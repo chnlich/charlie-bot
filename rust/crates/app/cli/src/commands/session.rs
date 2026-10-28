@@ -17,10 +17,13 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_cli_common::route;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_session_api::api as session_routes;
 use charliebot_store::{control_events, layout};
+use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
@@ -270,11 +273,12 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
     payload
       .insert("request_id".to_string(), json!(args.request_id.clone().unwrap_or_else(control_events::new_request_id)));
   }
-  let mut result = client::post("/api/sessions/", Value::Object(payload), None, &[])?;
+  let mut result = client::post(session_routes::SESSIONS_PATH, Value::Object(payload), None, &[])?;
   if let Some(group) = &args.group {
     let id =
       field(&result, "id")?.as_str().ok_or_else(|| CliExit::error("the create response's id is not a string"))?;
-    result = client::post(&format!("/api/sessions/{id}/group"), json!({ "group": group }), None, &[])?;
+    result =
+      client::post(&route::fill(session_routes::SESSION_GROUP_PATH, &[id]), json!({ "group": group }), None, &[])?;
   }
   print_result(&result);
   Ok(())
@@ -291,7 +295,7 @@ fn tree(args: &TreeArgs) -> Result<(), CliExit> {
   if let Some(cursor) = &args.cursor {
     params.push(("cursor".to_string(), cursor.clone()));
   }
-  let result = client::get("/api/sessions/tree", Some(params))?;
+  let result = client::get(session_routes::SESSION_TREE_PATH, Some(params))?;
   print_result(&result);
   Ok(())
 }
@@ -301,7 +305,8 @@ fn retry(args: &RetryArgs) -> Result<(), CliExit> {
     "request_id": args.request_id.clone().unwrap_or_else(control_events::new_request_id),
     "run_id": args.run,
   });
-  let result = client::post(&format!("/api/sessions/{}/retry", args.session_id), payload, None, &[])?;
+  let result =
+    client::post(&route::fill(task_routes::SESSION_RETRY_PATH, &[args.session_id.as_str()]), payload, None, &[])?;
   print_result(&result);
   Ok(())
 }
@@ -328,7 +333,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
   let task_id = args.session_id.clone();
   let readback = move || Ok(find_local_task_close(&home, &task_id, &request_id));
   let result = client::post(
-    &format!("/api/sessions/{}/archive", args.session_id),
+    &route::fill(task_routes::SESSION_ARCHIVE_PATH, &[args.session_id.as_str()]),
     Value::Object(body),
     Some(Box::new(readback)),
     &[],
@@ -348,7 +353,12 @@ fn acknowledge(args: &AcknowledgeArgs) -> Result<(), CliExit> {
     "input_ids": input_ids,
     "note": args.note,
   });
-  let result = client::post(&format!("/api/sessions/{}/task-inputs/acknowledge", args.session_id), payload, None, &[])?;
+  let result = client::post(
+    &route::fill(task_routes::TASK_INPUTS_ACKNOWLEDGE_PATH, &[args.session_id.as_str()]),
+    payload,
+    None,
+    &[],
+  )?;
   print_result(&result);
   Ok(())
 }
@@ -360,8 +370,12 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
   let home = home_dir()?;
   let task_id = args.session_id.clone();
   let readback = move || Ok(find_local_task_close(&home, &task_id, &request_id));
-  let result =
-    client::post(&format!("/api/sessions/{}/cancel", args.session_id), payload, Some(Box::new(readback)), &[])?;
+  let result = client::post(
+    &route::fill(task_routes::SESSION_CANCEL_PATH, &[args.session_id.as_str()]),
+    payload,
+    Some(Box::new(readback)),
+    &[],
+  )?;
   print_result(&result);
 
   let stopped_runs = result.get("stopped_runs").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -381,7 +395,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
     if let Some(cursor) = &cursor {
       params.push(("cursor".to_string(), cursor.clone()));
     }
-    let page = client::get(&format!("/api/sessions/{}/runs", args.session_id), Some(params))?;
+    let page = client::get(&route::fill(session_routes::SESSION_RUNS_PATH, &[args.session_id.as_str()]), Some(params))?;
     for row in field(&page, "items")?.as_array().cloned().unwrap_or_default() {
       let id = field(&row, "id")?.as_str().ok_or_else(|| CliExit::error("a run row's id is not a string"))?;
       if run_ids.contains(&id) {
@@ -414,7 +428,7 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
     }
   };
   let result = client::post(
-    "/api/internal/session-message",
+    task_routes::SESSION_MESSAGE_PATH,
     json!({ "session_id": session_id, "target_session_id": args.target, "content": content }),
     None,
     &[(422, EXIT_SEND_REFUSED)],
@@ -463,7 +477,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   // The bootstrap payload is the newest page the chat UI opens with; its oldest_message_ordinal is
   // the cursor backward paging starts from, in the events endpoint's own cursor space.
-  let boot = client::get(&format!("/api/sessions/{session_id}/bootstrap"), None)?;
+  let boot = client::get(&route::fill(session_routes::SESSION_BOOTSTRAP_PATH, &[session_id.as_str()]), None)?;
   let mut page_starts = vec![
     field(&boot, "oldest_message_ordinal")?
       .as_i64()
@@ -479,7 +493,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   let turn_budget = args.turns.map(|turns| turns + 1);
   while has_more && turn_budget.is_none_or(|budget| (separators as i64) < budget) {
     let page = client::get(
-      &format!("/api/sessions/{session_id}/events"),
+      &route::fill(session_routes::SESSION_EVENTS_PATH, &[session_id.as_str()]),
       Some(vec![("before".to_string(), cursor.to_string()), ("limit".to_string(), DIALOG_PAGE_LIMIT.to_string())]),
     )?;
     let messages = field(&page, "messages")?.as_array().cloned().unwrap_or_default();

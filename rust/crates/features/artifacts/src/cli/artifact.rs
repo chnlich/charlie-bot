@@ -18,6 +18,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_tasks::cold_read;
+use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -293,7 +294,7 @@ fn delegate_cold_read(
       Some(&readback_request_id),
     ))
   };
-  let result = client::post("/api/internal/delegate", payload, Some(Box::new(readback)), &[])?;
+  let result = client::post(task_routes::DELEGATE_PATH, payload, Some(Box::new(readback)), &[])?;
   let child = result
     .get("session_id")
     .and_then(Value::as_str)

@@ -16,11 +16,15 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use charliebot_cli_common::route;
+use charliebot_cli_common::skew;
 use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::run_records::RUN_EVENTS_NAME;
+use charliebot_tasks::routes as task_routes;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -228,20 +232,20 @@ impl Server {
   }
 
   fn route(&self, method: &str, path: &str, request: &Value) -> io::Result<(u16, Value)> {
-    if method == "GET" && path == "/api/internal/version" {
+    if method == "GET" && path == skew::VERSION_PATH {
       return Ok((200, json!({"ok": true})));
     }
     self.log_call(method, path)?;
     let delegation_prefixes = [
-      "/api/internal/delegate".to_string(),
+      task_routes::DELEGATE_PATH.to_string(),
       format!("/api/chat/{PARENT_SESSION}"),
-      format!("/api/sessions/{PARENT_SESSION}"),
-      format!("/api/sessions/{CHILD_SESSION}"),
+      route::fill(session_routes::SESSION_PATH, &[PARENT_SESSION]),
+      route::fill(session_routes::SESSION_PATH, &[CHILD_SESSION]),
     ];
     if delegation_prefixes.iter().any(|prefix| path.starts_with(prefix.as_str())) {
       return self.delegation(method, path, request);
     }
-    if method == "POST" && path == "/api/sessions/" {
+    if method == "POST" && path == session_routes::SESSIONS_PATH {
       let session = if request["name"] == "switch delegation" { PARENT_SESSION } else { PROBE_SESSION };
       return Ok((200, json!({"id": session})));
     }
@@ -258,7 +262,7 @@ impl Server {
     if method == "GET" && RUNS_LISTING.is_match(path) {
       return Ok(self.run_listing(path));
     }
-    if method == "GET" && path == format!("/api/sessions/{PROBE_SESSION}/bootstrap") {
+    if method == "GET" && path == route::fill(session_routes::SESSION_BOOTSTRAP_PATH, &[PROBE_SESSION]) {
       return Ok((200, self.bootstrap()));
     }
     if method == "POST"
@@ -266,7 +270,7 @@ impl Server {
     {
       return Ok(self.cancel_probe_run(&found[1]));
     }
-    if method == "POST" && path == format!("/api/sessions/{PROBE_SESSION}/archive") {
+    if method == "POST" && path == route::fill(task_routes::SESSION_ARCHIVE_PATH, &[PROBE_SESSION]) {
       return Ok(self.archive_probe_session(request));
     }
     Ok((404, json!({"detail": "not found"})))
@@ -352,12 +356,12 @@ impl Server {
 
   fn delegation(&self, method: &str, path_and_query: &str, request: &Value) -> io::Result<(u16, Value)> {
     let path = path_and_query.split('?').next().unwrap_or_default();
-    if method == "POST" && path == format!("/api/chat/{PARENT_SESSION}/message") {
+    if method == "POST" && path == route::fill(task_routes::CHAT_MESSAGE_PATH, &[PARENT_SESSION]) {
       let content = string_field(request, "content")?.to_string();
       self.lock().opened.push(content);
       return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "open-input"})));
     }
-    if method == "POST" && path == "/api/internal/delegate" {
+    if method == "POST" && path == task_routes::DELEGATE_PATH {
       if self.behavior.delegate == "refused" {
         return Ok((400, json!({"detail": "backend router failed: no backend is available"})));
       }
@@ -381,11 +385,11 @@ impl Server {
         }),
       ));
     }
-    if method == "GET" && path == format!("/api/sessions/{CHILD_SESSION}/runs") {
+    if method == "GET" && path == route::fill(session_routes::SESSION_RUNS_PATH, &[CHILD_SESSION]) {
       let items: Vec<Value> = self.lock().task.iter().cloned().collect();
       return Ok((200, json!({"items": items, "next_cursor": null})));
     }
-    if method == "POST" && path == format!("/api/sessions/{CHILD_SESSION}/runs/{TASK_RUN}/cancel") {
+    if method == "POST" && path == route::fill(task_routes::RUN_CANCEL_PATH, &[CHILD_SESSION, TASK_RUN]) {
       let mut state = self.lock();
       let Some(task) = state.task.as_mut() else {
         return Ok((404, json!({"detail": "run not found"})));
@@ -395,10 +399,10 @@ impl Server {
       }
       return Ok((200, json!({"run_id": TASK_RUN, "stop_requested": true, "outcome": null})));
     }
-    if method == "GET" && path == format!("/api/sessions/{PARENT_SESSION}/runs") {
+    if method == "GET" && path == route::fill(session_routes::SESSION_RUNS_PATH, &[PARENT_SESSION]) {
       return Ok((200, json!({"items": [], "next_cursor": null})));
     }
-    if method == "POST" && path == format!("/api/sessions/{PARENT_SESSION}/archive") {
+    if method == "POST" && path == route::fill(task_routes::SESSION_ARCHIVE_PATH, &[PARENT_SESSION]) {
       return Ok((200, json!({"archived": [PARENT_SESSION]})));
     }
     Ok((404, json!({"detail": "not found"})))

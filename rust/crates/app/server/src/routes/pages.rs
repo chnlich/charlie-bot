@@ -8,12 +8,14 @@ use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{StatusCode, Uri, request::Parts};
 use axum::response::Response;
+use charliebot_cli_common::route;
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
 use charliebot_core::paths;
 use charliebot_registry::Registry;
 use charliebot_registry::templating::Templating;
+use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::join_all;
@@ -223,7 +225,7 @@ async fn events_viewer(
   let context = json!({
     "session": session,
     "session_id": session_id,
-    "events_url": format!("/api/sessions/{session_id}/events.jsonl"),
+    "events_url": route::fill(session_routes::SESSION_EVENTS_JSONL_PATH, &[session_id.as_str()]),
   });
   render_page(state, request, "events_viewer.html", context, PageRuntime::Events).await
 }

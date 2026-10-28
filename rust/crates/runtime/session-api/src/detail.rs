@@ -27,7 +27,7 @@ use http::header::HeaderValue;
 use lru::LruCache;
 use serde_json::{Map, Value, json};
 
-use crate::paths;
+use crate::api;
 use crate::route_support::{Query, blocking_store};
 use crate::{listing, worker_transcript};
 
@@ -51,12 +51,12 @@ static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
     .route("/api/sessions/{session_id}/pending-triggers", get_only(pending_triggers))
-    .route(paths::SESSION_BOOTSTRAP_PATH, get_only(session_bootstrap))
+    .route(api::SESSION_BOOTSTRAP_PATH, get_only(session_bootstrap))
     .route("/api/sessions/{session_id}/usage", get_only(session_usage))
-    .route(paths::SESSION_EVENTS_PATH, get_only(session_events))
+    .route(api::SESSION_EVENTS_PATH, get_only(session_events))
     .route("/api/sessions/{session_id}/transcript", get_only(session_transcript))
-    .route(paths::SESSION_EVENTS_JSONL_PATH, get_only(events_jsonl))
-    .route(paths::SESSION_RUNS_PATH, get_only(session_runs))
+    .route(api::SESSION_EVENTS_JSONL_PATH, get_only(events_jsonl))
+    .route(api::SESSION_RUNS_PATH, get_only(session_runs))
     .route("/api/sessions/{session_id}/task-inputs/pending", get_only(pending_task_inputs))
 }
 

@@ -566,8 +566,11 @@ dependencies = [
  "charliebot-opencode",
  "charliebot-packages",
  "charliebot-registry",
+ "charliebot-session-api",
  "charliebot-slack",
  "charliebot-store",
+ "charliebot-tasks",
+ "charliebot-triggers",
  "charliebot-voice",
  "charliebot-web-reply",
  "clap",
@@ -1073,9 +1076,12 @@ dependencies = [
 name = "charliebot-script-tests"
 version = "0.1.0"
 dependencies = [
+ "charliebot-cli-common",
  "charliebot-core",
+ "charliebot-session-api",
  "charliebot-shell-harness",
  "charliebot-store",
+ "charliebot-tasks",
  "chrono",
  "http 1.5.0",
  "libc",

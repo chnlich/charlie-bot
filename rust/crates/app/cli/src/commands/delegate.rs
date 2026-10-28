@@ -10,6 +10,7 @@ use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::event_types;
+use charliebot_tasks::routes as task_routes;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use serde_json::{Map, Value, json};
@@ -191,7 +192,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
       readback_request_id.as_deref(),
     ))
   };
-  let result = client::post("/api/internal/delegate", Value::Object(payload), Some(Box::new(readback)), &[])?;
+  let result = client::post(task_routes::DELEGATE_PATH, Value::Object(payload), Some(Box::new(readback)), &[])?;
 
   eprintln!("Worker spawned in the background; the completion summary arrives as an async wake-up.");
   let session_id = result.get("session_id").ok_or_else(|| CliExit::error("the delegate response lacks session_id"))?;

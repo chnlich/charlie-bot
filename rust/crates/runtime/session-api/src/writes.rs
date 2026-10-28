@@ -18,7 +18,7 @@ use charliebot_store::metadata::RoundRating;
 use charliebot_store::{Store, TaskCaller};
 use serde_json::{Map, Value, json};
 
-use crate::paths;
+use crate::api;
 
 const RENAME_GROUP_FIELDS: &[Field] =
   &[Field::required("old_name", FieldType::String), Field::required("new_name", FieldType::String)];
@@ -39,7 +39,7 @@ pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
     .route("/api/sessions/{session_id}/read", post_only(mark_session_read))
     .route("/api/sessions/{session_id}/star", post_only(star_session))
     .route("/api/sessions/{session_id}/unstar", post_only(unstar_session))
-    .route(paths::SESSION_GROUP_PATH, post_only(set_session_group))
+    .route(api::SESSION_GROUP_PATH, post_only(set_session_group))
     .route("/api/sessions/{session_id}/rounds/{round_id}/rate", post_only(rate_round))
     .route("/api/sessions/{session_id}/permanent", refuse_other_methods(delete(delete_session_permanently), "DELETE"))
 }

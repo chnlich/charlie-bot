@@ -32,7 +32,7 @@ use charliebot_core::timefmt;
 use charliebot_registry::backend::{BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
-use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
+use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -85,13 +85,6 @@ impl std::fmt::Display for QuotaExhaustedError {
 }
 
 impl std::error::Error for QuotaExhaustedError {}
-
-/// One persisted event as its log line: compact UTF-8 JSON and a newline (`worker.py` `_event_line`).
-pub fn event_line(event: &Value) -> Vec<u8> {
-  let mut line = serde_json::to_vec(event).expect("a JSON value serializes");
-  line.push(b'\n');
-  line
-}
 
 /// The inputs of one task run's worker (`worker.py` `Worker.__init__`).
 pub struct WorkerSpec {

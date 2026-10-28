@@ -1088,18 +1088,6 @@ async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> a
 // The event line and the quota scan (`tests/test_worker_event_line.py`, `tests/test_worker_quota_scan.py`)
 // ---------------------------------------------------------------------------
 
-// Python: tests/test_worker_event_line.py::test_event_line_round_trips_the_event
-#[test]
-fn test_event_line_round_trips_the_event() {
-  let event = json!({
-    "type": "assistant",
-    "message": {"content": [{"type": "text", "text": "概要 — 100% done"}], "usage": {"input_tokens": 10}},
-    "timestamp": "2026-09-11T00:00:00+00:00",
-  });
-  let line = worker::event_line(&event);
-  assert_eq!(serde_json::from_slice::<Value>(&line).expect("the line is JSON"), event);
-}
-
 // Python: tests/test_worker_quota_scan.py::test_error_event_with_quota_pattern_raises_and_persists
 #[tokio::test]
 async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Result<()> {

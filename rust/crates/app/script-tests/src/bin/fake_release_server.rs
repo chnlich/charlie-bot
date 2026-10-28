@@ -24,7 +24,7 @@ use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::metadata::MetadataReadError;
-use charliebot_store::run_records::{RUN_EVENTS_NAME, read_run_metadata};
+use charliebot_store::run_records::{RUN_EVENTS_NAME, event_line, read_run_metadata};
 use charliebot_tasks::routes as task_routes;
 use regex::Regex;
 use serde::Deserialize;
@@ -440,7 +440,7 @@ impl Server {
       let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(CHILD_SESSION)).join(TASK_RUN);
       fs::create_dir_all(&run_dir)?;
       let event = json!({"type": "error", "message": self.behavior.task_error});
-      fs::write(run_dir.join(RUN_EVENTS_NAME), format!("{event}\n"))?;
+      fs::write(run_dir.join(RUN_EVENTS_NAME), event_line(&event))?;
     }
     Ok(task)
   }

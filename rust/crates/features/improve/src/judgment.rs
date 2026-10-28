@@ -7,7 +7,7 @@ use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_core::event_types::{ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT};
 use charliebot_core::pyfmt::{PYTHON_JSON_DEFAULT, python_str};
-use charliebot_tasks::run_support::NewestFirstEvents;
+use charliebot_store::run_records::NewestFirstEvents;
 use regex::Regex;
 use serde_json::Value;
 

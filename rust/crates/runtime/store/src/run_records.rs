@@ -1,6 +1,7 @@
 //! Persisted run records and their chat-log facts.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -8,12 +9,14 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::run_token;
+use memmap2::Mmap;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, getpgid};
@@ -68,6 +71,206 @@ pub fn read_run_record_file(path: &Path) -> Result<RunRecord, MetadataReadError>
 /// dump through `Store::write_run_record`.
 pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std::io::Result<()> {
   fs::write(path, pyfmt::json_dumps(record, style))
+}
+
+// The run event log (`events.jsonl`, `RUN_EVENTS_NAME`): one JSON value per line. This module owns the line's
+// bytes, its two decodes — the strict one, which fails a line that is not one JSON value, and the skip contract,
+// which drops such a line — and the newest-first walk of a log.
+
+/// One persisted event as its log line: compact UTF-8 JSON and a newline (`worker.py` `_event_line`).
+pub fn event_line(event: &Value) -> Vec<u8> {
+  let mut line = serde_json::to_vec(event).expect("a JSON value serializes");
+  line.push(b'\n');
+  line
+}
+
+/// The one strict decode of a run event line: the line's JSON value. A blank line or a line that is not JSON is the
+/// caller's error to give; a value that is not an object is still a value.
+pub fn decode_event_line(line: &str) -> Result<Value, serde_json::Error> {
+  serde_json::from_str(line)
+}
+
+/// Decode one run event line under the skip contract: a blank line and a line that is not JSON give `None`, and a
+/// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse, as `src/infra/ndjson.py`
+/// `parse_ndjson_line` repairs it. A final partial line decodes like any other line.
+pub fn parse_event_line(raw: &[u8]) -> Option<Value> {
+  if raw.is_empty() || raw.iter().all(u8::is_ascii_whitespace) {
+    return None;
+  }
+  match serde_json::from_slice(raw) {
+    Ok(value) => Some(value),
+    Err(error) => match std::str::from_utf8(raw) {
+      Ok(_) => {
+        tracing::debug!(target: "charliebot_store", error = %error, "run_event_line_not_json");
+        None
+      }
+      Err(_) => match serde_json::from_str(&String::from_utf8_lossy(raw)) {
+        Ok(value) => Some(value),
+        Err(repaired_error) => {
+          tracing::debug!(target: "charliebot_store", error = %repaired_error, "run_event_line_not_json");
+          None
+        }
+      },
+    },
+  }
+}
+
+/// Why a run event log could not be read as its event values.
+#[derive(Debug)]
+pub enum EventReadError {
+  /// The file could not be opened or read. A `NotFound` error means the log is missing.
+  Io(std::io::Error),
+  /// A line of the log is not one JSON value; the error is that line's parse error.
+  Json(serde_json::Error),
+}
+
+impl fmt::Display for EventReadError {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      Self::Io(error) => write!(formatter, "{error}"),
+      Self::Json(error) => write!(formatter, "{error}"),
+    }
+  }
+}
+
+/// The run event log at `path` as its event values, oldest first, under the strict decode: the file reads as text
+/// and every line, a blank one included, must be one JSON value, so a bad line fails the read with that line's
+/// parse error. A missing file is `Err` with `NotFound`, so the caller decides whether that means no events.
+pub fn read_event_values(path: &Path) -> Result<Vec<Value>, EventReadError> {
+  let text = fs::read_to_string(path).map_err(EventReadError::Io)?;
+  text.lines().map(|line| decode_event_line(line).map_err(EventReadError::Json)).collect()
+}
+
+/// The run event log's lines, read with each invalid byte replaced by U+FFFD, as the chat event log's
+/// `LineRule::LossyLines` reads. A missing file is `Err` with `NotFound`, so the caller decides whether that means
+/// no lines.
+pub fn read_event_lines_lossy(path: &Path) -> Result<Vec<String>, EventReadError> {
+  let bytes = fs::read(path).map_err(EventReadError::Io)?;
+  Ok(String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect())
+}
+
+/// Visit matching run events newest first, stopping when `visit` returns a value. See [`NewestFirstEvents`].
+pub fn visit_events_from_end<T>(
+  path: &Path,
+  keep_types: &[&str],
+  visit: impl FnMut(Value) -> Option<T>,
+) -> anyhow::Result<(Option<T>, EventScanStats)> {
+  let mut events = NewestFirstEvents::open(path, keep_types)?;
+  let value = events.by_ref().find_map(visit);
+  Ok((value, events.stats))
+}
+
+/// The events of one run event log, newest first, read through one read-only mapping. Only a provable mismatch in
+/// the first 256 bytes skips a line without parsing it, matching Python's `iter_ndjson_events_from_end` and
+/// `type_line_filter` (`src/infra/ndjson.py:404-547`). Each line's start is one backward `memrchr` from the
+/// previous line's start, so a walk that stops at a line leaves the older bytes unscanned, as Python's mmap walk
+/// does.
+pub struct NewestFirstEvents<'k> {
+  map: Option<Mmap>,
+  end: usize,
+  keep_types: &'k [&'k str],
+  pending: std::vec::IntoIter<Value>,
+  stats: EventScanStats,
+}
+
+/// How far into a line the type proof reads.
+const TYPE_FILTER_HEAD_BYTES: usize = 256;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EventScanStats {
+  pub lines_visited: u64,
+  pub events_parsed: u64,
+}
+
+impl<'k> NewestFirstEvents<'k> {
+  /// Map `path` for a walk of the events `keep_types` names; a missing file has no events.
+  pub fn open(path: &Path, keep_types: &'k [&'k str]) -> anyhow::Result<Self> {
+    let map = match fsutil::map_file(path) {
+      Ok(map) => map,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+      Err(error) => return Err(error).with_context(|| format!("opening event log {}", path.display())),
+    };
+    let end = map.as_ref().map_or(0, |map| map.len());
+    Ok(Self { map, end, keep_types, pending: Vec::new().into_iter(), stats: EventScanStats::default() })
+  }
+
+  /// The byte range of the next non-empty line, newest first. Blank segments are skipped without a visit.
+  fn next_line(&mut self) -> Option<(usize, usize)> {
+    let bytes = self.map.as_deref().unwrap_or_default();
+    while self.end > 0 {
+      let end = self.end;
+      let (start, next_end) = match memchr::memrchr(b'\n', &bytes[..end]) {
+        Some(newline) => (newline + 1, newline),
+        None => (0, 0),
+      };
+      self.end = next_end;
+      if start < end {
+        return Some((start, end));
+      }
+    }
+    None
+  }
+}
+
+impl Iterator for NewestFirstEvents<'_> {
+  type Item = Value;
+
+  fn next(&mut self) -> Option<Value> {
+    loop {
+      if let Some(event) = self.pending.next() {
+        return Some(event);
+      }
+      let (start, end) = self.next_line()?;
+      self.stats.lines_visited += 1;
+      let bytes = self.map.as_deref().unwrap_or_default();
+      let events = parse_kept_line(&bytes[start..end], self.keep_types);
+      self.stats.events_parsed += events.len() as u64;
+      self.pending = events.into_iter();
+    }
+  }
+}
+
+/// The line's parsed events, or none when its first bytes prove a type the reader does not keep.
+fn parse_kept_line(line: &[u8], keep_types: &[&str]) -> Vec<Value> {
+  let head = &line[..line.len().min(TYPE_FILTER_HEAD_BYTES)];
+  if type_line_proves_rejection(head, keep_types) {
+    return Vec::new();
+  }
+  parse_event_line(line).into_iter().collect()
+}
+
+fn type_line_proves_rejection(head: &[u8], keep_types: &[&str]) -> bool {
+  let rest = if let Some(rest) = head.strip_prefix(br#"{"type""#) {
+    rest
+  } else if let Some(rest) = head.strip_prefix(br#"{"id""#) {
+    let Some((_, rest)) = first_header_string(rest) else { return false };
+    let rest = trim_horizontal_space(rest);
+    let Some(rest) = rest.strip_prefix(b",") else { return false };
+    let rest = trim_horizontal_space(rest);
+    let Some(rest) = rest.strip_prefix(br#""type""#) else { return false };
+    rest
+  } else {
+    return false;
+  };
+  let Some((event_type, _)) = first_header_string(rest) else { return false };
+  let event_type = String::from_utf8_lossy(event_type);
+  !keep_types.contains(&event_type.as_ref())
+}
+
+fn first_header_string(mut rest: &[u8]) -> Option<(&[u8], &[u8])> {
+  rest = trim_horizontal_space(rest);
+  rest = rest.strip_prefix(b":")?;
+  rest = trim_horizontal_space(rest);
+  let quoted = rest.strip_prefix(b"\"")?;
+  let end = quoted.iter().position(|byte| *byte == b'\"')?;
+  Some((&quoted[..end], &quoted[end + 1..]))
+}
+
+fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
+  while matches!(bytes.first(), Some(b' ' | b'\t')) {
+    bytes = &bytes[1..];
+  }
+  bytes
 }
 
 /// The execution category in a persisted run record.
@@ -1310,6 +1513,19 @@ async fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::fs;
+
+  // Python: tests/test_worker_event_line.py::test_event_line_round_trips_the_event
+  #[test]
+  fn test_event_line_round_trips_the_event() {
+    let event = json!({
+      "type": "assistant",
+      "message": {"content": [{"type": "text", "text": "概要 — 100% done"}], "usage": {"input_tokens": 10}},
+      "timestamp": "2026-09-11T00:00:00+00:00",
+    });
+    let line = event_line(&event);
+    assert_eq!(serde_json::from_slice::<Value>(&line).expect("the line is JSON"), event);
+  }
 
   /// A run metadata file holding `text` in a fresh temporary directory.
   fn run_metadata_with(text: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -1546,5 +1762,118 @@ mod tests {
     assert_eq!(decode_run_cursor(&ascending).unwrap(), (boundary.clone(), RunOrder::Ascending));
     let descending = run_cursor(&record, RunOrder::Descending);
     assert_eq!(decode_run_cursor(&descending).unwrap(), (boundary, RunOrder::Descending));
+  }
+
+  #[test]
+  fn reverse_event_reader_parses_only_matching_summary_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let mut raw = String::from("{\"type\":\"result\",\"result\":\"done\"}\n");
+    for index in 0..256 {
+      raw.push_str(&format!("{{\"type\":\"user\",\"id\":\"tool-{index}\",\"blob\":\"{}\"}}\n", "x".repeat(1024)));
+    }
+    assert!(type_line_proves_rejection(br#"{"type":"user","id":"tool"}"#, &["result", "assistant"]));
+    fs::write(&path, raw).unwrap();
+
+    let (summary, stats) = visit_events_from_end(&path, &["result", "assistant"], |event| {
+      event.get("result").and_then(serde_json::Value::as_str).map(str::to_string)
+    })
+    .unwrap();
+    assert_eq!(summary.as_deref(), Some("done"));
+    assert_eq!(stats.events_parsed, 1, "filtered lines are not parsed into Value objects");
+    assert_eq!(stats.lines_visited, 257);
+  }
+
+  #[test]
+  fn reverse_event_reader_stops_at_the_newest_matching_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let mut raw = String::new();
+    for index in 0..200 {
+      raw.push_str(&format!("{{\"type\":\"user\",\"id\":\"tool-{index}\",\"blob\":\"{}\"}}\n", "x".repeat(1024)));
+    }
+    raw.push_str("{\"type\":\"result\",\"result\":\"done\"}\n");
+    fs::write(&path, &raw).unwrap();
+
+    let (summary, stats) = visit_events_from_end(&path, &["result"], |event| {
+      event.get("result").and_then(serde_json::Value::as_str).map(str::to_string)
+    })
+    .unwrap();
+    assert_eq!(summary.as_deref(), Some("done"));
+    assert_eq!(stats.lines_visited, 1, "the 200 padding lines before the result are never visited");
+    assert_eq!(stats.events_parsed, 1);
+  }
+
+  #[test]
+  fn reverse_event_reader_visits_each_nonblank_line_newest_first_across_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let mut raw = String::new();
+    let mut forward = Vec::new();
+    for index in 0..120 {
+      let blob = "x".repeat(index * 97 % 9000);
+      raw.push_str(&format!("{{\"type\":\"user\",\"id\":\"line-{index}\",\"blob\":\"{blob}\"}}\n"));
+      forward.push(format!("line-{index}"));
+      if index % 5 == 0 {
+        raw.push('\n');
+      }
+    }
+    raw.push_str("{\"type\":\"result\",\"id\":\"last\"}");
+    forward.push("last".to_string());
+    fs::write(&path, &raw).unwrap();
+
+    let mut newest_first = Vec::new();
+    let (_, stats) = visit_events_from_end(&path, &["user", "result"], |event| {
+      newest_first.push(event["id"].as_str().unwrap().to_string());
+      None::<()>
+    })
+    .unwrap();
+    forward.reverse();
+    assert_eq!(newest_first, forward);
+    assert_eq!(stats.lines_visited, forward.len() as u64);
+  }
+
+  /// The strict read: a missing file is the caller's no-events decision, and a blank line or a line that is not
+  /// JSON fails the read with that line's parse error, while a value that is not an object is still a value.
+  #[test]
+  fn read_event_values_reports_a_missing_file_and_fails_a_bad_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let missing = read_event_values(&path).unwrap_err();
+    assert!(matches!(missing, EventReadError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound));
+
+    fs::write(&path, "{\"type\":\"system\"}\n\n[1, 2]\n").unwrap();
+    let error = read_event_values(&path).unwrap_err();
+    let EventReadError::Json(error) = error else { panic!("a blank line is a parse error, not an io error") };
+    assert!(error.to_string().contains("EOF while parsing a value"), "{error}");
+
+    fs::write(&path, "{\"type\":\"system\"}\n[1, 2]\n").unwrap();
+    let events = read_event_values(&path).unwrap();
+    assert_eq!(events, [serde_json::json!({"type": "system"}), serde_json::json!([1, 2])]);
+  }
+
+  /// The skip contract: a blank line and a line that is not JSON give `None`, and a line whose bytes are not UTF-8
+  /// is repaired with U+FFFD before the parse.
+  #[test]
+  fn parse_event_line_applies_the_skip_contract_per_line() {
+    let line = |raw: &[u8]| parse_event_line(raw);
+    assert_eq!(line(b"{\"i\": 1}"), Some(serde_json::json!({"i": 1})));
+    assert_eq!(line(b"  {\"i\": 1}  \n"), Some(serde_json::json!({"i": 1})));
+    assert_eq!(line(b""), None);
+    assert_eq!(line(b"   "), None);
+    assert_eq!(line(b"{not json"), None);
+    assert_eq!(line(b"{\"text\": \"ok\xff\"}"), Some(serde_json::json!({"text": "ok\u{fffd}"})));
+  }
+
+  /// The lossy line read: each invalid byte becomes U+FFFD, and the lines keep their count.
+  #[test]
+  fn read_event_lines_lossy_replaces_an_invalid_byte() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    fs::write(&path, b"{\"text\": \"ok\xff\"}\n{\"type\": \"system\"}\n").unwrap();
+    let lines = read_event_lines_lossy(&path).unwrap();
+    assert_eq!(lines, ["{\"text\": \"ok\u{fffd}\"}", "{\"type\": \"system\"}"]);
+    assert!(matches!(read_event_lines_lossy(&path.with_extension("absent")).unwrap_err(),
+      EventReadError::Io(error) if error.kind() == std::io::ErrorKind::NotFound));
   }
 }

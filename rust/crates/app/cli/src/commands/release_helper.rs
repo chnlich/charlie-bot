@@ -724,12 +724,12 @@ fn delegation_error_text(sessions: &Path, manager_id: &str) -> Result<Option<Str
     if !seen.insert(path.clone()) || !path.is_file() {
       continue;
     }
-    let text = read_text_lossy(&path.to_string_lossy())?;
-    for line in text.lines() {
+    let lines = run_records::read_event_lines_lossy(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    for line in &lines {
       if !line.contains("timed out after") {
         continue;
       }
-      if let Some(found) = event_timeout(line, &serde_json::from_str::<Value>(line)) {
+      if let Some(found) = event_timeout(line, &run_records::decode_event_line(line)) {
         return Ok(Some(found));
       }
     }

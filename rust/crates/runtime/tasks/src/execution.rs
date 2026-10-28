@@ -30,7 +30,7 @@ use charliebot_store::control_events::{self, ACTOR_SYSTEM};
 use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
 };
-use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, visit_events_from_end};
 use charliebot_store::{ChatEventHistory, NodeFacts, RunFacts, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -47,7 +47,6 @@ use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding,
 use crate::prompts::{self, PromptSnapshot, TaskPromptError};
 use crate::review;
 use crate::review_text;
-use crate::run_support::visit_events_from_end;
 use crate::session_anchors;
 use crate::spawner_backends;
 use crate::task_input_prompt::compose_input_prompt;
@@ -2421,14 +2420,14 @@ impl TaskExecutionAdapter {
     if let Some(quota_exhausted) = quota_exhausted {
       event.insert(event_types::QUOTA_EXHAUSTED.to_string(), json!(quota_exhausted));
     }
-    let mut line = serde_json::to_string(&Value::Object(event))?;
-    line.push('\n');
     let mut file = OpenOptions::new()
       .create(true)
       .append(true)
       .open(&event_path)
       .with_context(|| format!("opening {}", event_path.display()))?;
-    file.write_all(line.as_bytes()).with_context(|| format!("writing {}", event_path.display()))?;
+    file
+      .write_all(&run_records::event_line(&Value::Object(event)))
+      .with_context(|| format!("writing {}", event_path.display()))?;
     file.flush().with_context(|| format!("flushing {}", event_path.display()))?;
     self
       .features

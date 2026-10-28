@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::Context;
+use charliebot_store::run_records::parse_event_line;
 use memchr::memmem;
 use serde_json::Value;
 
@@ -20,8 +21,7 @@ pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<
     if line.last() != Some(&b'\n') || !finders.iter().any(|finder| finder.find(&line).is_some()) {
       continue;
     }
-    let parsed = serde_json::from_slice(&line).or_else(|_| serde_json::from_str(&String::from_utf8_lossy(&line)));
-    if let Ok(value) = parsed {
+    if let Some(value) = parse_event_line(&line) {
       objects.push(value);
     }
   }

@@ -1105,6 +1105,14 @@ const FORMAT_TABLE: &[FormatRow] = &[
            through `write_run_metadata` or the store's run-record save.",
   },
   FormatRow {
+    kind: "run event log",
+    owner: "runtime/store",
+    names: &["RUN_EVENTS_NAME", "EVENTS_LOG_NAME"],
+    hint: "Encode a line with `charliebot_store::run_records::event_line`, decode a line with `parse_event_line` or \
+           `decode_event_line`, read the log with `read_event_values` or `read_event_lines_lossy`, and read it \
+           newest first with `visit_events_from_end` or `NewestFirstEvents`.",
+  },
+  FormatRow {
     kind: "improve loop state",
     owner: "features/improve",
     names: &["STATE_FILE", "read_loop_state_value", "load_loop_state", "save_loop_state"],

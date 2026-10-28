@@ -5,9 +5,8 @@ use std::path::Path;
 
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_store::run_records::visit_events_from_end;
 use serde_json::Value;
-
-use crate::run_support::visit_events_from_end;
 
 /// A selected backend, its resolved model, and the updated reviewer-attempt list.
 pub type ReviewerBackendSelection = (String, Option<String>, Vec<String>);

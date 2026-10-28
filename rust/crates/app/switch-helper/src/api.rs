@@ -11,7 +11,7 @@ use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_store::layout;
-use charliebot_store::run_records::RUN_EVENTS_NAME;
+use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
 use serde_json::{Value, json};
 
 use crate::common::{USAGE, exact, exit_with, failed, python_truthy, read_json};
@@ -194,35 +194,25 @@ pub fn run_error(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let session = config::sessions_dir_in(Path::new(&home)).join(&session_id);
   let path = layout::runs_dir(&session).join(&run_id).join(RUN_EVENTS_NAME);
-  let text = match fs::read_to_string(&path) {
-    Ok(text) => text,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+  let events = match read_event_values(&path) {
+    Ok(events) => events,
+    Err(EventReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
     Err(error) => return Err(CliExit::error(format!("{}: {error}", path.display()))),
   };
-  println!(
-    "{}",
-    last_error_message(&text)
-      .map_err(|error| CliExit::error(format!("{}: {error}", path.display())))?
-      .unwrap_or_default()
-  );
+  println!("{}", last_error_message(&events).unwrap_or_default());
   Ok(())
 }
 
 /// The last error event's message, with its whitespace collapsed; `None` when no error event exists.
-fn last_error_message(text: &str) -> Result<Option<String>, serde_json::Error> {
-  let mut last = None;
-  for line in text.lines() {
-    let event: Value = serde_json::from_str(line)?;
-    if event.get("type").and_then(Value::as_str) == Some(event_types::ERROR) {
-      last = Some(event.get("message").and_then(Value::as_str).unwrap_or("").to_string());
-    }
-  }
-  Ok(last.map(|message| message.split_whitespace().collect::<Vec<_>>().join(" ")))
+fn last_error_message(events: &[Value]) -> Option<String> {
+  let last = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ERROR))?;
+  Some(last.get("message").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_store::run_records::decode_event_line;
 
   #[test]
   fn the_newest_run_fields_keep_null_empty_and_missing_runs_empty() {
@@ -277,7 +267,8 @@ mod tests {
   fn the_last_error_message_collapses_whitespace() {
     let text =
       "{\"type\": \"error\", \"message\": \"first\"}\n{\"type\": \"error\", \"message\": \"  boxed \\n  text \"}\n";
-    assert_eq!(last_error_message(text).expect("the events").as_deref(), Some("boxed text"));
-    assert_eq!(last_error_message("").expect("the events"), None);
+    let events: Vec<Value> = text.lines().map(|line| decode_event_line(line).expect("the events")).collect();
+    assert_eq!(last_error_message(&events).as_deref(), Some("boxed text"));
+    assert_eq!(last_error_message(&[]), None);
   }
 }

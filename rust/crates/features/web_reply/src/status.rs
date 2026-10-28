@@ -1,5 +1,5 @@
-//! A web session's status (`src/features/web_reply/status.py`): the Goal, Now and Waiting on you items that
-//! `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
+//! A web session's status (`src/features/web_reply/status.py`): the Goal, Now, Waiting on you and Remaining items
+//! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
 //! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded. A read
 //! lists the open descendants whose status holds Waiting on you items and the open children that hold a Now.
 
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::json_input::replace_unrepresentable_numbers;
-use crate::metadata::WaitingItem;
+use crate::metadata::{RemainingItem, WaitingItem};
 use crate::plan_links::{self, PlanLinks};
 use crate::reply::{self, WebReplyError};
 
@@ -33,13 +33,14 @@ pub const OWNER: &str = "web_reply";
 const STATUS_FIELD: &str = "web_status";
 
 /// The status items in the order a set lists them and the status line names them (`status.ITEMS`).
-const ITEMS: [&str; 3] = ["goal", "now", "waiting"];
+const ITEMS: [&str; 4] = ["goal", "now", "waiting", "remaining"];
 
 /// The label of each item in the event's content (`status.LABELS`).
 fn label(item: &str) -> &'static str {
   match item {
     "goal" => "Goal",
     "now" => "Now",
+    "remaining" => "Remaining",
     _ => "Waiting on you",
   }
 }
@@ -52,6 +53,7 @@ const MUST_NOT_BE_BLANK: &str = "Value error, must not be blank";
 const NOT_A_STRING: &str = "Input should be a valid string";
 const NOT_A_LIST: &str = "Input should be a valid list";
 const NOT_A_WAITING_ITEM: &str = "Input should be a valid dictionary or instance of WaitingItem";
+const NOT_A_REMAINING_ITEM: &str = "Input should be a valid dictionary or instance of RemainingItem";
 const FIELD_REQUIRED: &str = "Field required";
 const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
 const NOW_BUDGET_CHARS: usize = 200;
@@ -64,12 +66,17 @@ const NOT_A_DATETIME: &str = "Input should be a valid datetime";
 /// The pydantic message a since_exact field that is not a boolean raises.
 const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 
-/// The session status: Goal, Now and Waiting on you, and the time the last set stored them (`metadata.WebStatus`).
+/// The session status: Goal, Now, Waiting on you and Remaining, and the time the last set stored them
+/// (`metadata.WebStatus`). A status without Remaining serializes without either Remaining key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebStatus {
   goal: Option<String>,
   now: Option<String>,
   waiting: Vec<WaitingItem>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  remaining: Vec<RemainingItem>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  remaining_updated_at: Option<UtcDateTime>,
   #[serde(default = "UtcDateTime::now")]
   updated_at: UtcDateTime,
 }
@@ -81,6 +88,7 @@ pub struct StatusPatch {
   goal: Option<Option<String>>,
   now: Option<Option<String>>,
   waiting: Option<Vec<WaitingItem>>,
+  remaining: Option<Vec<RemainingItem>>,
 }
 
 impl StatusPatch {
@@ -95,6 +103,9 @@ impl StatusPatch {
     }
     if self.waiting.is_some() {
       named.push("waiting");
+    }
+    if self.remaining.is_some() {
+      named.push("remaining");
     }
     named
   }
@@ -146,6 +157,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   let goal = fields.get("goal").map(|value| nullable_text(value, "goal", &mut problems));
   let now = fields.get("now").map(|value| nullable_text(value, "now", &mut problems));
   let waiting = fields.get("waiting").map(|value| waiting_items(value, &mut problems));
+  let remaining = fields.get("remaining").map(|value| remaining_items(value, &mut problems));
   for key in fields.keys().filter(|key| !ITEMS.contains(&key.as_str())) {
     problems.push(Problem { loc: key.clone(), msg: EXTRA_FORBIDDEN });
   }
@@ -156,19 +168,26 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
       format!("Status file is invalid: {}", summary.join("; ")),
     ));
   }
-  let patch = StatusPatch { goal, now, waiting };
+  let patch = StatusPatch { goal, now, waiting, remaining };
   if patch.named().is_empty() {
     return Err(WebReplyError::refused(
       StatusCode::UNPROCESSABLE_ENTITY,
-      "Status file names no item: give goal, now or waiting",
+      "Status file names no item: give goal, now, waiting or remaining",
     ));
   }
   Ok(patch)
 }
 
-/// Refuse a set file whose waiting item carries a field that only the server writes
-/// (`status._refuse_server_fields`). Only a list `waiting` is examined, and only its object items.
+/// Refuse a set file that names a field only the server writes (`status._refuse_server_fields`): the status's
+/// `remaining_updated_at`, or a waiting item's `since` and `since_exact`. Only a list `waiting` is examined, and only
+/// its object items.
 fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError> {
+  if fields.contains_key("remaining_updated_at") {
+    return Err(WebReplyError::refused(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      "Status field remaining_updated_at is written by the server; remove it from the file",
+    ));
+  }
   let Some(Value::Array(waiting)) = fields.get("waiting") else {
     return Ok(());
   };
@@ -423,6 +442,50 @@ fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem>
     .collect()
 }
 
+/// `list[RemainingItem]` for a present `remaining` value: each item validated, invalid items reported with their
+/// index.
+fn remaining_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<RemainingItem> {
+  let Value::Array(items) = value else {
+    problems.push(Problem { loc: "remaining".to_string(), msg: NOT_A_LIST });
+    return Vec::new();
+  };
+  items
+    .iter()
+    .enumerate()
+    .filter_map(|(index, item)| remaining_item(item, &format!("remaining.{index}"), problems))
+    .collect()
+}
+
+/// One `RemainingItem`: its required non-blank `text`, its required boolean `done`, then extra keys.
+fn remaining_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<RemainingItem> {
+  let Value::Object(fields) = item else {
+    problems.push(Problem { loc: loc.to_string(), msg: NOT_A_REMAINING_ITEM });
+    return None;
+  };
+  let text = match fields.get("text") {
+    None => {
+      problems.push(Problem { loc: nested_loc(loc, "text"), msg: FIELD_REQUIRED });
+      None
+    }
+    Some(value) => text_value(value, &nested_loc(loc, "text"), problems),
+  };
+  let done = match fields.get("done") {
+    None => {
+      problems.push(Problem { loc: nested_loc(loc, "done"), msg: FIELD_REQUIRED });
+      None
+    }
+    Some(Value::Bool(value)) => Some(*value),
+    Some(_) => {
+      problems.push(Problem { loc: nested_loc(loc, "done"), msg: NOT_A_BOOLEAN });
+      None
+    }
+  };
+  for key in fields.keys().filter(|key| !matches!(key.as_str(), "text" | "done")) {
+    problems.push(Problem { loc: nested_loc(loc, key), msg: EXTRA_FORBIDDEN });
+  }
+  text.zip(done).map(|(text, done)| RemainingItem { text, done })
+}
+
 /// One `WaitingItem`: its required non-blank `text`, optional non-blank `context`, optional `link`, the server-written
 /// start-time fields, then extra keys.
 fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<WaitingItem> {
@@ -504,8 +567,14 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   require_waiting_context(patch.waiting.as_deref().unwrap_or_default())?;
   let stored = stored_status(&meta)?;
-  let base =
-    stored.clone().unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
+  let base = stored.clone().unwrap_or(WebStatus {
+    goal: None,
+    now: None,
+    waiting: Vec::new(),
+    remaining: Vec::new(),
+    remaining_updated_at: None,
+    updated_at: UtcDateTime::now(),
+  });
   let stored_waiting = effective_waiting(&base);
   let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
   let mut links = require_current_plan_links(&prospective, &scan_context)?;
@@ -527,7 +596,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   };
   let mut status = base;
   let changed = patch.named();
-  let StatusPatch { goal, now: now_item, waiting: _ } = patch;
+  let StatusPatch { goal, now: now_item, waiting: _, remaining } = patch;
   if let Some(goal) = goal {
     status.goal = goal;
   }
@@ -535,6 +604,11 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     status.now = now_item;
   }
   status.waiting = waiting;
+  // A named Remaining stores its list and this set's time; an empty list removes both, and an unnamed one keeps both.
+  if let Some(items) = remaining {
+    status.remaining_updated_at = (!items.is_empty()).then_some(now);
+    status.remaining = items;
+  }
   status.updated_at = now;
   let payload = payload_of(&status);
   {
@@ -577,6 +651,8 @@ pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Resu
     goal: None,
     now: None,
     waiting: Vec::new(),
+    remaining: Vec::new(),
+    remaining_updated_at: None,
     updated_at: UtcDateTime::now(),
   });
   let scan_context = reply::file_link_scan_context(features, session_id)?;
@@ -890,6 +966,125 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_status_set_with_remaining_stores_the_list_its_update_time_and_the_event() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let text = json!({"remaining": [
+      {"text": "Move the server to Rust", "done": true},
+      {"text": "Delete the Python server", "done": false},
+    ]})
+    .to_string();
+
+    let response = set_status(&home.features, &sid, &text).await.expect("the set stores");
+
+    assert_eq!(
+      response["remaining"],
+      json!([
+        {"text": "Move the server to Rust", "done": true},
+        {"text": "Delete the Python server", "done": false},
+      ])
+    );
+    assert_eq!(response["remaining_updated_at"], response["updated_at"], "the set's time stamps the list");
+    assert_eq!(stored(&home, &sid).await, without_budget(&response));
+    let events = status_events(&home, &sid);
+    assert_eq!(events[0]["content"], json!("Status updated: Remaining"));
+    assert_eq!(events[0]["web_status_changed"], json!(["remaining"]));
+    assert_eq!(events[0][WEB_STATUS]["remaining"], response["remaining"]);
+    assert_eq!(events[0][WEB_STATUS]["remaining_updated_at"], response["remaining_updated_at"]);
+
+    let (code, read) = home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(read["web_status"]["remaining"], response["remaining"]);
+    assert_eq!(read["web_status"]["remaining_updated_at"], response["remaining_updated_at"]);
+  }
+
+  #[tokio::test]
+  async fn a_status_set_without_remaining_keeps_the_stored_list_and_its_update_time() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let first = set_status(&home.features, &sid, r#"{"remaining": [{"text": "Move the server", "done": true}]}"#)
+      .await
+      .expect("the first set stores");
+    tokio::time::sleep(Duration::from_millis(2)).await;
+
+    let second = set_status(&home.features, &sid, VALID_SET).await.expect("the second set stores");
+
+    assert_eq!(second["remaining"], first["remaining"]);
+    assert_eq!(second["remaining_updated_at"], first["remaining_updated_at"], "an unnamed Remaining keeps its time");
+    assert_ne!(second["updated_at"], first["updated_at"]);
+  }
+
+  #[tokio::test]
+  async fn an_empty_remaining_list_removes_the_list_and_its_update_time() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    set_status(
+      &home.features,
+      &sid,
+      r#"{"goal": "Ship the panel", "remaining": [{"text": "Move the server", "done": false}]}"#,
+    )
+    .await
+    .expect("the first set stores");
+
+    let cleared = set_status(&home.features, &sid, r#"{"remaining": []}"#).await.expect("the empty list stores");
+
+    assert_eq!(cleared["goal"], json!("Ship the panel"), "the other items stay");
+    assert!(cleared.get("remaining").is_none(), "a status without Remaining omits the key");
+    assert!(cleared.get("remaining_updated_at").is_none());
+    let stored_after = stored(&home, &sid).await;
+    assert!(stored_after.get("remaining").is_none());
+    assert!(stored_after.get("remaining_updated_at").is_none());
+    assert_eq!(status_events(&home, &sid).last().expect("two events")["content"], json!("Status updated: Remaining"));
+  }
+
+  #[tokio::test]
+  async fn a_status_set_with_an_invalid_remaining_item_is_refused_and_stores_nothing() {
+    let cases = [
+      r#"{"remaining": "x"}"#,
+      r#"{"remaining": [5]}"#,
+      r#"{"remaining": [{}]}"#,
+      r#"{"remaining": [{"text": " ", "done": true}]}"#,
+      r#"{"remaining": [{"text": "a"}]}"#,
+      r#"{"remaining": [{"text": "a", "done": "yes"}]}"#,
+      r#"{"remaining": [{"text": "a", "done": null}]}"#,
+      r#"{"remaining": [{"text": "a", "done": true, "due": "today"}]}"#,
+      r#"{"remaining": [], "remaining_updated_at": "2026-11-02T03:10:00Z"}"#,
+    ];
+    for text in cases {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+
+      let error = set_status(&home.features, &sid, text).await.expect_err("the set is refused");
+
+      match error {
+        WebReplyError::Refused { status, .. } => {
+          assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}")
+        }
+        other => panic!("{text}: expected a refusal, got {other:?}"),
+      }
+      assert_eq!(stored(&home, &sid).await, Value::Null, "{text}");
+      assert!(status_events(&home, &sid).is_empty(), "{text}");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_status_stored_without_remaining_reads_back_unchanged() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let legacy =
+      json!({"goal": "Ship the panel", "now": "Running", "waiting": [], "updated_at": "2026-10-24T00:00:00Z"});
+    write_stored_status(&home, &sid, legacy.clone()).await;
+
+    let (code, read) = home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(read["web_status"], legacy, "neither Remaining key appears");
+    let written = set_status(&home.features, &sid, r#"{"goal": "Ship the panel"}"#).await.expect("the set stores");
+    assert!(written.get("remaining").is_none());
+    assert!(written.get("remaining_updated_at").is_none());
+  }
+
+  #[tokio::test]
   async fn a_refused_status_set_stores_nothing_and_records_no_event() {
     let cases = [
       ("unknown", VALID_SET, 404),
@@ -928,7 +1123,7 @@ mod tests {
       ("not json", "Status file is not JSON: Expecting value"),
       (r#"{"now": "a""#, "Status file is not JSON: Expecting ',' delimiter"),
       ("[1, 2]", "Status file is not a JSON object"),
-      ("{}", "Status file names no item: give goal, now or waiting"),
+      ("{}", "Status file names no item: give goal, now, waiting or remaining"),
       (r#"{"colour": "red"}"#, "Status file is invalid: colour: Extra inputs are not permitted"),
       (r#"{"goal": " "}"#, "Status file is invalid: goal: Value error, must not be blank"),
       (r#"{"now": true}"#, "Status file is invalid: now: Input should be a valid string"),
@@ -945,6 +1140,35 @@ mod tests {
       (
         r#"{"waiting": [{"text": "Decide", "due": "today"}]}"#,
         "Status file is invalid: waiting.0.due: Extra inputs are not permitted",
+      ),
+      (r#"{"remaining": "x"}"#, "Status file is invalid: remaining: Input should be a valid list"),
+      (
+        r#"{"remaining": [5]}"#,
+        "Status file is invalid: remaining.0: Input should be a valid dictionary or instance of RemainingItem",
+      ),
+      (
+        r#"{"remaining": [{}]}"#,
+        "Status file is invalid: remaining.0.text: Field required; remaining.0.done: Field required",
+      ),
+      (
+        r#"{"remaining": [{"text": " ", "done": true}]}"#,
+        "Status file is invalid: remaining.0.text: Value error, must not be blank",
+      ),
+      (
+        r#"{"remaining": [{"text": "a", "done": "yes"}]}"#,
+        "Status file is invalid: remaining.0.done: Input should be a valid boolean",
+      ),
+      (
+        r#"{"remaining": [{"text": "a", "done": true, "due": "today"}]}"#,
+        "Status file is invalid: remaining.0.due: Extra inputs are not permitted",
+      ),
+      (
+        r#"{"remaining": [{}, {"text": "a"}]}"#,
+        "Status file is invalid: remaining.0.text: Field required; remaining.0.done: Field required; remaining.1.done: Field required",
+      ),
+      (
+        r#"{"remaining": [], "remaining_updated_at": "2026-11-02T03:10:00Z"}"#,
+        "Status field remaining_updated_at is written by the server; remove it from the file",
       ),
       (
         r#"{"colour": 1, "goal": 5, "waiting": [{"text": 5, "zzz": 1}]}"#,

@@ -45,6 +45,15 @@ const OLDER = {
   updated_at: '2026-10-16T19:00:00Z',
 };
 
+const WITH_REMAINING = {
+  ...STATUS,
+  remaining: [
+    {text: 'Move the server to Rust', done: true},
+    {text: 'Delete the Python server', done: false},
+  ],
+  remaining_updated_at: '2026-10-16T20:30:00Z',
+};
+
 const CHILD_ID = 'child-aaaaaaaa-1111';
 const OTHER_CHILD_ID = 'child-bbbbbbbb-2222';
 
@@ -189,6 +198,10 @@ function waitingItems(panel) {
   return rowByKind(panel, 'waiting').querySelectorAll('[data-waiting-item]');
 }
 
+function remainingItems(panel) {
+  return rowByKind(panel, 'remaining').querySelectorAll('[data-remaining-item]');
+}
+
 function childToggle(panel) {
   return rowByKind(panel, 'children').children[0];
 }
@@ -224,6 +237,44 @@ test('a web session with a status shows the Goal, Now and Waiting on you rows in
   const updated = rowByKind(rig.panel, 'now').querySelector('[data-status-updated]');
   assert.equal(updated.dataset.statusUpdated, STATUS.updated_at, 'the Now row carries its update time');
   assert.equal(waitingItems(rig.panel).length, 2);
+});
+
+test('the Remaining row sits between Goal and Now with the count, update time and one line per item', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: WITH_REMAINING});
+  assert.deepEqual(rowKinds(rig.panel), ['toggle', 'goal', 'remaining', 'now', 'waiting']);
+
+  const row = rowByKind(rig.panel, 'remaining');
+  const value = row.children[1];
+  assert.equal(value.children[0].textContent, '1 of 2 left');
+  assert.equal(value.children[0].dataset.remainingCount, '1');
+  assert.equal(value.children[1].dataset.statusUpdated, WITH_REMAINING.remaining_updated_at);
+  assert.ok(value.children[1].textContent.startsWith('updated '));
+
+  const items = remainingItems(rig.panel);
+  assert.equal(items.length, 2, 'one line per milestone');
+  assert.equal(items[0].dataset.remainingItem, 'done');
+  assert.equal(items[0].children[0].textContent, '✓');
+  assert.equal(items[0].children[1].textContent, 'Move the server to Rust');
+  assert.equal(items[1].dataset.remainingItem, 'open');
+  assert.equal(items[1].children[0].textContent, '○');
+  assert.equal(items[1].children[1].textContent, 'Delete the Python server');
+});
+
+test('a milestone renders its agent-written text literally', async () => {
+  const rig = panelRig();
+  const text = 'Retire <b>old</b> server & keep the log';
+  await openSession(rig, {web_status: {...WITH_REMAINING, remaining: [{text, done: false}]}});
+  const item = remainingItems(rig.panel)[0];
+  assert.equal(item.children[1].textContent, text, 'the text goes in through textContent');
+});
+
+test('a status without Remaining items draws no Remaining row', async () => {
+  for (const status of [STATUS, {...STATUS, remaining: []}]) {
+    const rig = panelRig();
+    await openSession(rig, {web_status: status});
+    assert.deepEqual(rowKinds(rig.panel), ['toggle', 'goal', 'now', 'waiting']);
+  }
 });
 
 test('a waiting item with a link ends with a link to that URL, and one without a link has none', async () => {

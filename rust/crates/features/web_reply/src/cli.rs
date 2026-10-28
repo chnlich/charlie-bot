@@ -74,7 +74,7 @@ struct SessionArgs {
 
 #[derive(Args)]
 struct StatusSetArgs {
-  /// JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin
+  /// JSON object with any of goal, now, waiting, remaining; prints cold reads and exits 3 before storing; - reads stdin
   #[arg(long)]
   file: String,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
@@ -185,8 +185,8 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// `_render_status`: the GET result as plain text, the session's Goal, Now and Waiting on you, then one block per child
-/// with waiting items, then the Now of each open child.
+/// `_render_status`: the GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then one
+/// block per child with waiting items, then the Now of each open child.
 fn render_status(result: &Value) -> Result<String, CliExit> {
   let mut lines: Vec<String> = Vec::new();
   let status = field(result, "web_status")?;
@@ -194,6 +194,23 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
     lines.push("No status yet".to_string());
   } else {
     lines.push(format!("Goal: {}", or_not_set(field(status, "goal")?)));
+    let remaining: &[Value] = match status.get("remaining") {
+      None | Some(Value::Null) => &[],
+      Some(value) => list(value)?,
+    };
+    if !remaining.is_empty() {
+      let done: Vec<bool> = remaining.iter().map(remaining_done).collect::<Result<_, _>>()?;
+      let open = done.iter().filter(|done| !**done).count();
+      lines.push(format!(
+        "Remaining: {open} of {} left (updated {})",
+        remaining.len(),
+        pyfmt::python_str(field(status, "remaining_updated_at")?)
+      ));
+      for (item, done) in remaining.iter().zip(done) {
+        let marker = if done { "✓" } else { "○" };
+        lines.push(format!("  {marker} {}", pyfmt::python_str(field(item, "text")?)));
+      }
+    }
     lines.push(format!(
       "Now: {} (updated {})",
       or_not_set(field(status, "now")?),
@@ -249,6 +266,14 @@ fn item_lines(item: &Value) -> Result<Vec<String>, CliExit> {
     }
   }
   Ok(lines)
+}
+
+/// A remaining item's `done` flag; a response without a boolean one is a broken server contract.
+fn remaining_done(item: &Value) -> Result<bool, CliExit> {
+  item
+    .get("done")
+    .and_then(Value::as_bool)
+    .ok_or_else(|| CliExit::error("the response carries a remaining item without a boolean done"))
 }
 
 /// `_item_line`: `- <text>`, with ` (<link>)` appended when the item names a link.
@@ -323,4 +348,60 @@ fn block_on<F: Future>(future: F) -> Result<F::Output, CliExit> {
 
 fn anyhow_exit(error: anyhow::Error) -> CliExit {
   CliExit::error(format!("{error:#}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use serde_json::json;
+
+  use super::render_status;
+
+  /// A GET result for a status that carries `status` and no descendant or child rows.
+  fn status_result(status: serde_json::Value) -> serde_json::Value {
+    json!({"web_status": status, "descendants": [], "children": []})
+  }
+
+  #[test]
+  fn a_status_with_remaining_prints_the_count_and_one_line_per_item_after_the_goal() {
+    let result = status_result(json!({
+      "goal": "Ship the panel",
+      "remaining": [
+        {"text": "Move the server to Rust", "done": true},
+        {"text": "Delete the Python server", "done": false},
+      ],
+      "remaining_updated_at": "2026-11-02T03:10:00Z",
+      "now": "Reviewing",
+      "waiting": [],
+      "updated_at": "2026-11-02T03:10:00Z",
+    }));
+
+    let text = render_status(&result).expect("the status renders");
+
+    assert_eq!(
+      text.lines().collect::<Vec<_>>(),
+      vec![
+        "Goal: Ship the panel",
+        "Remaining: 1 of 2 left (updated 2026-11-02T03:10:00Z)",
+        "  ✓ Move the server to Rust",
+        "  ○ Delete the Python server",
+        "Now: Reviewing (updated 2026-11-02T03:10:00Z)",
+        "Waiting on you: Nothing",
+      ]
+    );
+  }
+
+  #[test]
+  fn a_status_without_remaining_prints_no_remaining_line() {
+    let result = status_result(json!({
+      "goal": "Ship the panel",
+      "now": "Reviewing",
+      "waiting": [],
+      "updated_at": "2026-11-02T03:10:00Z",
+    }));
+
+    let text = render_status(&result).expect("the status renders");
+
+    assert!(text.lines().all(|line| !line.starts_with("Remaining:")), "{text}");
+    assert_eq!(text.lines().nth(1), Some("Now: Reviewing (updated 2026-11-02T03:10:00Z)"));
+  }
 }

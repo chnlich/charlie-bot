@@ -100,6 +100,8 @@ struct Literal {
   line: usize,
   /// The literal is the argument of `.join(..)`, `Path::new(..)` or `PathBuf::from(..)`.
   path_arg: bool,
+  /// The literal is the argument of `.strip_prefix(..)` or `.starts_with(..)`, a prefix that claims routes.
+  prefix_arg: bool,
 }
 
 struct UseRecord {
@@ -811,6 +813,21 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Read the plan registry through `Registry::plan_registry_reader`, which `features/artifacts` registers.",
   },
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
+  OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
+  OwnerRow {
+    name: "metadata.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::metadata_slot::METADATA_FILE_NAME`, or `charliebot_store::layout::metadata_path` for a \
+           session.",
+  },
+  OwnerRow { name: "data", owner: "runtime/store", hint: "Use `charliebot_store::layout::data_dir`." },
+  OwnerRow { name: "runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::runs_dir`." },
+  OwnerRow { name: "triggers", owner: "runtime/store", hint: "Use `charliebot_store::layout::triggers_dir`." },
+  OwnerRow {
+    name: "chat_events.jsonl",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::layout::chat_events_path`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
@@ -867,15 +884,22 @@ fn event_name_rows(workspace: &'static Workspace) -> Vec<OwnerRow> {
 /// A class of names that one crate must hold. A production literal that `name_of` maps to a name counts toward the
 /// crates that spell that name; a name spelled in two or more crates fails.
 struct SpellingClass {
-  name_of: fn(&str) -> Option<String>,
+  name_of: fn(&Site) -> Option<String>,
   hint: &'static str,
 }
 
 const ENVIRONMENT_HINT: &str = "Name it once, as a const in its owner module (infra/core for CHARLIEBOT_ names), and \
                                 reference that const from the other crates.";
 
-/// The environment variable names: `CHARLIEBOT_` followed by one or more of `A-Z`, `0-9` and `_`.
-const SPELLING_CLASSES: &[SpellingClass] = &[SpellingClass { name_of: environment_name, hint: ENVIRONMENT_HINT }];
+const ROUTE_HINT: &str = "Export the path as a `pub const` from the crate that registers its route, and reference that \
+                          const from the other crates. `charliebot_cli_common::route::fill` fills its `{}` parameters.";
+
+/// The environment variable names: `CHARLIEBOT_` followed by one or more of `A-Z`, `0-9` and `_`. The route paths: the
+/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`.
+const SPELLING_CLASSES: &[SpellingClass] = &[
+  SpellingClass { name_of: environment_name, hint: ENVIRONMENT_HINT },
+  SpellingClass { name_of: route_name, hint: ROUTE_HINT },
+];
 
 /// A production string literal and where it sits.
 struct Site {
@@ -884,6 +908,7 @@ struct Site {
   line: usize,
   value: String,
   path_arg: bool,
+  prefix_arg: bool,
 }
 
 impl Site {
@@ -907,6 +932,7 @@ fn production_sites(workspace: &Workspace) -> Vec<Site> {
               line: literal.line,
               value: literal.value.clone(),
               path_arg: literal.path_arg,
+              prefix_arg: literal.prefix_arg,
             });
           }
         }
@@ -936,12 +962,42 @@ fn spells(site: &Site, name: &str) -> bool {
 }
 
 /// The `CHARLIEBOT_[A-Z0-9_]+` name a literal spells, whole or before its first `=`.
-fn environment_name(value: &str) -> Option<String> {
-  let name = value.split_once('=').map_or(value, |(name, _)| name);
+fn environment_name(site: &Site) -> Option<String> {
+  let name = site.value.split_once('=').map_or(site.value.as_str(), |(name, _)| name);
   let suffix = name.strip_prefix("CHARLIEBOT_")?;
   let spelled =
     !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
   spelled.then(|| name.to_string())
+}
+
+/// The route path a literal spells: the part from `/api/` up to the first `?`, with each `{...}` parameter written `{}`,
+/// so `{session_id}` and `{id}` name one path. A literal that is the argument of `strip_prefix(..)` or `starts_with(..)`
+/// is a prefix that claims routes, so it names no path.
+fn route_name(site: &Site) -> Option<String> {
+  if site.prefix_arg {
+    return None;
+  }
+  let start = site.value.find("/api/")?;
+  let path = site.value[start..].split('?').next().unwrap_or_default();
+  Some(parameters_as_empty(path))
+}
+
+/// The path with each `{...}` parameter replaced by `{}`.
+fn parameters_as_empty(path: &str) -> String {
+  let mut named = String::with_capacity(path.len());
+  let mut in_parameter = false;
+  for character in path.chars() {
+    match (in_parameter, character) {
+      (false, '{') => {
+        in_parameter = true;
+        named.push_str("{}");
+      }
+      (true, '}') => in_parameter = false,
+      (false, _) => named.push(character),
+      (true, _) => {}
+    }
+  }
+  named
 }
 
 /// The owner rule's failures: each owner row's name spelled outside its owner, and each spelling class's name spelled
@@ -959,7 +1015,7 @@ fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingC
   for class in classes {
     let mut by_name: BTreeMap<String, Vec<&Site>> = BTreeMap::new();
     for site in &sites {
-      if let Some(name) = (class.name_of)(&site.value) {
+      if let Some(name) = (class.name_of)(site) {
         by_name.entry(name).or_default().push(site);
       }
     }
@@ -1432,6 +1488,52 @@ mod tests {
   );
 }
 
+/// The route rule on a synthetic workspace. A path that two crates spell fails once, with each site and the hint. Two
+/// spellings that differ only in a parameter's name count as one path, and a `strip_prefix` or `starts_with` argument
+/// names no path, so the reader crate passes.
+#[test]
+fn the_route_rule_finds_each_break() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  let owner_lib = r##"pub const THING: &str = "/api/things/{id}";
+"##;
+  let writer_lib = r##"pub fn send() -> &'static str {
+  "/api/things/{thing_id}?verbose=1"
+}
+"##;
+  let reader_lib = r##"pub fn claims(path: &str) -> bool {
+  path.strip_prefix("/api/things/").is_some() || path.starts_with("/api/things/")
+}
+"##;
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/owner", "crates/features/writer", "crates/features/reader"])),
+      ("crates/infra/owner/Cargo.toml", crate_manifest("owner-crate", &[], &[])),
+      ("crates/infra/owner/src/lib.rs", owner_lib.to_string()),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
+      ("crates/features/writer/src/lib.rs", writer_lib.to_string()),
+      ("crates/features/reader/Cargo.toml", crate_manifest("reader", &[], &[])),
+      ("crates/features/reader/src/lib.rs", reader_lib.to_string()),
+    ],
+  );
+  let workspace = load_workspace(root);
+
+  assert_eq!(
+    owner_failures(&workspace, &[], SPELLING_CLASSES),
+    vec![
+      [
+        "/api/things/{}: spelled in 2 crates at:",
+        "  crates/features/writer/src/lib.rs:2",
+        "  crates/infra/owner/src/lib.rs:1",
+        ROUTE_HINT,
+      ]
+      .join("\n"),
+    ],
+    "the route rule fails the path that two crates spell, and passes the prefix arguments"
+  );
+}
+
 /// The event names of `event_types.rs` become owner rows with no table edit: the derived set holds the value with
 /// `_`, and none of the names the backend output formats also use nor a single word. A writer crate spelling the
 /// protected name fails with its `file:line` and hint; its spellings of the unprotected ones pass.
@@ -1731,6 +1833,8 @@ struct LiteralCollector {
   literals: Vec<Literal>,
   /// The start positions of the literals that are the argument of `.join(..)`, `Path::new(..)` or `PathBuf::from(..)`.
   path_args: BTreeSet<(usize, usize)>,
+  /// The start positions of the literals that are the argument of `.strip_prefix(..)` or `.starts_with(..)`.
+  prefix_args: BTreeSet<(usize, usize)>,
 }
 
 fn production_literals(items: &[Item]) -> Vec<Literal> {
@@ -1741,15 +1845,15 @@ fn production_literals(items: &[Item]) -> Vec<Literal> {
   collector.literals
 }
 
-impl LiteralCollector {
-  fn mark_path_args<'a>(&mut self, args: impl Iterator<Item = &'a Expr>) {
-    for arg in args {
-      if let Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) = arg {
-        let start = value.span().start();
-        self.path_args.insert((start.line, start.column));
-      }
+/// The start positions of the string literals among `args`.
+fn literal_positions<'a>(args: impl Iterator<Item = &'a Expr> + 'a) -> impl Iterator<Item = (usize, usize)> + 'a {
+  args.filter_map(|arg| match arg {
+    Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) => {
+      let start = value.span().start();
+      Some((start.line, start.column))
     }
-  }
+    _ => None,
+  })
 }
 
 impl<'ast> Visit<'ast> for LiteralCollector {
@@ -1824,7 +1928,9 @@ impl<'ast> Visit<'ast> for LiteralCollector {
 
   fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
     if node.method == "join" {
-      self.mark_path_args(node.args.iter());
+      self.path_args.extend(literal_positions(node.args.iter()));
+    } else if node.method == "strip_prefix" || node.method == "starts_with" {
+      self.prefix_args.extend(literal_positions(node.args.iter()));
     }
     syn::visit::visit_expr_method_call(self, node);
   }
@@ -1833,15 +1939,17 @@ impl<'ast> Visit<'ast> for LiteralCollector {
     if let Expr::Path(callee) = &*node.func
       && is_path_constructor(&callee.path)
     {
-      self.mark_path_args(node.args.iter());
+      self.path_args.extend(literal_positions(node.args.iter()));
     }
     syn::visit::visit_expr_call(self, node);
   }
 
   fn visit_lit_str(&mut self, node: &'ast LitStr) {
     let start = node.span().start();
-    let path_arg = self.path_args.contains(&(start.line, start.column));
-    self.literals.push(Literal { value: node.value(), line: start.line, path_arg });
+    let position = (start.line, start.column);
+    let path_arg = self.path_args.contains(&position);
+    let prefix_arg = self.prefix_args.contains(&position);
+    self.literals.push(Literal { value: node.value(), line: start.line, path_arg, prefix_arg });
   }
 }
 
@@ -1853,7 +1961,12 @@ fn collect_token_literals(tokens: TokenStream, literals: &mut Vec<Literal>) {
       TokenTree::Literal(literal) => {
         let parsed: Lit = syn::parse_str(&literal.to_string()).expect("a literal token parses as a syn literal");
         if let Lit::Str(value) = parsed {
-          literals.push(Literal { value: value.value(), line: literal.span().start().line, path_arg: false });
+          literals.push(Literal {
+            value: value.value(),
+            line: literal.span().start().line,
+            path_arg: false,
+            prefix_arg: false,
+          });
         }
       }
       TokenTree::Ident(_) | TokenTree::Punct(_) => {}

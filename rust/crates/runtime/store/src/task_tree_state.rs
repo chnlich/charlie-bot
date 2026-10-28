@@ -221,6 +221,39 @@ pub(crate) struct TreeIndex {
   pub(crate) archive_by_id: HashMap<String, bool>,
 }
 
+/// The most ancestors one chain walk follows before it reports the chain as overlong.
+pub(crate) const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
+
+/// The metadata of one indexed node; a node the index lacks answers its 404.
+pub(crate) fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
+  index
+    .metas
+    .get(session_id)
+    .map(Arc::as_ref)
+    .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+}
+
+/// The ancestors of a node, nearest first.
+pub(crate) fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
+  let mut chain = Vec::new();
+  let mut seen = HashSet::from([session_id.to_string()]);
+  let mut current =
+    index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+  while let Some(parent_id) = current.task_parent_id.as_deref() {
+    if !seen.insert(parent_id.to_string()) {
+      return Err(StoreError::conflict(vec![format!("task relation cycle through {parent_id}")]));
+    }
+    current = index.metas.get(parent_id).ok_or_else(|| StoreError::not_found(format!("task {parent_id} not found")))?;
+    chain.push(parent_id.to_string());
+    if chain.len() > TASK_ANCESTOR_HOP_LIMIT {
+      return Err(StoreError::conflict(vec![format!(
+        "ancestor chain of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} hops"
+      )]));
+    }
+  }
+  Ok(chain)
+}
+
 pub(crate) struct CachedTreeIndex {
   pub(crate) generation: u64,
   pub(crate) built_at: Instant,

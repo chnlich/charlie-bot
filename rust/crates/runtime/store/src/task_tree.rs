@@ -23,6 +23,7 @@ use crate::layout;
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
+use crate::task_reparent;
 #[cfg(test)]
 pub(crate) use crate::task_tree_state::IdentityStage;
 pub(crate) use crate::task_tree_state::{
@@ -30,6 +31,7 @@ pub(crate) use crate::task_tree_state::{
   EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
 };
 pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity};
+use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -38,7 +40,6 @@ const LIFECYCLE_STATE_TYPES: &[&str] =
   &[event_types::CLONE_START, event_types::TASK_CLOSED, event_types::TASK_REOPENED];
 // The facts a node's Run verdicts read: terminal outcomes and stop requests.
 const RUN_FACT_TYPES: &[&str] = &[event_types::RUN_FINISHED, event_types::RUN_STOP_REQUESTED];
-const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 // Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
@@ -80,6 +81,18 @@ pub struct PatchTask {
   pub task: Option<Option<TaskSpec>>,
   pub subtree_prompt: Option<Option<String>>,
   pub node_prompt: Option<Option<String>>,
+}
+
+impl PatchTask {
+  /// Whether the body sets `task_parent_id` and no other field: the one change an agent may ask for.
+  fn sets_only_parent(&self) -> bool {
+    self.task_parent_id.is_some()
+      && self.name.is_none()
+      && self.profile.is_none()
+      && self.task.is_none()
+      && self.subtree_prompt.is_none()
+      && self.node_prompt.is_none()
+  }
 }
 
 /// The structural guards that the task dispatcher answers for a node (`TaskTreeManager.pending_input_blockers` and
@@ -1465,11 +1478,13 @@ impl Store {
     Ok(deleted)
   }
 
-  /// Apply one operator PATCH of a task node with its structural guards (`TaskTreeManager.patch_task`).
+  /// Apply one PATCH of a task node with its structural guards (`TaskTreeManager.patch_task`).
   ///
-  /// Operator scope only. Under the control lock the guards of every node that the change moves or restructures are
-  /// collected before any write, so a refusal writes nothing. The field write is a fresh read-modify-write, so a
-  /// rename that landed meanwhile is kept. Each prompt scope then swaps its reference and lands its fact.
+  /// The operator may change every field. An agent may only reparent within its own subtree, with a body that sets
+  /// `task_parent_id` alone; the move keeps each moved session's subtree rules (`task_reparent`). Under the control
+  /// lock the guards of every node that the change moves or restructures are collected before any write, so a refusal
+  /// writes nothing. The field write is a fresh read-modify-write, so a rename that landed meanwhile is kept. Each
+  /// prompt scope then swaps its reference and lands its fact. A changed parent leaves one `task_reparented` fact.
   pub async fn patch_task(
     &self,
     session_id: &str,
@@ -1477,15 +1492,21 @@ impl Store {
     caller: TaskCaller,
     guards: &dyn StructuralBlockers,
   ) -> StoreResult<SessionMetadata> {
-    if caller != TaskCaller::Operator {
-      return Err(StoreError::forbidden("task metadata mutations require operator credentials"));
-    }
+    let caller_session_id = match &caller {
+      TaskCaller::Operator => None,
+      TaskCaller::Agent { session_id: caller_task } if patch.sets_only_parent() => Some(caller_task.clone()),
+      _ => return Err(StoreError::forbidden("task metadata mutations require operator credentials")),
+    };
     let guard = self.control_lock().await;
     // Rebuild from disk under the lock: the cache can predate writes that another process made.
     self.invalidate_tree_index();
     let index = self.tree_index()?;
     let meta = self.load_task_meta(session_id).await?;
     let PatchTask { name, task_parent_id, profile, task, subtree_prompt, node_prompt } = patch;
+    if let Some(caller_task) = caller_session_id.as_deref() {
+      let new_parent = task_parent_id.as_ref().and_then(Option::as_deref);
+      task_reparent::check_agent_scope(&index, caller_task, session_id, new_parent)?;
+    }
     let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
     let structural = task.is_some() || profile.is_some() || task_parent_id.is_some();
     let mut blockers = if structural { self.structural_blockers(session_id, guards)? } else { Vec::new() };
@@ -1493,8 +1514,17 @@ impl Store {
     if profile == Some(Some(TaskProfile::Worker)) && meta.profile != TaskProfile::Worker && children > 0 {
       blockers.push("demotion to worker requires a task with no child tasks".to_string());
     }
-    if let Some(parent) = task_parent_id.as_ref().filter(|parent| parent.as_deref() != meta.task_parent_id.as_deref()) {
+    let reparent = task_parent_id.clone().filter(|parent| *parent != meta.task_parent_id);
+    let mut carried = None;
+    if let Some(parent) = &reparent {
       blockers.extend(self.reparent_blockers(&index, session_id, parent.as_deref(), guards)?);
+      if caller_session_id.is_some()
+        && let Some(parent_id) = parent.as_deref()
+      {
+        let (prompt_blockers, carry) = task_reparent::prompt_check(&index, session_id, parent_id)?;
+        blockers.extend(prompt_blockers);
+        carried = carry;
+      }
     }
     if !blockers.is_empty() {
       blockers.sort();
@@ -1502,7 +1532,23 @@ impl Store {
       return Err(StoreError::conflict(blockers));
     }
 
-    self
+    if carried.is_some() {
+      // An interrupted earlier subtree edit lands its own fact first, so the carry's fact folds no second transition.
+      self.ensure_prompt_changed_fact_locked(&guard, session_id, &meta, PromptScope::Subtree).await?;
+    }
+    if let Some(parent) = &reparent {
+      // Logged before the writes, so the caller of a move that stops between them stays on record.
+      tracing::info!(
+        session_id,
+        previous_parent_id = ?meta.task_parent_id,
+        task_parent_id = ?parent,
+        caller_session_id = ?caller_session_id,
+        carried_subtree_ref = ?carried.as_ref().map(|rule| &rule.reference),
+        "task_reparent"
+      );
+    }
+    let carried_ref = carried.as_ref().map(|rule| rule.reference.clone());
+    let moved = self
       .mutate_fresh(session_id, false, true, move |meta| {
         if let Some(name) = name {
           meta.name = name;
@@ -1516,6 +1562,9 @@ impl Store {
         if let Some(parent) = task_parent_id {
           meta.task_parent_id = parent;
         }
+        if let Some(reference) = carried_ref {
+          meta.subtree_prompt_ref = Some(reference);
+        }
         meta.schema_version = 2;
         meta.updated_at = UtcDateTime::now();
         Ok(true)
@@ -1523,6 +1572,20 @@ impl Store {
       .await?
       .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
     self.invalidate_tree_index();
+    if carried.is_some() {
+      self.ensure_prompt_changed_fact_locked(&guard, session_id, &moved, PromptScope::Subtree).await?;
+    }
+    if let Some(parent) = &reparent {
+      let event = task_reparent::reparented_event(
+        caller_actor(&caller),
+        session_id,
+        meta.task_parent_id.as_deref(),
+        parent.as_deref(),
+        caller_session_id.as_deref(),
+        carried.as_ref(),
+      );
+      self.append_control_fact(&guard, session_id, event).await?;
+    }
 
     if let Some(body) = subtree_prompt {
       self.apply_prompt_change(&guard, session_id, PromptScope::Subtree, body.as_deref()).await?;
@@ -2066,37 +2129,9 @@ fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
   }
 }
 
-fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
-  index
-    .metas
-    .get(session_id)
-    .map(Arc::as_ref)
-    .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
-}
-
 /// The 409 blocker sentence naming a node's closed ancestor tasks.
 fn closed_ancestors_blocker(closed: &[String]) -> String {
   format!("closed ancestor task(s): {}", closed.join(", "))
-}
-
-fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
-  let mut chain = Vec::new();
-  let mut seen = HashSet::from([session_id.to_string()]);
-  let mut current =
-    index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
-  while let Some(parent_id) = current.task_parent_id.as_deref() {
-    if !seen.insert(parent_id.to_string()) {
-      return Err(StoreError::conflict(vec![format!("task relation cycle through {parent_id}")]));
-    }
-    current = index.metas.get(parent_id).ok_or_else(|| StoreError::not_found(format!("task {parent_id} not found")))?;
-    chain.push(parent_id.to_string());
-    if chain.len() > TASK_ANCESTOR_HOP_LIMIT {
-      return Err(StoreError::conflict(vec![format!(
-        "ancestor chain of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} hops"
-      )]));
-    }
-  }
-  Ok(chain)
 }
 
 /// Every transitive descendant in depth-first order. Only non-archived nodes count toward the cap, so a closed
@@ -3440,7 +3475,7 @@ pub(crate) mod tests {
   }
 
   /// Write one archive close fact directly, as the completion owner's archive writes it.
-  async fn archive_node(store: &Store, session_id: &str) {
+  pub(crate) async fn archive_node(store: &Store, session_id: &str) {
     let guard = store.control_lock().await;
     let event = archived_close_event(session_id, "archive-test", ACTOR_USER, "archived by the user", &[], None);
     store.append_control_fact(&guard, session_id, event).await.unwrap();

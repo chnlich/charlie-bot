@@ -1,5 +1,6 @@
 //! The task-tree prompt contract over a real store: one assembler at every depth, inherited subtree rules without
-//! ancestor node-rule or sibling leakage, the overlay states of a launch, and the historical run context.
+//! ancestor node-rule or sibling leakage, the prompts a reparent keeps, the overlay states of a launch, and the
+//! historical run context.
 //!
 //! Each test builds a task tree in its own temporary home and reads it through `charliebot_store`. The prompt
 //! references are written the way the store's prompt-change path writes them. No agent CLI and no server starts.
@@ -16,8 +17,9 @@ use charliebot_core::config::{
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RunRecord, SequenceArchiveHook,
-  SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult, TaskCaller,
+  AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, PatchTask, RunRecord,
+  SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
+  StructuralBlockers, TaskCaller,
 };
 use charliebot_tasks::prompts::{
   CoherentSnapshot, PromptEnv, PromptSnapshot, RuleInputs, SNAPSHOT_FILENAME, assemble_coherent_snapshot,
@@ -392,6 +394,57 @@ async fn three_levels_with_both_scopes_prove_inheritance_and_ordering() {
       ("node".to_string(), Some(tree.mid.clone())),
     ]
   );
+}
+
+/// The structural guards a reparent reads: no node in these trees holds a pending input or an owed report.
+struct NoGuards;
+
+impl StructuralBlockers for NoGuards {
+  fn pending_input_blockers(&self, _session_id: &str) -> StoreResult<Vec<String>> {
+    Ok(Vec::new())
+  }
+
+  fn undelivered_report_blockers(&self, _session_id: &str) -> StoreResult<Vec<String>> {
+    Ok(Vec::new())
+  }
+}
+
+/// An agent reparent keeps each moved session's instructions word for word. The move of `moved` drops the rule of
+/// `holder`, which the store carries onto `moved`; the move of `wanderer` drops no rule and keeps the hash too.
+#[tokio::test]
+async fn an_agent_reparent_keeps_each_moved_prompt_word_for_word() {
+  let mut harness = Harness::new();
+  let caller = harness.node("caller", None, TaskProfile::Manager, None, "Caller").await;
+  let holder = harness.node("holder", Some(&caller.id), TaskProfile::Manager, None, "Holder").await;
+  let moved = harness.node("moved", Some(&holder.id), TaskProfile::Manager, None, "Moved").await;
+  let leaf_task = worker_task("leaf goal", Some("/tmp/repo-leaf"));
+  let leaf = harness.node("leaf", Some(&moved.id), TaskProfile::Worker, Some(leaf_task), "Leaf").await;
+  let target = harness.node("target", Some(&caller.id), TaskProfile::Manager, None, "Target").await;
+  let wanderer = harness.node("wanderer", Some(&target.id), TaskProfile::Manager, None, "Wanderer").await;
+  let spare = harness.node("spare", Some(&caller.id), TaskProfile::Manager, None, "Spare").await;
+  harness.set_refs(&caller.id, Some("caller subtree rule"), None).await;
+  harness.set_refs(&holder.id, Some("holder subtree rule"), None).await;
+  harness.set_refs(&leaf.id, Some("leaf subtree rule"), Some("leaf node rule")).await;
+  let agent = || TaskCaller::Agent { session_id: caller.id.clone() };
+  let move_under =
+    |parent: &SessionMetadata| PatchTask { task_parent_id: Some(Some(parent.id.clone())), ..PatchTask::default() };
+
+  let moved_before = harness.snapshot_for(&moved.id, "manager_turn").await;
+  let leaf_before = harness.snapshot_for(&leaf.id, "work").await;
+  harness.store.patch_task(&moved.id, move_under(&target), agent(), &NoGuards).await.expect("the carried move lands");
+  let moved_after = harness.snapshot_for(&moved.id, "manager_turn").await;
+  let leaf_after = harness.snapshot_for(&leaf.id, "work").await;
+  assert_eq!(moved_after.instructions_text(), moved_before.instructions_text());
+  assert_eq!(leaf_after.instructions_text(), leaf_before.instructions_text());
+  assert!(moved_before.instructions_text().contains("holder subtree rule"));
+  let holder_ref = harness.store.load_meta(&holder.id).await.unwrap().unwrap().subtree_prompt_ref.unwrap();
+  let carried = ("subtree".to_string(), format!("prompt_bodies/{holder_ref}.md"), Some(moved.id.clone()));
+  assert!(sources_of(&moved_after).contains(&carried));
+
+  let wanderer_before = harness.snapshot_for(&wanderer.id, "manager_turn").await;
+  harness.store.patch_task(&wanderer.id, move_under(&spare), agent(), &NoGuards).await.expect("the plain move lands");
+  let wanderer_after = harness.snapshot_for(&wanderer.id, "manager_turn").await;
+  assert_eq!(wanderer_after.prompt_hash(), wanderer_before.prompt_hash());
 }
 
 #[tokio::test]

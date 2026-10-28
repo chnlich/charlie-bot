@@ -577,9 +577,11 @@ pub(crate) fn model_response(store: &Store, meta: &SessionMetadata) -> Response 
 mod tests {
   use std::sync::{Arc, Mutex};
 
-  use charliebot_core::run_token::RunTokenClaims;
+  use axum::http::header::{AUTHORIZATION, HeaderValue};
+  use charliebot_core::config::CREDENTIALS_FILENAME;
+  use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_core::test_support::EventSink;
-  use charliebot_store::{SIDEBAR_CHANNEL, session_channel};
+  use charliebot_store::{AGENT_REPARENT_SCOPE_REFUSAL, SIDEBAR_CHANNEL, session_channel};
   use tracing::Event;
   use tracing::field::{Field, Visit};
 
@@ -972,6 +974,57 @@ mod tests {
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(detail, json!({"detail": "task metadata mutations require operator credentials"}));
+  }
+
+  /// A run token resolves through `resolve_caller` to the agent path: a move inside the caller's subtree lands with the
+  /// caller on its fact, a move of the caller's own task is the scope refusal, and a name-only body stays the rename.
+  #[tokio::test]
+  async fn a_run_token_reparents_only_inside_its_own_subtree() {
+    let (home, features) = feature_context();
+    install_dispatcher(&features);
+    let access_key = "synthetic-access-key";
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {access_key}\n"))
+      .expect("credentials file");
+    let manager = create_node(&features.store, "manager", None, TaskProfile::Manager).await;
+    let child = create_node(&features.store, "child", Some(&manager.id), TaskProfile::Manager).await;
+    let grandchild = create_node(&features.store, "grandchild", Some(&child.id), TaskProfile::Manager).await;
+    let sibling = create_node(&features.store, "sibling", Some(&manager.id), TaskProfile::Manager).await;
+    let run_path = features.store.run_metadata_path(&manager.id, "manager-run");
+    std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run =
+      json!({"id": "manager-run", "session_id": manager.id, "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+    std::fs::write(&run_path, run.to_string()).expect("launched run record");
+    let claims = RunTokenClaims {
+      session_id: manager.id.clone(),
+      run_id: "manager-run".to_string(),
+      agent: "synthetic".to_string(),
+    };
+    let bearer = format!("Bearer {}", run_token::sign_run_token(&claims, access_key).expect("run token"));
+    let agent_request = |payload: Value| {
+      let (mut headers, body) = json_request(payload);
+      headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer).expect("bearer header"));
+      (headers, body)
+    };
+
+    let (headers, body) = agent_request(json!({"task_parent_id": sibling.id}));
+    let response = patch_session(State(features.clone()), AxumPath(grandchild.id.clone()), headers, body).await;
+    let (status, detail) = answer(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["task_parent_id"], json!(sibling.id));
+    let events = features.store.load_chat_events_sync(&grandchild.id).expect("moved task events");
+    let fact = events.iter().find(|event| event["type"].as_str() == Some(event_types::TASK_REPARENTED)).unwrap();
+    assert_eq!(fact["actor"].as_str(), Some("agent"));
+    assert_eq!(fact["caller_session_id"].as_str(), Some(manager.id.as_str()));
+
+    let (headers, body) = agent_request(json!({"task_parent_id": sibling.id}));
+    let response = patch_session(State(features.clone()), AxumPath(manager.id.clone()), headers, body).await;
+    assert_eq!(answer(response).await, (StatusCode::FORBIDDEN, json!({"detail": AGENT_REPARENT_SCOPE_REFUSAL})));
+
+    let (headers, body) = agent_request(json!({"name": "Renamed"}));
+    let response = patch_session(State(features.clone()), AxumPath(grandchild.id.clone()), headers, body).await;
+    let (status, detail) = answer(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["name"], "Renamed");
   }
 
   #[tokio::test]

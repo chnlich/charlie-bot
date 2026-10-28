@@ -6,37 +6,6 @@ use serde::{Deserialize, Serialize};
 /// The Python default for cron task and create-request time zones.
 pub const DEFAULT_TIMEZONE: &str = "America/Los_Angeles";
 
-const STEP_FIELDS: &[Field] = &[
-  Field::required("name", FieldType::String).min_length(1),
-  Field::optional("prompt_file", FieldType::NullableString),
-  Field::optional("prompt", FieldType::NullableString),
-  Field::optional("backend", FieldType::NullableString),
-  Field::optional("distinct_backend_from", FieldType::NullableString),
-];
-
-/// The nested step body model used by FastAPI request validation.
-pub const STEP_MODEL: BodyModel = BodyModel::optional(STEP_FIELDS).forbid_extra();
-
-const TASK_FIELDS: &[Field] = &[
-  Field::required("name", FieldType::String),
-  Field::required("cron", FieldType::String),
-  Field::optional("prompt_file", FieldType::NullableString),
-  Field::optional("repo", FieldType::NullableString),
-  Field::optional("backend", FieldType::NullableString),
-  Field::optional("timezone", FieldType::String),
-  Field::optional("enabled", FieldType::Boolean),
-  Field::optional("project", FieldType::NullableString),
-  Field::optional("allow_failure", FieldType::Boolean),
-  Field::optional("session_id", FieldType::NullableString),
-  Field::optional("mode", FieldType::NullableLiteral(&["master", "worker"])),
-  Field::optional("prompt", FieldType::NullableString),
-  Field::optional("handler", FieldType::NullableString),
-  Field::optional("steps", FieldType::NullableModelList { class_name: "StepConfig", model: &STEP_MODEL }),
-];
-
-/// The YAML task model: forbids unknown fields and applies the model-level source and mode rules.
-pub const TASK_MODEL: BodyModel = BodyModel::optional(TASK_FIELDS).forbid_extra().checked(check_task_model);
-
 /// A named step in an ordered scheduled-worker chain.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -184,12 +153,6 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
     }
   }
   Ok(())
-}
-
-fn check_task_model(values: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-  serde_json::from_value::<ScheduledTaskConfig>(serde_json::Value::Object(values.clone()))
-    .ok()
-    .and_then(|task| validate_task(&task).err())
 }
 
 fn default_timezone() -> String {

@@ -663,12 +663,9 @@ where
 
 fn write_cron_key(cfg: &CharlieBotConfig, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
   let path = loader::cron_path(cfg, name);
-  let raw = std::fs::read_to_string(&path)?;
-  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw)?;
-  let mut value_json = serde_json::to_value(yaml)?;
-  let object = value_json.as_object_mut().ok_or_else(|| anyhow::anyhow!("cron config must be a mapping"))?;
-  object.insert(key.to_string(), value);
-  std::fs::write(&path, charliebot_core::yaml::dump(&value_json)?)?;
+  let mut data = loader::read_task_file(&path).map_err(|error| anyhow::anyhow!(error.message_without_path()))?;
+  data.insert(key.to_string(), value);
+  loader::write_task_file(&path, &Value::Object(data))?;
   Ok(())
 }
 

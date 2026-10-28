@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::yaml;
 use serde_json::Value;
 
 use crate::loader;
@@ -28,7 +27,8 @@ pub struct SeedReport {
 /// With `dry_run` the same validation runs, nothing is written or created, and a would-be seed reports
 /// `would-create` — the preview `./scripts/setup.sh -n` shows must fail exactly where the real run would.
 ///
-/// Creates `config.d/cron.d/` when absent. Writes through [`yaml::dump`] (the same writer the cron API uses).
+/// Creates `config.d/cron.d/` when absent. Writes through [`loader::write_task_file`] (the same writer the cron
+/// API uses).
 /// Validates every default entry before writing: each must construct a [`crate::config::ScheduledTaskConfig`]
 /// after `prompt_file`/`local` resolution (an entry with `steps` resolves each step's `prompt_file` exactly like
 /// the task-level pointer) and every `prompt_file` must resolve to an existing file. Fails loudly without writing
@@ -72,8 +72,7 @@ pub fn seed_default_cron_tasks(
     let (_, body) = split_entry(entry)?;
     // Persist the pointer unchanged: the pointed file owns the prompt body,
     // and this host file carries only its path.
-    let contents = yaml::dump(&body).map_err(|error| format!("{}: {error}", path.display()))?;
-    std::fs::write(&path, contents).map_err(|error| format!("{}: {error}", path.display()))?;
+    loader::write_task_file(&path, &body).map_err(|error| format!("{}: {error}", path.display()))?;
     report.push(SeedReport { name, status: "created" });
   }
   Ok(report)

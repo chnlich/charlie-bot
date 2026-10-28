@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use charliebot_core::config::{CONFIG_D_DIR_NAME, CharlieBotConfig};
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::home;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
@@ -165,7 +165,7 @@ impl CronSequenceController {
     // The server binds FeatureContext before requests. The path loader keeps isolated registry tests on the same
     // fingerprinted snapshot when they invoke listing hooks without starting that service.
     let home = cron_home();
-    let directory = home.join(CONFIG_D_DIR_NAME).join(loader::CRON_D_DIR_NAME);
+    let directory = loader::cron_dir_for_home(&home);
     match std::env::var_os(REPO_ROOT_ENV).map(PathBuf::from) {
       Some(repo) => match loader::load_snapshot_for_paths(&directory, &repo) {
         Ok((snapshot, _)) => snapshot,
@@ -778,8 +778,7 @@ fn names_for_binding(tasks: &[ScheduledTaskConfig], session_id: &str) -> Vec<Str
 }
 
 fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
-  let directory = home.join(CONFIG_D_DIR_NAME).join(loader::CRON_D_DIR_NAME);
-  let mut paths = match std::fs::read_dir(directory) {
+  let mut paths = match std::fs::read_dir(loader::cron_dir_for_home(home)) {
     Ok(entries) => entries.filter_map(Result::ok).map(|entry| entry.path()).collect::<Vec<_>>(),
     Err(_) => return Vec::new(),
   };
@@ -789,23 +788,18 @@ fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
     .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("yaml"))
     .filter_map(|path| {
       let name = path.file_stem()?.to_str()?.to_string();
-      let raw = std::fs::read_to_string(path).ok()?;
-      let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).ok()?;
-      let mut body = serde_json::to_value(yaml).ok()?;
-      body.as_object_mut()?.insert("name".to_string(), Value::String(name));
-      serde_json::from_value(body).ok()
+      let mut body = loader::read_task_file(&path).ok()?;
+      body.insert("name".to_string(), Value::String(name));
+      serde_json::from_value(Value::Object(body)).ok()
     })
     .collect()
 }
 
 fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
-  let path = home.join(CONFIG_D_DIR_NAME).join(loader::CRON_D_DIR_NAME).join(format!("{name}.yaml"));
-  let raw = std::fs::read_to_string(&path)?;
-  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw)?;
-  let mut data = serde_json::to_value(yaml)?;
-  let object = data.as_object_mut().ok_or_else(|| anyhow::anyhow!("cron config must be a mapping"))?;
-  object.insert(key.to_string(), value);
-  std::fs::write(path, charliebot_core::yaml::dump(&data)?)?;
+  let path = loader::cron_path_for_home(home, name);
+  let mut data = loader::read_task_file(&path).map_err(|error| anyhow::anyhow!(error.message_without_path()))?;
+  data.insert(key.to_string(), value);
+  loader::write_task_file(&path, &Value::Object(data))?;
   Ok(())
 }
 

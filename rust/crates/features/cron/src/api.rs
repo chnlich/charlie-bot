@@ -315,18 +315,14 @@ fn validate_name(name: &str) -> Result<(), String> {
 }
 
 fn read_yaml_mapping(path: &std::path::Path) -> Result<Map<String, Value>, String> {
-  let raw = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(|error| error.to_string())?;
-  serde_json::to_value(yaml)
-    .map_err(|error| error.to_string())?
-    .as_object()
-    .cloned()
-    .ok_or_else(|| "cron config must be a mapping".to_string())
+  loader::read_task_file(path).map_err(|error| error.message_without_path())
 }
 
 fn write_yaml(path: &std::path::Path, value: &Value) -> Result<(), String> {
-  let contents = charliebot_core::yaml::dump(value).map_err(|error| error.to_string())?;
-  std::fs::write(path, contents).map_err(|error| format!("{}: {error}", path.display()))
+  loader::write_task_file(path, value).map_err(|error| match error {
+    loader::TaskFileWriteError::Encode(error) => error.to_string(),
+    loader::TaskFileWriteError::Write(error) => format!("{}: {error}", path.display()),
+  })
 }
 
 fn detail(status: StatusCode, detail: String) -> Response {

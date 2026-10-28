@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CONFIG_D_DIR_NAME, CharlieBotConfig};
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::Registry;
 use charliebot_registry::context::FeatureContext;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::config::{ScheduledTaskConfig, ScheduledTaskError};
 
@@ -54,14 +54,118 @@ static PROMPT_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::n
 /// The directory under `config.d` that holds the cron jobs, one YAML file per job.
 pub const CRON_D_DIR_NAME: &str = "cron.d";
 
+/// Return the cron task directory under a profile home path.
+pub fn cron_dir_for_home(home: &Path) -> PathBuf {
+  home.join(CONFIG_D_DIR_NAME).join(CRON_D_DIR_NAME)
+}
+
 /// Return the file directory owned by this profile.
 pub fn cron_dir(cfg: &CharlieBotConfig) -> PathBuf {
-  cfg.config_d_dir().join(CRON_D_DIR_NAME)
+  cron_dir_for_home(&cfg.charliebot_home)
+}
+
+/// Return one task's config file path under a profile home path.
+pub fn cron_path_for_home(home: &Path, name: &str) -> PathBuf {
+  cron_dir_for_home(home).join(format!("{name}.yaml"))
 }
 
 /// Return one task's config file path.
 pub fn cron_path(cfg: &CharlieBotConfig, name: &str) -> PathBuf {
-  cron_dir(cfg).join(format!("{name}.yaml"))
+  cron_path_for_home(&cfg.charliebot_home, name)
+}
+
+/// One cron task file, decoded as the JSON object its readers and writers take.
+pub type TaskFile = Map<String, Value>;
+
+/// Why one cron task file could not be read as a mapping.
+#[derive(Debug)]
+pub enum TaskFileReadError {
+  /// The file could not be opened or read.
+  Read { path: PathBuf, error: std::io::Error },
+  /// The file's text is not YAML.
+  Decode(serde_yaml::Error),
+  /// The YAML document cannot become a JSON object, such as one with a non-string key.
+  Convert(serde_json::Error),
+  /// The YAML document is not a mapping.
+  NotMapping,
+}
+
+impl TaskFileReadError {
+  /// The message with no file path, as a reader that already names the file uses.
+  pub fn message_without_path(&self) -> String {
+    match self {
+      Self::Read { error, .. } => error.to_string(),
+      Self::Decode(error) => error.to_string(),
+      Self::Convert(error) => error.to_string(),
+      Self::NotMapping => "cron config must be a mapping".to_string(),
+    }
+  }
+}
+
+impl std::fmt::Display for TaskFileReadError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Read { path, error } => write!(formatter, "{}: {error}", path.display()),
+      Self::Decode(error) => error.fmt(formatter),
+      Self::Convert(error) => error.fmt(formatter),
+      Self::NotMapping => formatter.write_str("cron config must be a mapping"),
+    }
+  }
+}
+
+impl std::error::Error for TaskFileReadError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    match self {
+      Self::Read { error, .. } => Some(error),
+      Self::Decode(error) => Some(error),
+      Self::Convert(error) => Some(error),
+      Self::NotMapping => None,
+    }
+  }
+}
+
+/// Open one cron task file, decode its YAML and require a mapping.
+pub fn read_task_file(path: &Path) -> Result<TaskFile, TaskFileReadError> {
+  let raw =
+    std::fs::read_to_string(path).map_err(|error| TaskFileReadError::Read { path: path.to_path_buf(), error })?;
+  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(TaskFileReadError::Decode)?;
+  match serde_json::to_value(yaml).map_err(TaskFileReadError::Convert)? {
+    Value::Object(mapping) => Ok(mapping),
+    _ => Err(TaskFileReadError::NotMapping),
+  }
+}
+
+/// Why one cron task file could not be written.
+#[derive(Debug)]
+pub enum TaskFileWriteError {
+  /// The value could not be encoded as YAML.
+  Encode(serde_yaml::Error),
+  /// The encoded text could not be written to the file.
+  Write(std::io::Error),
+}
+
+impl std::fmt::Display for TaskFileWriteError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Encode(error) => error.fmt(formatter),
+      Self::Write(error) => error.fmt(formatter),
+    }
+  }
+}
+
+impl std::error::Error for TaskFileWriteError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    match self {
+      Self::Encode(error) => Some(error),
+      Self::Write(error) => Some(error),
+    }
+  }
+}
+
+/// Encode one cron task value as YAML and write it to the file.
+pub fn write_task_file(path: &Path, value: &Value) -> Result<(), TaskFileWriteError> {
+  let contents = charliebot_core::yaml::dump(value).map_err(TaskFileWriteError::Encode)?;
+  std::fs::write(path, contents).map_err(TaskFileWriteError::Write)
 }
 
 /// Validate a task name before forming a host file path.
@@ -170,18 +274,16 @@ fn load_file_with_prompts(
       .entry(directory.to_path_buf())
       .or_default() += 1;
   }
-  let raw = std::fs::read_to_string(path).map_err(|error| (format!("{}: {error}", path.display()), Vec::new()))?;
-  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(|error| (error.to_string(), Vec::new()))?;
-  let prompts = prompt_paths(&yaml, repo);
-  let body = serde_json::to_value(yaml).map_err(|error| (error.to_string(), prompts.clone()))?;
+  let body = read_task_file(path).map_err(|error| (error.to_string(), Vec::new()))?;
+  let body = Value::Object(body);
+  let prompts = prompt_paths(&body, repo);
   validate_body(name, body, repo).map(|task| (task, prompts.clone())).map_err(|error| (error, prompts))
 }
 
-fn prompt_paths(body: &serde_yaml::Value, repo: &Path) -> Vec<PathBuf> {
-  let entries =
-    std::iter::once(body).chain(body.get("steps").and_then(serde_yaml::Value::as_sequence).into_iter().flatten());
+fn prompt_paths(body: &Value, repo: &Path) -> Vec<PathBuf> {
+  let entries = std::iter::once(body).chain(body.get("steps").and_then(Value::as_array).into_iter().flatten());
   entries
-    .filter_map(|entry| entry.get("prompt_file").and_then(serde_yaml::Value::as_str))
+    .filter_map(|entry| entry.get("prompt_file").and_then(Value::as_str))
     .filter(|pointer| !pointer.is_empty())
     .filter_map(|pointer| resolve_path(pointer, repo).ok())
     .collect()
@@ -336,21 +438,18 @@ fn detect_local_timezone() -> String {
 }
 
 fn read_enabled(path: &Path) -> Option<bool> {
-  let raw = match std::fs::read_to_string(path) {
-    Ok(raw) => raw,
-    Err(error) => {
+  match read_task_file(path) {
+    Ok(mapping) => mapping.get("enabled").and_then(Value::as_bool),
+    Err(TaskFileReadError::Read { error, .. }) => {
       tracing::debug!(path = %path.display(), error = %error, "cron_file_enabled_unreadable");
-      return None;
+      None
     }
-  };
-  let value = match serde_yaml::from_str::<serde_yaml::Value>(&raw) {
-    Ok(value) => value,
-    Err(error) => {
+    Err(TaskFileReadError::Decode(error)) => {
       tracing::debug!(path = %path.display(), error = %error, "cron_file_enabled_unreadable");
-      return None;
+      None
     }
-  };
-  value.get("enabled")?.as_bool()
+    Err(TaskFileReadError::Convert(_) | TaskFileReadError::NotMapping) => None,
+  }
 }
 
 fn repo_root(features: &FeatureContext) -> Arc<RepoRoot> {
@@ -481,7 +580,10 @@ mod tests {
   use charliebot_core::config::CharlieBotConfig;
   use serde_json::{Value, json};
 
-  use super::{alert_message, fire_error_alert, load_snapshot, validate_body};
+  use super::{
+    TaskFileReadError, TaskFileWriteError, alert_message, fire_error_alert, load_snapshot, read_task_file,
+    validate_body, write_task_file,
+  };
   use crate::test_support::feature_context;
 
   fn write_task(cfg: &CharlieBotConfig, name: &str, body: &Value) {
@@ -495,6 +597,65 @@ mod tests {
     let path = directory.join(name);
     std::fs::write(&path, body).unwrap();
     path
+  }
+
+  #[test]
+  fn task_file_read_reports_an_unreadable_file_a_decode_failure_a_conversion_failure_and_a_non_mapping() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let missing = dir.path().join("missing.yaml");
+    let error = read_task_file(&missing).unwrap_err();
+    assert!(matches!(error, TaskFileReadError::Read { .. }));
+    let io = std::fs::read_to_string(&missing).unwrap_err();
+    // The loaders that name the file fold the path into the message; the API and the key writers already name it.
+    assert_eq!(error.to_string(), format!("{}: {io}", missing.display()));
+    assert_eq!(error.message_without_path(), io.to_string());
+
+    let invalid = dir.path().join("invalid.yaml");
+    std::fs::write(&invalid, "cron: [unclosed\n").unwrap();
+    let error = read_task_file(&invalid).unwrap_err();
+    assert!(matches!(error, TaskFileReadError::Decode(_)));
+    let yaml = serde_yaml::from_str::<serde_yaml::Value>("cron: [unclosed\n").unwrap_err();
+    assert_eq!(error.to_string(), yaml.to_string());
+    assert_eq!(error.message_without_path(), yaml.to_string());
+
+    let sequence = dir.path().join("sequence.yaml");
+    std::fs::write(&sequence, "- cron\n- 0 8 * * *\n").unwrap();
+    let error = read_task_file(&sequence).unwrap_err();
+    assert!(matches!(error, TaskFileReadError::NotMapping));
+    assert_eq!(error.to_string(), "cron config must be a mapping");
+    assert_eq!(error.message_without_path(), "cron config must be a mapping");
+
+    let null_key = dir.path().join("null-key.yaml");
+    std::fs::write(&null_key, "cron: 0 8 * * *\nnull: null key\n").unwrap();
+    let error = read_task_file(&null_key).unwrap_err();
+    assert!(matches!(error, TaskFileReadError::Convert(_)));
+    let yaml = serde_yaml::from_str::<serde_yaml::Value>("cron: 0 8 * * *\nnull: null key\n").unwrap();
+    let json = serde_json::to_value(yaml).unwrap_err();
+    assert_eq!(error.to_string(), json.to_string());
+    assert_eq!(error.message_without_path(), json.to_string());
+  }
+
+  #[test]
+  fn task_file_write_keeps_the_loader_bytes_and_reports_a_write_failure_without_a_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = json!({"cron":"0 8 * * *","prompt_file":"prompts/synthetic.md"});
+    let path = dir.path().join("synthetic.yaml");
+    write_task_file(&path, &body).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), charliebot_core::yaml::dump(&body).unwrap());
+
+    let absent = dir.path().join("absent/synthetic.yaml");
+    let error = write_task_file(&absent, &body).unwrap_err();
+    assert!(matches!(error, TaskFileWriteError::Write(_)));
+    let io = std::fs::write(&absent, "").unwrap_err();
+    assert_eq!(error.to_string(), io.to_string());
+    // The API and the seed fold the path into a failed write; the task-key writers already name the file.
+    assert_eq!(format!("{}: {error}", absent.display()), format!("{}: {io}", absent.display()));
+
+    let encode =
+      TaskFileWriteError::Encode(serde_yaml::from_str::<serde_yaml::Value>("cron: [unclosed\n").unwrap_err());
+    let yaml = serde_yaml::from_str::<serde_yaml::Value>("cron: [unclosed\n").unwrap_err();
+    assert_eq!(encode.to_string(), yaml.to_string());
   }
 
   #[test]

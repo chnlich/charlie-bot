@@ -272,13 +272,17 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
 }
 
 /// Whether one page of a runs response holds a queued or running run, then that page's next cursor.
-fn run_page(args: &[String]) -> Result<i32, String> {
-  let [path] = arguments::<1>(args, "run-page")?;
-  let value = load_json(path)?;
+fn run_page_fields(value: &Value) -> Result<(bool, String), String> {
   let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
   let active = items.iter().any(|item| matches!(run_state(item).as_str(), "queued" | "running"));
+  Ok((active, or_default(value.get("next_cursor"))))
+}
+
+fn run_page(args: &[String]) -> Result<i32, String> {
+  let [path] = arguments::<1>(args, "run-page")?;
+  let (active, cursor) = run_page_fields(&load_json(path)?)?;
   println!("{}", i32::from(active));
-  println!("{}", or_default(value.get("next_cursor")));
+  println!("{cursor}");
   Ok(0)
 }
 
@@ -1492,6 +1496,14 @@ count=2 names=['charliebot-sess-aaaaaaaa', \"charliebot-sess-bbbbbbbb\"]";
 
     assert_eq!(credential_api_key(&credentials.to_string_lossy(), "upstream").unwrap(), Some("k-1".to_string()));
     assert_eq!(credential_api_key(&credentials.to_string_lossy(), "missing").unwrap(), None);
+  }
+
+  #[test]
+  fn a_runs_page_is_active_only_while_a_run_is_queued_or_running() {
+    let page = json!({"items": [{"state": "success"}, {"state": "running"}], "next_cursor": "c-2"});
+    assert_eq!(run_page_fields(&page).unwrap(), (true, "c-2".to_string()));
+    let last = json!({"items": [{"state": "success"}, {"state": ""}], "next_cursor": null});
+    assert_eq!(run_page_fields(&last).unwrap(), (false, String::new()));
   }
 
   #[test]

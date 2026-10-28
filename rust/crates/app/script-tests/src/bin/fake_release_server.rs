@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use regex::Regex;
 use serde::Deserialize;
@@ -249,7 +250,7 @@ impl Server {
         return Ok((self.behavior.message_status, json!({"detail": "message refused"})));
       }
       self.lock().runs.push(RunRecord { id: "probe-run".to_string(), state: self.behavior.run_state.clone() });
-      return Ok((ACCEPTED, json!({"input_event_id": "probe-input"})));
+      return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "probe-input"})));
     }
     if method == "GET" && RUNS_LISTING.is_match(path) {
       return Ok(self.run_listing(path));
@@ -351,7 +352,7 @@ impl Server {
     if method == "POST" && path == format!("/api/chat/{PARENT_SESSION}/message") {
       let content = string_field(request, "content")?.to_string();
       self.lock().opened.push(content);
-      return Ok((ACCEPTED, json!({"input_event_id": "open-input"})));
+      return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "open-input"})));
     }
     if method == "POST" && path == "/api/internal/delegate" {
       if self.behavior.delegate == "refused" {

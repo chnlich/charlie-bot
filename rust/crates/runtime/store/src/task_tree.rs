@@ -1532,10 +1532,6 @@ impl Store {
       return Err(StoreError::conflict(blockers));
     }
 
-    if carried.is_some() {
-      // An interrupted earlier subtree edit lands its own fact first, so the carry's fact folds no second transition.
-      self.ensure_prompt_changed_fact_locked(&guard, session_id, &meta, PromptScope::Subtree).await?;
-    }
     if let Some(parent) = &reparent {
       // Logged before the writes, so the caller of a move that stops between them stays on record.
       tracing::info!(
@@ -1546,6 +1542,10 @@ impl Store {
         carried_subtree_ref = ?carried.as_ref().map(|rule| &rule.reference),
         "task_reparent"
       );
+    }
+    if carried.is_some() {
+      // An interrupted earlier subtree edit lands its own fact first, so the carry's fact folds no second transition.
+      self.ensure_prompt_changed_fact_locked(&guard, session_id, &meta, PromptScope::Subtree).await?;
     }
     let carried_ref = carried.as_ref().map(|rule| rule.reference.clone());
     let moved = self

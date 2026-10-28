@@ -929,6 +929,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "chrono",
  "clap",
  "flate2",
  "regex",

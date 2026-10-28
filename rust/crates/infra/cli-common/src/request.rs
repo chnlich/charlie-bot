@@ -156,7 +156,7 @@ pub fn fetch(request: &Request, redactions: &[&str]) -> Result<Vec<u8>, CliExit>
   if !(200..300).contains(&response.status) {
     return Err(http_failure(response.status, &response.body, redactions));
   }
-  Ok(response.body)
+  Ok(redact_bytes(&response.body, redactions))
 }
 
 /// The whole verb for a service whose credential is one bearer token: prepare, send, print.
@@ -188,6 +188,26 @@ pub fn redact(text: &str, redactions: &[&str]) -> String {
     text = text.replace(secret, "[redacted]");
   }
   text
+}
+
+fn redact_bytes(body: &[u8], redactions: &[&str]) -> Vec<u8> {
+  let mut body = body.to_vec();
+  for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
+    let secret = secret.as_bytes();
+    let mut redacted = Vec::with_capacity(body.len());
+    let mut position = 0;
+    while position < body.len() {
+      if body[position..].starts_with(secret) {
+        redacted.extend_from_slice(b"[redacted]");
+        position += secret.len();
+      } else {
+        redacted.push(body[position]);
+        position += 1;
+      }
+    }
+    body = redacted;
+  }
+  body
 }
 
 fn parse_method(method: &str) -> Result<reqwest::Method, CliExit> {
@@ -307,6 +327,17 @@ mod tests {
     assert_eq!(error.body["status"], 401);
     assert_eq!(error.body["response"], "denied [redacted]");
     assert!(!text(&error).contains(TOKEN));
+  }
+
+  #[test]
+  fn a_success_body_redacts_the_bearer_token_and_preserves_binary_bytes() {
+    let response = [b"echo ".as_slice(), TOKEN.as_bytes(), b"\xff".as_slice()].concat();
+    let (url, receiver) = stub(200, &response);
+    let body = fetch(&args("GET", &url).prepare().unwrap().bearer(TOKEN), &[TOKEN]).unwrap();
+    let _ = receiver.recv_timeout(Duration::from_secs(2));
+
+    assert_eq!(body, [b"echo [redacted]".as_slice(), b"\xff".as_slice()].concat());
+    assert!(!body.windows(TOKEN.len()).any(|window| window == TOKEN.as_bytes()));
   }
 
   #[test]

@@ -15,12 +15,18 @@ path = "src/bin/fake_release_server.rs"
 name = "fake-pane-server"
 path = "src/bin/fake_pane_server.rs"
 
+# The release's `charliebot` under test: the switch-helper subcommands the switch calls.
+[[bin]]
+name = "fake-charliebot"
+path = "src/bin/fake_charliebot.rs"
+
 [dependencies]
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
 charliebot-session-api.workspace = true
 charliebot-store.workspace = true
 charliebot-tasks.workspace = true
+charliebot-switch-helper.workspace = true
 http.workspace = true
 libc.workspace = true
 regex.workspace = true

@@ -10,8 +10,8 @@ Run `charliebot memory proposal open` and read the worktree path from the `workt
 output. On a refusal, end the step with the command's reason as the final message.
 
 Step 2: mine cross-session user messages into staging.
-Run the digest script and read its output in full:
-`python3 ~/workspace/charlie-bot/prompts/cron/memory_curator/user_message_digest.py > /tmp/curator_user_digest.txt`
+Run the digest command and read its output in full:
+`charliebot memory user-digest > /tmp/curator_user_digest.txt`
 Each output line is `<YYYY-MM-DD> <session-short-id> [NEW] <text>`: one user message from the
 last 7 days across all sessions, artifact comments included, messages starting with `/` excluded; NEW marks
 messages from the last 24 hours, and the digest caps at 120K characters, oldest lines dropped

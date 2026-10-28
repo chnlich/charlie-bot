@@ -143,6 +143,14 @@ roots copy.
   sets the order in which packages register; `RUNTIME` in the same file registers before it.
   *Purpose:* routes, page parts, metadata keys, template paths and lifespan steps follow registration order
   (`docs/registry.md`), so a second list that set that order would change the server's output with no diff to `PACKAGES`.
+- **Each file kind has one owner.** The owner module holds the file's paths, its line rules and the functions that
+  decode and encode its lines, and other modules read and write the file through those functions. The format table in
+  the structure test (`FORMAT_TABLE` in `crates/app/structure/tests/structure.rs`) names each kind's owner and its
+  functions, and fails a function that names one of them and also decodes or encodes a line in its body. A new file
+  kind adds its row there.
+  *Purpose:* a change to a file's format, location or bad-line handling then happens in one module, and a function
+  that opens a kind's path and decodes its lines in one body fails `cargo test` instead of reading the file wrong at
+  run time.
 
 ## Layout
 

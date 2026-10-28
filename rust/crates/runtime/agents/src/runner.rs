@@ -296,7 +296,9 @@ impl AgentRunner {
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(child, sender));
     let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false), serve: None });
-    *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
+    if self.register_active(Arc::clone(&active)) {
+      self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await?;
+    }
 
     if let Some(prompt) = midturn_prompt {
       let stdin = stdin_slot.take().context("agent stdin was not piped")?;
@@ -467,7 +469,9 @@ impl AgentRunner {
       detached: AtomicBool::new(false),
       serve: Some(serve),
     });
-    *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
+    if self.register_active(Arc::clone(&active)) {
+      self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await?;
+    }
 
     let run_result = serve_turn
       .run(ServeTurnArgs {
@@ -554,7 +558,9 @@ impl AgentRunner {
     tokio::spawn(reap_child(spawned.child, sender));
     let active =
       Arc::new(ActiveProcess { pid: identity.pid, exit: receiver, detached: AtomicBool::new(false), serve: None });
-    *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
+    if self.register_active(Arc::clone(&active)) {
+      self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await?;
+    }
     while active.exit.borrow().is_none() && !active.detached.load(Ordering::Acquire) {
       tokio::time::sleep(follow::TAIL_POLL_INTERVAL).await;
     }
@@ -615,8 +621,11 @@ impl AgentRunner {
 
   /// Send SIGTERM to the process group and escalate to SIGKILL after five seconds.
   pub async fn terminate(&self) -> anyhow::Result<()> {
-    self.terminated.store(true, Ordering::Release);
-    let active = self.active.lock().expect("active process lock poisoned").clone();
+    let active = {
+      let active = self.active.lock().expect("active process lock poisoned");
+      self.terminated.store(true, Ordering::Release);
+      active.clone()
+    };
     if let Some(active) = active {
       let finish = match &active.serve {
         Some(serve) => serve.finish_active_turn(active.pid).await,
@@ -655,6 +664,12 @@ impl AgentRunner {
 
   fn record_exit_code(&self, exit_code: i32) {
     *self.exit_code.lock().expect("exit code lock poisoned") = Some(exit_code);
+  }
+
+  fn register_active(&self, active: Arc<ActiveProcess>) -> bool {
+    let mut active_slot = self.active.lock().expect("active process lock poisoned");
+    *active_slot = Some(active);
+    self.terminated.load(Ordering::Acquire)
   }
 
   fn clear_active(&self, active: &Arc<ActiveProcess>) {
@@ -1510,29 +1525,31 @@ mod tests {
   #[tokio::test]
   async fn final_stdout_stop_preserves_the_signal_exit_code() {
     let root = tempfile::tempdir().unwrap();
-    let marker = root.path().join("started");
     let runner = Arc::new(AgentRunner::new(
       "shell",
-      Box::new(FinalStdoutShell::new("touch \"$MARKER\"; exec sleep 300", None, None)),
+      Box::new(FinalStdoutShell::new("exec sleep 300", None, None)),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     ));
-    let request = test_request(
+    let mut request = test_request(
       "test".into(),
       root.path().to_path_buf(),
-      Env::from([("PATH".into(), "/bin:/usr/bin".into()), ("MARKER".into(), marker.to_string_lossy().into_owned())]),
+      Env::from([("PATH".into(), "/bin:/usr/bin".into())]),
       root.path().join("cgroups"),
     );
-    let active = runner.clone();
-    let run = tokio::spawn(async move { active.run(request).await });
-    tokio::time::timeout(Duration::from_secs(5), async {
-      while !marker.exists() {
-        tokio::time::sleep(follow::TAIL_POLL_INTERVAL).await;
-      }
-    })
-    .await
-    .unwrap();
-    runner.terminate().await.unwrap();
-    assert_eq!(run.await.unwrap().unwrap().exit_code, Some(-15));
+    let callback_runner = Arc::clone(&runner);
+    request.on_spawn = Some(Arc::new(move |_| {
+      let callback_runner = Arc::clone(&callback_runner);
+      Box::pin(async move { callback_runner.terminate().await })
+    }));
+    let task_runner = Arc::clone(&runner);
+    let mut run = tokio::spawn(async move { task_runner.run(request).await });
+    let outcome = tokio::time::timeout(Duration::from_secs(5), &mut run).await;
+    if outcome.is_err() {
+      runner.terminate().await.unwrap();
+      run.await.unwrap().unwrap();
+      panic!("stop requested during spawn did not stop the child");
+    }
+    assert_eq!(outcome.unwrap().unwrap().unwrap().exit_code, Some(-15));
   }
 
   fn test_request(prompt: String, cwd: PathBuf, values: Env, cgroup_base: PathBuf) -> RunRequest {

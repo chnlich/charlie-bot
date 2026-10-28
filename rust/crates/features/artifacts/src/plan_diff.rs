@@ -1171,8 +1171,8 @@ mod tests {
   use super::*;
   use std::io::Read;
 
-  const BASE: &str = include_str!("../../../../../tests/data/plan_move2-direct-kill_v10.html");
-  const NEW: &str = include_str!("../../../../../tests/data/plan_move2-direct-kill_v11.html");
+  const BASE: &str = include_str!("../../../../../tests/data/plan_sample_v10.html");
+  const NEW: &str = include_str!("../../../../../tests/data/plan_sample_v11.html");
 
   #[test]
   fn seeded_plan_annotations_match_the_recorded_python_outputs() {
@@ -1220,10 +1220,12 @@ mod tests {
   }
 
   #[test]
-  fn real_plan_versions_keep_word_marks_in_the_new_page() {
+  fn sample_plan_versions_keep_word_marks_in_the_new_page() {
     let annotated = annotate(BASE, NEW).expect("the plan pages parse");
     assert!(annotated.contains("data-del=\"v10\""));
     assert!(annotated.contains("<ins class=\"cbd-ins\">v11</ins>"));
+    assert!(annotated.contains("data-del=\"旧\""));
+    assert!(annotated.contains("<ins class=\"cbd-ins\">新</ins>"));
   }
 
   #[test]

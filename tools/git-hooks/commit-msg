@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+source tools/leak-patterns.sh
+
+tmp_patterns=$(mktemp)
+trap 'rm -f "$tmp_patterns"' EXIT
+load_host_patterns
+[[ -s "$tmp_patterns" ]] || exit 0
+
+check_field() {
+  local field=$1 file=$2 status
+  if grep -aiEq -f "$tmp_patterns" "$file"; then
+    printf 'Host pattern matches %s (patterns: %s)\n' "$field" "$extra_patterns_file" >&2
+    return 1
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || return "$status"
+  fi
+}
+
+check_field 'commit message' "$1"
+author=$(git var GIT_AUTHOR_IDENT)
+committer=$(git var GIT_COMMITTER_IDENT)
+check_field 'author identity' <(printf '%s\n' "$author")
+check_field 'committer identity' <(printf '%s\n' "$committer")

@@ -57,7 +57,7 @@ A local pre-commit hook enforces this boundary. One-time setup per clone:
 
     git config --local core.hooksPath tools/git-hooks
 
-Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `$CHARLIEBOT_HOME/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. Run `tools/check-skills-host-leak.sh` manually anytime to scan the whole tree.
+Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `$CHARLIEBOT_HOME/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. The host patterns scan every tracked file, including decompressed gzip files. The hooks scan staged files, commit messages, and commit identities.
 
 ## Person-Identifying Session Content Boundary
 

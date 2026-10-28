@@ -1,5 +1,5 @@
-//! The route paths that `session-api` mounts. Its routers and `ROUTE_PATTERNS` use these consts, and so do the clients
-//! in other crates, so each path is spelled once. A `{session_id}` parameter is filled by the caller.
+//! The session route paths that other crates use. The routers and `ROUTE_PATTERNS` use these consts too, so each path is
+//! spelled once. A `{session_id}` parameter is filled by the caller.
 
 /// The session collection: `GET` lists the active sessions, `POST` creates one.
 pub const SESSIONS_PATH: &str = "/api/sessions/";

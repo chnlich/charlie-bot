@@ -20,6 +20,11 @@
 //! code uses that name. A cycle is a strongly connected component of two or more modules.
 //!
 //! Every module cycle fails: a cycle is a defect of the code, not a recorded exception.
+//!
+//! A name that two crates must agree on has one owner: the owner table names the owner crate, and no other crate's
+//! production code may spell the name. A class of names, such as `CHARLIEBOT_` environment variables, must be spelled
+//! in one crate. Both rules read the string literals of each production module; a literal with whitespace is prose and
+//! names nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -30,7 +35,10 @@ use std::sync::OnceLock;
 use proc_macro2::{Spacing, TokenStream, TokenTree};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
-use syn::{Attribute, Item, ItemMacro, ItemMod, ItemUse, Meta, UseTree};
+use syn::{
+  Arm, Attribute, Expr, ExprCall, ExprLit, ExprMethodCall, Field, FieldValue, ImplItem, Item, ItemMacro, ItemMod,
+  ItemUse, Lit, LitStr, Local, Meta, StmtMacro, UseTree,
+};
 
 const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"];
 const CHAT_CHANNELS: [&str; 2] = ["slack", "discord"];
@@ -83,6 +91,15 @@ struct Module {
   macro_paths: Vec<PathRecord>,
   /// Identifiers the module's own code names, outside `use` declarations.
   idents: BTreeSet<String>,
+  /// The string literals of the module's production code; empty for a test module.
+  literals: Vec<Literal>,
+}
+
+struct Literal {
+  value: String,
+  line: usize,
+  /// The literal is the argument of `.join(..)`, `Path::new(..)` or `PathBuf::from(..)`.
+  path_arg: bool,
 }
 
 struct UseRecord {
@@ -240,6 +257,7 @@ impl Builder<'_> {
     for item in items {
       collector.visit_item(item);
     }
+    let literals = if test { Vec::new() } else { production_literals(items) };
     let child_mods = collector.child_mods;
     let children = child_mods.iter().map(|node| node.ident.to_string()).collect();
     self.modules.insert(
@@ -254,6 +272,7 @@ impl Builder<'_> {
         paths: collector.paths,
         macro_paths: collector.macro_paths,
         idents: collector.idents,
+        literals,
       },
     );
 
@@ -486,6 +505,11 @@ fn stale_layer_failures(workspace: &Workspace) -> Vec<String> {
 const MAX_RESOLVE_DEPTH: usize = 32;
 
 impl Crate {
+  /// The crate's directory under `rust/crates`, such as `infra/core`; the owner table names crates this way.
+  fn key(&self) -> &str {
+    self.dir_rel.strip_prefix("crates/").unwrap_or(&self.dir_rel)
+  }
+
   fn target(&self, target: usize) -> &Target {
     &self.targets[target]
   }
@@ -738,6 +762,138 @@ fn cycle_failures(workspace: &Workspace) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The owner rule.
+
+/// A name that one owner crate defines. A production literal that spells the name in another crate fails.
+struct OwnerRow {
+  name: &'static str,
+  /// The owner crate's directory under `rust/crates`.
+  owner: &'static str,
+  /// Names the owner's const or function that the other crates use instead.
+  hint: &'static str,
+}
+
+/// The names with an owner. A task that fixes the sites of a name adds the name's row in the same commit, so the rule
+/// stays green at every commit.
+const OWNER_TABLE: &[OwnerRow] = &[];
+
+/// A class of names that one crate must hold. A production literal that `name_of` maps to a name counts toward the
+/// crates that spell that name; a name spelled in two or more crates fails.
+struct SpellingClass {
+  name_of: fn(&str) -> Option<String>,
+  hint: &'static str,
+}
+
+const ENVIRONMENT_HINT: &str = "Name it once, as a const in its owner module (infra/core for CHARLIEBOT_ names), and \
+                                reference that const from the other crates.";
+
+/// The environment variable names: `CHARLIEBOT_` followed by one or more of `A-Z`, `0-9` and `_`.
+const SPELLING_CLASSES: &[SpellingClass] = &[SpellingClass { name_of: environment_name, hint: ENVIRONMENT_HINT }];
+
+/// A production string literal and where it sits.
+struct Site {
+  krate: String,
+  file: String,
+  line: usize,
+  value: String,
+  path_arg: bool,
+}
+
+impl Site {
+  fn location(&self) -> String {
+    format!("{}:{}", self.file, self.line)
+  }
+}
+
+/// Every production literal of the workspace that holds no whitespace, sorted by file and line.
+fn production_sites(workspace: &Workspace) -> Vec<Site> {
+  let mut sites = Vec::new();
+  for item in &workspace.crates {
+    for target in &item.targets {
+      for module in target.modules.values() {
+        let file = rel(&workspace.root, &module.file);
+        for literal in &module.literals {
+          if !literal.value.contains(char::is_whitespace) {
+            sites.push(Site {
+              krate: item.key().to_string(),
+              file: file.clone(),
+              line: literal.line,
+              value: literal.value.clone(),
+              path_arg: literal.path_arg,
+            });
+          }
+        }
+      }
+    }
+  }
+  sites.sort_by(|left, right| (&left.file, left.line).cmp(&(&right.file, right.line)));
+  sites.dedup_by(|left, right| left.file == right.file && left.line == right.line && left.value == right.value);
+  sites
+}
+
+/// Whether a site spells `name`. A name with `.`, `_` or `/` matches a literal whose `/`-separated segments hold the
+/// name's segments in sequence. A plain word matches only in a path form: an argument of `.join(..)`, `Path::new(..)`
+/// or `PathBuf::from(..)` equal to it, or a segment of a relative path literal.
+fn spells(site: &Site, name: &str) -> bool {
+  if name.contains(['.', '_', '/']) {
+    let wanted: Vec<&str> = name.split('/').collect();
+    let segments: Vec<&str> = site.value.split('/').collect();
+    return segments.windows(wanted.len()).any(|window| window == wanted.as_slice());
+  }
+  let relative = site.value.contains('/')
+    && !site.value.starts_with('/')
+    && !site.value.contains("://")
+    && !site.value.contains("/api/");
+  (site.path_arg && site.value == name) || (relative && site.value.split('/').any(|segment| segment == name))
+}
+
+/// The `CHARLIEBOT_[A-Z0-9_]+` name a literal spells, whole or before its first `=`.
+fn environment_name(value: &str) -> Option<String> {
+  let name = value.split_once('=').map_or(value, |(name, _)| name);
+  let suffix = name.strip_prefix("CHARLIEBOT_")?;
+  let spelled =
+    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+  spelled.then(|| name.to_string())
+}
+
+/// The owner rule's failures: each owner row's name spelled outside its owner, and each spelling class's name spelled
+/// in two or more crates.
+fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingClass]) -> Vec<String> {
+  let sites = production_sites(workspace);
+  let mut failures = Vec::new();
+  for row in rows {
+    let outside: Vec<&Site> = sites.iter().filter(|site| site.krate != row.owner && spells(site, row.name)).collect();
+    if !outside.is_empty() {
+      let heading = format!("{}: owner {}; spelled outside it at:", row.name, row.owner);
+      failures.push(site_failure(&heading, &outside, row.hint));
+    }
+  }
+  for class in classes {
+    let mut by_name: BTreeMap<String, Vec<&Site>> = BTreeMap::new();
+    for site in &sites {
+      if let Some(name) = (class.name_of)(&site.value) {
+        by_name.entry(name).or_default().push(site);
+      }
+    }
+    for (name, group) in by_name {
+      let crates: BTreeSet<&str> = group.iter().map(|site| site.krate.as_str()).collect();
+      if crates.len() > 1 {
+        let heading = format!("{name}: spelled in {} crates at:", crates.len());
+        failures.push(site_failure(&heading, &group, class.hint));
+      }
+    }
+  }
+  failures
+}
+
+fn site_failure(heading: &str, sites: &[&Site], hint: &str) -> String {
+  let mut lines = vec![heading.to_string()];
+  lines.extend(sites.iter().map(|site| format!("  {}", site.location())));
+  lines.push(hint.to_string());
+  lines.join("\n")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The real workspace.
 
 fn real_workspace() -> &'static Workspace {
@@ -785,6 +941,12 @@ fn no_crate_has_a_module_cycle() {
 fn no_production_path_attribute_reaches_outside_its_crate() {
   let failures = &real_workspace().path_failures;
   assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn no_name_is_spelled_outside_its_owner() {
+  let failures = owner_failures(real_workspace(), OWNER_TABLE, SPELLING_CLASSES);
+  assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1033,6 +1195,147 @@ fn the_checks_find_each_break() {
   );
 }
 
+/// The owner rule on a synthetic workspace. The owner crate spells its names; the writer crate spells them outside it,
+/// and spells one environment name that the reader crate also spells. Each break fails with its sites and its hint.
+/// Each form the rule allows passes: an owner literal, a named const, a JSON key, prose, a `#[cfg(test)]` item, and a
+/// test target. Each line number below is the line of the fixture text.
+#[test]
+fn the_owner_rule_finds_each_break() {
+  let owner_dir = tempfile::tempdir().expect("create a temporary directory");
+  let owner_root = owner_dir.path();
+  let owner_lib = r##"pub const SESSIONS: &str = "sessions";
+pub const EVENTS_FILE: &str = "chat_events.jsonl";
+pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
+"##;
+  let writer_lib = r##"use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use std::fmt;
+
+pub struct Probe {
+  #[cfg(test)]
+  pub scratch: u8,
+  #[serde(rename = "chat_events.jsonl")]
+  pub name: &'static str,
+  pub label: &'static str,
+}
+
+pub fn sessions_dir(home: &Path) -> PathBuf {
+  home.join(owner_crate::SESSIONS)
+}
+
+pub fn archive(home: &Path) -> PathBuf {
+  home.join("sessions")
+}
+
+pub fn event_file(home: &Path) -> PathBuf {
+  home.join("data/chat_events.jsonl")
+}
+
+pub fn archive_path() -> &'static str {
+  "archive/sessions/x.json"
+}
+
+pub fn lookup(map: &HashMap<&str, u8>) -> u8 {
+  map["data"]
+}
+
+pub fn probe() -> Probe {
+  Probe {
+    #[cfg(test)]
+    name: "chat_events.jsonl",
+    label: "chat_events.jsonl",
+  }
+}
+
+pub fn token_names() -> [&'static str; 1] {
+  ["CHARLIEBOT_RUN_TOKEN"]
+}
+
+pub fn help() -> &'static str {
+  "Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)"
+}
+
+pub fn trace(home: &Path) {
+  #[cfg(test)]
+  let _probe = home.join("sessions");
+  let _ = home.join("sessions");
+  #[cfg(test)]
+  drop(Path::new("chat_events.jsonl"));
+}
+
+#[cfg(test)]
+fn fixture() -> &'static str {
+  "chat_events.jsonl"
+}
+
+#[cfg(test)]
+mod tests {
+  pub const NAME: &str = "sessions";
+}
+"##;
+  let reader_lib = r##"pub fn token_env() -> &'static str {
+  "CHARLIEBOT_RUN_TOKEN="
+}
+
+#[cfg(test)]
+mod tests {
+  pub const TOKEN: &str = "CHARLIEBOT_RUN_TOKEN";
+}
+"##;
+  let writer_fixture = r##"pub const FIXTURE: [&str; 2] = ["CHARLIEBOT_RUN_TOKEN", "chat_events.jsonl"];
+"##;
+  write_tree(
+    owner_root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/owner", "crates/features/writer", "crates/features/reader"])),
+      ("crates/infra/owner/Cargo.toml", crate_manifest("owner-crate", &[], &[])),
+      ("crates/infra/owner/src/lib.rs", owner_lib.to_string()),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[("owner-crate", "../../infra/owner")], &[])),
+      ("crates/features/writer/src/lib.rs", writer_lib.to_string()),
+      ("crates/features/writer/tests/fixture.rs", writer_fixture.to_string()),
+      ("crates/features/reader/Cargo.toml", crate_manifest("reader", &[], &[])),
+      ("crates/features/reader/src/lib.rs", reader_lib.to_string()),
+    ],
+  );
+  let workspace = load_workspace(owner_root);
+  let rows = [
+    OwnerRow { name: "chat_events.jsonl", owner: "infra/owner", hint: "Use `owner_crate::EVENTS_FILE`." },
+    OwnerRow { name: "sessions", owner: "infra/owner", hint: "Use `owner_crate::SESSIONS`." },
+  ];
+
+  assert_eq!(
+    owner_failures(&workspace, &rows, SPELLING_CLASSES),
+    vec![
+      [
+        "chat_events.jsonl: owner infra/owner; spelled outside it at:",
+        "  crates/features/writer/src/lib.rs:10",
+        "  crates/features/writer/src/lib.rs:24",
+        "  crates/features/writer/src/lib.rs:39",
+        "Use `owner_crate::EVENTS_FILE`.",
+      ]
+      .join("\n"),
+      [
+        "sessions: owner infra/owner; spelled outside it at:",
+        "  crates/features/writer/src/lib.rs:20",
+        "  crates/features/writer/src/lib.rs:28",
+        "  crates/features/writer/src/lib.rs:54",
+        "Use `owner_crate::SESSIONS`.",
+      ]
+      .join("\n"),
+      [
+        "CHARLIEBOT_RUN_TOKEN: spelled in 2 crates at:",
+        "  crates/features/reader/src/lib.rs:2",
+        "  crates/features/writer/src/lib.rs:44",
+        ENVIRONMENT_HINT,
+      ]
+      .join("\n"),
+    ],
+    "the owner rule finds each break with its sites and hint, and passes the forms it allows"
+  );
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Parsing helpers.
 
@@ -1273,6 +1576,233 @@ fn path_attr(attrs: &[Attribute]) -> Option<(String, usize)> {
     return Some((value.value(), attr.path().span().start().line));
   }
   None
+}
+
+/// The string literals of a module's production items. Each `#[cfg(test)]` item is skipped, and an inline module is
+/// read in its own scope, so the visitor does not enter it.
+#[derive(Default)]
+struct LiteralCollector {
+  literals: Vec<Literal>,
+  /// The start positions of the literals that are the argument of `.join(..)`, `Path::new(..)` or `PathBuf::from(..)`.
+  path_args: BTreeSet<(usize, usize)>,
+}
+
+fn production_literals(items: &[Item]) -> Vec<Literal> {
+  let mut collector = LiteralCollector::default();
+  for item in items {
+    collector.visit_item(item);
+  }
+  collector.literals
+}
+
+impl LiteralCollector {
+  fn mark_path_args<'a>(&mut self, args: impl Iterator<Item = &'a Expr>) {
+    for arg in args {
+      if let Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) = arg {
+        let start = value.span().start();
+        self.path_args.insert((start.line, start.column));
+      }
+    }
+  }
+}
+
+impl<'ast> Visit<'ast> for LiteralCollector {
+  fn visit_item(&mut self, node: &'ast Item) {
+    if !is_cfg_test(item_attrs(node)) {
+      syn::visit::visit_item(self, node);
+    }
+  }
+
+  fn visit_item_mod(&mut self, _node: &'ast ItemMod) {
+    // An inline module is its own scope, and `process_scope` reads it.
+  }
+
+  fn visit_impl_item(&mut self, node: &'ast ImplItem) {
+    if !is_cfg_test(impl_item_attrs(node)) {
+      syn::visit::visit_impl_item(self, node);
+    }
+  }
+
+  fn visit_field(&mut self, node: &'ast Field) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_field(self, node);
+    }
+  }
+
+  fn visit_field_value(&mut self, node: &'ast FieldValue) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_field_value(self, node);
+    }
+  }
+
+  fn visit_arm(&mut self, node: &'ast Arm) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_arm(self, node);
+    }
+  }
+
+  fn visit_local(&mut self, node: &'ast Local) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_local(self, node);
+    }
+  }
+
+  fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_stmt_macro(self, node);
+    }
+  }
+
+  fn visit_expr(&mut self, node: &'ast Expr) {
+    if !is_cfg_test(expr_attrs(node)) {
+      syn::visit::visit_expr(self, node);
+    }
+  }
+
+  fn visit_attribute(&mut self, node: &'ast Attribute) {
+    // A `doc` attribute holds documentation text, not code.
+    if node.path().is_ident("doc") {
+      return;
+    }
+    match &node.meta {
+      Meta::Path(_) => {}
+      Meta::List(list) => collect_token_literals(list.tokens.clone(), &mut self.literals),
+      Meta::NameValue(_) => syn::visit::visit_attribute(self, node),
+    }
+  }
+
+  fn visit_macro(&mut self, node: &'ast syn::Macro) {
+    // Syn does not parse a macro call's tokens, so their literals are read from the tokens.
+    collect_token_literals(node.tokens.clone(), &mut self.literals);
+  }
+
+  fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+    if node.method == "join" {
+      self.mark_path_args(node.args.iter());
+    }
+    syn::visit::visit_expr_method_call(self, node);
+  }
+
+  fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+    if let Expr::Path(callee) = &*node.func
+      && is_path_constructor(&callee.path)
+    {
+      self.mark_path_args(node.args.iter());
+    }
+    syn::visit::visit_expr_call(self, node);
+  }
+
+  fn visit_lit_str(&mut self, node: &'ast LitStr) {
+    let start = node.span().start();
+    let path_arg = self.path_args.contains(&(start.line, start.column));
+    self.literals.push(Literal { value: node.value(), line: start.line, path_arg });
+  }
+}
+
+/// The string literals in a token stream, nested groups included.
+fn collect_token_literals(tokens: TokenStream, literals: &mut Vec<Literal>) {
+  for tree in tokens {
+    match tree {
+      TokenTree::Group(group) => collect_token_literals(group.stream(), literals),
+      TokenTree::Literal(literal) => {
+        let parsed: Lit = syn::parse_str(&literal.to_string()).expect("a literal token parses as a syn literal");
+        if let Lit::Str(value) = parsed {
+          literals.push(Literal { value: value.value(), line: literal.span().start().line, path_arg: false });
+        }
+      }
+      TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+    }
+  }
+}
+
+/// Whether a callee is `Path::new` or `PathBuf::from`, by its last two segments.
+fn is_path_constructor(path: &syn::Path) -> bool {
+  match path_segments(path).as_slice() {
+    [.., owner, function] => matches!((owner.as_str(), function.as_str()), ("Path", "new") | ("PathBuf", "from")),
+    _ => false,
+  }
+}
+
+/// The attributes of an item. Syn keeps them on each variant; a variant it adds later fails here, not silently.
+fn item_attrs(item: &Item) -> &[Attribute] {
+  match item {
+    Item::Const(node) => &node.attrs,
+    Item::Enum(node) => &node.attrs,
+    Item::ExternCrate(node) => &node.attrs,
+    Item::Fn(node) => &node.attrs,
+    Item::ForeignMod(node) => &node.attrs,
+    Item::Impl(node) => &node.attrs,
+    Item::Macro(node) => &node.attrs,
+    Item::Mod(node) => &node.attrs,
+    Item::Static(node) => &node.attrs,
+    Item::Struct(node) => &node.attrs,
+    Item::Trait(node) => &node.attrs,
+    Item::TraitAlias(node) => &node.attrs,
+    Item::Type(node) => &node.attrs,
+    Item::Union(node) => &node.attrs,
+    Item::Use(node) => &node.attrs,
+    Item::Verbatim(_) => &[],
+    _ => panic!("syn added an Item variant; the owner rule must read its attributes"),
+  }
+}
+
+/// The attributes of an impl item; see `item_attrs`.
+fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
+  match item {
+    ImplItem::Const(node) => &node.attrs,
+    ImplItem::Fn(node) => &node.attrs,
+    ImplItem::Type(node) => &node.attrs,
+    ImplItem::Macro(node) => &node.attrs,
+    ImplItem::Verbatim(_) => &[],
+    _ => panic!("syn added an ImplItem variant; the owner rule must read its attributes"),
+  }
+}
+
+/// The attributes of an expression; see `item_attrs`. A statement's attributes sit on its expression.
+fn expr_attrs(expr: &Expr) -> &[Attribute] {
+  match expr {
+    Expr::Array(node) => &node.attrs,
+    Expr::Assign(node) => &node.attrs,
+    Expr::Async(node) => &node.attrs,
+    Expr::Await(node) => &node.attrs,
+    Expr::Binary(node) => &node.attrs,
+    Expr::Block(node) => &node.attrs,
+    Expr::Break(node) => &node.attrs,
+    Expr::Call(node) => &node.attrs,
+    Expr::Cast(node) => &node.attrs,
+    Expr::Closure(node) => &node.attrs,
+    Expr::Const(node) => &node.attrs,
+    Expr::Continue(node) => &node.attrs,
+    Expr::Field(node) => &node.attrs,
+    Expr::ForLoop(node) => &node.attrs,
+    Expr::Group(node) => &node.attrs,
+    Expr::If(node) => &node.attrs,
+    Expr::Index(node) => &node.attrs,
+    Expr::Infer(node) => &node.attrs,
+    Expr::Let(node) => &node.attrs,
+    Expr::Lit(node) => &node.attrs,
+    Expr::Loop(node) => &node.attrs,
+    Expr::Macro(node) => &node.attrs,
+    Expr::Match(node) => &node.attrs,
+    Expr::MethodCall(node) => &node.attrs,
+    Expr::Paren(node) => &node.attrs,
+    Expr::Path(node) => &node.attrs,
+    Expr::Range(node) => &node.attrs,
+    Expr::RawAddr(node) => &node.attrs,
+    Expr::Reference(node) => &node.attrs,
+    Expr::Repeat(node) => &node.attrs,
+    Expr::Return(node) => &node.attrs,
+    Expr::Struct(node) => &node.attrs,
+    Expr::Try(node) => &node.attrs,
+    Expr::TryBlock(node) => &node.attrs,
+    Expr::Tuple(node) => &node.attrs,
+    Expr::Unary(node) => &node.attrs,
+    Expr::Unsafe(node) => &node.attrs,
+    Expr::Verbatim(_) => &[],
+    Expr::While(node) => &node.attrs,
+    Expr::Yield(node) => &node.attrs,
+    _ => panic!("syn added an Expr variant; the owner rule must read its attributes"),
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

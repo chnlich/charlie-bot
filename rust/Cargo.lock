@@ -568,6 +568,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-slack",
  "charliebot-store",
+ "charliebot-voice",
  "charliebot-web-reply",
  "clap",
  "fancy-regex",

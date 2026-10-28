@@ -395,7 +395,7 @@ fn launch_dir(sessions_dir: &Path, session_id: &str, launch_id: &str) -> PathBuf
 }
 
 /// The launch record's file name in a launch directory. The launch record is the CLI's own file kind: only this
-/// command writes it and only the trigger readback reads it. Its name is the metadata file name the core owns.
+/// command writes it, and no server module reads it. Its name is the metadata file name the core owns.
 const LAUNCH_RECORD_FILE_NAME: &str = charliebot_core::metadata_slot::METADATA_FILE_NAME;
 
 /// The launch record's path in one launch directory.

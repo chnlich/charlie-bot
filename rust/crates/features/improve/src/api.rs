@@ -23,7 +23,7 @@ use charliebot_tasks::{recovery, spawner_backends};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::command::{self, ImproveLoopAlreadyRunningError, ImproveState, Reservation};
+use crate::command::{self, ImproveLoopAlreadyRunningError, ImproveState, LoopStatus, Reservation};
 use crate::sequence::{self, LoopSpec, run_improve_sequence};
 
 /// The `ImproveRequest` fields in the model's declaration order, which fixes the order of its 422 errors.
@@ -253,7 +253,7 @@ fn bad_request(error: anyhow::Error) -> Response {
 /// Fail a freshly reserved loop whose child was refused: the state is marked failed and the active lock cleared, so the
 /// refused request leaves no running loop that no controller owns.
 fn fail_reserved_loop(cfg: &CharlieBotConfig, session_id: &str, mut state: ImproveState) -> anyhow::Result<()> {
-  state.status = "failed".to_string();
+  state.status = LoopStatus::Failed;
   command::save_loop_state(cfg, session_id, &state)?;
   command::clear_active_loop_lock(cfg, session_id)
 }

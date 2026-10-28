@@ -29,7 +29,7 @@ use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{git, prompts, spawner_prompt};
 use serde_json::{Map, Value, json};
 
-use crate::command::{self, ImproveState};
+use crate::command::{self, ImproveState, LoopStatus};
 use crate::judgment::{
   ITERATION_SUMMARIES_HEADING, LOOP_FAILURE_ERROR_PREFIX, RUNNER_FALLBACK_REPORT_MARKER, WORKTREE_CREATE_ERROR_PREFIX,
 };
@@ -321,7 +321,7 @@ async fn settle_failure(
   let loaded = command::load_loop_state(cfg, spec.session_id, spec.loop_id);
   match loaded {
     Ok(Some(mut state)) => {
-      state.status = "failed".to_string();
+      state.status = LoopStatus::Failed;
       let controller_error = format!("Controller error: {error:#}");
       state.end_error = Some(match state.end_error.take() {
         Some(end_error) if !end_error.is_empty() => format!("{end_error} {controller_error}"),
@@ -373,7 +373,7 @@ async fn run_loop(
     Ok(canonical) => canonical,
     Err(error) => {
       let mut failed = state.clone();
-      failed.status = "failed".to_string();
+      failed.status = LoopStatus::Failed;
       failed.end_error = Some(format!("{WORKTREE_CREATE_ERROR_PREFIX}{error:#}"));
       command::save_loop_state(cfg, spec.session_id, &failed)?;
       command::clear_active_loop_lock(cfg, spec.session_id)?;
@@ -396,7 +396,7 @@ async fn run_loop(
   let mut next_pool_member = None;
   for iteration in 1..=spec.iterations {
     let state = command::require_loop_state(cfg, spec.session_id, spec.loop_id)?;
-    if state.status == "stopped" {
+    if state.status == LoopStatus::Stopped {
       break;
     }
     // The live goal and plan are re-read every iteration, so a mid-loop edit steers the next one.
@@ -495,7 +495,7 @@ async fn run_loop(
   }
 
   let state = command::require_loop_state(cfg, spec.session_id, spec.loop_id)?;
-  let stopped_by_user = state.status == "stopped";
+  let stopped_by_user = state.status == LoopStatus::Stopped;
   let mut merge_result = None;
   let mut end_error = None;
   if progress.blocked.is_none() && !stopped_by_user {
@@ -514,32 +514,31 @@ async fn run_loop(
   }
 
   let mut state = state;
-  let outcome_label = if let Some((iteration, reason, _)) = &progress.blocked {
-    state.status = "failed".to_string();
+  if let Some((iteration, reason, _)) = &progress.blocked {
+    state.status = LoopStatus::Failed;
     state.blocked_iteration = Some(*iteration);
     state.blocked_reason = Some(reason.clone());
-    "failed"
   } else if stopped_by_user {
-    state.status = "stopped".to_string();
-    "cancelled"
+    state.status = LoopStatus::Stopped;
   } else if merge_result.as_ref().and_then(|merge| merge.get("merged")) == Some(&Value::Bool(true)) {
-    state.status = "completed".to_string();
-    "completed"
+    state.status = LoopStatus::Completed;
   } else {
     // Exhausted iterations without proven delivery: never a fabricated success.
-    state.status = "blocked".to_string();
-    "blocked"
-  };
+    state.status = LoopStatus::Blocked;
+  }
   if let Some(end_error) = end_error {
     state.end_error = Some(end_error);
   }
   command::save_loop_state(cfg, spec.session_id, &state)?;
   command::clear_active_loop_lock(cfg, spec.session_id)?;
 
-  let payload_type = match outcome_label {
-    "completed" => IMPROVE_COMPLETED,
-    "cancelled" => IMPROVE_STOPPED,
-    _ => IMPROVE_FAILED,
+  let payload_type = match state.status {
+    LoopStatus::Completed => IMPROVE_COMPLETED,
+    LoopStatus::Stopped => IMPROVE_STOPPED,
+    LoopStatus::Failed | LoopStatus::Blocked => IMPROVE_FAILED,
+    LoopStatus::Running | LoopStatus::Interrupted => {
+      bail!("improve loop {} ended without a terminal status {:?}", spec.loop_id, state.status)
+    }
   };
   let mut payload = build_summary_payload(payload_type, &progress.goal, &progress.previous_summaries);
   if let Some((iteration, reason, summary)) = &progress.blocked {
@@ -589,7 +588,7 @@ async fn settle_withheld_iteration(
   reason: &str,
 ) -> anyhow::Result<()> {
   let mut state = command::require_loop_state(cfg, spec.session_id, spec.loop_id)?;
-  state.status = "blocked".to_string();
+  state.status = LoopStatus::Blocked;
   command::save_loop_state(cfg, spec.session_id, &state)?;
   command::clear_active_loop_lock(cfg, spec.session_id)?;
   tracing::warn!(
@@ -799,7 +798,7 @@ async fn close_ended_loop_child_inner(
   let Some(state) = command::load_loop_state(cfg, session_id, loop_id)? else {
     return Ok(());
   };
-  if state.status == "running" {
+  if state.status == LoopStatus::Running {
     return Ok(());
   }
   if state.server_pid == Some(i64::from(std::process::id())) {
@@ -882,7 +881,7 @@ async fn loop_close_verdict(
   // The blocked iteration the controller recorded. A failed state the controller never stamped falls back to the
   // quota-blocked iteration that the records still prove.
   let mut blocked_iter: Option<(i64, String)> = None;
-  if state.status == "failed" {
+  if state.status == LoopStatus::Failed {
     if let Some(reason) = &state.blocked_reason {
       blocked_iter = Some((state.blocked_iteration.unwrap_or(0), reason.clone()));
     } else {
@@ -899,26 +898,28 @@ async fn loop_close_verdict(
       }
     }
   }
-  let sentence = match state.status.as_str() {
-    "completed" => format!(
+  let sentence = match state.status {
+    LoopStatus::Completed => format!(
       "Improve loop completed {iteration_count} iteration(s); work branch {} landed on {}.",
       state.work_branch,
       state.base_branch.as_deref().unwrap_or_default()
     ),
-    "blocked" => format!(
+    LoopStatus::Blocked => format!(
       "Improve loop ran {iteration_count} iteration(s) on branch {}; the goal is not proven and the sequence delivered no landing. Decide whether to land the branch, continue iterating, or close the task.",
       state.work_branch
     ),
-    "stopped" => format!(
+    LoopStatus::Stopped => format!(
       "Improve loop stopped by user after {iteration_count} iteration(s); evidence retained on the loop's task, no further iterations will run."
     ),
-    _ if blocked_iter.is_some() => {
+    LoopStatus::Failed if blocked_iter.is_some() => {
       let (iteration, reason) = blocked_iter.as_ref().expect("a blocked iteration is present");
       landing::blocked_loop_summary(*iteration, reason)
     }
-    "failed" => "Improve loop failed.".to_string(),
-    "interrupted" => "Improve loop interrupted by a server restart; the loop is NOT resumed automatically.".to_string(),
-    other => bail!("improve loop {loop_id} has an unknown status {other:?}"),
+    LoopStatus::Failed => "Improve loop failed.".to_string(),
+    LoopStatus::Interrupted => {
+      "Improve loop interrupted by a server restart; the loop is NOT resumed automatically.".to_string()
+    }
+    LoopStatus::Running => bail!("improve loop {loop_id} has the non-terminal status running"),
   };
   let loop_dir = command::loop_dir(cfg, session_id, loop_id);
   let mut summaries = Vec::new();
@@ -940,17 +941,16 @@ async fn loop_close_verdict(
   // The end error rides after the outcome sentence, before the iteration summaries, verbatim.
   let end_error_part =
     state.end_error.as_deref().filter(|text| !text.is_empty()).map_or(String::new(), |text| format!(" {text}"));
-  let landing = match (state.status.as_str(), state.base_branch.as_deref()) {
-    ("completed", Some(base)) => {
-      git::git_rev_parse(Path::new(&state.repo_path), &state.work_branch).await.map(|commit| {
-        json!({
-          "branch": format!("origin/{base}"),
-          "commit": commit,
-          "repo_path": state.repo_path,
-        })
+  let base_to_land = state.base_branch.as_deref().filter(|_| state.status == LoopStatus::Completed);
+  let landing = match base_to_land {
+    Some(base) => git::git_rev_parse(Path::new(&state.repo_path), &state.work_branch).await.map(|commit| {
+      json!({
+        "branch": format!("origin/{base}"),
+        "commit": commit,
+        "repo_path": state.repo_path,
       })
-    }
-    _ => None,
+    }),
+    None => None,
   };
   let evidence = json!({
     "summary": format!("[Improve loop {loop_id}] {sentence}{end_error_part}{detail}"),
@@ -959,12 +959,12 @@ async fn loop_close_verdict(
     "review_run_ids": [],
     "landing": landing,
   });
-  let outcome = match state.status.as_str() {
-    "completed" => "completed",
-    "blocked" => "blocked",
-    "failed" | "interrupted" => "failed",
-    "stopped" => "cancelled",
-    other => bail!("improve loop {loop_id} has an unknown status {other:?}"),
+  let outcome = match state.status {
+    LoopStatus::Completed => "completed",
+    LoopStatus::Blocked => "blocked",
+    LoopStatus::Failed | LoopStatus::Interrupted => "failed",
+    LoopStatus::Stopped => "cancelled",
+    LoopStatus::Running => bail!("improve loop {loop_id} has the non-terminal status running"),
   };
   Ok((outcome, evidence))
 }
@@ -1019,11 +1019,11 @@ pub async fn reconcile_interrupted_sequences(
         return Ok(repaired);
       }
       if let Some(mut state) = command::load_loop_state(cfg, &session_id, loop_id)?
-        && state.status == "running"
+        && state.status == LoopStatus::Running
         && state.server_pid != Some(pid)
       {
         let recorded_pid = state.server_pid;
-        state.status = "interrupted".to_string();
+        state.status = LoopStatus::Interrupted;
         command::save_loop_state(cfg, &session_id, &state)?;
         let active = command::active_lock_path(cfg, &session_id);
         if active.exists() {

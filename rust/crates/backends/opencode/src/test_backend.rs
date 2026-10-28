@@ -361,7 +361,12 @@ impl Harness {
     if !self.log_path.is_file() {
       return Vec::new();
     }
-    fs::read_to_string(&self.log_path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+    // The fake server appends each request while a test polls the log; a line it is still writing has no newline yet,
+    // so only complete lines are read.
+    let text = fs::read_to_string(&self.log_path).unwrap();
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    lines.pop();
+    lines.into_iter().map(|line| serde_json::from_str(line).unwrap()).collect()
   }
 
   fn run_logs_directory(&self) -> PathBuf {

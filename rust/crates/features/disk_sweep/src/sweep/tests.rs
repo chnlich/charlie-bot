@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use tempfile::tempdir;
+use tempfile::{tempdir, tempdir_in};
 
 use super::{SweepAction, SweepRoots, run_sweep};
 
@@ -546,7 +546,7 @@ async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
 
 #[tokio::test]
 async fn test_scratch_age_and_nested_repository_safety() {
-  let root = tempdir().unwrap();
+  let root = tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
   let roots = fixture(root.path());
   let now = utc("2026-05-20T00:00:00Z");
   let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);

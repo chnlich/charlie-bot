@@ -4,10 +4,17 @@ mod api;
 mod archive;
 mod audio;
 mod config;
+mod decode;
+mod edit_list;
+mod file;
+mod matroska;
+mod opus;
 mod recording;
 mod relay;
 mod transcription;
 mod wav;
+
+pub use file::transcribe_file;
 
 use std::sync::Arc;
 

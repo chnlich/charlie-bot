@@ -10,3 +10,6 @@ pub const SESSION_EVENTS_PATH: &str = "/api/sessions/{session_id}/events";
 pub const SESSION_EVENTS_JSONL_PATH: &str = "/api/sessions/{session_id}/events.jsonl";
 pub const SESSION_GROUP_PATH: &str = "/api/sessions/{session_id}/group";
 pub const SESSION_RUNS_PATH: &str = "/api/sessions/{session_id}/runs";
+
+/// The session replay websocket. A client connects with its cursor in the query string.
+pub const SESSION_WEBSOCKET_PATH: &str = "/ws/sessions/{session_id}";

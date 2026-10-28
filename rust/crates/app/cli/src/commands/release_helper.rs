@@ -16,11 +16,13 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::route;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
 use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_session_api::api;
 use charliebot_store::layout;
 use charliebot_store::run_records;
 use regex::Regex;
@@ -1225,7 +1227,8 @@ fn replay(
   let credentials = credentials::load_credentials(home).map_err(|error| error.to_string())?;
   let token = credentials.access_key().ok_or("the credentials response has no access key")?;
   // The replay cursor rides the handshake query; cursor 0 replays every event.
-  let url = format!("{base_url}/ws/sessions/{session}?token={}&cursor=0", quote_component(&token));
+  let path = route::fill(api::SESSION_WEBSOCKET_PATH, &[session]);
+  let url = format!("{base_url}{path}?token={}&cursor=0", quote_component(&token));
   let outcome = replay_frames(&url).map_err(|error| error.replace(&token, "[redacted]"))?;
   let frames = outcome.ok_or("ValueError: replay returned no catchup frames")?;
   let mut signatures = Vec::new();

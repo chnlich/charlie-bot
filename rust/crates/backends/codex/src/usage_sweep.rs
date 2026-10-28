@@ -3,14 +3,13 @@
 //! A rollout's file name embeds the Codex thread id, which is the backend session id CharlieBot metadata references.
 
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::LazyLock;
 
 use charliebot_registry::usage::{CategoryResult, FreelistResult, SourceSweep, SweepScope};
 use regex::Regex;
 
-use super::rollout::walk_files;
+use super::rollout::{is_rollout_file, mtime_secs, rollout_thread_id, walk_files};
 
 const CATEGORY: &str = "codex-rollouts";
 const UNIT: &str = "files";
@@ -26,7 +25,7 @@ pub fn sweep(codex_home: &Path, scope: &SweepScope) -> anyhow::Result<SourceSwee
   let scoped_backends = scope.scoped_backend_sessions();
   let sessions = codex_home.join(super::rollout::CODEX_SESSIONS_DIR_NAME);
   if sessions.is_dir() {
-    match walk_files(&sessions, |name| name.starts_with("rollout-") && name.ends_with(".jsonl")) {
+    match walk_files(&sessions, is_rollout_file) {
       Ok(mut rollouts) => {
         rollouts.sort();
         for path in rollouts {
@@ -68,8 +67,7 @@ fn sweep_rollout(
   if !scope.references.contains_key(&backend_session) {
     match fs::metadata(path) {
       Ok(metadata) => {
-        let idle_since = metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1e9;
-        if scope.idle_past(idle_since) {
+        if scope.idle_past(mtime_secs(&metadata)) {
           counter.delete_file(path, scope.dry_run);
         }
       }
@@ -87,16 +85,10 @@ fn sweep_rollout(
   }
 }
 
-/// The thread id a rollout name embeds: the last five hyphen-separated segments of its stem, when they form a UUID.
+/// The thread id a rollout file's name embeds, when it forms a UUID.
 fn rollout_session_id(path: &Path) -> Option<String> {
-  let name = path.file_name()?.to_string_lossy().into_owned();
-  let stem = name.strip_suffix(".jsonl")?;
-  if !stem.starts_with("rollout-") {
-    return None;
-  }
-  let segments: Vec<&str> = stem.split('-').collect();
-  let candidate = segments[segments.len().saturating_sub(5)..].join("-");
-  SESSION_ID.is_match(&candidate).then_some(candidate)
+  let name = path.file_name()?.to_string_lossy();
+  rollout_thread_id(&name).filter(|thread_id| SESSION_ID.is_match(thread_id))
 }
 
 /// The category's count and freed bytes (`usage_sources.SweepCounter` for a file unit).

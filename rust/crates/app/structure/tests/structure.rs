@@ -885,17 +885,18 @@ fn production_sites(workspace: &Workspace) -> Vec<Site> {
 
 /// Whether a site spells `name`. A name with `.`, `_` or `/` matches a literal whose `/`-separated segments hold the
 /// name's segments in sequence. A plain word matches only in a path form: an argument of `.join(..)`, `Path::new(..)`
-/// or `PathBuf::from(..)` equal to it, or a segment of a relative path literal.
+/// or `PathBuf::from(..)` equal to it, or a segment of a relative path literal. A literal that holds `/api/` is a route
+/// path, which its router owns, so it spells no name in any form.
 fn spells(site: &Site, name: &str) -> bool {
+  if site.value.contains("/api/") {
+    return false;
+  }
   if name.contains(['.', '_', '/']) {
     let wanted: Vec<&str> = name.split('/').collect();
     let segments: Vec<&str> = site.value.split('/').collect();
     return segments.windows(wanted.len()).any(|window| window == wanted.as_slice());
   }
-  let relative = site.value.contains('/')
-    && !site.value.starts_with('/')
-    && !site.value.contains("://")
-    && !site.value.contains("/api/");
+  let relative = site.value.contains('/') && !site.value.starts_with('/') && !site.value.contains("://");
   (site.path_arg && site.value == name) || (relative && site.value.split('/').any(|segment| segment == name))
 }
 
@@ -1251,14 +1252,15 @@ fn the_checks_find_each_break() {
 
 /// The owner rule on a synthetic workspace. The owner crate spells its names; the writer crate spells them outside it,
 /// and spells one environment name that the reader crate also spells. Each break fails with its sites and its hint.
-/// Each form the rule allows passes: an owner literal, a named const, a JSON key, prose, a `#[cfg(test)]` item, and a
-/// test target. Each line number below is the line of the fixture text.
+/// Each form the rule allows passes: an owner literal, a named const, a JSON key, prose, a `#[cfg(test)]` item, a route
+/// path that holds a layout name, and a test target. Each line number below is the line of the fixture text.
 #[test]
 fn the_owner_rule_finds_each_break() {
   let owner_dir = tempfile::tempdir().expect("create a temporary directory");
   let owner_root = owner_dir.path();
   let owner_lib = r##"pub const SESSIONS: &str = "sessions";
 pub const EVENTS_FILE: &str = "chat_events.jsonl";
+pub const RUN_EVENTS: &str = "events.jsonl";
 pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 "##;
   let writer_lib = r##"use std::collections::HashMap;
@@ -1333,6 +1335,10 @@ mod tests {
   "CHARLIEBOT_RUN_TOKEN="
 }
 
+pub fn routes() -> [&'static str; 2] {
+  ["/api/sessions/{session_id}/events.jsonl", "/api/sessions/{session_id}/data/chat_events.jsonl"]
+}
+
 #[cfg(test)]
 mod tests {
   pub const TOKEN: &str = "CHARLIEBOT_RUN_TOKEN";
@@ -1357,6 +1363,7 @@ mod tests {
   let rows = [
     OwnerRow { name: "chat_events.jsonl", owner: "infra/owner", hint: "Use `owner_crate::EVENTS_FILE`." },
     OwnerRow { name: "sessions", owner: "infra/owner", hint: "Use `owner_crate::SESSIONS`." },
+    OwnerRow { name: "events.jsonl", owner: "infra/owner", hint: "Use `owner_crate::RUN_EVENTS`." },
   ];
 
   assert_eq!(

@@ -198,7 +198,9 @@ fn an_endpoint_without_the_model_is_reported() {
   let url = format!("{api_base}/models");
   assert_eq!(
     run.stderr,
-    format!("model-not-served: {url} lists [synthetic-other, synthetic-second]; fix the model field or the endpoint\n")
+    format!(
+      "model-not-served: {url} lists ['synthetic-other', 'synthetic-second']; fix the model field or the endpoint\n"
+    )
   );
 }
 

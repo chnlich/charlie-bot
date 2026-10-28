@@ -1502,11 +1502,12 @@ mod tests {
     }
   }
 
-  /// Fire one task through the scheduler's launch path and return its worker leaf and the run's terminal record.
-  async fn fire_and_settle(
+  /// Fire one task through the scheduler's launch path and return its worker leaf and the run once `done` holds.
+  async fn fire_until(
     features: &Arc<FeatureContext>,
     task: ScheduledTaskConfig,
     scheduled: bool,
+    done: fn(&FeatureContext, &str, &RunRecord) -> bool,
   ) -> (String, RunRecord) {
     let node_id = task.session_id.clone().expect("the synthetic task is bound to a node");
     let scheduler = CronScheduler::new(Arc::clone(features));
@@ -1520,13 +1521,12 @@ mod tests {
     let mut tracked = false;
     let run = tokio::time::timeout(std::time::Duration::from_secs(15), async {
       loop {
-        let facts = features.store.load_all_facts(&leaf_id).unwrap();
         if let Some(run) = features.store.list_run_records_sync(&leaf_id).unwrap().first() {
           if !tracked && let Some(pid) = run.pid {
             guard.track(pid);
             tracked = true;
           }
-          if charliebot_store::run_records::terminal_outcome(&facts, &run.id).unwrap().is_some() {
+          if done(features, &leaf_id, run) {
             break run.clone();
           }
         }
@@ -1534,8 +1534,34 @@ mod tests {
       }
     })
     .await
-    .expect("the fired run reaches a terminal fact");
+    .expect("the fired run reaches the awaited state");
     (leaf_id, run)
+  }
+
+  /// Fire one task and return its worker leaf and the run once the run reaches a terminal fact.
+  async fn fire_and_settle(
+    features: &Arc<FeatureContext>,
+    task: ScheduledTaskConfig,
+    scheduled: bool,
+  ) -> (String, RunRecord) {
+    fire_until(features, task, scheduled, |features, leaf_id, run| {
+      let facts = features.store.load_all_facts(leaf_id).unwrap();
+      charliebot_store::run_records::terminal_outcome(&facts, &run.id).unwrap().is_some()
+    })
+    .await
+  }
+
+  /// Fire one task and return its worker leaf and the run once the launch text is written. The run keeps going after
+  /// this returns, so a caller asserts only what the launch records.
+  async fn fire_and_launch(
+    features: &Arc<FeatureContext>,
+    task: ScheduledTaskConfig,
+    scheduled: bool,
+  ) -> (String, RunRecord) {
+    fire_until(features, task, scheduled, |features, leaf_id, run| {
+      features.store.run_dir(leaf_id, &run.id).join(charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME).is_file()
+    })
+    .await
   }
 
   fn launch_text(features: &FeatureContext, session_id: &str, run: &RunRecord) -> String {
@@ -1593,10 +1619,10 @@ mod tests {
 
   #[tokio::test]
   async fn a_steps_task_launches_its_first_step_prompt_in_either_launch_path() {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
     for scheduled in [true, false] {
-      let (_home, features) = feature_context();
-      install_execution(&features).await;
-      let node = manager(&features, "synthetic-step-launch-node").await.unwrap();
+      let node = manager(&features, &format!("synthetic-step-launch-node-{scheduled}")).await.unwrap();
       let mut task = worker_task("synthetic-step-launch-task", &node.id, None);
       task.prompt = None;
       task.steps = Some(vec![
@@ -1616,7 +1642,7 @@ mod tests {
         },
       ]);
 
-      let (leaf_id, run) = fire_and_settle(&features, task, scheduled).await;
+      let (leaf_id, run) = fire_and_launch(&features, task, scheduled).await;
 
       assert_eq!(run.kind, RunKind::ScheduledStep, "scheduled = {scheduled}");
       assert_eq!(run.sequence_ref.as_ref().map(|sequence| sequence.position), Some(0));

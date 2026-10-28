@@ -34,7 +34,10 @@ trap 'rm -rf "$tmp_dir"' EXIT
 # tools/leak-patterns.sh resolves it. Missing or unreadable is a refusal, not a
 # silent pass: nothing goes out unchecked.
 patterns_file=$(PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
-  'from src.infra import home; print(home.charliebot_home_dir() / "skills_leak_patterns.local.txt")')
+  'from src.infra import home; print(home.charliebot_home_dir() / "skills_leak_patterns.local.txt")') || {
+  printf 'Cannot resolve the profile home for the leak pattern file; nothing was sent.\n' >&2
+  exit 2
+}
 if [[ ! -r "$patterns_file" ]]; then
   printf 'Leak pattern file is absent or unreadable: %s\n' "$patterns_file" >&2
   exit 2
@@ -77,14 +80,19 @@ subcommand=$1
 shift
 orig_args=("$@")
 title='' body_file='' comment_file=''
-passthrough=()
 
+# Text reaches gh only through the checked fields. An inline text argument would
+# go to gh unchecked, so it is refused before any call; its value is not echoed.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --title) title=$2; shift 2 ;;
-    --body-file) body_file=$2; shift 2 ;;
+    --title|-t) title=$2; shift 2 ;;
+    --body-file|-F) body_file=$2; shift 2 ;;
     --comment-file) comment_file=$2; shift 2 ;;
-    *) passthrough+=("$1"); shift ;;
+    --body|-b|--comment|-c|--title=*|--body=*|--body-file=*|--comment-file=*|--comment=*|-[btcF]?*)
+      printf 'Refused an inline text argument; pass text with --title, --body-file or --comment-file.\n' >&2
+      exit 2
+      ;;
+    *) shift ;;
   esac
 done
 
@@ -164,11 +172,16 @@ case "$subcommand" in
         [[ -z "$side" ]] || check_string 'branch name' "$side"
       done
     done
+    # A failed listing must stop the push: a process substitution would hide the failure and push unchecked.
+    commits=$(git rev-list origin/main..HEAD) || {
+      printf 'Cannot list origin/main..HEAD for the commit check; nothing was pushed.\n' >&2
+      exit 2
+    }
     while IFS= read -r sha; do
       [[ -n "$sha" ]] || continue
       git show -s --format=%B "$sha" > "$tmp_dir/field"
       check_text "commit $sha" "$tmp_dir/field"
-    done < <(git rev-list origin/main..HEAD)
+    done <<< "$commits"
     git push "${orig_args[@]}"
     ;;
   *)

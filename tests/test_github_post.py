@@ -173,6 +173,17 @@ def test_pr_close_sends_comment_from_file(tmp_path: pathlib.Path, post_env) -> N
   assert 'improve-abandoned: topic' in line
 
 
+def test_inline_text_flags_are_refused(tmp_path: pathlib.Path, post_env) -> None:
+  env, gh_log, _ = post_env
+  body = tmp_path / 'body.md'
+  body.write_text(CLEAN_BODY)
+  inline_edit = [str(GITHUB_POST), 'pr-edit', '--title', 'clean topic', '--body', HOME_PATH_TEXT, '123']
+  assert _run(inline_edit, cwd=tmp_path, env=env).returncode == 2
+  inline_comment = [str(GITHUB_POST), 'pr-comment', '--body-file', str(body), f'--body={TAILNET_TEXT}', '123']
+  assert _run(inline_comment, cwd=tmp_path, env=env).returncode == 2
+  assert _gh_log_lines(gh_log) == []
+
+
 def test_push_refuses_leaky_commit_message(push_repo) -> None:
   clone, env = push_repo
   (clone / 'bad.txt').write_text('bad\n')
@@ -199,6 +210,19 @@ def test_push_refuses_leaky_branch_name(push_repo) -> None:
   refs = subprocess.run(
       ['git', 'ls-remote', 'origin'], cwd=clone, env=env, text=True, capture_output=True, check=True).stdout
   assert branch not in refs
+
+
+def test_push_refuses_when_origin_main_is_unknown(push_repo) -> None:
+  clone, env = push_repo
+  _git(clone, env, 'update-ref', '-d', 'refs/remotes/origin/main')
+  (clone / 'bad.txt').write_text('bad\n')
+  _git(clone, env, 'add', 'bad.txt')
+  _git(clone, env, 'commit', '-q', '-m', f'follow {HOME_PATH_TEXT}')
+  result = _run([str(GITHUB_POST), 'push', '-u', 'origin', 'improve/perf/topic-slug'], cwd=clone, env=env)
+  assert result.returncode == 2
+  refs = subprocess.run(
+      ['git', 'ls-remote', 'origin'], cwd=clone, env=env, text=True, capture_output=True, check=True).stdout
+  assert 'improve/perf/topic-slug' not in refs
 
 
 def test_push_updates_bare_repository(push_repo) -> None:

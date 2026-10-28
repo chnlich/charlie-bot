@@ -58,8 +58,35 @@ pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> 
   settings
 }
 
+fn add_wait_guard_hook(settings: &mut Map<String, Value>) {
+  let hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
+  hooks.as_object_mut().expect("Claude hook settings are an object").insert(
+    "PreToolUse".to_string(),
+    json!([{
+      "matcher": "Bash",
+      "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+    }]),
+  );
+}
+
 /// The one settings object every headless Claude process receives for its run kind.
 pub fn headless_claude_settings(run_kind: RunKind, session_id: Option<&str>) -> anyhow::Result<Map<String, Value>> {
+  headless_claude_settings_for(run_kind, session_id, true)
+}
+
+/// Headless settings for compaction, which keeps its existing hook set.
+pub fn headless_claude_settings_without_wait_guard(
+  run_kind: RunKind,
+  session_id: Option<&str>,
+) -> anyhow::Result<Map<String, Value>> {
+  headless_claude_settings_for(run_kind, session_id, false)
+}
+
+fn headless_claude_settings_for(
+  run_kind: RunKind,
+  session_id: Option<&str>,
+  use_wait_guard: bool,
+) -> anyhow::Result<Map<String, Value>> {
   let mut settings = Map::new();
   settings.insert(DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
   settings.insert(SYNC_CLAUDE_AI_SKILLS_SETTINGS_KEY.to_string(), Value::Bool(false));
@@ -72,6 +99,12 @@ pub fn headless_claude_settings(run_kind: RunKind, session_id: Option<&str>) -> 
     }
     RunKind::Work | RunKind::Review | RunKind::Iteration | RunKind::ScheduledStep => {
       settings.insert(DISABLE_BUNDLED_SKILLS_SETTINGS_KEY.to_string(), Value::Bool(true));
+    }
+  }
+  if use_wait_guard {
+    match run_kind {
+      RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => add_wait_guard_hook(&mut settings),
+      RunKind::ScheduledStep => {}
     }
   }
   Ok(settings)

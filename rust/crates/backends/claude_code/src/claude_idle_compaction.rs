@@ -322,6 +322,7 @@ pub fn build_idle_process(
   backend_kwargs
     .insert("claude_account".to_string(), json!({"label": account.label, "config_dir": account.config_dir}));
   backend_kwargs.insert("run_kind".to_string(), json!(identity.run_kind));
+  backend_kwargs.insert("use_wait_guard".to_string(), json!(false));
   let launch = LaunchArgs {
     extra_flags: vec!["--resume".to_string(), identity.cc_session_id, EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string()],
     cgroup_session_id: Some(identity.session_id.clone()),

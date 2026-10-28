@@ -171,6 +171,7 @@ pub struct ClaudeCodeBackend {
   effort: Option<String>,
   cli_binary: Option<String>,
   fast_mode: bool,
+  use_wait_guard: bool,
   run_kind: RunKind,
   claude_session_id: Option<String>,
   claude_config_dir: Option<String>,
@@ -216,11 +217,17 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("midturn_run_id must be a string"),
     }
     .filter(|value| !value.is_empty());
+    let use_wait_guard = match launch.backend_kwargs.get("use_wait_guard") {
+      None => true,
+      Some(Value::Bool(value)) => *value,
+      Some(_) => bail!("backend_kwargs.use_wait_guard must be a boolean"),
+    };
     Ok(Self {
       model,
       effort: effort.filter(|value| !value.is_empty()),
       cli_binary: cli_binary.filter(|value| !value.is_empty()),
       fast_mode,
+      use_wait_guard,
       run_kind,
       claude_session_id,
       claude_config_dir: claude_config_dir.filter(|value| !value.is_empty()),
@@ -246,7 +253,12 @@ impl ClaudeCodeBackend {
     if let Some(effort) = &self.effort {
       command.extend(["--effort".to_string(), effort.clone()]);
     }
-    let mut settings = claude_launch::headless_claude_settings(self.run_kind, self.cgroup_session_id.as_deref())?;
+    let mut settings = match self.use_wait_guard {
+      true => claude_launch::headless_claude_settings(self.run_kind, self.cgroup_session_id.as_deref())?,
+      false => {
+        claude_launch::headless_claude_settings_without_wait_guard(self.run_kind, self.cgroup_session_id.as_deref())?
+      }
+    };
     if self.fast_mode {
       settings.insert(claude_launch::FAST_MODE_SETTINGS_KEY.to_string(), Value::Bool(true));
     }
@@ -730,7 +742,11 @@ mod tests {
     assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
     assert_eq!(
       settings,
-      r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,"fastMode":true}"#
+      concat!(
+        r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
+        r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}]}]},""#,
+        r#"fastMode":true}"#
+      )
     );
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
   }
@@ -755,19 +771,6 @@ mod tests {
     let command = backend.build_command("hi").unwrap();
     let settings = command[command.iter().position(|value| value == "--settings").unwrap() + 1].clone();
     assert_eq!(command.iter().filter(|value| **value == "--settings").count(), 1);
-    assert_eq!(
-      settings,
-      concat!(
-        r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"hooks":{"SessionStart":["#,
-        r#"{"matcher":"compact","hooks":["#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 1"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 2"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 3"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 4"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 5"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 6"}]}]}}"#,
-      )
-    );
     let settings: Value = serde_json::from_str(&settings).unwrap();
     let mut without_hooks = settings.as_object().unwrap().clone();
     without_hooks.remove("hooks");
@@ -785,6 +788,27 @@ mod tests {
     let expected: Vec<String> =
       (1..=6).map(|slot| format!("charliebot compaction-context --session manager-session --slot {slot}")).collect();
     assert_eq!(commands, expected);
+    assert_eq!(
+      settings["hooks"]["PreToolUse"],
+      serde_json::json!([{
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+      }])
+    );
+  }
+
+  #[test]
+  fn headless_settings_install_wait_guard_except_for_scheduled_steps() {
+    let expected = serde_json::json!([{
+      "matcher": "Bash",
+      "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+    }]);
+    for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
+      let settings = claude_launch::headless_claude_settings(run_kind, Some("manager-session")).unwrap();
+      assert_eq!(settings["hooks"]["PreToolUse"], expected, "{run_kind:?}");
+    }
+    let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None).unwrap();
+    assert!(settings.get("hooks").is_none());
   }
 
   // Python: tests/test_claude_code_backend.py:249.

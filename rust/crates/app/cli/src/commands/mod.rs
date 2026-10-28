@@ -9,3 +9,4 @@ pub mod linear;
 pub mod schedule_trigger;
 pub mod session;
 pub mod voice;
+pub mod wait_guard;

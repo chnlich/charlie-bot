@@ -718,11 +718,17 @@ fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
 }
 
 fn launch_of(case: &Value) -> LaunchArgs {
+  // The Python fixture predates this Rust-only operational hook, so compare the shared CLI behavior without it.
+  let mut backend_kwargs = serde_json::Map::new();
+  if case["backend_type"] == "cc-anthropic-compatible" {
+    backend_kwargs.insert("use_wait_guard".to_string(), Value::Bool(false));
+  }
   LaunchArgs {
     extra_flags: strings(&case["extra_flags"]),
     resume_session_id: opt_text(&case["resume_session_id"]),
     instructions_content: opt_text(&case["instructions_content"]),
     instructions_file: opt_text(&case["instructions_file"]).map(PathBuf::from),
+    backend_kwargs,
     ..LaunchArgs::default()
   }
 }

@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher (`src/app/main.py`).
 //!
-//! The vocabulary is the 18 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 19 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a name this port has not reached yet prints
 //! the not-ported JSON error and exits 1 — it never calls the Python CLI.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the six caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 18] = [
+const COMMANDS: [&str; 19] = [
   "artifact",
   "compaction-context",
   "config",
@@ -35,6 +35,7 @@ const COMMANDS: [&str; 18] = [
   "session",
   "slack",
   "voice",
+  "wait-guard",
   "web",
 ];
 
@@ -109,6 +110,7 @@ fn run_subcommand(
     "session" => commands::session::main(args),
     "slack" => charliebot_slack::cli::main(args),
     "voice" => commands::voice::main(args, host),
+    "wait-guard" => commands::wait_guard::main(args),
     "web" => charliebot_web_reply::cli::main(args, host),
     name => Err(charliebot_cli_common::exit::CliExit::error(format!("{name} is not ported to the Rust CLI yet"))),
   }

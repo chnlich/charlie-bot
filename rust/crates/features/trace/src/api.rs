@@ -152,7 +152,7 @@ async fn perfetto_merged(
         "perfetto_merge_failed"
       );
       let detail = if mode == BuildMode::Merge && resolved_paths.len() == 1 && slim && !error.is_not_a_trace() {
-        format!("merged-trace build child failed rc=1: {}", error.message())
+        format!("merged-trace build failed: {}", error.message())
       } else {
         error.message().to_string()
       };

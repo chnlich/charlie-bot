@@ -73,6 +73,7 @@ BEHAVIOR_DEFAULTS = {
     "followup": "none",
     "message_status": 202,
     "archive_runs_delay": 0,
+    "archive_runs_delay_after": 0,
     "ignore_sigterm": False,
     "delegate": "accepts",
     "task_state": "success",
@@ -121,9 +122,10 @@ TASK = {}
 OPENED = []
 TERMINAL = {"success", "failed", "interrupted", "stopped"}
 # The session's runs, oldest first. The probe's message starts the probe run in behavior.run_state; behavior.followup
-# "nudge" adds the follow-up run "nudge-run" at the first archive. READS counts the bootstrap reads.
+# "nudge" adds the follow-up run "nudge-run" at the first archive. READS counts the bootstrap reads and the run
+# listings of the archive step.
 RUNS = []
-READS = {"bootstrap": 0}
+READS = {"bootstrap": 0, "runs": 0}
 
 
 def log(event, **fields):
@@ -176,8 +178,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
       RUNS.append({"id": "probe-run", "state": BEHAVIOR["run_state"]})
       return self._reply(202, {"input_event_id": "probe-input"})
     if method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/runs\?.*", self.path):
+      # The archive step's run listing stalls once archive_runs_delay_after listings have been answered fast.
       if "order=desc" not in self.path:
-        time.sleep(BEHAVIOR["archive_runs_delay"])
+        READS["runs"] += 1
+        if READS["runs"] > BEHAVIOR["archive_runs_delay_after"]:
+          time.sleep(BEHAVIOR["archive_runs_delay"])
       items = list(reversed(RUNS)) if "order=desc" in self.path else list(RUNS)
       return self._reply(200, {"items": items, "next_cursor": None})
     if method == "GET" and self.path == f"/api/sessions/{PROBE_SESSION}/bootstrap":
@@ -1208,14 +1213,25 @@ def test_probe_archive_does_not_cancel_an_empty_run_id(probe: ProbeRun) -> None:
 
 
 def test_probe_archive_bounds_a_slow_run_list_by_its_wait(probe: ProbeRun) -> None:
-  """A stalled archive request times out within PROBE_CANCEL_WAIT_S."""
+  """A run listing that answers only after END reports the wait timeout, not the listing's timed-out status."""
   start = time.monotonic()
   proc, calls = probe(run_state="success", output="none", archive_runs_delay=2)
   elapsed = time.monotonic() - start
   assert proc.returncode == 1, proc.stdout + proc.stderr
   assert elapsed < 1.8
   assert any(line.startswith("GET /api/sessions/probe-session/runs?limit=500") for line in calls)
-  assert "probe: listing the runs answered 000" in proc.stdout
+  assert re.search(r"probe: archive did not finish within 1s session=probe-session run=- elapsed=\d+s", proc.stdout)
+  _assert_stage_lines(proc)
+
+
+def test_probe_archive_names_the_run_when_its_listing_answers_after_the_wait(probe: ProbeRun) -> None:
+  """The wait ends while the run listing that follows the stop request is in flight: the probe reports the settle
+  timeout with the run it waited for, as the clock check at the top of a pass does."""
+  proc, calls = probe(
+      run_state="running", output="message", cancel="hangs", archive_runs_delay=2, archive_runs_delay_after=1)
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert PROBE_CANCEL in calls
+  assert re.search(r"probe: run did not settle within 1s session=probe-session run=probe-run elapsed=\d+s", proc.stdout)
   _assert_stage_lines(proc)
 
 

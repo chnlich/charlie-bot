@@ -1,11 +1,12 @@
-//! `init_seed.init_charliebot_home`: the profile home's directories and seeded files.
+//! `init_seed.init_charliebot_home`: the profile home's directories and seeded files. The server's startup and
+//! `charliebot setup` both run this one provisioning path.
 
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use charliebot_core::config::CharlieBotConfig;
+use crate::config::CharlieBotConfig;
 
 /// `_default_config_yaml()` as `yaml_utils.save_yaml` writes it, for a checkout without the template.
 const DEFAULT_CONFIG_YAML: &str = "paths:\n  workspace_dirs:\n  - ~/workspace\n  worktree_dir: ~/worktrees\n";

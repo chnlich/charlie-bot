@@ -317,8 +317,14 @@ mod tests {
     path
   }
 
+  /// Run the script through `/bin/sh` instead of executing the file directly.
+  ///
+  /// A parallel test forks while this file is open for writing, and the child keeps the write descriptor until it
+  /// execs, so a direct exec of the fresh file can fail with `Text file busy` (ETXTBSY). `/bin/sh` is never open for
+  /// writing, and the script's arguments keep their positions (`$0` is the script, `$1` its first argument).
   fn command_for(program: &Path, arguments: &[&str]) -> Vec<String> {
-    std::iter::once(program.to_string_lossy().into_owned())
+    std::iter::once("/bin/sh".to_string())
+      .chain(std::iter::once(program.to_string_lossy().into_owned()))
       .chain(arguments.iter().map(|argument| (*argument).to_string()))
       .collect()
   }

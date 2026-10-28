@@ -410,6 +410,25 @@ impl Harness {
     .expect("the raw cursor reaches the end of the delivered prefix");
   }
 
+  /// Wait until the run delivered an event that `matches` accepts.
+  ///
+  /// `wait_for_raw_cursor` waits for the cursor to catch up with the raw log, which the relay can write one
+  /// untranslated line at a time; it can return after the first line (for example `session.execution.started`) and
+  /// before the turn's text reaches the sink. Tests that cut the turn and then assert about the delivered events wait
+  /// for the event itself.
+  async fn wait_for_events(&self, events: &Arc<Mutex<Vec<Value>>>, matches: impl Fn(&[Value]) -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+      loop {
+        if matches(&collected_events(events)) {
+          return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the run delivered no matching event");
+  }
+
   async fn control(&self, body: Value) -> anyhow::Result<()> {
     self.server.client_request(reqwest::Method::POST, "/__control")?.json(&body).send().await?.error_for_status()?;
     Ok(())
@@ -1278,6 +1297,9 @@ async fn a_turn_ending_during_downtime_delivers_its_answer_by_the_dead_process_r
     .await;
   let run_directory = run_directory(&harness);
   harness.wait_for_raw_cursor(&run_directory).await;
+  harness
+    .wait_for_events(&initial_events, |events| events.iter().any(|event| event["type"] == event_types::ASSISTANT))
+    .await;
   let turn = super::relay::read_turn_record(&run_directory).unwrap().expect("the turn opened a session");
   let identity = harness
     .turn_processes

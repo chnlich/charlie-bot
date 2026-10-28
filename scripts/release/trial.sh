@@ -2,6 +2,7 @@
 # Run the release trial on a server binary with its paired CLI in the same directory.
 #
 #   scripts/release/trial.sh <full main commit> <server binary>
+#   scripts/release/trial.sh --serve <commit> <server binary> -- <command> [args...]
 #   scripts/release/trial.sh --self-test
 #
 # The commit is extracted from this repository into a trial tree with its own home, private tmux server and a port in
@@ -10,7 +11,21 @@
 # repository, and the server's git calls run behind a wrapper that waits SLOW_GIT_DELAY_SECONDS first, so a binary with
 # sub-second git timeouts fails here instead of on a production repository.
 #
+# The --serve mode owns the same isolated setup (tree, home, port range, private tmux server, credentials, cleanup and
+# sweep-check) but replaces the release checks with one caller command. It starts the binary without the slow-git
+# wrapper, whose per-call delay would distort a measurement, inside a systemd user scope with MemoryMax=2G, so a
+# measurement cannot push the live server into swap, and runs <command> with CHARLIEBOT_SERVE_URL,
+# CHARLIEBOT_SERVE_AUTH_HEADER (one line `Authorization: Bearer <key>`) and CHARLIEBOT_SERVE_PID in its environment.
+# After the command ends it waits until every run of the trial home has ended, stops the server, asserts that no
+# process of the trial tree remains, cleans up and runs sweep-check on the server log. This host gives an
+# unprivileged process no read-only view of /sys/fs/cgroup, so the preflight refuses (exit 2, nothing started) a commit
+# whose diff against its merge base with origin/main touches the cgroup code
+# (rust/crates/runtime/agents/src/transport/cgroup.rs, rust/crates/infra/core/src/cgroup.rs or
+# rust/crates/runtime/agents/src/agent_environment.rs): --serve runs only binaries whose cgroup code equals main's.
+#
 # Exit: 0 every check passed; 1 a check or the cleanup failed; 2 the preflight failed, nothing started.
+# Exit (--serve): the command's exit code; 1 a foreign cgroup removal, a remaining child process or a cleanup failure;
+# 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/trial-<UTC>/ (or a directory under $CHARLIEBOT_RELEASE_LOG_DIR) and is
 # kept after a failure.
 set -uo pipefail
@@ -83,19 +98,40 @@ unquote_yaml_scalar() {
 }
 
 SELF_TEST=0
+SERVE_MODE=0
 BINARY=
+COMMAND=()
 if [[ $# -eq 1 && $1 == --self-test ]]; then
   SELF_TEST=1
   COMMIT="selftest-$$"
+elif [[ ${1:-} == --serve ]]; then
+  if (( $# < 5 )); then
+    preflight_fail 'arguments must be --serve <commit> <server binary> -- <command> [args...]'
+  fi
+  if [[ ! $2 =~ ^[[:xdigit:]]{40}$ ]]; then
+    preflight_fail 'the --serve commit must be a full 40-character hexadecimal sha'
+  fi
+  if [[ -z $3 ]]; then
+    preflight_fail 'the --serve server binary path must be non-empty'
+  fi
+  if [[ $4 != -- ]]; then
+    preflight_fail 'arguments must be --serve <commit> <server binary> -- <command> [args...]: the command follows a --'
+  fi
+  SERVE_MODE=1
+  COMMIT=${2,,}
+  BINARY=$3
+  COMMAND=("${@:5}")
 elif [[ $# -eq 2 && $1 =~ ^[[:xdigit:]]{40}$ && -n $2 ]]; then
   COMMIT=${1,,}
   BINARY=$2
 else
-  preflight_fail 'arguments must be a full 40-character hexadecimal sha followed by the server binary to run, or --self-test'
+  preflight_fail 'arguments must be a full 40-character hexadecimal sha followed by the server binary to run, --serve <commit> <server binary> -- <command> [args...], or --self-test'
 fi
 readonly SELF_TEST
+readonly SERVE_MODE
 readonly COMMIT
 readonly BINARY
+readonly COMMAND
 REAL_GIT=
 
 if (( SELF_TEST == 0 )); then
@@ -104,6 +140,36 @@ if (( SELF_TEST == 0 )); then
   fi
   git -C "$SOURCE_REPO" cat-file -e "$COMMIT^{commit}" 2>/dev/null \
     || preflight_fail "the trial sha $COMMIT is not in $SOURCE_REPO; fetch it first"
+
+  if (( SERVE_MODE == 1 )); then
+    # --serve runs a measurement beside the live server, and this host gives an unprivileged process no read-only view
+    # of /sys/fs/cgroup (an unprivileged user may not create the mount namespace a read-only bind needs). The guard is
+    # therefore the sweep-check after the run plus this refusal: a binary whose cgroup code differs from main's never
+    # starts, which keeps the risk equal to a release trial's.
+    if ! SERVE_MERGE_BASE=$(git -C "$SOURCE_REPO" merge-base origin/main "$COMMIT" 2>/dev/null); then
+      preflight_fail "the merge base of $COMMIT with origin/main resolves in $SOURCE_REPO"
+    fi
+    if ! SERVE_CGROUP_CHANGES=$(git -C "$SOURCE_REPO" diff --name-only "$SERVE_MERGE_BASE" "$COMMIT" -- \
+      rust/crates/runtime/agents/src/transport/cgroup.rs rust/crates/infra/core/src/cgroup.rs \
+      rust/crates/runtime/agents/src/agent_environment.rs); then
+      preflight_fail "the cgroup-code diff of $COMMIT against its origin/main merge base runs in $SOURCE_REPO"
+    fi
+    if [[ -n $SERVE_CGROUP_CHANGES ]]; then
+      preflight_fail "the trial sha $COMMIT changes cgroup code against its origin/main merge base: $(tr '\n' ' ' <<<"$SERVE_CGROUP_CHANGES")"
+    fi
+
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [[ ! -d $XDG_RUNTIME_DIR ]]; then
+      preflight_fail "the user runtime directory exists for the serve scope: $XDG_RUNTIME_DIR"
+    fi
+    if ! command -v systemd-run >/dev/null 2>&1; then
+      preflight_fail 'systemd-run resolves on PATH for the serve scope'
+    fi
+    if ! systemd-run --user --scope --slice=charliebot.slice -p MemoryMax=2G \
+      --unit="charliebot-release-trial-serve-probe-$$" true >/dev/null 2>&1; then
+      preflight_fail 'systemd-run starts a MemoryMax=2G user scope for the serve server'
+    fi
+  fi
 
   if ! command -v ldd >/dev/null 2>&1; then
     preflight_fail 'ldd is available for the result binary'
@@ -933,21 +999,24 @@ cat >"$GIT_CONFIG_GLOBAL" <<'EOF'
 EOF
 
 # The wrapper waits SLOW_GIT_DELAY_SECONDS before every git call. start_server puts it first on the server's PATH only; the
-# trial script's own git calls keep the real git and stay fast.
-if ! mkdir -m 700 "$SLOW_GIT_BIN"; then
-  printf 'trial setup failed: create the slow-git wrapper directory %s\n' "$SLOW_GIT_BIN" >&2
-  exit 1
-fi
-cat >"$SLOW_GIT_BIN/git" <<EOF
+# trial script's own git calls keep the real git and stay fast. --serve starts the binary without it, because the per-call
+# delay would distort a measurement.
+if (( SERVE_MODE == 0 )); then
+  if ! mkdir -m 700 "$SLOW_GIT_BIN"; then
+    printf 'trial setup failed: create the slow-git wrapper directory %s\n' "$SLOW_GIT_BIN" >&2
+    exit 1
+  fi
+  cat >"$SLOW_GIT_BIN/git" <<EOF
 #!/usr/bin/env bash
 # trial.sh: every git call of the trial server waits $SLOW_GIT_DELAY_SECONDS s first, so a binary whose git timeouts are
 # shorter than a production repository's git runs fails the delegation check instead of passing on a tiny local repository.
 sleep $SLOW_GIT_DELAY_SECONDS
 exec $(printf '%q' "$REAL_GIT") "\$@"
 EOF
-if ! chmod 700 "$SLOW_GIT_BIN/git"; then
-  printf 'trial setup failed: set the slow-git wrapper mode\n' >&2
-  exit 1
+  if ! chmod 700 "$SLOW_GIT_BIN/git"; then
+    printf 'trial setup failed: set the slow-git wrapper mode\n' >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$ORIGIN_SEED" "$TREE/origin"
@@ -1385,13 +1454,15 @@ trap cleanup_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-live_status=$(live_version_probe)
-if [[ $live_status == 200 ]]; then
-  LIVE_BEFORE_OK=1
-  printf 'LIVE_BEFORE PASS GET /api/internal/version port=18498 HTTP 200\n'
-else
-  OVERALL_FAIL=1
-  printf 'LIVE_BEFORE FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
+if (( SERVE_MODE == 0 )); then
+  live_status=$(live_version_probe)
+  if [[ $live_status == 200 ]]; then
+    LIVE_BEFORE_OK=1
+    printf 'LIVE_BEFORE PASS GET /api/internal/version port=18498 HTTP 200\n'
+  else
+    OVERALL_FAIL=1
+    printf 'LIVE_BEFORE FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
+  fi
 fi
 
 if [[ ! -x $PYTHON ]]; then
@@ -1432,7 +1503,14 @@ start_server() {
   local server_number=$(( ${#SERVER_PIDS[@]} + 1 ))
   SERVER_LOG="$TREE/server-$server_number.log"
   SERVER_LOGS+=("$SERVER_LOG")
-  PATH="$SLOW_GIT_BIN:$PATH" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+  if (( SERVE_MODE == 0 )); then
+    # The trial's git-timeout check needs the slow-git wrapper first on the server's PATH.
+    PATH="$SLOW_GIT_BIN:$PATH" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+  else
+    # The serve server runs inside a scope whose MemoryMax keeps a measurement beside the live server, and without the
+    # slow-git wrapper, whose per-call delay would distort the measurement's timings.
+    systemd-run --user --scope --slice=charliebot.slice -p MemoryMax=2G --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+  fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
   for _ in $(seq 1 120); do
@@ -1454,10 +1532,11 @@ check_sweep_names() {
   rc=$?
   if (( rc == 0 )); then
     printf 'SWEEP_NAMES PASS %s: %s\n' "$label" "$output"
-  else
-    OVERALL_FAIL=1
-    printf 'SWEEP_NAMES FAIL %s: a startup sweep removed a directory not named for a session under the trial home: %s\n' "$label" "$output"
+    return 0
   fi
+  OVERALL_FAIL=1
+  printf 'SWEEP_NAMES FAIL %s: a startup sweep removed a directory not named for a session under the trial home: %s\n' "$label" "$output"
+  return 1
 }
 
 read_run_summary() {
@@ -1475,6 +1554,144 @@ read_run_summary() {
   RUN_BRANCH=${fields[6]}
   RUN_STATES=${fields[7]}
 }
+
+SERVE_UNIT=
+SERVE_WAIT_RUNS_SECONDS=600
+
+serve_home_has_active_run() {
+  # Prints 1 while some run of a trial-home session is still queued or running, else 0. A stopped, withheld or
+  # input-blocked run consumes no server process, so the active set is queued and running only; a session whose runs
+  # cannot be read counts as active, because its runs are not proven ended.
+  local trial_session_id runs_status state
+  local -a run_states=()
+  while IFS= read -r trial_session_id; do
+    [[ -n $trial_session_id ]] || continue
+    runs_status=$(http_get "/api/sessions/$trial_session_id/runs?order=asc&limit=100" "$HTTP_ROOT/serve-runs.json")
+    if [[ $runs_status != 200 ]] || ! read_run_summary "$HTTP_ROOT/serve-runs.json"; then
+      printf '1'
+      return 0
+    fi
+    [[ -n $RUN_STATES ]] || continue
+    IFS=',' read -r -a run_states <<<"$RUN_STATES"
+    for state in "${run_states[@]}"; do
+      if [[ $state == running || $state == queued ]]; then
+        printf '1'
+        return 0
+      fi
+    done
+  done < <("$PYTHON" "$HELPER" session-ids "$SESSIONS_DIR" 2>/dev/null)
+  printf '0'
+}
+
+stop_serve_scope() {
+  # The scope normally ends with the server process; the stop clears a unit that outlived an unclean server exit, and a
+  # scope whose server died abnormally is loaded in the failed state, which reset-failed unloads.
+  local unit=$1
+  local active
+  active=$(systemctl --user is-active "$unit" 2>/dev/null)
+  if [[ $active == active ]] && ! systemctl --user stop "$unit"; then
+    printf 'trial serve scope stop failed: %s\n' "$unit" >&2
+    return 1
+  fi
+  if [[ $active == failed ]] && ! systemctl --user reset-failed "$unit" >/dev/null 2>&1; then
+    printf 'trial serve scope reset-failed failed: %s\n' "$unit" >&2
+    return 1
+  fi
+  printf 'SERVE scope stop unit=%s state=%s\n' "$unit" "${active:-unreachable}"
+  return 0
+}
+
+run_serve_mode() {
+  # One caller command instead of the release checks. The exit code is the command's, demoted to 1 by a foreign cgroup
+  # removal (sweep-check) or any cleanup failure.
+  local cmd_rc=0 sweep_failed=0 cleanup_failed=0
+  local wait_started live_status server_pid state stray_pids
+  SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  if ! start_server; then
+    printf 'FAIL serve Startup: the server did not become ready on 127.0.0.1:%s\n' "$CHOSEN_PORT"
+    printf 'CAUSE serve: the trial server exited or did not bind the selected port\n'
+    return 1
+  fi
+  printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s unit=%s memory_max=2147483648\n' "$CHOSEN_PORT" "$SERVER_PID" "$SERVE_UNIT"
+  check_sweep_names 'start 1' || sweep_failed=1
+
+  export CHARLIEBOT_SERVE_URL="http://127.0.0.1:$CHOSEN_PORT"
+  export CHARLIEBOT_SERVE_AUTH_HEADER="Authorization: Bearer $ACCESS_KEY"
+  export CHARLIEBOT_SERVE_PID="$SERVER_PID"
+  printf 'SERVE command start: %s\n' "${COMMAND[*]}"
+  "${COMMAND[@]}"
+  cmd_rc=$?
+  unset CHARLIEBOT_SERVE_URL CHARLIEBOT_SERVE_AUTH_HEADER CHARLIEBOT_SERVE_PID
+  printf 'SERVE command exit=%s\n' "$cmd_rc"
+
+  wait_started=$SECONDS
+  while [[ $(serve_home_has_active_run) == 1 ]]; do
+    if (( SECONDS - wait_started >= SERVE_WAIT_RUNS_SECONDS )); then
+      cleanup_failed=1
+      printf 'FAIL serve RunWait: a trial-home run is still queued or running after %s s\n' "$SERVE_WAIT_RUNS_SECONDS"
+      break
+    fi
+    sleep 1
+  done
+  if (( cleanup_failed == 0 )); then
+    printf 'SERVE PASS RunWait: every run of the trial home has ended\n'
+  fi
+
+  if ! stop_current_server 6; then
+    cleanup_failed=1
+  fi
+  if ! stop_serve_scope "$SERVE_UNIT"; then
+    cleanup_failed=1
+  fi
+  if ! cleanup_owned_cgroups; then
+    cleanup_failed=1
+  fi
+  if ! cleanup_trial_tmux_servers; then
+    cleanup_failed=1
+  fi
+  for server_pid in "${SERVER_PIDS[@]}"; do
+    state=$(process_state "$server_pid")
+    if [[ -n $state && $state != *Z* ]]; then
+      cleanup_failed=1
+      printf 'FAIL serve ChildProcess: the server process %s remains\n' "$server_pid"
+    fi
+  done
+  stray_pids=$(pgrep -f "$TREE" || true)
+  if [[ -n $stray_pids ]]; then
+    cleanup_failed=1
+    printf 'FAIL serve ChildProcess: processes of the trial tree remain: %s\n' "$stray_pids"
+  else
+    printf 'SERVE PASS ChildProcess: no process of the trial tree remains\n'
+  fi
+  check_sweep_names 'serve' || sweep_failed=1
+
+  live_status=$(live_version_probe)
+  if [[ $live_status == 200 ]]; then
+    printf 'LIVE_AFTER PASS GET /api/internal/version port=18498 HTTP 200\n'
+  else
+    printf 'LIVE_AFTER FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
+  fi
+  LIVE_AFTER_RECORDED=1
+
+  if ! capture_evidence; then
+    cleanup_failed=1
+    printf 'evidence capture failed: %s\n' "$EVIDENCE_ROOT" >&2
+  fi
+  if ! remove_trial_tree; then
+    cleanup_failed=1
+  fi
+  CLEANUP_DONE=1
+  printf 'EVIDENCE path=%s\n' "$EVIDENCE_ROOT"
+  if (( sweep_failed == 1 || cleanup_failed == 1 )); then
+    return 1
+  fi
+  return "$cmd_rc"
+}
+
+if (( SERVE_MODE == 1 )); then
+  run_serve_mode
+  exit $?
+fi
 
 manager_id=
 manager_first_input_id=

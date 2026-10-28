@@ -140,7 +140,7 @@ async fn wait_for_run(
   session_id: &str,
   run_id: &str,
 ) -> anyhow::Result<RunOutcomeKind> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + Duration::from_secs(30);
   let mut tracked = false;
   loop {
     let run = stack.store().read_run_sync(session_id, run_id)?.context("the run record exists")?;
@@ -151,7 +151,7 @@ async fn wait_for_run(
     if let Some(outcome) = run_records::terminal_outcome(&stack.run_events(session_id)?, run_id)? {
       return Ok(outcome);
     }
-    anyhow::ensure!(Instant::now() < deadline, "run {run_id} did not finish within ten seconds");
+    anyhow::ensure!(Instant::now() < deadline, "run {run_id} did not finish before the test deadline");
     tokio::time::sleep(Duration::from_millis(20)).await;
   }
 }

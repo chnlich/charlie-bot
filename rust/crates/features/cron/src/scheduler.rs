@@ -335,9 +335,13 @@ impl CronScheduler {
       .get_backend_option(&backend)
       .ok_or_else(|| anyhow::anyhow!("scheduled task backend '{backend}' is not configured"))?;
     let model = (!option.model.is_empty()).then(|| option.model.clone());
-    let (leaf, run, prompt, _steps) =
+    let (leaf, run, prompt, steps) =
       self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), &cfg).await?;
     self.record_bound_fire(&session, &task, now).await?;
+    // A run without steps takes the work context, whose task text is the leaf goal (the cron prompt) and which
+    // prepares a worktree from the leaf's repo. A launch text would route it to the step context instead, which
+    // never prepares one.
+    let launch_text = steps.then_some(prompt);
     if scheduled {
       let executor = Arc::clone(&executor);
       let leaf_id = leaf.id.clone();
@@ -346,9 +350,8 @@ impl CronScheduler {
       let owner_ref = firing_ref(&task, &firing);
       let step_count = task.steps.as_ref().map_or(0, Vec::len);
       let boundary = crate::boundary::subscribe_boundary(&leaf_id, &owner_ref);
-      let prompt = prompt.clone();
       let handle = tokio::spawn(async move {
-        match executor.launch_and_settle(&leaf_id, &run_id, Some(&prompt)).await {
+        match executor.launch_and_settle(&leaf_id, &run_id, launch_text.as_deref()).await {
           Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
             // Python keeps the firing task alive through the sequence chain (`src/features/cron/scheduler.py:413-434`).
             wait_for_steps_boundary(boundary).await;
@@ -363,7 +366,7 @@ impl CronScheduler {
       });
       self.handles.lock().expect("cron handle mutex is not poisoned").insert(task.name.clone(), handle);
     } else {
-      executor.launch(&leaf.id, &run.id, Some(&prompt)).await?;
+      executor.launch(&leaf.id, &run.id, launch_text.as_deref()).await?;
     }
     Ok(TaskRunResult { session_id: session.id, thread_id: None })
   }
@@ -853,8 +856,9 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_registry::context::FeatureContext;
   use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
-  use charliebot_store::run_records::RunKind;
+  use charliebot_store::run_records::{RunKind, RunRecord};
   use charliebot_store::{CreateTask, TaskCaller};
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
@@ -864,7 +868,7 @@ mod tests {
 
   use super::{CronExpression, CronScheduler, python_isoformat};
   use crate::config::{ScheduledTaskConfig, StepConfig};
-  use crate::test_support::{feature_context, manager};
+  use crate::test_support::{ProcessGroupGuard, feature_context, init_repo_with_origin, manager};
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
     let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
@@ -1463,5 +1467,163 @@ mod tests {
     );
     let rebound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(rebound["session_id"].as_str(), Some(node_id.as_str()));
+  }
+
+  async fn install_execution(features: &Arc<FeatureContext>) {
+    std::fs::write(
+      features.config.get().unwrap().credentials_file(),
+      "charliebot:\n  access_key: synthetic-access-key\n",
+    )
+    .unwrap();
+    charliebot_tasks::execution::pre_recovery_step(Arc::clone(features)).await.unwrap();
+    let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
+    dispatcher.set_executor(None);
+  }
+
+  fn worker_task(name: &str, node_id: &str, repo: Option<&Path>) -> ScheduledTaskConfig {
+    ScheduledTaskConfig {
+      name: name.to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: repo.map(|path| path.display().to_string()),
+      backend: Some("synthetic".to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: Some(node_id.to_string()),
+      mode: Some("worker".to_string()),
+      prompt: Some("Synthetic scheduled work".to_string()),
+      handler: None,
+      steps: None,
+    }
+  }
+
+  /// Fire one task through the scheduler's launch path and return its worker leaf and the run's terminal record.
+  async fn fire_and_settle(
+    features: &Arc<FeatureContext>,
+    task: ScheduledTaskConfig,
+    scheduled: bool,
+  ) -> (String, RunRecord) {
+    let node_id = task.session_id.clone().expect("the synthetic task is bound to a node");
+    let scheduler = CronScheduler::new(Arc::clone(features));
+    let cfg = (*features.config.get().unwrap()).clone();
+    scheduler
+      .execute_task(task, Some("2026-10-21T03:00:00-07:00".to_string()), scheduled, cfg, Utc::now())
+      .await
+      .unwrap();
+    let leaf_id = features.store.child_ids(&node_id).unwrap().first().cloned().expect("the fire created a worker leaf");
+    let mut guard = ProcessGroupGuard::new();
+    let mut tracked = false;
+    let run = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+      loop {
+        let facts = features.store.load_all_facts(&leaf_id).unwrap();
+        if let Some(run) = features.store.list_run_records_sync(&leaf_id).unwrap().first() {
+          if !tracked && let Some(pid) = run.pid {
+            guard.track(pid);
+            tracked = true;
+          }
+          if charliebot_store::run_records::terminal_outcome(&facts, &run.id).unwrap().is_some() {
+            break run.clone();
+          }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the fired run reaches a terminal fact");
+    (leaf_id, run)
+  }
+
+  fn launch_text(features: &FeatureContext, session_id: &str, run: &RunRecord) -> String {
+    std::fs::read_to_string(
+      features.store.run_dir(session_id, &run.id).join(charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME),
+    )
+    .unwrap()
+  }
+
+  async fn assert_repo_fire_prepares_a_worktree(scheduled: bool) {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
+    let origin = tempfile::tempdir().unwrap();
+    let repo = init_repo_with_origin(origin.path()).unwrap();
+    let node = manager(&features, "synthetic-worktree-node").await.unwrap();
+    let task = worker_task("synthetic-worktree-task", &node.id, Some(&repo));
+
+    let (leaf_id, run) = fire_and_settle(&features, task, scheduled).await;
+
+    assert_eq!(run.kind, RunKind::Work);
+    let worktree_path = run.worktree_path.clone().expect("a repo-backed work run records its worktree");
+    let worktree_dir = std::fs::canonicalize(features.config.get().unwrap().paths.worktree_dir.clone()).unwrap();
+    assert!(Path::new(&worktree_path).starts_with(&worktree_dir), "{worktree_path}");
+    let branch_name = run.branch_name.as_deref().expect("a repo-backed work run records its branch");
+    assert!(branch_name.starts_with("charliebot/task-"), "{branch_name}");
+    let launch = launch_text(&features, &leaf_id, &run);
+    assert!(launch.contains(&worktree_path), "{launch}");
+    assert!(launch.contains("Synthetic scheduled work"), "{launch}");
+  }
+
+  #[tokio::test]
+  async fn a_scheduled_fire_without_steps_prepares_a_worktree_for_its_run() {
+    assert_repo_fire_prepares_a_worktree(true).await;
+  }
+
+  #[tokio::test]
+  async fn a_run_now_without_steps_prepares_a_worktree_for_its_run() {
+    assert_repo_fire_prepares_a_worktree(false).await;
+  }
+
+  #[tokio::test]
+  async fn a_steps_task_launches_its_first_step_prompt_in_either_launch_path() {
+    for scheduled in [true, false] {
+      let (_home, features) = feature_context();
+      install_execution(&features).await;
+      let node = manager(&features, "synthetic-step-launch-node").await.unwrap();
+      let mut task = worker_task("synthetic-step-launch-task", &node.id, None);
+      task.prompt = None;
+      task.steps = Some(vec![
+        StepConfig {
+          name: "select".to_string(),
+          prompt_file: None,
+          prompt: Some("Select candidates.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+        StepConfig {
+          name: "review".to_string(),
+          prompt_file: None,
+          prompt: Some("Review the diff.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+      ]);
+
+      let (leaf_id, run) = fire_and_settle(&features, task, scheduled).await;
+
+      assert_eq!(run.kind, RunKind::ScheduledStep, "scheduled = {scheduled}");
+      assert_eq!(run.sequence_ref.as_ref().map(|sequence| sequence.position), Some(0));
+      assert_eq!(run.worktree_path, None);
+      let launch = launch_text(&features, &leaf_id, &run);
+      assert!(launch.contains("Select candidates."), "{launch}");
+      assert!(!launch.contains("Review the diff."), "{launch}");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_task_without_a_repo_runs_without_a_worktree() {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
+    let node = manager(&features, "synthetic-repo-less-node").await.unwrap();
+    let task = worker_task("synthetic-repo-less-task", &node.id, None);
+
+    let (leaf_id, run) = fire_and_settle(&features, task, false).await;
+
+    assert_eq!(run.kind, RunKind::Work);
+    assert_eq!(run.worktree_path, None);
+    assert_eq!(run.branch_name, None);
+    let worktree_dir = features.config.get().unwrap().paths.worktree_dir.clone();
+    let launch = launch_text(&features, &leaf_id, &run);
+    assert!(launch.contains("Synthetic scheduled work"), "{launch}");
+    assert!(!launch.contains(&worktree_dir), "{launch}");
   }
 }

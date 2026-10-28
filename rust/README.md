@@ -90,6 +90,27 @@ fixture generator are run by hand. The compatibility and SSH outputs under `rust
 The parity harness (`rust/parity/`) that compared the Rust server against the Python reference on synthetic homes was
 removed on 2026-10-27; `main` has no Python server to compare against.
 
+## Development rules
+
+- **A name that two crates agree on has one owner.** A file or directory name, an environment variable name, an event
+  name or an HTTP path has one owner module, and the other crates reference that module's const or function.
+  Environment variable names live in `infra/core` (`home.rs`, `repo_root.rs`, `run_token.rs`, `venv.rs`). The structure
+  test's owner rule fails a name that another crate spells. It checks environment variable names now; each other kind of
+  name joins `OWNER_TABLE` in `crates/app/structure/tests/structure.rs` as its sites are fixed.
+  *Purpose:* a rename in one crate otherwise leaves the other crate compiling, and the break shows only at run time.
+- **The process environment changes only at startup.** `runtime/agents/src/agent_environment.rs` is the one production
+  place that sets or removes a process environment variable, and it does so before any thread starts.
+  *Purpose:* a write to the environment races with every thread that reads it, so one owner that runs first keeps that
+  race out of the server.
+- **Mutable statics stay private to their module.** A `static` that holds mutable state (a `Lazy`, `OnceLock`, `Mutex`
+  or atomic) has no visibility modifier, and its module exposes it through functions.
+  *Purpose:* a public static lets any crate change shared state without the owning module's checks, so no reader can
+  tell which code changed it.
+- **The PACKAGES list alone decides registration order.** The `PACKAGES` list in `rust/crates/app/packages/src/lib.rs`
+  sets the order in which packages register; `RUNTIME` in the same file registers before it.
+  *Purpose:* routes, page parts, metadata keys, template paths and lifespan steps follow registration order
+  (`docs/registry.md`), so a second list that set that order would change the server's output with no diff to `PACKAGES`.
+
 ## Layout
 
 ```

@@ -16,6 +16,8 @@ use super::text::object_or_empty;
 
 /// The rollout record-type names: `session_meta` opens a file, `turn_context` carries the model in force, and
 /// `event_msg` wraps the `token_count` payload the readers read.
+/// The directory under the Codex home that holds the rollout files. Codex names it, so the name stays here.
+pub const CODEX_SESSIONS_DIR_NAME: &str = "sessions";
 pub const SESSION_META: &str = "session_meta";
 pub const TURN_CONTEXT: &str = "turn_context";
 pub const EVENT_MSG: &str = "event_msg";

@@ -24,7 +24,7 @@ static SESSION_ID: LazyLock<Regex> = LazyLock::new(|| {
 pub fn sweep(codex_home: &Path, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
   let mut counter = Counter { count: 0, bytes: 0 };
   let scoped_backends = scope.scoped_backend_sessions();
-  let sessions = codex_home.join("sessions");
+  let sessions = codex_home.join(super::rollout::CODEX_SESSIONS_DIR_NAME);
   if sessions.is_dir() {
     match walk_files(&sessions, |name| name.starts_with("rollout-") && name.ends_with(".jsonl")) {
       Ok(mut rollouts) => {

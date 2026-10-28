@@ -45,7 +45,7 @@ impl CodexLogs {
   }
 
   fn log_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
-    let sessions = self.codex_home.join("sessions");
+    let sessions = self.codex_home.join(super::rollout::CODEX_SESSIONS_DIR_NAME);
     if !sessions.is_dir() {
       return Ok(Vec::new());
     }

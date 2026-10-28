@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
-use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
+use charliebot_core::metadata_slot::{METADATA_FILE_NAME, MetadataFile, MetadataSlot};
 use lru::LruCache;
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -22,6 +22,7 @@ use crate::control::ControlLock;
 use crate::event_state::EventReadCaches;
 use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
+use crate::layout;
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -496,7 +497,7 @@ impl Store {
 
   /// The metadata file for `session_id`.
   pub fn metadata_path(&self, session_id: &str) -> PathBuf {
-    self.session_dir(session_id).join("metadata.json")
+    layout::metadata_path(&self.session_dir(session_id))
   }
 
   /// Serialize one session with every registered field's Python model default.
@@ -558,12 +559,12 @@ impl Store {
 
   /// Return the directory where the live event log is stored.
   pub fn chat_events_path(&self, session_id: &str) -> PathBuf {
-    self.session_dir(session_id).join("data").join("chat_events.jsonl")
+    layout::chat_events_path(&self.session_dir(session_id))
   }
 
   /// Path to a legacy thread's metadata file.
   pub fn thread_metadata_path(&self, session_id: &str, thread_id: &str) -> PathBuf {
-    self.session_dir(session_id).join("threads").join(thread_id).join("metadata.json")
+    layout::threads_dir(&self.session_dir(session_id)).join(thread_id).join(METADATA_FILE_NAME)
   }
 
   /// Read one thread metadata file from disk.

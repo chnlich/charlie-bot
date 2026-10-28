@@ -13,6 +13,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_USER};
+use crate::layout;
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use crate::sidebar_state;
 use crate::{ControlGuard, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreHookFuture, StoreResult, ndjson};
@@ -285,7 +286,7 @@ impl Store {
     );
     meta.created_by_event = Some(EventRef { session_id: meta.id.clone(), event_id: Some(created_event_id) });
     let session_dir = self.session_dir(&meta.id);
-    fs::create_dir_all(session_dir.join("data"))
+    fs::create_dir_all(layout::data_dir(&session_dir))
       .map_err(|error| StoreError::new(format!("{}: {error}", session_dir.display())))?;
 
     let clone_event = json!({

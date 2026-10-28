@@ -2,9 +2,12 @@
 
 use std::path::Path;
 
+use charliebot_core::config::sessions_dir_in;
 use serde_json::{Value, json};
 
 use crate::control_events;
+use crate::layout;
+use crate::run_records::RUN_METADATA_NAME;
 
 /// The v2 task-tree child that a request's stable identity binds to.
 ///
@@ -32,7 +35,8 @@ pub fn find_local_task_child(
       )
     });
   let child_id = control_events::stable_task_id(Some(session_id), &resolved_request_id);
-  let metadata_path = home.join("sessions").join(&child_id).join("metadata.json");
+  let session_dir = sessions_dir_in(home).join(&child_id);
+  let metadata_path = layout::metadata_path(&session_dir);
   let metadata_text = std::fs::read_to_string(metadata_path).ok()?;
   let metadata = serde_json::from_str::<Value>(&metadata_text).ok()?;
 
@@ -61,8 +65,7 @@ pub fn find_local_task_child(
   // `(child, "<request id>:work")` binding the server launched — not "whatever run directory
   // sorts first" (a review Run of the same child is a different operation).
   let run_id = control_events::stable_run_id(&child_id, &format!("{resolved_request_id}:work"));
-  let run_metadata_path =
-    home.join("sessions").join(&child_id).join("data").join("runs").join(&run_id).join("metadata.json");
+  let run_metadata_path = layout::runs_dir(&session_dir).join(&run_id).join(RUN_METADATA_NAME);
   let run_id = run_metadata_path.is_file().then_some(run_id);
 
   Some(json!({
@@ -92,7 +95,7 @@ mod tests {
     let home = tempfile::tempdir().expect("a temp home");
     let session_dir = home.path().join("sessions").join(child_id());
     std::fs::create_dir_all(&session_dir).expect("the child session directory");
-    std::fs::write(session_dir.join("metadata.json"), serde_json::to_vec(&metadata).unwrap())
+    std::fs::write(layout::metadata_path(&session_dir), serde_json::to_vec(&metadata).unwrap())
       .expect("the child metadata");
     home
   }

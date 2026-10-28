@@ -60,10 +60,11 @@ pub trait SequenceListingFields: Send + Sync {
     session_ids: &[String],
     now: UtcDateTime,
   ) -> StoreResult<HashMap<String, Map<String, Value>>>;
-  /// Return sequence subtree roots over a metadata snapshot.
-  fn sequence_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>>;
-  /// Return view subtree roots over a metadata snapshot.
-  fn view_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>>;
+  /// Return sequence subtree roots over a metadata snapshot, borrowing the memoized rows.
+  fn sequence_subtree_roots(&self, metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>>;
+  /// Return view subtree roots over a metadata snapshot, borrowing the memoized rows.
+  fn view_subtree_roots(&self, metas: &[Arc<SessionMetadata>])
+  -> StoreResult<HashMap<String, HashMap<String, String>>>;
 }
 
 /// The sequence binding archive callback for one task-tree node.
@@ -108,7 +109,8 @@ pub(crate) struct CachedMetadata {
 }
 
 pub(crate) struct CachedSubtreeRoots {
-  pub(crate) metadata_identity: Vec<(String, Arc<()>)>,
+  /// The memoized metadata corpus the maps were built from; a different corpus rebuilds them.
+  pub(crate) metadata_snapshot: Arc<Vec<Arc<SessionMetadata>>>,
   pub(crate) sequence: Arc<HashMap<String, String>>,
   pub(crate) views: Arc<HashMap<String, HashMap<String, String>>>,
 }
@@ -1401,11 +1403,14 @@ pub(crate) mod test_support {
       Ok(HashMap::new())
     }
 
-    fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+    fn sequence_subtree_roots(&self, _metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
       Ok(HashMap::new())
     }
 
-    fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+    fn view_subtree_roots(
+      &self,
+      _metas: &[Arc<SessionMetadata>],
+    ) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
     }
   }
@@ -1504,11 +1509,14 @@ mod tests {
       Ok(HashMap::new())
     }
 
-    fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+    fn sequence_subtree_roots(&self, _metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
       Ok(HashMap::new())
     }
 
-    fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+    fn view_subtree_roots(
+      &self,
+      _metas: &[Arc<SessionMetadata>],
+    ) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
     }
   }

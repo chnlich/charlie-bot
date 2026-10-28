@@ -1941,10 +1941,13 @@ mod tests {
       ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
         Ok(HashMap::new())
       }
-      fn sequence_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+      fn sequence_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
         Ok(HashMap::new())
       }
-      fn view_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+      fn view_subtree_roots(
+        &self,
+        _: &[Arc<SessionMetadata>],
+      ) -> StoreResult<HashMap<String, HashMap<String, String>>> {
         Ok(HashMap::new())
       }
     }

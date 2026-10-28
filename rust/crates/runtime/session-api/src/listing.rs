@@ -97,9 +97,10 @@ impl PageRows {
 /// Read the chat page's sidebar corpus without rendering a row.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let (mut rows, derived) = active_listing_corpus(store, registry)?;
-  let sequence = store.sequence_subtree_roots()?;
-  let views = store.view_subtree_roots()?;
-  rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
+  let roots = store.subtree_roots_shared()?;
+  rows.retain(|row| {
+    !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
+  });
   Ok(PageRows { rows, derived })
 }
 

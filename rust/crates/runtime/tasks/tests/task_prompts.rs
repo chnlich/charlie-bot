@@ -74,11 +74,14 @@ impl SequenceListingFields for NoHooks {
     Ok(HashMap::new())
   }
 
-  fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+  fn sequence_subtree_roots(&self, _metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
     Ok(HashMap::new())
   }
 
-  fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+  fn view_subtree_roots(
+    &self,
+    _metas: &[Arc<SessionMetadata>],
+  ) -> StoreResult<HashMap<String, HashMap<String, String>>> {
     Ok(HashMap::new())
   }
 }

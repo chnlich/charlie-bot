@@ -1,3 +1,6 @@
+/// The file name of a session's, a run's and a thread's metadata. [`MetadataFile`] names the kinds that hold it.
+pub const METADATA_FILE_NAME: &str = "metadata.json";
+
 /// One package's top-level keys in a metadata file (src/infra/metadata_slot_registration.py).
 pub type MetadataSlotValidator = fn(&mut serde_json::Map<String, serde_json::Value>) -> Option<String>;
 

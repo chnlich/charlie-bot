@@ -21,6 +21,10 @@ use crate::{paths, pyfmt};
 
 pub const CONFIG_FILENAME: &str = "config.yaml";
 pub const CREDENTIALS_FILENAME: &str = "credentials.yaml";
+/// The profile home's directory of session directories, one per session.
+pub const SESSIONS_DIR_NAME: &str = "sessions";
+/// The profile home's directory of configuration fragments, one YAML file per job or section.
+pub const CONFIG_D_DIR_NAME: &str = "config.d";
 
 /// A legacy-key value under this prefix names a `credentials.yaml` key path (`config_registry.CREDENTIALS_PREFIX`).
 pub const CREDENTIALS_PREFIX: &str = "credentials: ";
@@ -300,9 +304,14 @@ pub struct CharlieBotConfig {
   pub sections: Sections,
 }
 
+/// The sessions directory of a profile home.
+pub fn sessions_dir_in(home: &Path) -> PathBuf {
+  home.join(SESSIONS_DIR_NAME)
+}
+
 impl CharlieBotConfig {
   pub fn sessions_dir(&self) -> PathBuf {
-    self.charliebot_home.join("sessions")
+    sessions_dir_in(&self.charliebot_home)
   }
 
   pub fn config_file(&self) -> PathBuf {
@@ -314,7 +323,7 @@ impl CharlieBotConfig {
   }
 
   pub fn config_d_dir(&self) -> PathBuf {
-    self.charliebot_home.join("config.d")
+    self.charliebot_home.join(CONFIG_D_DIR_NAME)
   }
 
   /// The backend option with exactly this id, or `None`.
@@ -361,7 +370,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
   let config_path = home.join(CONFIG_FILENAME);
   let config_path_text = paths::display(&config_path);
 
-  let config_d = home.join("config.d");
+  let config_d = home.join(CONFIG_D_DIR_NAME);
   if config_d.is_dir() {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(&config_d)
       .map_err(|error| ConfigError(format!("{}: {error}", paths::display(&config_d))))?

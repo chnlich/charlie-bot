@@ -7,6 +7,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::config::CharlieBotConfig;
+use crate::metadata_slot::METADATA_FILE_NAME;
 
 const CONVERSION_SCRIPT: &str = "scripts/v1_session_conversion.py";
 
@@ -27,7 +28,7 @@ pub fn count_v1_sessions(sessions_dir: &Path) -> Result<usize, String> {
     if !entry.path().is_dir() || (name.starts_with(".task-") && name.ends_with(".tmp")) {
       continue;
     }
-    let path = entry.path().join("metadata.json");
+    let path = entry.path().join(METADATA_FILE_NAME);
     let raw = match fs::read(&path) {
       Ok(raw) => raw,
       Err(error) if error.kind() == io::ErrorKind::NotFound => continue,

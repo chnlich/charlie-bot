@@ -14,6 +14,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::home;
+use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
 use serde_json::Value;
@@ -61,10 +62,11 @@ pub fn digest(home_dir: &Path, now: f64) -> Result<String, CliExit> {
       continue;
     }
     let session_id: String = entry.file_name().to_string_lossy().chars().take(8).collect();
-    let text = fs::read_to_string(&events_path)
+    let lines = chat_events::read_lines(&events_path, LineRule::Lines)
       .map_err(|error| CliExit::error(format!("read {}: {error}", events_path.display())))?;
-    for line in text.lines() {
-      let Ok(Value::Object(event)) = serde_json::from_str::<Value>(line) else {
+    for line in lines {
+      let line = line.map_err(|error| CliExit::error(format!("read {}: {error}", events_path.display())))?;
+      let Ok(Value::Object(event)) = line.decode() else {
         continue;
       };
       if event_kind(&event) != Some(event_types::USER) {

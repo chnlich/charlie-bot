@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::pyfmt;
-use charliebot_improve::command::{loops_dir_in, read_loop_state};
+use charliebot_improve::command::{loops_dir_in, read_loop_state_value};
 use charliebot_store::layout;
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use regex::Regex;
@@ -95,11 +95,11 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       continue;
     };
     for loop_dir in sorted_directories(&loops_dir_in(&home, session_id)).map_err(failed)? {
-      let Some(state) = read_loop_state(&loop_dir).map_err(failed)? else {
+      let Some(state) = read_loop_state_value(&loop_dir).map_err(failed)? else {
         continue;
       };
-      let running = state.status == "running";
-      let Some(controller) = state.server_pid else {
+      let running = state.get("status").and_then(Value::as_str) == Some("running");
+      let Some(controller) = state.get("server_pid").and_then(Value::as_i64) else {
         continue;
       };
       if running && Path::new(&format!("/proc/{controller}")).exists() {

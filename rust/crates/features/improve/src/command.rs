@@ -10,6 +10,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil::atomic_write_text;
 use charliebot_core::timefmt::utc_now_iso;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// The state file's name in a loop directory.
 pub const STATE_FILE: &str = "state.json";
@@ -141,10 +142,9 @@ pub fn read_loop_plan(loop_dir: &Path) -> anyhow::Result<Option<String>> {
   Ok(Some(std::fs::read_to_string(&plan_path).with_context(|| format!("read {}", plan_path.display()))?))
 }
 
-/// The state file of one loop directory, or `None` when the directory holds none. A file the read fails on fails the
-/// read, as Python's `json.load` did: the error names the step, `read` or `parse`.
-pub fn read_loop_state(loop_dir: &Path) -> anyhow::Result<Option<ImproveState>> {
-  let path = loop_dir.join(STATE_FILE);
+/// The loop's state file, or `None` when it is missing.
+pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> anyhow::Result<Option<ImproveState>> {
+  let path = state_path(cfg, session_id, loop_id);
   if !path.exists() {
     return Ok(None);
   }
@@ -152,9 +152,16 @@ pub fn read_loop_state(loop_dir: &Path) -> anyhow::Result<Option<ImproveState>> 
   Ok(Some(serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?))
 }
 
-/// The loop's state file, or `None` when it is missing.
-pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> anyhow::Result<Option<ImproveState>> {
-  read_loop_state(&loop_dir(cfg, session_id, loop_id))
+/// The state file of one loop directory as its JSON value, or `None` when the directory holds no state file. The value
+/// is not checked against `ImproveState`, so a state file that does not match it still reads: the switch helper's scan
+/// takes only the status and the controller's PID from it.
+pub fn read_loop_state_value(loop_dir: &Path) -> anyhow::Result<Option<Value>> {
+  let path = loop_dir.join(STATE_FILE);
+  if !path.is_file() {
+    return Ok(None);
+  }
+  let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+  Ok(Some(serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?))
 }
 
 /// The loop's state file, which must exist.

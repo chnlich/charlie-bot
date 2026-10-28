@@ -158,6 +158,7 @@ backend_reading_limits	src.backends.anthropic_compatible	cc-anthropic-compatible
 usage resolver	src.backends.codex	codex
 sequence controller	src.features.cron	cron
 sequence controller	src.features.improve	improve
+plan registry	src.features.artifacts	plan_registry
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups
 pre-recovery step	runtime.agents	backend_pool

@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
 use charliebot_compat::python_json::{self, LoadError};
+use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
 use charliebot_core::pyfmt::{JsonStyle, json_dumps};
 use charliebot_core::pystr;
@@ -234,8 +235,13 @@ fn status_payload(status: &WebStatus) -> Value {
 
 /// Refuse `items` when any of their links names an older version of a registered plan or a closed plan, before the
 /// cold read runs; return the lookup the since pairing then uses (`status._require_current_plan_links`).
-fn require_current_plan_links(items: &[WaitingItem], scan_context: &ScanContext) -> Result<PlanLinks, WebReplyError> {
-  let mut links = PlanLinks::new(scan_context.charliebot_home.join("sessions"));
+fn require_current_plan_links(
+  features: &FeatureContext,
+  items: &[WaitingItem],
+  scan_context: &ScanContext,
+) -> Result<PlanLinks, WebReplyError> {
+  let read_plans = features.registry.plan_registry_reader().map_err(WebReplyError::Failed)?;
+  let mut links = PlanLinks::new(sessions_dir_in(&scan_context.charliebot_home), read_plans);
   let stale = links.stale_links(items, scan_context)?;
   if !stale.is_empty() {
     return Err(WebReplyError::refused(StatusCode::CONFLICT, plan_links::stale_detail(&stale)));
@@ -400,7 +406,7 @@ pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &
     Some(items) => items.to_vec(),
     None => stored.map(|status| status.waiting).unwrap_or_default(),
   };
-  require_current_plan_links(&prospective, &scan_context)?;
+  require_current_plan_links(features, &prospective, &scan_context)?;
   let read_digests = read_item_digests(features, session_id).await?;
   let unread = unread_items(items, &read_digests)?;
   Ok(json!({"unread": unread}))
@@ -577,7 +583,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   });
   let stored_waiting = effective_waiting(&base);
   let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
-  let mut links = require_current_plan_links(&prospective, &scan_context)?;
+  let mut links = require_current_plan_links(features, &prospective, &scan_context)?;
   if let Some(items) = patch.waiting.as_deref() {
     let read_digests = read_item_digests(features, session_id).await?;
     let unread = unread_items(items, &read_digests)?;
@@ -656,7 +662,7 @@ pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Resu
     updated_at: UtcDateTime::now(),
   });
   let scan_context = reply::file_link_scan_context(features, session_id)?;
-  require_current_plan_links(&effective_waiting(&status), &scan_context)?;
+  require_current_plan_links(features, &effective_waiting(&status), &scan_context)?;
   features
     .store
     .persist_and_broadcast(session_id, json!({"type": WEB_STATUS_CONFIRMED, "content": "Status confirmed"}))

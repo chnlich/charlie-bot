@@ -180,9 +180,13 @@ pub fn archive_files(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 /// The chat event logs of a session in reading order: each archive in file-name order, then the live log when it is
-/// a file.
+/// a file. A `data/archives` that is not a directory holds no archives; the live log still counts.
 pub fn session_log_paths(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
-  let mut paths = archive_files(session_dir)?;
+  let mut paths = if layout::archives_dir(session_dir).is_dir() {
+    archive_files(session_dir)?
+  } else {
+    Vec::new()
+  };
   let live = layout::chat_events_path(session_dir);
   if live.is_file() {
     paths.push(live);
@@ -387,6 +391,18 @@ mod tests {
     let paths = super::session_log_paths(session).unwrap();
     assert_eq!(paths.len(), 3);
     assert_eq!(paths.last().unwrap(), &session.join("data").join("chat_events.jsonl"));
+  }
+
+  #[test]
+  fn session_log_paths_skips_an_archives_path_that_is_not_a_directory() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let session = dir.path();
+    std::fs::create_dir_all(session.join("data")).unwrap();
+    std::fs::write(session.join("data").join("archives"), "not a directory").unwrap();
+    std::fs::write(session.join("data").join("chat_events.jsonl"), "{}\n").unwrap();
+
+    let paths = super::session_log_paths(session).unwrap();
+    assert_eq!(paths, vec![session.join("data").join("chat_events.jsonl")]);
   }
 
   #[test]

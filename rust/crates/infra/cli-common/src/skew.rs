@@ -6,6 +6,9 @@ use charliebot_core::repo_root;
 use crate::timeouts;
 use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 
+/// The version route `app/server` mounts. The skew probe sends its `GET` to the running server.
+pub const VERSION_PATH: &str = "/api/internal/version";
+
 /// `compose_version_skew_hint`: a hint when the server and the repo sit at different SHAs, `None`
 /// when either SHA is missing (a best-effort fetch failed) or when they match.
 pub fn compose_version_skew_hint(
@@ -47,7 +50,7 @@ fn best_effort_server_version(
 ) -> (Option<String>, Option<String>) {
   let request = WireRequest {
     method: Method::Get,
-    url: format!("{base_url}/api/internal/version"),
+    url: format!("{base_url}{VERSION_PATH}"),
     headers: headers.to_vec(),
     body: None,
     timeout: timeouts::HTTP_VERSION_SKEW_TIMEOUT,

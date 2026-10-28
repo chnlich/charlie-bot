@@ -43,36 +43,47 @@ impl FromRequestParts<Arc<FeatureContext>> for RequiredTaskSession {
   }
 }
 
+/// The route paths that other crates' clients send. The router and `ROUTE_PATTERNS` use these consts, so each path is
+/// spelled once. A `{session_id}` or `{run_id}` parameter is filled by the caller.
+pub const CHAT_MESSAGE_PATH: &str = "/api/chat/{session_id}/message";
+pub const SESSION_RETRY_PATH: &str = "/api/sessions/{session_id}/retry";
+pub const RUN_CANCEL_PATH: &str = "/api/sessions/{session_id}/runs/{run_id}/cancel";
+pub const SESSION_ARCHIVE_PATH: &str = "/api/sessions/{session_id}/archive";
+pub const SESSION_CANCEL_PATH: &str = "/api/sessions/{session_id}/cancel";
+pub const TASK_INPUTS_ACKNOWLEDGE_PATH: &str = "/api/sessions/{session_id}/task-inputs/acknowledge";
+pub const DELEGATE_PATH: &str = "/api/internal/delegate";
+pub const SESSION_MESSAGE_PATH: &str = "/api/internal/session-message";
+
 /// Build the task orchestration routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/chat/{session_id}/upload", post_only(crate::upload::upload_file))
-    .route("/api/chat/{session_id}/message", post_only(send_message))
+    .route(CHAT_MESSAGE_PATH, post_only(send_message))
     .route("/api/chat/{session_id}/cancel", post_only(cancel_chat))
-    .route("/api/sessions/{session_id}/retry", post_only(retry_run))
-    .route("/api/sessions/{session_id}/runs/{run_id}/cancel", post_only(cancel_run))
-    .route("/api/sessions/{session_id}/archive", post_only(archive_task))
-    .route("/api/sessions/{session_id}/cancel", post_only(cancel_task))
-    .route("/api/sessions/{session_id}/task-inputs/acknowledge", post_only(acknowledge_task_inputs))
+    .route(SESSION_RETRY_PATH, post_only(retry_run))
+    .route(RUN_CANCEL_PATH, post_only(cancel_run))
+    .route(SESSION_ARCHIVE_PATH, post_only(archive_task))
+    .route(SESSION_CANCEL_PATH, post_only(cancel_task))
+    .route(TASK_INPUTS_ACKNOWLEDGE_PATH, post_only(acknowledge_task_inputs))
     .route("/api/sessions/{session_id}/unarchive", post_only(unarchive_task))
-    .route("/api/internal/delegate", post_only(delegate_task))
-    .route("/api/internal/session-message", post_only(session_message))
+    .route(DELEGATE_PATH, post_only(delegate_task))
+    .route(SESSION_MESSAGE_PATH, post_only(session_message))
     .with_state(Arc::clone(features))
 }
 
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
 pub const ROUTE_PATTERNS: &[&str] = &[
   "/api/chat/{session_id}/upload",
-  "/api/chat/{session_id}/message",
+  CHAT_MESSAGE_PATH,
   "/api/chat/{session_id}/cancel",
-  "/api/sessions/{session_id}/retry",
-  "/api/sessions/{session_id}/runs/{run_id}/cancel",
-  "/api/sessions/{session_id}/archive",
-  "/api/sessions/{session_id}/cancel",
-  "/api/sessions/{session_id}/task-inputs/acknowledge",
+  SESSION_RETRY_PATH,
+  RUN_CANCEL_PATH,
+  SESSION_ARCHIVE_PATH,
+  SESSION_CANCEL_PATH,
+  TASK_INPUTS_ACKNOWLEDGE_PATH,
   "/api/sessions/{session_id}/unarchive",
-  "/api/internal/delegate",
-  "/api/internal/session-message",
+  DELEGATE_PATH,
+  SESSION_MESSAGE_PATH,
 ];
 
 struct UploadedFileRef {

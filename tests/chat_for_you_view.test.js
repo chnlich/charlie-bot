@@ -345,7 +345,7 @@ test('Everything separator HTML matches the output before button extraction', ()
   }), 'sess-fy');
   const hash = crypto.createHash('sha256').update(html).digest('hex');
 
-  assert.equal(hash, 'f039b2faf0eb09a1b2a4096e7c736eaad1e30b90da08a333415c6f99e11189e8');
+  assert.equal(hash, 'b3b5d700bd9a4c066c2201175dde400ab370db4fb3e96551dbbc1e8ef013d06e');
 });
 
 test('For you shows an error row with every line of its text', () => {

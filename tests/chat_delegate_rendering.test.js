@@ -271,6 +271,10 @@ test('a run_end separator omits buttons while an ordinary separator keeps its du
   }, 'sess-1');
   assert.match(managerSeparator, /response complete &middot; 45s/);
   assert.match(managerSeparator, /class="separator-action"/);
+  // The phone rule in styles.css finds this row, its label and its two hairlines by these
+  // class names; without them the row's controls clip off a phone's right edge again.
+  assert.match(managerSeparator, /<span class="[^"]*\bseparator-label\b/);
+  assert.equal((managerSeparator.match(/\bseparator-hairline\b/g) || []).length, 2);
 
   const runEnd = context.renderMessage({
     role: 'separator', kind: 'run_end', id: 'run-end', event_index: 13, thinking_seconds: 68,

@@ -94,6 +94,20 @@
    not chain to the page. */
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
 .turn-collapse:hover { color: #cbd5e1; }
+/* A labelled round separator (chat/rendering.js, the separator role) keeps its label, the
+   round's buttons and the fold control on one line. The chat list clips horizontal overflow
+   (#messages), and a phone is narrower than that line, so the controls past the right edge
+   had no visible position. A phone draws the divider as the row's own top border and stacks
+   the label above the controls, which wrap when the next one does not fit. The For-you
+   view's button-only row carries no separator-label and keeps the desktop line. */
+@media (max-width: 768px) {
+  .separator-line:has(> .separator-label) {
+    flex-wrap: wrap; justify-content: center; row-gap: 0.25rem;
+    border-top: 1px solid rgba(100, 116, 139, 0.4);
+  }
+  .separator-line > .separator-label { flex: 1 0 100%; text-align: center; }
+  .separator-line > .separator-hairline { display: none; }
+}
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
 /* Sidebar resize handle */

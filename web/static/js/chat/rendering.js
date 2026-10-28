@@ -918,12 +918,14 @@ function renderMessage(msg, sessionId) {
         ? " &middot; " + formatRunDuration(msg.thinking_seconds) : "");
     }
     var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
+    // separator-hairline and separator-label are the phone layout's hooks (styles.css):
+    // a phone hides the hairlines and stacks the label above the controls.
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
       + messageIdentityAttrs(msg) + eventIndexAttr + secondsAttr + ">"
-      + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
-      + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">" + sepLabel + "</span>"
+      + "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>"
+      + "<span class=\"text-xs text-slate-500 whitespace-nowrap separator-label\">" + sepLabel + "</span>"
       + buttons
-      + "<div class=\"flex-1 border-t border-slate-600/40\"></div></div>";
+      + "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div></div>";
   }
   return "";
 }

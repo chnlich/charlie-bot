@@ -22,7 +22,6 @@ mod buildinfo;
 mod connection;
 mod cookies;
 mod gzip;
-mod home_init;
 mod packages;
 mod request_log;
 mod request_path;
@@ -239,7 +238,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
   }
 
   let build_info = BuildInfo::capture(repo_root.path());
-  if let Err(error) = home_init::init_charliebot_home(&cfg, repo_root.path()) {
+  if let Err(error) = charliebot_core::home_init::init_charliebot_home(&cfg, repo_root.path()) {
     writer_fence.release();
     eprintln!("charliebot-server: initializing {} failed: {error}", paths::display(&cfg.charliebot_home));
     return ExitCode::from(EXIT_STARTUP);

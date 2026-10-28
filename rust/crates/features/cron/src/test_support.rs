@@ -203,6 +203,74 @@ fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
   Ok(())
 }
 
+/// The commit SHA the fake origin's `main` points at.
+const FAKE_TIP: &str = "1111111111111111111111111111111111111111";
+
+/// Serializes the tests that depend on the tasks crate's git program override, which is process-global: the tests that
+/// install a [`FakeGit`], and each test that launches a repo-backed run, since its git calls must reach real git.
+pub static GIT_PROGRAM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// A `git` stand-in for the repo-backed cron tests. A `/bin/sh` script records each call's argv, answers the calls
+/// `prepare_worktree` makes for origin's `main` and the delivery cleanup that removes the worktree, and fails every
+/// other call so that the test reports it. The tasks crate's `test-hooks` program override routes the module's git
+/// spawns through the script.
+pub struct FakeGit {
+  dir: tempfile::TempDir,
+}
+
+impl FakeGit {
+  /// Installs the fake until the returned value drops; the call log starts empty.
+  pub fn install() -> Self {
+    let dir = tempfile::tempdir().expect("fake git directory is available");
+    let calls = dir.path().join("calls");
+    std::fs::write(&calls, "").expect("fake git call log is written");
+    let script = dir.path().join("fake_git.sh");
+    std::fs::write(&script, fake_git_script(&calls)).expect("fake git script is written");
+    charliebot_tasks::git::set_git_program_override(
+      "/bin/sh",
+      &[script.to_str().expect("fake git script path is UTF-8")],
+    );
+    Self { dir }
+  }
+
+  /// The argv of each intercepted call, space-joined, in call order.
+  pub fn calls(&self) -> Vec<String> {
+    let log = std::fs::read_to_string(self.dir.path().join("calls")).expect("fake git call log is readable");
+    log.lines().map(str::to_string).collect()
+  }
+}
+
+impl Drop for FakeGit {
+  fn drop(&mut self) {
+    charliebot_tasks::git::clear_git_program_override();
+  }
+}
+
+fn fake_git_script(calls: &Path) -> String {
+  format!(
+    r#"#!/bin/sh
+echo "$*" >> '{calls}'
+case "$*" in
+  "-c protocol.version=0 ls-remote --symref origin")
+    printf 'ref: refs/heads/main\tHEAD\n{tip}\tHEAD\n{tip}\trefs/heads/main\n' ;;
+  "rev-parse --verify --quiet refs/remotes/origin/main")
+    echo '{tip}' ;;
+  "worktree add -b "*)
+    mkdir -p "$5" ;;
+  "worktree remove --force "*)
+    rm -rf "$4" ;;
+  "worktree prune")
+    : ;;
+  *)
+    echo "fake git: unexpected call: $*" >&2
+    exit 97 ;;
+esac
+"#,
+    calls = calls.display(),
+    tip = FAKE_TIP,
+  )
+}
+
 pub struct ProcessGroupGuard {
   groups: Vec<Pid>,
 }

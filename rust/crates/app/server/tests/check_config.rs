@@ -38,8 +38,7 @@ fn server_command(home: &Path, args: &[&str], include_repo_root: bool, server_bi
     .env_clear()
     .env("PATH", "/usr/bin:/bin")
     .env("HOME", synthetic_root)
-    .env("CHARLIEBOT_HOME", home)
-    .env("CHARLIEBOT_VENV_BIN", synthetic_root.join("venv/bin"));
+    .env("CHARLIEBOT_HOME", home);
   if include_repo_root {
     command.env("CHARLIEBOT_REPO_ROOT", repo_root);
   }
@@ -75,10 +74,8 @@ fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
 fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
-  let venv_bin = temporary.path().join("venv/bin");
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), false);
   fs::create_dir_all(home.join("state")).unwrap();
-  fs::create_dir_all(&venv_bin).unwrap();
   fs::write(
     home.join("config.yaml"),
     "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",

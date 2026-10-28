@@ -1,7 +1,7 @@
 //! The switch's test world: one runtime clone, home, release root, log directory and private tmux socket under a sandbox
 //! of stub commands. Each test builds its own, so nothing touches ~/.charliebot, ~/charliebot-releases, the default
 //! tmux server or the live port. A release binary is a copy of the fake release server, which answers the switch's
-//! readback and probe routes; the systemd and uv commands are shell stubs.
+//! readback and probe routes; the systemd commands are shell stubs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -40,15 +40,6 @@ const BACKENDS_OF_BUILDS: [(&str, &str, bool); 3] =
 
 /// The backends that the test config names, with the types the scan maps them to.
 const BACKEND_OPTIONS: &str = "backends:\n  options:\n  - id: oc-deepseek-flash\n    type: opencode\n  - id: agy-gemini-flash\n    type: antigravity\n  - id: claude-opus\n    type: cc-claude\n";
-
-const UV_STUB: &str = r#"if [ "$1" = sync ]; then
-  if [ -e fail-sync ]; then
-    exit 1
-  fi
-  exit 0
-fi
-exit 2
-"#;
 
 /// One test's runtime clone, home, release root, log directory and tmux socket. The clone starts at `old_sha`.
 pub struct World {
@@ -153,7 +144,6 @@ impl World {
     }
     symlink(&old_sha, releases.join("current")).expect("the current release");
 
-    sandbox.stub("uv", UV_STUB);
     // The launcher's slice preflight and its systemd-run scope, without the host's user manager.
     sandbox.install_systemd_stubs();
     let port = free_port();

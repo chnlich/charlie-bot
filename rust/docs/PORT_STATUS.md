@@ -183,7 +183,7 @@ implemented.
 
 | Kind | Service or step | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
-| pre-loop | `agent_environment.apply_agent_environment` | foundation | ported | `main` replaces the server's process environment with the agent environment before any thread starts and before the config load (`app/server/src/main.rs:232`, `runtime/agents/src/agent_environment.rs:63`). The web terminal's tmux server and the usage panel's `claude --version` probe inherit it, and the typed `AgentBaseEnvironment` equals the rewritten environment. Python: `server.py:582`, `src/runtime/agent_environment.py:53-63`. Deviation: Rust takes the venv bin from `CHARLIEBOT_VENV_BIN` (`infra/core/src/venv.rs`), Python from `sys.prefix`. |
+| pre-loop | `agent_environment.apply_agent_environment` | foundation | ported | `main` replaces the server's process environment with the agent environment before any thread starts and before the config load (`app/server/src/main.rs:466`, `runtime/agents/src/agent_environment.rs:60`). The web terminal's tmux server and the usage panel's `claude --version` probe inherit it, and the typed `AgentBaseEnvironment` equals the rewritten environment. Python: `server.py:582`, `src/runtime/agent_environment.py:53-63`. Deviation: Rust takes no venv directory, removes no venv entry from `PATH` and sets no venv bin variable; Python reads `sys.prefix` (task venv-removal). |
 | pre-loop | `config.get_config` | foundation | ported | |
 | pre-loop | `config.require_backends` | foundation | ported | |
 | pre-loop | `v1_sessions.require_no_v1_sessions` | foundation | ported | Runs before bind. |

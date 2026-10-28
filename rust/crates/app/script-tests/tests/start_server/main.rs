@@ -28,8 +28,7 @@ if [ "${1:-}" = "--check-config" ]; then
   exit 0
 fi
 here=$(dirname "$0")
-printf '{"CHARLIEBOT_REPO_ROOT":"%s","CHARLIEBOT_VENV_BIN":"%s"}\n' \
-  "$CHARLIEBOT_REPO_ROOT" "$CHARLIEBOT_VENV_BIN" > "$here/run.json"
+printf '{"CHARLIEBOT_REPO_ROOT":"%s"}\n' "$CHARLIEBOT_REPO_ROOT" > "$here/run.json"
 printf '%s\n' "fake_release_ready"
 "#;
 
@@ -108,7 +107,7 @@ fn launcher_without_current_refuses_to_start_and_names_the_missing_release() {
 }
 
 #[test]
-fn launcher_with_current_runs_the_release_binary_with_both_variables() {
+fn launcher_with_current_runs_the_release_binary_with_the_repo_root() {
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();
   let releases = sandbox.dir("releases");
@@ -122,13 +121,7 @@ fn launcher_with_current_runs_the_release_binary_with_both_variables() {
   let record: serde_json::Value =
     serde_json::from_slice(&fs::read(&record_path).expect("read the release environment record"))
       .expect("the release environment record is JSON");
-  assert_eq!(
-    record,
-    json!({
-      "CHARLIEBOT_REPO_ROOT": harness::repo_root().display().to_string(),
-      "CHARLIEBOT_VENV_BIN": harness::repo_root().join(".venv/bin").display().to_string(),
-    })
-  );
+  assert_eq!(record, json!({"CHARLIEBOT_REPO_ROOT": harness::repo_root().display().to_string()}));
   assert!(!sandbox.root().join("uv-record.json").exists(), "no uv command runs for a current release");
   let log_text = read_log(&log_dir);
   let log_lines = log_text.lines().collect::<Vec<_>>();

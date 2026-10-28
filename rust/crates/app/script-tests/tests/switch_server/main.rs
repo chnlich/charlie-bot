@@ -809,10 +809,14 @@ fn test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3() {
   assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), old_sha);
   assert!(world.serves_release(&old_sha), "the old release does not serve");
 
-  // A sync that fails again during the restore leaves the server down, which is exit 3.
-  fs::write(world.clone.join("fail-sync"), "").expect("the fail-sync marker");
+  // A switch whose new release cannot adopt, followed by a restore whose old release rejects its config, leaves the
+  // server down, which is exit 3.
+  write_behavior(&world.releases.join(&old_sha), &[("check_config", json!("fail"))]);
+  write_behavior(&world.releases.join(&new_sha), &[("adopt", json!(false))]);
   let run = world.switch(&["rust", &new_sha]);
   assert_eq!(run.code, 3, "{}", world.report(&run));
-  world.assert_server_scope_records(5);
+  // The switch started the new release (one more scope) before its readback failed; the restore then could not start
+  // the old release.
+  world.assert_server_scope_records(6);
   assert!(world.listener_pids().is_empty(), "a server still listens on port {}", world.port);
 }

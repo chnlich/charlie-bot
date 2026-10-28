@@ -4,19 +4,17 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
-use charliebot_core::venv::VenvBin;
 use charliebot_registry::backend::Env;
 use charliebot_registry::context::{FeatureContext, StartupState, StartupStop};
 use futures_util::future::BoxFuture;
 
 use crate::transport::cgroup;
 
-pub use charliebot_core::venv::VENV_BIN_ENV;
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
 
 /// The server environment after removing its virtualenv activation for agent children.
@@ -26,37 +24,22 @@ pub struct AgentBaseEnvironment {
 }
 
 /// Rewrite a supplied server environment with the running server's directory first on agent PATH.
-pub fn agent_environment(
-  inherited: &Env,
-  venv_bin: &Path,
-  server_bin_dir: &Path,
-) -> anyhow::Result<AgentBaseEnvironment> {
-  if venv_bin.as_os_str().is_empty() {
-    bail!("{VENV_BIN_ENV} is required and must name the server venv bin directory");
-  }
+pub fn agent_environment(inherited: &Env, server_bin_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
   require_agent_cli(server_bin_dir)?;
   let Some(path) = inherited.get("PATH") else {
     bail!("PATH is not set in the server environment; the agent environment places the server binary directory on it");
   };
-  let real_venv_bin = realpath(venv_bin)?;
   let mut values = inherited.clone();
   for name in ACTIVATION_VARIABLES {
     values.remove(name);
   }
-  let mut path_entries = Vec::new();
-  for entry in env::split_paths(path) {
-    if realpath(&entry)? != real_venv_bin {
-      path_entries.push(entry);
-    }
-  }
   let mut rewritten_entries = vec![server_bin_dir.to_path_buf()];
-  rewritten_entries.extend(path_entries.into_iter().filter(|entry| entry != server_bin_dir));
+  rewritten_entries.extend(env::split_paths(path).filter(|entry| entry != server_bin_dir));
   let rewritten_path = env::join_paths(&rewritten_entries)
     .context("the agent PATH entries join with the path separator")?
     .into_string()
     .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
   values.insert("PATH".to_string(), rewritten_path);
-  values.insert(VENV_BIN_ENV.to_string(), venv_bin.to_string_lossy().into_owned());
   values.entry("PYDANTIC_DISABLE_PLUGINS".to_string()).or_insert_with(|| "__all__".to_string());
   Ok(AgentBaseEnvironment { values })
 }
@@ -74,9 +57,9 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
 /// environment as the typed snapshot. `main` calls this before any thread starts and before the config load: every
 /// child process copies the process environment, so the web terminal's tmux server and the usage panel's
 /// `claude --version` probe inherit the agent environment too.
-pub fn replace_process_environment(venv_bin: &VenvBin, server_bin_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
+pub fn replace_process_environment(server_bin_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
   let inherited = process_environment()?;
-  let agent = agent_environment(&inherited, venv_bin.path(), server_bin_dir)?;
+  let agent = agent_environment(&inherited, server_bin_dir)?;
   for name in inherited.keys().filter(|name| !agent.values.contains_key(*name)) {
     // SAFETY: `main` calls this before the runtime and the logger start, so no other thread reads the environment.
     unsafe { env::remove_var(name) };
@@ -145,20 +128,13 @@ fn process_environment() -> anyhow::Result<Env> {
   Ok(values)
 }
 
-fn realpath(path: &Path) -> anyhow::Result<PathBuf> {
-  if path.as_os_str().is_empty() {
-    return Ok(env::current_dir()?);
-  }
-  soft_canonicalize::soft_canonicalize(path).with_context(|| format!("cannot resolve path {}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::path::PathBuf;
   use std::process::Command;
 
   use super::*;
-  use charliebot_core::venv::VenvBin;
 
   fn server_bin_dir_under(root: &Path) -> PathBuf {
     let directory = root.join("release");
@@ -172,7 +148,7 @@ mod tests {
   }
 
   #[test]
-  fn places_server_binary_dir_first_and_removes_venv_activation() {
+  fn places_server_binary_dir_first_and_removes_activation() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");
     fs::create_dir_all(&venv_bin).unwrap();
@@ -180,7 +156,6 @@ mod tests {
     std::os::unix::fs::symlink(root.path().join("venv"), root.path().join("venv-link")).unwrap();
     let tools = root.path().join("tools");
     let system = root.path().join("system");
-    // A path whose final components do not exist resolves lexically and stays on PATH.
     let missing = root.path().join("missing/bin");
     let inherited = Env::from([
       ("VIRTUAL_ENV".to_string(), root.path().join("venv").display().to_string()),
@@ -199,15 +174,16 @@ mod tests {
       ("KEPT".to_string(), "value".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &venv_bin, &server_bin_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir).unwrap();
 
     assert!(!rewritten.values.contains_key("VIRTUAL_ENV"));
     assert!(!rewritten.values.contains_key("UV_RUN_RECURSION_DEPTH"));
     let path_entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
     assert_eq!(path_entries[0], server_bin_dir);
-    assert_eq!(path_entries, [server_bin_dir.clone(), tools, missing, system]);
-    assert!(!path_entries.iter().any(|entry| entry.starts_with(root.path().join("src"))), "{path_entries:?}");
-    assert_eq!(rewritten.values[VENV_BIN_ENV], venv_bin.display().to_string());
+    assert_eq!(
+      path_entries,
+      [server_bin_dir.clone(), venv_bin, tools, root.path().join("venv-link/bin"), missing, system]
+    );
     assert_eq!(rewritten.values["PYDANTIC_DISABLE_PLUGINS"], "__all__");
     assert_eq!(rewritten.values["KEPT"], "value");
     assert!(inherited.contains_key("VIRTUAL_ENV"));
@@ -216,15 +192,13 @@ mod tests {
   #[test]
   fn moves_existing_server_dir_to_the_front_and_keeps_pydantic_values() {
     let root = tempfile::tempdir().unwrap();
-    let venv_bin = root.path().join("venv/bin");
-    fs::create_dir_all(&venv_bin).unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let inherited = Env::from([
-      ("PATH".to_string(), format!("/usr/bin:{}:{}", server_bin_dir.display(), venv_bin.display())),
+      ("PATH".to_string(), format!("/usr/bin:{}", server_bin_dir.display())),
       ("PYDANTIC_DISABLE_PLUGINS".to_string(), "custom".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &venv_bin, &server_bin_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir).unwrap();
 
     let entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
     assert_eq!(entries, [server_bin_dir, PathBuf::from("/usr/bin")]);
@@ -234,14 +208,12 @@ mod tests {
   #[test]
   fn missing_agent_cli_fails_with_the_expected_path() {
     let root = tempfile::tempdir().unwrap();
-    let venv_bin = root.path().join("venv/bin");
     let server_bin_dir = root.path().join("release");
-    fs::create_dir_all(&venv_bin).unwrap();
     fs::create_dir_all(&server_bin_dir).unwrap();
     let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let expected_path = server_bin_dir.join("charliebot");
 
-    let error = agent_environment(&inherited, &venv_bin, &server_bin_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
 
@@ -249,7 +221,7 @@ mod tests {
     let mut permissions = fs::metadata(&expected_path).unwrap().permissions();
     permissions.set_mode(0o644);
     fs::set_permissions(&expected_path, permissions).unwrap();
-    let error = agent_environment(&inherited, &venv_bin, &server_bin_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
     assert!(format!("{error:#}").contains("executable file"), "{error:#}");
@@ -258,12 +230,10 @@ mod tests {
   #[test]
   fn missing_path_is_an_error_that_names_path() {
     let root = tempfile::tempdir().unwrap();
-    let venv_bin = root.path().join("venv/bin");
-    fs::create_dir_all(&venv_bin).unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let inherited = Env::from([("KEPT".to_string(), "value".to_string())]);
 
-    let error = agent_environment(&inherited, &venv_bin, &server_bin_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir).unwrap_err();
 
     assert!(error.to_string().contains("PATH"), "{error:#}");
   }
@@ -297,7 +267,6 @@ mod tests {
       .env("PATH", path)
       .env("VIRTUAL_ENV", root.path().join("venv"))
       .env("UV_RUN_RECURSION_DEPTH", "1")
-      .env(VENV_BIN_ENV, &venv_bin)
       .env(SERVER_BIN_DIR_ENV, &server_bin_dir)
       .env(CHILD_OUTPUT_ENV, &output)
       .status()
@@ -310,17 +279,15 @@ mod tests {
     assert!(!vars.contains_key("UV_RUN_RECURSION_DEPTH"));
     let entries: Vec<&str> = vars["PATH"].split(':').collect();
     assert_eq!(entries[0], server_bin_dir.to_str().unwrap());
-    assert!(!entries.contains(&venv_bin.to_str().unwrap()), "the venv bin is off PATH: {entries:?}");
+    assert!(entries.contains(&venv_bin.to_str().unwrap()), "the venv bin stays on PATH: {entries:?}");
     assert_eq!(vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
-    assert_eq!(vars[VENV_BIN_ENV], venv_bin.to_str().unwrap());
   }
 
   /// The startup step as `main` runs it, then the grandchild whose environment the parent checks.
   fn startup_child(output: &Path) {
-    let venv_bin = VenvBin::new(env::var_os(VENV_BIN_ENV)).unwrap();
     let server_bin_dir = PathBuf::from(env::var_os(SERVER_BIN_DIR_ENV).unwrap());
 
-    let agent = replace_process_environment(&venv_bin, &server_bin_dir).unwrap();
+    let agent = replace_process_environment(&server_bin_dir).unwrap();
 
     assert_eq!(process_environment().unwrap(), agent.values);
     let grandchild = Command::new("/usr/bin/env").output().unwrap();

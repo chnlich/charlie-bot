@@ -159,9 +159,23 @@ fn check_with_host(
     .enable_all()
     .build()
     .map_err(|error| CliExit::error(format!("could not start the assertion runtime: {error}")))?;
-  let outcomes = runtime
-    .block_on(artifact_check::run_assertions(&args.genre, artifact.to_path_buf(), &host.cfg, inputs.repo_root.clone()))
-    .map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let assertions = runtime.block_on(artifact_check::run_assertions(
+    &args.genre,
+    artifact.to_path_buf(),
+    &host.cfg,
+    inputs.repo_root.clone(),
+  ));
+  let close = crate::close_renderer();
+  let outcomes = match (assertions, close) {
+    (Ok(outcomes), Ok(())) => outcomes,
+    (Err(error), Ok(())) => return Err(CliExit::error(format!("{error:#}"))),
+    (Ok(_), Err(error)) => return Err(CliExit::error(format!("{error:#}"))),
+    (Err(assertion_error), Err(close_error)) => {
+      return Err(CliExit::error(format!(
+        "{assertion_error:#}; failed to close the headless renderer: {close_error:#}"
+      )));
+    }
+  };
 
   let mut stdout = String::new();
   let mut failed = 0;

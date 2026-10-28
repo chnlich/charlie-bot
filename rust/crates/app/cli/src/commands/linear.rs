@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use charliebot_cli_common::args::with_infer_long_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{self, CliExit};
 use charliebot_cli_common::http;
 use charliebot_core::config;
 use charliebot_core::credentials;
@@ -89,12 +89,12 @@ fn execute_graphql(body: &[u8], endpoint: &str, home: &Path) -> Result<Vec<u8>, 
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()
     .build()
-    .map_err(|_| response_failure(None, "request failed", &api_key))?;
+    .map_err(|error| response_failure(None, "request failed", Some(&error), &api_key))?;
   runtime.block_on(async {
     let client = reqwest::Client::builder()
       .timeout(Duration::from_secs(30))
       .build()
-      .map_err(|_| response_failure(None, "request failed", &api_key))?;
+      .map_err(|error| response_failure(None, "request failed", Some(&error), &api_key))?;
     let response = client
       .post(endpoint)
       .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -102,17 +102,19 @@ fn execute_graphql(body: &[u8], endpoint: &str, home: &Path) -> Result<Vec<u8>, 
       .body(body.to_vec())
       .send()
       .await
-      .map_err(|_| response_failure(None, "request failed", &api_key))?;
+      .map_err(|error| response_failure(None, "request failed", Some(&error), &api_key))?;
     let status = response.status().as_u16();
-    let response_body =
-      response.bytes().await.map_err(|_| response_failure(Some(status), "response body read failed", &api_key))?;
+    let response_body = response
+      .bytes()
+      .await
+      .map_err(|error| response_failure(Some(status), "response body read failed", Some(&error), &api_key))?;
     if status != 200 {
-      return Err(response_failure(Some(status), &String::from_utf8_lossy(&response_body), &api_key));
+      return Err(response_failure(Some(status), &String::from_utf8_lossy(&response_body), None, &api_key));
     }
     let value: Value = serde_json::from_slice(&response_body)
-      .map_err(|_| response_failure(Some(status), &String::from_utf8_lossy(&response_body), &api_key))?;
+      .map_err(|_| response_failure(Some(status), &String::from_utf8_lossy(&response_body), None, &api_key))?;
     if value.as_object().is_some_and(|object| object.contains_key("errors")) {
-      return Err(response_failure(Some(status), &String::from_utf8_lossy(&response_body), &api_key));
+      return Err(response_failure(Some(status), &String::from_utf8_lossy(&response_body), None, &api_key));
     }
     Ok(response_body.to_vec())
   })
@@ -131,9 +133,21 @@ fn credential_failure(path: &Path) -> CliExit {
   )
 }
 
-fn response_failure(status: Option<u16>, response: &str, api_key: &str) -> CliExit {
-  let safe_response = if api_key.is_empty() { response.to_string() } else { response.replace(api_key, "[redacted]") };
-  CliExit::contract(json!({"status": status, "response": safe_response}), 1)
+fn response_failure(
+  status: Option<u16>,
+  response: &str,
+  cause: Option<&dyn std::error::Error>,
+  api_key: &str,
+) -> CliExit {
+  let mut body = json!({"status": status, "response": redact_key(response, api_key)});
+  if let Some(cause) = cause {
+    body["error"] = json!(redact_key(&exit::source_chain(&cause), api_key));
+  }
+  CliExit::contract(body, 1)
+}
+
+fn redact_key(text: &str, api_key: &str) -> String {
+  if api_key.is_empty() { text.to_string() } else { text.replace(api_key, "[redacted]") }
 }
 
 #[cfg(test)]
@@ -252,6 +266,7 @@ mod tests {
       assert_eq!(error.code, 1);
       assert_no_key(&text);
       assert!(text.contains(&format!("\"status\":{status}")));
+      assert!(error.body.get("error").is_none());
     }
   }
 
@@ -263,6 +278,7 @@ mod tests {
     drop(listener);
     let error = execute_graphql(REQUEST_BODY, &format!("http://127.0.0.1:{port}/graphql"), home.path()).unwrap_err();
     assert_eq!(error.code, 1);
+    assert!(error.body["error"].as_str().is_some_and(|cause| !cause.is_empty()));
     assert_no_key(&error_text(&error));
 
     let missing_home = credentials_home(None);

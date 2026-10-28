@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::base_url;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{self, CliExit};
 use charliebot_cli_common::headers;
 use charliebot_cli_common::http;
 use charliebot_core::home;
@@ -46,30 +46,38 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 
 fn probe(link: &str) -> Result<String, CliExit> {
   let path = path_and_query(link)?;
-  let home = home::charliebot_home_dir().map_err(|_| probe_failure(None, &path))?;
-  let port = base_url::server_port(&home).map_err(|_| probe_failure(None, &path))?;
-  let auth_headers = headers::internal_api_auth_headers().map_err(|_| probe_failure(None, &path))?;
+  let home =
+    home::charliebot_home_dir().map_err(|error| probe_failure(None, &path, Some(exit::source_chain(&error))))?;
+  let port = base_url::server_port(&home).map_err(|error| {
+    let cause = error.body["error"].as_str().expect("base URL errors carry an error message").to_string();
+    probe_failure(None, &path, Some(cause))
+  })?;
+  let auth_headers = headers::internal_api_auth_headers()
+    .map_err(|_| probe_failure(None, &path, Some("$CHARLIEBOT_HOME/credentials.yaml".to_string())))?;
   let url = format!("http://localhost:{port}{path}");
 
   http::ensure_crypto_provider();
-  let runtime =
-    tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| probe_failure(None, &path))?;
+  let runtime = tokio::runtime::Builder::new_current_thread()
+    .enable_all()
+    .build()
+    .map_err(|error| probe_failure(None, &path, Some(exit::source_chain(&error))))?;
   let status = runtime.block_on(async {
     let client = reqwest::Client::builder()
       .no_proxy()
       .redirect(reqwest::redirect::Policy::none())
       .timeout(Duration::from_secs(10))
       .build()
-      .map_err(|_| probe_failure(None, &path))?;
+      .map_err(|error| probe_failure(None, &path, Some(exit::source_chain(&error))))?;
     let mut request = client.get(&url);
     for (name, value) in auth_headers {
       request = request.header(name, value);
     }
-    let response = request.send().await.map_err(|_| probe_failure(None, &path))?;
+    let response =
+      request.send().await.map_err(|error| probe_failure(None, &path, Some(exit::source_chain(&error))))?;
     Ok::<u16, CliExit>(response.status().as_u16())
   })?;
 
-  if status == 200 { Ok(format!("200 {path}")) } else { Err(probe_failure(Some(status), &path)) }
+  if status == 200 { Ok(format!("200 {path}")) } else { Err(probe_failure(Some(status), &path, None)) }
 }
 
 fn path_and_query(link: &str) -> Result<String, CliExit> {
@@ -90,8 +98,12 @@ fn path_and_query(link: &str) -> Result<String, CliExit> {
   Ok(path)
 }
 
-fn probe_failure(status: Option<u16>, path: &str) -> CliExit {
-  CliExit::contract(json!({"status": status, "path": path}), 1)
+fn probe_failure(status: Option<u16>, path: &str, cause: Option<String>) -> CliExit {
+  let mut body = json!({"status": status, "path": path});
+  if status.is_none() {
+    body["error"] = json!(cause.expect("failures without an HTTP status carry a cause"));
+  }
+  CliExit::contract(body, 1)
 }
 
 #[cfg(test)]

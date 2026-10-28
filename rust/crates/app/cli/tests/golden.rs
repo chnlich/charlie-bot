@@ -738,11 +738,23 @@ mod authenticated_commands {
   use std::thread;
 
   const ACCESS_KEY: &str = "synthetic-file-access-key";
+  const LINEAR_API_KEY: &str = "synthetic-linear-api-key";
 
   fn home_for_port(port: u16) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.yaml"), format!("server:\n  port: {port}\n")).unwrap();
     std::fs::write(home.path().join("credentials.yaml"), format!("charliebot:\n  access_key: {ACCESS_KEY}\n")).unwrap();
+    home
+  }
+
+  fn home_for_linear() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+      home.path().join("credentials.yaml"),
+      format!("charliebot:\n  access_key: {ACCESS_KEY}\nlinear:\n  api_key: {LINEAR_API_KEY}\n"),
+    )
+    .unwrap();
+    std::fs::write(home.path().join("request.json"), r#"{"query":"query { viewer { id } }"}"#).unwrap();
     home
   }
 
@@ -757,6 +769,19 @@ mod authenticated_commands {
       command.env("CHARLIEBOT_RUN_TOKEN", run_token);
     }
     command.output().unwrap()
+  }
+
+  fn invoke_linear(home: &tempfile::TempDir, proxy_port: u16) -> Output {
+    let proxy = format!("http://127.0.0.1:{proxy_port}");
+    Command::new(env!("CARGO_BIN_EXE_charliebot"))
+      .env_clear()
+      .env("CHARLIEBOT_HOME", home.path())
+      .env("HTTPS_PROXY", &proxy)
+      .env("HTTP_PROXY", &proxy)
+      .args(["linear", "graphql", "--file"])
+      .arg(home.path().join("request.json"))
+      .output()
+      .unwrap()
   }
 
   fn start_stub(
@@ -842,6 +867,7 @@ mod authenticated_commands {
         let error: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(error["status"], status);
         assert_eq!(error["path"], "/absolute_filepath/synthetic/file.txt?download=1");
+        assert!(error.get("error").is_none());
       }
     }
   }
@@ -921,7 +947,41 @@ mod authenticated_commands {
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert!(error["status"].is_null());
     assert_eq!(error["path"], "/unreachable");
+    assert!(error["error"].as_str().is_some_and(|cause| !cause.is_empty()));
+    assert!(output.stdout.is_empty());
     assert_clean(&output, &[ACCESS_KEY]);
+  }
+
+  #[test]
+  fn files_probe_credential_load_failure_names_only_the_file() {
+    let home = home_for_port(1);
+    std::fs::write(home.path().join("credentials.yaml"), format!("charliebot: [{ACCESS_KEY}]\n")).unwrap();
+    let output = invoke_files(&home, "/unreachable", None);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(error["status"].is_null());
+    assert_eq!(error["path"], "/unreachable");
+    assert_eq!(error["error"], "$CHARLIEBOT_HOME/credentials.yaml");
+    assert_clean(&output, &[ACCESS_KEY]);
+  }
+
+  #[test]
+  fn linear_graphql_connection_failures_report_a_cause_without_credentials() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let home = home_for_linear();
+    let output = invoke_linear(&home, proxy_port);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(error["status"].is_null());
+    assert_eq!(error["response"], "request failed");
+    assert!(error["error"].as_str().is_some_and(|cause| !cause.is_empty()));
+    assert_clean(&output, &[ACCESS_KEY, LINEAR_API_KEY]);
   }
 
   #[test]

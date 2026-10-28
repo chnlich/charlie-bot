@@ -42,6 +42,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
       Some(fields.context_window),
       fields.effort,
       config_dir,
+      cfg.server.port,
       launch,
       SessionCgroupConfig::from_config(cfg),
     )?

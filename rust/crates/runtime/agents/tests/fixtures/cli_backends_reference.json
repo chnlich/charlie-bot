@@ -507,9 +507,11 @@
           "--verbose",
           "--dangerously-skip-permissions",
           "--disallowed-tools",
-          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings,WebSearch",
           "--settings",
-          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}"
+          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
+          "--mcp-config",
+          "{\"mcpServers\":{\"charliebot-web\":{\"type\":\"http\",\"url\":\"http://localhost:18499/api/web-search/mcp\",\"headers\":{\"Authorization\":\"Bearer ${CHARLIEBOT_RUN_TOKEN}\"}}}}"
         ],
         "env": {
           "HOME": "$TMPROOT/home",
@@ -550,11 +552,13 @@
           "--verbose",
           "--dangerously-skip-permissions",
           "--disallowed-tools",
-          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings,WebSearch",
           "--settings",
           "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
           "--max-turns",
-          "3"
+          "3",
+          "--mcp-config",
+          "{\"mcpServers\":{\"charliebot-web\":{\"type\":\"http\",\"url\":\"http://localhost:18499/api/web-search/mcp\",\"headers\":{\"Authorization\":\"Bearer ${CHARLIEBOT_RUN_TOKEN}\"}}}}"
         ],
         "env": {
           "HOME": "$TMPROOT/home",
@@ -595,9 +599,11 @@
           "--verbose",
           "--dangerously-skip-permissions",
           "--disallowed-tools",
-          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings,WebSearch",
           "--settings",
-          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}"
+          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
+          "--mcp-config",
+          "{\"mcpServers\":{\"charliebot-web\":{\"type\":\"http\",\"url\":\"http://localhost:18499/api/web-search/mcp\",\"headers\":{\"Authorization\":\"Bearer ${CHARLIEBOT_RUN_TOKEN}\"}}}}"
         ],
         "env": {
           "HOME": "$TMPROOT/home",
@@ -638,11 +644,13 @@
           "--verbose",
           "--dangerously-skip-permissions",
           "--disallowed-tools",
-          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings,WebSearch",
           "--settings",
           "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
           "--append-system-prompt-file",
-          "$SYNTHETIC_ROOT/instructions/worker.md"
+          "$SYNTHETIC_ROOT/instructions/worker.md",
+          "--mcp-config",
+          "{\"mcpServers\":{\"charliebot-web\":{\"type\":\"http\",\"url\":\"http://localhost:18499/api/web-search/mcp\",\"headers\":{\"Authorization\":\"Bearer ${CHARLIEBOT_RUN_TOKEN}\"}}}}"
         ],
         "env": {
           "HOME": "$TMPROOT/home",

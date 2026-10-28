@@ -3,6 +3,9 @@
 The `cc-claude` backend type (`src/backends/claude_code`): the Claude Code process, its account pool, launch,
 lifecycle, environment, event translation, compaction, mid-turn delivery, and the Claude Code usage source.
 
+The endpoint backends built here (`AnthropicEndpointBackend`) disallow Claude Code's built-in `WebSearch` and mount
+the server's `charliebot-web` MCP tool instead, which `features/web_search` serves.
+
 ## Public API
 
 | Rust item | Python source |

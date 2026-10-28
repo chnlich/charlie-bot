@@ -7,6 +7,9 @@ pub use charliebot_packages::registry;
 mod thread_rules_tests;
 
 #[cfg(test)]
+mod web_search_gate;
+
+#[cfg(test)]
 mod tests {
   use std::env;
   use std::fs;

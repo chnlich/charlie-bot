@@ -40,3 +40,4 @@ charliebot-usage.workspace = true
 charliebot-usage-page.workspace = true
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
+charliebot-web-search.workspace = true

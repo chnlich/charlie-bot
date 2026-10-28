@@ -34,6 +34,7 @@ impl BackendFactory for OpenAiCompatibleFactory {
       &auth_token,
       &option.model,
       config_dir,
+      cfg.server.port,
       launch,
       SessionCgroupConfig::from_config(cfg),
     )?;

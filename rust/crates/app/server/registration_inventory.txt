@@ -23,6 +23,7 @@ page_packages	src.features.terminal	src.features.terminal
 page_packages	src.features.trace	src.features.trace
 page_packages	src.features.usage	src.features.usage
 page_packages	src.features.voice	src.features.voice
+page_packages	src.features.web_search	src.features.web_search
 page_packages	src.backends.openai_compatible	src.backends.openai_compatible
 page_packages	src.backends.antigravity	src.backends.antigravity
 page_packages	src.backends.charlie_code	src.backends.charlie_code
@@ -53,6 +54,7 @@ routers	src.features.trace	src.features.trace
 routers	src.features.usage	src.features.usage
 routers	src.features.usage	src.features.usage
 routers	src.features.voice	src.features.voice
+routers	src.features.web_search	src.features.web_search
 routers	src.backends.openai_compatible	src.backends.openai_compatible
 routers	src.features.files	src.features.files
 websocket route	runtime.session_api	/ws/sessions/*

@@ -1047,6 +1047,7 @@ dependencies = [
  "charliebot-usage-page",
  "charliebot-voice",
  "charliebot-web-reply",
+ "charliebot-web-search",
 ]
 
 [[package]]
@@ -1466,6 +1467,23 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "charliebot-web-search"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "futures-util",
+ "reqwest 0.13.5",
+ "rustls",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

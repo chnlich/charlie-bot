@@ -776,7 +776,42 @@ struct OwnerRow {
 
 /// The names with an owner. A task that fixes the sites of a name adds the name's row in the same commit, so the rule
 /// stays green at every commit.
-const OWNER_TABLE: &[OwnerRow] = &[];
+const OWNER_TABLE: &[OwnerRow] = &[
+  OwnerRow {
+    name: "agent.raw.ndjson",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::RAW_LOG_NAME`.",
+  },
+  OwnerRow {
+    name: "events.jsonl",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::RUN_EVENTS_NAME`.",
+  },
+  OwnerRow { name: "threads", owner: "runtime/store", hint: "Use `charliebot_store::layout::threads_dir`." },
+  OwnerRow { name: "master_runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::master_runs_dir`." },
+  OwnerRow { name: "archives", owner: "runtime/store", hint: "Use `charliebot_store::layout::archives_dir`." },
+  OwnerRow {
+    name: "launch_prompt.md",
+    owner: "runtime/tasks",
+    hint: "Use `charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME`.",
+  },
+  OwnerRow {
+    name: "prompt_snapshot.json",
+    owner: "runtime/tasks",
+    hint: "Use `charliebot_tasks::prompts::SNAPSHOT_FILENAME`.",
+  },
+  OwnerRow {
+    name: "stdout.log",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME`.",
+  },
+  OwnerRow {
+    name: "plans.json",
+    owner: "features/artifacts",
+    hint: "Read the plan registry through `Registry::plan_registry_reader`, which `features/artifacts` registers.",
+  },
+  OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
+];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.

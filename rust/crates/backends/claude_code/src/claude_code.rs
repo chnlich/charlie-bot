@@ -30,6 +30,9 @@ pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide"
 );
 pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
+/// Claude Code's built-in web search tool. It asks the API endpoint to search, which the endpoint backends either
+/// refuse or answer without a search, so those backends disallow it and use the server's tool instead.
+pub const BUILT_IN_WEB_SEARCH_TOOL: &str = "WebSearch";
 pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
@@ -42,6 +45,17 @@ fn headless_disallowed_tools(run_kind: RunKind) -> String {
     RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration | RunKind::ScheduledStep => "ReportFindings",
   };
   format!("{HEADLESS_DISALLOWED_TOOLS},{kind_tools}")
+}
+
+/// Append `tool` to the command's `--disallowed-tools` value.
+fn disallow_tool(command: &mut [String], tool: &str) {
+  let index = command
+    .iter()
+    .position(|value| value == DISALLOWED_TOOLS_FLAG)
+    .expect("every agent command names its disallowed tools");
+  let value = command.get_mut(index + 1).expect("--disallowed-tools always carries a value");
+  value.push(',');
+  value.push_str(tool);
 }
 
 fn headless_command(run_kind: RunKind) -> Vec<String> {
@@ -558,12 +572,19 @@ impl AnthropicEndpointBackend {
     self.prepare_env(base_env.clone())
   }
 
-  /// No `--model` — the model variables select the model — and the entry's `effort` rides `--effort`.
+  /// No `--model` — the model variables select the model — and the entry's `effort` rides `--effort`. The built-in
+  /// web search is disallowed in both commands, because the endpoint answers it with a refusal or no search.
   fn one_shot_model_args(&self) -> Vec<String> {
     match self.backend.effort.as_deref() {
       Some(effort) => vec!["--effort".to_string(), effort.to_string()],
       None => Vec::new(),
     }
+  }
+
+  fn one_shot_command(&self, system: &str) -> Vec<String> {
+    let mut command = one_shot_argv(&self.one_shot_model_args(), system);
+    disallow_tool(&mut command, BUILT_IN_WEB_SEARCH_TOOL);
+    command
   }
 }
 
@@ -577,7 +598,9 @@ impl AgentBackend for AnthropicEndpointBackend {
   }
 
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
-    self.backend.build_command(prompt)
+    let mut command = self.backend.build_command(prompt)?;
+    disallow_tool(&mut command, BUILT_IN_WEB_SEARCH_TOOL);
+    Ok(command)
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
@@ -643,7 +666,7 @@ impl AgentBackend for AnthropicEndpointBackend {
     timeout: Option<Duration>,
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     Some(Box::pin(async move {
-      let command = one_shot_argv(&self.one_shot_model_args(), system);
+      let command = self.one_shot_command(system);
       let env = self.one_shot_env(base_env)?;
       run_one_shot_process(
         &command,
@@ -1124,5 +1147,84 @@ mod tests {
         ONE_SHOT_DISALLOWED_TOOLS
       ]
     );
+  }
+
+  /// The two commands of `cc-claude`: the built-in web search stays available, and the endpoint backend's extra
+  /// tool changes neither command.
+  #[test]
+  fn claude_code_commands_stay_byte_identical_to_the_base() {
+    let backend = ClaudeCodeBackend::from_launch(
+      None,
+      None,
+      None,
+      false,
+      None,
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+    assert_eq!(
+      backend.build_command("prompt").unwrap(),
+      [
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,\
+         TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "--settings",
+        concat!(
+          r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
+          r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}]}]}}"#
+        ),
+      ]
+    );
+    assert_eq!(
+      one_shot_argv(&[], "system"),
+      [
+        "claude",
+        "-p",
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+        "--system-prompt",
+        "system",
+        "--disallowed-tools",
+        ONE_SHOT_DISALLOWED_TOOLS
+      ]
+    );
+  }
+
+  #[test]
+  fn endpoint_backend_disallows_the_built_in_web_search_in_both_commands() {
+    let backend = AnthropicEndpointBackend::new(
+      "http://localhost:8123/api/anthropic-proxy".to_string(),
+      "synthetic-token".to_string(),
+      "synthetic/model-1".to_string(),
+      None,
+      None,
+      None,
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+    let session = backend.build_command("prompt").unwrap();
+    assert_eq!(
+      disallowed_tools_value(&session),
+      format!("{},{}", headless_disallowed_tools(RunKind::Work), BUILT_IN_WEB_SEARCH_TOOL)
+    );
+    let one_shot = backend.one_shot_command("system");
+    assert_eq!(
+      disallowed_tools_value(&one_shot),
+      format!("{},{}", ONE_SHOT_DISALLOWED_TOOLS, BUILT_IN_WEB_SEARCH_TOOL)
+    );
+  }
+
+  fn disallowed_tools_value(command: &[String]) -> String {
+    let index = command.iter().position(|value| value == DISALLOWED_TOOLS_FLAG).expect("the flag is in the command");
+    command[index + 1].clone()
   }
 }

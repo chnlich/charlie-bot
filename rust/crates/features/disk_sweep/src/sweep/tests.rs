@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use tempfile::{tempdir, tempdir_in};
+use tempfile::tempdir;
+use walkdir::WalkDir;
 
 use super::{SweepAction, SweepRoots, run_sweep};
 
@@ -35,6 +36,11 @@ fn create_repo(path: &Path) -> PathBuf {
   git(path, &["init", "-b", "main"]);
   git(path, &["config", "user.name", "Disk Sweep Test"]);
   git(path, &["config", "user.email", "disk-sweep@example.test"]);
+  // Git detaches a `git maintenance run --auto` after every commit. Its writes into `.git` land after a test has
+  // aged the fixture, so the sweep would see a fresh tree and skip the entry, or a walked `.git` entry could vanish
+  // mid-walk. The fixture must stay quiet while a test asserts on its age.
+  git(path, &["config", "maintenance.auto", "false"]);
+  git(path, &["config", "gc.auto", "0"]);
   fs::write(path.join("tracked.txt"), b"original\n").unwrap();
   git(path, &["add", "tracked.txt"]);
   git(path, &["commit", "-m", "initial"]);
@@ -105,7 +111,17 @@ fn utc(value: &str) -> DateTime<Utc> {
 
 fn row_by_path<'a>(report: &'a super::SweepReport, path: &Path) -> &'a super::SweepRow {
   let row = report.rows.iter().find(|row| row.path == path);
-  assert!(row.is_some(), "no sweep row for {}", path.display());
+  if row.is_none() {
+    // A missing row for a scratch candidate means the sweep found it younger than the cutoff and skipped it without
+    // a row; name the newest entry so a failure points at whatever kept the tree fresh.
+    let detail = if path.exists() {
+      let (newest, freshest) = newest_entry(path);
+      format!("its newest entry is {} at {newest:.3}", freshest.display())
+    } else {
+      "it does not exist".to_string()
+    };
+    panic!("no sweep row for {}: {detail}", path.display());
+  }
   row.unwrap()
 }
 
@@ -116,9 +132,44 @@ fn set_tree_mtime(path: &Path, timestamp: SystemTime) {
     if entry.file_type().unwrap().is_dir() {
       set_tree_mtime(&entry_path, timestamp);
     }
-    File::open(&entry_path).unwrap().set_times(FileTimes::new().set_modified(timestamp)).unwrap();
+    File::open(&entry_path)
+      .unwrap_or_else(|error| panic!("opening {} to set its age: {error}", entry_path.display()))
+      .set_times(FileTimes::new().set_modified(timestamp))
+      .unwrap();
   }
-  File::open(path).unwrap().set_times(FileTimes::new().set_modified(timestamp)).unwrap();
+  File::open(path)
+    .unwrap_or_else(|error| panic!("opening {} to set its age: {error}", path.display()))
+    .set_times(FileTimes::new().set_modified(timestamp))
+    .unwrap();
+}
+
+/// The newest entry in one fixture tree, with the path that carries it.
+fn newest_entry(path: &Path) -> (f64, PathBuf) {
+  fn seconds(metadata: &fs::Metadata) -> f64 {
+    metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1_000_000_000.0
+  }
+  let mut newest = (seconds(&fs::symlink_metadata(path).unwrap()), path.to_path_buf());
+  for entry in WalkDir::new(path).min_depth(1) {
+    let entry = entry.unwrap();
+    let candidate = (seconds(&entry.metadata().unwrap()), entry.path().to_path_buf());
+    if candidate.0 > newest.0 {
+      newest = candidate;
+    }
+  }
+  newest
+}
+
+/// Assert one fixture tree is older than the sweep's scratch cutoff, naming the entry that keeps it fresh.
+fn assert_scratch_aged(path: &Path, now: DateTime<Utc>) {
+  let cutoff = now.timestamp() as f64 - (super::SCRATCH_DAYS * 24 * 60 * 60) as f64;
+  let (newest, freshest) = newest_entry(path);
+  assert!(
+    newest < cutoff,
+    "{} is not aged: {} is {:.3}s newer than the scratch cutoff",
+    path.display(),
+    freshest.display(),
+    newest - cutoff
+  );
 }
 
 type TreeEntry = (String, u32, u64, i64, i64, Option<Vec<u8>>);
@@ -546,7 +597,7 @@ async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
 
 #[tokio::test]
 async fn test_scratch_age_and_nested_repository_safety() {
-  let root = tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+  let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let now = utc("2026-05-20T00:00:00Z");
   let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
@@ -578,6 +629,12 @@ async fn test_scratch_age_and_nested_repository_safety() {
   fs::write(detached_repo.join("tracked.txt"), b"detached commit\n").unwrap();
   git(&detached_repo, &["commit", "-am", "detached head commit"]);
   set_tree_mtime(&detached, old_time);
+
+  // The sweep skips a candidate whose newest entry is younger than the cutoff, so the fixture must be quiet while
+  // the sweep reads it; a writer inside a tree would make that entry look fresh.
+  for path in [&old_clean, &dirty, &unpushed, &detached] {
+    assert_scratch_aged(path, now);
+  }
 
   let report = run(&roots, false, now).await;
   assert_eq!(row_by_path(&report, &old_clean).action, SweepAction::Delete);

@@ -73,11 +73,22 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - A separate reply comes from another person or at another time.
 - The user then clears each Waiting on you item with one reply.
 - Write the decision or the action in the item's `text`, in one sentence.
-- Write the item's `context` with these three parts:
-  - what the line does now, and why the decision comes now;
-  - the options, the consequence of each, and your recommendation;
-  - the links to the evidence: pages, diffs, PRs or logs.
-- Give each Waiting on you item the link to the place where the user answers it, when that place has a link.
+- Write in `context` what the line does now and why the decision comes now, in one or two sentences.
+  The panel then shows why the item waits, before the user opens the page.
+- Write on one HTML page the options, the consequence of each, your recommendation and the evidence links.
+- Set the item's `link` to that page.
+  The user then reads the options with their layout, and comments on the page reach this session.
+- When the item decides on a plan page or an understanding page, use that page.
+  That page already holds the options, the recommendation and the evidence.
+- For any other item, write the page body to a fragment file.
+- Then run `charliebot artifact wrap --genre waiting --output artifacts/waiting_<slug>.html <fragment>`.
+  The command adds the head and style of the decision-page template.
+- On that page, show the options as one `div.fork` block.
+  The user then reads every decision in one layout.
+- Before the status set, pass the page through the gate for waiting pages (`file-server` skill, Cold-Read Gate).
+  The page then reaches the user checked, with one cold read for its item.
+- When the user acts on another page, such as a login page, link that page from the item's page.
+  The item's page then holds the context, and the user reaches the action from it.
 - The user answers your Waiting on you items in your own session.
 - The status panel shows the Waiting on you items of your open descendant sessions below your items.
 - The status panel shows the **Now** of each open child session in a folded block below your items.
@@ -112,7 +123,7 @@ Remaining lists the milestones between the session and its Goal, so the user rea
   Each field that the file leaves out keeps its stored value.
 - The JSON object takes any of the keys `goal`, `now`, `waiting` and `remaining`.
 - `remaining` is a list of objects with the keys `text` and `done`. An empty list removes Remaining.
-- `waiting` is a list of objects with the keys `text`, `context` and `link`. Set `link` to null when the place has no link.
+- `waiting` is a list of objects with the keys `text`, `context` and `link`.
 - When the file holds `waiting`, run `charliebot web status show` right before you write the file.
   Start from your own Waiting on you list in that output.
   Write the whole list: each item that stays, and each new or changed item.
@@ -123,7 +134,8 @@ Remaining lists the milestones between the session and its Goal, so the user rea
 - The command gives each remaining Waiting on you item to a cold reader, unless the reader has already read it as it
   stands.
 - The cold reader reads the item, and the page at its link when this host serves that page. It has no other context.
-- The reader restates the decision and the three parts of its context, and names the kind of step.
+- The reader restates the decision, the line's state, the options with your recommendation, and the evidence links.
+  It also names the kind of step.
 - When the command prints these restatements, it stored nothing.
 - Compare each restatement with your intent:
   - When a part reads NOT STATED or differs from your intent, revise the item.

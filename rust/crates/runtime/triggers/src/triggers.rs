@@ -1353,17 +1353,20 @@ fn remote_exit_read_command(exit_file: &str) -> Result<String, shlex::QuoteError
   Ok(format!("cat {} 2>/dev/null", shlex::try_quote(exit_file)?))
 }
 
+/// The route path that the `schedule-trigger` command posts to. The router and `ROUTE_PATTERNS` use it, and so does the
+/// CLI.
+pub const SCHEDULE_TRIGGER_PATH: &str = "/api/internal/schedule-trigger";
+
 /// Register delayed trigger routes under the internal API paths.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/internal/schedule-trigger", post_only(schedule_trigger))
+    .route(SCHEDULE_TRIGGER_PATH, post_only(schedule_trigger))
     .route("/api/internal/triggers/{session_id}/{trigger_id}/cancel", post_only(cancel_trigger_route))
     .with_state(Arc::clone(features))
 }
 
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
-pub const ROUTE_PATTERNS: &[&str] =
-  &["/api/internal/schedule-trigger", "/api/internal/triggers/{session_id}/{trigger_id}/cancel"];
+pub const ROUTE_PATTERNS: &[&str] = &[SCHEDULE_TRIGGER_PATH, "/api/internal/triggers/{session_id}/{trigger_id}/cancel"];
 
 /// Build one manager after recovery, then recover its durable pending triggers.
 pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<()>> {

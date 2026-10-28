@@ -1097,6 +1097,7 @@ dependencies = [
  "axum",
  "bytes",
  "charliebot-agents",
+ "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-opencode",

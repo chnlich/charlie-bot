@@ -19,6 +19,7 @@ use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::listing::{self, SessionsListMemos};
+use crate::paths;
 use crate::route_support::{Query, blocking_store, store_error};
 use crate::{search, sidebar, tree, write_routes};
 
@@ -45,51 +46,51 @@ struct StatusKey {
 /// The route patterns `routes` mounts, the merged writes, fork and detail routers included. The trailing-slash redirect
 /// matches a path against them.
 pub(crate) const ROUTE_PATTERNS: &[&str] = &[
-  "/api/sessions/",
+  paths::SESSIONS_PATH,
   "/api/sessions/{session_id}/backend",
   "/api/sessions/archived",
   "/api/sessions/starred",
   "/api/sessions/groups",
   "/api/sessions/status",
-  "/api/sessions/tree",
+  paths::SESSION_TREE_PATH,
   "/api/sessions/search",
   "/api/sessions/groups/rename",
   "/api/sessions/groups/delete",
   "/api/sessions/{session_id}/read",
   "/api/sessions/{session_id}/star",
   "/api/sessions/{session_id}/unstar",
-  "/api/sessions/{session_id}/group",
+  paths::SESSION_GROUP_PATH,
   "/api/sessions/{session_id}/rounds/{round_id}/rate",
   "/api/sessions/{session_id}/permanent",
   "/api/sessions/{session_id}/fork",
   "/api/sessions/{session_id}/elone",
   "/api/sessions/{session_id}/pending-triggers",
-  "/api/sessions/{session_id}/bootstrap",
+  paths::SESSION_BOOTSTRAP_PATH,
   "/api/sessions/{session_id}/usage",
-  "/api/sessions/{session_id}/events",
+  paths::SESSION_EVENTS_PATH,
   "/api/sessions/{session_id}/transcript",
-  "/api/sessions/{session_id}/events.jsonl",
-  "/api/sessions/{session_id}/runs",
+  paths::SESSION_EVENTS_JSONL_PATH,
+  paths::SESSION_RUNS_PATH,
   "/api/sessions/{session_id}/task-inputs/pending",
-  "/api/sessions/{session_id}",
+  paths::SESSION_PATH,
 ];
 
 /// Register every supported listing route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/sessions/", refuse_other_methods(get(list_active).post(write_routes::create_session), "GET"))
+    .route(paths::SESSIONS_PATH, refuse_other_methods(get(list_active).post(write_routes::create_session), "GET"))
     .route("/api/sessions/{session_id}/backend", post_only(write_routes::switch_backend))
     .route("/api/sessions/archived", get_only(list_archived))
     .route("/api/sessions/starred", get_only(list_starred))
     .route("/api/sessions/groups", get_only(list_groups))
     .route("/api/sessions/status", get_only(session_status))
-    .route("/api/sessions/tree", get_only(session_tree))
+    .route(paths::SESSION_TREE_PATH, get_only(session_tree))
     .route("/api/sessions/search", get_only(session_search))
     .merge(crate::writes::routes())
     .merge(crate::fork_routes::routes())
     .merge(crate::detail::routes())
     .route(
-      "/api/sessions/{session_id}",
+      paths::SESSION_PATH,
       refuse_other_methods(get(crate::detail::session_detail).patch(write_routes::patch_session), "GET"),
     )
     .with_state(Arc::clone(features))

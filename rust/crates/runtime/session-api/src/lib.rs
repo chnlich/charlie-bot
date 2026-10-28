@@ -3,6 +3,7 @@
 pub mod detail;
 mod fork_routes;
 pub mod listing;
+pub mod paths;
 mod prompt_routes;
 mod route_support;
 mod routes;

@@ -85,7 +85,6 @@ jobs:
         run: cargo build --release --locked -p charliebot-server -p charliebot-cli
 
       - name: Stage binaries and checksums
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           mkdir dist
           cp rust/target/release/charliebot-server rust/target/release/charliebot dist/
@@ -98,6 +97,17 @@ jobs:
           name: charliebot-server-${{ github.sha }}
           path: dist/
           retention-days: 30
+          if-no-files-found: error
+
+      # The UX and performance cron directions measure a pull request's own binary in trial.sh --serve; the artifact
+      # stages the same files as main's upload and is kept 3 days, one measurement round's lifetime.
+      - name: Upload server and CLI binaries (pull request)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: charliebot-server-pr-${{ github.event.pull_request.head.sha }}
+          path: dist/
+          retention-days: 3
           if-no-files-found: error
 
   rust-test:

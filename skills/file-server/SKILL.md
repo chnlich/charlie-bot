@@ -101,6 +101,14 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
 Pages of every genre pass the cold-read gate.
 The gate has two parts: the genre's mechanical assertions and one cold read.
 
+A waiting page (`prompts/web_reply.md`, Form) has the genre `waiting`.
+
+- Before the status set that links the page, run `charliebot artifact check <page-file> --genre waiting --assertions-only`.
+  A broken page then stops before the user opens it.
+- The cold read of `charliebot web status set` reads the item together with its page.
+- Count that cold read as the page's cold read, and start no second cold read for the page.
+  Each Waiting on you item then takes one cold read.
+
 Before you share a page or register a plan version, run the assertions:
 
     charliebot artifact check <page-file> --genre <genre> --assertions-only

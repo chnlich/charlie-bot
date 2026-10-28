@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# The stub gh: answers the authentication, repository, run and artifact queries from the gh_behavior/ directory beside
+# it. `run download` copies the artifact fixture into the directory its --dir names.
+here="${BASH_SOURCE[0]%/*}"
+behavior="$here/gh_behavior"
+case "$1 $2" in
+  "auth status")
+    test "$(cat "$behavior/auth")" = 1
+    ;;
+  "repo view")
+    test "$(cat "$behavior/auth")" = 1 || exit 1
+    cat "$behavior/slug"
+    ;;
+  "run list")
+    cat "$behavior/runs"
+    ;;
+  "run view")
+    cat "$behavior/jobs-$3" 2> /dev/null || printf '{"jobs": []}\n'
+    ;;
+  "run download")
+    test "$(cat "$behavior/download_ok")" = 1 || exit 1
+    destination=
+    previous=
+    for argument in "$@"; do
+      if [ "$previous" = "--dir" ]; then
+        destination="$argument"
+      fi
+      previous="$argument"
+    done
+    mkdir -p "$destination" || exit 1
+    artifact="$(cat "$behavior/artifact_dir")"
+    cp "$artifact/charliebot" "$artifact/charliebot-server" "$artifact/sha256sums.txt" "$destination/" || exit 1
+    ;;
+  *)
+    exit 2
+    ;;
+esac

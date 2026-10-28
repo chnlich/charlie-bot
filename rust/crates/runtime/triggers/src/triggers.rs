@@ -24,7 +24,8 @@ use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, pyfmt, ssh};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
-use charliebot_store::{StoreError, layout, trigger_files};
+use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus, WatchTarget, fresh_uuid};
+use charliebot_store::{StoreError, layout};
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -33,7 +34,6 @@ use tokio::io::{Interest, unix::AsyncFd};
 use tokio::process::Command;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep, sleep_until, timeout};
-use uuid::Uuid;
 
 /// The maximum number of pending triggers for one session.
 pub const MAX_PENDING_TRIGGERS: usize = 5;
@@ -101,146 +101,6 @@ const SLURM_TERMINAL_STATES: [&str; 11] = [
   "REVOKED",
   "SPECIAL_EXIT",
 ];
-
-/// A trigger status written by Python as a string enum.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TriggerStatus {
-  #[default]
-  Pending,
-  Fired,
-  Cancelled,
-}
-
-/// One watched process on the server host.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct LocalPid {
-  /// The discriminator value.
-  pub kind: String,
-  /// The process id.
-  pub pid: i64,
-  /// The wrapper's exit-code file, when the process came from `--cmd`.
-  pub exit_file: Option<String>,
-  /// The wrapper's log path, when the process came from `--cmd`.
-  pub log: Option<String>,
-}
-
-/// One watched process on a remote host.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct RemotePid {
-  /// The discriminator value.
-  pub kind: String,
-  /// The SSH host.
-  pub host: String,
-  /// The process id.
-  pub pid: i64,
-  /// The wrapper's remote exit-code file, when the process came from `--cmd`.
-  pub exit_file: Option<String>,
-  /// The wrapper's log path, when the process came from `--cmd`.
-  pub log: Option<String>,
-}
-
-/// One watched SLURM job.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct SlurmJob {
-  /// The discriminator value.
-  pub kind: String,
-  /// The SSH host, or `None` for the server host.
-  pub host: Option<String>,
-  /// The SLURM job id.
-  pub job_id: i64,
-}
-
-/// A tagged watched target. The discriminator and field order match Python's `WatchTarget` models.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind")]
-pub enum WatchTarget {
-  #[serde(rename = "local_pid")]
-  LocalPid {
-    pid: i64,
-    #[serde(default)]
-    exit_file: Option<String>,
-    #[serde(default)]
-    log: Option<String>,
-  },
-  #[serde(rename = "remote_pid")]
-  RemotePid {
-    host: String,
-    pid: i64,
-    #[serde(default)]
-    exit_file: Option<String>,
-    #[serde(default)]
-    log: Option<String>,
-  },
-  #[serde(rename = "slurm_job")]
-  SlurmJob {
-    #[serde(default)]
-    host: Option<String>,
-    job_id: i64,
-  },
-}
-
-impl WatchTarget {
-  fn local_pid(&self) -> Option<LocalPid> {
-    match self {
-      WatchTarget::LocalPid { pid, exit_file, log } => {
-        Some(LocalPid { kind: "local_pid".to_string(), pid: *pid, exit_file: exit_file.clone(), log: log.clone() })
-      }
-      _ => None,
-    }
-  }
-
-  fn remote_pid(&self) -> Option<RemotePid> {
-    match self {
-      WatchTarget::RemotePid { host, pid, exit_file, log } => Some(RemotePid {
-        kind: "remote_pid".to_string(),
-        host: host.clone(),
-        pid: *pid,
-        exit_file: exit_file.clone(),
-        log: log.clone(),
-      }),
-      _ => None,
-    }
-  }
-
-  fn slurm_job(&self) -> Option<SlurmJob> {
-    match self {
-      WatchTarget::SlurmJob { host, job_id } => {
-        Some(SlurmJob { kind: "slurm_job".to_string(), host: host.clone(), job_id: *job_id })
-      }
-      _ => None,
-    }
-  }
-}
-
-/// One durable pending, fired, or cancelled trigger.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct PendingTrigger {
-  /// The trigger's UUID and scheduled-input identity.
-  #[serde(default = "fresh_uuid")]
-  pub id: String,
-  /// The session that receives the scheduled input.
-  pub session_id: String,
-  /// The UTC deadline.
-  pub fire_at: UtcDateTime,
-  /// The short wake label.
-  pub message: String,
-  /// The trigger creation time.
-  #[serde(default = "UtcDateTime::now")]
-  pub created_at: UtcDateTime,
-  /// The durable trigger state.
-  #[serde(default)]
-  pub status: TriggerStatus,
-  /// The UTC time the trigger was fired.
-  #[serde(default)]
-  pub fired_at: Option<UtcDateTime>,
-  /// Every process or job the trigger watches.
-  #[serde(default)]
-  pub watch_targets: Vec<WatchTarget>,
-  /// The fire result or delivery refusal.
-  #[serde(default)]
-  pub fire_reason: Option<String>,
-}
 
 /// The request body for `POST /api/internal/schedule-trigger`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -368,13 +228,12 @@ impl TriggerManager {
       ));
     }
 
-    let remote_pids = targets.iter().filter_map(WatchTarget::remote_pid).collect::<Vec<_>>();
+    let remote_pids = targets.iter().filter_map(remote_pid).collect::<Vec<_>>();
     if !remote_pids.is_empty() {
       self.verify_remote_pids(&remote_pids).await.map_err(TriggerCreateError::RemoteVerify)?;
     }
 
-    let remote_slurm =
-      targets.iter().filter_map(WatchTarget::slurm_job).filter(|target| target.host.is_some()).collect::<Vec<_>>();
+    let remote_slurm = targets.iter().filter_map(slurm_job).filter(|target| target.host.is_some()).collect::<Vec<_>>();
     let observed = if remote_slurm.is_empty() {
       Map::new()
     } else {
@@ -611,7 +470,7 @@ impl TriggerManager {
   }
 
   fn trigger_path(&self, session_id: &str, trigger_id: &str) -> PathBuf {
-    self.triggers_dir(session_id).join(format!("{trigger_id}.json"))
+    trigger_files::trigger_path(&self.features.store.session_dir(session_id), trigger_id)
   }
 
   async fn load_trigger(&self, session_id: &str, trigger_id: &str) -> anyhow::Result<PendingTrigger> {
@@ -619,23 +478,15 @@ impl TriggerManager {
   }
 
   async fn load_trigger_path(&self, path: &Path) -> anyhow::Result<PendingTrigger> {
-    let text = tokio::fs::read_to_string(path).await.with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+    trigger_files::read_trigger(path)
   }
 
   async fn save_trigger(&self, trigger: &PendingTrigger) -> anyhow::Result<()> {
-    let path = self.trigger_path(&trigger.session_id, &trigger.id);
-    let parent = path.parent().expect("trigger file path has a parent");
-    tokio::fs::create_dir_all(parent).await.with_context(|| format!("create {}", parent.display()))?;
-    // Python writes `model_dump_json(indent=2)` as it is, with no trailing newline.
-    let text = serde_json::to_string_pretty(trigger).context("serialize trigger")?;
-    let publish_path = path.clone();
-    tokio::task::spawn_blocking(move || charliebot_core::fsutil::atomic_write_text(&publish_path, &text))
+    let session_dir = self.features.store.session_dir(&trigger.session_id);
+    let trigger = trigger.clone();
+    tokio::task::spawn_blocking(move || trigger_files::write_trigger(&session_dir, &trigger))
       .await
       .expect("trigger publish task completes")
-      .with_context(|| format!("publish {}", path.display()))?;
-    charliebot_store::sidebar_state::mark_sidebar_dirty(&trigger.session_id);
-    Ok(())
   }
 
   async fn ssh_probe_pid(&self, target: &RemotePid) -> (String, String) {
@@ -1197,6 +1048,76 @@ enum WaitGroup {
   Slurm(Vec<SlurmJob>),
 }
 
+/// One watched process on the server host.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct LocalPid {
+  /// The discriminator value.
+  pub kind: String,
+  /// The process id.
+  pub pid: i64,
+  /// The wrapper's exit-code file, when the process came from `--cmd`.
+  pub exit_file: Option<String>,
+  /// The wrapper's log path, when the process came from `--cmd`.
+  pub log: Option<String>,
+}
+
+/// One watched process on a remote host.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RemotePid {
+  /// The discriminator value.
+  pub kind: String,
+  /// The SSH host.
+  pub host: String,
+  /// The process id.
+  pub pid: i64,
+  /// The wrapper's remote exit-code file, when the process came from `--cmd`.
+  pub exit_file: Option<String>,
+  /// The wrapper's log path, when the process came from `--cmd`.
+  pub log: Option<String>,
+}
+
+/// One watched SLURM job.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SlurmJob {
+  /// The discriminator value.
+  pub kind: String,
+  /// The SSH host, or `None` for the server host.
+  pub host: Option<String>,
+  /// The SLURM job id.
+  pub job_id: i64,
+}
+
+fn local_pid(target: &WatchTarget) -> Option<LocalPid> {
+  match target {
+    WatchTarget::LocalPid { pid, exit_file, log } => {
+      Some(LocalPid { kind: "local_pid".to_string(), pid: *pid, exit_file: exit_file.clone(), log: log.clone() })
+    }
+    _ => None,
+  }
+}
+
+fn remote_pid(target: &WatchTarget) -> Option<RemotePid> {
+  match target {
+    WatchTarget::RemotePid { host, pid, exit_file, log } => Some(RemotePid {
+      kind: "remote_pid".to_string(),
+      host: host.clone(),
+      pid: *pid,
+      exit_file: exit_file.clone(),
+      log: log.clone(),
+    }),
+    _ => None,
+  }
+}
+
+fn slurm_job(target: &WatchTarget) -> Option<SlurmJob> {
+  match target {
+    WatchTarget::SlurmJob { host, job_id } => {
+      Some(SlurmJob { kind: "slurm_job".to_string(), host: host.clone(), job_id: *job_id })
+    }
+    _ => None,
+  }
+}
+
 fn wait_groups(targets: &[WatchTarget]) -> Vec<WaitGroup> {
   let mut groups = Vec::new();
   for target in targets {
@@ -1207,13 +1128,13 @@ fn wait_groups(targets: &[WatchTarget]) -> Vec<WaitGroup> {
     }
     match target {
       WatchTarget::LocalPid { .. } => {
-        groups.push(WaitGroup::Local(vec![target.local_pid().expect("local target variant")]))
+        groups.push(WaitGroup::Local(vec![local_pid(target).expect("local target variant")]))
       }
       WatchTarget::RemotePid { .. } => {
-        groups.push(WaitGroup::Remote(vec![target.remote_pid().expect("remote target variant")]))
+        groups.push(WaitGroup::Remote(vec![remote_pid(target).expect("remote target variant")]))
       }
       WatchTarget::SlurmJob { .. } => {
-        groups.push(WaitGroup::Slurm(vec![target.slurm_job().expect("SLURM target variant")]))
+        groups.push(WaitGroup::Slurm(vec![slurm_job(target).expect("SLURM target variant")]))
       }
     }
   }
@@ -1230,13 +1151,13 @@ impl WaitGroup {
   fn push(&mut self, target: &WatchTarget) {
     match (self, target) {
       (Self::Local(targets), WatchTarget::LocalPid { .. }) => {
-        targets.push(target.local_pid().expect("local target variant"))
+        targets.push(local_pid(target).expect("local target variant"))
       }
       (Self::Remote(targets), WatchTarget::RemotePid { .. }) => {
-        targets.push(target.remote_pid().expect("remote target variant"))
+        targets.push(remote_pid(target).expect("remote target variant"))
       }
       (Self::Slurm(targets), WatchTarget::SlurmJob { .. }) => {
-        targets.push(target.slurm_job().expect("SLURM target variant"))
+        targets.push(slurm_job(target).expect("SLURM target variant"))
       }
       _ => unreachable!("target was matched to its wait group"),
     }
@@ -1552,10 +1473,6 @@ impl TriggerManager {
     self.timing.dormancy_interval = Duration::from_millis(20);
     self
   }
-}
-
-fn fresh_uuid() -> String {
-  Uuid::new_v4().to_string()
 }
 
 fn deadline_after(delay_seconds: i64) -> anyhow::Result<UtcDateTime> {

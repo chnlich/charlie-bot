@@ -115,8 +115,7 @@ impl TriggerKey {
     let mut candidates = Vec::new();
     for (path, _) in files {
       // A file that cannot be read or parsed is skipped, as the Python readback skips it.
-      let Ok(text) = fs::read_to_string(&path) else { continue };
-      let Ok(stored) = serde_json::from_str::<Value>(&text) else { continue };
+      let Ok(stored) = trigger_files::read_trigger_value(&path) else { continue };
       if stored.get("status").and_then(Value::as_str) != Some("pending") {
         continue;
       }

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use charliebot_store::trigger_files;
-use charliebot_triggers::triggers::PendingTrigger;
+use charliebot_store::trigger_files::PendingTrigger;
 use serde_json::Value;
 
 const PYTHON_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip.json");

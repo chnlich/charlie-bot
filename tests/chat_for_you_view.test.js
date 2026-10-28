@@ -547,6 +547,7 @@ test('an Explain panel stays inside its For-you row after a live message reproje
   const rig = forYouRig(replyRound());
   const wrapper = forYouButtonRow(rig.root);
   const row = wrapper.querySelector('.separator-line');
+  assert.equal(wrapper.classList.contains('flex'), false, 'the wrapper is a block, so the panel stacks below the row');
   const explain = buttonsOf(row).find((button) => button.classList.contains('explain-toggle'));
   explain.onclick();
   await rig.context.submitSessionActionModal();

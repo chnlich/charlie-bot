@@ -24,7 +24,7 @@ use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, pyfmt, ssh};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
-use charliebot_store::{StoreError, trigger_files};
+use charliebot_store::{StoreError, layout, trigger_files};
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -537,7 +537,7 @@ impl TriggerManager {
       if !entry.file_type().await?.is_dir() {
         continue;
       }
-      let directory = entry.path().join("triggers");
+      let directory = layout::triggers_dir(&entry.path());
       let directory_for_walk = directory.clone();
       let files = match tokio::task::spawn_blocking(move || trigger_files::iter_trigger_file_stats(directory_for_walk))
         .await
@@ -607,7 +607,7 @@ impl TriggerManager {
   }
 
   fn triggers_dir(&self, session_id: &str) -> PathBuf {
-    self.features.store.session_dir(session_id).join("triggers")
+    layout::triggers_dir(&self.features.store.session_dir(session_id))
   }
 
   fn trigger_path(&self, session_id: &str, trigger_id: &str) -> PathBuf {

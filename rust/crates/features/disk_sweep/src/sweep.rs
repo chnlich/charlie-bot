@@ -7,10 +7,12 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, paths};
 use charliebot_store::chat_events::is_chat_events_archive;
+use charliebot_store::layout;
 use charliebot_store::metadata::TaskSpec;
-use charliebot_store::run_records::{RUN_METADATA_NAME, RUNS_DIR_NAME, RunRecord};
+use charliebot_store::run_records::{RUN_METADATA_NAME, RunRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::{DirEntry, WalkDir};
@@ -250,7 +252,7 @@ fn load_run_groups(sessions_root: &Path) -> Result<RunGroups> {
     if !session_dir.path().is_dir() {
       continue;
     }
-    let runs_dir = session_dir.path().join("data").join(RUNS_DIR_NAME);
+    let runs_dir = layout::runs_dir(&session_dir.path());
     if !runs_dir.is_dir() {
       continue;
     }
@@ -361,9 +363,8 @@ fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>)
     row.owner_session_id = Some(owner_session_id.clone());
     row.repo_path = run.repo_path.clone();
     row.branch_name = run.branch_name.clone();
-    row.archive_path = Some(
-      sessions_root.join(owner_session_id).join("data").join(RUNS_DIR_NAME).join(&run.id).join("worktree-changes.tar"),
-    );
+    row.archive_path =
+      Some(layout::runs_dir(&sessions_root.join(owner_session_id)).join(&run.id).join("worktree-changes.tar"));
     row.owner_run = Some(run);
     row.action = SweepAction::Delete;
     row.reason = "closed-task".to_string();
@@ -373,7 +374,7 @@ fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>)
 }
 
 fn task_keep_worktree(sessions_root: &Path, session_id: &str) -> Result<Option<bool>> {
-  let metadata_path = sessions_root.join(session_id).join("metadata.json");
+  let metadata_path = sessions_root.join(session_id).join(METADATA_FILE_NAME);
   if !metadata_path.is_file() {
     return Ok(None);
   }
@@ -393,7 +394,7 @@ fn task_keep_worktree(sessions_root: &Path, session_id: &str) -> Result<Option<b
 }
 
 fn latest_closed_at(session_dir: &Path) -> Result<Option<DateTime<Utc>>> {
-  let archives_dir = session_dir.join("data/archives");
+  let archives_dir = layout::archives_dir(session_dir);
   let mut event_paths = if archives_dir.is_dir() {
     git::sorted_entries(&archives_dir)?
       .into_iter()
@@ -403,7 +404,7 @@ fn latest_closed_at(session_dir: &Path) -> Result<Option<DateTime<Utc>>> {
   } else {
     Vec::new()
   };
-  let live_path = session_dir.join("data/chat_events.jsonl");
+  let live_path = layout::chat_events_path(session_dir);
   if live_path.is_file() {
     event_paths.push(live_path);
   }

@@ -14,7 +14,7 @@ use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_US
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
 use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::ReplacedSourceArchive;
-use charliebot_store::{ControlGuard, StoreError, StoreHookFuture, StoreResult};
+use charliebot_store::{ControlGuard, StoreError, StoreHookFuture, StoreResult, layout};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1763,7 +1763,7 @@ impl TaskCompletion {
 
   /// Build the delivery pause reason from pending triggers and unprocessed input.
   pub fn pause_reason(&self, session_id: &str) -> StoreResult<Option<String>> {
-    let triggers_dir = self.store().session_dir(session_id).join("triggers");
+    let triggers_dir = layout::triggers_dir(&self.store().session_dir(session_id));
     let (pending_triggers, _next_fire) = charliebot_store::trigger_files::pending_trigger_state(triggers_dir);
     if pending_triggers > 0 {
       return Ok(Some(format!("has {pending_triggers} pending trigger(s)")));

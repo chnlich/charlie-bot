@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use charliebot_registry::Registry;
+use charliebot_store::layout;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus};
+use charliebot_store::run_records::RUN_METADATA_NAME;
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Map, Value, json};
 
@@ -202,7 +204,7 @@ fn schedule_sidebar_sweep(
 
 fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreResult<Map<String, Value>> {
   let session_dir = store.session_dir(session_id);
-  let triggers_dir = session_dir.join("triggers");
+  let triggers_dir = layout::triggers_dir(&session_dir);
   let (pending_count, next_trigger) = charliebot_store::trigger_files::pending_trigger_state(&triggers_dir);
   let mut pending_plan_approval = false;
   for contribution in registry.sidebar_contributions() {
@@ -225,7 +227,7 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
 fn probe_signature(store: &Store, registry: &Registry, session_id: &str) -> Vec<Value> {
   let session_dir = store.session_dir(session_id);
   let trigger_files =
-    charliebot_store::trigger_files::iter_trigger_file_stats(session_dir.join("triggers")).unwrap_or_default();
+    charliebot_store::trigger_files::iter_trigger_file_stats(layout::triggers_dir(&session_dir)).unwrap_or_default();
   let mut trigger_signature: Vec<Value> = trigger_files
     .iter()
     .map(|(path, metadata)| {
@@ -247,7 +249,7 @@ fn probe_signature(store: &Store, registry: &Registry, session_id: &str) -> Vec<
       }
     }
   }
-  let runs_dir = session_dir.join("data/runs");
+  let runs_dir = layout::runs_dir(&session_dir);
   let mut run_names: Vec<String> = fs::read_dir(&runs_dir)
     .into_iter()
     .flatten()
@@ -258,14 +260,14 @@ fn probe_signature(store: &Store, registry: &Registry, session_id: &str) -> Vec<
   let run_signatures: Vec<Value> = run_names
     .iter()
     .filter_map(|name| {
-      stat_signature(&runs_dir.join(name).join("metadata.json"))
+      stat_signature(&runs_dir.join(name).join(RUN_METADATA_NAME))
         .map(|signature| json!([name, signature[0], signature[1]]))
     })
     .collect();
   let task_signature = json!([
-    stat_signature(&session_dir.join("metadata.json")),
-    stat_signature(&session_dir.join("data/chat_events.jsonl")),
-    stat_signature(&session_dir.join("data/archives")),
+    stat_signature(&layout::metadata_path(&session_dir)),
+    stat_signature(&layout::chat_events_path(&session_dir)),
+    stat_signature(&layout::archives_dir(&session_dir)),
     run_signatures,
     store.records_generation(),
   ]);

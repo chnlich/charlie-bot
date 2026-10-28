@@ -15,7 +15,9 @@ Check, in order of importance:
 3. Leftover references to symbols the diff deletes or moves.
 4. Out-of-scope hunks (a hunk is one contiguous diff block): edits unrelated to the PR's stated purpose.
 5. Naming and convention drift against AGENTS.md.
-6. Import form: import modules and access members as `module.attr` (Google style 2.2); flag direct class/function imports (`from x import Klass`) that the diff introduces.
+6. Import form in Python files: import modules and access members as `module.attr` (Google style 2.2);
+   flag direct class/function imports (`from x import Klass`) that the diff introduces.
+   Rust and web diffs have no equivalent rule.
 
 Report every finding whose confidence is at least 80 on a 0-100 scale, as one list item:
 `- <finding> (confidence <n>) — <file>: <one-line reason>`. With no findings above the bar, output exactly:

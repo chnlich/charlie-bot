@@ -10,7 +10,7 @@
 
 - Imports name modules (Google Python Style Guide 2.2): `from src.infra import models`, then
   `models.SessionMetadata`; symbols from `typing`, `typing_extensions` and `collections.abc`
-  import directly. New imports take this form; the code-health cron converts existing ones.
+  import directly. New imports take this form; convert a file's existing imports when a change touches it.
 - `uv run yapf -i <file>` formats each Python file a change touches.
 
 ### Module Boundaries

@@ -31,7 +31,10 @@ List the open pull requests whose head branch starts with `improve/<direction>/`
       '.[] | select(.headRefName | startswith("improve/<direction>/"))'
 
 When more than one is open, take the oldest.
-An adopted pull request is the whole round: work on its branch, then run Step 6 and Step 7.
+An adopted pull request is the whole round.
+Switch the worktree to its branch.
+Run Step 6 unless a review verdict comment already sits on the pull request, then run Step 7.
+When its newest comment starts `improve-waiting:`, read Step 8 first.
 End the round after it closes, merged or abandoned, and open no new pull request.
 This rule finishes a started topic before a new one.
 
@@ -45,10 +48,11 @@ A file that another branch changes would force that branch to resolve our confli
 
 List the closed pull requests of this direction and read each `improve-abandoned:` comment:
 
-    gh pr list --state closed --limit 50 --json headRefName,comments --jq \
+    gh pr list --state closed --limit 500 --json headRefName,comments --jq \
       '.[] | select(.headRefName | startswith("improve/<direction>/"))
        | select(any(.comments[].body; startswith("improve-abandoned:"))) | .headRefName'
 
+Read at least 500 closed pull requests: merged rounds fill a short list, and an older abandonment would drop out of it.
 Skip every topic that a comment names.
 The comment records a topic that already failed, and the round does not retry it.
 
@@ -57,7 +61,7 @@ The comment records a topic that already failed, and the round does not retry it
 Take one topic from the direction prompt.
 Complete the topic in the worktree: this round has no line cap and no file cap.
 The round lands a whole topic, not a fragment.
-For a fresh topic, create the branch `improve/<direction>/<topic slug>` from `origin/main`.
+For a fresh topic, create the branch with `git switch -c improve/<direction>/<topic slug> origin/main`.
 The branch name records the topic for the abandoned-topic check.
 
 When the topic touches `rust/`, run the local checks in the `rust/` directory:
@@ -102,8 +106,11 @@ Use the model, `api_base` and `context_window` of the `charlie-code-kimi` entry 
 The scratch directory keeps the reviewer's own git checkouts away from this worktree's HEAD.
 The review is the independent check that the topic is complete and correct.
 
+The reviewer's stdout is an NDJSON event stream.
+Take the verdict from the `final_output` field of its final `result` event.
+
 Post the verdict as one pull-request comment.
-The comment is the review record on the pull request.
+The comment is the review record on the pull request, and it carries the verdict without the event stream.
 Act on every finding on the same branch before the merge.
 Report a review that cannot run, with its reason, in the final message.
 A silent skip breaks the protocol.
@@ -122,17 +129,18 @@ Before the merge, rebase onto the latest `origin/main`:
     git fetch origin main
     git rebase origin/main
 
-Resolve each conflict, then push with `--force-with-lease`:
+Resolve each conflict, run `git add` and `git rebase --continue`, then push with `--force-with-lease`:
 
     git push --force-with-lease
 
 Wait for the checks again.
 The rebase proves that the topic still applies to today's `main`.
 
-When a conflict cannot be resolved, abandon the pull request:
+When a conflict cannot be resolved, run `git rebase --abort` and abandon the pull request:
 
     gh pr close <PR> --comment 'improve-abandoned: <topic> — conflict with origin/main'
 
+The abort restores the branch as it was before the rebase, so the worktree is left clean for the next round.
 The comment records the topic for the next round.
 
 With the checks green, confirm that the pull request still carries a diff against a fresh `main`:
@@ -140,7 +148,7 @@ With the checks green, confirm that the pull request still carries a diff agains
     git diff origin/main...HEAD --stat
 
 An empty diff means that the topic already landed.
-Close the pull request with `improve-abandoned: duplicate of #<N>`, naming the landed pull request.
+Close the pull request with `improve-abandoned: <topic> — duplicate of #<N>`, naming the landed pull request.
 A non-empty diff merges:
 
     gh pr merge --squash <PR>
@@ -199,6 +207,7 @@ These steps return `main` to green and resume the step that needed it.
 3. When the failure names its fix, create the branch `main-repair/<short-topic>` from the failing main sha.
    Apply the fix.
    A named fix is safe to apply without a design decision.
+   A failing test without its expected value in the log names no fix, because a guessed value would hide the regression.
 4. Push the branch and open a pull request.
    A red check follows the inside-diff fix steps with the same two-fix budget.
 5. Confirm that the repair still carries a diff against a fresh `origin/main`.
@@ -219,3 +228,6 @@ Write one message at the end of the round.
 It names the topic, the pull-request link, and the evidence summary with its file links.
 When the round opened no pull request, it gives the reason.
 The message wakes the task session, which replies to the user.
+
+A round that cannot finish its wait leaves its pull request open and reports that.
+Step 2 adopts the pull request in the next round, so the wait resumes without a new topic.

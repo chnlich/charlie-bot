@@ -22,6 +22,8 @@ Measure both sides with `scripts/release/trial.sh --serve <commit> <server binar
 Before the change, use main's CI artifact `charliebot-server-<main sha>` on the main tree.
 After the change, use the pull request's artifact `charliebot-server-pr-<head sha>` on the branch tree.
 Serve each artifact at the commit in its name, so the binary and the tree match.
+The command reads `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID`; the `/proc` reads use that pid.
+Measure the two sides back to back in one round.
 The host and the procedure are the same on both sides, so the change is the only difference.
 
 Measure a latency topic this way:
@@ -30,6 +32,7 @@ The warm-up keeps cold-start cost out of the sample.
 
 Measure a startup topic this way:
 measure the time from the process start to the first 200 response, 5 times, and keep the median.
+Each run of `trial.sh --serve` starts the server once, so five runs make five starts.
 The repetition keeps one slow start out of the report.
 
 Measure a memory topic this way:
@@ -37,8 +40,9 @@ send a fixed 200 requests, then read `VmHWM` from `/proc/<pid>/status`.
 The fixed request count makes the two runs comparable.
 
 Measure a CPU topic this way:
-read `utime` and `stime` from `/proc/<pid>/stat` before and after the same 200 requests, and add them.
-The fixed request count makes the two runs comparable.
+read `utime` and `stime` from `/proc/<pid>/stat` before and after the same 200 requests.
+Sum `utime` and `stime` in each read, subtract the before sum from the after sum, and divide by `getconf CLK_TCK` to get seconds.
+The fixed request count and the unit conversion make the two runs comparable.
 
 ## Evidence
 

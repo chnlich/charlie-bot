@@ -31,7 +31,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDate
 use charliebot_store::run_records::{
   self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text,
 };
-use charliebot_store::{PromptScope, Store, StoreError, StoreResult};
+use charliebot_store::{PromptScope, Store, StoreError, StoreResult, layout};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -117,10 +117,7 @@ fn boot_skip_reason(
     marker_instant.unix_timestamp(),
     i64::from(marker_instant.nanosecond()),
   );
-  for path in [
-    session_dir.join(run_records::DATA_DIR_NAME).join("chat_events.jsonl"),
-    session_dir.join(run_records::METADATA_NAME),
-  ] {
+  for path in [layout::chat_events_path(&session_dir), session_dir.join(run_records::METADATA_NAME)] {
     let modified = match std::fs::metadata(&path) {
       Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
       Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some("file_after_marker")),

@@ -15,8 +15,9 @@ use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
-use charliebot_store::run_records::{HostBoot, RunKind, RunRecord};
+use charliebot_store::run_records::{HostBoot, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord};
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
+use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
 use lru::LruCache;
 use serde_json::{Value, json};
 
@@ -85,7 +86,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   for run in &run_records {
     let state = states.get(&run.id).expect("every listed run has a display state");
     let run_dir = store.run_dir(session_id, &run.id);
-    let mut run_events: Vec<ChatEvent> = read_run_events(store, &run_dir.join("events.jsonl"));
+    let mut run_events: Vec<ChatEvent> = read_run_events(store, &run_dir.join(RUN_EVENTS_NAME));
     let mut error = String::new();
     if FAILED_STATES.contains(&state.as_str())
       && let Some((text, first_line, index, timestamp)) =
@@ -100,7 +101,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
     // One shared tree per event: the map, the summary, and the transcript read the same parse.
     let shared: Vec<SharedChatEvent> = run_events.into_iter().map(Arc::new).collect();
     run_events_map.insert(run.id.clone(), shared.clone());
-    let launch_prompt_path = run_dir.join("launch_prompt.md");
+    let launch_prompt_path = run_dir.join(LAUNCH_TEXT_FILENAME);
     let launch_prompt_ref =
       if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() };
     let backend = run.backend.as_deref().unwrap_or("");
@@ -186,8 +187,8 @@ fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
       for (name, path) in directories {
         parts.push(json!([
           name,
-          stat_signature(&path.join("metadata.json"))?,
-          stat_signature(&path.join("events.jsonl"))?
+          stat_signature(&path.join(RUN_METADATA_NAME))?,
+          stat_signature(&path.join(RUN_EVENTS_NAME))?
         ]));
       }
     }
@@ -478,7 +479,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
 
   let links = newest
     .map(|run| {
-      let launch_prompt_path = store.run_dir(session_id, &run.id).join("launch_prompt.md");
+      let launch_prompt_path = store.run_dir(session_id, &run.id).join(LAUNCH_TEXT_FILENAME);
       json!({
         "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
         "launch_prompt_ref": if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() },

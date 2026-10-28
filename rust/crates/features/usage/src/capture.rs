@@ -6,8 +6,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
+use charliebot_store::layout;
+use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
 
@@ -200,16 +203,16 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
   };
   let mut logs = Vec::new();
   for session in sessions {
-    for (kind, relative, filename) in [
-      (CharlieLogKind::Thread, Path::new("threads"), Path::new("data/events.jsonl")),
-      (CharlieLogKind::Master, Path::new("data/master_runs"), Path::new("agent.raw.ndjson")),
-    ] {
-      let container = session.join(relative);
+    let containers: [(CharlieLogKind, PathBuf, fn(&Path) -> PathBuf); 2] = [
+      (CharlieLogKind::Thread, layout::threads_dir(&session), thread_log),
+      (CharlieLogKind::Master, layout::master_runs_dir(&session), master_log),
+    ];
+    for (kind, container, log_of) in containers {
       let Some(entries) = subdirs(&container)? else {
         continue;
       };
       for entry in entries {
-        let path = entry.join(filename);
+        let path = log_of(&entry);
         match fs::metadata(&path) {
           Ok(metadata) => logs.push((kind, path, metadata)),
           Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -221,17 +224,27 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
   Ok(logs)
 }
 
+/// The event log of one thread directory.
+fn thread_log(thread: &Path) -> PathBuf {
+  layout::data_dir(thread).join(RUN_EVENTS_NAME)
+}
+
+/// The raw log of one master-run directory.
+fn master_log(master_run: &Path) -> PathBuf {
+  master_run.join(RAW_LOG_NAME)
+}
+
 fn run_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(PathBuf, fs::Metadata)>> {
   let Some(sessions) = subdirs(sessions_dir)? else {
     return Ok(Vec::new());
   };
   let mut logs = Vec::new();
   for session in sessions {
-    let Some(runs) = subdirs(&session.join("data/runs"))? else {
+    let Some(runs) = subdirs(&layout::runs_dir(&session))? else {
       continue;
     };
     for run in runs {
-      let path = run.join("agent.raw.ndjson");
+      let path = run.join(RAW_LOG_NAME);
       match fs::metadata(&path) {
         Ok(metadata) => logs.push((path, metadata)),
         Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -345,7 +358,7 @@ fn thread_metadata(path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
     .parent()
     .and_then(Path::parent)
     .ok_or_else(|| anyhow!("{} has no thread metadata path", path.display()))?
-    .join("metadata.json");
+    .join(METADATA_FILE_NAME);
   let data = match fs::read(&metadata_path) {
     Ok(data) => data,
     Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -406,7 +419,7 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
 
 fn run_metadata(path: &Path) -> anyhow::Result<Map<String, Value>> {
   let metadata_path =
-    path.parent().ok_or_else(|| anyhow!("{} has no run metadata path", path.display()))?.join("metadata.json");
+    path.parent().ok_or_else(|| anyhow!("{} has no run metadata path", path.display()))?.join(RUN_METADATA_NAME);
   let data = fs::read(&metadata_path).with_context(|| format!("reading {}", metadata_path.display()))?;
   let value: Value = serde_json::from_slice(&data).with_context(|| format!("parsing {}", metadata_path.display()))?;
   value.as_object().cloned().ok_or_else(|| anyhow!("{}: metadata is not an object", metadata_path.display()))

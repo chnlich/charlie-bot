@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
+use charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME;
 use charliebot_compat::python_json;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
@@ -21,6 +22,7 @@ use charliebot_core::pystr;
 use charliebot_registry::usage::{CategoryResult, SessionFacts, SweepScope};
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME,
   THREADS_DIR_NAME,
@@ -37,11 +39,9 @@ const MIN_IDLE_DAYS: i64 = 14;
 /// `storage_cool.ORPHAN_IDLE_DAYS`: how long an unreferenced backend record must sit idle before the sweep takes it.
 const ORPHAN_IDLE_DAYS: i64 = 2;
 /// `RAW_TRANSPORT_NAMES`: the three agent-pipe names from `runs.py`, and the two tee names the backend writers use.
-const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, "stdout.log", "stderr.log"];
+const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, "stderr.log"];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
 const RUN_EVIDENCE_KEYS: [&str; 3] = ["raw_log_ref", "events_ref", "result_ref"];
-/// `run_identity.SESSION_METADATA_NAME`: the file a session's metadata lives in.
-const SESSION_METADATA_NAME: &str = "metadata.json";
 const SESSION_ARCHIVED: &str = "archived";
 
 /// The `cool_storage` scheduled handler: the real sweep at the wall clock, off the async runtime.

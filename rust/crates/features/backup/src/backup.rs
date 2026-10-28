@@ -11,7 +11,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use charliebot_core::config::CREDENTIALS_FILENAME;
+use charliebot_core::config::{CREDENTIALS_FILENAME, SESSIONS_DIR_NAME};
 use charliebot_core::home::OPENCODE_DIR_NAME;
 use charliebot_store::run_records::THREADS_DIR_NAME;
 use chrono::{Datelike, Local, NaiveDateTime, Weekday};
@@ -60,7 +60,7 @@ pub fn should_exclude(arcname: &[u8]) -> bool {
     }
   }
   // Exclude sessions/*/threads and everything under it.
-  parts.len() >= 3 && parts[0] == b"sessions" && parts[2] == THREADS_DIR_NAME.as_bytes()
+  parts.len() >= 3 && parts[0] == SESSIONS_DIR_NAME.as_bytes() && parts[2] == THREADS_DIR_NAME.as_bytes()
 }
 
 /// The archive name of a naive local time.

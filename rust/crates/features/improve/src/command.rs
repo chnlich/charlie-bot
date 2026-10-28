@@ -82,7 +82,12 @@ impl std::error::Error for ImproveLoopAlreadyRunningError {}
 
 /// The loops directory of one session.
 pub fn loops_dir(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {
-  cfg.sessions_dir().join(session_id).join("loops")
+  loops_dir_in(&cfg.charliebot_home, session_id)
+}
+
+/// The loops directory of one session under a profile home, for a reader that has no loaded config.
+pub fn loops_dir_in(home: &Path, session_id: &str) -> PathBuf {
+  charliebot_core::config::sessions_dir_in(home).join(session_id).join("loops")
 }
 
 /// The active-lock path of one session.

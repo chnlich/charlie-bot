@@ -730,3 +730,220 @@ fn changed_server_port_takes_effect_on_the_next_call() {
   run(&second);
   second.stop();
 }
+
+mod authenticated_commands {
+  use super::*;
+  use std::process::Output;
+  use std::sync::mpsc::{self, Receiver};
+  use std::thread;
+
+  const ACCESS_KEY: &str = "synthetic-file-access-key";
+
+  fn home_for_port(port: u16) -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("config.yaml"), format!("server:\n  port: {port}\n")).unwrap();
+    std::fs::write(home.path().join("credentials.yaml"), format!("charliebot:\n  access_key: {ACCESS_KEY}\n")).unwrap();
+    home
+  }
+
+  fn invoke_files(home: &tempfile::TempDir, link: &str, run_token: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
+    command
+      .env_clear()
+      .env("CHARLIEBOT_HOME", home.path())
+      .env("HTTP_PROXY", "http://127.0.0.1:1")
+      .args(["files", "probe", link]);
+    if let Some(run_token) = run_token {
+      command.env("CHARLIEBOT_RUN_TOKEN", run_token);
+    }
+    command.output().unwrap()
+  }
+
+  fn start_stub(
+    status: u16,
+    response_body: &[u8],
+    location: Option<&str>,
+  ) -> (u16, Receiver<Vec<u8>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let body = response_body.to_vec();
+    let location = location.map(str::to_string);
+    let (sender, receiver) = mpsc::channel();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let request = read_request_head(&mut stream);
+      sender.send(request).unwrap();
+      let reason = match status {
+        200 => "OK",
+        302 => "Found",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        _ => "Response",
+      };
+      let mut response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+      );
+      if let Some(location) = location {
+        response.push_str(&format!("Location: {location}\r\n"));
+      }
+      response.push_str("\r\n");
+      stream.write_all(response.as_bytes()).unwrap();
+      stream.write_all(&body).unwrap();
+    });
+    (port, receiver, handle)
+  }
+
+  fn read_request_head(stream: &mut TcpStream) -> Vec<u8> {
+    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+      let read = stream.read(&mut buffer).unwrap();
+      if read == 0 {
+        return request;
+      }
+      request.extend_from_slice(&buffer[..read]);
+      if request.windows(4).any(|window| window == b"\r\n\r\n") {
+        return request;
+      }
+    }
+  }
+
+  fn assert_clean(output: &Output, forbidden: &[&str]) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for value in forbidden {
+      assert!(!stdout.contains(value), "stdout contains a synthetic credential");
+      assert!(!stderr.contains(value), "stderr contains a synthetic credential");
+    }
+  }
+
+  #[test]
+  fn files_probe_uses_the_access_key_and_reports_status_without_response_bodies() {
+    for status in [200, 401, 404, 302] {
+      let (port, request_receiver, server) =
+        start_stub(status, ACCESS_KEY.as_bytes(), (status == 302).then_some("/redirect"));
+      let home = home_for_port(port);
+      let output = invoke_files(&home, "/absolute_filepath/synthetic/file.txt?download=1", None);
+      let request = request_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+      server.join().unwrap();
+      let request_text = String::from_utf8(request).unwrap();
+      let lowered = request_text.to_ascii_lowercase();
+
+      assert!(lowered.contains(&format!("authorization: bearer {ACCESS_KEY}")));
+      assert!(request_text.starts_with("GET /absolute_filepath/synthetic/file.txt?download=1 HTTP/1.1\r\n"));
+      assert_clean(&output, &[ACCESS_KEY]);
+      if status == 200 {
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "200 /absolute_filepath/synthetic/file.txt?download=1\n");
+      } else {
+        assert_eq!(output.status.code(), Some(1));
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["status"], status);
+        assert_eq!(error["path"], "/absolute_filepath/synthetic/file.txt?download=1");
+      }
+    }
+  }
+
+  #[test]
+  fn files_probe_prefers_a_run_token_and_encodes_links_like_a_browser() {
+    let run_token = charliebot_core::run_token::sign_run_token(
+      &charliebot_core::run_token::RunTokenClaims {
+        session_id: "synthetic-session".to_string(),
+        run_id: "synthetic-run".to_string(),
+        agent: "synthetic-agent".to_string(),
+      },
+      ACCESS_KEY,
+    )
+    .unwrap();
+    let (port, request_receiver, server) = start_stub(200, &[], None);
+    let home = home_for_port(port);
+    let output = invoke_files(&home, "https://unrelated.example/a b/雪?encoded=%2F#fragment", Some(&run_token));
+    let request = request_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    server.join().unwrap();
+    let request_text = String::from_utf8(request).unwrap();
+    let authorization = request_text
+      .lines()
+      .find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("authorization").then_some(value.trim())
+      })
+      .unwrap();
+
+    assert!(authorization == format!("Bearer {run_token}"), "the run token was not sent as the authorization header");
+    assert!(authorization != format!("Bearer {ACCESS_KEY}"), "the access key replaced the run token");
+    assert!(request_text.starts_with("GET /a%20b/%E9%9B%AA?encoded=%2F HTTP/1.1\r\n"));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "200 /a%20b/%E9%9B%AA?encoded=%2F\n");
+    assert_clean(&output, &[ACCESS_KEY, &run_token]);
+  }
+
+  #[test]
+  fn files_probe_handles_each_link_component_and_rejects_relative_paths() {
+    let links = [
+      ("/bare/path", "/bare/path"),
+      ("/path/file?query=value", "/path/file?query=value"),
+      ("/path/file#fragment", "/path/file"),
+      ("/path/file name", "/path/file%20name"),
+      ("/path/雪", "/path/%E9%9B%AA"),
+      ("/path/%2f", "/path/%2f"),
+    ];
+    for (link, expected) in links {
+      let (port, request_receiver, server) = start_stub(200, &[], None);
+      let home = home_for_port(port);
+      let output = invoke_files(&home, link, None);
+      let request = request_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+      server.join().unwrap();
+      let request_text = String::from_utf8(request).unwrap();
+
+      assert!(request_text.starts_with(&format!("GET {expected} HTTP/1.1\r\n")));
+      assert_eq!(output.status.code(), Some(0));
+      assert_clean(&output, &[ACCESS_KEY]);
+    }
+
+    let home = home_for_port(1);
+    let output = invoke_files(&home, "relative/path", None);
+    assert_eq!(output.status.code(), Some(2));
+    assert_clean(&output, &[ACCESS_KEY]);
+  }
+
+  #[test]
+  fn files_probe_connection_failures_have_no_status_or_credential() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let home = home_for_port(port);
+    let output = invoke_files(&home, "/unreachable", None);
+
+    assert_eq!(output.status.code(), Some(1));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(error["status"].is_null());
+    assert_eq!(error["path"], "/unreachable");
+    assert_clean(&output, &[ACCESS_KEY]);
+  }
+
+  #[test]
+  fn files_probe_returns_after_the_status_line_without_reading_the_body() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let request = read_request_head(&mut stream);
+      sender.send(request).unwrap();
+      stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000000\r\nConnection: keep-alive\r\n\r\n").unwrap();
+      stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+      let mut byte = [0_u8; 1];
+      let _ = stream.read(&mut byte);
+    });
+    let home = home_for_port(port);
+    let output = invoke_files(&home, "/large-trace", None);
+    let _request = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    server.join().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "200 /large-trace\n");
+    assert_clean(&output, &[ACCESS_KEY]);
+  }
+}

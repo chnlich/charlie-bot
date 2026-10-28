@@ -6,7 +6,7 @@
   ],
   "expect": {
     "stdout": "",
-    "stderr": "charliebot: unknown subcommand 'config'. Available subcommands: artifact, compaction-context, delegate, discord, gc-trash, improve, improve-stop, memory, plan, publish, schedule-trigger, session, slack, web\n",
+    "stderr": "charliebot: unknown subcommand 'config'. Available subcommands: artifact, compaction-context, delegate, discord, files, gc-trash, improve, improve-stop, linear, memory, plan, publish, schedule-trigger, session, slack, web\n",
     "exit": 2,
     "requests": []
   }

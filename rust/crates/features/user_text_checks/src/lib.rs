@@ -132,6 +132,7 @@ struct ElementState {
   anchor: Option<usize>,
   code: Option<usize>,
   in_pre: bool,
+  hidden: bool,
 }
 
 struct MarkdownLink {
@@ -327,8 +328,15 @@ impl UserTextChecks {
   fn reply_link_violations(&self, text: &str, file_scan_context: &ScanContext) -> anyhow::Result<Vec<TextViolation>> {
     let targets = file_urls::scan_link_targets(text);
     let files = file_urls::scan_file_links(text, Some(file_scan_context))?;
+    let fenced = fenced_code_ranges(text);
+    let inline_code = inline_code_spans(text, &fenced);
     let mut violations = Vec::new();
     for target in targets {
+      if is_inside(&fenced, &target.span)
+        || inline_code.iter().any(|code| is_inside(&[code.content.clone()], &target.span))
+      {
+        continue;
+      }
       let is_tsv = link_path(&target.target).to_ascii_lowercase().ends_with(".tsv");
       let is_server_markdown = link_path(&target.target).to_ascii_lowercase().ends_with(".md")
         && files.iter().any(|file| {
@@ -634,7 +642,14 @@ fn link_path(link: &str) -> &str {
 
 fn parse_page(html: &str) -> anyhow::Result<PageScan> {
   let mut page = PageScan { blocks: Vec::new(), text: Vec::new(), code: Vec::new(), links: Vec::new() };
-  let mut stack = vec![ElementState { tag: "#root".to_string(), block: None, anchor: None, code: None, in_pre: false }];
+  let mut stack = vec![ElementState {
+    tag: "#root".to_string(),
+    block: None,
+    anchor: None,
+    code: None,
+    in_pre: false,
+    hidden: false,
+  }];
   parse_with(html, true, |event| match event.kind {
     EventKind::StartTag | EventKind::StartEndTag => {
       let arguments = event.args.as_array().expect("a start-tag event has arguments");
@@ -676,8 +691,9 @@ fn parse_page(html: &str) -> anyhow::Result<PageScan> {
         parent.code
       };
       let in_pre = parent.in_pre || tag == "pre";
+      let hidden = parent.hidden || matches!(tag.as_str(), "script" | "style");
       if event.kind == EventKind::StartTag && !HTML_VOID_TAGS.contains(&tag.as_str()) {
-        stack.push(ElementState { tag, block, anchor, code, in_pre });
+        stack.push(ElementState { tag, block, anchor, code, in_pre, hidden });
       }
     }
     EventKind::EndTag => {
@@ -689,6 +705,9 @@ fn parse_page(html: &str) -> anyhow::Result<PageScan> {
     EventKind::Data => {
       let text = event.args[0].as_str().expect("a data event has text");
       let current = stack.last().expect("the root remains on the parser stack");
+      if current.hidden {
+        return;
+      }
       if let Some(block) = current.block {
         page.blocks[block].push_str(text);
       }

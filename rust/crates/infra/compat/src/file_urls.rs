@@ -306,21 +306,6 @@ fn candidates(text: &str) -> Vec<Candidate> {
       }
     }
   }
-  let markdown_targets = found
-    .values()
-    .filter(|candidate| candidate.markdown_target)
-    .map(|candidate| (candidate.span.start, candidate.link.clone()))
-    .collect::<Vec<_>>();
-  found.retain(|_, candidate| {
-    candidate.markdown_target
-      || !markdown_targets.iter().any(|(start, target)| {
-        candidate.span.start == *start
-          && candidate
-            .link
-            .strip_prefix(target)
-            .is_some_and(|trailing| !trailing.is_empty() && trailing.chars().all(|character| character == ')'))
-      })
-  });
   found.into_values().collect()
 }
 
@@ -541,7 +526,22 @@ pub fn scan_file_links(text: &str, context: Option<&ScanContext>) -> io::Result<
 
 /// Finds URL and Markdown link targets in text without classifying the targets as host files.
 pub fn scan_link_targets(text: &str) -> Vec<LinkTarget> {
-  candidates(text).into_iter().map(|candidate| LinkTarget { target: candidate.link, span: candidate.span }).collect()
+  let candidates = candidates(text);
+  candidates
+    .iter()
+    .filter(|candidate| {
+      candidate.markdown_target
+        || !candidates.iter().any(|other| {
+          other.markdown_target
+            && candidate.span.start == other.span.start
+            && candidate
+              .link
+              .strip_prefix(&other.link)
+              .is_some_and(|trailing| !trailing.is_empty() && trailing.chars().all(|character| character == ')'))
+        })
+    })
+    .map(|candidate| LinkTarget { target: candidate.link.clone(), span: candidate.span.clone() })
+    .collect()
 }
 
 /// Classifies one hyperlink target, treating it as a Markdown target so retired mounts and local paths resolve.

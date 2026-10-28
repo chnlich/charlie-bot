@@ -172,3 +172,26 @@ fn page_link_renderable_checks_file_server_markdown_and_tsv_not_external_markdow
   assert_eq!(count_named(&hits, LINK_RENDERABLE), 2);
   assert!(hits.iter().all(|hit| hit.block.as_deref() == Some("source raw table")));
 }
+
+#[test]
+fn code_examples_do_not_make_reply_urls_into_links() {
+  let (home, checks) = loaded_checks("");
+  let text = "`https://example.invalid/data.tsv`\n```\nhttps://example.invalid/data.tsv\n```\n[table](https://example.invalid/data.tsv)";
+
+  assert_eq!(count_named(&violations(&checks, &home, text), LINK_RENDERABLE), 1);
+}
+
+#[test]
+fn page_scripts_and_styles_are_not_user_text() {
+  let (home, _) = loaded_checks("user_text_checks:\n  internal_id_patterns: ['zz\\d{3}']\n");
+  let id = Uuid::new_v4().to_string();
+  add_session(&home, &id);
+  let mut registry = Registry::new();
+  registry.register_package("tests.user_text_checks", register).unwrap();
+  let config = registry.load_config(home.path()).unwrap();
+  let checks = UserTextChecks::new(config.section::<UserTextChecksConfig>(CONFIG_SECTION), home.path()).unwrap();
+  let html =
+    format!("<script>const id = '{id}'; const run = 'zz123';</script><style>/* {id} zz123 */</style><p>visible</p>");
+
+  assert!(checks.check_page(&html).unwrap().is_empty());
+}

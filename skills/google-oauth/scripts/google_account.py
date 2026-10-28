@@ -269,16 +269,6 @@ def _table_from_bytes(path: pathlib.Path, raw_bytes: bytes) -> AccountTable:
   return AccountTable(path, raw_bytes, raw_text, data, accounts, by_name, google)
 
 
-def _account_for(table: AccountTable, name: str | None) -> Account:
-  if name is None:
-    name = next(account.name for account in table.accounts if account.is_default)
-  account = table.by_name.get(name)
-  if account is None:
-    names = ", ".join(account.name for account in table.accounts)
-    raise CliError(f"unknown account. Available accounts: {names}", 2)
-  return account
-
-
 def _client_for(table: AccountTable, account: Account | None) -> tuple[str, str]:
   values = account.values if account is not None else table.google
   if "client_id" not in values:
@@ -326,21 +316,6 @@ def _required_response_string(response: dict[str, Any], key: str, operation: str
   if not isinstance(value, str) or not value.strip():
     raise CliError(f"{operation} did not return {key}", 1)
   return value
-
-
-def _mint_access_token(table: AccountTable, account: Account) -> str:
-  refresh_token = account.values.get("refresh_token")
-  if not isinstance(refresh_token, str) or not refresh_token.strip():
-    raise CliError(f"account {account.name} is pending authorization", 1)
-  client_id, client_secret = _client_for(table, account)
-  response = _post_form(
-      {
-          "client_id": client_id,
-          "client_secret": client_secret,
-          "refresh_token": refresh_token,
-          "grant_type": "refresh_token",
-      }, "Google token refresh")
-  return _required_response_string(response, "access_token", "Google token refresh")
 
 
 def _profile_email(access_token: str) -> str:
@@ -556,10 +531,6 @@ def _add_account(
 def _parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog="google_account.py")
   subparsers = parser.add_subparsers(dest="command", required=True)
-  token_parser = subparsers.add_parser("token")
-  token_parser.add_argument("--account")
-  list_parser = subparsers.add_parser("list")
-  list_parser.add_argument("--check", action="store_true")
   consent_parser = subparsers.add_parser("consent-url")
   consent_parser.add_argument("name")
   consent_parser.add_argument("--email")
@@ -572,44 +543,11 @@ def _parser() -> argparse.ArgumentParser:
   return parser
 
 
-def _is_pending(account: Account) -> bool:
-  refresh_token = account.values.get("refresh_token")
-  return not isinstance(refresh_token, str) or not refresh_token.strip()
-
-
-def _run_list(table: AccountTable, check: bool) -> int:
-  checked_emails: dict[str, str] = {}
-  if check:
-    for account in table.accounts:
-      if _is_pending(account):
-        continue
-      try:
-        checked_emails[account.name] = _profile_email(_mint_access_token(table, account))
-      except CliError as error:
-        raise CliError(f"account {account.name}: {error.message}", 1) from error
-  for account in table.accounts:
-    pending = _is_pending(account)
-    mark = "default" if account.is_default else "primary" if account.person_primary else ""
-    fields = [account.name, mark, "pending" if pending else "ready"]
-    fields.append(account.owner if account.owner is not None else "")
-    fields.append(_validate_description(account.section, account.values))
-    if check:
-      fields.append("" if pending else checked_emails[account.name])
-    print("\t".join(fields))
-  return 0
-
-
 def main(argv: Sequence[str] | None = None) -> int:
   """Run one Google account table command and return its process exit status."""
   args = _parser().parse_args(argv)
   try:
     table = _load_table()
-    if args.command == "token":
-      account = _account_for(table, args.account)
-      print(_mint_access_token(table, account))
-      return 0
-    if args.command == "list":
-      return _run_list(table, args.check)
     if args.command == "consent-url":
       print(_consent_url(table, args.name, args.email))
       return 0

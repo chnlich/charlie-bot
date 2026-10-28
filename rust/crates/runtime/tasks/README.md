@@ -231,7 +231,6 @@ report, then `complete` or `error`. Nothing outside the tests constructs `Worker
 | `handle_event` (private; `Worker._process_event`) | `src/runtime/worker.py:456-520` |
 | `handle_compaction_events` (private) | `src/runtime/streaming.py:161` (`handle_compaction_events`) |
 | `worker::QuotaExhaustedError`, `QuotaExhaustedError::new`, `resets_at` | `src/runtime/worker.py:33-39` |
-| `worker::event_line` | `src/runtime/worker.py:54-56` (`_event_line`) |
 | `worker::HARNESS_INSTRUCTIONS_NAME` | `src/runtime/runs.py:52` |
 | `worker::HANG_DIAGNOSTICS_NAME` | `src/runtime/worker.py:399` |
 | `worker::NO_OUTPUT_REPORT_THRESHOLD` (private) | `src/infra/timeouts.py:167` |

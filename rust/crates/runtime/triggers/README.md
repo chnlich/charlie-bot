@@ -9,12 +9,9 @@ trigger records, waiters and startup recovery. The trigger step is registered af
 | --- | --- |
 | `register` | `server.py:279-282`; routes are mounted through `internal.router` at `server.py:351` |
 | `triggers::MAX_PENDING_TRIGGERS` | `src/runtime/triggers.py:77` |
-| `triggers::TriggerStatus` | `src/infra/models.py:84-88` |
 | `triggers::LocalPid` | `src/infra/models.py:273-285` |
 | `triggers::RemotePid` | `src/infra/models.py:288-299` |
 | `triggers::SlurmJob` | `src/infra/models.py:301-310` |
-| `triggers::WatchTarget` | `src/infra/models.py:312-315` |
-| `triggers::PendingTrigger` | `src/infra/models.py:318-330` |
 | `triggers::ScheduleTriggerRequest` | `src/infra/models.py:698-706` |
 | `triggers::TriggerCreateError` | `src/runtime/triggers.py:84-88` |
 | `triggers::TriggerManager` and `TriggerManager::new` | `src/runtime/triggers.py:440-459` |
@@ -27,7 +24,7 @@ trigger records, waiters and startup recovery. The trigger step is registered af
 | `triggers::trigger_step` | `server.py:275-285` |
 
 `TriggerManager::list_triggers` has the public signature
-`pub async fn list_triggers(&self, session_id: &str) -> anyhow::Result<Vec<PendingTrigger>>`.
+`pub async fn list_triggers(&self, session_id: &str) -> anyhow::Result<Vec<charliebot_store::trigger_files::PendingTrigger>>`.
 
 The models keep Python's discriminator and field order so existing Python-written trigger files can be recovered,
 and Rust-written records can be read by Python. A scheduled trigger reaches the existing dispatch admission path with

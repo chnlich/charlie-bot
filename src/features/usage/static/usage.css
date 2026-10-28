@@ -5,8 +5,9 @@
 }
 /* Account rows are single-line flex and can exceed a narrow viewport, and body is
    overflow:hidden — without a scroll container here the row tail is clipped and
-   unreachable. */
-#ext-usage-strip { overflow-x: auto; }
+   unreachable. nowrap keeps each row on that one line: a hyphenated account name
+   otherwise splits mid-word, leaving its percentage on a second line. */
+#ext-usage-strip { overflow-x: auto; white-space: nowrap; }
 /* Quota-strip collapse chip: floats over the strip's top-right corner from a
    position:relative wrapper, so the strip's horizontal scrolling never drags
    it along (same pattern as #scroll-to-bottom inside #tab-chat). The template

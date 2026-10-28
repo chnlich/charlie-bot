@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::event_types;
 use charliebot_registry::backend::{
   BackendLifecycle, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch,
 };
@@ -88,7 +89,7 @@ impl BackendLifecycle for ClaudeCliLifecycle {
       return Vec::new();
     }
     vec![json!({
-      "type": "model_fallback_notice",
+      "type": event_types::MODEL_FALLBACK_NOTICE,
       "backend": option.id,
       "configured_model": option.model,
       "served_models": served_models,

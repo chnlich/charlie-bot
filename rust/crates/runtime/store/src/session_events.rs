@@ -19,15 +19,15 @@ const AGGREGATOR_INIT_SLICE_EVENTS: usize = 256;
 pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
   "assistant",
   "user",
-  "scheduled_trigger",
-  "child_report",
-  "task_closed",
-  "task_reopened",
-  "web_reply",
-  "web_reply_notice",
-  "web_status",
-  "web_status_confirmed",
-  "web_ask_check",
+  event_types::SCHEDULED_TRIGGER,
+  event_types::CHILD_REPORT,
+  event_types::TASK_CLOSED,
+  event_types::TASK_REOPENED,
+  event_types::WEB_REPLY,
+  event_types::WEB_REPLY_NOTICE,
+  event_types::WEB_STATUS,
+  event_types::WEB_STATUS_CONFIRMED,
+  event_types::WEB_ASK_CHECK,
 ];
 
 impl Store {
@@ -106,7 +106,7 @@ impl Store {
   pub async fn broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()> {
     let mut fields = Map::new();
     fields.insert("fact_type".to_string(), event_type.map_or(Value::Null, |value| json!(value)));
-    self.broadcast_sidebar(session_id, "task_tree_changed", fields).await
+    self.broadcast_sidebar(session_id, event_types::TASK_TREE_CHANGED, fields).await
   }
 
   /// Best-effort sidebar notification for one node's durable task fact. Call it after the fact is durable: a failure is
@@ -212,7 +212,7 @@ impl Store {
       return self
         .persist_and_broadcast(
           session_id,
-          json!({"type": "context_compacted", "trigger": trigger, "compact_metadata": metadata}),
+          json!({"type": event_types::CONTEXT_COMPACTED, "trigger": trigger, "compact_metadata": metadata}),
         )
         .await
         .map(Some);
@@ -221,7 +221,7 @@ impl Store {
       let error = event.get("compact_error").cloned().unwrap_or(Value::Null);
       tracing::info!(session_id, error = ?error, "cc_context_compact_failed");
       return self
-        .persist_and_broadcast(session_id, json!({"type": "context_compact_failed", "error": error}))
+        .persist_and_broadcast(session_id, json!({"type": event_types::CONTEXT_COMPACT_FAILED, "error": error}))
         .await
         .map(Some);
     }

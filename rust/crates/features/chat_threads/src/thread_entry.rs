@@ -456,7 +456,12 @@ pub fn event_by_id<E: ThreadEventData>(events: &[E], event_id: &str) -> Option<V
 /// The summon a round with this summon block answers: the block's `nudge_of` for a nudge, else the event itself
 /// (`summon_of`).
 pub fn summon_of(block: &Value, event_id: &str) -> String {
-  block.get("nudge_of").and_then(Value::as_str).filter(|nudge| !nudge.is_empty()).unwrap_or(event_id).to_string()
+  block
+    .get(event_types::NUDGE_OF)
+    .and_then(Value::as_str)
+    .filter(|nudge| !nudge.is_empty())
+    .unwrap_or(event_id)
+    .to_string()
 }
 
 /// `(event id, summon block)` of the newest summon-bearing input among `event_ids`, or None (`newest_thread_input`).
@@ -495,7 +500,8 @@ pub fn nudged<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summo
   events.iter().any(|event| {
     let event = event.event_value();
     event_type(&event) == Some(event_types::AGENT_MESSAGE)
-      && event.get(platform.name).and_then(|block| block.get("nudge_of")).and_then(Value::as_str) == Some(summon_id)
+      && event.get(platform.name).and_then(|block| block.get(event_types::NUDGE_OF)).and_then(Value::as_str)
+        == Some(summon_id)
   })
 }
 
@@ -1047,7 +1053,7 @@ pub async fn audit_round(
     return Ok(Some(chat_events));
   }
 
-  if target.get("nudge_of").is_none() {
+  if target.get(event_types::NUDGE_OF).is_none() {
     if nudged(platform, &chat_events, &summon_id) {
       return Ok(Some(chat_events));
     }
@@ -1058,7 +1064,7 @@ pub async fn audit_round(
         block.insert(key.to_string(), value.clone());
       }
     }
-    block.insert("nudge_of".to_string(), json!(summon_id));
+    block.insert(event_types::NUDGE_OF.to_string(), json!(summon_id));
     drop(chat_events);
     let dispatcher =
       features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().map_err(ThreadReplyError::failure)?;

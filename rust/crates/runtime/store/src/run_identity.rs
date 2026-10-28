@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 
+use charliebot_core::event_types;
 use serde_json::Value;
 
 use crate::run_records::RunRecord;
@@ -24,7 +25,7 @@ pub struct RunIdentity {
 pub fn run_identity_refusal(run: Option<&RunRecord>, events: &[Value]) -> Option<&'static str> {
   let Some(run) = run else { return Some(RUN_IDENTITY_UNKNOWN_DETAIL) };
   if events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some("run_finished")
+    event.get("type").and_then(Value::as_str) == Some(event_types::RUN_FINISHED)
       && event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
   }) {
     return Some(RUN_IDENTITY_UNKNOWN_DETAIL);

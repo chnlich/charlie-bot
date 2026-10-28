@@ -332,7 +332,7 @@ fn resolve_fold_tier(
     _ => Some(json!({
       "context_tokens": null,
       "context_full": null,
-      "context_compact_at": null,
+      (event_types::CONTEXT_COMPACT_AT): null,
       "total_cost_usd": cost,
       "model": "",
     })),
@@ -435,7 +435,7 @@ fn usage_value(
   json!({
     "context_tokens": context_tokens,
     "context_full": context_full,
-    "context_compact_at": context_compact_at,
+    (event_types::CONTEXT_COMPACT_AT): context_compact_at,
     "total_cost_usd": cost,
     "model": model,
   })

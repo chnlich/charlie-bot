@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, EventFields, INPUT_EVENT_ID, MASTER_DONE, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS,
+  AGENT_MESSAGE, EventFields, INPUT_EVENT_ID, MASTER_DONE, NUDGE_OF, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS,
   WEB_STATUS_CONFIRMED, WEB_STATUS_REMINDER,
 };
 use charliebot_registry::FeatureContext;
@@ -247,12 +247,12 @@ async fn post_status_reminder(
   let mut event = features.store.build_agent_message_event(session_id, text, provenance);
   event[WEB_STATUS_REMINDER] = turn_id.map_or(json!(true), Value::from).into();
   if let Some(user_event_id) = nudge_of {
-    event[WEB_REPLY] = json!({"nudge_of": user_event_id}).into();
+    event[WEB_REPLY] = json!({(NUDGE_OF): user_event_id}).into();
   }
   let persisted = features.store.persist_and_broadcast(session_id, event.to_value()).await?;
   let reminder_id = persisted["id"].as_str().context("the persisted reminder carries its id")?.to_string();
   spawn_wake(features, session_id, text, &reminder_id, STATUS_REMINDER_SENDER_NAME, "web-status-reminder");
-  tracing::info!(session = %session_id, turn_id, combined = nudge_of.is_some(), "web_status_reminder");
+  tracing::info!(session = %session_id, turn_id, combined = nudge_of.is_some(), "{}", WEB_STATUS_REMINDER);
   Ok(())
 }
 
@@ -262,7 +262,7 @@ async fn nudge(features: &Arc<FeatureContext>, session_id: &str, user_event_id: 
   let provenance =
     MessageProvenance { from_session: session_id.to_string(), from_session_name: reply::NUDGE_SENDER_NAME.to_string() };
   let mut event = features.store.build_agent_message_event(session_id, reply::NUDGE_TEXT, provenance);
-  event[WEB_REPLY] = json!({"nudge_of": user_event_id}).into();
+  event[WEB_REPLY] = json!({(NUDGE_OF): user_event_id}).into();
   let persisted = features.store.persist_and_broadcast(session_id, event.to_value()).await?;
   let nudge_id = persisted["id"].as_str().context("the persisted nudge carries its id")?.to_string();
 
@@ -318,7 +318,7 @@ async fn notice(features: &Arc<FeatureContext>, session_id: &str, user_event_id:
     )
     .await?;
   features.store.mark_unread(session_id).await?;
-  tracing::info!(session = %session_id, user_event_id, "web_reply_notice");
+  tracing::info!(session = %session_id, user_event_id, "{}", WEB_REPLY_NOTICE);
   Ok(())
 }
 

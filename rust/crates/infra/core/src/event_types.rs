@@ -26,6 +26,8 @@ pub const SCHEDULED_TRIGGER: &str = "scheduled_trigger";
 pub const SCHEDULED_RUN_SKIPPED: &str = "scheduled_run_skipped";
 pub const SESSION_ATTACHED: &str = "session_attached";
 pub const AGENT_MESSAGE: &str = "agent_message";
+/// The key of an `agent_message` block that marks the message as a nudge and names the event it nudges.
+pub const NUDGE_OF: &str = "nudge_of";
 pub const WEB_REPLY: &str = "web_reply";
 pub const WEB_REPLY_NOTICE: &str = "web_reply_notice";
 pub const WEB_STATUS: &str = "web_status";
@@ -225,5 +227,5 @@ pub fn is_platform_summon(event: &impl EventFields) -> bool {
   event.field("type").and_then(EventFields::as_str_field) == Some(AGENT_MESSAGE)
     && THREAD_PLATFORM_KEYS
       .iter()
-      .any(|key| event.field(key).is_some_and(|block| block.is_object() && !block.has_field("nudge_of")))
+      .any(|key| event.field(key).is_some_and(|block| block.is_object() && !block.has_field(NUDGE_OF)))
 }

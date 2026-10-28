@@ -1,3 +1,4 @@
+use charliebot_core::event_types;
 use serde_json::{Value, json};
 
 use crate::metadata::SessionMetadata;
@@ -19,7 +20,7 @@ pub struct MessageProvenance {
 /// Build the persisted event for a scheduled-trigger self-wake.
 pub fn build_scheduled_trigger_event(content: &str) -> ChatEvent {
   json!({
-    "type": "scheduled_trigger",
+    "type": event_types::SCHEDULED_TRIGGER,
     "content": content,
     "timestamp": charliebot_core::timefmt::utc_now_iso(),
   })
@@ -40,11 +41,11 @@ pub fn build_agent_message_event(text: &str, provenance: MessageProvenance) -> C
 
 /// Return the chat-event ids answered by one master_done event.
 pub fn master_done_input_event_ids<T: charliebot_core::event_types::EventFields>(event: &T) -> Vec<String> {
-  if let Some(ids) = event.field("input_event_ids") {
+  if let Some(ids) = event.field(event_types::INPUT_EVENT_IDS) {
     return ids.string_items().into_iter().map(str::to_string).collect();
   }
   event
-    .field("input_event_id")
+    .field(event_types::INPUT_EVENT_ID)
     .and_then(charliebot_core::event_types::EventFields::as_str_field)
     .filter(|id| !id.is_empty())
     .map(|id| vec![id.to_string()])

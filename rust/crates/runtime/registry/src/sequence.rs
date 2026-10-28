@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{ChatEvent, ControlGuard, RunRecord, SharedChatEvent, StopRequest, Store, StoreResult};
 use futures_util::future::BoxFuture;
@@ -348,7 +349,7 @@ impl SequenceTree for StoreSequenceTree {
     events
       .iter()
       .rfind(|event| {
-        event.get("type").and_then(CompactValue::as_str) == Some("run_finished")
+        event.get("type").and_then(CompactValue::as_str) == Some(event_types::RUN_FINISHED)
           && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
       })
       .and_then(|event| event.get("outcome").and_then(CompactValue::as_str))

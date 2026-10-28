@@ -12,6 +12,7 @@ use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, Request
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 
+use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
@@ -134,7 +135,7 @@ const DELEGATE_BODY_FIELDS: &[Field] = &[
   Field::optional("task_type", FieldType::Enum(DELEGATE_TASK_TYPE)),
   Field::optional("keep_worktree", FieldType::Boolean),
   Field::optional(
-    "delegate_invocation",
+    event_types::DELEGATE_INVOCATION,
     FieldType::NullableModel { class_name: "DelegateInvocationMetadata", model: &DELEGATE_INVOCATION_BODY },
   ),
   Field::optional("request_id", FieldType::NullableString),
@@ -178,7 +179,7 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     repo_path: optional_string(&values, "repo_path"),
     task_type,
     keep_worktree: values.get("keep_worktree").and_then(Value::as_bool).unwrap_or(false),
-    delegate_invocation: values.get("delegate_invocation").filter(|value| !value.is_null()).cloned(),
+    delegate_invocation: values.get(event_types::DELEGATE_INVOCATION).filter(|value| !value.is_null()).cloned(),
     request_id: optional_string(&values, "request_id"),
     cold_read,
   })
@@ -672,7 +673,7 @@ async fn send_message(
   };
   let mut response = json!({
     "status": "accepted",
-    "input_event_id": input_event_id,
+    (event_types::INPUT_EVENT_ID): input_event_id,
     "launch": launch,
   });
   if let Some(reason) =

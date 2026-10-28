@@ -250,7 +250,7 @@ async fn create(
       session_id = %meta.id,
       task_parent_id = ?task_parent_id,
       profile = profile_name(profile),
-      "task_created"
+      "{}", event_types::TASK_CREATED
     );
     return Ok(meta);
   }
@@ -437,7 +437,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
     .await
     .map_err(store_error)?
     .ok_or_else(|| store_error(StoreError::not_found(SESSION_NOT_FOUND_DETAIL)))?;
-  tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "session_renamed");
+  tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "{}", event_types::SESSION_RENAMED);
   features.store.invalidate_tree_index();
   features.store.notify_task_tree_changed(session_id, Some("task_updated")).await;
   let meta = response_metadata(&features.store, &meta).map_err(store_error)?;

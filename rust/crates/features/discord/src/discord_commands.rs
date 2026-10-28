@@ -61,7 +61,7 @@ fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
       continue;
     }
     let id = event["id"].as_str().expect("a chat event carries a string id");
-    if block.get("nudge_of").is_some() || answered.contains(id) || marked.contains(id) {
+    if block.get(event_types::NUDGE_OF).is_some() || answered.contains(id) || marked.contains(id) {
       continue;
     }
     if let Some(mention) = block.get(DISCORD.mention_key).filter(|mention| !mention.is_null()) {

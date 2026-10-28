@@ -17,6 +17,7 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::resolve;
 use charliebot_compat::file_urls;
+use charliebot_core::event_types;
 use charliebot_core::pyfmt;
 use charliebot_tasks::cold_read;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -115,8 +116,8 @@ fn dialog(args: &SessionArgs) -> Result<(), CliExit> {
   for entry in list(field(&result, "entries")?)? {
     let label = match pyfmt::python_str(field(entry, "role")?).as_str() {
       "user" => "You",
-      "web_reply" => "Reply",
-      "web_reply_notice" => "Notice",
+      event_types::WEB_REPLY => "Reply",
+      event_types::WEB_REPLY_NOTICE => "Notice",
       role => return Err(CliExit::error(format!("unknown dialog role {role}"))),
     };
     blocks.push(format!("{label}: {}", pyfmt::python_str(field(entry, "content")?)));
@@ -189,7 +190,7 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
 /// block per child with waiting items, then the Now of each open child.
 fn render_status(result: &Value) -> Result<String, CliExit> {
   let mut lines: Vec<String> = Vec::new();
-  let status = field(result, "web_status")?;
+  let status = field(result, event_types::WEB_STATUS)?;
   if status.is_null() {
     lines.push("No status yet".to_string());
   } else {

@@ -13,7 +13,7 @@ use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
-use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPLY, WEB_REPLY_NOTICE};
+use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_core::paths;
 use charliebot_core::pyregex::compile_python_automata_regex;
 use charliebot_core::pystr;
@@ -147,7 +147,7 @@ pub fn nudge_of(event: &impl EventFields) -> Option<String> {
   }
   event
     .field(WEB_REPLY)
-    .and_then(|record| record.field("nudge_of"))
+    .and_then(|record| record.field(NUDGE_OF))
     .and_then(EventFields::as_str_field)
     .map(str::to_string)
 }

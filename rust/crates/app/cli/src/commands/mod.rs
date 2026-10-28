@@ -8,3 +8,4 @@ pub mod gc_trash;
 pub mod linear;
 pub mod schedule_trigger;
 pub mod session;
+pub mod voice;

@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -101,8 +102,9 @@ fn serve() -> io::Result<()> {
     // SAFETY: SIG_IGN installs no handler, so no code runs in the signal path.
     unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
   }
-  let home =
-    PathBuf::from(env::var_os("CHARLIEBOT_HOME").ok_or_else(|| io::Error::other("CHARLIEBOT_HOME is not set"))?);
+  let home = PathBuf::from(
+    env::var_os(CHARLIEBOT_HOME_ENV).ok_or_else(|| io::Error::other(format!("{CHARLIEBOT_HOME_ENV} is not set")))?,
+  );
   let config = fs::read_to_string(home.join("config.yaml"))?;
   let port: u16 = capture(r"(?m)^\s*port:\s*(\d+)", &config)?.parse().map_err(io::Error::other)?;
   let key = capture(r"access_key:\s*(\S+)", &fs::read_to_string(home.join("credentials.yaml"))?)?;

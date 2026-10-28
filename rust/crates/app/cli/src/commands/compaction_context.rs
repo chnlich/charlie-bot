@@ -362,14 +362,6 @@ fn python_newlines(text: &str) -> String {
 /// `str(OSError)` with a filename: `[Errno N] <strerror>: '<path>'`. The delete paths of
 /// `gc-trash` are the one place Rust cannot carry Python's inner filename; here the failing path
 /// is always the one the command opened.
-/// The error text of a chat log that could not be read, in the words Python gives for the same failure.
-fn log_read_error(events_path: &Path, error: LogReadError) -> String {
-  match error {
-    LogReadError::Io(error) | LogReadError::Line { error, .. } => python_os_error(&paths::display(events_path), &error),
-    LogReadError::Utf8(error) => python_utf8_error(error.as_bytes(), &error.utf8_error()),
-  }
-}
-
 fn python_os_error(path: &str, error: &std::io::Error) -> String {
   match error.raw_os_error() {
     Some(errno) => {
@@ -378,6 +370,14 @@ fn python_os_error(path: &str, error: &std::io::Error) -> String {
       format!("[Errno {errno}] {strerror}: {}", str_repr(path))
     }
     None => format!("{error}: {}", str_repr(path)),
+  }
+}
+
+/// The error text of a chat log that could not be read, in the words Python gives for the same failure.
+fn log_read_error(events_path: &Path, error: LogReadError) -> String {
+  match error {
+    LogReadError::Io(error) | LogReadError::Line { error, .. } => python_os_error(&paths::display(events_path), &error),
+    LogReadError::Utf8(error) => python_utf8_error(error.as_bytes(), &error.utf8_error()),
   }
 }
 

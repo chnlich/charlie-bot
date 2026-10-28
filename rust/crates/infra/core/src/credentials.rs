@@ -1,6 +1,8 @@
 //! `credentials.yaml`: the profile's secrets, `section -> key -> scalar` (`src/infra/credentials.py`).
 
 use std::collections::BTreeMap;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_yaml::Value;
@@ -114,6 +116,77 @@ fn key_text(key: &Value) -> String {
   }
 }
 
+/// One failed `credentials.yaml` update, named by the phase that failed so callers keep their
+/// per-phase error messages.
+#[derive(Debug)]
+pub enum CredentialsWriteError {
+  /// The original file's permissions could not be read.
+  OriginalMode(std::io::Error),
+  /// The temporary file could not be created next to the original.
+  TempFile(std::io::Error),
+  /// The temporary file could not be written or renamed over the original.
+  Write(std::io::Error),
+  /// A failed update's temporary file could not be removed.
+  Cleanup(std::io::Error),
+}
+
+impl std::fmt::Display for CredentialsWriteError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let (phase, error) = match self {
+      CredentialsWriteError::OriginalMode(error) => ("read the original permissions", error),
+      CredentialsWriteError::TempFile(error) => ("create the temporary file", error),
+      CredentialsWriteError::Write(error) => ("write the temporary file", error),
+      CredentialsWriteError::Cleanup(error) => ("remove the temporary file", error),
+    };
+    write!(formatter, "could not {phase}: {error}")
+  }
+}
+
+impl std::error::Error for CredentialsWriteError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    match self {
+      CredentialsWriteError::OriginalMode(error)
+      | CredentialsWriteError::TempFile(error)
+      | CredentialsWriteError::Write(error)
+      | CredentialsWriteError::Cleanup(error) => Some(error),
+    }
+  }
+}
+
+/// Replace the file at `path` with `new_bytes` atomically: write a `.credentials.yaml.<random>.tmp`
+/// file in the same directory with the original file's mode, then rename it over the original. A
+/// failure leaves the original unchanged and removes the temporary file.
+pub fn write_credentials_update(path: &Path, new_bytes: &[u8]) -> Result<(), CredentialsWriteError> {
+  let original_mode =
+    std::fs::metadata(path).map_err(CredentialsWriteError::OriginalMode)?.permissions().mode() & 0o7777;
+  let parent = path.parent().expect("a credentials path always names a parent directory");
+  let temporary = tempfile::Builder::new()
+    .prefix(".credentials.yaml.")
+    .suffix(".tmp")
+    .rand_bytes(8)
+    .tempfile_in(parent)
+    .map_err(CredentialsWriteError::TempFile)?;
+  let result = write_and_rename(&temporary, path, original_mode, new_bytes);
+  if result.is_err() {
+    temporary.close().map_err(CredentialsWriteError::Cleanup)?;
+  }
+  result
+}
+
+fn write_and_rename(
+  temporary: &tempfile::NamedTempFile,
+  path: &Path,
+  original_mode: u32,
+  new_bytes: &[u8],
+) -> Result<(), CredentialsWriteError> {
+  temporary
+    .as_file()
+    .set_permissions(std::fs::Permissions::from_mode(original_mode))
+    .map_err(CredentialsWriteError::Write)?;
+  temporary.as_file().write_all(new_bytes).map_err(CredentialsWriteError::Write)?;
+  std::fs::rename(temporary.path(), path).map_err(CredentialsWriteError::Write)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -169,5 +242,42 @@ mod tests {
   fn a_missing_file_loads_as_no_sections() {
     let home = tempfile::tempdir().unwrap();
     assert_eq!(load_credentials(home.path()).unwrap().access_key(), None);
+  }
+
+  #[test]
+  fn the_atomic_write_replaces_the_bytes_and_keeps_the_mode() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join(CREDENTIALS_FILENAME);
+    std::fs::write(&path, b"before\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+    write_credentials_update(&path, b"after\n").unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"after\n");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode, 0o640);
+    assert!(temporary_files(home.path()).is_empty());
+  }
+
+  #[test]
+  fn a_failed_atomic_write_leaves_the_file_and_cleans_the_temporary_file() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join(CREDENTIALS_FILENAME);
+    // A directory cannot be replaced by a rename, so the write fails after the temporary file exists.
+    std::fs::create_dir(&path).unwrap();
+
+    let error = write_credentials_update(&path, b"after\n").unwrap_err();
+
+    assert!(matches!(error, CredentialsWriteError::Write(_)), "{error:?}");
+    assert!(path.is_dir());
+    assert!(temporary_files(home.path()).is_empty());
+  }
+
+  fn temporary_files(home: &Path) -> Vec<String> {
+    std::fs::read_dir(home)
+      .unwrap()
+      .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+      .filter(|name| name.starts_with(".credentials.yaml.") && name.ends_with(".tmp"))
+      .collect()
   }
 }

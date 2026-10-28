@@ -37,8 +37,8 @@ const SIGINT_RELEASE_BINARY: &str = r#"#!/usr/bin/env bash
 if [ "${1:-}" = "--check-config" ]; then
   exit 0
 fi
-printf '%s\n' "fake_server_ready"
 trap 'printf "%s\n" "fake_server_shutdown_marker"; exit 0' INT
+printf '%s\n' "fake_server_ready"
 while :; do
   sleep 3600
 done
@@ -215,8 +215,8 @@ fn preflight_rejects_a_slice_limit_that_differs_from_its_unit_file() {
   assert_ne!(run.code, 0, "{}", run.describe());
   assert!(run.stderr.contains("charliebot-agents.slice"));
   assert!(run.stderr.contains("MemoryMax"));
-  assert!(run.stderr.contains(&systemd_bytes(&sandbox, &launcher, "80%")));
-  assert!(run.stderr.contains(&systemd_bytes(&sandbox, &launcher, "40%")));
+  assert!(run.stderr.contains(&harness::memtotal_percent_bytes(80).to_string()));
+  assert!(run.stderr.contains(&harness::memtotal_percent_bytes(40).to_string()));
 }
 
 #[test]
@@ -297,9 +297,8 @@ fn launcher_preflight_exits_1_when_a_slice_limit_differs() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
   sandbox.install_systemd_stubs();
-  let current_limit = systemd_bytes(&sandbox, &launcher, "80%").parse::<u64>().expect("the current memory limit");
   let mut env = sandbox.env();
-  env.insert("SYSTEMCTL_MEMORY_MAX".to_string(), (current_limit + 1).to_string());
+  env.insert("SYSTEMCTL_MEMORY_MAX".to_string(), (harness::memtotal_percent_bytes(80) + 1).to_string());
   let log_dir = sandbox.root().join("logs");
   let run = run_launcher_preflight(&launcher, &log_dir, &env);
 
@@ -447,14 +446,6 @@ fn replace_text(path: &Path, old: &str, new: &str) {
   let contents = fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
   assert!(contents.contains(old), "{} does not contain {old:?}", path.display());
   fs::write(path, contents.replace(old, new)).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-}
-
-fn systemd_bytes(sandbox: &Sandbox, launcher: &Path, value: &str) -> String {
-  let mut command = harness::command("bash", &sandbox.env());
-  command.args(["-c", "source \"$1\"; _systemd_bytes \"$2\"", "bash"]).arg(launcher).arg(value);
-  let run = harness::run(&mut command);
-  assert_eq!(run.code, 0, "{}", run.describe());
-  run.stdout
 }
 
 struct ProcessGroup(Child);

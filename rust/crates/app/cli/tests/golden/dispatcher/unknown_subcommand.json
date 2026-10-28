@@ -4,7 +4,7 @@
   ],
   "expect": {
     "stdout": "",
-    "stderr": "charliebot: unknown subcommand 'disk-sweep'. Available subcommands: artifact, compaction-context, config, delegate, discord, files, gc-trash, improve, improve-stop, linear, memory, plan, publish, schedule-trigger, session, slack, voice, wait-guard, web\n",
+    "stderr": "charliebot: unknown subcommand 'disk-sweep'. Available subcommands: artifact, compaction-context, config, delegate, discord, files, gc-trash, google, improve, improve-stop, linear, memory, plan, publish, schedule-trigger, session, slack, voice, wait-guard, web\n",
     "exit": 2,
     "requests": []
   }

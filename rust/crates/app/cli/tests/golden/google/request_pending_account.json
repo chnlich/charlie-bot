@@ -1,0 +1,19 @@
+{
+  "files": {
+    "home/credentials.yaml": "google:\n  client_id: synthetic-client\n  client_secret: synthetic-secret\n  refresh_token: synthetic-refresh\ngoogle_account_personal:\n  description: personal mailbox\n"
+  },
+  "argv": [
+    "google",
+    "request",
+    "GET",
+    "https://example.invalid/api",
+    "--account",
+    "personal"
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"account personal is pending authorization\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

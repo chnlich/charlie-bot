@@ -165,6 +165,7 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_check_posts_an_empty_body_prints_the_readback_and_exits_zero_when_ok",
   "test_check_exits_one_after_printing_when_ok_is_false",
   "test_help_lists_discord",
+  "test_relative_profile_home_is_rejected",
 ];
 
 #[test]

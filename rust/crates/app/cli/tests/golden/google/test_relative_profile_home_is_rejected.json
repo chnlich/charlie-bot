@@ -1,0 +1,15 @@
+{
+  "env": {
+    "CHARLIEBOT_HOME": "relative/profile"
+  },
+  "argv": [
+    "google",
+    "list"
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"CHARLIEBOT_HOME must be an absolute path or start with '~'; got 'relative/profile'\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "google",
+    "request"
+  ],
+  "parser_generated": true,
+  "expect": {
+    "exit": 2,
+    "requests": []
+  }
+}

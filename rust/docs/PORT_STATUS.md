@@ -121,7 +121,6 @@ by the run id its stop request captured. The parity harness (removed 2026-10-27)
 | GET | `/api/sessions/{session_id}/explain/status` | features/explain | ported |  |
 | POST | `/api/internal/improve/stop` | features/improve | ported |  |
 | POST | `/api/internal/improve` | features/improve | ported | Resolves the improve role before reservation; pooled iterations cool quota-failed members and retry with the next member. |
-| GET | `/ncu` | features/ncu | ported | a cache miss runs a Python child, `rust/helpers/ncu_report_helper.py`, when the Nsight install has `extras/python`; otherwise the native `ncu --import --csv` path answers. See `rust/docs/python_helper.md`. A CSV integer cell outside the 64-bit range fails the import with a `ValueError` internal error, while Python keeps the exact integer |
 | WS | `/ws/terminal` | features/terminal | ported |  |
 | GET | `/perfetto` | features/trace | ported |  |
 | GET | `/perfetto/merged` | features/trace | ported |  |
@@ -147,7 +146,6 @@ by the run id its stop request captured. The parity harness (removed 2026-10-27)
 | GET, HEAD | `/static/features/explain` | foundation | ported |  |
 | GET, HEAD | `/static/features/improve` | foundation | ported |  |
 | GET, HEAD | `/static/features/memory` | foundation | ported |  |
-| GET, HEAD | `/static/features/ncu` | foundation | ported |  |
 | GET, HEAD | `/static/features/router` | foundation | ported |  |
 | GET, HEAD | `/static/features/terminal` | foundation | ported |  |
 | GET, HEAD | `/static/features/trace` | foundation | ported |  |

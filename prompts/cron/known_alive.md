@@ -98,13 +98,6 @@ Known-alive symbols:
   `tests/test_claude_accounts.py`, 60% confidence). The same two names also appear as
   `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
   does not flag.
-- `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
-  `panel-raw` (`src/features/ncu/templates/ncu.html`, the six tab-panel element ids) — reached by
-  string construction: the inline tab switcher activates panels with
-  ``p.classList.toggle('active', p.id === `panel-${name}`)``, where `name` is each tab
-  button's `data-tab` attribute. A whole-repo grep for any full id finds only its
-  definition, so a dead-id scan flags each as unused markup; the constructed
-  `panel-${name}` match is what makes them live.
 - `file-chip--failed`, `file-chip--uploaded`, `file-chip--uploading` (`web/static/css/styles.css`)
   — reached by string construction: `file-upload.js` emits
   ``file-chip file-chip--${file.status}``, and `tests/chat_attachments_render.test.js` asserts

@@ -7,7 +7,6 @@ The server renders HTML pages with Jinja2 (`src/runtime/templating.py`). This fi
 - `GET /sessions/{session_id}/events`
 - `GET /diff`
 - `GET /host-auth`
-- `GET /ncu`
 - `GET /perfetto`
 - `GET /token-usage`
 
@@ -58,7 +57,7 @@ Page parts at the baseline:
 | `modals` | `cron` |
 | `scripts` | `artifacts`, `chat_threads`, `cron`, `diag`, `diff_view`, `explain`, `terminal`, `usage`, `voice` |
 | `diff_toolbar` | `code_server` |
-| `home_notes` | `ncu`, `trace` |
+| `home_notes` | `trace` |
 
 `index.html` places `head`, `tab_buttons`, `below_header`, `input_buttons`, `tab_panels`, `scripts` and `modals`. `diff.html` places `diff_toolbar`. `home.html` places `home_notes`.
 
@@ -241,50 +240,6 @@ Row rules:
 - `summary.soonest_*` names the `ok` host with the smallest positive remaining time.
 
 The page has no JavaScript. It persists nothing.
-
-## `GET /ncu`
-
-- Auth: access key.
-- Handler: `src/features/ncu/api.py:32`.
-- Template: `src/features/ncu/templates/ncu.html`.
-
-| Name | In | Type | Required | Default |
-|---|---|---|---|---|
-| `file` | query, repeatable | list of strings | no | `[]` |
-
-The handler renders the first `file` only. It counts the others in `extra_count`.
-
-| Status | Case | Context `error` |
-|---|---|---|
-| 400 | No `file` | `No report specified. Provide a 'file' query param with an absolute path to a .ncu-rep file.` |
-| 400 | First `file` is not absolute | `Report path must be absolute: <file>` |
-| 404 | First `file` is not a regular file | `Report not found: <file>` |
-| 422 | The parser raised `NcuParseError` | the error message |
-| 200 | Report parsed | null |
-
-Every error response is the HTML page `ncu.html` with `error` set and `report` null. It is not JSON.
-
-The 200 context:
-
-| Variable | Value |
-|---|---|
-| `error` | null |
-| `report` | the parsed report dict from `ncu_parsing.parse_ncu_report` |
-| `report_path` | the absolute path |
-| `filename` | the base name |
-| `download_url` | `/absolute_filepath<path>` |
-| `extra_count` | number of `file` values minus 1 |
-| `ncu_ui_cmd` | `ncu-ui <path>` |
-| `ncu_details_cmd` | `ncu --import <path> --page details` |
-| `ncu_source_cmd` | `ncu --import <path> --page source --print-source sass` |
-| `ncu_session_cmd` | `ncu --import <path> --page session` |
-
-Side effects:
-
-- The parser uses the `ncu_report` Python module when it can load it. Otherwise it runs the `ncu` binary for a CSV import.
-- The server caches each parsed report in memory, keyed by (absolute path, mtime in ns).
-
-UNVERIFIED: the full shape of the `report` dict is defined by `src/features/ncu/ncu_parsing.py:682` and was not listed here.
 
 ## `GET /perfetto`
 

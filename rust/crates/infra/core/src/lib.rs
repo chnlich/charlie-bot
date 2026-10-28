@@ -18,7 +18,6 @@ pub mod proc_identity;
 pub mod pyfmt;
 pub mod pyregex;
 pub mod pystr;
-pub mod python_helper;
 pub mod repo_root;
 pub mod run_token;
 pub mod ssh;

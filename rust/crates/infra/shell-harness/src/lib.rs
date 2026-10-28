@@ -162,7 +162,8 @@ impl Sandbox {
   /// Installs the `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the limits its
   /// committed unit file declares, and the systemd-run stub records each scope it starts (see `scope_records`).
   pub fn install_systemd_stubs(&self) {
-    self.stub("systemctl", &SYSTEMCTL.replace("{memory_max}", &agents_memory_max_bytes().to_string()));
+    let memory_max = memtotal_percent_bytes(AGENTS_MEMORY_PERCENT);
+    self.stub("systemctl", &SYSTEMCTL.replace("{memory_max}", &memory_max.to_string()));
     self.stub("systemd-run", SYSTEMD_RUN);
   }
 
@@ -245,9 +246,9 @@ fn exit_code(status: ExitStatus) -> i32 {
   status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
 }
 
-/// The agents' slice limit in bytes, computed the way systemd rounds a percentage of host memory: down to a whole
-/// 4096-byte page, where a page is MemTotal kB / 4.
-fn agents_memory_max_bytes() -> u64 {
+/// A percentage of host memory in bytes, computed the way systemd rounds it: down to a whole 4096-byte page, where a
+/// page is MemTotal kB / 4.
+pub fn memtotal_percent_bytes(percent: u64) -> u64 {
   let meminfo = fs::read_to_string("/proc/meminfo").expect("read /proc/meminfo");
   let total_kb: u64 = meminfo
     .lines()
@@ -255,5 +256,5 @@ fn agents_memory_max_bytes() -> u64 {
     .and_then(|rest| rest.split_whitespace().next())
     .and_then(|kb| kb.parse().ok())
     .expect("/proc/meminfo has a MemTotal line");
-  ((total_kb / 4) * AGENTS_MEMORY_PERCENT / 100) * 4096
+  ((total_kb / 4) * percent / 100) * 4096
 }

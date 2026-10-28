@@ -121,7 +121,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 1. **Task Delegation** (Master → Worker):
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
-   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`src/runtime/cli/delegate.py`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
+   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`rust/crates/app/cli/src/commands/delegate.rs`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
    - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`delegate_task_tree` in `rust/crates/runtime/tasks/src/routes.rs`); the tree's executor launches it (`execute_run` in `rust/crates/runtime/tasks/src/execution.rs`)
 
 2. **Worker Execution** (Phase 1 — Implement):
@@ -155,7 +155,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 ### 5.2 Plan Registry (Draft, Approve, Delegate)
 For complex tasks, the master plans before building; the plan registry keeps that lifecycle:
 
-- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (the Python CLI command `src/features/artifacts/plan_cli.py` over the server's `present` verb in `rust/crates/features/artifacts/src/plan_verbs.rs`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
+- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (the CLI command `rust/crates/features/artifacts/src/cli/plan.rs` over the server's `present` verb in `rust/crates/features/artifacts/src/plan_verbs.rs`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
 - **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`src/features/artifacts/static/plan-panel.js`).
 - **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`rust/crates/runtime/store/src/task_tree.rs`, `is_read_only_exempt` and the delegation refusals) admits `/delegate` and `/improve` when the calling manager and its ancestors are open and the chain holds a real user message or a thread platform summon.
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
@@ -282,7 +282,7 @@ for the other backends) and passes no flag.
 - Rust server (`rust/crates/app/server/src/main.rs`)
 - All API routes: `/api/sessions`, `/api/chat`, `/api/internal/delegate` (full list: the route tables in `rust/crates/app/server/src/routes` and the packages in `rust/crates/app/server/src/packages/mod.rs`)
 - Master Agent as Claude Code session (`rust/crates/runtime/tasks/src/master_run.rs`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` trait (`rust/crates/runtime/registry/src/registry.rs`)
-- Delegation CLI (`src/runtime/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
+- Delegation CLI (`rust/crates/app/cli/src/commands/delegate.rs`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`rust/crates/runtime/tasks/src/execution.rs`, `rust/crates/runtime/tasks/src/spawner_prompt.rs`, `rust/crates/runtime/tasks/src/spawner_backends.rs`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.pool`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions

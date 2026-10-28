@@ -45,10 +45,10 @@ pub fn digest(home_dir: &Path, now: f64) -> Result<String, CliExit> {
   let mut rows: Vec<(f64, String, String)> = Vec::new();
   for entry in entries {
     let entry = entry.map_err(|error| CliExit::error(format!("read {}: {error}", sessions.display())))?;
-    if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+    let session_dir = entry.path();
+    if !session_dir.is_dir() {
       continue;
     }
-    let session_dir = entry.path();
     let events_path = layout::chat_events_path(&session_dir);
     let metadata = match fs::metadata(&events_path) {
       Ok(metadata) => metadata,
@@ -237,7 +237,7 @@ mod tests {
     let stale = fixture.session("22222222-session-id", &[user_event("stale file", "2026-10-28T06:00:00Z")]);
     let stale_path = layout::chat_events_path(&stale);
     let file = fs::OpenOptions::new().write(true).open(&stale_path).unwrap();
-    let old = SystemTime::now() - std::time::Duration::from_secs(8 * 86400);
+    let old = UNIX_EPOCH + std::time::Duration::from_secs_f64(now() - 8.0 * 86400.0);
     file.set_modified(old).unwrap();
 
     assert_eq!(fixture.digest(), "\n");

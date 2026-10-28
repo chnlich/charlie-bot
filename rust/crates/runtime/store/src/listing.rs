@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
@@ -104,7 +105,7 @@ impl Store {
     let cached = self.fresh_cached_metas()?;
     let mut rows = Vec::new();
     for session_id in names.iter() {
-      let metadata_path = root.join(session_id).join("metadata.json");
+      let metadata_path = root.join(session_id).join(METADATA_FILE_NAME);
       let meta = match cached.get(session_id) {
         Some(meta) => Some(Arc::clone(meta)),
         None => {
@@ -304,7 +305,7 @@ impl Store {
         continue;
       }
       let session_id = entry.file_name().to_string_lossy().into_owned();
-      let path: PathBuf = entry.path().join("metadata.json");
+      let path: PathBuf = entry.path().join(METADATA_FILE_NAME);
       let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,

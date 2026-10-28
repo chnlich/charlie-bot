@@ -709,7 +709,7 @@ mod tests {
   #[test]
   fn response_value_supplies_python_session_model_and_slot_defaults_for_legacy_metadata() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("metadata.json");
+    let path = directory.path().join(charliebot_core::metadata_slot::METADATA_FILE_NAME);
     std::fs::write(&path, r#"{"name":"Synthetic","profile":"manager"}"#).unwrap();
     let metadata = SessionMetadata::from_json(&std::fs::read_to_string(path).unwrap(), None).unwrap();
     let slots = vec![MetadataSlot {

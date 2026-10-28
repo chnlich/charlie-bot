@@ -9,6 +9,7 @@ mod event_state;
 mod event_types;
 mod events;
 pub mod hooks;
+pub mod layout;
 mod listing;
 pub mod message_events;
 pub mod message_utils;

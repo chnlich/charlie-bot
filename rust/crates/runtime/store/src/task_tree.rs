@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, fsutil};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -18,6 +19,7 @@ use crate::event_types::ChatEvent;
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
+use crate::layout;
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
@@ -1395,7 +1397,7 @@ impl Store {
       blockers
         .push(format!("has run record(s): {}", runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>().join(", ")));
     }
-    let triggers_dir = self.session_dir(session_id).join("triggers");
+    let triggers_dir = layout::triggers_dir(&self.session_dir(session_id));
     if triggers_dir.is_dir() {
       let mut has_trigger = false;
       for entry in fs::read_dir(&triggers_dir).map_err(|error| path_error(&triggers_dir, error))? {
@@ -1887,13 +1889,13 @@ impl Store {
       #[cfg(any(test, feature = "write-faults"))]
       self.fail_chat_append(&meta.id, event, &events_path)?;
       crate::ndjson::append(&events_path, event)?;
-      let metadata_path = temp_dir.join("metadata.json");
+      let metadata_path = temp_dir.join(METADATA_FILE_NAME);
       fsutil::atomic_write_text(&metadata_path, &meta.to_json_string(&self.slots, true))
         .map_err(|error| path_error(&metadata_path, error))?;
       match fs::rename(&temp_dir, &final_dir) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
-          if let Some(existing) = self.read_metadata_path(&final_dir.join("metadata.json"))? {
+          if let Some(existing) = self.read_metadata_path(&final_dir.join(METADATA_FILE_NAME))? {
             return if existing.id == meta.id {
               Ok(())
             } else {

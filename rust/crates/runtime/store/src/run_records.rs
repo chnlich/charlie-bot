@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::run_token;
@@ -32,12 +33,9 @@ pub use crate::run_facts::RunFacts;
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
-pub const DATA_DIR_NAME: &str = "data";
-pub const MASTER_RUNS_DIR_NAME: &str = "master_runs";
-pub const THREADS_DIR_NAME: &str = "threads";
-pub const RUNS_DIR_NAME: &str = "runs";
-pub const RUN_METADATA_NAME: &str = "metadata.json";
-pub const METADATA_NAME: &str = "metadata.json";
+pub use crate::layout::{DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RUNS_DIR_NAME, THREADS_DIR_NAME};
+pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;
+pub const METADATA_NAME: &str = METADATA_FILE_NAME;
 pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
 pub const EVENTS_LOG_NAME: &str = "events.jsonl";
 pub const STDERR_LOG_NAME: &str = "agent.stderr.log";

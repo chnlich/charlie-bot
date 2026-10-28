@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use charliebot_core::event_types;
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use serde_json::Value;
 
 use crate::run_records::RunRecord;
@@ -11,7 +12,7 @@ use crate::{Store, StoreError, StoreResult};
 
 pub const RUN_IDENTITY_UNKNOWN_DETAIL: &str = "run token does not reference an active run";
 pub const RUN_IDENTITY_NOT_LAUNCHED_DETAIL: &str = "run token references a run that has not launched";
-pub const SESSION_METADATA_NAME: &str = "metadata.json";
+pub const SESSION_METADATA_NAME: &str = METADATA_FILE_NAME;
 
 /// The identity fields read from a run record.
 #[derive(Clone, Debug, Eq, PartialEq)]

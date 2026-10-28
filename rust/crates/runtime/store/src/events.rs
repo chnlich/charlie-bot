@@ -18,6 +18,7 @@ use crate::event_state::{
 };
 pub(crate) use crate::event_types::FileIdentity;
 pub use crate::event_types::{ChatEvent, SharedChatEvent};
+use crate::layout;
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
 use crate::read_memos::FileSignature;
@@ -962,7 +963,7 @@ impl Store {
     }
     let date = cutoff.into_inner().date();
     let (iso_year, iso_week, _) = date.to_iso_week_date();
-    let archive_dir = live_path.parent().expect("event log path has a parent").join("archives");
+    let archive_dir = live_path.parent().expect("event log path has a parent").join(layout::ARCHIVES_DIR_NAME);
     fs::create_dir_all(&archive_dir).map_err(|error| StoreError::new(format!("{}: {error}", archive_dir.display())))?;
     let archive_path = archive_dir.join(format!("chat_events.{iso_year}-W{iso_week:02}.jsonl"));
     let mut archive = OpenOptions::new()
@@ -1013,7 +1014,7 @@ impl Store {
   /// The session's archive files in chronological (filename) order, memoized on the archive directory's
   /// `(mtime_ns, size)` like `src/runtime/chat_events.py:354-379`.
   pub(crate) fn archive_paths(&self, session_id: &str) -> StoreResult<Arc<Vec<PathBuf>>> {
-    let dir = self.session_dir(session_id).join("data").join("archives");
+    let dir = layout::archives_dir(&self.session_dir(session_id));
     let metadata = match fs::metadata(&dir) {
       Ok(metadata) => metadata,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Arc::new(Vec::new())),

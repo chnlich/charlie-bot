@@ -245,11 +245,10 @@ A raw log that stops growing while the process is still alive is what the server
   split_before_first_argument = true
   column_limit = 120
   ```
-  `tools/check-google-style.sh` runs YAPF and the module-import check over the tree;
-  the code-health cron takes its style cleanups from that probe's report. Without
-  `.style.yapf`, a yapf run falls back to pep8 defaults and reformats the tree to
-  4-space indent, which is why the CI "Formatter config present" step keeps the
-  config and the pin in place.
+  `tools/check-google-style.sh` runs YAPF and the module-import check over the tree.
+  Without `.style.yapf`, a yapf run falls back to pep8 defaults and reformats the
+  tree to 4-space indent, which is why the CI "Formatter config present" step keeps
+  the config and the pin in place.
 - **Imports**: modules only (Google Python Style Guide 2.2), checked by
   `tools/check-google-style.sh` through the pylint-google-style plugin
   (`[tool.pylint]` in `pyproject.toml`).

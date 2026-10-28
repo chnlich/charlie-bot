@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Repo root from the script's own location, not the cwd: the probe must run
-# from anywhere (the code-health cron and developers alike).
+# from anywhere (developers and repo tools alike).
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && git rev-parse --show-toplevel)
 cd "$repo_root"
 

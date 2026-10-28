@@ -73,21 +73,10 @@ fn git_program() -> (String, Vec<String>) {
   ("git".to_string(), Vec::new())
 }
 
-/// The git limit a test build applies to write and remote calls, when no test has set one.
-#[cfg(feature = "test-hooks")]
-static GIT_TIMEOUT_OVERRIDE: Mutex<Option<Duration>> = Mutex::new(None);
-
-/// Replace the test-build git limit for this process, for a test that runs real git under parallel load.
-#[cfg(feature = "test-hooks")]
-pub fn set_git_timeout_override(limit: Duration) {
-  *GIT_TIMEOUT_OVERRIDE.lock().expect("git timeout override is not poisoned") = Some(limit);
-}
-
-/// The test-build limit: the value a test set, else 300 ms, which keeps the hung-git tests under a second.
+/// The test-build limit for write and remote calls: 300 ms, which keeps the hung-git tests under a second.
 #[cfg(feature = "test-hooks")]
 fn test_hook_git_timeout() -> Duration {
-  let limit = *GIT_TIMEOUT_OVERRIDE.lock().expect("git timeout override is not poisoned");
-  limit.unwrap_or(Duration::from_millis(300))
+  Duration::from_millis(300)
 }
 
 /// The worktree-add write limit; the hook value keeps the hung-worktree-add test under a second.

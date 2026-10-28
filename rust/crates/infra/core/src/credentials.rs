@@ -151,7 +151,7 @@ pub fn with_credential_values(text: &str, section: &str, values: &[(&str, &str)]
       Some(index) => {
         let body = trim_line_end(&lines[index]);
         let indent = &body[..body.len() - body.trim_start_matches([' ', '\t']).len()];
-        let newline = if body.len() < lines[index].len() { &lines[index][body.len()..] } else { "\n" };
+        let newline = &lines[index][body.len()..];
         lines[index] = format!("{indent}{key}: {}{newline}", yaml_scalar(value));
       }
       None => missing.push((key, value)),
@@ -307,6 +307,13 @@ mod tests {
     let text = "feishu:\n  app_id: a\nlinear:\n  api_key: l\n";
     let updated = with_credential_values(text, "feishu", &[("user_access_token", "new-access")]).unwrap();
     assert_eq!(updated, "feishu:\n  app_id: a\n  user_access_token: new-access\nlinear:\n  api_key: l\n");
+  }
+
+  #[test]
+  fn a_replaced_value_on_the_last_line_keeps_its_missing_newline() {
+    let text = "feishu:\n  user_access_token: old-access";
+    let updated = with_credential_values(text, "feishu", &[("user_access_token", "new-access")]).unwrap();
+    assert_eq!(updated, "feishu:\n  user_access_token: new-access");
   }
 
   #[test]

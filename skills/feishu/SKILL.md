@@ -15,20 +15,28 @@ Read, create, and edit documents in the Feishu workspace using the Feishu Open A
 - Credentials location: `$CHARLIEBOT_HOME/credentials.yaml`
 - Keys (section `feishu`): `app_id`, `app_secret`, `user_access_token`, `refresh_token`
 - Auth method: OAuth2 user access token (acts as the user's own account)
-- Reading pattern (no YAML CLI is installed on hosts): one python line per value, e.g.
-
-```bash
-python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['user_access_token'])"
-```
+- Requests: send every Feishu Open API request through `charliebot feishu request`. The command reads the token from `credentials.yaml` inside its own process, so no token appears in a command, an output or a run record.
 
 ## API Reference
 
-All requests require: `-H "Authorization: Bearer TOKEN"`
+Send every request through `charliebot feishu request <METHOD> <URL>`:
 
-Read the token before making calls:
 ```bash
-FEISHU_TOKEN=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['user_access_token'])")
+charliebot feishu request GET 'https://open.feishu.cn/open-apis/docx/v1/documents/{doc_token}/raw_content'
+charliebot feishu request POST 'https://open.feishu.cn/open-apis/suite/docs-api/search/object' \
+  --json '{"search_key":"query","count":10,"docs_types":["docx","wiki"]}'
 ```
+
+The command adds the bearer header itself and prints the 2xx response body. Pass a request body from a file with `--data-file <path>`, and add any other header with `--header 'NAME:VALUE'`.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | A 2xx response whose `code` is absent or `0`. |
+| 1 | Another status, a nonzero `code`, or a network failure. |
+| 2 | Invalid arguments. |
+| 3 | `credentials.yaml` is unreadable or a required `feishu` key is missing. |
+
+Pipe the response body to `jq` when you need one field.
 
 ### Read a Wiki Page
 
@@ -269,38 +277,9 @@ Content-Type: application/json
 
 ## Token Refresh
 
-The user access token expires every **2 hours**. If you get a 401 or `99991663` (token expired) error code, refresh it:
+The user access token expires every **2 hours**. `charliebot feishu request` handles this itself: when Feishu answers `401` or an expired-token code (`99991663` or `20005`), the command gets an app access token from `app_id` and `app_secret`, exchanges the stored `refresh_token`, writes the new `user_access_token` and `refresh_token` to `credentials.yaml`, and retries the request once. Never mint, print or store a token by hand.
 
-```bash
-# Step 1: Get app access token
-APP_ID=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_id'])")
-APP_SECRET=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_secret'])")
-APP_TOKEN=$(curl -s -X POST https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal \
-  -H 'Content-Type: application/json' \
-  -d "{\"app_id\":\"$APP_ID\",\"app_secret\":\"$APP_SECRET\"}" | jq -r '.app_access_token')
-
-# Step 2: Refresh user token
-FEISHU_REFRESH=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['refresh_token'])")
-RESULT=$(curl -s -X POST https://open.feishu.cn/open-apis/authen/v1/oidc/refresh_access_token \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $APP_TOKEN" \
-  -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"$FEISHU_REFRESH\"}")
-
-# Step 3: Save new tokens to credentials.yaml
-NEW_ACCESS=$(echo $RESULT | jq -r '.data.access_token')
-NEW_REFRESH=$(echo $RESULT | jq -r '.data.refresh_token')
-NEW_ACCESS=$NEW_ACCESS NEW_REFRESH=$NEW_REFRESH python3 -c "
-import yaml, os
-path = os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')
-c = yaml.safe_load(open(path))
-c['feishu']['user_access_token'] = os.environ['NEW_ACCESS']
-c['feishu']['refresh_token'] = os.environ['NEW_REFRESH']
-with open(path, 'w') as f:
-    yaml.safe_dump(c, f, default_flow_style=False, allow_unicode=True)
-os.chmod(path, 0o600)
-"
-echo "Token refreshed successfully"
-```
+If the refresh itself fails, the command exits 1 and leaves `credentials.yaml` unchanged.
 
 The refresh token lasts **30 days**. If it expires, ask the user to re-authorize via OAuth.
 
@@ -308,22 +287,10 @@ The refresh token lasts **30 days**. If it expires, ask the user to re-authorize
 
 When the refresh token expires or new scopes are needed, the user must re-authorize:
 
-1. Open in browser: `https://open.feishu.cn/open-apis/authen/v1/authorize?app_id={app_id}&redirect_uri=http://localhost:9999/callback&scope={space-separated scopes}`
-2. User authorizes and gets redirected to `http://localhost:9999/callback?code=XXX`
-3. Exchange code for tokens:
-```bash
-APP_ID=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_id'])")
-APP_SECRET=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_secret'])")
-APP_TOKEN=$(curl -s -X POST https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal \
-  -H 'Content-Type: application/json' \
-  -d "{\"app_id\":\"$APP_ID\",\"app_secret\":\"$APP_SECRET\"}" | jq -r '.app_access_token')
-
-curl -s -X POST https://open.feishu.cn/open-apis/authen/v1/oidc/access_token \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $APP_TOKEN" \
-  -d '{"grant_type":"authorization_code","code":"THE_CODE"}' | jq .
-```
-4. Save new tokens to the `feishu` section of `credentials.yaml` (`user_access_token`, `refresh_token`).
+1. Print the authorize URL and open it in a browser: `charliebot feishu consent-url --scope <scope>…` (repeat `--scope` or list several scopes after one flag). The URL carries the app id and redirects to `http://localhost:9999/callback`.
+2. User authorizes and gets redirected to `http://localhost:9999/callback?code=XXX`.
+3. Exchange the code: `charliebot feishu exchange-code XXX`. The command gets an app access token from `app_id` and `app_secret` and stores the new `user_access_token` and `refresh_token` in the `feishu` section of `credentials.yaml`. It prints no token.
+4. Confirm with a request, for example `charliebot feishu request GET https://open.feishu.cn/open-apis/authen/v1/user_info`.
 
 Current scopes depend on what your app has been granted; check your token's actual granted scopes.
 
@@ -336,11 +303,11 @@ Extract tokens from Feishu URLs:
 ## Workflow
 
 ### Reading
-1. Read the token from config
+1. Send each request through `charliebot feishu request`
 2. If the user provides a URL, parse the token from the URL path
 3. For wiki URLs, resolve node → doc token first
 4. Fetch content via `raw_content` endpoint
-5. If token is expired, refresh it and retry
+5. An expired token refreshes and retries inside the command
 6. Present the document content to the user
 
 ### Creating / Editing

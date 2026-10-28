@@ -10,9 +10,10 @@ Read messages, search conversations, and look up users in the configured Slack w
 
 ## Configuration
 
-- Token location: `$CHARLIEBOT_HOME/credentials.yaml` under `slack.user_token`
+- Token location: `$CHARLIEBOT_HOME/credentials.yaml` under `slack.user_token` and `slack.bot_token`
 - Token type: User OAuth Token (`xoxp-`)
 - Available scopes: `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `mpim:history`, `search:read`, `users:read`
+- Requests: send every Slack Web API call through `charliebot slack request`. The command reads the token from `credentials.yaml` inside its own process, so no token appears in a command, an output or a run record.
 
 - CharlieBot runtime calls use app credentials.
 - Use `slack.user_token` for one-off reads and treat it as read-only.
@@ -22,13 +23,23 @@ Read messages, search conversations, and look up users in the configured Slack w
 
 ## API Reference
 
-All requests require the header: `-H "Authorization: Bearer TOKEN"`
-
-Read the token from `$CHARLIEBOT_HOME/credentials.yaml` (section `slack`, key `user_token`) before making any API calls:
+Send every request through `charliebot slack request <METHOD> <URL>`:
 
 ```bash
-python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['slack']['user_token'])"
+charliebot slack request GET 'https://slack.com/api/auth.test'
+charliebot slack request GET 'https://slack.com/api/conversations.list?types=im&limit=200'
 ```
+
+The command adds the bearer header itself and prints the 2xx response body. It uses `slack.user_token` by default; pass `--token bot` to use `slack.bot_token` for a post. Pass a request body from a file with `--data-file <path>`, and add any other header with `--header 'NAME:VALUE'`.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | A 2xx response whose `ok` is not `false`. |
+| 1 | Another status, `"ok": false`, or a network failure. |
+| 2 | Invalid arguments. |
+| 3 | `credentials.yaml` is unreadable or the chosen `slack` key is missing. |
+
+Pipe the response body to `jq` when you need one field.
 
 ### Authentication
 
@@ -91,8 +102,8 @@ Supports Slack search modifiers: `from:username`, `in:#channel`, `before:2026-01
 
 ## Workflow
 
-1. Read the token from `$CHARLIEBOT_HOME/credentials.yaml` (`slack.user_token`)
+1. Send each read through `charliebot slack request` (it uses `slack.user_token` by default)
 2. If looking up a user, call `users.list` first to resolve the user ID
 3. If reading DMs, call `conversations.list?types=im` to find the DM channel ID by matching the user ID
 4. Call `conversations.history` to fetch messages
-5. Use `python3` to parse JSON responses for readability — format output with timestamps, sender names, and message text
+5. Use `jq` to parse JSON responses for readability — format output with timestamps, sender names, and message text

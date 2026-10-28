@@ -16,6 +16,7 @@ name = "fake-pane-server"
 path = "src/bin/fake_pane_server.rs"
 
 [dependencies]
+charliebot-core.workspace = true
 http.workspace = true
 libc.workspace = true
 regex.workspace = true

@@ -1050,6 +1050,7 @@ dependencies = [
 name = "charliebot-script-tests"
 version = "0.1.0"
 dependencies = [
+ "charliebot-core",
  "charliebot-shell-harness",
  "chrono",
  "http 1.5.0",

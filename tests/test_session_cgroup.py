@@ -98,25 +98,8 @@ def test_session_cgroup_oom_priority_is_the_same_for_every_agent_process() -> No
   assert process.SESSION_CGROUP_OOM_SCORE_ADJ == 500
 
 
-def _bash_reads_bash_env(tmp_path: pathlib.Path) -> bool:
-  """Whether this host's bash sources ``BASH_ENV`` for a non-interactive shell.
-
-  A bash built with a system rc file (Debian's ``/etc/bash.bashrc``) can treat the run as a remote
-  shell and skip ``BASH_ENV``; the join-script contract only exists where bash reads it.
-  """
-  marker = tmp_path / "bash-env-marker.sh"
-  marker.write_text("echo bash-env-marker\n", encoding="utf-8")
-  result = subprocess.run(
-      ["bash", "-c", "true"], env={
-          **os.environ, "BASH_ENV": str(marker)
-      }, capture_output=True, text=True, check=True)
-  return "bash-env-marker" in result.stdout
-
-
 def test_opencode_join_script_moves_the_shell_and_sets_its_oom_priority(tmp_path: pathlib.Path) -> None:
   """The opencode shells join their session cgroup through the join script, which sets the OOM priority too."""
-  if not _bash_reads_bash_env(tmp_path):
-    pytest.skip("this host's bash does not read BASH_ENV for a non-interactive shell")
   procs = tmp_path / "cgroup.procs"
   procs.write_text("", encoding="utf-8")
   # A private copy carries the checkout's script bytes at a mode bash accepts as BASH_ENV: a

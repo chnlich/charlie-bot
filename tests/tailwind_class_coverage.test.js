@@ -176,20 +176,7 @@ const CHAT_MESSAGES = [
 // ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
-function hasNpm() {
-  try {
-    execFileSync('npm', ['--version'], { cwd: ROOT, env: BUILD_ENV, stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-test('tailwind utility classes used by rendered messages/cards are all present in the committed build', async (t) => {
-  if (!hasNpm()) {
-    t.skip('npm is required to build the coverage CSS');
-    return;
-  }
+test('tailwind utility classes used by rendered messages/cards are all present in the committed build', async () => {
   const snippets = [];
 
   // 1. Chat messages via renderMessage(), including tool-activity rendering.

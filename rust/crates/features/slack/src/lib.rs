@@ -9,6 +9,7 @@ mod service;
 mod slack_client;
 pub mod slack_listener;
 mod thread_contract;
+pub mod token;
 mod turn_contribution;
 
 use std::sync::Arc;

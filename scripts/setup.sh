@@ -5,6 +5,16 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
+# The scripts and the server run one release: the charliebot CLI that
+# $CHARLIEBOT_RELEASES_DIR/current selects. A missing release stops here, before
+# setup changes anything.
+RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
+CURRENT="$RELEASES_DIR/current"
+if [ ! -e "$CURRENT" ] && [ ! -L "$CURRENT" ]; then
+  echo "setup: no release at $CURRENT; install one with scripts/release.sh <sha>" >&2
+  exit 1
+fi
+
 DRY_RUN=0
 
 usage() {
@@ -71,12 +81,14 @@ for stale in "$UNIT_DIR"/charliebot-[r]epair.slice; do
   fi
 done
 
-# Run the setup steps: the $CHARLIEBOT_HOME home layout, then each step a package registers
-# (register_setup_step in src/runtime/hooks/wiring.py), in registration order.
+# Run the setup steps through the release CLI: the $CHARLIEBOT_HOME home layout, then each registered
+# setup step (the cron seed, then the Claude Code check), in registration order. The release reads the
+# checkout it seeds from through this variable, the way the server launcher exports it.
+export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 if (( DRY_RUN )); then
-  uv run python -m src.app.setup --dry-run
+  "$CURRENT/charliebot" setup --dry-run
 else
-  uv run python -m src.app.setup
+  "$CURRENT/charliebot" setup
 fi
 
 echo "Setup complete."

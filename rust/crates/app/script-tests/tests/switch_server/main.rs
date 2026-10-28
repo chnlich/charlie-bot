@@ -24,8 +24,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 use wait_timeout::ChildExt;
 use world::{
-  SESSION, World, fake_pane_server, install_release, pid_start, repo_switch, sha1_hex, step_target_sha, stop,
-  wait_until, write_behavior,
+  SESSION, World, fake_charliebot, fake_pane_server, install_release, pid_start, quote, replace_charliebot,
+  repo_switch, sha1_hex, step_target_sha, stop, wait_until, write_behavior,
 };
 
 // ---- home helper: the config's port -------------------------------------------------------------------------------
@@ -712,6 +712,60 @@ fn cmdline_contains(pid: u32, needle: &str) -> bool {
     Err(error) if error.kind() == ErrorKind::NotFound => false,
     Err(error) => panic!("read the argv of pid {pid}: {error}"),
   }
+}
+
+// ---- the helper binary: the target release's `charliebot`, else the current release's ------------------------------
+
+/// A release's `charliebot` that records each switch-helper call at `marker` and then runs the built stand-in.
+fn logging_charliebot(marker: &Path) -> String {
+  format!("printf '%s\\n' \"$*\" >> {}\nexec {} \"$@\"\n", quote(marker), quote(&fake_charliebot()))
+}
+
+#[test]
+fn test_switch_helper_binary_falls_back_to_the_current_release_when_the_target_lacks_it() {
+  let world = World::new();
+  replace_charliebot(&world.releases.join(&world.new_sha), "exit 2\n");
+  let marker = world.root().join("helper-calls.log");
+  replace_charliebot(&world.releases.join(&world.old_sha), &logging_charliebot(&marker));
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.rust_sha), "rust", &world.new_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  let calls = fs::read_to_string(&marker).expect("the helper calls");
+  assert!(calls.contains("switch-helper home-helper config"), "{calls}");
+  assert!(calls.contains("switch-helper home-helper scan"), "{calls}");
+}
+
+#[test]
+fn test_switch_helper_binary_uses_the_target_release_when_it_has_the_subcommand() {
+  let world = World::new();
+  replace_charliebot(&world.releases.join(&world.old_sha), "exit 2\n");
+  let marker = world.root().join("helper-calls.log");
+  replace_charliebot(&world.releases.join(&world.rust_sha), &logging_charliebot(&marker));
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  let calls = fs::read_to_string(&marker).expect("the helper calls");
+  assert!(calls.contains("switch-helper home-helper config"), "{calls}");
+}
+
+#[test]
+fn test_preflight_exits_2_when_neither_release_has_switch_helper() {
+  let world = World::new();
+  replace_charliebot(&world.releases.join(&world.rust_sha), "exit 2\n");
+  replace_charliebot(&world.releases.join(&world.old_sha), "exit 2\n");
+  let home_before = world.home_snapshot();
+  let current_before = readlink_opt(&world.releases.join("current"));
+  let rust_sha = world.rust_sha.clone();
+
+  let run = world.switch(&["rust", &rust_sha]);
+
+  assert_eq!(run.code, 2, "{}", world.report(&run));
+  assert_eq!(readlink_opt(&world.releases.join("current")), current_before, "{}", world.report(&run));
+  assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), world.old_sha, "{}", world.report(&run));
+  assert_eq!(world.home_snapshot(), home_before, "{}", world.report(&run));
+  assert!(world.report(&run).contains("neither release"), "{}", world.report(&run));
 }
 
 // ---- the switch on a real pane --------------------------------------------------------------------------------------

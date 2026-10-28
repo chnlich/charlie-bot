@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -367,6 +367,8 @@ preflight
     let script = format!("source \"$1\" rust {} && REPO_ROOT=\"$3\" && home_helper \"$2\"{scan_impl}", self.rust_sha);
     let mut env = self.sandbox.env();
     env.insert("CHARLIEBOT_HOME".to_string(), self.home.display().to_string());
+    // The helper binary is chosen from the release root, as the switch chooses it.
+    env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), self.releases.display().to_string());
     let mut command = harness::command("bash", &env);
     command.args(["-c", script.as_str(), "bash"]).arg(repo_switch()).arg(mode).arg(&self.clone);
     let run = harness::run(&mut command);
@@ -655,6 +657,11 @@ pub fn fake_pane_server() -> PathBuf {
   PathBuf::from(env!("CARGO_BIN_EXE_fake-pane-server"))
 }
 
+/// The release's `charliebot` under test: the built binary that serves `switch-helper`.
+pub fn fake_charliebot() -> PathBuf {
+  PathBuf::from(env!("CARGO_BIN_EXE_fake-charliebot"))
+}
+
 /// The run_finished fact that a run's stop leaves in the session's chat events.
 pub fn record_outcome(home: &Path, run_id: &str, outcome: &str) {
   let event = json!({
@@ -717,18 +724,33 @@ fn behavior_defaults() -> Map<String, Value> {
   defaults
 }
 
-/// A release directory with its binary, library and checksums, as an install writes them.
+/// A release directory with its binaries, library and checksums, as an install writes them.
 pub fn install_release(releases: &Path, sha: &str) {
   let release = releases.join(sha);
   fs::create_dir_all(&release).expect("the release directory");
   harness::copy_file(&fake_release_server(), &release.join("charliebot-server"));
+  harness::copy_file(&fake_charliebot(), &release.join("charliebot"));
   fs::write(release.join("libfake.so"), b"fake shared object").expect("the library");
-  let sums: String = ["charliebot-server", "libfake.so"]
+  write_checksums(&release);
+  write_behavior(&release, &[]);
+}
+
+/// Replaces a release's `charliebot` with a script of `body`, then refreshes the checksums the preflight verifies.
+pub fn replace_charliebot(release: &Path, body: &str) {
+  let path = release.join("charliebot");
+  fs::write(&path, format!("#!/usr/bin/env bash\n{body}")).expect("the charliebot stub");
+  fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the charliebot stub executable");
+  write_checksums(release);
+}
+
+/// A release's `sha256sums.txt` over the files it holds.
+fn write_checksums(release: &Path) {
+  let sums: String = ["charliebot", "charliebot-server", "libfake.so"]
     .iter()
+    .filter(|name| release.join(name).is_file())
     .map(|name| format!("{}  {name}\n", sha256_hex(&release.join(name))))
     .collect();
   fs::write(release.join("sha256sums.txt"), sums).expect("the checksums");
-  write_behavior(&release, &[]);
 }
 
 /// Writes one backend's registration in the layout that build has, with its `restart_reattach` declaration.
@@ -791,7 +813,7 @@ pub fn sha1_hex(text: &[u8]) -> String {
 }
 
 /// The shell quoting of one path. The fixtures' paths hold no quote, so single quotes are exact.
-fn quote(path: &Path) -> String {
+pub fn quote(path: &Path) -> String {
   let text = path.display().to_string();
   assert!(!text.contains('\''), "a path with a quote: {text}");
   format!("'{text}'")

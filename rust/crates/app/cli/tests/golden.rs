@@ -898,6 +898,7 @@ mod authenticated_commands {
       let request_text = String::from_utf8(request).unwrap();
 
       assert!(request_text.starts_with(&format!("GET {expected} HTTP/1.1\r\n")));
+      assert!(request_text.to_ascii_lowercase().contains(&format!("authorization: bearer {ACCESS_KEY}")));
       assert_eq!(output.status.code(), Some(0));
       assert_clean(&output, &[ACCESS_KEY]);
     }
@@ -939,9 +940,12 @@ mod authenticated_commands {
     });
     let home = home_for_port(port);
     let output = invoke_files(&home, "/large-trace", None);
-    let _request = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    let request = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
     server.join().unwrap();
 
+    assert!(
+      String::from_utf8_lossy(&request).to_ascii_lowercase().contains(&format!("authorization: bearer {ACCESS_KEY}"))
+    );
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "200 /large-trace\n");
     assert_clean(&output, &[ACCESS_KEY]);

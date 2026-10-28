@@ -213,6 +213,11 @@ mod tests {
     assert!(!text.contains(API_KEY), "an output contains a synthetic credential");
   }
 
+  fn assert_authorized(request: &[u8]) {
+    let request = String::from_utf8_lossy(request).to_ascii_lowercase();
+    assert!(request.contains("authorization: synthetic-linear-key"));
+  }
+
   #[test]
   fn graphql_posts_the_key_without_bearer_and_returns_the_response_unchanged() {
     let home = credentials_home(Some(API_KEY));
@@ -242,7 +247,7 @@ mod tests {
     ] {
       let (endpoint, request_receiver) = start_stub(status, response_body);
       let error = execute_graphql(REQUEST_BODY, &endpoint, home.path()).unwrap_err();
-      request_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+      assert_authorized(&request_receiver.recv_timeout(Duration::from_secs(2)).unwrap());
       let text = error_text(&error);
       assert_eq!(error.code, 1);
       assert_no_key(&text);

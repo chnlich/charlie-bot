@@ -5,13 +5,12 @@ use std::fs::{self, File, FileTimes};
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
-use charliebot_core::venv::VenvBin;
 use charliebot_registry::FeatureContext;
+use flate2::{Compression, GzBuilder};
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
 use serde::Serialize;
 use serde_json::ser::Formatter;
@@ -68,7 +67,6 @@ struct BuildPlan {
   paths: Vec<PathBuf>,
   slim: bool,
   mode: BuildMode,
-  venv_bin: PathBuf,
 }
 
 static RUNTIME: OnceLock<Arc<MergeRuntime>> = OnceLock::new();
@@ -101,9 +99,7 @@ pub(super) async fn cached_build(
     return Ok(cache_path);
   }
 
-  let venv_bin = features.startup.require::<VenvBin>().map_err(|error| BuildFailure::Failed(error.to_string()))?;
-  let plan =
-    BuildPlan { cache_dir, cache_path: cache_path.clone(), paths, slim, mode, venv_bin: venv_bin.path().to_path_buf() };
+  let plan = BuildPlan { cache_dir, cache_path: cache_path.clone(), paths, slim, mode };
   let runtime = runtime();
   let receiver = {
     let mut flights = runtime.flights.lock().await;
@@ -156,8 +152,8 @@ fn build_cached(plan: &BuildPlan) -> FlightResult {
   drop(file);
   let temp_path_buf = temp_path.to_path_buf();
   let built = match plan.mode {
-    BuildMode::DirectPass => direct_pass(&plan.paths[0], &temp_path_buf, &plan.venv_bin),
-    BuildMode::Merge => merge_artifact(&plan.paths, &temp_path_buf, plan.slim, &plan.venv_bin),
+    BuildMode::DirectPass => direct_pass(&plan.paths[0], &temp_path_buf),
+    BuildMode::Merge => merge_artifact(&plan.paths, &temp_path_buf, plan.slim),
   };
   if let Err(error) = built {
     drop(temp_path);
@@ -249,7 +245,7 @@ pub(super) fn is_json_trace(path: &Path) -> Result<bool, BuildFailure> {
   Ok(prefix[..length].iter().find(|byte| !b" \t\n\r".contains(byte)).is_some_and(|byte| b"{[".contains(byte)))
 }
 
-fn direct_pass(path: &Path, out_path: &Path, venv_bin: &Path) -> Result<(), BuildFailure> {
+fn direct_pass(path: &Path, out_path: &Path) -> Result<(), BuildFailure> {
   let source = fs::read(path).map_err(io_failure)?;
   let document = match parse_document(&source) {
     Ok(document) => document,
@@ -257,59 +253,20 @@ fn direct_pass(path: &Path, out_path: &Path, venv_bin: &Path) -> Result<(), Buil
     Err(error) => return Err(error),
   };
   trace_events_or_raise(&document, path)?;
-
-  let out_file = File::create(out_path).map_err(io_failure)?;
-  let output = Command::new(venv_bin.join("python"))
-    .arg("-m")
-    .arg("isal.igzip")
-    .arg("-1")
-    .arg("-n")
-    .arg("-c")
-    .arg(path)
-    .stdout(Stdio::from(out_file))
-    .stderr(Stdio::piped())
-    .output()
-    .map_err(io_failure)?;
-  if output.status.success() {
-    return Ok(());
-  }
-  Err(BuildFailure::Failed(String::from_utf8_lossy(&output.stderr).trim().to_string()))
+  gzip_bytes(&source, out_path)
 }
 
-fn merge_artifact(paths: &[PathBuf], out_path: &Path, slim: bool, venv_bin: &Path) -> Result<(), BuildFailure> {
+fn merge_artifact(paths: &[PathBuf], out_path: &Path, slim: bool) -> Result<(), BuildFailure> {
   let document = if paths.len() == 1 { merge_traces(paths, slim)? } else { build_multi_trace_merge(paths, slim)? };
-  gzip_bytes(&document, out_path, venv_bin)
+  gzip_bytes(&document, out_path)
 }
 
-fn gzip_bytes(document: &[u8], out_path: &Path, venv_bin: &Path) -> Result<(), BuildFailure> {
+fn gzip_bytes(document: &[u8], out_path: &Path) -> Result<(), BuildFailure> {
   let out_file = File::create(out_path).map_err(io_failure)?;
-  let mut child = Command::new(venv_bin.join("python"))
-    .arg("-m")
-    .arg("isal.igzip")
-    .arg("-1")
-    .arg("-n")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::from(out_file))
-    .stderr(Stdio::piped())
-    .spawn()
-    .map_err(io_failure)?;
-  let write_result = child.stdin.take().expect("the compressor has piped stdin").write_all(document);
-  if let Err(error) = write_result {
-    let output = child.wait_with_output().map_err(io_failure)?;
-    if !output.status.success() {
-      return Err(compressor_failure(&output.stderr, "trace merge"));
-    }
-    return Err(io_failure(error));
-  }
-  let output = child.wait_with_output().map_err(io_failure)?;
-  if !output.status.success() {
-    return Err(compressor_failure(&output.stderr, "trace merge"));
-  }
+  let mut encoder = GzBuilder::new().mtime(0).write(out_file, Compression::new(1));
+  encoder.write_all(document).map_err(io_failure)?;
+  encoder.finish().map_err(io_failure)?;
   Ok(())
-}
-
-fn compressor_failure(stderr: &[u8], context: &str) -> BuildFailure {
-  BuildFailure::Failed(format!("isal.igzip -1 failed ({context}): {}", String::from_utf8_lossy(stderr).trim()))
 }
 
 fn parse_document(source: &[u8]) -> Result<Value, BuildFailure> {
@@ -829,10 +786,6 @@ mod tests {
 
   use super::*;
 
-  fn venv_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().join(".venv/bin")
-  }
-
   fn write_trace(path: &Path, trace: &str) {
     fs::write(path, trace).unwrap();
   }
@@ -859,13 +812,13 @@ mod tests {
     let output = directory.path().join("trace.json.gz");
     let original = "{\"traceEvents\":[{\"ph\":\"X\",\"pid\":1,\"tid\":2}],\"note\":\"é\"} \n".as_bytes();
     fs::write(&trace, original).unwrap();
-    direct_pass(&trace, &output, &venv_bin()).unwrap();
+    direct_pass(&trace, &output).unwrap();
     let mut decompressed = Vec::new();
     GzDecoder::new(File::open(&output).unwrap()).read_to_end(&mut decompressed).unwrap();
     assert_eq!(decompressed, original);
 
     write_trace(&trace, "{\"analysis\":[]}");
-    assert!(matches!(direct_pass(&trace, &output, &venv_bin()), Err(BuildFailure::NotATrace(_))));
+    assert!(matches!(direct_pass(&trace, &output), Err(BuildFailure::NotATrace(_))));
   }
 
   #[test]
@@ -921,21 +874,17 @@ mod differential_tests {
 
   const FIXED_MTIME_NS: u64 = 1_700_000_000_123_456_789;
 
-  fn venv_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().join(".venv/bin")
-  }
-
   fn actual_artifact(builder: &str, paths: &[PathBuf], slim: bool, output: &Path) -> Result<Vec<u8>, String> {
     match builder {
       "merge" => {
         let document = merge_traces(paths, slim).map_err(|error| error.message().to_string())?;
-        gzip_bytes(&document, output, &venv_bin()).map_err(|error| error.message().to_string())?;
+        gzip_bytes(&document, output).map_err(|error| error.message().to_string())?;
       }
       "multi" => {
         let document = build_multi_trace_merge(paths, slim).map_err(|error| error.message().to_string())?;
-        gzip_bytes(&document, output, &venv_bin()).map_err(|error| error.message().to_string())?;
+        gzip_bytes(&document, output).map_err(|error| error.message().to_string())?;
       }
-      "direct" => direct_pass(&paths[0], output, &venv_bin()).map_err(|error| error.message().to_string())?,
+      "direct" => direct_pass(&paths[0], output).map_err(|error| error.message().to_string())?,
       _ => panic!("unknown differential builder: {builder}"),
     }
     fs::read(output).map_err(|error| error.to_string())
@@ -1007,11 +956,11 @@ mod differential_tests {
         } else {
           let recorded = decode_hex(reference["gzip_hex"].as_str().unwrap());
           let expected_json = decode_hex(reference["json_hex"].as_str().unwrap());
+          if decompress(&recorded) != expected_json {
+            differences.push(format!("recorded reference gzip does not decompress to its JSON for {name}/{builder}"));
+          }
           match actual {
             Ok(actual) => {
-              if actual != expected_gzip(&recorded, &expected_json, &venv_bin()) {
-                differences.push(format!("gzip bytes differ for {name}/{builder}"));
-              }
               if decompress(&actual) != expected_json {
                 differences.push(format!("JSON bytes differ for {name}/{builder}"));
               }
@@ -1053,17 +1002,6 @@ mod differential_tests {
 
   fn normalize_root(value: &str, root: &Path) -> String {
     value.replace(root.to_str().unwrap(), "$TMPROOT")
-  }
-
-  /// isal's deflate body depends on the CPU implementation, so the recorded bytes are an artifact
-  /// of the recording host. Compare with the recording when this host's isal reproduces it, and
-  /// with this host's encoding of the same document otherwise.
-  fn expected_gzip(recorded: &[u8], document: &[u8], venv_bin: &Path) -> Vec<u8> {
-    let output = tempdir().unwrap();
-    let path = output.path().join("expected.json.gz");
-    gzip_bytes(document, &path, venv_bin).unwrap();
-    let local = fs::read(&path).unwrap();
-    if local == recorded { recorded.to_vec() } else { local }
   }
 
   fn decode_hex(value: &str) -> Vec<u8> {

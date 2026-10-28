@@ -7,6 +7,7 @@ pub mod files;
 pub mod gc_trash;
 pub mod google;
 pub mod linear;
+pub mod release_helper;
 pub mod router;
 pub mod schedule_trigger;
 pub mod session;

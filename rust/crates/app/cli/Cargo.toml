@@ -31,15 +31,17 @@ charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 clap.workspace = true
 fancy-regex.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
 nix.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 url.workspace = true
-
-[dev-dependencies]
-regex.workspace = true
-tempfile.workspace = true
+uuid.workspace = true

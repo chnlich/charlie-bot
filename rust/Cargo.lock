@@ -576,8 +576,10 @@ dependencies = [
  "charliebot-web-reply",
  "clap",
  "fancy-regex",
+ "futures-util",
  "getrandom 0.3.4",
  "nix",
+ "percent-encoding",
  "regex",
  "reqwest 0.13.5",
  "serde_json",
@@ -585,7 +587,9 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "url",
+ "uuid",
 ]
 
 [[package]]

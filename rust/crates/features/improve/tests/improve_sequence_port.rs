@@ -355,7 +355,7 @@ async fn the_second_iteration_reads_the_live_goal_file() -> anyhow::Result<()> {
       ));
     }
     panic!(
-      "the first worker process starts: {timeout_error:?}; improve state status={} end_error={:?}; iteration runs:\n{}",
+      "the first worker process starts: {timeout_error:?}; improve state status={:?} end_error={:?}; iteration runs:\n{}",
       state.status,
       state.end_error,
       if run_diagnostics.is_empty() { "<none>".to_string() } else { run_diagnostics.join("\n") }
@@ -413,7 +413,7 @@ async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow
     event["message"].as_str().is_some_and(|text| text.contains("earliest reset") && text.contains("UTC"))
   }));
   let state = command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?;
-  assert_eq!(state.status, "failed");
+  assert_eq!(state.status, command::LoopStatus::Failed);
   assert_eq!(state.blocked_iteration, Some(1));
   assert!(
     state.blocked_reason.as_deref().is_some_and(|reason| reason.starts_with("launch refused with quota exhausted:"))
@@ -455,7 +455,7 @@ async fn a_cooling_pool_member_is_followed_by_the_next_member() -> anyhow::Resul
   assert!(recovery.contains("next not cooling"));
   assert_eq!(
     command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?.status,
-    "blocked"
+    command::LoopStatus::Blocked
   );
   Ok(())
 }
@@ -471,7 +471,7 @@ async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() 
   let runs = harness.stack.run_records(&harness.child.id)?;
   assert_eq!(runs.len(), 1);
   let state = command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?;
-  assert_eq!(state.status, "failed");
+  assert_eq!(state.status, command::LoopStatus::Failed);
   let final_report = harness.final_reports().remove(0);
   let summary = final_report["summary"].as_str().expect("final report summary is text");
   assert!(summary.contains("no backends.pool member is available"), "final report summary: {summary}");
@@ -558,7 +558,7 @@ async fn a_non_quota_failed_iteration_is_reported_and_the_loop_continues() -> an
   assert!(reports[0]["summary"].as_str().unwrap().ends_with("\n\nthe build broke"));
   assert_eq!(
     command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?.status,
-    "blocked"
+    command::LoopStatus::Blocked
   );
   Ok(())
 }
@@ -710,7 +710,7 @@ async fn recovery_loads_a_legacy_failed_state_without_end_error() -> anyhow::Res
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
   let loop_id = harness.state.loop_id;
   let mut state = harness.state.clone();
-  state.status = "failed".to_string();
+  state.status = command::LoopStatus::Failed;
   state.server_pid = Some(0);
   state.end_error = None;
   command::save_loop_state(&harness.stack.cfg, &harness.manager.id, &state)?;

@@ -20,6 +20,34 @@ struct FixtureProvenance {
 }
 
 #[derive(Deserialize)]
+struct DifferentialFixture {
+  source: String,
+  base_commit: String,
+  seed: u64,
+  cpython_version: String,
+  cases: Vec<DifferentialCase>,
+}
+
+#[derive(Deserialize)]
+struct DifferentialCase {
+  request: DifferentialInput,
+  expected: DifferentialExpected,
+}
+
+#[derive(Deserialize)]
+struct DifferentialInput {
+  id: String,
+  part: String,
+  source: String,
+}
+
+#[derive(Deserialize)]
+struct DifferentialExpected {
+  convert_charrefs_false: Vec<Event>,
+  convert_charrefs_true: Vec<Event>,
+}
+
+#[derive(Deserialize)]
 struct CorpusDocument {
   id: String,
   source: String,
@@ -100,6 +128,32 @@ fn read_gzip_json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> T {
   let mut json = String::new();
   decoder.read_to_string(&mut json).expect("fixture JSON decompresses");
   serde_json::from_str(&json).expect("valid fixture JSON")
+}
+
+#[test]
+fn tokenizer_matches_recorded_randomized_cpython_outputs() {
+  let fixture: DifferentialFixture = read_gzip_json(include_bytes!("fixtures/differential.json.gz"));
+  assert_eq!(fixture.source, "rust/crates/infra/pyhtml/tests/fixtures/differential.py");
+  assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
+  assert_eq!(fixture.seed, 20261019);
+  assert_eq!(fixture.cpython_version, "3.14.7");
+  assert_eq!(fixture.cases.len(), 20_000);
+
+  for case in fixture.cases {
+    assert_eq!(case.request.part, "random_document", "{}", case.request.id);
+    assert_eq!(
+      parse(&case.request.source, false).expect("tokenizer parse succeeds"),
+      case.expected.convert_charrefs_false,
+      "{} false",
+      case.request.id
+    );
+    assert_eq!(
+      parse(&case.request.source, true).expect("tokenizer parse succeeds"),
+      case.expected.convert_charrefs_true,
+      "{} true",
+      case.request.id
+    );
+  }
 }
 
 #[test]

@@ -2780,25 +2780,30 @@ async fn add_recovery_worker(
   Ok(worker)
 }
 
-fn repo_root() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .ancestors()
-    .nth(4)
-    .expect("the tasks crate has a repository root ancestor")
-    .to_path_buf()
-}
+const PYTHON_MARKER_FIXTURE: &str = include_str!("fixtures/boot_recovery_marker.json");
 
-fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
-  let repo_root = repo_root();
-  let helper = repo_root.join("rust/crates/runtime/tasks/tests/boot_recovery_marker_reference.py");
-  let output = Command::new("uv").args(["run", "python"]).arg(helper).arg(path).current_dir(repo_root).output()?;
+fn recorded_marker_instant(path: &Path) -> anyhow::Result<String> {
+  let fixture: Value = serde_json::from_str(PYTHON_MARKER_FIXTURE)?;
   anyhow::ensure!(
-    output.status.success(),
-    "uv run python failed:\nstdout: {}\nstderr: {}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr)
+    fixture["source"] == "rust/crates/runtime/tasks/tests/boot_recovery_marker_reference.py",
+    "the marker fixture names its Python reference"
   );
-  Ok(String::from_utf8(output.stdout)?.trim_end().to_string())
+  anyhow::ensure!(
+    fixture["base_commit"] == "d4021ce3993d7e36b2709f00caf578e1f8541407",
+    "the marker fixture names its base commit"
+  );
+  let cases = fixture["cases"].as_array().context("the marker fixture has cases")?;
+  anyhow::ensure!(cases.len() == 1, "the marker fixture has one case");
+  let case = &cases[0];
+  let placeholder =
+    case["request"]["marker"]["pass_started_at"].as_str().context("the marker fixture has a timestamp placeholder")?;
+  let marker: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+  let pass_started_at = marker["pass_started_at"].as_str().context("the marker has no pass start")?.to_string();
+  let mut normalized_marker = marker;
+  normalized_marker["pass_started_at"] = Value::String(placeholder.to_string());
+  assert_eq!(normalized_marker, case["request"]["marker"]);
+  let expected = case["expected"].as_str().context("the marker fixture has an expected timestamp")?;
+  Ok(expected.replace(placeholder, &pass_started_at))
 }
 
 fn path_lexists(path: &Path) -> anyhow::Result<bool> {
@@ -3133,7 +3138,7 @@ async fn python_fromisoformat_reads_the_rust_written_marker_instant() -> anyhow:
   let marker_path = boot_marker_path(&stack);
   let marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
   let rust_instant = UtcDateTime::parse(marker["pass_started_at"].as_str().expect("marker has a pass start"))?;
-  assert_eq!(python_marker_instant(&marker_path)?, rust_instant.to_python_isoformat());
+  assert_eq!(recorded_marker_instant(&marker_path)?, rust_instant.to_python_isoformat());
   Ok(())
 }
 

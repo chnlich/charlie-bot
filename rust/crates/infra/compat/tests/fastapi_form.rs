@@ -1,9 +1,5 @@
 use std::io::Read;
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::net::SocketAddr;
 
 use axum::Router;
 use axum::body::Body;
@@ -12,12 +8,13 @@ use axum::response::Response;
 use axum::routing::post;
 use charliebot_compat::fastapi_form::{self, Field, FormModel};
 use charliebot_compat::responses;
+use flate2::read::GzDecoder;
 use reqwest::Client;
 use serde_json::{Value, json};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{sleep, timeout};
+use tokio::net::TcpListener;
 
 const BOUNDARY: &str = "synthetic-form-boundary";
+const PYTHON_FIXTURE: &[u8] = include_bytes!("fixtures/fastapi_form.json.gz");
 const FIELDS: &[Field] = &[Field::file("file"), Field::form("note")];
 const MODEL: FormModel = FormModel::new(FIELDS);
 
@@ -31,79 +28,11 @@ struct Case {
   compare_body: bool,
 }
 
-struct PythonServer {
-  child: Child,
-}
-
-impl PythonServer {
-  async fn start(address: SocketAddr) -> Self {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest.join("../../../..").canonicalize().expect("the worktree root exists");
-    let script = manifest.join("tests/fixtures/fastapi_form_app.py");
-    let mut command = Command::new("uv");
-    command
-      .args(["run", "python"])
-      .arg(script)
-      .arg("--port")
-      .arg(address.port().to_string())
-      .current_dir(root)
-      .stdout(Stdio::null())
-      .stderr(Stdio::piped());
-    command.process_group(0);
-    let child = command.spawn().expect("uv run starts the FastAPI form test app");
-    let mut server = Self { child };
-    server.wait_ready(address).await;
-    server
-  }
-
-  async fn wait_ready(&mut self, address: SocketAddr) {
-    timeout(Duration::from_secs(10), async {
-      loop {
-        if let Some(status) = self.child.try_wait().expect("the FastAPI process status is readable") {
-          let mut stderr = String::new();
-          if let Some(stream) = self.child.stderr.as_mut() {
-            stream.read_to_string(&mut stderr).expect("the FastAPI error log is readable");
-          }
-          panic!("FastAPI form test app exited with {status}: {stderr}");
-        }
-        match TcpStream::connect(address).await {
-          Ok(stream) => {
-            drop(stream);
-            return;
-          }
-          Err(_) => sleep(Duration::from_millis(50)).await,
-        }
-      }
-    })
-    .await
-    .expect("FastAPI form test app starts within 10 seconds");
-  }
-}
-
-impl Drop for PythonServer {
-  fn drop(&mut self) {
-    if self.child.try_wait().expect("the FastAPI process status is readable").is_none() {
-      let process_group = format!("-{}", self.child.id());
-      let signal = Command::new("/usr/bin/kill")
-        .args(["-TERM", "--", process_group.as_str()])
-        .status()
-        .expect("the FastAPI process group can be stopped");
-      assert!(signal.success(), "the FastAPI process group stop succeeded");
-    }
-    self.child.wait().expect("the FastAPI process is reaped");
-  }
-}
-
 #[tokio::test]
 async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
   rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
-  let python_reservation = StdTcpListener::bind("127.0.0.1:0").expect("a loopback port is available");
-  let python_address = python_reservation.local_addr().expect("the Python address is readable");
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a second loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
-  drop(python_reservation);
-
-  let python = PythonServer::start(python_address).await;
   let rust_server = tokio::spawn(async move {
     axum::serve(rust_listener, Router::new().route("/items/{item_id}", post(read_item)))
       .await
@@ -113,17 +42,34 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
   let client = Client::new();
   let cases = corpus();
   assert_eq!(cases.len(), 32);
-  eprintln!("multipart differential corpus: {} cases", cases.len());
-  for case in &cases {
-    let (python_status, python_body) = send(&client, python_address, case).await;
+  let mut decoder = GzDecoder::new(PYTHON_FIXTURE);
+  let mut fixture_json = String::new();
+  decoder.read_to_string(&mut fixture_json).unwrap();
+  let fixture: Value = serde_json::from_str(&fixture_json).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/infra/compat/tests/fixtures/fastapi_form_app.py");
+  assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
+  let fixture_cases = fixture["cases"].as_array().unwrap();
+  assert_eq!(fixture_cases.len(), cases.len());
+  for (case, recorded) in cases.iter().zip(fixture_cases) {
+    let request = json!({
+      "path": format!("/items/{}", case.item_id),
+      "name": case.name,
+      "content_type": case.content_type,
+      "cookie": case.cookie,
+      "body_hex": hex_bytes(&case.body),
+    });
+    assert_eq!(recorded["request"], request, "recorded request for {}", case.name);
+    let status = u16::try_from(recorded["expected"]["status"].as_u64().unwrap()).unwrap();
+    let recorded_status = StatusCode::from_u16(status).unwrap();
+    let recorded_body = recorded["expected"]["body_text"].as_str().unwrap().as_bytes();
     let (rust_status, rust_body) = send(&client, rust_address, case).await;
 
-    assert_eq!(python_status, case.expected_status, "FastAPI status for {}", case.name);
-    assert_eq!(rust_status, python_status, "status for {}", case.name);
+    assert_eq!(recorded_status, case.expected_status, "FastAPI status for {}", case.name);
+    assert_eq!(rust_status, recorded_status, "status for {}", case.name);
     if case.compare_body {
-      assert_eq!(rust_body, python_body, "body for {}", case.name);
-    } else if case.expected_status == StatusCode::UNPROCESSABLE_ENTITY {
-      assert_eq!(error_shape(&rust_body), error_shape(&python_body), "validation shape for {}", case.name);
+      assert_eq!(rust_body.as_slice(), recorded_body, "body for {}", case.name);
+    } else if recorded_status == StatusCode::UNPROCESSABLE_ENTITY {
+      assert_eq!(error_shape(&rust_body), error_shape(recorded_body), "validation shape for {}", case.name);
     }
   }
 
@@ -133,7 +79,6 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
     Err(error) => panic!("axum test app stopped with {error}"),
     Ok(()) => panic!("axum test app ended before cancellation"),
   }
-  drop(python);
 }
 
 async fn read_item(request: Request<Body>) -> Response {
@@ -175,6 +120,10 @@ fn error_shape(body: &[u8]) -> Vec<(Value, Value)> {
     .iter()
     .map(|error| (error["type"].clone(), error["loc"].clone()))
     .collect()
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+  bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn corpus() -> Vec<Case> {

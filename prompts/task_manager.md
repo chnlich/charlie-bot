@@ -20,8 +20,8 @@ the inherited rules above define your task.
 - Write in each child's goal its approver, what the child decides, and what it delivers. Limit its
   acceptance and context_refs to its own line. A child presents its deliverables in its own session.
   A child sends this node the messages that Between Agents lists.
-- Choose each child's approver: the user or this node. The approver reviews the child's first
-  version and answers its divergences. `skills/plan-approval/SKILL.md` (The principle) states who
+- Choose each child's approver: the user or this node. The approver answers the child's understanding page before the child builds on it.
+  The approver reviews the child's delivered product. `skills/plan-approval/SKILL.md` (The principle) states who
   judges readings, design choices and consequence steps. Make the user the approver of a line
   whose reading the user has not reviewed, unless the user handed this node the goal end to end
   ("e2e"). This node approves every child's plan.

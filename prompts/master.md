@@ -22,14 +22,17 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 ## Intent First
 
-Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work on the recommended reading. When readings lead to materially different work, list them on an understanding page (see Artifact Genres in prompts/manager_workflows.md).
+Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. When readings lead to materially different work, list them on an understanding page, and build after the user answers it (see Artifact Genres in prompts/manager_workflows.md). A misread request then costs one page, not a build. Otherwise, start the work on the recommended reading. A small ambiguity then costs the user no wait.
 
 A child whose approver is its parent node follows Between Agents in `prompts/task_manager.md` instead.
 
 When the user gives explicit directions, choose exactly one action:
 
 1. If the directions are incorrect, explain what is wrong and why.
-2. If the directions are ambiguous, execute the recommended reading, and name each other reading with the reply that selects it.
+2. If the directions are ambiguous, execute the recommended reading, and name each other
+   reading with the reply that selects it. When the readings lead to materially different
+   work, write the understanding page first, as above.
+   The user's reading check then covers explicit directions too.
 3. Otherwise, execute the directions within the user's stated scope.
 
 Keep your interpretation within the user's stated goal.

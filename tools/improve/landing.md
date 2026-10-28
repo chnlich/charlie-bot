@@ -18,10 +18,13 @@ The script sends nothing on a hit, so the posted text is always text that passed
 ## Step 1: set the clone
 
 Work in the direction's own clone, `~/improve/<direction>/charlie-bot`.
-The round writes only there, in the evidence directory, and in the scratch directories it makes with `mktemp -d`.
+The round writes only there, in the evidence directory, and in the scratch directories under `/tmp/improve-<direction>/`.
+
+Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
 
 At round start, delete what a killed round left under `/tmp/improve-<direction>/`.
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
+A killed round's scratch holds large copies, so the next round removes it before it starts.
 
 End the round with a report when the clone is absent or lacks `core.hooksPath tools/git-hooks`:
 
@@ -33,6 +36,8 @@ A dirty clone from a killed round is reset to clean before the round starts:
 
     git -C ~/improve/<direction>/charlie-bot reset --hard
     git -C ~/improve/<direction>/charlie-bot clean -fd
+
+Otherwise a killed round's uncommitted edits would enter this round's commits.
 
 Then enter the clone, fetch `origin`, and start every branch from `origin/main`:
 
@@ -108,9 +113,10 @@ One pull request per round is the unit that CI and the reviewer check.
 
 ## Step 6: review the diff
 
-Write the review task file: `tools/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
-Run `charlie-code` from a scratch directory that `mktemp -d` makes, outside the clone.
-Use the model, API base and context window of the `claude-code-kimi-k3.1-pro` entry in `backends.options`; the gateway route needs the provider prefix on the model and the `/v1` suffix on the API base:
+Make the scratch directory with `mkdir -p /tmp/improve-<direction>` and `mktemp -d /tmp/improve-<direction>/XXXXXX`.
+Write the review task file there: `tools/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
+Run `charlie-code` from that directory, outside the clone.
+Use the model, API base and context window of the `claude-code-kimi-k3.1-pro` entry in `backends.options` of `$CHARLIEBOT_HOME/config.yaml`; the gateway route needs the provider prefix on the model and the `/v1` suffix on the API base:
 
     charlie-code --json \
       --model openai/<model> \
@@ -119,7 +125,7 @@ Use the model, API base and context window of the `claude-code-kimi-k3.1-pro` en
       --session-dir ~/improve/<direction>/clc-sessions \
       --task-file <task-file>
 
-The session directory keeps the review's sessions inside the round's own directory instead of the default one.
+The write boundary denies `~/.charliebot`, so the review's sessions go to the direction's own folder.
 The scratch directory keeps the reviewer's own git checkouts away from the clone's HEAD.
 The review is the independent check that the topic is complete and correct.
 
@@ -162,7 +168,7 @@ The rebase proves that the topic still applies to today's `main`.
 When a conflict cannot be resolved, run `git rebase --abort` and abandon the pull request.
 Write `improve-abandoned: <topic> — conflict with origin/main` into a comment file and close through the posting script:
 
-    tools/improve/github-post.sh pr-close --comment-file <comment file> --delete-branch <PR>
+    tools/improve/github-post.sh pr-close --comment-file <comment file> <PR>
 
 Every `improve-abandoned:` and `improve-waiting:` comment goes through the posting script.
 The abort restores the branch as it was before the rebase, so the clone is left clean for the next round.
@@ -173,7 +179,10 @@ With the checks green, confirm that the pull request still carries a diff agains
     git diff origin/main...HEAD --stat
 
 An empty diff means that the topic already landed.
-Close the pull request with `improve-abandoned: <topic> — duplicate of #<N>`, naming the landed pull request.
+Close the pull request through the posting script with the comment `improve-abandoned: <topic> — duplicate of #<N>`, naming the landed pull request, in a comment file:
+
+    tools/improve/github-post.sh pr-close --comment-file <comment file> <PR>
+
 A non-empty diff merges:
 
     gh pr merge --squash <PR>
@@ -223,37 +232,40 @@ Before building a fix, read the branch and the open pull requests:
     git ls-remote origin refs/heads/main-repair/current
     gh pr list --state open --json headRefName --jq '.[].headRefName' | grep '^main-repair/'
 
-When the branch exists with no open pull request, the round that pushed it died before it opened one.
-Open one for it through the posting script and continue that repair:
+When the branch exists with an open pull request, another direction holds the repair.
+A second repair would race the first for the same branch, so this round waits: write an `improve-waiting: main repair held by another direction` comment file, post it on this round's pull request through the posting script, and end the round.
 
+When the branch exists with no open pull request, the round that pushed it died before it opened one.
+Check out the branch, open its pull request through the posting script, and continue at repair step 5:
+
+    git fetch origin main-repair/current
+    git switch -c main-repair/current origin/main-repair/current
     tools/improve/github-post.sh pr-create --title "<repair topic>" --body-file <body file> --head main-repair/current
 
-A "pull request already exists" refusal means that another direction holds the repair.
+A "pull request already exists" refusal means that another direction opened it first: wait as above.
 
-When the branch is absent, commit the fix and push it without force through the posting script:
-
-    tools/improve/github-post.sh push origin HEAD:refs/heads/main-repair/current
-
-A rejected push means that another direction holds the repair: the two repair commits do not contain each other, so GitHub refuses the second non-force push.
-
-When another direction holds the repair, write an `improve-waiting:` comment file and post it through the posting script, then end the round.
-
-Otherwise this round repairs `main`.
+When the branch is absent, this round repairs `main` with the steps below.
 These steps return `main` to green and resume the step that needed it.
 
 1. Read the failure with `gh run view --log-failed <run-id>`.
 2. When `gh run view <run-id> --json attempt` reads 1, rerun the failed jobs once with `gh run rerun <run-id> --failed`.
    Watch the run after the rerun.
    A green rerun returns to the sending step with main green.
-3. When the failure names its fix, create `main-repair/current` from the failing main sha.
-   Apply the fix.
+3. When the failure names its fix, create `main-repair/current` from the failing main sha, apply the fix, commit it, and push it without force:
+
+       git switch -c main-repair/current origin/main
+       tools/improve/github-post.sh push origin HEAD:refs/heads/main-repair/current
+
    A named fix is safe to apply without a design decision.
    A failing test without its expected value in the log names no fix, because a guessed value would hide the regression.
+   A rejected push means another direction pushed its repair first: wait as above.
+   The two repair commits do not contain each other, so GitHub refuses the second non-force push.
 4. Open the pull request through the posting script, with `--head main-repair/current`.
    A red check follows the inside-diff fix steps with the same two-fix budget.
 5. Confirm that the repair still carries a diff against a fresh `origin/main`.
-   An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and return to the sending step.
-6. Merge the repair pull request with `gh pr merge --squash` once green.
+   An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair — nothing left to merge`, then return to the sending step.
+6. Review the repair pull request with Step 6, act on its findings, and merge it with `gh pr merge --squash` once it is green and carries its verdict comment (Step 7).
+   A repair lands on `main` as well, so it gets the same review as a topic.
    Wait for the merge's main run with `gh run watch`, then return to the sending step.
 7. When the failure names no fix, or the repair pull request is abandoned,
    return to the sending step with main still failed.

@@ -9,10 +9,11 @@ use std::process;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
-use charliebot_core::{credentials, event_types, home, pystr, run_token};
-use charliebot_store::run_identity;
+use charliebot_core::{config, credentials, event_types, home, pystr, run_token};
 use charliebot_store::run_records::RunRecord;
+use charliebot_store::{layout, run_identity};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
@@ -158,9 +159,9 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
     Ok(claims) => claims,
     Err(error) => python_error(&format!("error: invalid run token: {error}")),
   };
-  let sessions_root = home_dir.join("sessions");
+  let sessions_root = config::sessions_dir_in(home_dir);
   let session_dir = sessions_root.join(&claims.session_id);
-  let run_path = session_dir.join("data/runs").join(&claims.run_id).join("metadata.json");
+  let run_path = layout::runs_dir(&session_dir).join(&claims.run_id).join(METADATA_FILE_NAME);
   let identity = run_identity::read_run_identity_sync(&run_path).map_err(|error| CliExit::error(error.to_string()))?;
   let Some(identity) = identity else {
     python_error(&format!("error: {}", run_identity::RUN_IDENTITY_UNKNOWN_DETAIL));
@@ -172,7 +173,7 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
     "pid_start": identity.pid_start,
   }))
   .map_err(|error| CliExit::error(error.to_string()))?;
-  let events_path = session_dir.join("data/chat_events.jsonl");
+  let events_path = layout::chat_events_path(&session_dir);
   let events = read_run_events(&events_path)?;
   if let Some(refusal) = run_identity::run_identity_refusal(Some(&run), &events) {
     python_error(&format!("error: {refusal}"));
@@ -233,7 +234,7 @@ fn add(args: &AddArgs) -> Result<(), CliExit> {
   let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let memory_dir = home_dir.join("memory");
-  let target = write_capture(&memory_dir, &home_dir.join("sessions"), &cwd, title, &body, cli_clock)?;
+  let target = write_capture(&memory_dir, &config::sessions_dir_in(&home_dir), &cwd, title, &body, cli_clock)?;
   println!("{}", target.display());
   Ok(())
 }

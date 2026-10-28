@@ -19,11 +19,13 @@ use std::sync::OnceLock;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
+use charliebot_core::config;
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::pyfmt::str_repr;
 use charliebot_core::pyregex::compile_python_regex;
 use charliebot_core::repo_root;
+use charliebot_store::layout;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use fancy_regex::Regex;
 use serde_json::{Value, json};
@@ -88,7 +90,8 @@ fn run(session: &str, slot: i64) -> Result<(), String> {
     .map_err(|error| error.to_string())?
     .path()
     .to_path_buf();
-  let events_path = home.join("sessions").join(session).join("data").join("chat_events.jsonl");
+  let session_dir = config::sessions_dir_in(&home).join(session);
+  let events_path = layout::chat_events_path(&session_dir);
   let (skills, unresolved) = load_skill_texts(&events_path, &home, &repo)?;
   let (parts, included, omitted) = context_parts(&skills)?;
   let part = if slot <= parts.len() as i64 { parts[(slot - 1) as usize].clone() } else { String::new() };

@@ -15,9 +15,11 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_core::config;
+use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::timefmt;
-use charliebot_store::trigger_files;
+use charliebot_store::{layout, trigger_files};
 use clap::{Arg, ArgMatches, Command};
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -99,7 +101,7 @@ impl TriggerKey {
   /// endpoint's response shape. Fired triggers stay on disk and a renewed watch repeats its message, so only a pending
   /// record proves that this call landed.
   fn readback(&self, sessions_dir: &Path) -> Option<Value> {
-    let triggers_dir = sessions_dir.join(&self.session_id).join("triggers");
+    let triggers_dir = layout::triggers_dir(&sessions_dir.join(&self.session_id));
     if !triggers_dir.is_dir() {
       return None;
     }
@@ -251,7 +253,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     return Err(CliExit::usage("--cwd requires --cmd: it names the started command's working directory"));
   }
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let sessions_dir = home_dir()?.join("sessions");
+  let sessions_dir = config::sessions_dir_in(&home_dir()?);
   match &args.cmd {
     Some(cmd) => start_and_register(&sessions_dir, &session_id, &args, cmd),
     None => register_watch(&sessions_dir, &session_id, &args),
@@ -339,7 +341,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   let dir = launch_dir(sessions_dir, session_id, &launch_id);
   fs::create_dir_all(&dir).map_err(io_failure)?;
   let record_text = pyfmt::json_dumps(&Value::Object(record.clone()), &LAUNCH_RECORD_JSON);
-  fs::write(dir.join("metadata.json"), format!("{record_text}\n")).map_err(io_failure)?;
+  fs::write(dir.join(METADATA_FILE_NAME), format!("{record_text}\n")).map_err(io_failure)?;
 
   // The output object: trigger_id and fire_at first, then the record's fields (its trigger_id keeps the first slot).
   let mut output = Map::new();

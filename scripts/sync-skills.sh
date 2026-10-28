@@ -4,16 +4,19 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
-# --- Resolve the profile home (src/infra/home.py; standard library only) ---
-home_pair=$(python3 -I -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-from src.infra.home import charliebot_home_dir, default_charliebot_home
-print(charliebot_home_dir())
-print(default_charliebot_home())
-' "$REPO_ROOT")
-CHARLIEBOT_HOME=$(head -n 1 <<<"$home_pair")
-DEFAULT_HOME=$(tail -n 1 <<<"$home_pair")
+# --- Resolve the release CLI and the two homes it owns ---
+# The scripts and the server run one release: the charliebot CLI that
+# $CHARLIEBOT_RELEASES_DIR/current selects. It prints both homes through the
+# config loader, whose `home` module owns the two values.
+RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
+CURRENT="$RELEASES_DIR/current"
+if [ ! -e "$CURRENT" ] && [ ! -L "$CURRENT" ]; then
+  echo "sync-skills: no release at $CURRENT; install one with scripts/release.sh <sha>" >&2
+  exit 1
+fi
+CHARLIEBOT_BIN="$CURRENT/charliebot"
+CHARLIEBOT_HOME=$("$CHARLIEBOT_BIN" config get charliebot_home)
+DEFAULT_HOME=$("$CHARLIEBOT_BIN" config get default_charliebot_home)
 
 # --- Canonical skill sources ---
 REPO_SKILLS="$REPO_ROOT/skills"

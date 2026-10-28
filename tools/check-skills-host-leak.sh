@@ -118,9 +118,15 @@ if [[ ${#files[@]} -gt 0 ]]; then
 
   extra_patterns_file=${EXTRA_PATTERNS_FILE:-}
   if [[ -z "$extra_patterns_file" ]]; then
-    # Resolve the profile home from the one place that owns it. System python3,
-    # no venv: src/infra/home.py imports only the standard library.
-    home=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from src.infra.home import charliebot_home_dir; print(charliebot_home_dir())' "$repo_root")
+    # Resolve the profile home through the release CLI, the one reader of the
+    # value (`charliebot config get charliebot_home`); the scripts and the
+    # server select it through $CHARLIEBOT_RELEASES_DIR/current.
+    current="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}/current"
+    if [ ! -e "$current" ] && [ ! -L "$current" ]; then
+      printf 'check-skills-host-leak: no release at %s; install one with scripts/release.sh <sha>\n' "$current" >&2
+      exit 1
+    fi
+    home=$("$current/charliebot" config get charliebot_home)
     if [[ -f "$home/skills_leak_patterns.local.txt" ]]; then
       extra_patterns_file="$home/skills_leak_patterns.local.txt"
     fi

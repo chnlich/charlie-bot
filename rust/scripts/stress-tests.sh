@@ -24,18 +24,12 @@ total_failures=0
 total_executions=0
 
 for pkg in "$@"; do
+  # The test binaries come from cargo's own JSON: a compiler-artifact whose
+  # target kind is a test or lib target and whose executable exists. jq serves
+  # both the build host and CI.
   mapfile -t bins < <(cargo test --no-run -p "$pkg" --message-format=json 2>/dev/null \
-    | python3 -c '
-import json, sys
-for line in sys.stdin:
-  try:
-    artifact = json.loads(line)
-  except ValueError:
-    continue
-  kinds = artifact.get("target", {}).get("kind", []) if artifact.get("reason") == "compiler-artifact" else []
-  if ("test" in kinds or "lib" in kinds) and artifact.get("executable"):
-    print(artifact["executable"])
-' | sort -u)
+    | jq -r 'select(.reason == "compiler-artifact") | select(.target.kind | any(. == "test" or . == "lib")) | select(.executable != null) | .executable' \
+    | sort -u)
   if [ "${#bins[@]}" -eq 0 ]; then
     echo "stress-tests: no test binaries found for $pkg" >&2
     exit 1

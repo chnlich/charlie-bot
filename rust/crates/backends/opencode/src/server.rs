@@ -605,10 +605,16 @@ impl OpenCodeServer {
       (state.process.clone(), state.reader_done.as_ref().and_then(|done| done.borrow().clone()))
     };
     let process = process?;
+    // The event reader records why the stream ended after giving the process its exit grace, so that reason already
+    // carries the exit code when the process died. When the server loses its stream while running, the stop that
+    // follows also reaps the process; preferring the raw exit status here would report that kill instead of the loss.
+    if let Some(reason) = stream_reason {
+      return Some(reason);
+    }
     match process.exit.borrow().clone() {
       Some(Ok(code)) => Some(format!("opencode serve exited with code {code}: {}", process.tail_text())),
       Some(Err(error)) => Some(format!("opencode serve wait failed: {error}")),
-      None => stream_reason,
+      None => None,
     }
   }
 

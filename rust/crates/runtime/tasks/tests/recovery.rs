@@ -712,6 +712,20 @@ fn stop_server(runtime: tokio::runtime::Runtime, stack: &Stack, hold: &'static H
   Ok(())
 }
 
+/// Wait until a launch has entered `hold`, polling from the block-on thread instead of awaiting a timer.
+///
+/// The hold blocks a runtime worker, and while it is held this runtime can stop firing timers: the other workers
+/// park waiting for the runtime's shared driver, so a `tokio::time::sleep` in the block-on future never wakes. The
+/// poll here needs no timer, and the launch task runs on a worker, so blocking this thread does not stop it.
+fn wait_entered(hold: &'static Hold) -> anyhow::Result<()> {
+  let deadline = Instant::now() + Duration::from_secs(10);
+  while !hold.entered() {
+    anyhow::ensure!(Instant::now() < deadline, "the hold was not entered within ten seconds");
+    std::thread::sleep(Duration::from_millis(20));
+  }
+  Ok(())
+}
+
 /// The durable facts a cut launch leaves, which Python's next boot reads: no terminal fact, no error event in the run's
 /// events log, no report to the parent, no close, and an open task.
 fn assert_cut_launch_facts(cut: &DispatchedWorker) -> anyhow::Result<()> {
@@ -766,7 +780,7 @@ fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> any
   let runtime = server_runtime()?;
   let cut = runtime.block_on(async {
     let cut = dispatched_worker(HELD_BUILD_TYPE, &result_script("never runs"), false).await?;
-    settle_until(|| Ok(BUILD_HOLD.entered())).await?;
+    wait_entered(&BUILD_HOLD)?;
     anyhow::Ok(cut)
   })?;
   stop_server(runtime, &cut.stack, &BUILD_HOLD)?;
@@ -829,7 +843,7 @@ fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() 
   let runtime = server_runtime()?;
   let cut = runtime.block_on(async {
     let cut = dispatched_worker(HELD_TRANSLATE_TYPE, &script, false).await?;
-    settle_until(|| Ok(TRANSLATE_HOLD.entered())).await?;
+    wait_entered(&TRANSLATE_HOLD)?;
     anyhow::Ok(cut)
   })?;
   let guard = ProcessGroupGuard::new();

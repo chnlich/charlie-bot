@@ -242,9 +242,19 @@ A lead keeps only coordination state in its context: each later model call re-re
   Load each matching skill by its name with your skill tool, or read `~/.claude/skills/<name>/SKILL.md` when you have no skill tool.
   The list names every skill, so a listing of the skill directories adds only material.
   When no listed skill fits your next step, put the skill search in the task spec.
-- Name the report file in the task spec, and ask for a report that opens with a conclusion no longer than an agent message (Between Agents).
-- When a material report arrives, read its conclusion from that file, and open no other file of the worker.
+- Name the report file in each task spec, and ask for a report that opens with a conclusion no longer than an agent message (Between Agents).
+  A verify or cold-read worker reads only, so the final message of its run is its report.
+- When a worker reports, read its conclusion from its report file, and open no other file of the worker.
+  For a verify worker, read the report with this command, with the run id from the wake message:
+  `jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last' "$CHARLIEBOT_HOME"/sessions/*/data/runs/<run id>/events.jsonl | grep -E '^(mismatch|unverifiable|gap-design:|gap-goal:|scenario:|anchor:|RESULT:)'`
+  For a cold-read worker, run the same command without the `grep` stage.
   The worker's material then stays out of your context.
+- When the verify output has no `RESULT` line, or the cold-read output is empty, delegate the check again.
+  A missing report then never reads as a clean check.
+- When the verify output has fewer `mismatch` lines than its `RESULT` count, give a worker the run id.
+  The worker then handles the full report, so a dropped finding never reads as no finding.
+- When a check finds an error in a page or report, give a worker the fix and the check's run id.
+  The worker then reads the full report, and the page stays out of your context.
 - When a question needs material as a lead, ask the worker for a conclusion report without a page.
   As soon as the report arrives, write your answer reply from its conclusion, under the web reply Form rules.
   The user then gets the answer within minutes, and the page and its checks follow.

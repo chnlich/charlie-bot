@@ -6,13 +6,19 @@
 # The preflight checks the release, the clone, the runs and the config, then asks start-server.sh to test its slices
 # and scope. It refuses a clone with local changes and a target commit that a fetch does not bring. The switch then
 # stops the old server, moves the clone with `git reset --keep <commit>` (forward or back), starts the release and
-# reads it back. A refusal changes nothing and exits 1. The switch runs detached under setsid, because stopping the
-# old server ends the master turn that started this command. The command prints the log path, waits for the verdict
-# and exits with it: 0 when the readback, the probe turn and the delegation check passed; 2 when the switch failed
-# and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
-# the server is in; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing
-# is restored, and the log names the run and its outcome. When the pane stays busy after Ctrl-C, the restore sends
-# SIGTERM, then SIGKILL, to the server processes under the pane.
+# reads it back. A refusal changes nothing and exits 1, except that a missing helper binary exits 2 (below). The switch
+# runs detached under setsid, because stopping the old server ends the master turn that started this command. The
+# command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
+# delegation check passed; 2 when the switch failed and the previous implementation serves again; 3 when the restore
+# failed too, and the log ends with the state the server is in; 4 when the switch completed but a recorded run died
+# during it: the new server keeps serving, nothing is restored, and the log names the run and its outcome. When the
+# pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server processes under the pane.
+#
+# This script starts no python3: every read of the home, of a run record and of an API answer goes through
+# `charliebot switch-helper` (rust/crates/app/switch-helper). The binary is chosen once, when the switch starts: the
+# target release's `charliebot` when it has the subcommand, otherwise the `charliebot` of the release `current` names
+# at that moment. The fallback lets a switch back to a release older than this script work: the release that serves
+# the switch supplies the binary. When neither release has it, the preflight exits 2 before it changes anything.
 #
 # The probe turn runs after the readback, in a session of its own. It passes once the run records its first assistant
 # output (a message or a tool call) or ends success. The archive then stops every run of the session that has not ended,
@@ -82,236 +88,55 @@ done
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') switch: $*"; }
 fail() { log "preflight failed: $*"; exit 1; }
 
+RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
+HELPER_BIN=""   # the release's `charliebot`, chosen by helper_binary below
+
+# supports_switch_helper BIN: the binary exists and parses the subcommand group. A release older than the group exits
+# nonzero on it, which is the answer.
+supports_switch_helper() {
+  [ -x "$1" ] && "$1" switch-helper --help > /dev/null 2>&1
+}
+
+# helper_binary: choose the binary once, when the switch starts, and exit 2 when neither release has the subcommand.
+helper_binary() {
+  if [ -n "$HELPER_BIN" ]; then return 0; fi
+  if supports_switch_helper "$RELEASE_DIR/charliebot"; then
+    HELPER_BIN="$RELEASE_DIR/charliebot"
+    return 0
+  fi
+  local current
+  current="$(readlink "$CURRENT" 2> /dev/null || true)"
+  if [ -n "$current" ] && supports_switch_helper "$RELEASES_DIR/$current/charliebot"; then
+    HELPER_BIN="$RELEASES_DIR/$current/charliebot"
+    return 0
+  fi
+  log "preflight failed: neither release $TARGET_SHA nor the release current names has charliebot switch-helper"
+  exit 2
+}
+
+# helper NAME ARG...: one `charliebot switch-helper` subcommand of the chosen binary.
+helper() {
+  helper_binary || return 1
+  "$HELPER_BIN" switch-helper "$@"
+}
+
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
 # `scan` takes the running implementation (`rust <sha>`) and prints one line per live Run (live) and one per refusal
 # (block); `alive` prints alive or ended for a recorded (pid, pid start); `outcome` reads the terminal fact so
 # readback can distinguish a completed run from one the stop killed.
 home_helper() {
-  python3 -I - "$HOME_DIR" "$REPO_ROOT" "$@" "$TARGET_SHA" "$MODE" <<'PY'
-import datetime
-import json
-import os
-import pathlib
-import re
-import subprocess
-import sys
-import time
-
-import yaml
-
-home = pathlib.Path(sys.argv[1])
-repo_root = pathlib.Path(sys.argv[2])
-mode = sys.argv[3]
-helper_args = sys.argv[4:-2]
-target_sha = sys.argv[-2]
-# Owner: ServerConfig.port in rust/crates/infra/core/src/config.rs.
-DEFAULT_SERVER_PORT = 18498
-# Each backend's registration has moved twice: rust/crates/charliebot-agents/src/backends/<backend>/mod.rs held it from
-# 7b680fcbb until the crate grouping at 03459e0ca, rust/crates/runtime/agents/src/backends/<backend>/mod.rs from
-# 03459e0ca until each backend's own crate at d1a07436f, and rust/crates/backends/<backend>/src/lib.rs from d1a07436f
-# on. A build's tree says which layout it has, so each sha is read in its own.
-BACKEND_LAYOUTS = (
-    ("rust/crates/charliebot-agents/src/backends", "/mod.rs"),
-    ("rust/crates/runtime/agents/src/backends", "/mod.rs"),
-    ("rust/crates/backends", "/src/lib.rs"),
-)
-reattach_cache = {}
-
-
-def backend_registration_files(sha):
-  """The registration files of one build in the layout its tree has, and the error the tree read gave."""
-  for prefix, suffix in BACKEND_LAYOUTS:
-    listed = subprocess.run(
-      ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", sha, prefix],
-      capture_output=True, text=True, check=False,
-    )
-    if listed.returncode:
-      return None, f"cannot inspect build {sha}: {listed.stderr.strip()}"
-    paths = [path for path in listed.stdout.splitlines() if path.endswith(suffix)]
-    if paths:
-      return paths, None
-  return [], None
-
-
-def rust_registration(sha, backend_type):
-  """Read one build's backend registration without checking out or changing its source tree."""
-  key = (sha, backend_type)
-  if key in reattach_cache:
-    return reattach_cache[key]
-  paths, error = backend_registration_files(sha)
-  if error is not None:
-    result = (None, error)
-    reattach_cache[key] = result
-    return result
-  for path in paths:
-    shown = subprocess.run(
-      ["git", "-C", str(repo_root), "show", f"{sha}:{path}"],
-      capture_output=True, text=True, check=False,
-    )
-    if shown.returncode:
-      result = (None, f"cannot read {path} from build {sha}: {shown.stderr.strip()}")
-      reattach_cache[key] = result
-      return result
-    for registration in re.finditer(
-      r"type_name:\s*(?P<name>\"[^\"]+\"|[A-Z_]+)\s*,\s*traits:\s*BackendTraits\s*\{(?P<body>.*?)\}",
-      shown.stdout,
-      re.DOTALL,
-    ):
-      name = registration.group("name")
-      if name.startswith('"'):
-        declared = name[1:-1]
-      else:
-        constant = re.search(rf"const\s+{re.escape(name)}\s*:\s*&str\s*=\s*\"([^\"]+)\"", shown.stdout)
-        if constant is None:
-          continue
-        declared = constant.group(1)
-      if declared != backend_type:
-        continue
-      enabled = re.search(r"^\s*restart_reattach:\s*(true|false)\s*,?\s*$", registration.group("body"), re.MULTILINE)
-      if enabled is None:
-        result = (None, f"{path} in build {sha} has no restart_reattach value")
-      else:
-        result = (enabled.group(1) == "true", path)
-      reattach_cache[key] = result
-      return result
-  result = (None, f"build {sha} has no registration for backend type {backend_type}")
-  reattach_cache[key] = result
-  return result
-
-
-def proc_stat(pid):
-  """(start time, state) from /proc/<pid>/stat; field 22 pins one process instance. None once the process is gone."""
-  try:
-    text = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-  except OSError:
-    return None
-  fields = text.rsplit(")", 1)[1].split()
-  return fields[19], fields[0]
-
-
-def boot_time():
-  for line in pathlib.Path("/proc/stat").read_text(encoding="utf-8").splitlines():
-    if line.startswith("btime "):
-      return int(line.split()[1])
-  raise RuntimeError("/proc/stat has no btime line")
-
-
-def process_instance(pid, pid_start):
-  """(pid, pid_start) still names one live process instance; field 22 of /proc/<pid>/stat pins that instance, so a
-  recycled pid never counts. A zombie has ended: its argv is gone and nothing can follow it."""
-  stat = proc_stat(pid)
-  return stat is not None and stat[0] == pid_start and stat[1] != "Z"
-
-
-def run_alive(run, boot):
-  """The run's recorded (pid, pid_start) still names a live process that started after this boot."""
-  pid, pid_start, started_at = run.get("pid"), run.get("pid_start"), run.get("started_at")
-  if pid is None or pid_start is None or started_at is None:
-    return False
-  if not process_instance(pid, pid_start):
-    return False
-  return datetime.datetime.fromisoformat(started_at).timestamp() > boot
-
-
-if mode == "config":
-  config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-  credentials = yaml.safe_load((home / "credentials.yaml").read_text(encoding="utf-8"))
-  print(config.get("server", {}).get("port", DEFAULT_SERVER_PORT))
-  print(credentials["charliebot"].get("access_key") or "")
-elif mode == "scan":
-  config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-  types = {option["id"]: option["type"] for option in config["backends"]["options"]}
-  boot = boot_time()
-  source_sha = helper_args[0].removeprefix("rust ")
-  for path in sorted((home / "sessions").glob("*/data/runs/*/metadata.json")):
-    run = json.loads(path.read_text(encoding="utf-8"))
-    if run.get("ended_at") is not None or not run_alive(run, boot):
-      continue
-    print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}\t{run['pid_start']}")
-    backend = run.get("backend")
-    backend_type = types.get(backend)
-    if backend_type is None:
-      print(f"block\tbackend {backend!r} of run {run['id']} (pid {run['pid']}) is not in backends.options; "
-            "restart re-attachment is unknown")
-      continue
-    for build_label, sha in (("running build", source_sha), ("target build", target_sha)):
-      enabled, detail = rust_registration(sha, backend_type)
-      if enabled is not True:
-        state = "false" if enabled is False else "unknown"
-        print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) cannot be re-attached after a restart: "
-              f"{build_label} {sha} marks restart_reattach = {state} ({detail})")
-  # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
-  for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
-    state = json.loads(path.read_text(encoding="utf-8"))
-    controller = state.get("server_pid")
-    if state.get("status") == "running" and controller is not None and pathlib.Path(f"/proc/{controller}").exists():
-      print(f"block\timprove loop {path.parent.name} is running under pid {controller}")
-elif mode == "alive":
-  pid, pid_start = helper_args
-  print("alive" if process_instance(pid, pid_start) else "ended")
-elif mode == "outcome":
-  # The run store's fact history includes rotated segments, so read its archive files before the live event log.
-  session_id, run_id = helper_args
-  session = home / "sessions" / session_id
-  run = json.loads((session / "data" / "runs" / run_id / "metadata.json").read_text(encoding="utf-8"))
-  data = session / "data"
-  archives = sorted((data / "archives").glob("chat_events.*.jsonl"))
-  events = session / "data" / "chat_events.jsonl"
-  outcome = None
-  outcome_recorded = False
-
-  def read_outcome(line, number, path):
-    try:
-      event = json.loads(line)
-    except json.JSONDecodeError:
-      # The live log's own reader skips a line it cannot parse, so such a line is not a fact; the skip is logged.
-      print(f"skipped line {number} of {path}: not JSON", file=sys.stderr)
-      return False, None
-    if event.get("type") == "run_finished" and event.get("run_id") == run_id:
-      return True, event.get("outcome")
-    return False, None
-
-  for archive in archives:
-    with archive.open(encoding="utf-8") as stream:
-      for number, line in enumerate(stream, 1):
-        found, recorded = read_outcome(line, number, archive)
-        if found:
-          outcome_recorded = True
-          outcome = recorded
-  if events.is_file():
-    with events.open(encoding="utf-8") as stream:
-      line_number = 0
-      remainder = ""
-      for line in stream:
-        if not line.endswith("\n"):
-          remainder = line
-          break
-        line_number += 1
-        found, recorded = read_outcome(line, line_number, events)
-        if found:
-          outcome_recorded = True
-          outcome = recorded
-      if run.get("kind") == "manager_turn" and not outcome_recorded:
-        # Startup queues manager-turn recovery in the background, so give its finish callback time to persist the fact.
-        deadline = time.monotonic() + 10
-        while not outcome_recorded and time.monotonic() < deadline:
-          line = stream.readline()
-          if not line:
-            time.sleep(0.1)
-            continue
-          if not line.endswith("\n"):
-            remainder += line
-            continue
-          line_number += 1
-          found, recorded = read_outcome(remainder + line, line_number, events)
-          remainder = ""
-          if found:
-            outcome_recorded = True
-            outcome = recorded
-  print(outcome or "")
-else:
-  raise SystemExit(f"unknown home_helper mode {mode}")
-PY
+  local mode=$1
+  shift
+  case "$mode" in
+    config) helper home-helper config "$HOME_DIR" ;;
+    scan) helper home-helper scan "$HOME_DIR" "$REPO_ROOT" "$1" "$TARGET_SHA" ;;
+    alive) helper home-helper alive "$1" "$2" ;;
+    outcome) helper home-helper outcome "$HOME_DIR" "$1" "$2" ;;
+    *)
+      log "unknown home helper mode $mode"
+      return 1
+      ;;
+  esac
 }
 
 # scan_home writes the live runs to $RUNS_FILE and leaves the refusals in BLOCKERS. A live line is the session, the run,
@@ -422,27 +247,15 @@ version_ok() {
 
 # json_field NAME: a top-level field of the response body in $WORK/body.
 json_field() {
-  python3 -I - "$WORK/body" "$1" <<'PY'
-import json
-import sys
-
-print(json.load(open(sys.argv[1]))[sys.argv[2]])
-PY
+  helper json-field "$WORK/body" "$1"
 }
 
 # newest_run_fields FIELD...: the named fields of the newest Run in the runs response in $WORK/body (read with
 # order=desc&limit=1), joined by the unit separator (0x1f). read splits on that separator without collapsing empty
-# fields. A field is empty while the session has no run, and when the record holds it as null. One python start
-# reads all the fields.
+# fields. A field is empty while the session has no run, and when the record holds it as null. One call reads all the
+# fields.
 newest_run_fields() {
-  python3 -I - "$WORK/body" "$@" <<'PY'
-import json
-import sys
-
-items = json.load(open(sys.argv[1])).get("items") or []
-values = [items[0][field] if items else "" for field in sys.argv[2:]]
-print("\x1f".join("" if value is None else str(value) for value in values))
-PY
+  helper newest-run-fields "$WORK/body" "$@"
 }
 
 # launch_command: the pane's command. The pane's shell does not inherit this switch's environment, so the three
@@ -468,22 +281,7 @@ new_output() { tail -c "+$((NEW_OFFSET + 1))" "$NEW_LOG"; }
 # the Rust server's JSON-lines log; a line of another event never matches.
 launch_has() {
   new_output > "$WORK/launch.log"
-  python3 -I - "$WORK/launch.log" "$@" <<'PY'
-import json
-import pathlib
-import sys
-
-path, event, *pairs = sys.argv[1:]
-wanted = dict(pair.split("=", 1) for pair in pairs)
-# Only complete lines: a line the server is still writing has no newline yet.
-for line in pathlib.Path(path).read_text(encoding="utf-8", errors="replace").split("\n")[:-1]:
-  if not line.startswith('{"'):
-    continue
-  record = {key: str(value) for key, value in json.loads(line).items()}
-  if record.get("event") == event and all(record.get(key) == value for key, value in wanted.items()):
-    sys.exit(0)
-sys.exit(1)
-PY
+  helper launch-has "$WORK/launch.log" "$@"
 }
 
 new_launch_ready() {
@@ -636,14 +434,7 @@ run_ended() {
 # assistant_messages: how many assistant messages the bootstrap in $WORK/body holds, the open draft included. A tool
 # call is part of its turn's assistant message, so a tool call counts here too.
 assistant_messages() {
-  python3 -I - "$WORK/body" <<'PY'
-import json
-import sys
-
-body = json.load(open(sys.argv[1]))
-drafts = [body["pending_draft"]] if body["pending_draft"] else []
-print(sum(message["role"] == "assistant" for message in body["messages"] + drafts))
-PY
+  helper assistant-messages "$WORK/body"
 }
 
 # probe_wait_output: succeeds once the run records its first assistant output or ends success. It fails when the run
@@ -692,16 +483,7 @@ probe_run_stages() {
 # run_states: one "RUN_ID STATE" line per run in the runs page in $WORK/body. The page asks for 500 runs, the largest
 # page both servers serve; a next cursor means runs the stop would miss, so it is an error.
 run_states() {
-  python3 -I - "$WORK/body" <<'PY'
-import json
-import sys
-
-page = json.load(open(sys.argv[1]))
-if page["next_cursor"] is not None:
-  raise SystemExit("the session has more than 500 runs")
-for run in page["items"]:
-  print(run["id"], run["state"])
-PY
+  helper run-states "$WORK/body"
 }
 
 # check_cancel RUN END: asks RUN to stop. The request id names the run, so a repeated request is the same request. A
@@ -836,36 +618,13 @@ delegation_fail() {
 # delegation_body: the delegate request that starts the task in CHECK_SESSION, as JSON. The base branch is main, and
 # keep_worktree keeps the worktree after the run so the judgment can find it.
 delegation_body() {
-  python3 -I - "$CHECK_SESSION" "$REPO_ROOT" "$DELEGATION_TASK" <<'PY'
-import json
-import sys
-
-session, repo, goal = sys.argv[1:]
-print(json.dumps({
-    "session_id": session,
-    "description": goal,
-    "repo_path": repo,
-    "base_branch": "main",
-    "task_type": "script-run",
-    "keep_worktree": True,
-    "request_id": f"switch-delegation:{session}",
-}))
-PY
+  helper delegation-body "$CHECK_SESSION" "$REPO_ROOT" "$DELEGATION_TASK"
 }
 
 # run_error: the message of the last error event in the check's run, read from the run's event log. Each line of that
 # log is one JSON object. Empty when the run logged no error.
 run_error() {
-  python3 -I - "$HOME_DIR/sessions/$DELEG_CHILD/data/runs/$CHECK_RUN/events.jsonl" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.is_file() else []
-errors = [event.get("message", "") for event in events if event.get("type") == "error"]
-print(" ".join(errors[-1].split()) if errors else "")
-PY
+  helper run-error "$HOME_DIR" "$DELEG_CHILD" "$CHECK_RUN"
 }
 
 # delegation_open: creates the session that holds the task, then sends it the user message that opens the task chain.
@@ -1016,9 +775,9 @@ stop_old() {
 
 preflight() {
   PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
-  RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
   (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
+  helper_binary   # exits 2 when neither release carries the subcommand, before anything changes
   OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ] \
     || fail "runtime clone $REPO_ROOT has local changes"

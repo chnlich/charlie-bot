@@ -10,6 +10,7 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
 use charliebot_store::layout;
+use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
@@ -362,13 +363,12 @@ fn thread_metadata(path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
     .and_then(Path::parent)
     .ok_or_else(|| anyhow!("{} has no thread metadata path", path.display()))?
     .join(METADATA_FILE_NAME);
-  let data = match fs::read(&metadata_path) {
-    Ok(data) => data,
-    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-    Err(error) => return Err(error).with_context(|| format!("reading {}", metadata_path.display())),
-  };
-  let value: Value = serde_json::from_slice(&data).with_context(|| format!("parsing {}", metadata_path.display()))?;
-  value.as_object().cloned().map(Some).ok_or_else(|| anyhow!("{}: metadata is not an object", metadata_path.display()))
+  match read_metadata_object(&metadata_path) {
+    Ok(Some(object)) => Ok(Some(object)),
+    Ok(None) => Err(anyhow!("{}: metadata is not an object", metadata_path.display())),
+    Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(metadata_read_error(error, &metadata_path)),
+  }
 }
 
 fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -> anyhow::Result<Vec<StoredRecord>> {
@@ -423,9 +423,22 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
 fn run_metadata(path: &Path) -> anyhow::Result<Map<String, Value>> {
   let metadata_path =
     path.parent().ok_or_else(|| anyhow!("{} has no run metadata path", path.display()))?.join(RUN_METADATA_NAME);
-  let data = fs::read(&metadata_path).with_context(|| format!("reading {}", metadata_path.display()))?;
-  let value: Value = serde_json::from_slice(&data).with_context(|| format!("parsing {}", metadata_path.display()))?;
-  value.as_object().cloned().ok_or_else(|| anyhow!("{}: metadata is not an object", metadata_path.display()))
+  match read_metadata_object(&metadata_path) {
+    Ok(Some(object)) => Ok(object),
+    Ok(None) => Err(anyhow!("{}: metadata is not an object", metadata_path.display())),
+    Err(error) => Err(metadata_read_error(error, &metadata_path)),
+  }
+}
+
+/// The read failure under the verb Python's read reported: an unreadable file reads `reading` and a file that is not
+/// JSON reads `parsing`.
+fn metadata_read_error(error: MetadataReadError, metadata_path: &Path) -> anyhow::Error {
+  match error {
+    MetadataReadError::Io(error) => anyhow::Error::new(error).context(format!("reading {}", metadata_path.display())),
+    MetadataReadError::Json(message) => {
+      anyhow::Error::msg(message).context(format!("parsing {}", metadata_path.display()))
+    }
+  }
 }
 
 fn run_record(

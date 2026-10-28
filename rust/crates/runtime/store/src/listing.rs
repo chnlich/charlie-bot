@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -281,8 +280,8 @@ impl Store {
         continue;
       }
       let session_id = entry.file_name().to_string_lossy().into_owned();
-      let path: PathBuf = entry.path().join(METADATA_FILE_NAME);
-      let raw = match fs::read_to_string(&path) {
+      let path = crate::layout::metadata_path(&entry.path());
+      let raw = match crate::metadata::read_metadata_text(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
         // A missing or unreadable or malformed file logs at debug level and drops out of the
@@ -292,7 +291,7 @@ impl Store {
           continue;
         }
       };
-      let value = match serde_json::from_str(&raw) {
+      let value = match crate::metadata::decode_metadata(&raw) {
         Ok(value) => value,
         Err(error) => {
           tracing::debug!(path = %path.display(), error = %error, "metadata_raw_scan_parse_skip");

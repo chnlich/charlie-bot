@@ -262,8 +262,8 @@ fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String
   let unreadable = |detail: String| {
     CliExit::error(format!("cannot read the requesting session's profile from {}: {detail}", paths::display(&path)))
   };
-  let text = std::fs::read_to_string(&path).map_err(|error| unreadable(error.to_string()))?;
-  let metadata: Value = serde_json::from_str(&text).map_err(|error| unreadable(error.to_string()))?;
+  let metadata =
+    charliebot_store::metadata::read_metadata_value(&path).map_err(|error| unreadable(error.to_string()))?;
   match metadata.get("profile") {
     Some(Value::String(profile)) => Ok(profile.clone()),
     _ => Err(unreadable("the metadata carries no profile".to_string())),

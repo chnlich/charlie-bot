@@ -9,6 +9,7 @@ use anyhow::Context as _;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::{self, CONFIG_FILENAME};
 use charliebot_core::pyfmt;
+use charliebot_store::metadata::MetadataReadError;
 use serde_json::Value;
 
 /// The group's usage line, printed for `--help` and for a bad name or argument count.
@@ -58,6 +59,15 @@ pub(crate) fn exit_with(code: i32) -> ! {
 pub(crate) fn read_json(path: &Path) -> anyhow::Result<Value> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+}
+
+/// The failure text of a metadata read: the verb names the step that failed, as `read_json` reports it. An
+/// unreadable file reads `read <path>` and a file that is not JSON reads `parse <path>`.
+pub(crate) fn metadata_read_failure(path: &Path, error: MetadataReadError) -> String {
+  match error {
+    MetadataReadError::Io(_) => format!("read {}", path.display()),
+    MetadataReadError::Json(_) => format!("parse {}", path.display()),
+  }
 }
 
 /// The profile home's `config.yaml` as a JSON value. The switch reads the raw file rather than the loaded

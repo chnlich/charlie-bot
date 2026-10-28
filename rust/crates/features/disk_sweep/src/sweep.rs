@@ -10,8 +10,8 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, paths};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
-use charliebot_store::metadata::TaskSpec;
-use charliebot_store::run_records::{RUN_METADATA_NAME, RunRecord};
+use charliebot_store::metadata::{MetadataReadError, TaskSpec, read_metadata_object};
+use charliebot_store::run_records::{RUN_METADATA_NAME, RunRecord, read_run_record_file};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::{DirEntry, WalkDir};
@@ -263,10 +263,18 @@ fn load_run_groups(sessions_root: &Path) -> Result<RunGroups> {
       if !metadata_path.is_file() {
         continue;
       }
-      let content =
-        fs::read(&metadata_path).with_context(|| format!("reading run metadata {}", metadata_path.display()))?;
-      let record: RunRecord = serde_json::from_slice(&content)
-        .with_context(|| format!("unreadable run metadata at {}", metadata_path.display()))?;
+      let record: RunRecord = match read_run_record_file(&metadata_path) {
+        Ok(Some(record)) => record,
+        Ok(None) => continue,
+        Err(MetadataReadError::Io(error)) => {
+          return Err(anyhow::Error::new(error).context(format!("reading run metadata {}", metadata_path.display())));
+        }
+        Err(MetadataReadError::Json(message)) => {
+          return Err(
+            anyhow::Error::msg(message).context(format!("unreadable run metadata at {}", metadata_path.display())),
+          );
+        }
+      };
       let session_id = session_dir.file_name().to_string_lossy().into_owned();
       let run_id = run_dir.file_name().to_string_lossy().into_owned();
       if record.session_id != session_id || record.id != run_id {
@@ -377,13 +385,16 @@ fn task_keep_worktree(sessions_root: &Path, session_id: &str) -> Result<Option<b
   if !metadata_path.is_file() {
     return Ok(None);
   }
-  let content =
-    fs::read(&metadata_path).with_context(|| format!("reading session metadata {}", metadata_path.display()))?;
-  let metadata: Value = serde_json::from_slice(&content)
-    .with_context(|| format!("reading session metadata {}", metadata_path.display()))?;
-  let metadata = metadata
-    .as_object()
-    .with_context(|| format!("session metadata at {} is not an object", metadata_path.display()))?;
+  let metadata = read_metadata_object(&metadata_path).map_err(|error| match error {
+    MetadataReadError::Io(error) => {
+      anyhow::Error::new(error).context(format!("reading session metadata {}", metadata_path.display()))
+    }
+    MetadataReadError::Json(message) => {
+      anyhow::Error::msg(message).context(format!("reading session metadata {}", metadata_path.display()))
+    }
+  })?;
+  let metadata =
+    metadata.with_context(|| format!("session metadata at {} is not an object", metadata_path.display()))?;
   let Some(task) = metadata.get("task").filter(|task| task.is_object()) else {
     return Ok(None);
   };

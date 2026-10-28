@@ -166,8 +166,7 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
   let loop_id = candidates.into_iter().max()?;
 
   // The session's metadata must have been written: the loop's child is admitted under it.
-  let metadata_text = std::fs::read_to_string(layout::metadata_path(&session_dir)).ok()?;
-  charliebot_store::metadata::SessionMetadata::from_json(&metadata_text, None).ok()?;
+  charliebot_store::metadata::read_session_metadata(&layout::metadata_path(&session_dir)).ok().flatten()?;
 
   let loop_dir = loops_dir.join(loop_id.to_string());
   let mut response = Map::new();

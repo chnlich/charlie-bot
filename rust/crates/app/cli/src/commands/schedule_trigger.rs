@@ -16,7 +16,6 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
-use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_store::{layout, trigger_files};
@@ -342,7 +341,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   let dir = launch_dir(sessions_dir, session_id, &launch_id);
   fs::create_dir_all(&dir).map_err(io_failure)?;
   let record_text = pyfmt::json_dumps(&Value::Object(record.clone()), &LAUNCH_RECORD_JSON);
-  fs::write(dir.join(METADATA_FILE_NAME), format!("{record_text}\n")).map_err(io_failure)?;
+  fs::write(launch_record_path(&dir), format!("{record_text}\n")).map_err(io_failure)?;
 
   // The output object: trigger_id and fire_at first, then the record's fields (its trigger_id keeps the first slot).
   let mut output = Map::new();
@@ -393,6 +392,15 @@ fn launch_watch(launch: &Launch) -> WatchSpec {
 
 fn launch_dir(sessions_dir: &Path, session_id: &str, launch_id: &str) -> PathBuf {
   sessions_dir.join(session_id).join("launches").join(launch_id)
+}
+
+/// The launch record's file name in a launch directory. The launch record is the CLI's own file kind: only this
+/// command writes it and only the trigger readback reads it. Its name is the metadata file name the core owns.
+const LAUNCH_RECORD_FILE_NAME: &str = charliebot_core::metadata_slot::METADATA_FILE_NAME;
+
+/// The launch record's path in one launch directory.
+fn launch_record_path(launch_dir: &Path) -> PathBuf {
+  launch_dir.join(LAUNCH_RECORD_FILE_NAME)
 }
 
 fn launch_failure(error: LaunchError) -> CliExit {

@@ -13,8 +13,9 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
 use charliebot_core::{config, credentials, event_types, home, pystr, run_token};
 use charliebot_store::chat_events::{self, LineRule};
+use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::RunRecord;
-use charliebot_store::{layout, run_identity};
+use charliebot_store::{layout, metadata, run_identity};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
@@ -217,8 +218,12 @@ fn load_json_metadata(path: &Path) -> Result<Option<Value>, CliExit> {
   if !path.exists() {
     return Ok(None);
   }
-  let text = fs::read_to_string(path).map_err(|error| CliExit::error(format!("read {}: {error}", path.display())))?;
-  Ok(serde_json::from_str(&text).ok())
+  match metadata::read_metadata_value(path) {
+    Ok(value) => Ok(Some(value)),
+    Err(MetadataReadError::Io(error)) => Err(CliExit::error(format!("read {}: {error}", path.display()))),
+    // A file that is not JSON names no profile, the way `json_utils.load_json_meta` answers None for one.
+    Err(MetadataReadError::Json(_)) => Ok(None),
+  }
 }
 
 fn add(args: &AddArgs) -> Result<(), CliExit> {

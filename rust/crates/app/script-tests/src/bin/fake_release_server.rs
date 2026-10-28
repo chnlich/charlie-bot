@@ -23,7 +23,8 @@ use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
-use charliebot_store::run_records::RUN_EVENTS_NAME;
+use charliebot_store::metadata::MetadataReadError;
+use charliebot_store::run_records::{RUN_EVENTS_NAME, read_run_metadata};
 use charliebot_tasks::routes as task_routes;
 use regex::Regex;
 use serde::Deserialize;
@@ -152,7 +153,10 @@ fn recovery_logs(home: &Path, adopt: bool) -> io::Result<()> {
     }
   }
   for path in metas {
-    let meta: Value = serde_json::from_str(&fs::read_to_string(&path)?).map_err(io::Error::other)?;
+    let meta: Value = read_run_metadata(&path).map_err(|error| match error {
+      MetadataReadError::Io(error) => error,
+      error @ MetadataReadError::Json(_) => io::Error::other(error.to_string()),
+    })?;
     let ended_at =
       meta.get("ended_at").ok_or_else(|| io::Error::other(format!("{} has no ended_at", path.display())))?;
     if ended_at.is_null() {

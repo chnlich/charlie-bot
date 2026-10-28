@@ -1,6 +1,5 @@
 //! Refuse run tokens that do not identify a registered, launched, active run.
 
-use std::fs;
 use std::path::Path;
 
 use charliebot_core::event_types;
@@ -42,8 +41,7 @@ pub fn read_run_identity_sync(path: &Path) -> StoreResult<Option<RunIdentity>> {
   if !path.is_file() {
     return Ok(None);
   }
-  let raw = fs::read_to_string(path).map_err(|error| run_metadata_error(path, error))?;
-  let record: Value = serde_json::from_str(&raw).map_err(|error| run_metadata_error(path, error))?;
+  let record: Value = crate::metadata::read_metadata_value(path).map_err(|error| run_metadata_error(path, error))?;
   let id = record.get("id").and_then(Value::as_str).ok_or_else(|| {
     StoreError::new(format!("run metadata unreadable at {}: run id must be a string", path.display()))
   })?;

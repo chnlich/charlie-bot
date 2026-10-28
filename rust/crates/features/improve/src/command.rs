@@ -141,14 +141,20 @@ pub fn read_loop_plan(loop_dir: &Path) -> anyhow::Result<Option<String>> {
   Ok(Some(std::fs::read_to_string(&plan_path).with_context(|| format!("read {}", plan_path.display()))?))
 }
 
-/// The loop's state file, or `None` when it is missing.
-pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> anyhow::Result<Option<ImproveState>> {
-  let path = state_path(cfg, session_id, loop_id);
+/// The state file of one loop directory, or `None` when the directory holds none. A file the read fails on fails the
+/// read, as Python's `json.load` did: the error names the step, `read` or `parse`.
+pub fn read_loop_state(loop_dir: &Path) -> anyhow::Result<Option<ImproveState>> {
+  let path = loop_dir.join(STATE_FILE);
   if !path.exists() {
     return Ok(None);
   }
   let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
   Ok(Some(serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?))
+}
+
+/// The loop's state file, or `None` when it is missing.
+pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> anyhow::Result<Option<ImproveState>> {
+  read_loop_state(&loop_dir(cfg, session_id, loop_id))
 }
 
 /// The loop's state file, which must exist.

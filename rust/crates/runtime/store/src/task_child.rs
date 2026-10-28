@@ -37,8 +37,7 @@ pub fn find_local_task_child(
   let child_id = control_events::stable_task_id(Some(session_id), &resolved_request_id);
   let session_dir = sessions_dir_in(home).join(&child_id);
   let metadata_path = layout::metadata_path(&session_dir);
-  let metadata_text = std::fs::read_to_string(metadata_path).ok()?;
-  let metadata = serde_json::from_str::<Value>(&metadata_text).ok()?;
+  let metadata = crate::metadata::read_metadata_value(&metadata_path).ok()?;
 
   let task = metadata.get("task")?.as_object()?;
   let goal_matches = match task.get("goal") {

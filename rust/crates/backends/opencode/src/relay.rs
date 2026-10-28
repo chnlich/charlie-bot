@@ -78,9 +78,15 @@ pub fn write_server_record(path: &Path, record: &ServerRecord) -> anyhow::Result
   write_atomic_json(path, record, 0o600)
 }
 
+/// Read one server record: the bytes at `path` decoded as the record `write_server_record` wrote.
+pub fn read_server_record(path: &Path) -> anyhow::Result<ServerRecord> {
+  let bytes = fs::read(path).with_context(|| format!("reading OpenCode server record {}", path.display()))?;
+  serde_json::from_slice(&bytes).with_context(|| format!("decoding OpenCode server record {}", path.display()))
+}
+
 /// Persist why the OpenCode process or its event stream ended while this server was running.
 pub fn write_server_exit_reason(path: &Path, reason: String) -> anyhow::Result<()> {
-  let mut record: ServerRecord = serde_json::from_slice(&fs::read(path)?)?;
+  let mut record = read_server_record(path)?;
   record.exit_reason = Some(reason);
   write_atomic_json(path, &record, 0o600)
 }

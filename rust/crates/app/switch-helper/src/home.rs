@@ -14,10 +14,10 @@ use charliebot_core::event_types;
 use charliebot_core::pyfmt;
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
-use charliebot_store::run_records::RUN_METADATA_NAME;
+use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use serde_json::Value;
 
-use crate::common::{USAGE, exact, failed, python_truthy, read_config, read_json};
+use crate::common::{USAGE, exact, failed, metadata_read_failure, python_truthy, read_config};
 use crate::{process, scan};
 
 /// How long the outcome read waits for a manager turn's finish callback to persist its fact.
@@ -72,7 +72,8 @@ fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let session = config::sessions_dir_in(Path::new(&home)).join(&session_id);
   let metadata_path = layout::runs_dir(&session).join(&run_id).join(RUN_METADATA_NAME);
-  let metadata = read_json(&metadata_path).map_err(failed)?;
+  let metadata =
+    read_run_metadata(&metadata_path).map_err(|error| failed(metadata_read_failure(&metadata_path, error)))?;
   let manager_turn = metadata.get("kind").and_then(Value::as_str) == Some("manager_turn");
   let mut outcome = Outcome::default();
   for archive in chat_events::archive_files(&session).map_err(failed)? {

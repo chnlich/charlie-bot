@@ -26,6 +26,7 @@ use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_session_api::api;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout;
+use charliebot_store::metadata;
 use charliebot_store::run_records;
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -526,7 +527,8 @@ fn child_workers(args: &[String]) -> Result<i32, String> {
     if !metadata_path.is_file() {
       continue;
     }
-    let metadata = load_json(&metadata_path.to_string_lossy())?;
+    let metadata =
+      metadata::read_metadata_value(&metadata_path).map_err(|error| format!("{}: {error}", metadata_path.display()))?;
     if metadata.get("task_parent_id").and_then(Value::as_str) != Some(parent_id) {
       continue;
     }
@@ -560,7 +562,8 @@ fn session_ids(args: &[String]) -> Result<i32, String> {
     if !directory.is_dir() || !metadata_path.is_file() {
       continue;
     }
-    let metadata = load_json(&metadata_path.to_string_lossy())?;
+    let metadata =
+      metadata::read_metadata_value(&metadata_path).map_err(|error| format!("{}: {error}", metadata_path.display()))?;
     if let Some(Value::String(id)) = metadata.get("id")
       && !id.is_empty()
     {
@@ -1179,8 +1182,8 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
     "started_at": started_at,
     "ended_at": Value::Null,
   });
-  let metadata = layout::metadata_path(&run_dir);
-  fs::write(&metadata, pyfmt::json_dumps(&record, &PYTHON_JSON))
+  let metadata = run_dir.join(run_records::RUN_METADATA_NAME);
+  run_records::write_run_metadata(&metadata, &record, &pyfmt::PYTHON_JSON_DEFAULT)
     .map_err(|error| format!("{}: {error}", metadata.display()))?;
   Ok(0)
 }

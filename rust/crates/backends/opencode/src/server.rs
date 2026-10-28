@@ -35,6 +35,8 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::identity::read_pid_stat;
 use charliebot_agents::transport::kill::{kill_process_group, python_exit_code};
 use charliebot_agents::transport::spawn::{SpawnSetup, SpawnSpec, SpawnedChild, spawn_detached_files};
+use charliebot_store::metadata::MetadataReadError;
+use charliebot_store::run_records::read_run_record_file;
 
 const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 static LISTEN_RE: OnceLock<Regex> = OnceLock::new();
@@ -258,13 +260,17 @@ impl OpenCodeServerPool {
       for run in fs::read_dir(runs_directory)? {
         let run = run?;
         let metadata_path = run.path().join(charliebot_store::run_records::RUN_METADATA_NAME);
-        if !metadata_path.is_file() {
+        let Some(record) = read_run_record_file(&metadata_path).map_err(|error| match error {
+          MetadataReadError::Io(error) => {
+            anyhow::Error::new(error).context(format!("reading {}", metadata_path.display()))
+          }
+          MetadataReadError::Json(message) => {
+            anyhow::Error::msg(message).context(format!("decoding {}", metadata_path.display()))
+          }
+        })?
+        else {
           continue;
-        }
-        let record: charliebot_store::run_records::RunRecord = serde_json::from_slice(
-          &fs::read(&metadata_path).with_context(|| format!("reading {}", metadata_path.display()))?,
-        )
-        .with_context(|| format!("decoding {}", metadata_path.display()))?;
+        };
         if record.ended_at.is_some()
           || !record.backend.as_ref().is_some_and(|backend| opencode_backend_ids.contains(backend))
           || !record.pid.zip(record.pid_start.as_deref()).is_some_and(|(pid, start)| relay::same_process(pid, start))
@@ -285,10 +291,7 @@ impl OpenCodeServerPool {
       };
       relay::validate_server_record_name(&turn.server_record)?;
       let record_path = server_directory.join(&turn.server_record);
-      let record: ServerRecord = serde_json::from_slice(
-        &fs::read(&record_path).with_context(|| format!("reading OpenCode server record {}", record_path.display()))?,
-      )
-      .with_context(|| format!("decoding OpenCode server record {}", record_path.display()))?;
+      let record = relay::read_server_record(&record_path)?;
       if !relay::same_process(record.pid, &record.pid_start) {
         continue;
       }
@@ -320,8 +323,7 @@ impl OpenCodeServerPool {
         if active_records.contains(&record_name) {
           continue;
         }
-        let record: ServerRecord = serde_json::from_slice(&fs::read(entry.path())?)
-          .with_context(|| format!("decoding OpenCode server record {}", entry.path().display()))?;
+        let record = relay::read_server_record(&entry.path())?;
         if relay::same_process(record.pid, &record.pid_start) {
           kill_process_group(record.pid, Signal::SIGTERM);
         }

@@ -14,13 +14,13 @@ use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::pyfmt;
-use charliebot_improve::command::{STATE_FILE, loops_dir_in};
+use charliebot_improve::command::{loops_dir_in, read_loop_state};
 use charliebot_store::layout;
-use charliebot_store::run_records::RUN_METADATA_NAME;
+use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::common::{exact, failed, python_repr, read_config, read_json};
+use crate::common::{exact, failed, metadata_read_failure, python_repr, read_config};
 use crate::process;
 
 /// Each backend's registration has moved twice: the agents crate held it from 7b680fcbb until the crate grouping at
@@ -59,7 +59,7 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       if !metadata.is_file() {
         continue;
       }
-      let run = read_json(&metadata).map_err(failed)?;
+      let run = read_run_metadata(&metadata).map_err(|error| failed(metadata_read_failure(&metadata, error)))?;
       if matches!(run.get("ended_at"), Some(value) if !value.is_null()) {
         continue;
       }
@@ -95,13 +95,11 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       continue;
     };
     for loop_dir in sorted_directories(&loops_dir_in(&home, session_id)).map_err(failed)? {
-      let state_path = loop_dir.join(STATE_FILE);
-      if !state_path.is_file() {
+      let Some(state) = read_loop_state(&loop_dir).map_err(failed)? else {
         continue;
-      }
-      let state = read_json(&state_path).map_err(failed)?;
-      let running = state.get("status").and_then(Value::as_str) == Some("running");
-      let Some(controller) = state.get("server_pid").and_then(Value::as_i64) else {
+      };
+      let running = state.status == "running";
+      let Some(controller) = state.server_pid else {
         continue;
       };
       if running && Path::new(&format!("/proc/{controller}")).exists() {

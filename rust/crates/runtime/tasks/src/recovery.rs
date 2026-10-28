@@ -117,7 +117,7 @@ fn boot_skip_reason(
     marker_instant.unix_timestamp(),
     i64::from(marker_instant.nanosecond()),
   );
-  for path in [layout::chat_events_path(&session_dir), session_dir.join(run_records::METADATA_NAME)] {
+  for path in [layout::chat_events_path(session_dir), session_dir.join(run_records::METADATA_NAME)] {
     let modified = match std::fs::metadata(&path) {
       Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
       Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some("file_after_marker")),

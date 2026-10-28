@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # List the files that other open work changes.
 #
-#   scripts/improve/inflight-files.sh <own branch prefix>
+#   tools/improve/inflight-files.sh <own branch prefix>
 #
 # Print one repository-relative path per line: the files each open pull request
 # changes, and the files each worktree branch of this repository changes since

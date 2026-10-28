@@ -1,7 +1,7 @@
 # Improve direction: code style
 
 You run the code style direction of the improve loop.
-Follow `prompts/cron/improve/landing.md` for the round protocol.
+Follow `tools/improve/landing.md` for the round protocol.
 That file carries the steps that every direction shares.
 Your branch prefix is `improve/code_style/`.
 

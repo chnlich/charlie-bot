@@ -42,7 +42,7 @@ Go to Step 3 only when no such pull request is open, because an adopted pull req
 
 ## Step 3: avoid in-flight files and abandoned topics
 
-Run `scripts/improve/inflight-files.sh improve/<direction>/`.
+Run `tools/improve/inflight-files.sh improve/<direction>/`.
 Pick a topic whose files the output does not list.
 A file that another branch changes would force that branch to resolve our conflict.
 
@@ -93,7 +93,7 @@ One pull request per round is the unit that CI and the reviewer check.
 
 ## Step 6: review the diff
 
-Write the review task file: `prompts/cron/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
+Write the review task file: `tools/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
 Run `charlie-code` from a scratch directory outside this worktree (`mktemp -d`).
 Use the model, `api_base` and `context_window` of the `charlie-code-kimi` entry in `backends.options`:
 

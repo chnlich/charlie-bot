@@ -28,3 +28,14 @@ impl CliExit {
     CliExit { code, body: error }
   }
 }
+
+/// The error and each source, joined for a CLI failure message.
+pub fn source_chain(error: &dyn std::error::Error) -> String {
+  let mut messages = Vec::new();
+  let mut current = Some(error);
+  while let Some(error) = current {
+    messages.push(error.to_string());
+    current = error.source();
+  }
+  messages.join(": ")
+}

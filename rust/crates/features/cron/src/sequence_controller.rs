@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CONFIG_D_DIR_NAME, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::home;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
@@ -165,7 +165,7 @@ impl CronSequenceController {
     // The server binds FeatureContext before requests. The path loader keeps isolated registry tests on the same
     // fingerprinted snapshot when they invoke listing hooks without starting that service.
     let home = cron_home();
-    let directory = home.join("config.d/cron.d");
+    let directory = home.join(CONFIG_D_DIR_NAME).join(loader::CRON_D_DIR_NAME);
     match std::env::var_os(REPO_ROOT_ENV).map(PathBuf::from) {
       Some(repo) => match loader::load_snapshot_for_paths(&directory, &repo) {
         Ok((snapshot, _)) => snapshot,
@@ -778,7 +778,7 @@ fn names_for_binding(tasks: &[ScheduledTaskConfig], session_id: &str) -> Vec<Str
 }
 
 fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
-  let directory = home.join("config.d/cron.d");
+  let directory = home.join(CONFIG_D_DIR_NAME).join(loader::CRON_D_DIR_NAME);
   let mut paths = match std::fs::read_dir(directory) {
     Ok(entries) => entries.filter_map(Result::ok).map(|entry| entry.path()).collect::<Vec<_>>(),
     Err(_) => return Vec::new(),
@@ -799,7 +799,7 @@ fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
 }
 
 fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
-  let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
+  let path = home.join(CONFIG_D_DIR_NAME).join(loader::CRON_D_DIR_NAME).join(format!("{name}.yaml"));
   let raw = std::fs::read_to_string(&path)?;
   let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw)?;
   let mut data = serde_json::to_value(yaml)?;

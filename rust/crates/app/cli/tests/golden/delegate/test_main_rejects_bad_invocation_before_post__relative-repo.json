@@ -6,7 +6,7 @@
     "--session",
     "s1",
     "--repo",
-    "meshy-research",
+    "example-repo",
     "--base-branch",
     "main",
     "--task-spec-file",
@@ -23,7 +23,7 @@
   "parser_generated": true,
   "expect": {
     "stdout": "",
-    "stderr": "usage: charliebot delegate [-h] [--session SESSION] [--repo REPO]\n                           --task-spec-file TASK_SPEC_FILE\n                           [--base-branch BASE_BRANCH] [--backend BACKEND]\n                           --keep-worktree {0,1} [--request-id REQUEST_ID]\n                           [--task-type {implement,quick-edit,script-run,verify}]\ncharliebot delegate: error: --repo must be an absolute path (starting with '/'), got: 'meshy-research'\n",
+    "stderr": "usage: charliebot delegate [-h] [--session SESSION] [--repo REPO]\n                           --task-spec-file TASK_SPEC_FILE\n                           [--base-branch BASE_BRANCH] [--backend BACKEND]\n                           --keep-worktree {0,1} [--request-id REQUEST_ID]\n                           [--task-type {implement,quick-edit,script-run,verify}]\ncharliebot delegate: error: --repo must be an absolute path (starting with '/'), got: 'example-repo'\n",
     "exit": 2,
     "requests": []
   }

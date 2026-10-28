@@ -10,7 +10,7 @@ from src.app import registrations
 from src.backends.anthropic_compatible import factory, options
 from src.backends.claude_code import claude_code, claude_launch
 from src.infra import config, config_registry
-from src.infra import event_types as ET
+from src.infra import event_types
 from src.runtime import session_usage
 from src.runtime.hooks import (
     backend_lifecycle,
@@ -20,7 +20,7 @@ from src.runtime.hooks import (
 )
 
 MODEL = "moonshotai/Kimi-K3"
-API_BASE = "https://fpt-jp-slurm-kimi-k3.onca-snapper.ts.net"
+API_BASE = "https://llm-gateway.example.invalid"
 CONTEXT_WINDOW = 409600
 
 
@@ -272,20 +272,20 @@ def test_usage_gauge_uses_the_option_context_window(monkeypatch: pytest.MonkeyPa
   option = _option()
   events = [
       {
-          "type": ET.ASSISTANT,
+          "type": event_types.ASSISTANT,
           "message":
               {
                   "model": MODEL,
                   "usage":
                       {
-                          ET.USAGE_INPUT_TOKENS: 1200,
-                          ET.USAGE_CACHE_CREATION_INPUT_TOKENS: 0,
-                          ET.USAGE_CACHE_READ_INPUT_TOKENS: 0,
+                          event_types.USAGE_INPUT_TOKENS: 1200,
+                          event_types.USAGE_CACHE_CREATION_INPUT_TOKENS: 0,
+                          event_types.USAGE_CACHE_READ_INPUT_TOKENS: 0,
                       },
               },
       },
       {
-          "type": ET.RESULT,
+          "type": event_types.RESULT,
           "modelUsage": {
               MODEL: {
                   "contextWindow": 1_000_000
@@ -296,5 +296,5 @@ def test_usage_gauge_uses_the_option_context_window(monkeypatch: pytest.MonkeyPa
 
   reading = session_usage.resolve_events_usage(events, "manager_turn", backend_option=option)
 
-  assert reading[ET.CONTEXT_FULL] == CONTEXT_WINDOW
-  assert reading[ET.CONTEXT_COMPACT_AT] == CONTEXT_WINDOW - 20_000 - 13_000
+  assert reading[event_types.CONTEXT_FULL] == CONTEXT_WINDOW
+  assert reading[event_types.CONTEXT_COMPACT_AT] == CONTEXT_WINDOW - 20_000 - 13_000

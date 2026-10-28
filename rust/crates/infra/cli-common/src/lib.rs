@@ -15,6 +15,7 @@ pub mod headers;
 pub mod http;
 pub mod json_out;
 pub mod reply;
+pub mod request;
 pub mod resolve;
 pub mod skew;
 pub mod timeouts;

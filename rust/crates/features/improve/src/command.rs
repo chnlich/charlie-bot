@@ -9,6 +9,7 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil::atomic_write_text;
 use charliebot_core::timefmt::utc_now_iso;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -142,14 +143,20 @@ pub fn read_loop_plan(loop_dir: &Path) -> anyhow::Result<Option<String>> {
   Ok(Some(std::fs::read_to_string(&plan_path).with_context(|| format!("read {}", plan_path.display()))?))
 }
 
+/// Read and decode the state file at `path`, the one reader of `state.json` in this module. The caller checks that the
+/// file exists, and the read and parse errors name the path.
+fn read_state_file<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
+  let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+  serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+}
+
 /// The loop's state file, or `None` when it is missing.
 pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> anyhow::Result<Option<ImproveState>> {
   let path = state_path(cfg, session_id, loop_id);
   if !path.exists() {
     return Ok(None);
   }
-  let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-  Ok(Some(serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?))
+  Ok(Some(read_state_file(&path)?))
 }
 
 /// The state file of one loop directory as its JSON value, or `None` when the directory holds no state file. The value
@@ -160,8 +167,7 @@ pub fn read_loop_state_value(loop_dir: &Path) -> anyhow::Result<Option<Value>> {
   if !path.is_file() {
     return Ok(None);
   }
-  let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-  Ok(Some(serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?))
+  Ok(Some(read_state_file(&path)?))
 }
 
 /// The loop's state file, which must exist.

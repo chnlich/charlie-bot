@@ -200,6 +200,8 @@ rust/
     home_init.rs, buildinfo.rs, state.rs
   crates/app/script-tests/
                                   the stand-in servers (src/bin) and the switch-server tests (tests/switch_server/)
+  crates/app/switch-helper/
+                                  the switch script's home, run-record and API-answer reads (`charliebot switch-helper`)
 ```
 
 ## Differences from the Python server

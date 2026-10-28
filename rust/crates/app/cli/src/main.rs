@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher (`src/app/main.py`).
 //!
-//! The vocabulary is the 21 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 22 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a name this port has not reached yet prints
 //! the not-ported JSON error and exits 1 — it never calls the Python CLI.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 21] = [
+const COMMANDS: [&str; 22] = [
   "artifact",
   "compaction-context",
   "config",
@@ -36,6 +36,7 @@ const COMMANDS: [&str; 21] = [
   "schedule-trigger",
   "session",
   "slack",
+  "switch-helper",
   "voice",
   "wait-guard",
   "web",
@@ -116,6 +117,7 @@ fn run_subcommand(
     "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
     "slack" => charliebot_slack::cli::main(args),
+    "switch-helper" => charliebot_switch_helper::main(args),
     "voice" => commands::voice::main(args, host),
     "wait-guard" => commands::wait_guard::main(args),
     "web" => charliebot_web_reply::cli::main(args, host),

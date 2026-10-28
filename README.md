@@ -98,7 +98,7 @@ release, and each subcommand keeps the argv, stdout and exit codes of the Python
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
 
-The Python-only `config`, `disk-sweep`, `router`, `storage`, `usage-ledger` and `voice-replay-eval`
+The Python-only `config`, `disk-sweep`, `storage`, `usage-ledger` and `voice-replay-eval`
 subcommands have no Rust port and no caller; the binary answers them with the unknown-subcommand
 error.
 

@@ -16,8 +16,8 @@ use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
-/// caller; the six caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 20] = [
+/// caller; the caller-less names the Python CLI lists are unknown names here.
+const COMMANDS: [&str; 21] = [
   "artifact",
   "compaction-context",
   "config",
@@ -32,6 +32,7 @@ const COMMANDS: [&str; 20] = [
   "memory",
   "plan",
   "publish",
+  "router",
   "schedule-trigger",
   "session",
   "slack",
@@ -108,6 +109,10 @@ fn run_subcommand(
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
     "publish" => charliebot_artifacts::cli::publish::main(args, host),
+    "router" => {
+      commands::router::main(args);
+      Ok(())
+    }
     "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
     "slack" => charliebot_slack::cli::main(args),

@@ -13,12 +13,12 @@ Sections 1-3 are the Python baseline as history: the Python CLI, its entry point
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
 `rust/crates/infra/cli-common`. Every row in section 3 marked *ported to Rust* runs on the Rust binary, and the
-dispatcher's vocabulary is the 14 caller-bearing names; the six caller-less Python names (`config`, `disk-sweep`,
-`router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2). The golden cases under
+dispatcher's vocabulary is the 21 caller-bearing names; the four caller-less Python names (`disk-sweep`,
+`storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2). The golden cases under
 `rust/crates/app/cli/tests/golden/` were recorded from the Python CLI while it existed and now replay against the Rust
 binary; the replay command is in `rust/crates/app/cli/README.md`. Rust deviations: no port
 cache — the port comes from `<home>/config.yaml`'s `server` section on every call; argument-parser help and usage text
-may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 14 caller-bearing names, so its
+may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 21 caller-bearing names, so its
 help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
 structlog console lines on stdout (a wall-clock stamp and a pid per line) are not reproduced — the golden harness drops
 them from both sides.
@@ -102,7 +102,7 @@ below.
 | `plan present --file F [--session]`, `plan amend --file F --note N`, `plan approve [--plan]`, `plan close --plan P` | `GET /api/sessions/<sid>/plans`, then `POST /api/internal/plan/<verb>` | none (the server validates and writes `plans.json`) | 0; 1; 2 | *ported to Rust* |
 | `plan diff [--plan] [--v]`, `plan list` | `GET /api/sessions/<sid>/plans` | `plan diff` takes the registry from the route and reads the two version files straight from the session directory (`_read_version_file`), then diffs them locally | 0; 1; 2 | *ported to Rust*: `plan_diff::diff_text`, the Rust differ's text form |
 | `publish <artifact> [-- lane options]` | none | With `publish.command`: runs it with the artifact's absolute path plus the lane options; success is exit 0 and exactly one `http(s)://` line on stdout. Otherwise: needs `<publish.dir>/index.html`, creates `<publish.dir>/<token_urlsafe(16)>/` (0755), copies the file in (0644), and prints `<public_base_url>/<token>/<basename>`. | 0 prints the URL; 1 any failure (JSON on stderr); 2 usage | *ported to Rust*: reads the registered raw `publish:` section and validates the selected lane |
-| `router` | none | Reads one JSON request from stdin and writes one JSON answer to stdout. Reads `<home>/router.yaml` and the `api_key` in the credentials section named by `jev.credential`; posts the choice request to Jev. | 0; 1 config, credential or request failure; 2 usage |  |
+| `router` | none | Reads one JSON request from stdin and writes one JSON answer to stdout. Reads `<home>/router.yaml` on every call (`files.md` 5.18) and the `api_key` in the credentials section named by `jev.credential`; posts the choice request to Jev with a 5 s attempt bound and one retry after an HTTP 429 that waits 10 s. `stdout` carries only the one-line JSON answer; a failure prints `router: <message>` on stderr. | 0; 1 config, credential or request failure; 2 usage | *ported to Rust* — the config and stdin field errors keep the Python wording; the underlying YAML, HTTP and JSON library error texts differ (serde_yaml, reqwest, serde_json) |
 | `schedule-trigger --max-wait S --message M [--watch SPEC...] [--cmd CMD [--host H] [--cwd D]] [--session]` | `POST /api/internal/schedule-trigger` (422 maps to exit 2) | With `--cmd`, it starts `bash -lc "(<cmd>\n); echo $? > <exit file>"` detached, locally or over `ssh <host>` (remote files in `/tmp/charliebot_runs/<launch_id>/`), and writes `<home>/sessions/<sid>/launches/<launch_id>/metadata.json` (`files.md` 6.7). Watch specs: `<pid>`, `<host>:<pid>`, `slurm:<job>`, `<host>:slurm:<job>`. | 0 prints `{trigger_id, fire_at, ...launch fields}`; 2 usage, or a rejected or failed registration (a started process is killed first); 3 the ssh start failed or the remote pid did not parse (nothing registered); 1 client contract | *ported to Rust*. Deviations: under `--cmd` every failed registration exits 2 after the kill, as Python's `except SystemExit` does, so a client-contract failure exits 2 there, not 1; a stored trigger that lacks `id`, `fire_at` or `created_at` never matches the readback (Python fails with a KeyError); an integer flag beyond the i64 range is a usage error. Shared with Python and not fixed here: the backgrounded `setsid` keeps ssh's stdout open, so a `--host` start returns only when the command ends or after the 30 s bound (checked with a local pipe, not with sshd). |
 | `session create [--name] [--backend] [--parent P --profile manager\|worker] [--task-file F] [--request-id] [--group G] ...` | `POST /api/sessions/`, then `POST /api/sessions/<id>/group` when `--group` is given | Reads `F` | 0 prints JSON; 1; 2 (for example `"v2 task create requires both --parent and --profile"`) | *ported to Rust*
 | `session tree [--root] [--include-archived] [--limit]` | `GET /api/sessions/tree` | none | 0; 1; 2 | *ported to Rust*
@@ -132,5 +132,5 @@ uv run python -m src.app.main --help | sed -n '/Available subcommands:/,$p' | ta
   | while read c; do grep -q "\`$c" rust/docs/contract/state/cli.md && echo "ok $c" || echo "MISSING $c"; done
 ```
 
-The Python CLI is deleted; the Rust binary now answers the same question via its dispatcher help, which names the 14
+The Python CLI is deleted; the Rust binary now answers the same question via its dispatcher help, which names the 21
 caller-bearing subcommands.

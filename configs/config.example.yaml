@@ -63,7 +63,8 @@ backends:
   # PATH; each selection starts it once, feeds it one JSON object on stdin ({role, text,
   # candidates: [{id, cooling_until}]}) and reads one JSON object on stdout
   # ({backends: [id, ...], reason: "one line"}). The server side is route_command in
-  # rust/crates/runtime/agents/src/backend_pool.rs; the charliebot router CLI it usually names is Python (src/).
+  # rust/crates/runtime/agents/src/backend_pool.rs; the charliebot router CLI it names is the Rust
+  # subcommand in rust/crates/app/cli/src/commands/router.rs, which reads <charliebot home>/router.yaml.
   # routing:
   #   command: [charliebot, router]
   options:

@@ -369,7 +369,7 @@ The server does not create a speech-model directory. Python removed the local sp
 ### 5.18 `router.yaml`
 
 - Writer: none in the server or CLI. The operator copies and edits this host-owned file.
-- Reader: `src/features/router/routing.py::load_config`, on every `charliebot router` invocation.
+- Reader: `rust/crates/app/cli/src/commands/router.rs::load_config`, on every `charliebot router` invocation.
 - Shape: a YAML mapping with `jev: {url, model, credential}`, `instructions`, `routine`, `design` and `strong`.
   `strong` is an ordered list of backend ids. `jev.credential` names the `credentials.yaml` section whose
   `api_key` authenticates the request. Missing or invalid fields stop the router command with an error.

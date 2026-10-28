@@ -1,0 +1,32 @@
+[package]
+name = "charliebot-script-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The stand-in programs the script tests copy into their release roots and panes. Each test binary's stubs and the
+# scripts under test are shared through charliebot-shell-harness.
+[[bin]]
+name = "fake-release-server"
+path = "src/bin/fake_release_server.rs"
+
+[[bin]]
+name = "fake-pane-server"
+path = "src/bin/fake_pane_server.rs"
+
+[dependencies]
+http.workspace = true
+libc.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+charliebot-shell-harness.workspace = true
+chrono.workspace = true
+nix.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+wait-timeout.workspace = true

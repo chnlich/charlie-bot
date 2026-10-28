@@ -11,11 +11,13 @@ members = [
     "crates/backends/opencode",
     "crates/runtime/agents",
     "crates/infra/core",
+    "crates/infra/shell-harness",
     "crates/infra/compat",
     "crates/infra/cli-common",
     "crates/app/cli",
     "crates/app/packages",
     "crates/app/server",
+    "crates/app/script-tests",
     "crates/app/structure",
     "crates/runtime/tasks",
     "crates/infra/pyhtml",
@@ -168,6 +170,7 @@ charliebot-registry = { path = "crates/runtime/registry" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/runtime/store" }
 charliebot-session-api = { path = "crates/runtime/session-api" }
+charliebot-shell-harness = { path = "crates/infra/shell-harness" }
 charliebot-triggers = { path = "crates/runtime/triggers" }
 charliebot-tasks = { path = "crates/runtime/tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }

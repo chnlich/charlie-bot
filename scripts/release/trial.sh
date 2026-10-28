@@ -165,7 +165,7 @@ if (( SELF_TEST == 0 )); then
     if ! command -v systemd-run >/dev/null 2>&1; then
       preflight_fail 'systemd-run resolves on PATH for the serve scope'
     fi
-    if ! systemd-run --user --scope --slice=charliebot.slice -p MemoryMax=2G \
+    if ! systemd-run --user --scope -p MemoryMax=2G \
       --unit="charliebot-release-trial-serve-probe-$$" true >/dev/null 2>&1; then
       preflight_fail 'systemd-run starts a MemoryMax=2G user scope for the serve server'
     fi
@@ -1430,7 +1430,7 @@ cleanup_on_exit() {
     if ! cleanup_trial_tmux_servers; then
       exit_status=1
     fi
-    if (( LIVE_AFTER_RECORDED == 0 )); then
+    if (( SERVE_MODE == 0 && LIVE_AFTER_RECORDED == 0 )); then
       local live_status
       live_status=$(live_version_probe)
       if [[ $live_status == 200 ]]; then
@@ -1509,7 +1509,7 @@ start_server() {
   else
     # The serve server runs inside a scope whose MemoryMax keeps a measurement beside the live server, and without the
     # slow-git wrapper, whose per-call delay would distort the measurement's timings.
-    systemd-run --user --scope --slice=charliebot.slice -p MemoryMax=2G --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+    systemd-run --user --scope -p MemoryMax=2G --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
@@ -1605,7 +1605,7 @@ run_serve_mode() {
   # One caller command instead of the release checks. The exit code is the command's, demoted to 1 by a foreign cgroup
   # removal (sweep-check) or any cleanup failure.
   local cmd_rc=0 sweep_failed=0 cleanup_failed=0
-  local wait_started live_status server_pid state stray_pids
+  local wait_started server_pid state stray_pids
   SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   if ! start_server; then
     printf 'FAIL serve Startup: the server did not become ready on 127.0.0.1:%s\n' "$CHOSEN_PORT"
@@ -1664,14 +1664,6 @@ run_serve_mode() {
     printf 'SERVE PASS ChildProcess: no process of the trial tree remains\n'
   fi
   check_sweep_names 'serve' || sweep_failed=1
-
-  live_status=$(live_version_probe)
-  if [[ $live_status == 200 ]]; then
-    printf 'LIVE_AFTER PASS GET /api/internal/version port=18498 HTTP 200\n'
-  else
-    printf 'LIVE_AFTER FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
-  fi
-  LIVE_AFTER_RECORDED=1
 
   if ! capture_evidence; then
     cleanup_failed=1

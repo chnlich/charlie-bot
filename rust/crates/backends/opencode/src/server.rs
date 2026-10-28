@@ -14,6 +14,8 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::config::BackendOption;
 use charliebot_core::home;
+use charliebot_core::repo_root::REPO_ROOT_ENV;
+use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
 use charliebot_registry::backend::Env;
 use futures_util::StreamExt;
 use memchr::memchr;
@@ -65,7 +67,7 @@ impl OpenCodeHost {
     let root = PathBuf::from(home_dir);
     let binary = root.join(".opencode").join("bin").join("opencode");
     let profile_home = home::charliebot_home_dir().map_err(anyhow::Error::new)?;
-    let repo_root = std::env::var_os("CHARLIEBOT_REPO_ROOT")
+    let repo_root = std::env::var_os(REPO_ROOT_ENV)
       .map(PathBuf::from)
       .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.."));
     Ok(Self {
@@ -764,8 +766,8 @@ impl OpenCodeServer {
 
   pub(crate) fn server_env_from(&self, mut env: Env, password: &str) -> anyhow::Result<Env> {
     let host = self.pool()?.host.clone();
-    env.remove("CHARLIEBOT_RUN_TOKEN");
-    env.remove("CHARLIEBOT_SESSION_ID");
+    env.remove(RUN_TOKEN_ENV);
+    env.remove(SESSION_ID_ENV);
     env.extend(self.pool()?.host.extra_env.clone());
     env.insert("XDG_DATA_HOME".to_string(), host.data_dir().display().to_string());
     env.insert("XDG_STATE_HOME".to_string(), host.state_dir().display().to_string());

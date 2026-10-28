@@ -2,12 +2,9 @@
 
 use charliebot_core::credentials;
 use charliebot_core::home;
+use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
 
 use crate::exit::CliExit;
-use crate::resolve;
-
-/// `constants.RUN_TOKEN_ENV`: the presented bearer a run carries. One spelling everywhere.
-pub const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 
 /// `constants.CALLER_SESSION_HEADER`: the calling session on internal-API calls. One spelling everywhere.
 pub const CALLER_SESSION_HEADER: &str = "X-CharlieBot-Caller-Session";
@@ -45,7 +42,7 @@ pub fn internal_api_auth_headers() -> Result<Vec<(String, String)>, CliExit> {
 /// The value comes from the environment variable only: it names the process the server started,
 /// while the cwd only names a directory.
 fn caller_session() -> Option<String> {
-  std::env::var(resolve::SESSION_ID_ENV_VAR).ok().filter(|value| !value.is_empty())
+  std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty())
 }
 
 /// `configured_access_key()`: the `charliebot.access_key` credential, or `None` when unset. A

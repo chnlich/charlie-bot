@@ -9,6 +9,7 @@ use std::process;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::run_token::RUN_TOKEN_ENV;
 use charliebot_core::{credentials, home, pystr, run_token};
 use charliebot_store::run_identity;
 use charliebot_store::run_records::RunRecord;
@@ -22,7 +23,6 @@ mod proposal;
 mod proposal_check;
 mod store;
 
-const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 const TEST_NOW_ENV: &str = "CHARLIEBOT_MEMORY_CLI_TEST_NOW";
 #[derive(Parser)]
 #[command(name = "memory", about = "Labeled-entry memory store: query, add captures, and lint")]

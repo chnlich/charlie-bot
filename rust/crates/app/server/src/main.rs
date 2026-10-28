@@ -39,7 +39,7 @@ use charliebot_agents::agent_environment::{self, AgentBaseEnvironment};
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
-use charliebot_core::venv::VenvBin;
+use charliebot_core::venv::{VENV_BIN_ENV, VenvBin};
 use charliebot_core::{config, home, logging, paths, v1_sessions};
 use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
 use charliebot_registry::templating::Templating;
@@ -468,7 +468,7 @@ struct StateParts {
 /// The venv bin and the checkout, read once, and the process environment rewritten from them. Any error names the input
 /// it concerns.
 fn replace_environment() -> Result<(VenvBin, RepoRoot, AgentBaseEnvironment), String> {
-  let venv_bin = VenvBin::new(std::env::var_os("CHARLIEBOT_VENV_BIN")).map_err(|error| error.to_string())?;
+  let venv_bin = VenvBin::new(std::env::var_os(VENV_BIN_ENV)).map_err(|error| error.to_string())?;
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
   let server_executable =
     std::env::current_exe().map_err(|error| format!("cannot resolve charliebot-server path: {error}"))?;

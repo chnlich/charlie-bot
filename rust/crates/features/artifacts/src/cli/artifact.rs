@@ -122,9 +122,7 @@ impl CheckInputs {
     Ok(CheckInputs {
       home: host.cfg.charliebot_home.clone(),
       cwd,
-      session_env: std::env::var(charliebot_cli_common::resolve::SESSION_ID_ENV_VAR)
-        .ok()
-        .filter(|value| !value.is_empty()),
+      session_env: std::env::var(charliebot_core::run_token::SESSION_ID_ENV).ok().filter(|value| !value.is_empty()),
       repo_root: host.repo_root.clone(),
     })
   }

@@ -25,7 +25,11 @@ use wait_timeout::ChildExt;
 /// The `charlie-code --help` flags the backend's command carries, so the installed CLI answers to it.
 const CONTRACT_FLAGS: [&str; 6] = ["--task-file", "--json", "--model", "--api-base", "--resume", "--context-window"];
 
-/// The reinstall guidance the `binary-missing` and `binary-broken` lines carry.
+/// The install command both failure lines carry; Python's `binary-missing` line is the bare command, and its
+/// `binary-broken` line prefixes the reinstall instruction.
+const INSTALL_HINT: &str = "uv tool install -e ~/workspace/charlie-code";
+
+/// The reinstall guidance the `binary-broken` line carries.
 const REINSTALL: &str = "reinstall charlie-code (uv tool install -e ~/workspace/charlie-code)";
 
 #[derive(Parser)]
@@ -86,14 +90,14 @@ fn preflight(backend_id: &str) -> Result<(), String> {
       let text = format!("{error:#}");
       if text.starts_with("charlie-code binary not found on PATH") {
         return Err(format!(
-          "binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin ({REINSTALL})"
+          "binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin ({INSTALL_HINT})"
         ));
       }
       return Err(format!("option-missing: {text}"));
     }
   };
   let bin = host.resolve_binary("charlie-code").map_err(|_| {
-    format!("binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin ({REINSTALL})")
+    format!("binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin ({INSTALL_HINT})")
   })?;
 
   // Mechanism 3: the binary actually runs.

@@ -140,9 +140,12 @@ fn a_missing_binary_names_the_install_guidance() {
   let run = run_preflight(&sandbox, &home, "synthetic-cc");
 
   assert_eq!(run.code, 1, "{}", run.describe());
+  // Python's line carries the bare install command, without the `reinstall charlie-code` prefix its
+  // `binary-broken` line has.
   assert_eq!(
     run.stderr,
-    format!("binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin ({REINSTALL})\n")
+    "binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin \
+     (uv tool install -e ~/workspace/charlie-code)\n"
   );
 }
 

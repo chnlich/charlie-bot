@@ -12,7 +12,8 @@ use charliebot_store::metadata::{TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::session_fork::CloseReportRedelivery;
 use charliebot_store::{
-  ChatEvent, ControlGuard, SharedChatEvent, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers,
+  ChatEvent, ChatEventHistory, ControlGuard, NodeFacts, SharedChatEvent, Store, StoreError, StoreHookFuture,
+  StoreResult, StructuralBlockers,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -745,10 +746,24 @@ impl Dispatcher {
     )
   }
 
+  /// One recipient's answer to whether its history holds one report event id.
+  ///
+  /// The folded id index covers the same archived and live events as the history view, and the node's fold is shared
+  /// with the rest of the boot pass, so a checked id costs a hash lookup instead of a walk over the recipient's whole
+  /// history. A history whose task fold failed has no index; its events are scanned unparsed instead, which is the
+  /// only reading available for it.
+  fn delivered_report_history(&self, recipient: &str) -> StoreResult<DeliveredReportHistory> {
+    let facts = self.store.node_facts(recipient)?;
+    if facts.task().is_ok() {
+      return Ok(DeliveredReportHistory::Indexed(facts));
+    }
+    Ok(DeliveredReportHistory::Scanned(self.store.load_all_facts_view_sync(recipient)?))
+  }
+
   fn undelivered_close_recipients(&self, session_id: &str) -> StoreResult<Vec<(SharedChatEvent, String)>> {
     let close_events = self.store.node_facts(session_id)?.task()?.close_events.clone();
     let mut undelivered = Vec::new();
-    let mut recipient_events = HashMap::new();
+    let mut recipient_events: HashMap<String, DeliveredReportHistory> = HashMap::new();
     for close in close_events {
       let close_value = close.to_value();
       let recipient = close_value.get("report_to");
@@ -760,16 +775,32 @@ impl Dispatcher {
       let report_id =
         charliebot_store::control_events::stable_child_report_id(session_id, &source_event_id, &recipient);
       if !recipient_events.contains_key(&recipient) {
-        recipient_events.insert(recipient.clone(), self.store.load_all_facts_view_sync(&recipient)?);
+        let history = self.delivered_report_history(&recipient)?;
+        recipient_events.insert(recipient.clone(), history);
       }
-      let events = recipient_events.get(&recipient).expect("recipient history is inserted before it is read");
-      let already_delivered =
-        events.iter().any(|event| event.get("id").and_then(CompactValue::as_str) == Some(report_id.as_str()));
-      if !already_delivered {
+      let history = recipient_events.get(&recipient).expect("recipient history is inserted before it is read");
+      if !history.contains(&report_id) {
         undelivered.push((close, recipient));
       }
     }
     Ok(undelivered)
+  }
+}
+
+/// A recipient's history as the delivered-report check reads it.
+enum DeliveredReportHistory {
+  Indexed(Arc<NodeFacts>),
+  Scanned(ChatEventHistory),
+}
+
+impl DeliveredReportHistory {
+  fn contains(&self, event_id: &str) -> bool {
+    match self {
+      DeliveredReportHistory::Indexed(facts) => facts.task().is_ok_and(|task| task.events_by_id.contains_key(event_id)),
+      DeliveredReportHistory::Scanned(history) => {
+        history.iter().any(|event| event.get("id").and_then(CompactValue::as_str) == Some(event_id))
+      }
+    }
   }
 }
 
@@ -1314,7 +1345,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn close_report_scan_reuses_one_shared_recipient_history() {
+  async fn close_report_scan_resolves_each_recipient_once_through_its_id_index() {
     let (_home, features) = features().await;
     let parent =
       test_fixtures::manager_session(&features, "report-parent-count", "fable", None, "claude-report-parent").await;
@@ -1346,6 +1377,8 @@ mod tests {
         .await
         .unwrap();
     }
+    // Fold neither side before the first scan: it folds the child and the recipient once each, and every close event
+    // then asks the recipient's id index instead of walking its event history.
     let dispatcher = dispatcher(&features);
     let before = features.store.history_work();
 
@@ -1354,7 +1387,12 @@ mod tests {
     let after = features.store.history_work();
     assert_eq!(blockers.len(), 8);
     assert_eq!(after.owned_event_clones - before.owned_event_clones, 0);
-    assert_eq!(after.file_reads - before.file_reads, 1, "one parent history load serves all eight close events");
-    assert_eq!(after.event_history_views - before.event_history_views, 1);
+    assert_eq!(after.event_history_views - before.event_history_views, 0, "no recipient event view is scanned");
+
+    let before_again = features.store.history_work();
+    let blockers_again = dispatcher.undelivered_report_blockers(&child.id).unwrap();
+    let after_again = features.store.history_work();
+    assert_eq!(blockers_again.len(), 8);
+    assert_eq!(after_again.full_folds - before_again.full_folds, 0, "a repeated scan reuses both folds");
   }
 }

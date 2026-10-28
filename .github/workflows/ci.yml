@@ -58,6 +58,29 @@ jobs:
       - name: Test
         run: uv run pytest -q -m "not local_only"
 
+  frontend-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from node_modules;
+      # installing up front keeps the installs the suites run themselves at no-op speed.
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+
+      # One suite per tests/*.test.{js,mjs} file on disk: the glob is the single source, so a suite file that
+      # lands runs here without a registration edit. The bound turns a hung runner into a step failure instead
+      # of a CI hang.
+      - name: Test
+        run: |
+          suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) | sort)
+          count=$(printf '%s\n' "$suites" | grep -c .)
+          echo "Running $count node suite files"
+          [ "$count" -gt 0 ]
+          timeout 780 node --test $suites
+
   # The image is pinned by name. The live host runs Ubuntu 24.04 with glibc 2.39, and a binary built against a
   # newer glibc does not start there.
   release-build:

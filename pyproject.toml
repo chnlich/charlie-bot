@@ -24,7 +24,12 @@ dev = [
     "pylint-google-style==0.1.2",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    # The Rust differential tests launch Python FastAPI reference apps (rust/crates/infra/compat/tests/),
+    # so the dev group keeps their runtime: uvicorn serves both fixtures, and the multipart corpus
+    # compares against python-multipart 0.0.22 (0.0.32 disagrees on one urlencoded case).
+    "python-multipart==0.0.22",
     "ruff==0.16.1",
+    "uvicorn[standard]>=0.42.0",
 ]
 
 # Loads with every pytest run through this venv and restricts it before collection — see src/infra/pytest_sandbox.py.

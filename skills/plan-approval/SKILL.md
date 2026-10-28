@@ -129,8 +129,8 @@ An understanding page lists the divergences of a request that admits several rea
 - Replies that touch the plan are feedback, not approval: Trade-off resolutions by
   number, added constraints, questions, changed terms.
   Fold each into the plan, and register the revision with `charliebot plan amend`.
-  Continue the line after verifying the revision under the Verify section.
-  The revision then meets the same review limit as the first plan.
+  Continue the line after following the revision rule in Verify.
+  This lets that rule determine when the revision ends.
   A revision registers with `charliebot plan amend`, which requires `--note`: the one
   line saying why this version differs from its predecessor. The note rides on the version record; the body stays the complete
   current design and carries no revision marks, and the reader gets the differences
@@ -181,9 +181,10 @@ An understanding page lists the divergences of a request that admits several rea
   3. Register the plan with `charliebot plan present`.
   4. Run one Improve round: answer the plan page's Improve prompt
      (src/features/artifacts/static/artifact-comments.js) yourself.
-  5. Start round 1 and the cold read in the same turn, following the round rule below.
-  6. Approve the plan with `charliebot plan approve`, and send the user its link.
-  The order keeps verification on the registered design before delivery.
+  5. Start verify round 1 and the cold read in the same turn, following the revision rule below.
+  6. Complete the revision under that rule.
+  7. Approve the plan with `charliebot plan approve`, and send the user its link.
+  The order puts approval after the revision is complete.
   Verify is a read-only repo-less delegation and runs on
   a registered plan, so the goal it measures against has one home and the plan is listed
   while the rounds run.
@@ -198,32 +199,52 @@ An understanding page lists the divergences of a request that admits several rea
 - Verify also checks each wait, test and user question in the plan.
   Each one names the requirement it protects (prompts/manager_workflows.md, Design section).
   A step that names none is a finding, so a plan carries no step that only adds a wait.
-- A revision contains the versions between two triggers.
-  The initial plan starts the first revision.
-  User feedback or a design change by the author starts a new revision.
-  Findings folded into the plan stay in the current revision.
-  Run round 1 on each revision.
-  Run at most two verify rounds per revision.
-  The limit keeps findings folds from starting an endless review loop.
-  When a cold read starts with verify in the same turn, count it in that verify round.
-  Fold the findings from the round into the plan.
-  The combined fold keeps each round's findings together.
-  When round 1 findings change the plan, run round 2 on those changes.
-  Declare delta for round 2.
-  Re-check the changes that folded round 1 findings and whether those findings are closed.
-  Round 2 checks the fold before the revision is finalized.
-  After round 2, fold its findings and finalize the revision.
-  This completes the revision without a third round.
+- Treat the initial plan as the first revision.
+  This starts the lineage's review sequence.
+  Treat the versions between triggers as one revision.
+  This keeps versions from one review cycle together.
+  When the user gives feedback or the author changes the design outside a findings fold, start a new revision.
+  This gives each independent design change its own review cycle.
+  Keep verify and cold-read findings folds in the current revision.
+  This stops findings folds from resetting the round limit.
+  Run verify round 1 on each revision.
+  This checks each revision under its declared scope.
+  For each revision of a plan for the user, run at most two verify rounds.
+  This stops findings folds from starting an endless review loop.
+  When a cold read starts in the same turn as verify, count it in that verify round.
+  This keeps the cold read within the round limit.
+  When a verify round 1 finding holds, fold it into the plan.
+  This gives verify round 2 a defined change set to re-check.
+  When verify round 1 findings change the plan, run verify round 2 on those changes.
+  This checks the fold before finalization.
+  For verify round 2, declare delta.
+  This confines verify round 2 to the verify round 1 fold.
+  For verify round 2, quote only verify round 1 fold changes from `charliebot plan diff` into the spec.
+  This keeps verify round 2 scoped to changes from verify round 1.
+  Re-check those changes and whether verify round 1 findings are closed.
+  This confirms whether the fold closed verify round 1 findings.
+  After verify round 2, fold its findings into the plan.
+  This records findings from the final round.
+  Then finalize the revision.
+  This ends verification without a third round.
+  When verify round 1 findings do not change the plan, finalize the revision.
+  This avoids verify round 2 when round 1 changes nothing.
 - Declare the scope in every spec.
-  A spec without a declared scope is verified as full.
-  For round 1 of a lineage, declare full.
-  For round 1 of a later revision, declare delta or full.
-  When the revision changes the design's structure, declare full for round 1.
-  Full rounds cover adequacy's whole-plan refutation.
-  For a delta round, quote the declared terms from `charliebot plan diff` into the spec.
+  This tells the reviewer which terms to re-check.
+  When a spec omits its scope, verify it as full.
+  This keeps missing scope from narrowing the review.
+  For verify round 1 of a lineage, declare full.
+  This gives adequacy the whole plan to refute.
+  For verify round 1 of a later revision, declare delta or full.
+  This matches the check to the revision's changes.
+  When the revision changes the design's structure, declare full for verify round 1.
+  This lets adequacy check the whole design after structural changes.
+  When verify round 1 of a later revision declares delta, quote its terms from `charliebot plan diff` into the spec.
+  This anchors the review in recorded changes.
   Re-check those terms and their dependents.
+  This checks the effects of those changes.
   Re-check whether prior findings are closed.
-  The delta check covers the actual changes, their effects, and prior findings.
+  This confirms earlier findings are resolved.
 - Every round of one plan measures with the same ruler: the spec's Goal quotes the registered
   version's section 1 by path, and cites fidelity and adequacy as defined here. A round that
   wants a wider question puts that question to the user.

@@ -78,15 +78,33 @@ pub fn write_server_record(path: &Path, record: &ServerRecord) -> anyhow::Result
   write_atomic_json(path, record, 0o600)
 }
 
+/// Why a server record could not be read: its file could not be read, or its bytes are not a server record. The two
+/// stay apart so each caller words its own error.
+#[derive(Debug)]
+pub enum ServerRecordReadError {
+  Read(std::io::Error),
+  Decode(serde_json::Error),
+}
+
+impl ServerRecordReadError {
+  /// The failure as the error it wraps, with no context.
+  pub fn into_error(self) -> anyhow::Error {
+    match self {
+      Self::Read(error) => error.into(),
+      Self::Decode(error) => error.into(),
+    }
+  }
+}
+
 /// Read one server record: the bytes at `path` decoded as the record `write_server_record` wrote.
-pub fn read_server_record(path: &Path) -> anyhow::Result<ServerRecord> {
-  let bytes = fs::read(path).with_context(|| format!("reading OpenCode server record {}", path.display()))?;
-  serde_json::from_slice(&bytes).with_context(|| format!("decoding OpenCode server record {}", path.display()))
+pub fn read_server_record(path: &Path) -> Result<ServerRecord, ServerRecordReadError> {
+  let bytes = fs::read(path).map_err(ServerRecordReadError::Read)?;
+  serde_json::from_slice(&bytes).map_err(ServerRecordReadError::Decode)
 }
 
 /// Persist why the OpenCode process or its event stream ended while this server was running.
 pub fn write_server_exit_reason(path: &Path, reason: String) -> anyhow::Result<()> {
-  let mut record = read_server_record(path)?;
+  let mut record = read_server_record(path).map_err(ServerRecordReadError::into_error)?;
   record.exit_reason = Some(reason);
   write_atomic_json(path, &record, 0o600)
 }

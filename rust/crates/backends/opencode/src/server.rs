@@ -291,7 +291,14 @@ impl OpenCodeServerPool {
       };
       relay::validate_server_record_name(&turn.server_record)?;
       let record_path = server_directory.join(&turn.server_record);
-      let record = relay::read_server_record(&record_path)?;
+      let record = relay::read_server_record(&record_path).map_err(|error| match error {
+        relay::ServerRecordReadError::Read(error) => {
+          anyhow::Error::new(error).context(format!("reading OpenCode server record {}", record_path.display()))
+        }
+        relay::ServerRecordReadError::Decode(error) => {
+          anyhow::Error::new(error).context(format!("decoding OpenCode server record {}", record_path.display()))
+        }
+      })?;
       if !relay::same_process(record.pid, &record.pid_start) {
         continue;
       }
@@ -323,7 +330,12 @@ impl OpenCodeServerPool {
         if active_records.contains(&record_name) {
           continue;
         }
-        let record = relay::read_server_record(&entry.path())?;
+        let record = relay::read_server_record(&entry.path()).map_err(|error| match error {
+          relay::ServerRecordReadError::Read(error) => anyhow::Error::new(error),
+          relay::ServerRecordReadError::Decode(error) => {
+            anyhow::Error::new(error).context(format!("decoding OpenCode server record {}", entry.path().display()))
+          }
+        })?;
         if relay::same_process(record.pid, &record.pid_start) {
           kill_process_group(record.pid, Signal::SIGTERM);
         }

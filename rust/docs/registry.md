@@ -17,8 +17,8 @@ Rules that hold for every hook kind:
 
 ## Composition root
 
-`rust/crates/app/packages/src/lib.rs` lists the packages in the order of
-`src/app/registrations.py:16-46`, one entry per package:
+`rust/crates/app/packages/src/lib.rs` owns the package list, one entry per package. The list began as the order of
+`src/app/registrations.py:16-46`, which now serves only the remaining Python scripts:
 
 ```rust
 pub const PACKAGES: &[(&str, RegisterFn)] = &[

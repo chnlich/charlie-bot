@@ -1,20 +1,17 @@
 # charliebot-packages
 
 The composition root both binaries share. It owns the runtime registrations and the package registration list in
-the server's order (`src/app/registrations.py:16-46`). The server binary and the CLI binary both register the
-packages through this crate, so a package added here reaches both and the two lists cannot drift.
+the server's order. The server binary and the CLI binary both register the packages through this crate, so a
+package added here reaches both and the two lists cannot drift.
 
-## Public API and Python source
+## Public API
 
-| Rust item | Python source |
+| Rust item | Role |
 | --- | --- |
-| `RUNTIME` | no Python line: the server's runtime registrations, which run before the package list |
-| `PACKAGES` | `src/app/registrations.py:16-46` |
-| `registry` | the server's composition root |
-| `cli_registry` | the CLI's composition root: `PACKAGES` without the Python-only stubs |
+| `RUNTIME` | the server's runtime registrations, which run before the package list |
+| `PACKAGES` | the server's package list, one entry per package |
+| `registry` | the composition root both binaries share |
 
-## The CLI subset
-
-`cli_registry` leaves out `PYTHON_ONLY_PACKAGES`, which currently holds `src.features.router`. A CLI verb loads the
-config and resolves backend types; it renders no page and serves no route, so the no-op stub registers nothing a
-verb uses. This omission is the only difference between the two binaries' registries, and this crate states it once.
+The list began as the package list of `src/app/registrations.py` (its lines 16-46 at the port's start). The Python
+list now serves only the remaining Python scripts and no longer matches, so this crate owns the list: a package
+added to the server is added here.

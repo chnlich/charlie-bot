@@ -25,4 +25,7 @@ Report every finding whose confidence is at least 80 on a 0-100 scale, as one li
     Code review: no issues found.
     Scope: <one line naming the commits and files you read>.
 
+Write every file path in the verdict relative to the repository root, and name no host path or host name in it.
+The verdict is posted to a public pull request; a path beyond the repository or a machine name leaks where the code runs.
+
 Your stdout is the review verdict; the calling agent reads it and posts it to GitHub.

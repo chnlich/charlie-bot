@@ -45,6 +45,6 @@ The pair at each width shows the change to the user.
 
 ## Evidence
 
-Keep the four screenshots in `~/scripts/<YYYYMMDD>_improve-ux/`.
-Link each file in the pull request's `## Evidence` section with the file-server URL from the landing protocol.
-The reviewer compares the before and after screenshots at each width.
+Write in the pull request's `## Evidence` section what the screenshots show, in words: for each width, the defect that the before screenshot shows and the state that the after screenshot shows.
+The four screenshots stay in the round's evidence directory from the landing protocol; their links go only into the final message.
+The reviewer reads the words and reaches the screenshots through the final message.

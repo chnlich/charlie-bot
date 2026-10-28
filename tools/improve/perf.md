@@ -46,8 +46,7 @@ The fixed request count and the unit conversion make the two runs comparable.
 
 ## Evidence
 
-Keep the raw measurement logs in `~/scripts/<YYYYMMDD>_improve-perf/`.
 Write one line per metric in the pull request's `## Evidence` section.
-A line names the metric, the before value, the after value, the sample count, and the change.
-Link each log file with the file-server URL from the landing protocol.
+A line states the numbers: the metric, the before value, the after value, the sample count, and the change.
+The raw measurement logs stay in the round's evidence directory from the landing protocol; their links go only into the final message.
 A reviewer checks the numbers without rerunning the measurement.

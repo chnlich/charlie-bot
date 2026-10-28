@@ -57,6 +57,17 @@ fn headless_command(run_kind: RunKind) -> Vec<String> {
   ]
 }
 
+/// The `--disallowed-tools` value the headless command carries, for the setup check
+/// (`setup_check::setup_step`); the errors name the flag the way Python's check did over `BASE_COMMAND`.
+pub fn base_disallowed_tools() -> Result<String, String> {
+  let command = headless_command(RunKind::Work);
+  let index = command
+    .iter()
+    .position(|value| value == DISALLOWED_TOOLS_FLAG)
+    .ok_or_else(|| "missing --disallowed-tools in BASE_COMMAND".to_string())?;
+  command.get(index + 1).cloned().ok_or_else(|| "--disallowed-tools has no value in BASE_COMMAND".to_string())
+}
+
 static DECLARED_WINDOW_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// Apply the common Claude child edits registered for every agent backend.

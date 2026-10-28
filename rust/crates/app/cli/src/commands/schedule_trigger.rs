@@ -20,13 +20,14 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_store::{layout, trigger_files};
+use charliebot_triggers::triggers;
 use clap::{Arg, ArgMatches, Command};
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use crate::launcher::{self, Launch, LaunchError};
 
-const ENDPOINT: &str = "/api/internal/schedule-trigger";
+const ENDPOINT: &str = triggers::SCHEDULE_TRIGGER_PATH;
 
 /// `constants.MAX_TRIGGER_MESSAGE_CHARS`: the short-label limit on `--message`.
 const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;

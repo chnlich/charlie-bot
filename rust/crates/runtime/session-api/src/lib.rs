@@ -1,9 +1,9 @@
 //! Session listing routes and the shared listing helpers.
 
+pub mod api;
 pub mod detail;
 mod fork_routes;
 pub mod listing;
-pub mod paths;
 mod prompt_routes;
 mod route_support;
 mod routes;

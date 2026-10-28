@@ -255,6 +255,88 @@ switch_forward
     harness::run(&mut command)
   }
 
+  /// The switch's probe turn, run in a shell against a stand-in server that answers with `behavior`. Returns the
+  /// turn's result and the requests the server served past the version probe. Both probe waits are one second.
+  pub fn probe_turn(&self, behavior: &[(&str, Value)]) -> (Run, Vec<String>) {
+    let server = self.start_fake_server(behavior);
+    let mut env = self.check_env();
+    env.insert("CHARLIEBOT_SWITCH_PROBE_WAIT_S".to_string(), "1".to_string());
+    env.insert("CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S".to_string(), "1".to_string());
+    let snippet = format!("source \"$1\" rust {} && probe_turn", step_target_sha());
+    let mut command = harness::command("bash", &env);
+    command.args(["-c", snippet.as_str(), "bash"]).arg(repo_switch());
+    let run = harness::run(&mut command);
+    (run, server.calls())
+  }
+
+  /// The switch's delegation check, run in a shell against a stand-in server that answers the delegate, task and
+  /// archive routes with `behavior`. The check's REPO_ROOT is the runtime clone, so the worktree the server makes is
+  /// a real worktree of it. Returns the check's result and the requests the server served past the version probe.
+  /// The delegation wait and the probe cancel wait are one second.
+  pub fn delegation_check(&self, behavior: &[(&str, Value)]) -> (Run, Vec<String>) {
+    // The check runs on a runtime clone, whose HEAD is attached to its branch; the world's clone is left detached at
+    // the old release's commit, so the check puts it on main first.
+    self.git(&self.clone, &["checkout", "-q", "main"]);
+    let server = self.start_fake_server(behavior);
+    let mut env = self.check_env();
+    env.insert("CHARLIEBOT_SWITCH_DELEGATION_WAIT_S".to_string(), "1".to_string());
+    env.insert("CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S".to_string(), "1".to_string());
+    let snippet = r#"source "$1" rust "$2" && REPO_ROOT="$3" && delegation_check"#;
+    let mut command = harness::command("bash", &env);
+    command.args(["-c", snippet, "bash"]).arg(repo_switch()).arg(step_target_sha()).arg(&self.clone);
+    let run = harness::run(&mut command);
+    (run, server.calls())
+  }
+
+  /// The environment of one check that the script serves over the port: the home, the port, the key and the work
+  /// directory, whose `body` file holds each answer.
+  fn check_env(&self) -> Env {
+    let work = self.root().join("work");
+    fs::create_dir_all(&work).expect("the work directory");
+    let mut env = self.env.clone();
+    env.insert("PORT".to_string(), self.port.to_string());
+    env.insert("KEY".to_string(), ACCESS_KEY.to_string());
+    env.insert("WORK".to_string(), work.display().to_string());
+    env
+  }
+
+  /// Starts one stand-in release server on the port over the home, with `behavior` on top of the defaults, and waits
+  /// until it answers the version route. Its binary is a copy in the server directory, where its calls.log lands.
+  pub fn start_fake_server(&self, behavior: &[(&str, Value)]) -> FakeServer {
+    let dir = self.root().join("server");
+    fs::create_dir_all(&dir).expect("the server directory");
+    let binary = dir.join("charliebot-server");
+    harness::copy_file(&fake_release_server(), &binary);
+    write_behavior(&dir, behavior);
+    let mut command = harness::command(&binary, &self.env);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let child = harness::spawn(&mut command);
+    wait_until(|| self.answers_version(), Duration::from_secs(10));
+    FakeServer { child, dir }
+  }
+
+  /// Whether the version route answers 200 over the port with the access key. A port nobody listens on reads as no.
+  fn answers_version(&self) -> bool {
+    match TcpStream::connect(("127.0.0.1", self.port)) {
+      Ok(_) => self.version_status() == 200,
+      Err(_) => false,
+    }
+  }
+
+  /// The worktrees beyond the clone and the branches beyond main that the clone still holds.
+  pub fn left_behind(&self) -> Vec<String> {
+    let clone = self.clone.canonicalize().expect("the clone").display().to_string();
+    let worktrees = self.git(&self.clone, &["worktree", "list", "--porcelain"]);
+    let mut left: Vec<String> = worktrees
+      .lines()
+      .filter(|line| line.starts_with("worktree ") && line != &format!("worktree {clone}"))
+      .map(String::from)
+      .collect();
+    let branches = self.git(&self.clone, &["branch", "--format=%(refname:short)"]);
+    left.extend(branches.lines().filter(|name| *name != "main").map(String::from));
+    left
+  }
+
   /// The switch's preflight, with the listener, the pane and the tmux step stubbed out: the listener runs
   /// `running_impl`, and the preflight takes `mode` and `target_sha`. Its live runs go to `preflight.runs`.
   pub fn stubbed_preflight(&self, running_impl: &str, mode: &str, target_sha: &str) -> Run {
@@ -523,6 +605,30 @@ impl Drop for World {
     for child in &mut self.live {
       stop(child);
     }
+  }
+}
+
+/// One stand-in release server a test started: its process and the server directory, where its calls.log lands.
+/// Dropping it stops the process.
+pub struct FakeServer {
+  child: Child,
+  dir: PathBuf,
+}
+
+impl FakeServer {
+  /// The requests the server served past the version probe, as "METHOD PATH" lines, oldest first.
+  pub fn calls(&self) -> Vec<String> {
+    let path = self.dir.join("calls.log");
+    if !path.is_file() {
+      return Vec::new();
+    }
+    fs::read_to_string(path).expect("the calls log").lines().map(String::from).collect()
+  }
+}
+
+impl Drop for FakeServer {
+  fn drop(&mut self) {
+    stop(&mut self.child);
   }
 }
 

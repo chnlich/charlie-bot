@@ -361,7 +361,14 @@ impl Harness {
     if !self.log_path.is_file() {
       return Vec::new();
     }
-    fs::read_to_string(&self.log_path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+    let text = fs::read_to_string(&self.log_path).unwrap();
+    // The fake server appends while the test reads, so the tail can hold an unterminated fragment
+    // of the entry being written; only the newline-terminated lines are whole.
+    let complete = match text.rfind('\n') {
+      Some(end) => &text[..=end],
+      None => "",
+    };
+    complete.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
   }
 
   fn run_logs_directory(&self) -> PathBuf {

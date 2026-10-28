@@ -20,7 +20,6 @@ page_packages	src.features.explain	src.features.explain
 page_packages	src.features.improve	src.features.improve
 page_packages	src.features.memory	src.features.memory
 page_packages	src.features.ncu	src.features.ncu
-page_packages	src.features.router	src.features.router
 page_packages	src.features.terminal	src.features.terminal
 page_packages	src.features.trace	src.features.trace
 page_packages	src.features.usage	src.features.usage

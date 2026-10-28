@@ -83,11 +83,11 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') switch: $*"; }
 fail() { log "preflight failed: $*"; exit 1; }
 
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
-# `scan` prints one line per live Run (live) and one per refusal (block); `alive` prints alive or ended for a recorded
-# (pid, pid start); `outcome` reads the terminal fact so readback can distinguish a completed run from one the stop
-# killed.
+# `scan` takes the running implementation (`rust <sha>`) and prints one line per live Run (live) and one per refusal
+# (block); `alive` prints alive or ended for a recorded (pid, pid start); `outcome` reads the terminal fact so
+# readback can distinguish a completed run from one the stop killed.
 home_helper() {
-  python3 -I - "$HOME_DIR" "$REPO_ROOT" "$@" "$TARGET_SHA" "${OLD_IMPL:-python}" "$MODE" <<'PY'
+  python3 -I - "$HOME_DIR" "$REPO_ROOT" "$@" "$TARGET_SHA" "$MODE" <<'PY'
 import datetime
 import json
 import os
@@ -102,14 +102,10 @@ import yaml
 home = pathlib.Path(sys.argv[1])
 repo_root = pathlib.Path(sys.argv[2])
 mode = sys.argv[3]
-helper_args = sys.argv[4:-3]
-target_sha, source_impl, target_impl = sys.argv[-3:]
+helper_args = sys.argv[4:-2]
+target_sha = sys.argv[-2]
 # Owner: ServerConfig.port in rust/crates/infra/core/src/config.rs.
 DEFAULT_SERVER_PORT = 18498
-# Owner: the restart_reattach field of the backend registration (BackendTypeRegistration in
-# rust/crates/runtime/registry/src/registry.rs), set by each backend's register() in
-# rust/crates/backends/*/src/lib.rs.
-NO_REATTACH = {"opencode", "antigravity"}
 # Each backend's registration has moved twice: rust/crates/charliebot-agents/src/backends/<backend>/mod.rs held it from
 # 7b680fcbb until the crate grouping at 03459e0ca, rust/crates/runtime/agents/src/backends/<backend>/mod.rs from
 # 03459e0ca until each backend's own crate at d1a07436f, and rust/crates/backends/<backend>/src/lib.rs from d1a07436f
@@ -119,7 +115,6 @@ BACKEND_LAYOUTS = (
     ("rust/crates/runtime/agents/src/backends", "/mod.rs"),
     ("rust/crates/backends", "/src/lib.rs"),
 )
-rust_to_rust = source_impl.startswith("rust ") and target_impl == "rust"
 reattach_cache = {}
 
 
@@ -227,6 +222,7 @@ elif mode == "scan":
   config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
   types = {option["id"]: option["type"] for option in config["backends"]["options"]}
   boot = boot_time()
+  source_sha = helper_args[0].removeprefix("rust ")
   for path in sorted((home / "sessions").glob("*/data/runs/*/metadata.json")):
     run = json.loads(path.read_text(encoding="utf-8"))
     if run.get("ended_at") is not None or not run_alive(run, boot):
@@ -237,17 +233,13 @@ elif mode == "scan":
     if backend_type is None:
       print(f"block\tbackend {backend!r} of run {run['id']} (pid {run['pid']}) is not in backends.options; "
             "restart re-attachment is unknown")
-    elif rust_to_rust:
-      source_sha = source_impl.removeprefix("rust ")
-      for build_label, sha in (("running build", source_sha), ("target build", target_sha)):
-        enabled, detail = rust_registration(sha, backend_type)
-        if enabled is not True:
-          state = "false" if enabled is False else "unknown"
-          print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) cannot be re-attached after a restart: "
-                f"{build_label} {sha} marks restart_reattach = {state} ({detail})")
-    elif backend_type in NO_REATTACH:
-      print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) "
-            "cannot be re-attached after a restart")
+      continue
+    for build_label, sha in (("running build", source_sha), ("target build", target_sha)):
+      enabled, detail = rust_registration(sha, backend_type)
+      if enabled is not True:
+        state = "false" if enabled is False else "unknown"
+        print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) cannot be re-attached after a restart: "
+              f"{build_label} {sha} marks restart_reattach = {state} ({detail})")
   # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
   for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
     state = json.loads(path.read_text(encoding="utf-8"))
@@ -323,10 +315,11 @@ PY
 }
 
 # scan_home writes the live runs to $RUNS_FILE and leaves the refusals in BLOCKERS. A live line is the session, the run,
-# its backend, its pid and that pid's start time.
+# its backend, its pid and that pid's start time. It reads each live run's re-attachment declaration from the running
+# build ($OLD_IMPL) and the target build, so the caller runs it only once both builds are known.
 scan_home() {
   local scan
-  scan="$(home_helper scan)" || return 1
+  scan="$(home_helper scan "$OLD_IMPL")" || return 1
   awk -F'\t' '$1 == "live"' <<<"$scan" > "$RUNS_FILE"
   BLOCKERS="$(awk -F'\t' '$1 == "block" { print $2 }' <<<"$scan")"
 }
@@ -1012,15 +1005,14 @@ preflight() {
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
-  OLD_IMPL="$(listener_impl)"
-  scan_home || fail "cannot read the run records in $HOME_DIR"
-  [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
-  [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"
-  "$REPO_ROOT/scripts/start-server.sh" --preflight || fail "launcher preflight failed"
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"
   LISTENER="$(listener_pids)"
   OLD_IMPL="$(impl_of_pid "$LISTENER")"
   [ "$OLD_IMPL" != unknown ] || fail "pid $LISTENER on port $PORT is not a release binary"
+  scan_home || fail "cannot read the run records in $HOME_DIR"
+  [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
+  [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"
+  "$REPO_ROOT/scripts/start-server.sh" --preflight || fail "launcher preflight failed"
   if [ -z "$PANE" ]; then
     PANE="$(pane_of_pid "$LISTENER")" || fail "no tmux pane runs the server on port $PORT; pass --pane"
   fi

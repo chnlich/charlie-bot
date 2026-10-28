@@ -6,7 +6,9 @@ in for the release binary: the switch reads the server's argv to tell a release 
 comes from a behavior.json beside it. Each installed release has a matching commit in the runtime clone, and the
 switch moves the clone to the target release commit in either direction.
 
-The preflight refusals stop before any pane is looked up, so they need no tmux. The steps after the preflight drive a
+The preflight refusals stop before any pane is looked up, so they need no tmux. The refusals that a live run raises
+run against a started stand-in release, so the preflight knows the running build whose registrations the scan reads.
+The steps after the preflight drive a
 pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
 share one test. The probe turn's cases run its functions in a shell against a fake server of their own, with one-second
 waits, so each stays under the unit budget. The escalation cases run escalate_pane the same way, against stand-in
@@ -20,7 +22,6 @@ that the check left no worktree and no branch behind.
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import dataclasses
 import datetime
@@ -45,9 +46,6 @@ from collections.abc import Callable, Iterator
 import pytest
 import systemd_stubs
 import yaml
-
-from src.infra import config
-from src.runtime.hooks import backend_type_registration
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SWITCH = ROOT / "scripts" / "switch-server.sh"
@@ -597,6 +595,21 @@ def _listener_pids(port: int) -> set[int]:
   return {int(pid) for pid in re.findall(r"pid=(\d+)", out)}
 
 
+def _start_release(world: World) -> subprocess.Popen[bytes]:
+  """The current release serving the port, so the preflight knows the running build that the scan reads."""
+  proc = subprocess.Popen(
+      [str(world.releases / world.old_sha / "charliebot-server")],
+      env={
+          **world.env, "CHARLIEBOT_HOME": str(world.home)
+      },
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+      start_new_session=True)
+  world.live.append(proc)
+  _wait_until(lambda: bool(_listener_pids(world.port)), 10)
+  return proc
+
+
 def _listener_argv(world: World) -> list[pathlib.Path]:
   pids = _listener_pids(world.port)
   assert len(pids) == 1, f"expected one listener on port {world.port}, found {pids}"
@@ -644,9 +657,18 @@ def _assert_server_scope_records(world: World, expected_count: int) -> None:
 
 
 def _home_helper(world: World, mode: str) -> subprocess.CompletedProcess[str]:
+  """One home_helper mode, with the scan reading the running build the world's current release names.
+
+  The scan reads the builds' registrations from the world's clone, where those commits live; the sourced script
+  computes REPO_ROOT from its own path, which is this repository's checkout.
+  """
+  scan_impl = f" rust {world.old_sha}" if mode == "scan" else ""
   return subprocess.run(
-      ["bash", "-c", f'source "$1" rust {world.rust_sha} && home_helper "$2"', "bash",
-       str(SWITCH), mode],
+      [
+          "bash", "-c", f'source "$1" rust {world.rust_sha} && REPO_ROOT="$3" && home_helper "$2"{scan_impl}', "bash",
+          str(SWITCH), mode,
+          str(world.clone)
+      ],
       env={
           **os.environ, "CHARLIEBOT_HOME": str(world.home)
       },
@@ -663,22 +685,16 @@ def test_home_helper_config_uses_server_default(world: World, server: dict[str, 
 
   proc = _home_helper(world, "config")
 
-  assert int(proc.stdout.splitlines()[0]) == config.ServerConfig().port
+  # Owner: default_port of ServerConfig in rust/crates/infra/core/src/config.rs.
+  rust_config = (ROOT / "rust" / "crates" / "infra" / "core" / "src" / "config.rs").read_text(encoding="utf-8")
+  default_port = int(re.search(r"fn default_port\(\) -> u16 \{\n\s*(\d+)", rust_config).group(1))
+  assert int(proc.stdout.splitlines()[0]) == default_port
 
 
 def test_home_helper_config_uses_explicit_port(world: World) -> None:
   proc = _home_helper(world, "config")
 
   assert int(proc.stdout.splitlines()[0]) == world.port
-
-
-def test_home_helper_no_reattach_matches_registered_traits() -> None:
-  declaration = re.search(r"^NO_REATTACH = (.+)$", SWITCH.read_text(encoding="utf-8"), re.MULTILINE)
-  assert declaration is not None
-  assert ast.literal_eval(declaration[1]) == {
-      backend_type for backend_type, registration in backend_type_registration.registrations().items()
-      if not registration.traits.restart_reattach
-  }
 
 
 def _stubbed_preflight(world: World, running_impl: str, mode: str, target_sha: str) -> subprocess.CompletedProcess[str]:
@@ -691,7 +707,6 @@ def _stubbed_preflight(world: World, running_impl: str, mode: str, target_sha: s
           "bash", "-c", '''source "$1" "$2" ${3:+"$3"}
 OLD_SOURCE="$4"
 RUNS_FILE="$5"
-listener_impl() { echo "$OLD_SOURCE"; }
 listener_pids() { echo 999999; }
 impl_of_pid() { echo "$OLD_SOURCE"; }
 pane_of_pid() { echo '%1'; }
@@ -709,40 +724,31 @@ preflight
 
 
 @pytest.mark.parametrize(
-    "running,target",
-    [("carries", "carries"), ("lacks", "carries"), ("carries", "lacks"), ("python", "carries"), ("carries", "python")],
-    ids=["both-carry", "running-lacks", "target-lacks", "python-running", "python-target"])
+    "running,target", [("carries", "carries"), ("lacks", "carries"), ("carries", "lacks")],
+    ids=["both-carry", "running-lacks", "target-lacks"])
 @pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash", "claude-opus", "oc-retired"])
 def test_live_backend_switch_directions(world: World, running: str, target: str, backend: str) -> None:
   """Rust builds read each backend's re-attachment declaration from their own source tree, in either layout."""
   _seed_live_run(world, "run-direction", backend)
-  build = {"carries": world.rust_sha, "lacks": world.old_sha, "python": ""}
-  running_impl = f"rust {build[running]}" if running != "python" else "python"
-  mode = "rust" if target != "python" else "python"
+  build = {"carries": world.rust_sha, "lacks": world.old_sha}
 
-  proc = _stubbed_preflight(world, running_impl, mode, build[target])
+  proc = _stubbed_preflight(world, f"rust {build[running]}", "rust", build[target])
 
   backend_type = {
       "agy-gemini-flash": "antigravity",
       "oc-deepseek-flash": "opencode",
       "claude-opus": "cc-claude",
   }.get(backend)
-  allowed = (running != "python" and target != "python" and backend_type == "cc-claude") or (
-      running == "carries" and target == "carries" and backend_type
-      in {"antigravity", "opencode"}) or (running == "python" and target == "carries" and backend_type == "cc-claude")
+  allowed = backend_type is not None and (backend_type == "cc-claude" or (running == "carries" and target == "carries"))
   assert proc.returncode == (0 if allowed else 1), _report(world, proc)
-  if target == "python":
-    assert "usage: switch-server.sh rust" in proc.stderr
-  elif target != "python" and not allowed:
+  if not allowed:
     assert backend in proc.stdout
     assert "run-direction" in proc.stdout
     if backend != "oc-retired":
       assert "cannot be re-attached after a restart" in proc.stdout
-  if not allowed and backend in {"agy-gemini-flash", "oc-deepseek-flash", "claude-opus"
-                                } and running != "python" and target != "python":
-    lacking = "running" if running == "lacks" else "target"
-    assert f"{lacking} build {world.old_sha} marks restart_reattach = false" in proc.stdout, _report(world, proc)
-  if backend == "oc-retired" and target != "python":
+      lacking = "running" if running == "lacks" else "target"
+      assert f"{lacking} build {world.old_sha} marks restart_reattach = false" in proc.stdout, _report(world, proc)
+  if backend == "oc-retired":
     assert "restart re-attachment is unknown" in proc.stdout, _report(world, proc)
   assert all(live.poll() is None for live in world.live)
 
@@ -817,7 +823,11 @@ def test_preflight_fails_when_a_build_is_not_in_the_clone(world: World, missing:
         "improve-loop", "dirty-clone", "launcher-preflight"
     ])
 def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) -> None:
-  """Each preflight check refuses before the switch stops anything: exit 1 and no change."""
+  """Each preflight check refuses before the switch stops anything: exit 1 and no change.
+
+  The refusals that a live run raises run against a started release, because the scan reads the running build's
+  registrations and the preflight refuses a listener that is not one release binary before it scans.
+  """
   release = world.releases / world.rust_sha
   if case == "checksum":
     (release / "charliebot-server").write_text(FAKE_SERVER + "# tampered\n", encoding="utf-8")
@@ -831,12 +841,15 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
         "missing-backend-run": None,
     }[case]
     _seed_live_run(world, "run-blocked", backend)
+    _start_release(world)
   elif case == "improve-loop":
     _seed_improve_loop(world, _spawn_live(world).pid)
+    _start_release(world)
   elif case == "dirty-clone":
     (world.clone / "scripts" / "start-server.sh").write_text("# local edit\n", encoding="utf-8")
   elif case == "launcher-preflight":
     world.env["SYSTEMD_RUN_REFUSE_ALL"] = "1"
+    _start_release(world)
 
   home_before = {path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()}
   current = world.releases / "current"
@@ -992,7 +1005,8 @@ def _switch_forward(world: World,
   steps stubbed out. DELEGATION is the shell command that stands in for the delegation check.
 
   The scan records the live run, and the stub stop kills its process, as a stop that does not spare a run would. A
-  restore touches a marker file and exits 2, so a test tells a restore from the switch's own exit.
+  restore touches a marker file and exits 2, so a test tells a restore from the switch's own exit. OLD_IMPL names the
+  running build, as the preflight left it.
   """
   launch_log = world.root / "server.log"
   launch_log.write_text(launch_output, encoding="utf-8")
@@ -1014,6 +1028,7 @@ def _switch_forward(world: World,
   script = """
 source "$1" rust "$2"
 REPO_ROOT="$CLONE"
+OLD_IMPL="$3"
 stop_old() { kill -KILL "$RUN_PID"; }
 start_in_pane() { :; }
 wait_ready() { :; }
@@ -1024,7 +1039,7 @@ restore() { touch "$RESTORED"; exit 2; }
 switch_forward
 """
   return subprocess.run(
-      ["bash", "-c", script, "bash", str(SWITCH), world.rust_sha],
+      ["bash", "-c", script, "bash", str(SWITCH), world.rust_sha, f"rust {world.old_sha}"],
       env=env,
       capture_output=True,
       text=True,

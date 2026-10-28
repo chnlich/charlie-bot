@@ -1,17 +1,18 @@
-//! The composition root both binaries share: the runtime registrations and the package list from
-//! `src/app/registrations.py:16-46`, in the server's order.
+//! The composition root both binaries share: the runtime registrations and the server's package list, in the
+//! server's order.
 //!
-//! Each entry names a Python package and the `register` function that makes the package's contributions. A package
-//! the port has not built calls a stub. A stub that carries the Python `register`'s data (its config section, its
-//! metadata slots, its backend types) registers that data; a stub with no data makes no registration. The list keeps
-//! every package, so the page parts, the static mounts and the template search path follow the Python order.
+//! Each entry names a package by its `src.*` label and the `register` function that makes the package's
+//! contributions. This crate owns the list. It began as the package list of `src/app/registrations.py` (that file's
+//! lines 16-46 at the port's start); the Python list now serves only the remaining Python scripts and no longer
+//! matches, so a package added to the server is added here. The list keeps every package, so the page parts, the
+//! static mounts and the template search path keep their registration order.
 //!
 //! One crate owns both lists, so the server binary and the CLI binary cannot drift: a package added here reaches
 //! both.
 
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 
-/// Runtime registrations run before the Python package list, matching the server's pre-recovery ordering.
+/// Runtime registrations run before the package list, matching the server's pre-recovery ordering.
 pub const RUNTIME: &[(&str, RegisterFn)] = &[
   ("runtime.agents", charliebot_agents::register_runtime),
   ("runtime.usage", charliebot_usage::register),
@@ -19,10 +20,6 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
   ("runtime.tasks", charliebot_tasks::register),
   ("runtime.triggers", charliebot_triggers::register),
 ];
-
-fn register_python_only_package(_registry: &mut Registry) -> Result<(), RegistryError> {
-  Ok(())
-}
 
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
@@ -43,7 +40,6 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.improve", charliebot_improve::register),
   ("src.features.memory", charliebot_memory::register),
   ("src.features.ncu", charliebot_ncu::register),
-  ("src.features.router", register_python_only_package),
   ("src.features.terminal", charliebot_terminal::register),
   ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage_page::register),
@@ -59,32 +55,15 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.files", charliebot_files::register),
 ];
 
-/// The packages whose Python module has no Rust crate: `PACKAGES` gives each of them a no-op stub.
-const PYTHON_ONLY_PACKAGES: &[&str] = &["src.features.router"];
-
 /// The registry of every listed package, registered in list order. A failing registration fails the server's
 /// startup.
 pub fn registry() -> Result<Registry, RegistryError> {
-  build_registry(|_| true)
-}
-
-/// The registry a CLI process composes: [`registry`] without the Python-only stubs.
-///
-/// A CLI verb loads the config and resolves backend types; it renders no page and serves no route, so a no-op stub
-/// registers nothing it uses. This omission is the only difference between the two binaries' registries.
-pub fn cli_registry() -> Result<Registry, RegistryError> {
-  build_registry(|package| !PYTHON_ONLY_PACKAGES.contains(&package))
-}
-
-fn build_registry(include_package: impl Fn(&str) -> bool) -> Result<Registry, RegistryError> {
   let mut registry = Registry::new();
   for &(package, register) in RUNTIME {
     registry.register_package(package, register)?;
   }
   for &(package, register) in PACKAGES {
-    if include_package(package) {
-      registry.register_package(package, register)?;
-    }
+    registry.register_package(package, register)?;
   }
   Ok(registry)
 }

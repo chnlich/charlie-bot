@@ -182,11 +182,7 @@ pub fn archive_files(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
 /// The chat event logs of a session in reading order: each archive in file-name order, then the live log when it is
 /// a file. A `data/archives` that is not a directory holds no archives; the live log still counts.
 pub fn session_log_paths(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
-  let mut paths = if layout::archives_dir(session_dir).is_dir() {
-    archive_files(session_dir)?
-  } else {
-    Vec::new()
-  };
+  let mut paths = if layout::archives_dir(session_dir).is_dir() { archive_files(session_dir)? } else { Vec::new() };
   let live = layout::chat_events_path(session_dir);
   if live.is_file() {
     paths.push(live);

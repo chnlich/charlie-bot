@@ -1,14 +1,61 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
-cd "$repo_root"
-source tools/leak-patterns.sh
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 tmp_patterns="$tmp_dir/patterns"
 : > "$tmp_patterns"
+source "$script_dir/leak-patterns.sh"
+
+built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|[a-z][a-z0-9-]{2,}\.slack\.com'
+
+# Stdin mode scans one text with the full rules: built-in rules plus host patterns,
+# with no path test, so text cannot slip past the check by suffix or location.
+# It exits 1 on a hit, 0 on clean text, and 2 when the pattern file is unreadable.
+if [[ "${1:-}" == '--stdin' ]]; then
+  load_host_patterns
+  cat > "$tmp_dir/content"
+  matches=0
+  if grep -aiEn "$built_in_regex" "$tmp_dir/content" > "$tmp_dir/matches"; then
+    printf 'Built-in pattern matches in stdin:\n'
+    cat "$tmp_dir/matches"
+    matches=$((matches + 1))
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+  fi
+  if grep -aiEn '[a-z0-9]{6,}\.feishu\.cn' "$tmp_dir/content" > "$tmp_dir/candidates"; then
+    if grep -vE 'open\.feishu\.cn|<tenant>\.feishu\.cn|xxx\.feishu\.cn' "$tmp_dir/candidates" > "$tmp_dir/matches"; then
+      printf 'Built-in pattern matches in stdin:\n'
+      cat "$tmp_dir/matches"
+      matches=$((matches + 1))
+    else
+      status=$?
+      [[ "$status" -eq 1 ]] || exit "$status"
+    fi
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+  fi
+  if [[ -s "$tmp_patterns" ]]; then
+    if grep -aiEn -f "$tmp_patterns" "$tmp_dir/content" > "$tmp_dir/matches"; then
+      printf 'Host pattern matches in stdin (patterns: %s)\n' "$extra_patterns_file"
+      cat "$tmp_dir/matches"
+      matches=$((matches + 1))
+    else
+      status=$?
+      [[ "$status" -eq 1 ]] || exit "$status"
+    fi
+  fi
+  printf 'Summary: %d matches in stdin\n' "$matches"
+  [[ "$matches" -eq 0 ]]
+  exit
+fi
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
 load_host_patterns
 
 manifest_scan=()
@@ -61,7 +108,6 @@ read_file() {
 }
 
 matches=0
-built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|[a-z][a-z0-9-]{2,}\.slack\.com'
 for file in "${builtin_files[@]}"; do
   read_file "$file" > "$tmp_dir/content"
   if grep -aiEn "$built_in_regex" "$tmp_dir/content" > "$tmp_dir/matches"; then

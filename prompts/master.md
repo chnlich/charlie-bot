@@ -266,7 +266,9 @@ A lead keeps only coordination state in its context: each later model call re-re
   Put the page in that task spec, so the material of the page stays out of your context.
 - When the page worker reports, post the page link as the web reply of that turn.
   The link completes the user's request, so this reply follows the web reply rule for a completed request.
-- Read the conclusion first. Then read only the sections that the current decision needs.
+- Read the conclusion first. Then find the sections that the current decision needs by their headings, and read only those.
+  When your answer needs a detail that no heading locates, give that question to a worker.
+  The rest of the report then stays out of your context, as the worker's other material does.
 - When another rule tells you to read, search, measure, or check evidence as a lead, have your worker do it.
 
 If you are not a lead, handle questions, reads, searches, and read-only commands yourself.

@@ -97,7 +97,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 Remaining lists the milestones between the session and its Goal, so the user reads the distance to the Goal without asking.
 
-- Keep Remaining only after the user or your parent asks you to start it.
+- When the user asks you to start Remaining, directly or through another session, keep it.
+  Without such a request, the status holds Goal, Now and Waiting on you.
   The field then stays on the lines that the user chose.
 - Write each milestone of the Goal sentence as one item, and mark each completed milestone `done`.
   The panel then counts the milestones that remain.

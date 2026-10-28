@@ -9,8 +9,7 @@ import pytest
 from src.app import registrations
 from src.backends.anthropic_compatible import factory, options
 from src.backends.claude_code import claude_code, claude_launch
-from src.infra import config, config_registry
-from src.infra import event_types
+from src.infra import config, config_registry, event_types
 from src.runtime import session_usage
 from src.runtime.hooks import (
     backend_lifecycle,

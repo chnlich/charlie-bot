@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -41,6 +40,15 @@ struct TestRunConfig<'a> {
 }
 
 const MODEL: &str = "fakeprov/fake-model";
+
+/// The `fake_opencode` example, which `cargo test` builds into the `examples` directory beside the profile.
+fn fake_opencode_binary() -> PathBuf {
+  let test_binary = std::env::current_exe().expect("the test binary path reads");
+  let profile = test_binary.parent().and_then(Path::parent).expect("the test binary sits in a profile directory");
+  let binary = profile.join("examples").join("fake_opencode");
+  assert!(binary.is_file(), "cargo test builds the fake_opencode example at {}", binary.display());
+  binary
+}
 
 fn adoption_option() -> BackendOption {
   BackendOption {
@@ -133,14 +141,8 @@ async fn killed_server_process_leaves_relay_and_serve_for_adoption() {
   guard.owner.wait().unwrap();
 
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
-  let host = OpenCodeHost::with_program(
-    "/usr/bin/python3".into(),
-    vec!["-I".into(), root.join("tests/fake_opencode_serve.py").into_os_string()],
-    "/usr/bin/python3".into(),
-    root,
-    profile,
-    Env::new(),
-  );
+  let fake = fake_opencode_binary();
+  let host = OpenCodeHost::with_program(fake.clone(), Vec::new(), fake, root, profile, Env::new());
   let pool = OpenCodeServerPool::new(host, ServerTimeouts::default());
   pool.record_options(&[adoption_option()]);
   pool.adopt_existing().unwrap();
@@ -226,8 +228,6 @@ impl Harness {
     let root = tempfile::tempdir().unwrap();
     let worktree_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let worktree_root = fs::canonicalize(worktree_root).unwrap();
-    let fake_binary = worktree_root.join("tests/fake_opencode_serve.py");
-    assert!(fake_binary.is_file());
     let script_path = root.path().join("script.json");
     fs::write(&script_path, serde_json::to_vec(&script).unwrap()).unwrap();
     let log_path = root.path().join("requests.jsonl");
@@ -240,8 +240,8 @@ impl Harness {
     }
     let display = root.path().join(".opencode/bin/opencode");
     let host = OpenCodeHost::with_program(
-      PathBuf::from("/usr/bin/python3"),
-      vec![OsString::from("-I"), fake_binary.into_os_string()],
+      fake_opencode_binary(),
+      Vec::new(),
       display,
       repo_root.unwrap_or(worktree_root),
       root.path().join("profile"),

@@ -67,6 +67,22 @@ function items(entries) {
   return entries.filter((entry) => showsInForYou(entry.msg));
 }
 
+// The row each completed reply receives in the For-you projection, keyed by its store entry.
+function roundButtonRows(entries) {
+  const rows = new Map();
+  if (isWorker()) return rows;
+
+  let lastReply = null;
+  entries.forEach((entry) => {
+    const msg = entry.msg;
+    if (msg.role === 'web_reply') lastReply = entry;
+    if (msg.role !== 'separator' || msg.id == null || msg.id === '') return;
+    if (msg.kind !== 'run_end' && msg.event_index != null && lastReply) rows.set(lastReply, msg);
+    lastReply = null;
+  });
+  return rows;
+}
+
 // The row an empty For you shows: one button that switches the view to Everything.
 function buildEmptyLine() {
   const btn = document.createElement('button');
@@ -117,6 +133,7 @@ const ForYou = {
   EVERYTHING,
   setSession,
   items,
+  roundButtonRows,
   isWorker,
   registerSummaryCardRenderer,
   summaryCard,

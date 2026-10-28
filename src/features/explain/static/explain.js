@@ -60,8 +60,8 @@ function renderExplainButton(sessionId, eventIndex) {
 // Paint every rendered divider's button from the active status map. Separators
 // the turn engine materializes later read the map at render time; this covers
 // the ones already in the DOM when a status load or WS frame lands.
-function applyExplainStatusesToDom() {
-  document.querySelectorAll('.explain-toggle[data-explain-state]').forEach((btn) => {
+function applyExplainStatusesToDom(root) {
+  root.querySelectorAll('.explain-toggle[data-explain-state]').forEach((btn) => {
     const sep = btn.closest('.separator-line');
     const eventIndex = sep && sep.dataset.eventIndex;
     if (eventIndex != null) applyExplainButtonVisual(btn, explainButtonState(eventIndex));
@@ -205,14 +205,14 @@ async function loadExplainStatuses({sessionId, isCurrent}) {
     const statuses = await res.json();
     if (!isCurrent()) return;
     setActiveExplainStatuses(statuses);
-    applyExplainStatusesToDom();
+    applyExplainStatusesToDom(document);
   } catch (err) {
     console.error('Load explain statuses failed:', err);
   }
 }
 
 // The explain button sits on every separator line, and its panel opens under it.
-Chat.registerSeparatorButton(renderExplainButton);
+Chat.registerSeparatorButton(renderExplainButton, applyExplainStatusesToDom);
 const toggleExplainPanelTracked = Chat.registerSeparatorPanel({
   panelClass: 'explain-panel',
   toggleSelector: '.explain-toggle',

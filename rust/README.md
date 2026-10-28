@@ -122,8 +122,14 @@ roots copy.
 - **A name that two crates agree on has one owner.** A file or directory name, an environment variable name, an event
   name or an HTTP path has one owner module, and the other crates reference that module's const or function.
   Environment variable names live in `infra/core` (`home.rs`, `repo_root.rs`, `run_token.rs`, `venv.rs`). The structure
-  test's owner rule fails a name that another crate spells. It checks environment variable names now; each other kind of
-  name joins `OWNER_TABLE` in `crates/app/structure/tests/structure.rs` as its sites are fixed.
+  test `no_name_is_spelled_outside_its_owner` in `crates/app/structure/tests/structure.rs` protects each kind of name.
+  A session layout name has one row each in `OWNER_TABLE`, and the crate that owns a new shared file or directory name
+  adds its row in the same commit. An event name needs no table edit: the rule reads `infra/core/src/event_types.rs`
+  and takes one row for each whitespace-free value that holds `_`, except the names in `EXTERNAL_EVENT_NAMES`, whose
+  spellings also appear in backend output the rule cannot tell apart. A `CHARLIEBOT_` environment variable name or an
+  `/api/` route path has no table; the rule fails the name when two crates spell the same one. A route path lives where
+  its route registers: that crate exports the path as a `pub const`, and `charliebot_cli_common::route::fill` fills its
+  `{}` parameters.
   *Purpose:* a rename in one crate otherwise leaves the other crate compiling, and the break shows only at run time.
 - **The process environment changes only at startup.** `runtime/agents/src/agent_environment.rs` is the one production
   place that sets or removes a process environment variable, and it does so before any thread starts.

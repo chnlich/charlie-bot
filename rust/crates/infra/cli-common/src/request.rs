@@ -190,7 +190,8 @@ pub fn redact(text: &str, redactions: &[&str]) -> String {
   text
 }
 
-fn redact_bytes(body: &[u8], redactions: &[&str]) -> Vec<u8> {
+/// Replace every non-empty secret in a response body, preserving bytes that are not a secret.
+pub fn redact_bytes(body: &[u8], redactions: &[&str]) -> Vec<u8> {
   let mut body = body.to_vec();
   for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
     let secret = secret.as_bytes();

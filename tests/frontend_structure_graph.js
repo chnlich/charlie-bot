@@ -29,9 +29,11 @@ const identifyShadowedGlobals = require(path.join(sucraseDist, 'identifyShadowed
 
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-// Registered packages in registration order: "src.features.cron" -> "features/cron".
-const registrations = read('src/app/registrations.py');
-const packagesBlock = registrations.match(/PACKAGES\s*=\s*\(([\s\S]*?)\n\)/)[1];
+// Registered packages in registration order: "src.features.cron" -> "features/cron". The table
+// lives in the server's package registry (rust/crates/app/packages/src/lib.rs), which is also
+// the order the served page assembles its package part templates in.
+const registry = read('rust/crates/app/packages/src/lib.rs');
+const packagesBlock = registry.match(/pub const PACKAGES[^=]*=\s*&\[([\s\S]*?)\n\];/)[1];
 const packages = [...packagesBlock.matchAll(/"src\.(features|backends)\.([A-Za-z0-9_]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
 
 // The page part templates of one package: page_*.html files under its templates directory, in

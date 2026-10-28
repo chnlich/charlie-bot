@@ -247,6 +247,8 @@ fn post(
     .map_err(|error| format!("{url}: request failed: {error}"))?;
   runtime.block_on(async {
     let client = reqwest::Client::builder()
+      // `httpx.Client()` does not follow redirects: an unexpected one surfaces as its status.
+      .redirect(reqwest::redirect::Policy::none())
       .timeout(limits.request_timeout)
       .build()
       .map_err(|error| format!("{url}: request failed: {error}"))?;
@@ -268,7 +270,8 @@ fn post(
         .map_err(|error| format!("{url}: request failed: {}", request_error(&error)))?;
     }
     let status = response.status().as_u16();
-    let body_text = response.text().await.unwrap_or_default();
+    let body_text =
+      response.text().await.map_err(|error| format!("{url}: request failed: {}", request_error(&error)))?;
     if status != 200 {
       return Err(format!("{url}: HTTP {status}: {body_text}"));
     }

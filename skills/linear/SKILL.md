@@ -36,7 +36,7 @@ JSON
 | 2 | Invalid arguments or request body. |
 | 3 | The credentials file cannot be read or `linear.api_key` is missing. |
 
-Pipe the output to `python3 -m json.tool` or `jq` to format it.
+Pipe the output to `jq` to format it.
 
 ### Viewer (who am I)
 

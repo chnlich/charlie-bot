@@ -126,9 +126,6 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 - Run `charliebot gc-trash --yes` to purge that directory.
 - `refs/stash` is shared by worktrees of one repository. Restore pre-fix code with `git show <base>:<path>` or a scratch worktree.
 - Recover displaced work with its stash hash. Do not use a bare `git stash pop`.
-- If `charliebot` fails with `ModuleNotFoundError: src`, run `uv run --project <repo-root> charliebot`.
-- uv repairs the editable install when `direct_url.json` points to another project path.
-- A hand-edited `.pth` file or stale shebang prevents that repair. Run `uv sync --reinstall-package charlie-bot` to repair the install.
 
 ---
 

@@ -1067,21 +1067,58 @@ struct FormatRow {
 
 /// The file kinds with an owner. A file kind adds its row in the change that makes its owner the only reader and writer
 /// of the file.
-const FORMAT_TABLE: &[FormatRow] = &[FormatRow {
-  kind: "chat event log",
-  owner: "runtime/store",
-  names: &[
-    "chat_events_path",
-    "archives_dir",
-    "is_chat_events_archive",
-    "CHAT_EVENTS_FILE_NAME",
-    "session_log_paths",
-    "archive_files",
-  ],
-  hint: "Read it through `charliebot_store::chat_events` (`read_lines`, `read_universal_text`, `take_complete_lines`), \
-         get its paths from `session_log_paths` or `archive_files`, decode a line with `LogLine::decode`, and append \
-         with `append_event`.",
-}];
+const FORMAT_TABLE: &[FormatRow] = &[
+  FormatRow {
+    kind: "chat event log",
+    owner: "runtime/store",
+    names: &[
+      "chat_events_path",
+      "archives_dir",
+      "is_chat_events_archive",
+      "CHAT_EVENTS_FILE_NAME",
+      "session_log_paths",
+      "archive_files",
+    ],
+    hint: "Read it through `charliebot_store::chat_events` (`read_lines`, `read_universal_text`, \
+           `take_complete_lines`), get its paths from `session_log_paths` or `archive_files`, decode a line with \
+           `LogLine::decode`, and append with `append_event`.",
+  },
+  FormatRow {
+    kind: "session metadata",
+    owner: "runtime/store",
+    names: &["metadata_path", "SESSION_METADATA_NAME", "METADATA_FILE_NAME"],
+    hint: "Read it through `charliebot_store::metadata` (`read_metadata_value`, `read_metadata_object`, \
+           `read_session_metadata`), and write it through the store's metadata saves.",
+  },
+  FormatRow {
+    kind: "thread metadata",
+    owner: "runtime/store",
+    names: &["METADATA_FILE_NAME"],
+    hint: "Read it through `charliebot_store::metadata` (`read_metadata_value`, `read_metadata_object`), and write it \
+           through the store's metadata saves.",
+  },
+  FormatRow {
+    kind: "run metadata",
+    owner: "runtime/store",
+    names: &["RUN_METADATA_NAME", "run_metadata_path", "METADATA_NAME"],
+    hint: "Read it through `charliebot_store::run_records` (`read_run_metadata`, `read_run_record_file`), and write it \
+           through `write_run_metadata` or the store's run-record save.",
+  },
+  FormatRow {
+    kind: "improve loop state",
+    owner: "features/improve",
+    names: &["STATE_FILE", "read_loop_state", "load_loop_state"],
+    hint: "Read it through `charliebot_improve::command` (`read_loop_state`, `load_loop_state`), and write it through \
+           `save_loop_state`.",
+  },
+  FormatRow {
+    kind: "OpenCode server record",
+    owner: "backends/opencode",
+    names: &["write_server_record", "read_server_record", "write_server_exit_reason"],
+    hint: "Read it through `relay::read_server_record`, and write it through `relay::write_server_record` or \
+           `write_server_exit_reason`.",
+  },
+];
 
 /// A production function of a module, with the names its body uses and the decode and encode calls it makes.
 struct FunctionRecord {

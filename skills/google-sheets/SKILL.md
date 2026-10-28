@@ -1,7 +1,7 @@
 ---
 name: google-sheets
 description: This skill should be used when the user asks to read, create, or edit Google Sheets spreadsheets, or manage cell data through the Google Sheets API.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Google Sheets
@@ -16,34 +16,22 @@ The shared Google credential configuration is defined once in the **google-oauth
 
 ## API Reference
 
-All Google API requests use:
+Send every Google API request through `charliebot google request`.
+The command mints the selected account's access token inside its own process, so the token never appears in a command, in the output or in a run record.
+A JSON body goes in `--json`, which sets `Content-Type: application/json`; `--data-file <path>` reads the body from a file instead.
+The command prints the response body on stdout and exits 0 for an HTTP 2xx answer; another status exits 1.
 
-```bash
--H "Authorization: Bearer $ACCESS_TOKEN"
--H "Content-Type: application/json"
-```
+### Choose the Account
 
-Use the selected account's access token before making any calls.
-
-### Refresh an Access Token
-
-Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
-
-```bash
-ACCESS_TOKEN=$(python3 skills/google-oauth/scripts/google_account.py token --account <name>)
-```
-
-For the default account, omit `--account`.
+Choose the account using the **Accounts** section in the **google-oauth** skill.
+Pass `--account <name>` on every request, and omit `--account` for the default account.
 
 If the refresh token is invalid or revoked, follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ### Create a Spreadsheet
 
 ```bash
-curl -s -X POST https://sheets.googleapis.com/v4/spreadsheets \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"properties":{"title":"Spreadsheet Title"}}'
+charliebot google request POST https://sheets.googleapis.com/v4/spreadsheets --json '{"properties":{"title":"Spreadsheet Title"}}'
 ```
 
 After a successful create, return the editor URL:
@@ -53,8 +41,7 @@ After a successful create, return the editor URL:
 ### Read Spreadsheet Metadata
 
 ```bash
-curl -s "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID"
 ```
 
 Returns spreadsheet properties, sheet names, grid dimensions, and other metadata. To list only sheet titles, inspect `sheets[].properties.title` in the response.
@@ -62,8 +49,7 @@ Returns spreadsheet properties, sheet names, grid dimensions, and other metadata
 ### Read Values
 
 ```bash
-curl -s "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RANGE" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RANGE"
 ```
 
 `RANGE` uses A1 notation, e.g. `Sheet1!A1:D10` or `Sheet1!A:A`. The response contains a `values` array of rows.
@@ -71,17 +57,8 @@ curl -s "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RAN
 ### Write Values
 
 ```bash
-curl -s -X PUT "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RANGE?valueInputOption=USER_ENTERED" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "range": "RANGE",
-    "majorDimension": "ROWS",
-    "values": [
-      ["A1 value", "B1 value"],
-      ["A2 value", "B2 value"]
-    ]
-  }'
+charliebot google request PUT "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RANGE?valueInputOption=USER_ENTERED" \
+  --json '{"range":"RANGE","majorDimension":"ROWS","values":[["A1 value","B1 value"],["A2 value","B2 value"]]}'
 ```
 
 `valueInputOption=USER_ENTERED` parses values as if typed into the UI (numbers, dates, formulas are interpreted). Use `RAW` to store literal strings.
@@ -89,16 +66,8 @@ curl -s -X PUT "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/val
 ### Append Values
 
 ```bash
-curl -s -X POST "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RANGE:append?valueInputOption=USER_ENTERED" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "range": "RANGE",
-    "majorDimension": "ROWS",
-    "values": [
-      ["A value", "B value"]
-    ]
-  }'
+charliebot google request POST "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID/values/RANGE:append?valueInputOption=USER_ENTERED" \
+  --json '{"range":"RANGE","majorDimension":"ROWS","values":[["A value","B value"]]}'
 ```
 
 Appends rows after the last row with data in the specified range. The `RANGE` determines which table to append to (e.g. `Sheet1!A:B`).
@@ -108,18 +77,8 @@ Appends rows after the last row with data in the specified range. The `RANGE` de
 Use `spreadsheets.batchUpdate` for structural changes (add/delete sheets, formatting, merge cells, resize, conditional formatting, etc.):
 
 ```bash
-curl -s -X POST "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID:batchUpdate" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "requests": [
-      {
-        "addSheet": {
-          "properties": { "title": "New Sheet" }
-        }
-      }
-    ]
-  }'
+charliebot google request POST "https://sheets.googleapis.com/v4/spreadsheets/SPREADSHEET_ID:batchUpdate" \
+  --json '{"requests":[{"addSheet":{"properties":{"title":"New Sheet"}}}]}'
 ```
 
 Common request types: `addSheet`, `deleteSheet`, `updateSheetProperties`, `mergeCells`, `repeatCell` (for formatting), `autoResizeDimensions`, `addConditionalFormatRule`.
@@ -131,7 +90,7 @@ Choose an account in the **Accounts** section and follow **Add or Re-Authorize a
 ## Workflow
 
 1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Mint its access token with `python3 skills/google-oauth/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
+2. Send each request with `charliebot google request <METHOD> <URL> [--json <body>] --account <name>`. Omit `--account` for the default account.
 3. For reads, call `spreadsheets.get` for metadata or `spreadsheets.values.get` for cell data.
 4. For writes, show the exact planned content first and wait for explicit `take off` approval.
 5. After approval, create, write, append, or batch update via Sheets API. After a successful create, return `https://docs.google.com/spreadsheets/d/{spreadsheetId}/edit`.

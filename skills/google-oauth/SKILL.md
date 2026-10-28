@@ -5,11 +5,12 @@ description: >
   OAuth client set up, its refresh token obtained again after expiry, or an
   access token minted at runtime. Use when adding a Google account or choosing
   among several accounts.
+version: 1.1.0
 ---
 
 # Google OAuth
 
-The `google_account.py` script reads the account table, mints access tokens, and adds accounts.
+`charliebot google` reads the account table, sends authenticated requests and lists accounts. The `google_account.py` script adds accounts.
 
 ## Configuration
 
@@ -31,15 +32,27 @@ The `google_account.py` script reads the account table, mints access tokens, and
 - `google.docs_default_folder_id` applies only to the default account.
 - Access tokens are minted at runtime and are not persisted.
 
-## Runtime Token Mint
+## Runtime Requests
 
-Mint an access token before the integration's API calls:
+Send every Google API request through `charliebot google request`, which mints the account's access token inside its own process:
 
 ```bash
-ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+charliebot google request <METHOD> <URL> [--account <name>] [--data-file <path> | --json <text>] [--header <name:value>]...
 ```
 
-For the default account, omit `--account`. The command prints the access token on stdout.
+The token never appears in a command, in an output, in a run record or in model context.
+For the default account, omit `--account`.
+`--json` sends the text as the request body with `Content-Type: application/json`; `--data-file` reads the body from a file; each `--header` adds one header.
+The command prints the response body on stdout.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | HTTP 2xx; the response body is on stdout. |
+| 1 | Another HTTP status, a network failure, or a token refresh failure, including a pending account. |
+| 2 | Invalid arguments, or an invalid account table in `credentials.yaml`. |
+| 3 | `credentials.yaml` cannot be read. |
+
+Redirects are not followed: a 3xx answer exits 1 with its status, so an unexpected redirect is visible.
 
 ## Accounts
 
@@ -48,7 +61,8 @@ A host holds one or more Google accounts. Each account has a short name, unique 
 - The `google` section of `$CHARLIEBOT_HOME/credentials.yaml` holds the OAuth client and the default account.
 - Each added account has its own section, `google_account_<name>`.
 - An added account section may carry its own `client_id` and `client_secret`.
-- `python3 <skill-dir>/scripts/google_account.py list` prints each account's name, mark, status, owner and description.
+- `charliebot google list` prints each account's name, mark, status, owner and description.
+- `charliebot google list --check` adds each account's email address; a pending account keeps its row with an empty address.
 - The mark is `default` for the default account and `primary` for the primary account of another person.
 
 Choose the account before each Google API call:
@@ -66,9 +80,9 @@ Choose the account before each Google API call:
 - When the request names no account, also name in the reply the accounts not checked.
 - Name the target account in each write draft that waits for take off.
 
-Mint the access token for the chosen account:
+Send each request for the chosen account:
 
-    ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+    charliebot google request <METHOD> <URL> --account <name>
 
 For the default account, omit `--account`.
 

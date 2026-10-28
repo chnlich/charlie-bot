@@ -16,13 +16,7 @@ Known-alive symbols:
 - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
   `_fresh_user_agent_cache`, `_fresh_claude_accounts`, `_fresh_codex_account` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
-  `_reset_config_caches` (`tests/test_charliebot_home.py`),
-  `_fresh_renderer_singleton` (`tests/core/test_headless_render.py`),
-  `_stub_headless_renderer` (`tests/conftest.py`) — the renderer pair: the first resets the
-  warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the
-  suite-wide conftest autouse that reshapes `headless_render.render_height` into the
-  dump-dom drive seam every artifact/plan-height test relies on
-  — pytest `autouse=True` fixtures,
+  `_reset_config_caches` (`tests/test_charliebot_home.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Most are single-line
   `fresh_state_fixture(...)` assignments in their module (built by the conftest factory of the
@@ -76,11 +70,6 @@ Known-alive symbols:
   prefix), so each binding surfaces to vulture as an unused variable. Removing a binding
   silently drops that stage's wall time from the budget accrual `pytest_runtest_makereport`
   enforces.
-- `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
-  `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
-  string (`'do_' + self.command` through `getattr`, `log_message` by name). Vulture flags each
-  as an unused method; the only other whole-repo matches are the perf doc's embedded collector
-  and the handler docstring's own `log_message` mention.
 - The `if False:` / `yield {}` marker in `tests/test_worker_diagnostics.py` is flagged as a
   100%-confidence unsatisfiable `if` condition; the unreachable branch is what keeps the fake
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
@@ -109,20 +98,6 @@ Known-alive symbols:
   `tests/test_claude_accounts.py`, 60% confidence). The same two names also appear as
   `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
   does not flag.
-- `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data` (`_TreeBuilder`
-  in `src/features/artifacts/artifact_check.py`) — template-method overrides of stdlib
-  `html.parser.HTMLParser`: `feed()` drives the base class's scanner, which invokes these
-  on `self` under their contract-fixed names while `_parse_dom` builds the DOM. Nothing in
-  the repo calls them, each name has exactly zero whole-repo matches outside its own
-  definition, and vulture flags each as an unused method. Same class as the
-  `do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
-  virtual dispatch in place of stdlib string dispatch.
-- `format` (`tests/test_cli_restart_contract.py`, the `log_message` override's second
-  parameter) — signature-mirror parameter kept deliberately, not fixed by any call: the
-  stdlib invokes `log_message(format, *args)` positionally into the override's trailing
-  `*args`, so deleting the parameter stays green; it keeps the override a faithful mirror
-  of the stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature.
-  Vulture flags it at 100% confidence as an unused variable.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
   `panel-raw` (`src/features/ncu/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with
@@ -159,33 +134,12 @@ Known-alive symbols:
   matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
   an unused method; a whole-repo grep is noisier — `render` is also ordinary web-JS DOM code
   (`plan-panel.js` `function render()`)
-  that names unrelated methods. Same class as the `do_POST`/`log_message`
-  stdlib-dispatch entry.
-- `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
-  `handle_charref` (`_Parser`, all six, in `src/features/artifacts/plan_diff.py`) — template-method
-  overrides of stdlib `html.parser.HTMLParser`, same class as the `_TreeBuilder` entry above.
-  `feed()` drives the base scanner, which calls these methods under their contract-fixed names
-  while the parser builds its DOM. The `_TreeBuilder` entry covers only artifact_check's class.
-  Each name matches only the `_Parser` definition, so vulture flags each as an unused method.
-  `_OffsetParser`, the base of `_Parser`, pins `convert_charrefs=False` because its offset math
-  must address raw source spans. Therefore `_Parser`'s `handle_entityref` and `handle_charref`,
-  the only overrides of that pair, fire there. `_TreeBuilder` pins `convert_charrefs=True`, and
-  under that setting the stdlib folds references into `handle_data`.
-- `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
-  `src.features.artifacts.cli.home.charliebot_home_dir` so the wrap verb's home resolution lands
-  under the pytest tmp tree instead of the host profile), requested by name in three tests' parameter lists; the bodies
-  never reference the parameter, so vulture flags it as an unused variable at each request site.
-  Same fixture-name-discovery class as `isolated_config` above.
-- `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
-  — the real `_render_once(self, probe_uri)` (src/features/artifacts/headless_render.py) is called with one
-  positional argument from `render_height`, so the stub's replaced two-parameter signature fixes
-  the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
-  100% confidence as an unused variable.
+  that names unrelated methods.
 - `_isolate_profile` (`tests/conftest.py`) — `@pytest.fixture(autouse=True)` in conftest,
   so pytest applies it to every test in the tree with no in-file reference: it pins
   `CHARLIEBOT_HOME` at a fresh temp profile and resets the config caches around each
   test. Vulture flags it as an unused function. Same autouse class as
-  `_stub_headless_renderer` above.
+  the `_fresh_*` entry above.
 - `_codex_home_under_tmp` (`tests/test_session_usage.py`) — `@pytest.fixture(autouse=True)`
   fixture; pytest invokes it around every test in its module with no in-file reference,
   pinning the codex resolver's default home under tmp_path so the seeded rollout tree
@@ -226,18 +180,9 @@ Known-alive symbols:
   runs in CI, so a deletion stays suite-green while leaving the annotations unresolved.
   Vulture reads the annotations as a use and does not flag the import; the
   no-type-checker fact is what keeps a deletion suite-green, so the guard stays.
-- `__getattr__` (`src/features/artifacts/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
-  delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`), which serves
-  `load_requests`. (The former `src/runtime/cli/common.py` hook left with the phase-separated
-  http.client transport; its conftest patch targets now name the `_request_post`/`_request_get`
-  adapters directly.)
-  Reached by string: the patch target `src.features.artifacts.artifact_wrap.requests.get`
-  (`tests/core/test_artifact_wrap.py`) resolves the module attribute through the hook.
-  Vulture flags it as an unused function at 60% confidence.
 - `__getattr__` (`src/runtime/worker.py`, `src/runtime/autonamer.py`) — the PEP 562 lazy-import
-  hooks; same class as the `src/features/artifacts/artifact_wrap.py` hook entry above. Each is a
-  one-line delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`) serving the
-  module's deferred `build_backend`. The worker hook resolves the
+  hooks. Each is a one-line delegate to the shared `deferred_module_getattr`
+  (`src/infra/deferred.py`) serving the module's deferred `build_backend`. The worker hook resolves the
   `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling `src.runtime.worker.build_backend` (constant defined
   in `tests/conftest.py`); the autonamer hook resolves the attribute-form patch
   `monkeypatch.setattr(autonamer, "build_backend", ...)` in `tests/test_master_cc_consumer.py`,
@@ -254,10 +199,6 @@ Known-alive symbols:
   what the listener paths may call"), so a missing method fails with an AttributeError by
   construction, never silently. Vulture flags each method as unused (60% confidence); the names
   match only the double and the real `SlackClient` in `src/features/slack/slack_listener.py`.
-- `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
-  `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
-  (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture
-  flags as an unused attribute.
 - `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend` and `TerminateFlagBackend`
   in `tests/conftest.py`) — the worker finalize path
   (`self._backend.cgroup_exit_report()`, `src/runtime/worker.py`) and the master round's error
@@ -301,14 +242,6 @@ Known-alive symbols:
   string at the first config parse or first use. The names have no whole-repo matches outside their
   definitions, so vulture flags them as unused. `check_default_backend` rejects a
   `voice.default_backend` typo against the transcription registry's ids at startup.
-- `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
-  `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
-  (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /
-  `self._decolor`), so the two assignments are what the stock `_set_color` would have
-  installed and the piped arm's help render depends on them: a formatter whose `_set_color`
-  installs neither attribute raises AttributeError on the first help render. Vulture flags
-  each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
-  delete them on that evidence.
 - `_reject_legacy_allow_list` (`DiscordConfig` in `src/features/discord/config.py`) — pydantic
   `@model_validator(mode="before")` classmethod: it rejects the retired
   `discord.allowed_user_ids` list at startup, naming `discord.allowed_users` as its
@@ -395,8 +328,7 @@ Known-alive symbols:
   `longrepr` (the pytest `TestReport` writes in `tests/conftest.py`) — attribute writes on library
   objects the library itself reads back: sqlite3 applies the connection's row factory to every
   cursor it creates, and pytest renders `longrepr` when a test fails. Nothing in the repo reads
-  the attributes back, so vulture flags each write as an unused attribute. Same library-attribute
-  class as the `_theme`/`_decolor` entry above.
+  the attributes back, so vulture flags each write as an unused attribute.
 - `exc_type`, `tb` (the `UsageLedger.__exit__` signature in
   `src/features/usage/usage_ledger.py`) and `exitstatus` (`pytest_terminal_summary` in
   `tests/conftest.py`) — protocol-mandated parameters the body does not read: the `with`

@@ -601,6 +601,18 @@ check_log() {
     "elapsed=$((($(check_clock) - CHECK_START) / 1000000))s"
 }
 
+# check_settle_failed STUCK: the report the archive step gives when its wait ends before the session settles. The run
+# the step last waited for is named when one is known; with none, the archive itself is what did not finish.
+check_settle_failed() {
+  if [ -n "$1" ]; then
+    CHECK_RUN=$1
+    check_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+  else
+    CHECK_RUN=""
+    check_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
+  fi
+}
+
 # check_read_run: the session's newest Run into CHECK_RUN and CHECK_STATE; both are empty while the session has no run.
 check_read_run() {
   api GET "/api/sessions/$CHECK_SESSION/runs?order=desc&limit=1"
@@ -692,11 +704,16 @@ for run in page["items"]:
 PY
 }
 
-# check_cancel RUN END: asks RUN to stop. The request id names the run, so a repeated request is the same request.
+# check_cancel RUN END: asks RUN to stop. The request id names the run, so a repeated request is the same request. A
+# wait that ends during the request reports the settle timeout; an answer the server gave before END reports its status.
 check_cancel() {
   CHECK_RUN=$1
   check_api "$2" POST "/api/sessions/$CHECK_SESSION/runs/$CHECK_RUN/cancel" \
     "{\"request_id\":\"switch-stop-$CHECK_RUN\"}"
+  if [ "$API_STATUS" != 200 ] && [ "$(check_clock)" -ge "$2" ]; then
+    check_settle_failed "$CHECK_RUN"   # the wait ended during the stop request
+    return 1
+  fi
   [ "$API_STATUS" = 200 ] || {
     log "$CHECK_LABEL: the cancel answered $API_STATUS"
     return 1
@@ -705,20 +722,21 @@ check_cancel() {
 }
 
 # check_clear_runs END: stops each run of CHECK_SESSION that has not ended, then waits until none is left or the
-# clock passes END. A run that starts meanwhile is stopped the same way.
+# clock passes END. A run that starts meanwhile is stopped the same way. A request the wait ends during reports the
+# settle timeout through check_settle_failed, as the clock check at the top of a pass does; an answer the server gave
+# before END reports its status.
 check_clear_runs() {
   local end=$1 requested=" " runs run_id state stuck="" issued
   while :; do
     if [ "$(check_clock)" -ge "$end" ]; then
-      if [ -n "$stuck" ]; then
-        CHECK_RUN=$stuck
-        check_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
-      else
-        check_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
-      fi
+      check_settle_failed "$stuck"
       return 1
     fi
     check_api "$end" GET "/api/sessions/$CHECK_SESSION/runs?limit=500" ""
+    if [ "$API_STATUS" != 200 ] && [ "$(check_clock)" -ge "$end" ]; then
+      check_settle_failed "$stuck"   # the wait ended during the listing; no answer came before END
+      return 1
+    fi
     [ "$API_STATUS" = 200 ] || {
       log "$CHECK_LABEL: listing the runs answered $API_STATUS"
       return 1
@@ -726,7 +744,7 @@ check_clear_runs() {
     runs="$(run_states)" || return 1
     if [ -z "$runs" ]; then
       if [ "$(check_clock)" -ge "$end" ]; then
-        check_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
+        check_settle_failed ""
         return 1
       fi
       return 0
@@ -747,8 +765,7 @@ check_clear_runs() {
     done <<<"$runs"
     [ -n "$stuck" ] || return 0
     if [ "$(check_clock)" -ge "$end" ]; then
-      CHECK_RUN=$stuck
-      check_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+      check_settle_failed "$stuck"
       return 1
     fi
     # A pass that just requested a stop reads the runs again at once; a pass that only waits sleeps one poll interval.
@@ -758,7 +775,8 @@ check_clear_runs() {
 
 # check_archive: archives CHECK_SESSION. Each attempt first stops the session's open runs, because the server
 # refuses an archive while a run is unfinished. A 409 means a run started after that stop, so the stop and the archive
-# repeat until PROBE_CANCEL_WAIT_S passes.
+# repeat until PROBE_CANCEL_WAIT_S passes. A request the wait ends during reports the settle timeout; an answer the
+# server gave before END reports its status.
 check_archive() {
   local end=$(($(check_clock) + PROBE_CANCEL_WAIT_S * 1000000))
   while :; do
@@ -769,9 +787,12 @@ check_archive() {
       check_log "archived"
       return 0
     fi
+    if [ "$(check_clock)" -ge "$end" ]; then
+      check_settle_failed ""   # the wait ended during the archive request
+      return 1
+    fi
     check_log "archive answered $API_STATUS"
     [ "$API_STATUS" = 409 ] || return 1
-    [ "$(check_clock)" -lt "$end" ] || return 1
     check_sleep "$end"
   done
 }
@@ -874,6 +895,11 @@ delegation_run() {
   end=$(($(check_clock) + DELEGATION_WAIT_S * 1000000))
   body="$(delegation_body)" || return 1
   check_api "$end" POST /api/internal/delegate "$body"
+  if [ "$API_STATUS" != 200 ] && [ "$(check_clock)" -ge "$end" ]; then
+    # The wait ended during the delegate request, so the answer that names the run never arrived.
+    delegation_fail delegate "the run did not start within ${DELEGATION_WAIT_S}s"
+    return 1
+  fi
   [ "$API_STATUS" = 200 ] || {
     delegation_fail delegate "the server answered $API_STATUS: $(cat "$WORK/body")"
     return 1

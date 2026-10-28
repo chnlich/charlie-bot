@@ -1,6 +1,16 @@
 //! The registered cc-claude option fields.
 
+use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
+
+/// The `cc-claude` option's type-specific fields in `CcClaudeBackend`'s declaration order, each with the value the
+/// Python model holds when an entry omits it. `charliebot config get backends` renders them.
+pub const SCHEMA: &[OptionField] = &[
+  OptionField::field("effort", OptionFieldDefault::Null),
+  OptionField::field("fast_mode", OptionFieldDefault::Bool(false)),
+  OptionField::field("cli_binary", OptionFieldDefault::Null),
+  OptionField::field("account_pool", OptionFieldDefault::Null),
+];
 
 /// Validate the cc-claude-only fields of one backend option.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {

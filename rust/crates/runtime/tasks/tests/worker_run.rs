@@ -926,7 +926,12 @@ fn register_pooled_claude(registry: &mut Registry) -> Result<(), RegistryError> 
   let state = CLAUDE_STATE
     .with(|cell| cell.borrow_mut().take())
     .expect("the test sets the Claude account state before registering");
-  registry.config_section(ConfigSection { key: "accounts", legacy_keys: &[], parse: claude_config::parse_accounts })?;
+  registry.config_section(ConfigSection {
+    key: "accounts",
+    legacy_keys: &[],
+    parse: claude_config::parse_accounts,
+    dump: claude_config::dump_accounts,
+  })?;
   let lifecycle: Arc<dyn BackendLifecycle> = Arc::new(ClaudeCodeLifecycle::with_state(state));
   let traits = BackendTraits {
     resume: ResumeStyle::CliFlag,

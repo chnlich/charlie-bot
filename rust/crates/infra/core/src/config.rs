@@ -78,6 +78,63 @@ pub struct ConfigSection {
   /// The retired top-level keys this section replaced, each with its new location.
   pub legacy_keys: &'static [(&'static str, &'static str)],
   pub parse: fn(&Value) -> Result<SectionValue, String>,
+  /// Renders the parsed section the way Python's `model_dump()` dumps it. `charliebot config get <key>`
+  /// prints this, so a section's defaults appear the same as the server's own model holds them.
+  pub dump: fn(&SectionValue) -> Result<serde_json::Value, String>,
+}
+
+/// The value a backend option's Python model holds for a type-specific field the entry omits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionFieldDefault {
+  /// A required field: the loader has already refused an entry that omits it.
+  Required,
+  Null,
+  Bool(bool),
+  /// An empty mapping, like pydantic's `dict` default factory.
+  EmptyMap,
+}
+
+impl OptionFieldDefault {
+  /// The JSON value Python's model dumps for the absent field; `None` for a required field.
+  pub fn json(self) -> Option<serde_json::Value> {
+    match self {
+      OptionFieldDefault::Required => None,
+      OptionFieldDefault::Null => Some(serde_json::Value::Null),
+      OptionFieldDefault::Bool(flag) => Some(serde_json::Value::Bool(flag)),
+      OptionFieldDefault::EmptyMap => Some(serde_json::Value::Object(serde_json::Map::new())),
+    }
+  }
+}
+
+/// How an option field's YAML value reaches JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionFieldKind {
+  /// The value as YAML loads it.
+  AsIs,
+  /// A `float` field: pydantic dumps an integer entry as a float (`1` prints `1.0`).
+  Float,
+}
+
+/// One type-specific field of a `backends.options[]` entry, in its Python model's declaration order. A
+/// backend package owns its type's fields; `charliebot config get backends` reads them so an option's dump
+/// carries the same fields and defaults as the type's pydantic model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OptionField {
+  pub name: &'static str,
+  pub default: OptionFieldDefault,
+  pub kind: OptionFieldKind,
+}
+
+impl OptionField {
+  /// A field whose YAML value is dumped as loaded.
+  pub const fn field(name: &'static str, default: OptionFieldDefault) -> OptionField {
+    OptionField { name, default, kind: OptionFieldKind::AsIs }
+  }
+
+  /// A `float` field; `default` is its Python default.
+  pub const fn float_field(name: &'static str, default: OptionFieldDefault) -> OptionField {
+    OptionField { name, default, kind: OptionFieldKind::Float }
+  }
 }
 
 /// What the registered packages add to the config schema. `charliebot-registry` builds it at startup.
@@ -272,6 +329,12 @@ impl CharlieBotConfig {
   pub fn section<T: Any + Send + Sync>(&self, key: &str) -> &T {
     let value = self.sections.0.get(key).unwrap_or_else(|| panic!("config section {key:?} is not registered"));
     value.downcast_ref::<T>().unwrap_or_else(|| panic!("config section {key:?} does not hold the requested type"))
+  }
+
+  /// The parsed value of the registered section `key`, or `None` when no package registered it. A reader that
+  /// only renders the value (`charliebot config get`) uses this instead of [`Self::section`].
+  pub fn section_value(&self, key: &str) -> Option<&SectionValue> {
+    self.sections.0.get(key)
   }
 }
 
@@ -667,8 +730,12 @@ mod tests {
     fn raw(value: &Value) -> Result<SectionValue, String> {
       Ok(Arc::new(value.clone()))
     }
+    fn dump(value: &SectionValue) -> Result<serde_json::Value, String> {
+      let value = value.downcast_ref::<Value>().ok_or("the voice section holds a raw YAML value")?;
+      yaml_to_json(value)
+    }
     ConfigSchema {
-      sections: vec![ConfigSection { key: "voice", legacy_keys: &[], parse: raw }],
+      sections: vec![ConfigSection { key: "voice", legacy_keys: &[], parse: raw, dump }],
       legacy_keys: Vec::new(),
       backend_types: vec!["cc-claude", "codex"],
     }

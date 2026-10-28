@@ -39,6 +39,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     lifecycle: None,
     translate_fallback: false,
   })?;
+  registry.option_schema("gemini", options::SCHEMA)?;
   registry
     .legacy_keys(&[("credentials: gemini_api_key", "gemini.api_key"), ("credentials: gemini_model", "gemini.model")])
 }

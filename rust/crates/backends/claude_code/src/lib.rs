@@ -78,10 +78,12 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     lifecycle: Some(Arc::new(ClaudeCodeLifecycle::with_state(Arc::clone(&state))) as Arc<dyn BackendLifecycle>),
     translate_fallback: true,
   })?;
+  registry.option_schema("cc-claude", options::SCHEMA)?;
   registry.config_section(charliebot_core::config::ConfigSection {
     key: "accounts",
     legacy_keys: &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")],
     parse: claude_config::parse_accounts,
+    dump: claude_config::dump_accounts,
   })?;
   registry.metadata_slot_with_validator(
     charliebot_core::metadata_slot::MetadataSlot {

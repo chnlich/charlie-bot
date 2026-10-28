@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "config",
+    "get",
+    "headless_chrome_bin"
+  ],
+  "files": {
+    "home/config.yaml": "{file:rust/crates/app/cli/tests/fixtures/config_get/config.yaml}"
+  },
+  "expect": {
+    "stdout": "/opt/synthetic/chrome\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

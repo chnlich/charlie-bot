@@ -1,0 +1,7 @@
+# Expected `charliebot config get telegram` output, recorded from the Python CLI.
+# Helper: CHARLIEBOT_HOME=<copy of config.yaml beside this file> uv run charliebot config get telegram
+#   (src/app/main.py dispatching to src/runtime/cli/config.py).
+# Base commit: f2b57d3f8
+# The home is config.yaml beside this file; every value in it is synthetic.
+#
+{"chat_id": null}

@@ -1,0 +1,27 @@
+# A synthetic profile home for the `config get` tests. Every value is invented: no real backend id,
+# model, host name, URL or credential appears here.
+server:
+  port: 18499
+backends:
+  pool:
+    - synthetic-claude
+    - synthetic-openai
+  routing:
+    command: [synthetic-router, --policy, round-robin]
+  options:
+    - id: synthetic-claude
+      label: Synthetic Claude
+      type: cc-claude
+      model: synthetic-claude-1
+      effort: high
+    - id: synthetic-openai
+      label: Synthetic OpenAI
+      type: cc-openai-compatible
+      model: synthetic-openai-1
+      api_base: https://api.synthetic.example/v1
+    - id: synthetic-codex
+      label: Synthetic Codex
+      type: codex
+      model: synthetic-codex-1
+headless_chrome_bin: /opt/synthetic/chrome
+telegram: {}

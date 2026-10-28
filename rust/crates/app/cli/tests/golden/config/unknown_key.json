@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "config",
+    "get",
+    "server.port"
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "error: unknown config key: server.port (not a CharlieBotConfig field or registered section)\n",
+    "exit": 2,
+    "requests": []
+  }
+}

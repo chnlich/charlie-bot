@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "config",
+    "get",
+    "backends"
+  ],
+  "files": {
+    "home/config.yaml": "{file:rust/crates/app/cli/tests/fixtures/config_get/config.yaml}"
+  },
+  "expect": {
+    "stdout": "{\"pool\": [\"synthetic-claude\", \"synthetic-openai\"], \"routing\": {\"command\": [\"synthetic-router\", \"--policy\", \"round-robin\"]}, \"options\": [{\"id\": \"synthetic-claude\", \"label\": \"Synthetic Claude\", \"model\": \"synthetic-claude-1\", \"prompt_overlay\": null, \"type\": \"cc-claude\", \"effort\": \"high\", \"fast_mode\": false, \"cli_binary\": null, \"account_pool\": null}, {\"id\": \"synthetic-openai\", \"label\": \"Synthetic OpenAI\", \"model\": \"synthetic-openai-1\", \"prompt_overlay\": null, \"type\": \"cc-openai-compatible\", \"api_base\": \"https://api.synthetic.example/v1\", \"credential\": null}, {\"id\": \"synthetic-codex\", \"label\": \"Synthetic Codex\", \"model\": \"synthetic-codex-1\", \"prompt_overlay\": null, \"type\": \"codex\", \"model_reasoning_effort\": null, \"model_auto_compact_token_limit\": null}]}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

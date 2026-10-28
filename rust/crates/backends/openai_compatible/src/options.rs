@@ -1,9 +1,17 @@
 //! The cc-openai-compatible option fields: `api_base` and `credential`, from `src/backends/openai_compatible/options.py`.
 
+use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
 const API_BASE: &str = "api_base";
 const CREDENTIAL: &str = "credential";
+
+/// The `cc-openai-compatible` option's type-specific fields in `CcOpenAICompatibleBackend`'s declaration order, each
+/// with the value the Python model holds when an entry omits it. `charliebot config get backends` renders them.
+pub const SCHEMA: &[OptionField] = &[
+  OptionField::field("api_base", OptionFieldDefault::Required),
+  OptionField::field("credential", OptionFieldDefault::Null),
+];
 
 /// The type-specific fields of one `cc-openai-compatible` backend option.
 #[derive(Debug, Clone, PartialEq, Eq)]

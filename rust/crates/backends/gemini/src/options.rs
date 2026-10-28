@@ -3,6 +3,9 @@
 
 use serde_yaml::Mapping;
 
+/// The `gemini` option's type-specific fields: none, as `GeminiBackend` names none.
+pub const SCHEMA: &[charliebot_core::config::OptionField] = &[];
+
 /// Accepts an option with no type-specific fields and refuses any other key.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
   match fields.keys().next() {

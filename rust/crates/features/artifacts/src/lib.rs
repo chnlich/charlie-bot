@@ -30,6 +30,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     key: "publish",
     legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],
     parse: raw_section,
+    dump: dump_section,
   })?;
   registry.sidebar_contribution("artifacts", Arc::new(sidebar::ArtifactsSidebar))?;
   registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
@@ -52,4 +53,22 @@ fn close_headless_renderer_at_shutdown(
 /// A config section kept as its YAML value until the owning package's port types it.
 fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
   Ok(Arc::new(value.clone()))
+}
+
+/// Render the raw section the way Python's `PublishConfig` dumps it (`charliebot config get publish`): the entry's
+/// keys plus the model's three defaults, with `dir`'s `~` expanded as its validator does.
+fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
+  let raw = value.downcast_ref::<serde_yaml::Value>().ok_or("the publish section holds an unexpected value")?;
+  let mut object = match charliebot_core::config::yaml_to_json(raw)? {
+    serde_json::Value::Object(object) => object,
+    serde_json::Value::Null => serde_json::Map::new(),
+    other => return Err(format!("publish must be a mapping, got {other}")),
+  };
+  for key in ["command", "dir", "public_base_url"] {
+    object.entry(key.to_string()).or_insert(serde_json::Value::Null);
+  }
+  if let Some(serde_json::Value::String(dir)) = object.get("dir").cloned() {
+    object.insert("dir".to_string(), serde_json::Value::String(charliebot_core::paths::expanduser(&dir)));
+  }
+  Ok(serde_json::Value::Object(object))
 }

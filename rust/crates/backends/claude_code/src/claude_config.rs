@@ -74,6 +74,12 @@ pub fn parse_accounts(value: &Value) -> Result<charliebot_core::config::SectionV
   Ok(std::sync::Arc::new(parsed))
 }
 
+/// Render the section as its model dumps it (`charliebot config get accounts`).
+pub fn dump_accounts(value: &charliebot_core::config::SectionValue) -> Result<serde_json::Value, String> {
+  let accounts = value.downcast_ref::<AccountsConfig>().ok_or("the accounts section holds an unexpected value")?;
+  serde_json::to_value(accounts).map_err(|error| error.to_string())
+}
+
 pub fn check_claude_pools(cfg: &CharlieBotConfig) -> Result<(), String> {
   let accounts = cfg.section::<AccountsConfig>("accounts");
   let labels = accounts.claude.iter().map(|account| account.label.as_str()).collect::<std::collections::HashSet<_>>();

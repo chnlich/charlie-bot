@@ -558,6 +558,16 @@ def all_runs_success(path):
     return ok, f"runs={len(items)} states={','.join(states) or 'none'} all_success={int(ok)}"
 
 
+def run_page(path):
+    value = load_json(path)
+    items = value.get("items")
+    if not isinstance(items, list):
+        raise ValueError("run response has no items list")
+    active = any(str(item.get("state") or "") in ("queued", "running") for item in items)
+    print(int(active))
+    print(value.get("next_cursor") or "")
+
+
 def frame_signature(frame):
     message = frame.get("message")
     message = message if isinstance(message, dict) else {}
@@ -896,6 +906,8 @@ def main():
         ok, summary = all_runs_success(sys.argv[2])
         print(summary)
         raise SystemExit(0 if ok else 1)
+    elif command == "run-page":
+        run_page(sys.argv[2])
     elif command == "self-test":
         self_test()
     elif command == "child-workers":
@@ -1560,26 +1572,38 @@ SERVE_WAIT_RUNS_SECONDS=600
 
 serve_home_has_active_run() {
   # Prints 1 while some run of a trial-home session is still queued or running, else 0. A stopped, withheld or
-  # input-blocked run consumes no server process, so the active set is queued and running only; a session whose runs
-  # cannot be read counts as active, because its runs are not proven ended.
-  local trial_session_id runs_status state
-  local -a run_states=()
+  # input-blocked run consumes no server process, so the active set is queued and running only. Every page of a
+  # session's runs is read, because the newest run is on the last page; a session whose runs cannot be read counts as
+  # active, because its runs are not proven ended.
+  local trial_session_id trial_session_ids runs_status cursor page_output
+  local -a page=()
+  if [[ ! -d $SESSIONS_DIR ]]; then
+    printf '0'
+    return 0
+  fi
+  trial_session_ids=$("$PYTHON" "$HELPER" session-ids "$SESSIONS_DIR") || {
+    printf '1'
+    return 0
+  }
   while IFS= read -r trial_session_id; do
     [[ -n $trial_session_id ]] || continue
-    runs_status=$(http_get "/api/sessions/$trial_session_id/runs?order=asc&limit=100" "$HTTP_ROOT/serve-runs.json")
-    if [[ $runs_status != 200 ]] || ! read_run_summary "$HTTP_ROOT/serve-runs.json"; then
-      printf '1'
-      return 0
-    fi
-    [[ -n $RUN_STATES ]] || continue
-    IFS=',' read -r -a run_states <<<"$RUN_STATES"
-    for state in "${run_states[@]}"; do
-      if [[ $state == running || $state == queued ]]; then
+    cursor=
+    while :; do
+      runs_status=$(http_get "/api/sessions/$trial_session_id/runs?order=asc&limit=500${cursor:+&cursor=$cursor}" \
+        "$HTTP_ROOT/serve-runs.json")
+      if [[ $runs_status != 200 ]] || ! page_output=$("$PYTHON" "$HELPER" run-page "$HTTP_ROOT/serve-runs.json"); then
         printf '1'
         return 0
       fi
+      mapfile -t page <<<"$page_output"
+      if [[ ${page[0]} == 1 ]]; then
+        printf '1'
+        return 0
+      fi
+      cursor=${page[1]:-}
+      [[ -n $cursor ]] || break
     done
-  done < <("$PYTHON" "$HELPER" session-ids "$SESSIONS_DIR" 2>/dev/null)
+  done <<<"$trial_session_ids"
   printf '0'
 }
 

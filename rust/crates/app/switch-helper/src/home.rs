@@ -2,9 +2,8 @@
 //! outcome a run recorded. The live-run scan lives in `scan.rs`; the four read the same session layout.
 
 use std::ffi::OsString;
-use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,7 +12,7 @@ use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
 use charliebot_core::pyfmt;
-use charliebot_store::chat_events;
+use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
 use charliebot_store::run_records::RUN_METADATA_NAME;
 use serde_json::Value;
@@ -76,15 +75,15 @@ fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   let metadata = read_json(&metadata_path).map_err(failed)?;
   let manager_turn = metadata.get("kind").and_then(Value::as_str) == Some("manager_turn");
   let mut outcome = Outcome::default();
-  for archive in archives(&session).map_err(failed)? {
-    let text = read_event_text(&archive).map_err(failed)?;
-    for (number, line) in event_lines(&text).enumerate() {
-      outcome.read(line, number + 1, &archive, &run_id);
+  for archive in chat_events::archive_files(&session).map_err(failed)? {
+    for line in chat_events::read_lines(&archive, LineRule::Universal).map_err(failed)? {
+      let line = line.map_err(failed)?;
+      outcome.read(&line.text, line.number, &archive, &run_id);
     }
   }
   let live = layout::chat_events_path(&session);
   if live.is_file() {
-    let text = read_event_text(&live).map_err(failed)?;
+    let text = chat_events::read_universal_text(&live).map_err(failed)?;
     let mut consumed = 0;
     let mut line_number = 0;
     drain(&text, &mut consumed, &mut line_number, &mut outcome, &live, &run_id);
@@ -97,44 +96,11 @@ fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The session's archive files in the order the switch reads them: by file name.
-fn archives(session_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-  let dir = layout::archives_dir(session_dir);
-  let mut paths = Vec::new();
-  let entries = match fs::read_dir(&dir) {
-    Ok(entries) => entries,
-    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(paths),
-    Err(error) => return Err(error),
-  };
-  for entry in entries {
-    let entry = entry?;
-    let name = entry.file_name().to_string_lossy().into_owned();
-    if chat_events::is_chat_events_archive(&name) {
-      paths.push(entry.path());
-    }
-  }
-  paths.sort();
-  Ok(paths)
-}
-
-/// One event log's text with Python's universal newlines: `\r\n` and a lone `\r` end a line as `\n` does.
-fn read_event_text(path: &Path) -> std::io::Result<String> {
-  Ok(fs::read_to_string(path)?.replace("\r\n", "\n").replace('\r', "\n"))
-}
-
-/// The lines Python's `for line in stream` yields: each line with its terminator, and a final line without one.
-fn event_lines(text: &str) -> impl Iterator<Item = &str> {
-  text.split_terminator('\n')
-}
-
-/// Read the complete lines after `consumed`, advancing it past them. A line still being written has no newline and
+/// Read the complete live lines after `consumed`, advancing it past them. A line still being written has no newline and
 /// stays unread, as the live log's own reader requires.
 fn drain(text: &str, consumed: &mut usize, line_number: &mut usize, outcome: &mut Outcome, path: &Path, run_id: &str) {
-  while let Some(offset) = text[*consumed..].find('\n') {
-    let line = &text[*consumed..*consumed + offset];
-    *consumed += offset + 1;
-    *line_number += 1;
-    outcome.read(line, *line_number, path, run_id);
+  for line in chat_events::take_complete_lines(text, consumed, line_number) {
+    outcome.read(&line.text, line.number, path, run_id);
   }
 }
 
@@ -145,10 +111,10 @@ fn wait_for_outcome(
   line_number: &mut usize,
   outcome: &mut Outcome,
   run_id: &str,
-) -> std::io::Result<()> {
+) -> Result<(), LogReadError> {
   let deadline = Instant::now() + MANAGER_TURN_OUTCOME_WAIT;
   while !outcome.recorded && Instant::now() < deadline {
-    let text = match read_event_text(path) {
+    let text = match chat_events::read_universal_text(path) {
       Ok(text) => text,
       // A line the server is still writing can split a UTF-8 character; the next poll reads the whole line.
       Err(error) if error.kind() == ErrorKind::InvalidData => {
@@ -176,7 +142,7 @@ struct Outcome {
 impl Outcome {
   /// Read one event line. A line the live log's own reader skips is not a fact; the skip is logged.
   fn read(&mut self, line: &str, number: usize, path: &Path, run_id: &str) {
-    match serde_json::from_str::<Value>(line) {
+    match chat_events::decode_line(line.as_bytes()) {
       Ok(event) => {
         if event.get("type").and_then(Value::as_str) == Some(event_types::RUN_FINISHED)
           && event.get("run_id").and_then(Value::as_str) == Some(run_id)

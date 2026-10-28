@@ -31,6 +31,7 @@ mod task_tree;
 mod task_tree_state;
 mod thinking;
 pub mod trigger_files;
+pub mod v1_sessions;
 #[cfg(any(test, feature = "write-faults"))]
 mod write_fault_types;
 #[cfg(any(test, feature = "write-faults"))]

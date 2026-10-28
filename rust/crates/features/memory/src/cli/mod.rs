@@ -12,6 +12,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
 use charliebot_core::{config, credentials, event_types, home, pystr, run_token};
+use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::run_records::RunRecord;
 use charliebot_store::{layout, run_identity};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -195,19 +196,21 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
 }
 
 fn read_run_events(path: &Path) -> Result<Vec<Value>, CliExit> {
-  let text = match fs::read_to_string(path) {
-    Ok(text) => text,
+  let lines = match chat_events::read_lines(path, LineRule::Lines) {
+    Ok(lines) => lines,
     Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
     Err(error) => return Err(CliExit::error(format!("read {}: {error}", path.display()))),
   };
-  Ok(
-    text
-      .split('\n')
-      .filter(|line| !line.is_empty())
-      .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-      .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RUN_FINISHED))
-      .collect(),
-  )
+  let mut run_finished = Vec::new();
+  for line in lines {
+    let line = line.map_err(|error| CliExit::error(format!("read {}: {error}", path.display())))?;
+    // A line that is not JSON, and a JSON value that is not an object, names no event.
+    let Ok(event) = line.decode() else { continue };
+    if event.get("type").and_then(Value::as_str) == Some(event_types::RUN_FINISHED) {
+      run_finished.push(event);
+    }
+  }
+  Ok(run_finished)
 }
 
 fn load_json_metadata(path: &Path) -> Result<Option<Value>, CliExit> {

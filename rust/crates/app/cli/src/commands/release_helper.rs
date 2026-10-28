@@ -190,12 +190,18 @@ fn run_state(run: &Value) -> String {
   or_default(run.get("state"))
 }
 
+/// A file's text with invalid UTF-8 replaced, as Python's `errors="replace"` reads it.
+fn read_text_lossy(path: &str) -> Result<String, String> {
+  let bytes = fs::read(path).map_err(|error| format!("{path}: {error}"))?;
+  Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// The event log lines that end in a newline; a line the server is still writing is not complete.
 fn complete_lines(path: &str) -> Result<Vec<String>, String> {
   if !Path::new(path).is_file() {
     return Ok(Vec::new());
   }
-  let text = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+  let text = read_text_lossy(path)?;
   let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
   lines.pop();
   Ok(lines)
@@ -367,13 +373,14 @@ fn run_contract_value(
     let kind = event.get("type").and_then(Value::as_str);
     // The server sends one session status reminder after a turn that ended without a status set or confirm.
     if kind == Some(event_types::AGENT_MESSAGE)
-      && event.get("web_status_reminder").is_some_and(truthy)
+      && event.get(event_types::WEB_STATUS_REMINDER).is_some_and(truthy)
       && !id.is_empty()
     {
       reminder_ids.insert(id.clone());
     }
     if kind == Some(event_types::AGENT_MESSAGE)
-      && let Some(parent) = event.get("web_reply").and_then(Value::as_object).and_then(|reply| reply.get("nudge_of"))
+      && let Some(parent) =
+        event.get(event_types::WEB_REPLY).and_then(Value::as_object).and_then(|reply| reply.get(event_types::NUDGE_OF))
     {
       let parent = pyfmt::python_str(parent);
       if expected_user_ids.contains(&parent) {
@@ -389,7 +396,7 @@ fn run_contract_value(
   let mut nudge_counts: Vec<(String, usize)> = expected_user_ids.iter().map(|id| (id.clone(), 0)).collect();
   let mut states = Vec::new();
   for run in items {
-    let input_ids: Vec<String> = match run.get("input_event_ids") {
+    let input_ids: Vec<String> = match run.get(event_types::INPUT_EVENT_IDS) {
       Some(Value::Array(ids)) => ids.iter().map(pyfmt::python_str).collect(),
       _ => Vec::new(),
     };
@@ -662,7 +669,7 @@ fn delegation_error_text(sessions: &Path, manager_id: &str) -> Result<Option<Str
     if !seen.insert(path.clone()) || !path.is_file() {
       continue;
     }
-    let text = fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let text = read_text_lossy(&path.to_string_lossy())?;
     for line in text.lines() {
       if !line.contains("timed out after") {
         continue;
@@ -888,7 +895,7 @@ fn python_string_list(text: &str) -> Result<Vec<String>, String> {
 fn sweep_check(args: &[String]) -> Result<i32, String> {
   let [log, sessions] = arguments::<2>(args, "sweep-check")?;
   let own = session_cgroup_names(sessions)?;
-  let text = fs::read_to_string(log).map_err(|error| format!("{log}: {error}"))?;
+  let text = read_text_lossy(log)?;
   let mut lines = 0;
   let mut removed = Vec::new();
   // Complete lines only: a line the server is still writing has no newline yet.
@@ -1314,11 +1321,11 @@ fn self_test(args: &[String]) -> Result<i32, String> {
 
   let events = vec![
     json!({"id": "user-1", "type": "user"}),
-    json!({"id": "nudge-1", "type": "agent_message", "web_reply": {"nudge_of": "user-1"}}),
+    json!({"id": "nudge-1", "type": "agent_message", (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}}),
   ];
   let runs = vec![
-    json!({"id": "run-user", "state": "success", "input_event_ids": ["user-1"]}),
-    json!({"id": "run-nudge", "state": "success", "input_event_ids": ["nudge-1"]}),
+    json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
+    json!({"id": "run-nudge", "state": "success", (event_types::INPUT_EVENT_IDS): ["nudge-1"]}),
   ];
   let (ok, _) = run_contract_value(&runs, &events, "check2", "user-1", "")?;
   if !ok {
@@ -1327,8 +1334,8 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   println!("PASS self-test check 2 allows one nudge run");
 
   let runs = vec![
-    json!({"id": "run-user-a", "state": "success", "input_event_ids": ["user-1"]}),
-    json!({"id": "run-user-b", "state": "success", "input_event_ids": ["user-1"]}),
+    json!({"id": "run-user-a", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
+    json!({"id": "run-user-b", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
   ];
   let (ok, _) = run_contract_value(&runs, &events, "check2", "user-1", "")?;
   if ok {
@@ -1338,12 +1345,12 @@ fn self_test(args: &[String]) -> Result<i32, String> {
 
   let events = vec![
     json!({"id": "user-1", "type": "user"}),
-    json!({"id": "reminder-1", "type": "agent_message", "web_status_reminder": "reminder-a"}),
-    json!({"id": "reminder-2", "type": "agent_message", "web_status_reminder": "reminder-b"}),
+    json!({"id": "reminder-1", "type": "agent_message", (event_types::WEB_STATUS_REMINDER): "reminder-a"}),
+    json!({"id": "reminder-2", "type": "agent_message", (event_types::WEB_STATUS_REMINDER): "reminder-b"}),
   ];
   let runs = vec![
-    json!({"id": "run-user", "state": "success", "input_event_ids": ["user-1"]}),
-    json!({"id": "run-reminder", "state": "success", "input_event_ids": ["reminder-1"]}),
+    json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
+    json!({"id": "run-reminder", "state": "success", (event_types::INPUT_EVENT_IDS): ["reminder-1"]}),
   ];
   for mode in ["check2", "check5"] {
     let (ok, _) = run_contract_value(&runs, &events, mode, "user-1", "")?;
@@ -1354,9 +1361,9 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   println!("PASS self-test checks 2 and 5 allow one status reminder run");
 
   let runs = vec![
-    json!({"id": "run-user", "state": "success", "input_event_ids": ["user-1"]}),
-    json!({"id": "run-reminder-a", "state": "success", "input_event_ids": ["reminder-1"]}),
-    json!({"id": "run-reminder-b", "state": "success", "input_event_ids": ["reminder-2"]}),
+    json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
+    json!({"id": "run-reminder-a", "state": "success", (event_types::INPUT_EVENT_IDS): ["reminder-1"]}),
+    json!({"id": "run-reminder-b", "state": "success", (event_types::INPUT_EVENT_IDS): ["reminder-2"]}),
   ];
   let (ok, _) = run_contract_value(&runs, &events, "check5", "user-1", "")?;
   if ok {
@@ -1365,8 +1372,8 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   println!("PASS self-test check 5 rejects two status reminder runs for one turn");
 
   let events = vec![json!({"id": "user-1", "type": "user",
-    "web_reply": {"nudge_of": "user-1"}, "web_status_reminder": "reminder-a"})];
-  let runs = vec![json!({"id": "run-user", "state": "success", "input_event_ids": ["user-1"]})];
+    (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}, (event_types::WEB_STATUS_REMINDER): "reminder-a"})];
+  let runs = vec![json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]})];
   for mode in ["check2", "check5"] {
     let (ok, summary) = run_contract_value(&runs, &events, mode, "user-1", "")?;
     if !ok {
@@ -1379,7 +1386,7 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   let sessions = directory.path();
   let session = sessions.join("manager");
   fs::create_dir_all(layout::data_dir(&session)).map_err(|error| error.to_string())?;
-  let line = json!({"id": "report-1", "type": "child_report", "outcome": "failed",
+  let line = json!({"id": "report-1", "type": event_types::CHILD_REPORT, "outcome": "failed",
     "summary": "run run-a failed: git worktree add timed out after 0.3s for charliebot/task-x\nsee the worker log"});
   fs::write(layout::chat_events_path(&session), format!("{line}\n")).map_err(|error| error.to_string())?;
   let reported = delegation_error_text(sessions, "manager")?;

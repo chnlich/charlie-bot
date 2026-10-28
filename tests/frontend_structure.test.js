@@ -100,7 +100,7 @@ const FIX_THE_UPWARD_USE =
 // A package part: a static file of the package, or one of its templates/<name>/page_*.html part
 // templates. A package that adds files at these paths joins the check without an edit here.
 const PACKAGE_PART =
-  new RegExp('src/(features|backends)/([A-Za-z0-9_]+)/(?:static/.+|templates/([A-Za-z0-9_]+)/page_[^/]*\\.html)');
+  new RegExp('^src/(features|backends)/([A-Za-z0-9_]+)/(?:static/.+|templates/([A-Za-z0-9_]+)/page_[^/]*\\.html)$');
 
 // The group of one graph node: core for a file under web/, <kind>.<name> for a package part; null
 // when the node's path is in no group.

@@ -12,8 +12,9 @@ pub fn setup_step() -> Result<(), String> {
   println!("==> Checking Claude Code backend tools");
   let disallowed = super::base_disallowed_tools()?;
   let disallowed_tools: BTreeSet<&str> = disallowed.split(',').collect();
-  let missing: Vec<&str> = REQUIRED.iter().copied().filter(|tool| !disallowed_tools.contains(tool)).collect();
+  let mut missing: Vec<&str> = REQUIRED.iter().copied().filter(|tool| !disallowed_tools.contains(tool)).collect();
   if !missing.is_empty() {
+    missing.sort_unstable();
     return Err(format!("missing disallowed tools: {}", missing.join(",")));
   }
   println!("OK: backend disallows {}", REQUIRED.join(","));

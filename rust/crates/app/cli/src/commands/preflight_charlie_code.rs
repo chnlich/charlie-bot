@@ -121,10 +121,9 @@ fn preflight(backend_id: &str) -> Result<(), String> {
   // The litellm provider prefix is stripped at request time; the endpoint serves the bare id.
   let served_model = option.model.split_once('/').map_or(option.model.as_str(), |(_, bare)| bare);
   if !served_ids.iter().any(|id| id == served_model) {
-    return Err(format!(
-      "model-not-served: {url} lists [{}]; fix the model field or the endpoint",
-      served_ids.join(", ")
-    ));
+    // The list prints the way Python's `str(list)` wrote it: quoted ids inside brackets.
+    let listed = served_ids.iter().map(|id| format!("'{id}'")).collect::<Vec<_>>().join(", ");
+    return Err(format!("model-not-served: {url} lists [{listed}]; fix the model field or the endpoint"));
   }
 
   println!("OK: {backend_id} -> {} serves {served_model} at {api_base}", bin.display());

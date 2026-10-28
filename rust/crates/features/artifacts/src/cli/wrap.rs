@@ -71,14 +71,7 @@ fn wrap_fragment(
   repo_root: &Path,
   node_command: &[OsString],
 ) -> Result<PathBuf, String> {
-  let template_name = match genre {
-    "plan" | "understanding" => "plan_template.html",
-    "sitrep" => "sitrep_template.html",
-    "debug" => "debug_template.html",
-    "explain" => "explain_template.html",
-    other => return Err(format!("unknown artifact genre: {other}")),
-  };
-  let template_rel = format!("prompts/{template_name}");
+  let template_rel = format!("prompts/{}", crate::artifact_check::genre_template(genre));
   let template_path = repo_root.join(&template_rel);
   let template =
     std::fs::read_to_string(&template_path).map_err(|error| format!("could not read {template_rel}: {error}"))?;

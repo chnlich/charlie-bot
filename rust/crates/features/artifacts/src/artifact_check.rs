@@ -31,8 +31,9 @@ const PAGE_HEIGHT: &str = "page-height";
 const ORDINAL_NAMED: &str = "ordinal-named";
 const BYTE_INTEGRITY: &str = "byte-integrity";
 
-/// The registered genres in the order the parser states them (`constants.ARTIFACT_GENRES`).
-pub const ARTIFACT_GENRES: [&str; 5] = ["plan", "understanding", "sitrep", "debug", "explain"];
+/// The registered genres in the order the parser states them. Python's `constants.ARTIFACT_GENRES` lists the first
+/// five; `waiting` exists only here.
+pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
 
 const GOAL_WEIGHTED_BUDGET: usize = 240;
 const PAGE_HEIGHT_TARGET: i32 = 2000;
@@ -101,9 +102,9 @@ static RUN_CHANGED_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// `artifact_shared.GENRE_TEMPLATES`: the genre template whose `<style>` block a genre's pages carry.
-fn genre_template(genre: &str) -> &'static str {
+pub(crate) fn genre_template(genre: &str) -> &'static str {
   match genre {
-    "plan" | "understanding" => "plan_template.html",
+    "plan" | "understanding" | "waiting" => "plan_template.html",
     "sitrep" => "sitrep_template.html",
     "debug" => "debug_template.html",
     "explain" => "explain_template.html",
@@ -117,6 +118,7 @@ fn section_count_rule(genre: &str) -> (usize, bool) {
     "plan" => (6, true),
     "understanding" => (5, false),
     "sitrep" | "debug" | "explain" => (5, true),
+    "waiting" => unreachable!("the waiting set omits sections-numbered, so it has no section-count rule"),
     other => unreachable!("genre {other:?} is registered, so it has a section-count rule"),
   }
 }
@@ -168,6 +170,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_OPEN_SHAPE,
       ORDINAL_NAMED,
     ]),
+    "waiting" => Some(&[BYTE_INTEGRITY, STYLE_VERBATIM, FORK_OPEN_SHAPE, FORK_EXPLAINER, ORDINAL_NAMED]),
     _ => None,
   }
 }
@@ -257,7 +260,8 @@ pub(crate) fn run_assertions_sync(
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   let names = assertion_set(genre).ok_or_else(|| {
     anyhow!(
-      "no assertion set registered for genre {}; genres with a set: plan, understanding, sitrep, debug, explain",
+      "no assertion set registered for genre {}; genres with a set: plan, understanding, sitrep, debug, explain, \
+       waiting",
       pyfmt::str_repr(genre)
     )
   })?;
@@ -1547,6 +1551,31 @@ mod tests {
     assert_eq!(value["name"], "plan");
     assert_eq!(value["passed"], false);
     assert_eq!(value["detail"], "detail");
+  }
+
+  /// A waiting page as `charliebot artifact wrap --genre waiting` assembles it: one context sentence and one fork.
+  fn waiting_sample() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/waiting_page.html")
+  }
+
+  #[test]
+  fn the_waiting_sample_passes_every_waiting_assertion_in_order() {
+    let outcomes = run_assertions_sync("waiting", &waiting_sample(), "", &repo_root()).unwrap();
+    let names = outcomes.iter().map(|outcome| outcome.name.as_str()).collect::<Vec<_>>();
+    assert_eq!(names, [BYTE_INTEGRITY, STYLE_VERBATIM, FORK_OPEN_SHAPE, FORK_EXPLAINER, ORDINAL_NAMED]);
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
+  }
+
+  #[test]
+  fn the_waiting_sample_fails_the_understanding_set_on_sections_and_foot() {
+    let directory = tempfile::tempdir().unwrap();
+    let chrome = stub_chrome(directory.path(), 800);
+    headless_render::set_test_height(&chrome, 800);
+    let outcomes =
+      run_assertions_sync("understanding", &waiting_sample(), chrome.to_str().unwrap(), &repo_root()).unwrap();
+    let failures =
+      outcomes.iter().filter(|outcome| !outcome.passed).map(|outcome| outcome.name.as_str()).collect::<HashSet<_>>();
+    assert_eq!(failures, [SECTIONS_NUMBERED, FOOT_PRESENT].into_iter().collect());
   }
 
   /// `tests/core/test_artifact_check.py::_genre_doc`: the genre template's `<style>` block verbatim plus `body`.

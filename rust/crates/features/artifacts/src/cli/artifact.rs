@@ -3,8 +3,9 @@
 //! `check` runs a genre's mechanical assertions, prints one line per outcome, and — once every assertion passed and
 //! `--assertions-only` was not given — runs the cold read. The cold read follows the session's profile: a manager
 //! session delegates a cold-read child over `/api/internal/delegate` and prints the started line; a worker session or
-//! one with no session identity runs the probe in the foreground and prints the report body. `wrap` assembles a genre
-//! page and can pre-render its math.
+//! one with no session identity runs the probe in the foreground and prints the report body. A `waiting` page has no
+//! cold read here: `web status set` runs it with the item, so `check` refuses that genre without `--assertions-only`.
+//! `wrap` assembles a genre page and can pre-render its math.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -131,6 +132,12 @@ impl CheckInputs {
 
 /// `_run_check`: the assertion lines, then the cold read the session's shape selects.
 fn check(args: &CheckArgs, lazy_host: &LazyHost) -> Result<CheckOutcome, CliExit> {
+  if args.genre == "waiting" && !args.assertions_only {
+    return Err(CliExit::usage(
+      "--genre waiting has no cold read here: `charliebot web status set` runs the cold read of a waiting page, \
+       reading the item with its page. Pass --assertions-only to run the assertions alone",
+    ));
+  }
   if args.trigger.is_none() && !args.assertions_only {
     return Err(CliExit::usage(format!("--genre {} requires --trigger unless --assertions-only is given", args.genre)));
   }
@@ -409,5 +416,20 @@ mod tests {
     assert_eq!(session_identity(&host.cfg, &inputs).as_deref(), Some("sess-2"));
     let outside = CheckInputs { cwd: home.path().to_path_buf(), ..inputs };
     assert_eq!(session_identity(&host.cfg, &outside), None);
+  }
+
+  #[test]
+  fn a_waiting_check_without_assertions_only_is_refused_before_any_host_or_cold_read() {
+    let args = CheckArgs {
+      file: "page.html".to_string(),
+      genre: "waiting".to_string(),
+      trigger: Some("the trigger".to_string()),
+      assertions_only: false,
+    };
+    // A cold read composes the host first, so a host factory that fails proves the refusal comes before it.
+    let lazy_host = LazyHost::new(|| anyhow::bail!("the host must not be composed for a refused check"));
+    let exit = check(&args, &lazy_host).err().expect("a waiting check without --assertions-only is refused");
+    assert_eq!(exit.code, 2);
+    assert!(exit.body["error"].as_str().unwrap().contains("charliebot web status set"), "{}", exit.body);
   }
 }

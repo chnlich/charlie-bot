@@ -2,10 +2,10 @@
 // Session status panel (chat column)
 // ---------------------------------------------------------------------------
 // The panel under the view toggle, above the message list, shows a web session's
-// Goal, Now and Waiting on you, how long each waiting item has waited, and in a
-// parent session the Waiting on you items of its open descendant sessions and a
-// folded block of the Now of its open direct children. A web session is one that
-// Chat.ForYou.isWebSession (for-you.js) accepts.
+// Goal, Remaining, Now and Waiting on you, how long each waiting item has waited,
+// and in a parent session the Waiting on you items of its open descendant sessions
+// and a folded block of the Now of its open direct children. A web session is one
+// that Chat.ForYou.isWebSession (for-you.js) accepts.
 // A thread session and a worker session show no panel. Both platforms draw the
 // toggle row; the phone starts folded and desktop state persists in localStorage.
 //
@@ -124,6 +124,37 @@
     const row = statusRow('goal');
     row.appendChild(labelSpan('Goal'));
     row.appendChild(textSpan('min-w-0 break-words text-slate-200', goal || ''));
+    return row;
+  }
+
+  // The milestones between the session and its Goal: how many remain, when the list
+  // was last set, then one line per milestone. The text is agent-written, so it goes
+  // in through textContent like the Goal.
+  function remainingRow(status) {
+    const row = statusRow('remaining');
+    row.appendChild(labelSpan('Remaining'));
+    const value = document.createElement('div');
+    value.className = 'min-w-0 break-words text-slate-200';
+    const open = status.remaining.filter((item) => !item.done).length;
+    const count = textSpan('', open + ' of ' + status.remaining.length + ' left');
+    count.dataset.remainingCount = String(open);
+    value.appendChild(count);
+    const updated = textSpan('ml-2 whitespace-nowrap text-slate-500',
+      'updated ' + relativeTime(status.remaining_updated_at));
+    updated.dataset.statusUpdated = status.remaining_updated_at;
+    value.appendChild(updated);
+    const list = document.createElement('div');
+    list.className = 'space-y-1';
+    for (const item of status.remaining) {
+      const line = document.createElement('div');
+      line.className = 'break-words';
+      line.dataset.remainingItem = item.done ? 'done' : 'open';
+      line.appendChild(textSpan('mr-2 text-slate-400', item.done ? '✓' : '○'));
+      line.appendChild(textSpan('', item.text));
+      list.appendChild(line);
+    }
+    value.appendChild(list);
+    row.appendChild(value);
     return row;
   }
 
@@ -323,6 +354,7 @@
     if (!expanded) return;
     if (panelStatus) {
       el.appendChild(goalRow(panelStatus.goal));
+      if (panelStatus.remaining && panelStatus.remaining.length) el.appendChild(remainingRow(panelStatus));
       el.appendChild(nowRow(panelStatus));
       el.appendChild(waitingRow(panelStatus.waiting));
     } else {

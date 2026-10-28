@@ -10,7 +10,7 @@ use memchr::{memchr_iter, memchr2, memchr2_iter};
 use memmap2::Mmap;
 use serde_json::Value;
 
-use crate::chat_events::is_chat_events_archive;
+use crate::chat_events::{decode_line, is_chat_events_archive};
 use crate::compact::CompactValue;
 use crate::event_state::{
   LIVE_RANGE_WALK_BYTE_BUDGET, LiveRangeMemo, ParsedLiveLine, SharedLiveLines, TAIL_WINDOW_SIZE, TYPE_HEAD_PROOF_BYTES,
@@ -1446,7 +1446,7 @@ fn python_event_timestamp(value: UtcDateTime) -> String {
 /// whose `timestamp` is missing, falsy or unparsable, is not archived and starts the kept part. A JSON value that
 /// is not an object, or a truthy `timestamp` that is not a string, fails the archive, as Python raises on it.
 fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number: usize) -> StoreResult<bool> {
-  let Ok(event) = serde_json::from_str::<Value>(pystr::strip(line)) else {
+  let Ok(event) = decode_line(pystr::strip(line).as_bytes()) else {
     tracing::debug!(path = %live_path.display(), line = line_number, "chat_event_archive_parse_skip");
     return Ok(false);
   };

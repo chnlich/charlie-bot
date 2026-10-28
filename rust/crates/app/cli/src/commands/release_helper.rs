@@ -72,6 +72,7 @@ const VERBS: &[(&str, &str)] = &[
   ("pid-start", "PID"),
   ("redact-stdin", ""),
   ("run-contract", "RUNS_PATH EVENTS_PATH MODE [FIRST_USER_ID] [DELEGATION_ID]"),
+  ("run-page", "RUNS_PATH"),
   ("run-summary", "RUNS_PATH"),
   ("runs-success", "RUNS_PATH"),
   ("seed-run", "SESSIONS_DIR SESSION PID PID_START BACKEND RUN_ID"),
@@ -136,6 +137,7 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
     "pid-start" => pid_start(args),
     "redact-stdin" => redact_stdin(),
     "run-contract" => run_contract(args),
+    "run-page" => run_page(args),
     "run-summary" => run_summary_command(args),
     "runs-success" => runs_success(args),
     "seed-run" => seed_run(args),
@@ -261,6 +263,17 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
   }
   fields.push(items.iter().map(run_state).collect::<Vec<_>>().join(","));
   Ok(fields)
+}
+
+/// Whether one page of a runs response holds a queued or running run, then that page's next cursor.
+fn run_page(args: &[String]) -> Result<i32, String> {
+  let [path] = arguments::<1>(args, "run-page")?;
+  let value = load_json(path)?;
+  let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
+  let active = items.iter().any(|item| matches!(run_state(item).as_str(), "queued" | "running"));
+  println!("{}", i32::from(active));
+  println!("{}", or_default(value.get("next_cursor")));
+  Ok(0)
 }
 
 fn json_field(args: &[String]) -> Result<i32, String> {

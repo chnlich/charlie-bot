@@ -333,7 +333,7 @@ impl UserTextChecks {
     let mut violations = Vec::new();
     for target in targets {
       if is_inside(&fenced, &target.span)
-        || inline_code.iter().any(|code| is_inside(&[code.content.clone()], &target.span))
+        || inline_code.iter().any(|code| is_inside(std::slice::from_ref(&code.content), &target.span))
       {
         continue;
       }
@@ -525,7 +525,7 @@ fn is_url_or_path(text: &str, span: &Range<usize>, links: &[MarkdownLink]) -> bo
   let start = text[..span.start].rfind(char::is_whitespace).map_or(0, |index| index + 1);
   let end = text[span.end..].find(char::is_whitespace).map_or(text.len(), |index| span.end + index);
   let token = &text[start..end];
-  let uri = token.trim_start_matches(|character| matches!(character, '(' | '[' | '{' | '<'));
+  let uri = token.trim_start_matches(['(', '[', '{', '<']);
   if uri.split_once(':').is_some_and(|(scheme, _)| {
     scheme.chars().next().is_some_and(|first| first.is_ascii_alphabetic())
       && scheme.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-'))
@@ -630,14 +630,13 @@ fn matching_backtick_run(bytes: &[u8], mut cursor: usize, count: usize, fenced: 
 fn link_path(link: &str) -> &str {
   let no_fragment = link.split_once('#').map_or(link, |(before, _)| before);
   let no_query = no_fragment.split_once('?').map_or(no_fragment, |(before, _)| before);
-  let after_authority = if let Some((_, after_scheme)) = no_query.split_once("://") {
+  if let Some((_, after_scheme)) = no_query.split_once("://") {
     after_scheme.find('/').map_or("", |slash| &after_scheme[slash..])
   } else if let Some(authority) = no_query.strip_prefix("//") {
     authority.find('/').map_or("", |slash| &authority[slash..])
   } else {
     no_query
-  };
-  after_authority
+  }
 }
 
 fn parse_page(html: &str) -> anyhow::Result<PageScan> {

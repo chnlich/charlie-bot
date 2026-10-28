@@ -17,26 +17,32 @@ change, so take the deployment's declared modality over memory.
 
 ## 2. Online transcription
 
-Run this command from the repo root to transcribe one file:
+Run this command to transcribe one file:
 
-    uv run --with av python3 <skill-dir>/scripts/decode_audio.py <file>
+    charliebot voice transcribe <file>
 
-Purpose: uv runs the script in the checkout's environment, and `--with av` adds
-the reader for any audio container.
+Purpose: the transcript comes from the same backend that the voice upload uses.
 
-The script sends the whole clip through the online transcription backend that
-the voice upload uses. It uses `voice.default_backend` from the profile's config.
-The backend's key comes from `credentials.yaml`. The transcript goes to stdout.
+The command reads these inputs:
 
-When the command fails or the checkout is missing, report that to the user and do not
-guess the words.
+- WAV, MP3, and MP4 with AAC;
+- Ogg with Vorbis or Opus, and WebM with Opus;
+- raw 16 kHz mono s16 PCM (`.pcm`, `.s16`).
+
+Purpose: a model converts a file first when its container is not on this list.
+
+The command sends the whole clip through the online transcription backend. It uses
+`voice.default_backend` from the profile's config. The backend's key comes from
+`credentials.yaml`. The transcript goes to stdout.
+
+When the command fails, report that to the user and do not guess the words.
 
 Purpose: a guessed transcript answers words the user never said.
 
 ## Slack specifics
 
 When Slack hosts the file, fetch it through `url_private_download` with the app bearer.
-Purpose: the script needs the audio file to transcribe it.
+Purpose: the command reads a local file, so the clip must be on disk first.
 
 Use the online transcription result.
 Purpose: Slack's `files.info` transcript can take minutes.

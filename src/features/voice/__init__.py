@@ -1,8 +1,4 @@
-"""Voice dictation: the online transcription backends and the turn note.
-
-``skills/voice-notes/scripts/decode_audio.py`` imports the shared recording
-transcription directly, so the skill stays with this package.
-"""
+"""Voice dictation: the online transcription backends and the turn note."""
 
 from src.infra import config_registry
 from src.runtime.hooks import turn_contributions

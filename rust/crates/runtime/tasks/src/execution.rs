@@ -18,8 +18,9 @@ use charliebot_agents::launch_loop;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
+use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::pyfmt;
-use charliebot_core::run_token::{RunTokenClaims, sign_run_token};
+use charliebot_core::run_token::{RUN_TOKEN_ENV, RunTokenClaims, sign_run_token};
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
@@ -2255,9 +2256,9 @@ impl TaskExecutionAdapter {
     .map_err(|error| StoreError::new(error.to_string()))?;
     Ok(Env::from([
       (launch_loop::SESSION_ID_ENV.to_string(), session_id.to_string()),
-      ("CHARLIEBOT_RUN_TOKEN".to_string(), token),
+      (RUN_TOKEN_ENV.to_string(), token),
       (
-        "CHARLIEBOT_HOME".to_string(),
+        CHARLIEBOT_HOME_ENV.to_string(),
         self
           .features
           .config

@@ -10,6 +10,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use charliebot_core::run_token::SESSION_ID_ENV;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{ForkptyResult, Winsize, forkpty};
@@ -29,7 +30,6 @@ const PTY_INPUT: &str = "pty_input";
 const PTY_OUTPUT: &str = "pty_output";
 const PTY_RESIZE: &str = "pty_resize";
 const TMUX_SOCKET: &str = "charliebot";
-const SESSION_ID_ENV_VAR: &str = "CHARLIEBOT_SESSION_ID";
 const INITIAL_COLS: i128 = 80;
 const INITIAL_ROWS: i128 = 24;
 const HISTORY_LIMIT: &str = "50000";
@@ -49,7 +49,7 @@ pub(super) fn filtered_env(
   let mut env = source
     .into_iter()
     .filter(|(key, _)| {
-      key != OsStr::new(SESSION_ID_ENV_VAR)
+      key != OsStr::new(SESSION_ID_ENV)
         && (!remove_tmux || key != OsStr::new("TMUX"))
         && (!replace_term || key != OsStr::new("TERM"))
     })

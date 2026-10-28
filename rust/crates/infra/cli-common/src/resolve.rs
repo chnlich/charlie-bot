@@ -2,14 +2,11 @@
 
 use std::path::Path;
 
+use charliebot_core::run_token::SESSION_ID_ENV;
 use serde_json::{Value, json};
 
 use crate::exit::CliExit;
 use crate::json_out;
-
-/// `constants.SESSION_ID_ENV_VAR`: the server writes the master's session id into every spawned
-/// process environment, and the CLIs read it back. One spelling everywhere.
-pub const SESSION_ID_ENV_VAR: &str = "CHARLIEBOT_SESSION_ID";
 
 /// The resolution inputs, passed in so tests exercise the rules without touching process state.
 pub struct SessionSources<'a> {
@@ -41,13 +38,13 @@ pub fn resolve_session_id(sources: SessionSources<'_>) -> Result<Resolved, CliEx
     if let Some(arg_session) = sources.arg_session
       && arg_session != env_session
     {
-      return Err(ambiguous(format!("--session={arg_session} {SESSION_ID_ENV_VAR}={env_session}")));
+      return Err(ambiguous(format!("--session={arg_session} {SESSION_ID_ENV}={env_session}")));
     }
     let mut note = None;
     if let Some(cwd_session) = &cwd_session
       && cwd_session != env_session
     {
-      note = Some(format!("cwd is session dir of {cwd_session}; using {SESSION_ID_ENV_VAR}={env_session}"));
+      note = Some(format!("cwd is session dir of {cwd_session}; using {SESSION_ID_ENV}={env_session}"));
     }
     return Ok(Resolved { session_id: env_session.to_string(), note });
   }
@@ -80,7 +77,7 @@ pub fn resolve_from_env(arg_session: Option<&str>) -> Result<String, CliExit> {
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let sessions_dir = home.join("sessions");
   let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  let env_session = std::env::var(SESSION_ID_ENV_VAR).ok().filter(|value| !value.is_empty());
+  let env_session = std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty());
   let resolved = resolve_session_id(SessionSources {
     arg_session,
     env_session: env_session.as_deref(),

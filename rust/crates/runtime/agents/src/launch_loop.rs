@@ -1,11 +1,10 @@
 //! The lifecycle loop shared by manager turns and task runs.
 
 use anyhow::Result;
+pub use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{BackendLifecycle, Env, Launch, LaunchContext, LaunchWatch};
 use futures_util::future::BoxFuture;
-
-pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 
 /// Whether launch-loop child edits apply to a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -14,10 +14,11 @@ use walkdir::WalkDir;
 
 use super::text::object_or_empty;
 
-/// The rollout record-type names: `session_meta` opens a file, `turn_context` carries the model in force, and
-/// `event_msg` wraps the `token_count` payload the readers read.
 /// The directory under the Codex home that holds the rollout files. Codex names it, so the name stays here.
 pub const CODEX_SESSIONS_DIR_NAME: &str = "sessions";
+
+/// The rollout record-type names: `session_meta` opens a file, `turn_context` carries the model in force, and
+/// `event_msg` wraps the `token_count` payload the readers read.
 pub const SESSION_META: &str = "session_meta";
 pub const TURN_CONTEXT: &str = "turn_context";
 pub const EVENT_MSG: &str = "event_msg";
@@ -183,8 +184,23 @@ pub fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
   map.get(key).and_then(Value::as_str)
 }
 
+/// Whether `name` is a rollout file's name: `rollout-<started>-<thread id>.jsonl`.
+pub fn is_rollout_file(name: &str) -> bool {
+  rollout_stem(name).is_some()
+}
+
+/// The thread id a rollout file's name embeds: the last five dash-separated segments of its stem.
+///
+/// The `rollout-<started>` head supplies more than five segments, so the last five are the id's own groups. The
+/// segments come back unvalidated, so a name that does not end in an id yields that tail.
+pub fn rollout_thread_id(name: &str) -> Option<String> {
+  let stem = rollout_stem(name)?;
+  let segments: Vec<&str> = stem.split('-').collect();
+  Some(segments[segments.len().saturating_sub(5)..].join("-"))
+}
+
 /// The name a rollout file is known by: `rollout-` and `.jsonl` removed.
-pub fn rollout_stem(name: &str) -> Option<&str> {
+fn rollout_stem(name: &str) -> Option<&str> {
   name.strip_prefix("rollout-").and_then(|rest| rest.strip_suffix(".jsonl"))
 }
 

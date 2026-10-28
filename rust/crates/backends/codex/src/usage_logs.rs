@@ -83,13 +83,12 @@ impl UsageSourceImpl for CodexLogs {
   }
 }
 
-/// The session a rollout registers: the last five dash-separated segments of `rollout-*.jsonl`, or the path relative to
-/// the codex home for any other file name.
+/// The session a rollout registers: the thread id its name embeds, or the path relative to the codex home for any other
+/// file name.
 pub fn session_id(path: &Path, codex_home: &Path) -> anyhow::Result<String> {
   let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-  if let Some(stem) = rollout::rollout_stem(&name) {
-    let segments: Vec<&str> = stem.split('-').collect();
-    return Ok(segments[segments.len().saturating_sub(5)..].join("-"));
+  if let Some(thread_id) = rollout::rollout_thread_id(&name) {
+    return Ok(thread_id);
   }
   let relative = path
     .strip_prefix(codex_home)

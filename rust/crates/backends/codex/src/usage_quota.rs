@@ -266,7 +266,7 @@ fn list_rollout_files(sessions_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   if !sessions_dir.exists() {
     return Ok(Vec::new());
   }
-  walk_files(sessions_dir, |name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+  walk_files(sessions_dir, rollout::is_rollout_file)
     .with_context(|| format!("listing rollouts under {}", sessions_dir.display()))
 }
 

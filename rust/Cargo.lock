@@ -528,9 +528,12 @@ dependencies = [
  "getrandom 0.3.4",
  "nix",
  "regex",
+ "reqwest 0.13.5",
  "serde_json",
  "tempfile",
  "time",
+ "tokio",
+ "url",
 ]
 
 [[package]]

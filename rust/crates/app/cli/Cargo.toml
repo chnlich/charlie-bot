@@ -27,8 +27,11 @@ clap.workspace = true
 fancy-regex.workspace = true
 getrandom.workspace = true
 nix.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 time.workspace = true
+tokio.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 regex.workspace = true

@@ -1,7 +1,7 @@
 ---
 name: file-server
 description: Must invoke when presenting a file to the user. The CharlieBot server has a built-in file browser that serves any file on the host filesystem.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # File Server
@@ -64,13 +64,11 @@ on), generate the URL instead of dumping file contents into chat. This is especi
 
 ## Rules
 
-1. Every file link is certified before it is pasted: probe the link's exact prefix and path on
-   the local server, `curl -s --noproxy '*' -o /dev/null -w '%{http_code}'
-   http://localhost:<server_port>/<prefix>/<path>`, and read 200. The pasted link's public base
-   URL names the same server, so the local 200 certifies the path the reader opens; probe and
-   paste share the exact prefix and path, and nothing is reconstructed from memory.
-   Send `Authorization: Bearer <access-key>` when probing an artifact or file endpoint; unauthenticated
-   requests return 401.
+1. Before you paste a file link, run `charliebot files probe '<link>'` on that exact link.
+   Paste the link only after the command prints `200`.
+   The local 200 certifies the path that the reader opens, because the link's public base URL names the same server.
+   The command authenticates inside its own process and prints only the status and the probed path.
+   The session thus reads no credential file and handles no key.
 2. Present the link in markdown format: `[descriptive text](url)`
 3. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory
    of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the

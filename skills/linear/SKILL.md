@@ -1,7 +1,7 @@
 ---
 name: linear
 description: This skill should be used when the user asks to read, create, update, or search Linear issues, projects, cycles, or teams.
-version: 1.1.1
+version: 1.2.0
 ---
 
 # Linear
@@ -10,35 +10,33 @@ Read, create, update, and search issues in Linear using the Linear GraphQL API.
 
 ## Configuration
 
-- Token location: `$CHARLIEBOT_HOME/credentials.yaml` under `linear.api_key`
-- Token type: Personal API Key
 - API endpoint: `https://api.linear.app/graphql`
+- Key: a Personal API Key, which the operator stores in the profile home's `credentials.yaml` under `linear.api_key`.
+- Send every Linear request through `charliebot linear graphql`.
+  The command is the one reader of the key, so the key stays out of session commands, output and run records.
 
 ## API Reference
 
-All requests use POST to the GraphQL endpoint with headers:
+`charliebot linear graphql` sends one GraphQL request to Linear and prints Linear's JSON response.
+It reads the request body from stdin, or from the file that `--file <path>` names.
+The body is a JSON object with a string `query` and an optional `variables` object.
 
-```
-Content-Type: application/json
-Authorization: TOKEN
-```
+Send the viewer query through a quoted heredoc on stdin. This keeps the JSON body out of shell arguments.
 
-Read the token from `$CHARLIEBOT_HOME/credentials.yaml` (section `linear`, key `api_key`) before making any API calls:
-
-```bash
-python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['linear']['api_key'])"
-```
-
-### Example: curl template
-
-```bash
-curl -s -X POST https://api.linear.app/graphql \
-  -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_API_KEY" \
-  -d '{"query": "GRAPHQL_QUERY"}'
+```sh
+charliebot linear graphql <<'JSON'
+{"query":"query { viewer { id name email } }"}
+JSON
 ```
 
-Use `python3 -c '...'` or `python3 -m json.tool` to parse and format JSON responses.
+| Exit code | Meaning |
+|---|---|
+| 0 | HTTP 200 and a JSON response without an `errors` key. |
+| 1 | Another status, an `errors` key, invalid response JSON or a network failure. |
+| 2 | Invalid arguments or request body. |
+| 3 | The credentials file cannot be read or `linear.api_key` is missing. |
+
+Pipe the output to `python3 -m json.tool` or `jq` to format it.
 
 ### Viewer (who am I)
 
@@ -199,7 +197,7 @@ query($teamId: String!) {
 
 ## Workflow
 
-1. Read the token from `$CHARLIEBOT_HOME/credentials.yaml` (`linear.api_key`)
+1. Send each request through `charliebot linear graphql` (API Reference above).
 2. If team context is needed, call `teams` query first to resolve team IDs
 3. Use `searchIssues` for text lookups and `issues` with filters for structured queries
 4. For creating/updating issues, resolve team and user IDs first

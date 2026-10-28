@@ -3,7 +3,7 @@
     "--help"
   ],
   "expect": {
-    "stdout": "usage: charliebot <subcommand> [args...]\n\nAvailable subcommands:\n  artifact\n  compaction-context\n  delegate\n  discord\n  gc-trash\n  improve\n  improve-stop\n  memory\n  plan\n  publish\n  schedule-trigger\n  session\n  slack\n  web\n",
+    "stdout": "usage: charliebot <subcommand> [args...]\n\nAvailable subcommands:\n  artifact\n  compaction-context\n  delegate\n  discord\n  files\n  gc-trash\n  improve\n  improve-stop\n  linear\n  memory\n  plan\n  publish\n  schedule-trigger\n  session\n  slack\n  web\n",
     "stderr": "",
     "exit": 0,
     "requests": []

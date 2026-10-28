@@ -11,7 +11,8 @@ use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 /// `http://localhost` base URLs never negotiate TLS, but the client builder refuses to build
 /// without one installed. Failure to install can only mean another provider is already installed,
 /// which serves the same purpose.
-fn ensure_crypto_provider() {
+/// Make a rustls crypto provider available to reqwest clients.
+pub fn ensure_crypto_provider() {
   static INSTALLED: OnceLock<()> = OnceLock::new();
   INSTALLED.get_or_init(|| {
     let _ = rustls::crypto::ring::default_provider().install_default();

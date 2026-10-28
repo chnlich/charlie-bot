@@ -90,6 +90,9 @@ pub(crate) fn features() -> (tempfile::TempDir, Arc<FeatureContext>) {
 /// A feature context over the home at `home`, with the artifacts package registered and the checkout as the repo root.
 fn features_in(home: &Path) -> Arc<FeatureContext> {
   let mut registry = Registry::new();
+  registry
+    .register_package("src.features.user_text_checks", charliebot_user_text_checks::register)
+    .expect("the user text checks package registers");
   registry.register_package("src.features.artifacts", crate::register).expect("the artifacts package registers");
   let registry = Arc::new(registry);
   let config_value = registry.load_config(home).expect("the default config loads");

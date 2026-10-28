@@ -15,6 +15,7 @@ charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
 charliebot-tasks.workspace = true
+charliebot-user-text-checks.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 http.workspace = true

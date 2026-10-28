@@ -166,6 +166,7 @@ by the run id its stop request captured. The parity harness (removed 2026-10-27)
 
 | Kind | Name | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
+| config section | `user_text_checks` | features/user_text_checks | ported | Empty by default; compiles internal ID patterns for the shared artifact-page and web-reply checks. |
 | config section | `voice` | features/voice | ported | `default_backend` defaults to `gemini`; also accepts `vocabulary` and `languages` (`rust/crates/features/voice/src/config.rs:13-21,30-32`); no legacy keys and unknown-key refusal |
 | config check | `check_default_backend` | features/voice | ported | `rust/crates/features/voice/src/config.rs:72-82`; validates against gemini and muse |
 | template global | `voice_backends` | features/voice | ported | backend availability in dropdown order |

@@ -22,6 +22,7 @@ use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
+use charliebot_user_text_checks::{self as user_text_checks, UserTextChecks, UserTextChecksConfig};
 use regex::{Captures, Regex};
 use serde_json::{Value, json};
 
@@ -294,10 +295,10 @@ fn visible_reply_chars(text: &str) -> anyhow::Result<usize> {
 
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
 ///
-/// The text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
+/// Accepted text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
 /// nothing when the running turn has neither. The language check holds the text unless `keep_language`, the agent's
-/// reason for posting it as written, is given; the reason is then recorded on the reply. A refusal records nothing and
-/// marks nothing.
+/// reason for posting it as written, is given; the reason is then recorded on the reply. User-text refusals give a
+/// correction and its purpose so the writer can fix the text. A refusal records nothing and marks nothing.
 #[cfg(test)]
 pub async fn post_web_reply(
   features: &FeatureContext,
@@ -320,7 +321,18 @@ pub async fn post_web_reply_with_request_id(
   if pystr::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
-  refuse_dead_links([text], &file_link_scan_context(features, session_id)?)?;
+  let file_scan_context = file_link_scan_context(features, session_id)?;
+  refuse_dead_links([text], &file_scan_context)?;
+  let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
+  let checks =
+    UserTextChecks::new(config.section::<UserTextChecksConfig>("user_text_checks"), &config.charliebot_home)?;
+  let violations = checks.check_reply(text, &file_scan_context)?;
+  if !violations.is_empty() {
+    return Err(WebReplyError::refused(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      user_text_checks::reply_refusal_detail(&violations),
+    ));
+  }
   if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
@@ -541,6 +553,65 @@ mod tests {
       assert_eq!(home.events(&sid).len(), events_before, "case {case}");
       assert!(!home.meta(&sid).await.has_unread, "case {case}");
     }
+  }
+
+  async fn assert_user_text_refusal(home: &Home, sid: &str, text: &str, check: &str, snippet: &str, fix: &str) {
+    let events_before = home.events(sid);
+
+    let (status, response) = post_reply(home, sid, text, None).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = response["detail"].as_str().expect("the refusal has text detail");
+    let lines = detail.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{detail}");
+    assert!(lines[0].starts_with(&format!("{check}:")), "{detail}");
+    assert!(lines[0].contains(snippet), "{detail}");
+    assert!(lines[0].contains(fix), "{detail}");
+    assert_eq!(home.events(sid), events_before);
+    assert!(replies(home, sid).is_empty());
+    assert!(!home.meta(sid).await.has_unread);
+  }
+
+  #[tokio::test]
+  async fn an_internal_id_without_a_nearby_linear_id_refuses_a_web_reply() {
+    let home = Home::with_config("user_text_checks:\n  internal_id_patterns: ['zz\\d{3}']\n");
+    let sid = home.manager("session", None).await;
+
+    assert_user_text_refusal(
+      &home,
+      &sid,
+      "The run is zz123.",
+      "tracker-id-nearby",
+      "zz123",
+      "write the Linear id right next to the internal id",
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn an_unlinked_session_id_refuses_a_web_reply() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let text = format!("The session is {sid}.");
+
+    assert_user_text_refusal(&home, &sid, &text, "session-linked", &sid, "write the id as").await;
+  }
+
+  #[tokio::test]
+  async fn a_raw_tsv_link_refuses_a_web_reply() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let text = "[table](https://example.invalid/export.TSV?download=1)";
+
+    assert_user_text_refusal(
+      &home,
+      &sid,
+      text,
+      "link-renderable",
+      "export.TSV",
+      "link an HTML page, or the directory that holds the file",
+    )
+    .await;
   }
 
   #[tokio::test]

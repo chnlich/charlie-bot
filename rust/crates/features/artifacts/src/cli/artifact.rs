@@ -346,6 +346,7 @@ mod tests {
 
   fn test_host(home: &Path, repo_root: &Path) -> CliHost {
     let mut registry = Registry::new();
+    registry.register_package("src.features.user_text_checks", charliebot_user_text_checks::register).unwrap();
     registry.register_package("src.features.artifacts", crate::register).unwrap();
     let cfg = registry.load_config(home).unwrap();
     CliHost {
@@ -387,6 +388,45 @@ mod tests {
 
     assert_eq!(output.exit, 0, "{}", output.stdout);
     assert!(output.stdout.contains("ok page-height 2600 px: 600 px over the 2000 px target"), "{}", output.stdout);
+  }
+
+  #[test]
+  fn the_artifact_check_fail_line_shows_each_user_text_hit_and_its_fix() {
+    let home = tempfile::tempdir().unwrap();
+    let chrome = crate::test_support::chrome_program(home.path(), json!([{"exit": 0}]));
+    crate::headless_render::set_test_height(&chrome, 2600);
+    let mut config = format!("headless_chrome_bin: {}\n", chrome.display());
+    config.push_str("user_text_checks:\n  internal_id_patterns: ['zz\\d{3}']\n");
+    std::fs::write(home.path().join("config.yaml"), config).unwrap();
+    let artifact = home.path().join("page.html");
+    std::fs::write(&artifact, plan_page("The internal id is zz123.")).unwrap();
+    let args = CheckArgs {
+      file: artifact.display().to_string(),
+      genre: "plan".to_string(),
+      trigger: None,
+      assertions_only: true,
+    };
+    let host = test_host(home.path(), &repo_root());
+    let inputs = CheckInputs {
+      home: home.path().to_path_buf(),
+      cwd: home.path().to_path_buf(),
+      session_env: None,
+      repo_root: repo_root(),
+    };
+
+    let CheckOutcome::Done(output) = check_with_host(&args, &artifact, &host, &inputs).unwrap() else {
+      panic!("the assertions finish without a cold read");
+    };
+
+    assert_eq!(output.exit, 1, "{}", output.stdout);
+    let line = output
+      .stdout
+      .lines()
+      .find(|line| line.starts_with("FAIL tracker-id-nearby:"))
+      .expect("the CLI prints the tracker-id failure");
+    assert!(line.contains(r#"snippet "zz123""#), "{line}");
+    assert!(line.contains(r#"block "The internal id is zz123.""#), "{line}");
+    assert!(line.contains("write the Linear id right next to the internal id"), "{line}");
   }
 
   #[test]

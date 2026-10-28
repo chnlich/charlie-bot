@@ -70,11 +70,19 @@ pub struct Home {
 
 impl Home {
   pub fn new() -> Self {
+    Self::with_config("")
+  }
+
+  pub fn with_config(config_yaml: &str) -> Self {
     let running = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().expect("temporary directory exists");
+    fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
     fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
       .expect("the synthetic access key writes");
     let mut registry = Registry::new();
+    registry
+      .register_package("src.features.user_text_checks", charliebot_user_text_checks::register)
+      .expect("the user text checks package registers");
     registry.register_package("src.features.web_reply", crate::register).expect("the web reply package registers");
     registry.register_package("tests.origins", register_origins).expect("the origin slots register");
     registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");

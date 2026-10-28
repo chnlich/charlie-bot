@@ -437,6 +437,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "charliebot-tasks",
+ "charliebot-user-text-checks",
  "clap",
  "fancy-regex",
  "flate2",
@@ -1045,6 +1046,7 @@ dependencies = [
  "charliebot-triggers",
  "charliebot-usage",
  "charliebot-usage-page",
+ "charliebot-user-text-checks",
  "charliebot-voice",
  "charliebot-web-reply",
  "charliebot-web-search",
@@ -1417,6 +1419,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-user-text-checks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-pyhtml",
+ "charliebot-registry",
+ "fancy-regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "charliebot-voice"
 version = "0.1.0"
 dependencies = [
@@ -1457,6 +1476,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "charliebot-tasks",
+ "charliebot-user-text-checks",
  "clap",
  "futures-util",
  "http 1.5.0",

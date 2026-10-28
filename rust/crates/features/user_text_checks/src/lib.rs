@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use anyhow::{Context as AnyhowContext, anyhow};
 use charliebot_compat::file_urls::{self, FileLinkForm, ScanContext};
-use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::config::{ConfigSection, SectionValue, sessions_dir_in};
 use charliebot_pyhtml::{EventKind, parse_with};
 use charliebot_registry::{Registry, RegistryError};
 use fancy_regex::Regex;
@@ -181,7 +181,7 @@ fn dump_config(value: &SectionValue) -> Result<Value, String> {
 impl UserTextChecks {
   /// Build checks for home, reading the session directory names used to resolve session ids.
   pub fn new(config: &UserTextChecksConfig, home: &Path) -> anyhow::Result<UserTextChecks> {
-    let sessions_path = home.join("sessions");
+    let sessions_path = sessions_dir_in(home);
     let mut names = Vec::new();
     match fs::read_dir(&sessions_path) {
       Ok(entries) => {

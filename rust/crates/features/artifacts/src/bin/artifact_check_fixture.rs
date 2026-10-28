@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
   let repo_root =
     Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).ok_or("the crate lies under the repository")?;
   let home = tempfile::tempdir()?;
-  fs::create_dir(home.path().join("sessions"))?;
+  fs::create_dir(charliebot_core::config::sessions_dir_in(home.path()))?;
   let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
   let outcomes = runtime.block_on(charliebot_artifacts::artifact_check::run_assertions_with_chrome(
     "plan",

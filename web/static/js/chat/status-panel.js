@@ -19,6 +19,8 @@
 
   const PANEL_ID = 'chat-status-panel';
   const PANEL_EXPANDED_STORAGE_KEY = 'chat-status-panel-expanded';
+  const CHILD_BLOCK_TOGGLE_CLASS =
+    'flex items-center gap-2 w-full text-left text-slate-400 hover:text-slate-200 transition-colors';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
@@ -44,6 +46,31 @@
 
   function clearChildren(el) {
     while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  // A fold's mark: the closed and open glyphs every fold in the panel shows.
+  function foldGlyph(open) {
+    return open ? '▾' : '▸';
+  }
+
+  // A fold toggle: the button, its glyph span and its label span are the same in every
+  // fold, so a caller names the style, the state, the label and the click.
+  function foldToggle(className, open, label, onToggle) {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = className;
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.appendChild(textSpan('w-3 text-center', foldGlyph(open)));
+    toggle.appendChild(textSpan('', label));
+    toggle.onclick = onToggle;
+    return toggle;
+  }
+
+  // A fold's state as its toggle shows it: aria-expanded for assistive tech, the glyph
+  // for the eye.
+  function setFoldOpen(toggle, open) {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.children[0].textContent = foldGlyph(open);
   }
 
   function safeLink(link) {
@@ -86,23 +113,20 @@
     const block = document.createElement('div');
     block.className = 'mt-1';
     block.dataset.context = 'true';
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors';
-    toggle.dataset.contextToggle = 'true';
-    toggle.setAttribute('aria-expanded', 'false');
-    toggle.appendChild(textSpan('w-3 text-center', '▸'));
-    toggle.appendChild(textSpan('', 'Context'));
     const body = document.createElement('div');
     body.className = 'hidden mt-1 whitespace-pre-wrap text-xs text-slate-300';
     body.dataset.contextBody = 'true';
     appendContextText(body, context);
-    toggle.onclick = () => {
-      const open = body.classList.contains('hidden');
-      body.classList.toggle('hidden', !open);
-      toggle.setAttribute('aria-expanded', String(open));
-      toggle.children[0].textContent = open ? '▾' : '▸';
-    };
+    const toggle = foldToggle(
+      'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors',
+      false,
+      'Context',
+      () => {
+        const open = body.classList.contains('hidden');
+        body.classList.toggle('hidden', !open);
+        setFoldOpen(toggle, open);
+      });
+    toggle.dataset.contextToggle = 'true';
     block.appendChild(toggle);
     block.appendChild(body);
     return block;
@@ -264,7 +288,7 @@
     const childCount = descendantItemCount();
     row.dataset.childCount = String(childCount);
     if (childCount) summary += ' · In child sessions · ' + childCount;
-    row.textContent = (expanded ? '▾' : '▸') + ' ' + summary;
+    row.textContent = foldGlyph(expanded) + ' ' + summary;
     return row;
   }
 
@@ -282,17 +306,15 @@
     const block = document.createElement('div');
     block.className = 'space-y-1 pt-1';
     block.dataset.statusRow = 'children';
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'flex items-center gap-2 w-full text-left text-slate-400 hover:text-slate-200 transition-colors';
+    const toggle = foldToggle(
+      CHILD_BLOCK_TOGGLE_CLASS,
+      panelChildrenOpen,
+      'In child sessions · ' + count,
+      () => {
+        panelChildrenOpen = !panelChildrenOpen;
+        renderPanel();
+      });
     toggle.dataset.childCount = String(count);
-    toggle.setAttribute('aria-expanded', String(panelChildrenOpen));
-    toggle.onclick = () => {
-      panelChildrenOpen = !panelChildrenOpen;
-      renderPanel();
-    };
-    toggle.appendChild(textSpan('w-3 text-center', panelChildrenOpen ? '▾' : '▸'));
-    toggle.appendChild(textSpan('', 'In child sessions · ' + count));
     block.appendChild(toggle);
     if (panelChildrenOpen) {
       for (const row of panelDescendants) {
@@ -320,17 +342,15 @@
     const block = document.createElement('div');
     block.className = 'space-y-1 pt-1';
     block.dataset.statusRow = 'children-now';
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'flex items-center gap-2 w-full text-left text-slate-400 hover:text-slate-200 transition-colors';
+    const toggle = foldToggle(
+      CHILD_BLOCK_TOGGLE_CLASS,
+      panelChildrenNowOpen,
+      "Child sessions' Now · " + panelChildren.length,
+      () => {
+        panelChildrenNowOpen = !panelChildrenNowOpen;
+        renderPanel();
+      });
     toggle.dataset.childCount = String(panelChildren.length);
-    toggle.setAttribute('aria-expanded', String(panelChildrenNowOpen));
-    toggle.onclick = () => {
-      panelChildrenNowOpen = !panelChildrenNowOpen;
-      renderPanel();
-    };
-    toggle.appendChild(textSpan('w-3 text-center', panelChildrenNowOpen ? '▾' : '▸'));
-    toggle.appendChild(textSpan('', "Child sessions' Now · " + panelChildren.length));
     block.appendChild(toggle);
     if (panelChildrenNowOpen) {
       for (const row of panelChildren) block.appendChild(childNowItem(row));

@@ -297,7 +297,7 @@ Keys the server and its CLIs read:
 | --- | --- | --- |
 | `charliebot.access_key` | `configured_access_key()`: HTTP auth (`src/runtime/api/auth.py`, `deps.py`), run-token signing (`task_execution._child_env`), CLI auth (`cli/common.py`), `memory` CLI, page `auth_enabled` | Auth is disabled (`auth_enabled: false`). Agent child launches raise `"run-token signing requires credentials.yaml charliebot.access_key; agent child environments cannot be built without it"`. cc-openai-compatible launches raise the `require` error. |
 | `<option.credential>.api_key` | cc-anthropic-compatible factory (when `credential` is set), charlie-code factory, cc-openai-compatible proxy upstream | `require` error at launch or request |
-| `<router.jev.credential>.api_key` | `src/features/router/routing.py::design_probability` | `charliebot router` exits 1 with the missing credential error |
+| `<router.jev.credential>.api_key` | `rust/crates/app/cli/src/commands/router.rs::design_probability` | `charliebot router` exits 1 with the missing credential error |
 | `slack.bot_token`, `slack.app_token` | `src/features/slack/service.py`, `slack_listener.py` | the slack service does not start |
 | `discord.bot_token` | `src/features/discord/service.py`, `discord_listener.py`, `discord_commands.py` | the discord service does not start (it starts only when `discord.bot_token` and `discord.allowed_users` are both set) |
 | `telegram.bot_token` | `src/infra/notifications.py::send_telegram` | `require` error when a notification is sent |

@@ -32,12 +32,12 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use proc_macro2::{Spacing, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 use syn::{
-  Arm, Attribute, Expr, ExprCall, ExprLit, ExprMethodCall, Field, FieldValue, ImplItem, Item, ItemMacro, ItemMod,
-  ItemUse, Lit, LitStr, Local, Meta, StmtMacro, UseTree,
+  Arm, Attribute, Expr, ExprCall, ExprLit, ExprMethodCall, Field, FieldValue, ImplItem, ImplItemFn, Item, ItemFn,
+  ItemMacro, ItemMod, ItemUse, Lit, LitStr, Local, Meta, StmtMacro, TraitItemFn, UseTree,
 };
 
 const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"];
@@ -93,6 +93,8 @@ struct Module {
   idents: BTreeSet<String>,
   /// The string literals of the module's production code; empty for a test module.
   literals: Vec<Literal>,
+  /// The production functions of the module's own items; empty for a test module.
+  functions: Vec<FunctionRecord>,
 }
 
 struct Literal {
@@ -260,6 +262,7 @@ impl Builder<'_> {
       collector.visit_item(item);
     }
     let literals = if test { Vec::new() } else { production_literals(items) };
+    let functions = if test { Vec::new() } else { production_functions(items) };
     let child_mods = collector.child_mods;
     let children = child_mods.iter().map(|node| node.ident.to_string()).collect();
     self.modules.insert(
@@ -275,6 +278,7 @@ impl Builder<'_> {
         macro_paths: collector.macro_paths,
         idents: collector.idents,
         literals,
+        functions,
       },
     );
 
@@ -1038,6 +1042,286 @@ fn site_failure(heading: &str, sites: &[&Site], hint: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The format rule.
+
+/// A file kind that one owner crate reads and writes. A production function outside the owner that names one of the
+/// kind's `names` and makes a decode or an encode call in its body fails.
+struct FormatRow {
+  /// The file kind, named for a reader.
+  kind: &'static str,
+  /// The owner crate's directory under `rust/crates`.
+  owner: &'static str,
+  /// The owner's accessor functions and file-name consts for the kind.
+  names: &'static [&'static str],
+  /// The owner's read and write functions that a caller uses instead.
+  hint: &'static str,
+}
+
+/// The file kinds with an owner. A file kind adds its row in the change that makes its owner the only reader and writer
+/// of the file.
+const FORMAT_TABLE: &[FormatRow] = &[FormatRow {
+  kind: "chat event log",
+  owner: "runtime/store",
+  names: &[
+    "chat_events_path",
+    "archives_dir",
+    "is_chat_events_archive",
+    "CHAT_EVENTS_FILE_NAME",
+    "session_log_paths",
+    "archive_files",
+  ],
+  hint: "Read it through `charliebot_store::chat_events` (`read_lines`, `read_universal_text`, `take_complete_lines`), \
+         get its paths from `session_log_paths` or `archive_files`, decode a line with `LogLine::decode`, and append \
+         with `append_event`.",
+}];
+
+/// A production function of a module, with the names its body uses and the decode and encode calls it makes.
+struct FunctionRecord {
+  name: String,
+  line: usize,
+  /// The identifiers the body names: path segments, method names and the identifiers in macro tokens.
+  names: BTreeSet<String>,
+  /// The decode calls, by callee path.
+  decodes: BTreeSet<String>,
+  /// The encode calls, by callee path.
+  encodes: BTreeSet<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Codec {
+  Decode,
+  Encode,
+}
+
+impl FunctionRecord {
+  /// Record a call by its callee path when the call decodes or encodes.
+  fn note_call(&mut self, path: &[String]) {
+    let joined = path.join("::");
+    match codec_of_call(path) {
+      Some(Codec::Decode) => {
+        self.decodes.insert(joined);
+      }
+      Some(Codec::Encode) => {
+        self.encodes.insert(joined);
+      }
+      None => {}
+    }
+  }
+}
+
+/// The codec of a call by its callee path. A serde decoder or encoder is named through `serde_json` or `serde_yaml`,
+/// a Python-style decoder through `python_json`, and a bare name, or a method name, counts as the name alone.
+fn codec_of_call(path: &[String]) -> Option<Codec> {
+  let last = path.last()?.as_str();
+  let serde = path.iter().any(|segment| segment == "serde_json" || segment == "serde_yaml");
+  let python = path.iter().any(|segment| segment == "python_json");
+  let bare = path.len() == 1;
+  match last {
+    "lines" | "split_inclusive" | "split_terminator" | "read_until" => Some(Codec::Decode),
+    "from_str" | "from_slice" | "from_reader" if serde || bare => Some(Codec::Decode),
+    "loads" | "loads_text" if python || bare => Some(Codec::Decode),
+    "json_dumps" => Some(Codec::Encode),
+    _ if last.starts_with("to_") && serde => Some(Codec::Encode),
+    _ => None,
+  }
+}
+
+/// Collects the production functions of one module: each item and impl item that is not `#[cfg(test)]`, with the
+/// names its body uses and the codec calls in it. An inline module is its own scope and stays out.
+#[derive(Default)]
+struct FunctionCollector {
+  functions: Vec<FunctionRecord>,
+  /// The functions whose bodies the visitor is inside, innermost last.
+  open: Vec<FunctionRecord>,
+}
+
+impl FunctionCollector {
+  fn enter(&mut self, name: &syn::Ident) {
+    self.open.push(FunctionRecord {
+      name: name.to_string(),
+      line: name.span().start().line,
+      names: BTreeSet::new(),
+      decodes: BTreeSet::new(),
+      encodes: BTreeSet::new(),
+    });
+  }
+
+  fn exit(&mut self) {
+    let record = self.open.pop().expect("a function is entered before it is left");
+    self.functions.push(record);
+  }
+
+  /// The function whose body the visitor is inside, when it is inside one.
+  fn current(&mut self) -> Option<&mut FunctionRecord> {
+    self.open.last_mut()
+  }
+}
+
+impl<'ast> Visit<'ast> for FunctionCollector {
+  fn visit_item(&mut self, node: &'ast Item) {
+    if !is_cfg_test(item_attrs(node)) {
+      syn::visit::visit_item(self, node);
+    }
+  }
+
+  fn visit_item_mod(&mut self, _node: &'ast ItemMod) {
+    // An inline module is its own scope, and `process_scope` reads it.
+  }
+
+  fn visit_impl_item(&mut self, node: &'ast ImplItem) {
+    if !is_cfg_test(impl_item_attrs(node)) {
+      syn::visit::visit_impl_item(self, node);
+    }
+  }
+
+  fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+    self.enter(&node.sig.ident);
+    syn::visit::visit_item_fn(self, node);
+    self.exit();
+  }
+
+  fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
+    self.enter(&node.sig.ident);
+    syn::visit::visit_impl_item_fn(self, node);
+    self.exit();
+  }
+
+  fn visit_trait_item_fn(&mut self, node: &'ast TraitItemFn) {
+    self.enter(&node.sig.ident);
+    syn::visit::visit_trait_item_fn(self, node);
+    self.exit();
+  }
+
+  fn visit_expr(&mut self, node: &'ast Expr) {
+    if !is_cfg_test(expr_attrs(node)) {
+      syn::visit::visit_expr(self, node);
+    }
+  }
+
+  fn visit_local(&mut self, node: &'ast Local) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_local(self, node);
+    }
+  }
+
+  fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
+    if !is_cfg_test(&node.attrs) {
+      syn::visit::visit_stmt_macro(self, node);
+    }
+  }
+
+  fn visit_path(&mut self, node: &'ast syn::Path) {
+    if let Some(record) = self.current() {
+      record.names.extend(path_segments(node));
+    }
+    syn::visit::visit_path(self, node);
+  }
+
+  fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+    if let Expr::Path(callee) = &*node.func
+      && let Some(record) = self.current()
+    {
+      record.note_call(&path_segments(&callee.path));
+    }
+    syn::visit::visit_expr_call(self, node);
+  }
+
+  fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+    if let Some(record) = self.current() {
+      let method = node.method.to_string();
+      record.names.insert(method.clone());
+      record.note_call(std::slice::from_ref(&method));
+    }
+    syn::visit::visit_expr_method_call(self, node);
+  }
+
+  fn visit_macro(&mut self, node: &'ast syn::Macro) {
+    if let Some(record) = self.current() {
+      scan_macro_tokens(node.tokens.clone(), record);
+    }
+  }
+}
+
+/// Record the identifiers of a macro call's tokens and the calls among them. Syn does not parse a macro's tokens, so a
+/// path that a parenthesized group follows counts as a call.
+fn scan_macro_tokens(tokens: TokenStream, record: &mut FunctionRecord) {
+  let trees: Vec<TokenTree> = tokens.into_iter().collect();
+  for (index, tree) in trees.iter().enumerate() {
+    match tree {
+      TokenTree::Ident(ident) => {
+        record.names.insert(ident.to_string());
+        if let Some(TokenTree::Group(group)) = trees.get(index + 1)
+          && group.delimiter() == Delimiter::Parenthesis
+        {
+          record.note_call(&call_path_before(&trees, index));
+        }
+      }
+      TokenTree::Group(group) => scan_macro_tokens(group.stream(), record),
+      TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+    }
+  }
+}
+
+/// The callee path that ends at `trees[index]`: the identifiers joined by `::` before it.
+fn call_path_before(trees: &[TokenTree], index: usize) -> Vec<String> {
+  let mut segments = vec![trees[index].to_string()];
+  let mut at = index;
+  while at >= 3 && is_path_separator(&trees[at - 2], &trees[at - 1]) {
+    let TokenTree::Ident(previous) = &trees[at - 3] else { break };
+    segments.insert(0, previous.to_string());
+    at -= 3;
+  }
+  segments
+}
+
+/// The production functions of a module's items, each with the names and codec calls its body holds.
+fn production_functions(items: &[Item]) -> Vec<FunctionRecord> {
+  let mut collector = FunctionCollector::default();
+  for item in items {
+    collector.visit_item(item);
+  }
+  collector.functions
+}
+
+/// The format rule's failures: each production function outside a file kind's owner that names one of the kind's
+/// `names` and makes a decode or an encode call in its body. Each failure gives the function's `file:line`, the kind,
+/// the calls and the owner's hint.
+fn format_failures(workspace: &Workspace, table: &[FormatRow]) -> Vec<String> {
+  let mut failures = BTreeSet::new();
+  for item in &workspace.crates {
+    for target in &item.targets {
+      for module in target.modules.values() {
+        let file = rel(&workspace.root, &module.file);
+        for function in &module.functions {
+          for row in table {
+            let named = function.names.iter().any(|name| row.names.contains(&name.as_str()));
+            let codecs = !function.decodes.is_empty() || !function.encodes.is_empty();
+            if item.key() != row.owner && named && codecs {
+              failures.insert(format_failure(&file, function, row));
+            }
+          }
+        }
+      }
+    }
+  }
+  failures.into_iter().collect()
+}
+
+/// One failure line: the function's `file:line`, its verb and the calls it makes, the file kind and the owner's hint.
+fn format_failure(file: &str, function: &FunctionRecord, row: &FormatRow) -> String {
+  let verb = match (function.decodes.is_empty(), function.encodes.is_empty()) {
+    (false, true) => "decodes",
+    (true, false) => "encodes",
+    (false, false) => "decodes and encodes",
+    (true, true) => unreachable!("a function fails the format rule only when it makes a codec call"),
+  };
+  let calls: BTreeSet<&String> = function.decodes.union(&function.encodes).collect();
+  let calls: Vec<String> = calls.into_iter().map(|call| format!("`{call}`")).collect();
+  let calls = calls.join(", ");
+  format!("{file}:{}: `{}` {verb} the {} itself ({calls}). {}", function.line, function.name, row.kind, row.hint)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The real workspace.
 
 fn real_workspace() -> &'static Workspace {
@@ -1092,6 +1376,12 @@ fn no_name_is_spelled_outside_its_owner() {
   let workspace = real_workspace();
   let rows: Vec<OwnerRow> = OWNER_TABLE.iter().copied().chain(event_name_rows(workspace)).collect();
   let failures = owner_failures(workspace, &rows, SPELLING_CLASSES);
+  assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn every_file_kind_is_read_and_written_by_its_owner() {
+  let failures = format_failures(real_workspace(), FORMAT_TABLE);
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
@@ -1581,6 +1871,85 @@ fn the_event_names_of_event_types_are_protected() {
         .to_string()
     ],
     "the owner rule fails the spelled name with its file:line and hint, and passes the unprotected words"
+  );
+}
+
+/// The format rule on a synthetic workspace. The owner decodes its own file, which passes. The writer's function that
+/// decodes the file fails, and so does the one that encodes a line next to the path inside a macro call. A function
+/// that only passes the path on passes, and so does a test-only function. Each failure gives its `file:line`, the kind
+/// and the hint.
+#[test]
+fn the_format_rule_finds_each_break() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  let owner_lib = r##"use std::path::{Path, PathBuf};
+
+pub fn log_path(home: &Path) -> PathBuf {
+  home.join("chat_events.jsonl")
+}
+
+pub fn read_lines(home: &Path) -> Vec<String> {
+  std::fs::read_to_string(log_path(home)).unwrap().lines().map(str::to_string).collect()
+}
+"##;
+  let writer_lib = r##"use std::path::{Path, PathBuf};
+
+pub fn decode_break(home: &Path) -> usize {
+  let text = std::fs::read_to_string(owner_crate::log_path(home)).unwrap();
+  text.lines().count()
+}
+
+pub fn encode_break(home: &Path) -> String {
+  let event = serde_json::json!({"type": "task_closed"});
+  format!("{}\n{}", owner_crate::log_path(home).display(), serde_json::to_string(&event).unwrap())
+}
+
+pub fn pass_on(home: &Path) -> PathBuf {
+  owner_crate::log_path(home)
+}
+
+pub fn count_at(path: &Path) -> usize {
+  std::fs::read_to_string(path).unwrap().lines().count()
+}
+
+pub fn pass_through_helper(home: &Path) -> usize {
+  count_at(&owner_crate::log_path(home))
+}
+
+#[cfg(test)]
+fn fixture_count(home: &Path) -> usize {
+  std::fs::read_to_string(owner_crate::log_path(home)).unwrap().lines().count()
+}
+"##;
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/owner", "crates/features/writer"])),
+      ("crates/infra/owner/Cargo.toml", crate_manifest("owner-crate", &[], &[])),
+      ("crates/infra/owner/src/lib.rs", owner_lib.to_string()),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
+      ("crates/features/writer/src/lib.rs", writer_lib.to_string()),
+    ],
+  );
+  let workspace = load_workspace(root);
+  let table = [FormatRow {
+    kind: "owner file",
+    owner: "infra/owner",
+    names: &["log_path"],
+    hint: "Read it through `owner_crate::read_lines`.",
+  }];
+
+  assert_eq!(
+    format_failures(&workspace, &table),
+    vec![
+      "crates/features/writer/src/lib.rs:3: `decode_break` decodes the owner file itself (`lines`). Read it through \
+       `owner_crate::read_lines`."
+        .to_string(),
+      "crates/features/writer/src/lib.rs:8: `encode_break` encodes the owner file itself (`serde_json::to_string`). \
+       Read it through `owner_crate::read_lines`."
+        .to_string(),
+    ],
+    "the format rule fails each decode and encode outside the owner, and passes the owner, a pass-on and a test fn"
   );
 }
 

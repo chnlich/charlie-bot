@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot Plan Template</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center;margin-right:8px;vertical-align:-4px}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#187f37}
+  .flow .ar{color:var(--mut)}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#ffffff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;margin-right:9px;vertical-align:-3px}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  details.details-layer{background:var(--panel);border:1px solid var(--bd);border-radius:9px;margin:6px 0 0}
+  details.details-layer summary{cursor:pointer;padding:11px 15px;font-size:13px;font-weight:600;color:var(--mut)}
+  details.details-layer summary:hover{color:var(--tx)}
+  details.details-layer[open] summary{color:var(--tx);border-bottom:1px solid var(--bd)}
+  details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  @media(max-width:760px){body{padding:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Choose how often the export job runs</h1>
+  </header>
+
+  <main>
+    <section class="plan-section">
+      <p>The export job stays paused until it has an interval, because the table it fills changed shape and no run is safe yet.</p>
+    </section>
+
+    <div class="fork">
+      <p class="q"><span class="fn">1</span> Run the export every hour, or once a day?</p>
+      <p class="rec"><b>Recommendation:</b> once a day, at 02:00, when the database is idle.</p>
+      <p class="trade">Tradeoff: hourly runs keep the table fresher, but they read the database 24 times a day.</p>
+      <details class="details-layer">
+        <summary>Full story, expand to check the recommendation by hand</summary>
+        <ul>
+          <li>A run reads the whole table and takes about 9 minutes.</li>
+          <li>Worked example: hourly runs occupy 216 minutes a day; a daily run occupies 9 minutes.</li>
+        </ul>
+      </details>
+    </div>
+  </main>
+</div>
+</body>
+</html>

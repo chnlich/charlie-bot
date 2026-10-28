@@ -1543,6 +1543,9 @@ mod tests {
   }
 
   async fn assert_repo_fire_prepares_a_worktree(scheduled: bool) {
+    // The test build's git limit is 300 ms, and a git call past it fails the launch before its worktree is recorded.
+    // These tests run real git under parallel test load, so they take a 30 s limit.
+    charliebot_tasks::git::set_git_timeout_override(std::time::Duration::from_secs(30));
     let (_home, features) = feature_context();
     install_execution(&features).await;
     let origin = tempfile::tempdir().unwrap();

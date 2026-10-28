@@ -23,7 +23,7 @@ use crate::event_state::EventReadCaches;
 use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
-use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
+use crate::metadata::{MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
 use crate::streaming::StreamingManager;
@@ -670,15 +670,12 @@ impl Store {
   }
 
   pub(crate) fn read_metadata_path(&self, path: &Path) -> StoreResult<Option<SessionMetadata>> {
-    let raw = match fs::read_to_string(path) {
-      Ok(raw) => raw,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
-    };
-    if raw.trim().is_empty() {
-      return Ok(None);
+    match crate::metadata::read_session_metadata(path) {
+      Ok(Some(meta)) => Ok(Some(meta)),
+      Ok(None) => Ok(None),
+      Err(MetadataReadError::Io(error)) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+      Err(MetadataReadError::Json(error)) => Err(StoreError::new(error)),
     }
-    SessionMetadata::from_json(&raw, Some(&path.display().to_string())).map(Some)
   }
 
   pub(crate) async fn mutate_fresh<F>(

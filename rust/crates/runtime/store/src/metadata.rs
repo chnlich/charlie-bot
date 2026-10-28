@@ -678,14 +678,17 @@ pub fn read_metadata_object(path: &Path) -> Result<Option<Map<String, Value>>, M
   Ok(read_metadata_value(path)?.as_object().cloned())
 }
 
-/// Read one session's metadata file as typed session metadata, `None` when the file is missing. The typed read is
-/// `SessionMetadata::from_json`, which enforces the v2 session schema.
+/// Read one session's metadata file as typed session metadata, `None` when the file is missing or empty or blank.
+/// The typed read is `SessionMetadata::from_json`, which enforces the v2 session schema.
 pub fn read_session_metadata(path: &Path) -> Result<Option<SessionMetadata>, MetadataReadError> {
   let text = match read_metadata_text(path) {
     Ok(text) => text,
     Err(MetadataReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
     Err(error) => return Err(error),
   };
+  if text.trim().is_empty() {
+    return Ok(None);
+  }
   SessionMetadata::from_json(&text, Some(&path.to_string_lossy()))
     .map(Some)
     .map_err(|error| MetadataReadError::Json(error.to_string()))
@@ -1054,6 +1057,14 @@ mod tests {
     let (_dir, legacy) = metadata_with(br#"{"id": "legacy"}"#);
     let error = super::read_session_metadata(&legacy).unwrap_err();
     assert!(error.to_string().contains("schema_version 2 profile"), "{error}");
+  }
+
+  #[test]
+  fn read_session_metadata_answers_none_for_an_empty_or_blank_file() {
+    let (_dir, empty) = metadata_with(b"");
+    assert_eq!(super::read_session_metadata(&empty).unwrap(), None);
+    let (_dir, blank) = metadata_with(b"  \n  ");
+    assert_eq!(super::read_session_metadata(&blank).unwrap(), None);
   }
 
   #[test]

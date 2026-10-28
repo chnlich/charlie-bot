@@ -430,4 +430,34 @@ mod tests {
     assert_eq!(id.as_deref(), Some("thread-a"));
     assert_eq!(reader.consumed, b"{\"session_id\":\"thread-a\"}\n".len());
   }
+
+  /// The store's two chat line decoders — this module's `decode_line` and the compact mmap fast path's
+  /// `parse_line_compact` — agree on every line both can read, and differ today only on bytes that are not
+  /// UTF-8: the strict decode fails them and the compact decode repairs them to U+FFFD first. A change to one
+  /// decoder fails here until the other follows.
+  #[test]
+  fn compact_and_value_line_decoders_agree_over_the_line_corpus() {
+    use crate::ndjson::parse_line_compact;
+
+    // A blank line, a whitespace line and a malformed line reject under both decoders.
+    for line in [b"".as_slice(), b"   ".as_slice(), b"{broken".as_slice()] {
+      assert!(decode_line(line).is_err(), "{line:?}");
+      assert_eq!(parse_line_compact(line), None, "{line:?}");
+    }
+    // A nested value, and a line that keeps its `\n` terminator, decode to the same value.
+    for line in [
+      br#"{"b": 1, "a": {"deep": [1, 2.5, null, true, {"x": "y"}]}}"#.as_slice(),
+      br#"{"a": 1}
+"#
+      .as_slice(),
+    ] {
+      assert_eq!(decode_line(line).unwrap(), parse_line_compact(line).unwrap().to_value(), "{line:?}");
+    }
+    // The difference of today.
+    assert!(decode_line(b"{\"text\": \"ok\xff\"}").is_err());
+    assert_eq!(
+      parse_line_compact(b"{\"text\": \"ok\xff\"}").map(|compact| compact.to_value()),
+      Some(serde_json::json!({"text": "ok\u{fffd}"}))
+    );
+  }
 }

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use charliebot_core::config::BackendOption;
+use charliebot_core::config::{BackendOption, sessions_dir_in};
 use charliebot_core::home;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
@@ -100,7 +100,7 @@ impl OpenCodeHost {
   }
 
   pub fn data_dir(&self) -> PathBuf {
-    self.store_dir().join("data")
+    self.store_dir().join(home::OPENCODE_XDG_DATA_DIR_NAME)
   }
 
   pub fn state_dir(&self) -> PathBuf {
@@ -238,7 +238,7 @@ impl OpenCodeServerPool {
   fn adopt_live_servers(self: &Arc<Self>) -> anyhow::Result<()> {
     let profile_home = &self.host.profile_home;
     let server_directory = profile_home.join(home::OPENCODE_DIR_NAME).join(relay::SERVER_DIRECTORY_NAME);
-    let sessions_directory = profile_home.join("sessions");
+    let sessions_directory = sessions_dir_in(profile_home);
     let opencode_backend_ids = self
       .recorded_options()
       .into_iter()
@@ -251,7 +251,7 @@ impl OpenCodeServerPool {
     let mut live_runs = Vec::new();
     for session in fs::read_dir(&sessions_directory)? {
       let session = session?;
-      let runs_directory = session.path().join("data/runs");
+      let runs_directory = charliebot_store::layout::runs_dir(&session.path());
       if !runs_directory.is_dir() {
         continue;
       }

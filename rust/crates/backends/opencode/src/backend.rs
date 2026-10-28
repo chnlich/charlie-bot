@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
+use charliebot_core::home;
 use charliebot_core::pyfmt::python_str;
 use charliebot_core::pystr;
 use charliebot_registry::backend::{
@@ -1031,7 +1032,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   let root = oneshot_root()?;
   let mut env = base_env;
   env.extend(host.extra_env.clone());
-  env.insert("XDG_DATA_HOME".to_string(), root.path().join("data").display().to_string());
+  env.insert("XDG_DATA_HOME".to_string(), root.path().join(home::OPENCODE_XDG_DATA_DIR_NAME).display().to_string());
   env.insert("XDG_STATE_HOME".to_string(), root.path().join("state").display().to_string());
   env.insert("XDG_CACHE_HOME".to_string(), root.path().join("cache").display().to_string());
   let mut config = json!({"permission": {"*": "deny"}});

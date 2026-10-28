@@ -13,6 +13,8 @@ pub const CHARLIEBOT_HOME_ENV: &str = "CHARLIEBOT_HOME";
 
 /// The profile's opencode store directory name, under the profile home.
 pub const OPENCODE_DIR_NAME: &str = "opencode";
+/// The `data` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_DATA_HOME`.
+pub const OPENCODE_XDG_DATA_DIR_NAME: &str = "data";
 
 /// A `CHARLIEBOT_HOME` value that names no usable home.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +110,7 @@ fn opencode_store_in(home: &Path) -> PathBuf {
 }
 
 fn opencode_data_in(home: &Path) -> PathBuf {
-  opencode_store_in(home).join("data")
+  opencode_store_in(home).join(OPENCODE_XDG_DATA_DIR_NAME)
 }
 
 fn opencode_state_in(home: &Path) -> PathBuf {

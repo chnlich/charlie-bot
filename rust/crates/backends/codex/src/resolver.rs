@@ -171,7 +171,7 @@ impl CodexUsageResolver {
       return Ok(None);
     }
     let suffix = format!("{thread_id}.jsonl");
-    let matches = walk_files(&sessions, |name| name.starts_with("rollout-") && name.ends_with(&suffix))
+    let matches = walk_files(&sessions, |name| rollout::is_rollout_file(name) && name.ends_with(&suffix))
       .with_context(|| format!("listing rollouts under {}", sessions.display()))?;
     let mut newest: Vec<(i128, PathBuf)> = matches
       .into_iter()

@@ -185,6 +185,20 @@ impl Sandbox {
   }
 }
 
+/// A program cargo built for another workspace package, in the target directory that holds this test binary.
+///
+/// `CARGO_BIN_EXE_<name>` names only the test package's own binaries, so a test that runs another package's program
+/// finds it beside the running test binary instead.
+pub fn built_binary(name: &str) -> PathBuf {
+  let executable = env::current_exe().expect("the test binary path");
+  executable
+    .ancestors()
+    .skip(1)
+    .map(|directory| directory.join(name))
+    .find(|candidate| candidate.is_file())
+    .unwrap_or_else(|| panic!("cargo builds {name} into the target directory that holds the test binary"))
+}
+
 /// A command for `program` that sees exactly the variables of `env`.
 pub fn command(program: impl AsRef<OsStr>, env: &Env) -> Command {
   let mut command = Command::new(program);

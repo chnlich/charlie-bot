@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher (`src/app/main.py`).
 //!
-//! The vocabulary is the 24 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 26 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a name this port has not reached yet prints
 //! the not-ported JSON error and exits 1 — it never calls the Python CLI.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 24] = [
+const COMMANDS: [&str; 26] = [
   "artifact",
   "compaction-context",
   "config",
@@ -32,11 +32,13 @@ const COMMANDS: [&str; 24] = [
   "linear",
   "memory",
   "plan",
+  "preflight-charlie-code",
   "publish",
   "release-helper",
   "router",
   "schedule-trigger",
   "session",
+  "setup",
   "slack",
   "switch-helper",
   "voice",
@@ -112,6 +114,7 @@ fn run_subcommand(
     "linear" => commands::linear::main(args),
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
+    "preflight-charlie-code" => commands::preflight_charlie_code::main(args),
     "publish" => charliebot_artifacts::cli::publish::main(args, host),
     "release-helper" => commands::release_helper::main(args),
     "router" => {
@@ -120,6 +123,7 @@ fn run_subcommand(
     }
     "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
+    "setup" => commands::setup::main(args),
     "slack" => charliebot_slack::cli::main(args),
     "switch-helper" => charliebot_switch_helper::main(args),
     "voice" => commands::voice::main(args, host),

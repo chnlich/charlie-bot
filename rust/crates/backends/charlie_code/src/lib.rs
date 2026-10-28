@@ -3,7 +3,7 @@
 
 mod charlie_code_cli;
 pub mod factory;
-mod options;
+pub mod options;
 mod translate;
 
 use std::sync::Arc;

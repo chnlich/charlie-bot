@@ -1,0 +1,8 @@
+cron: 27 6 * * *
+timezone: local
+steps:
+- name: selector
+  prompt_file: prompts/cron/memory_curator/memory_selector.md
+- name: reviewer
+  prompt_file: prompts/cron/memory_curator/memory_reviewer.md
+  distinct_backend_from: selector

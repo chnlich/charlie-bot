@@ -109,9 +109,14 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 const FIELD_KEYS: [&str; 7] =
   ["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram"];
 
-/// True for a top-level field or a registered section — the names Python's `config get` accepts.
+/// The home fact that is no config field: the state directory `CHARLIEBOT_HOME` selects when it is unset or
+/// blank. [`charliebot_core::home`] owns the value; the launcher scripts read it the same way they read
+/// `charliebot_home`.
+const DEFAULT_HOME_KEY: &str = "default_charliebot_home";
+
+/// True for a top-level field, a registered section, or the default-home fact.
 fn known_key(key: &str, registry: &Registry) -> bool {
-  FIELD_KEYS.contains(&key) || registry.config_sections().any(|section| section.key == key)
+  key == DEFAULT_HOME_KEY || FIELD_KEYS.contains(&key) || registry.config_sections().any(|section| section.key == key)
 }
 
 /// One key's stdout text, or the failure that exits.
@@ -135,6 +140,7 @@ fn render(key: &str, value: Option<Rendered>) -> Result<String, Failure> {
 fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Option<Rendered>, Failure> {
   let rendered = match key {
     "charliebot_home" => Rendered::Scalar(paths::display(&cfg.charliebot_home)),
+    "default_charliebot_home" => Rendered::Scalar(paths::display(&home::default_charliebot_home())),
     "headless_chrome_bin" => Rendered::Scalar(cfg.headless_chrome_bin.clone()),
     "server" => Rendered::Json(server_json(cfg)),
     "paths" => Rendered::Json(paths_json(cfg)),

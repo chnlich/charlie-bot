@@ -16,8 +16,11 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_store::layout;
+use charliebot_store::run_records::RUN_EVENTS_NAME;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -136,9 +139,9 @@ fn capture(pattern: &str, text: &str) -> io::Result<String> {
 /// such run also gets a master line, which the switch must not count as adoption.
 fn recovery_logs(home: &Path, adopt: bool) -> io::Result<()> {
   let mut metas = Vec::new();
-  for session in sorted_entries(&home.join("sessions"))? {
-    for run in sorted_entries(&session.join("data/runs"))? {
-      let meta = run.join("metadata.json");
+  for session in sorted_entries(&sessions_dir_in(home))? {
+    for run in sorted_entries(&layout::runs_dir(&session))? {
+      let meta = layout::metadata_path(&run);
       if meta.is_file() {
         metas.push(meta);
       }
@@ -426,10 +429,10 @@ impl Server {
       task["worktree_path"] = json!(fs::canonicalize(&worktree)?.display().to_string());
     }
     if !self.behavior.task_error.is_empty() {
-      let run_dir = self.home.join("sessions").join(CHILD_SESSION).join("data/runs").join(TASK_RUN);
+      let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(CHILD_SESSION)).join(TASK_RUN);
       fs::create_dir_all(&run_dir)?;
       let event = json!({"type": "error", "message": self.behavior.task_error});
-      fs::write(run_dir.join("events.jsonl"), format!("{event}\n"))?;
+      fs::write(run_dir.join(RUN_EVENTS_NAME), format!("{event}\n"))?;
     }
     Ok(task)
   }

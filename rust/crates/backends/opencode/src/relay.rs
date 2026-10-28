@@ -276,12 +276,13 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
       }
       chunk = stream.next() => {
         let Some(chunk) = chunk else {
-          let reason = if same_process(record.pid, &record.pid_start) {
-            "event stream disconnected".to_string()
-          } else {
-            wait_for_server_exit_reason(&record_path)
-              .await?
-              .unwrap_or_else(|| "opencode serve exited".to_string())
+          // The stream closing means either the serve exited or only this connection was lost. The serve's parent
+          // records why, including the exit code when it has one, so wait for that record: a liveness check here can
+          // run before the process has finished exiting and would report the disconnect instead of the crash.
+          let reason = match wait_for_server_exit_reason(&record_path).await? {
+            Some(reason) => reason,
+            None if same_process(record.pid, &record.pid_start) => "event stream disconnected".to_string(),
+            None => "opencode serve exited".to_string(),
           };
           bail!("{reason}");
         };

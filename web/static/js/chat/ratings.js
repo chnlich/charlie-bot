@@ -60,8 +60,8 @@ function updateRoundRatingButtons(sessionId, roundId, activeRating) {
   });
 }
 
-function refreshAllRoundRatingButtons() {
-  document.querySelectorAll('[data-round-rating]').forEach(btn => {
+function refreshAllRoundRatingButtons(root) {
+  root.querySelectorAll('[data-round-rating]').forEach(btn => {
     applyRoundRatingButtonState(btn, getRoundRating(btn.dataset.roundRatingEvent));
   });
 }
@@ -75,7 +75,7 @@ async function initializeRoundRatings() {
     const session = await res.json();
     if (SESSION_ID !== sessionId) return;
     setActiveRoundRatings(session.round_ratings || {});
-    refreshAllRoundRatingButtons();
+    refreshAllRoundRatingButtons(document);
   } catch (err) {
     console.error('Load round ratings failed:', err);
   }
@@ -106,6 +106,7 @@ const GLOBALS = {
 };
 const CHAT_ONLY = {
   renderRoundRatingButtons,
+  refreshAllRoundRatingButtons,
   initializeRoundRatings,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);

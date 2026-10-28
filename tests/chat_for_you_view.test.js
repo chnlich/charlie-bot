@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -13,7 +14,7 @@ const {
   settle,
   eMsg,
 } = require('./turn_engine_harness');
-const {readStatic, chatModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, runStaticModules} = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // The For-you projection of the turn engine, on the same fake DOM as the
@@ -30,6 +31,59 @@ function loadPageModules(context) {
   runStaticModules(context, chatModules());
 }
 
+function appendButtonMarkup(parent, html, context) {
+  const buttons = /<button\b([^>]*)>([\s\S]*?)<\/button>/g;
+  let match;
+  while ((match = buttons.exec(html))) {
+    const button = new FakeElement('BUTTON');
+    const attributes = /([a-zA-Z_:][\w:.-]*)="([^"]*)"/g;
+    let attribute;
+    let onclick = null;
+    while ((attribute = attributes.exec(match[1]))) {
+      const [, name, value] = attribute;
+      button.setAttribute(name, value);
+      if (name === 'class') button.className = value;
+      if (name.startsWith('data-')) {
+        button.dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
+      }
+      if (name === 'onclick') onclick = value;
+    }
+    button.innerHTML = match[2];
+    if (onclick) button.onclick = () => vm.runInContext(onclick, context);
+    parent.appendChild(button);
+  }
+}
+
+function installButtonHtmlParser(context) {
+  const createElement = context.document.createElement;
+  context.document.createElement = (tag) => {
+    const element = createElement(tag);
+    let html = element.innerHTML;
+    Object.defineProperty(element, 'innerHTML', {
+      get() { return html; },
+      set(value) {
+        html = String(value);
+        if (element.classList.contains('separator-line')) appendButtonMarkup(element, html, context);
+      },
+    });
+    return element;
+  };
+}
+
+function loadRoundActionModules(context, wsHandlers) {
+  context.Sidebar = {wire: (globals) => Object.assign(context, globals)};
+  context.registerSidebarControl = () => {};
+  context.registerWsMessageHandler = (type, handler) => wsHandlers.set(type, handler);
+  context.BACKEND_OPTIONS = {test: 'Test backend'};
+  context.JSON_HEADERS = {'Content-Type': 'application/json'};
+  context.getActiveBackendId = () => 'test';
+  context.getDefaultBackendId = () => 'test';
+  context.location = {};
+  context.alert = () => {};
+  vm.runInContext(readStatic('sidebar/modals.js'), context, {filename: 'sidebar/modals.js'});
+  vm.runInContext(readPackageStatic('features', 'explain', 'explain.js'), context, {filename: 'explain.js'});
+}
+
 function forYouRig(
     messages, {view = 'foryou', clientHeight = 900, profile = null, workerSummary = null, hasMore = false} = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
@@ -38,6 +92,16 @@ function forYouRig(
   if (sentinel) root.appendChild(sentinel);
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
+  const modalElements = new Map([
+    'session-action-modal-overlay',
+    'session-action-modal-title',
+    'session-action-modal-body',
+    'session-action-modal-confirm',
+    'session-action-backend',
+  ].map((id) => [id, new FakeElement(id === 'session-action-backend' ? 'SELECT' : 'DIV', {id})]));
+  modalElements.get('session-action-modal-overlay').className = 'hidden';
+  const wsHandlers = new Map();
+  const fetchCalls = [];
   const timers = makeEngineTimers();
   const context = {
     CSS: {escape: (value) => String(value)},
@@ -47,31 +111,46 @@ function forYouRig(
     marked: {Renderer: function Renderer() {}, use() {}},
     window: {addEventListener() {}},
     platform: {isMobile: false, onChange() {}},
-    fetch: async () => ({ok: false, status: 500, json: async () => ({})}),
+    fetch: async (url, options = {}) => {
+      fetchCalls.push({url, options});
+      if (String(url).includes('/explain?upto=')) return new Promise(() => {});
+      return {ok: true, status: 200, json: async () => ({id: 'new-session', round_ratings: {}})};
+    },
     document: {
       addEventListener() {},
       createElement: (tag) => new FakeElement(tag),
       createTreeWalker: () => ({}),
-      querySelectorAll: () => [],
+      querySelector: (selector) => root.querySelector(selector),
+      querySelectorAll: (selector) => root.querySelectorAll(selector),
       getElementById(id) {
         if (id === 'messages') return root;
         if (id === 'streaming-msg') return stream;
         if (id === 'load-more-sentinel') return sentinel && sentinel.parentElement ? sentinel : null;
-        return null;
+        return modalElements.get(id) || null;
       },
     },
   };
   loadPageModules(context);
+  loadRoundActionModules(context, wsHandlers);
+  installButtonHtmlParser(context);
   if (profile) context.Chat.ForYou.setSession({profile});
   if (workerSummary) context.Chat.applyWorkerSummary(workerSummary);
   installEngineTimers(context, timers);
-  context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
+  context.Chat.buildTurnEngineMessageNode = (msg, sessionId) => {
+    const node = fakeEngineNode(msg);
+    if (msg.role === 'separator') {
+      if (msg.event_index != null) node.dataset.eventIndex = String(msg.event_index);
+      appendButtonMarkup(node, context.Chat.roundButtonsHtml(sessionId, msg), context);
+      node.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t'}));
+    }
+    return node;
+  };
   const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-fy', {view});
   assert.ok(engine && engine.alive, 'the engine mounts the chat container');
   // A worker page hands its sentinel to the engine after the mount, as
   // session-view.js renderSessionView does.
   if (sentinel && profile === 'worker') engine.holdWorkerSentinel(sentinel);
-  return {context, root, stream, sentinel, timers, engine};
+  return {context, root, stream, sentinel, timers, engine, modalElements, wsHandlers, fetchCalls};
 }
 
 test('worker For you holds one summary card and no transcript or empty-state rows', () => {
@@ -100,6 +179,7 @@ function rowsOf(root) {
     if (el.classList.contains('for-you-empty')) return 'empty';
     if (el.classList.contains('hidden')) return 'holder';
     if (el.id === 'load-more-sentinel') return 'sentinel';
+    if (!el.dataset.messageRole && el.querySelector('.separator-line')) return 'round-buttons';
     return el.dataset.messageRole;
   });
 }
@@ -125,11 +205,147 @@ function fixture() {
 }
 
 // The shown rows of the fixture: the user's messages, the reply, the notice and the error row.
-const FIXTURE_ROWS = ['user', 'web_reply', 'web_reply_notice', 'user', 'system', 'holder'];
+const FIXTURE_ROWS = ['user', 'web_reply', 'round-buttons', 'web_reply_notice', 'user', 'system', 'holder'];
 
 test('For you shows only the user, web reply, notice and error rows, in order', () => {
   const rig = forYouRig(fixture());
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
+});
+
+function replyRound() {
+  return [
+    eMsg('user', 'round-u', 'question'),
+    eMsg('assistant', 'round-a1', 'working'),
+    eMsg('web_reply', 'round-r1', 'first reply'),
+    eMsg('assistant', 'round-a2', 'more work'),
+    eMsg('web_reply', 'round-r2', 'last reply'),
+    eMsg('separator', 'round-s', '', {thinking_seconds: 4, event_index: 701}),
+  ];
+}
+
+function forYouButtonRow(root) {
+  return root.children.find((el) => !el.dataset.messageRole && el.querySelector('.separator-line')) || null;
+}
+
+function separatorLineFor(root, eventIndex) {
+  return root.querySelectorAll('.separator-line').find((el) => el.dataset.eventIndex === String(eventIndex)) || null;
+}
+
+function buttonsOf(line) {
+  return line.children.filter((el) => el.tagName === 'BUTTON');
+}
+
+function buttonInventory(line) {
+  return {
+    eventIndex: line.dataset.eventIndex,
+    buttons: buttonsOf(line).filter((button) => !button.classList.contains('turn-collapse')).map((button) => ({
+      title: button.getAttribute('title'),
+      className: button.className,
+      onclick: button.getAttribute('onclick'),
+      rating: button.dataset.roundRating || null,
+      ratingSession: button.dataset.roundRatingSession || null,
+      ratingEvent: button.dataset.roundRatingEvent || null,
+    })),
+  };
+}
+
+test('one finished round puts one button row under its last web reply', () => {
+  const rig = forYouRig(replyRound());
+  assert.deepEqual(rowsOf(rig.root), ['user', 'web_reply', 'web_reply', 'round-buttons', 'holder']);
+
+  const wrapper = forYouButtonRow(rig.root);
+  const row = wrapper.querySelector('.separator-line');
+  assert.equal(rig.root.children[rig.root.children.indexOf(wrapper) - 1].dataset.messageId, 'round-r2');
+  assert.equal(row.dataset.eventIndex, '701');
+  assert.equal(wrapper.dataset.messageId, undefined);
+  assert.equal(row.dataset.messageId, undefined);
+  assert.equal(wrapper.querySelectorAll('[data-message-id]').length, 0);
+});
+
+test('a live separator adds the button row after the last reply when the round closes', () => {
+  const messages = replyRound().slice(0, -1);
+  const rig = forYouRig(messages);
+  assert.equal(forYouButtonRow(rig.root), null, 'the running round has no button row');
+
+  rig.engine.appendMessage(replyRound().at(-1), false);
+  settle(rig.timers);
+
+  assert.equal(rig.root.children[rig.root.children.indexOf(forYouButtonRow(rig.root)) - 1].dataset.messageId, 'round-r2');
+});
+
+test('rounds without a reply and run_end separators add no row, and worker For you stays a summary', () => {
+  const noReply = forYouRig([
+    eMsg('user', 'no-reply-u', 'question'),
+    eMsg('assistant', 'no-reply-a', 'working'),
+    eMsg('separator', 'no-reply-s', '', {event_index: 702}),
+  ]);
+  assert.equal(forYouButtonRow(noReply.root), null);
+
+  const runEnd = forYouRig([
+    eMsg('web_reply', 'run-end-r', 'reply'),
+    eMsg('separator', 'run-end-s', '', {kind: 'run_end', event_index: 703}),
+  ]);
+  assert.equal(forYouButtonRow(runEnd.root), null);
+
+  const worker = forYouRig(replyRound(), {
+    profile: 'worker',
+    workerSummary: {task_state: 'open', runs: [], closing: {work: null, review: null}, links: {}},
+  });
+  assert.equal(rowsOf(worker.root).filter((row) => row === 'round-buttons').length, 0);
+  assert.equal(worker.root.children.filter((child) => child.classList.contains('worker-summary')).length, 1);
+});
+
+test('For-you and Everything use the same round buttons and action boundaries', async () => {
+  const messages = replyRound();
+  const forYou = forYouRig(messages);
+  const forYouWrapper = forYouButtonRow(forYou.root);
+  const forYouLine = forYouWrapper.querySelector('.separator-line');
+  const separatorMessage = messages[messages.length - 1];
+
+  forYou.engine.setView('everything');
+  settle(forYou.timers);
+  const separatorLine = separatorLineFor(forYou.root, separatorMessage.event_index);
+  assert.deepEqual(buttonInventory(forYouLine), buttonInventory(separatorLine));
+  assert.equal(forYouLine.innerHTML, forYou.context.Chat.roundButtonsHtml('sess-fy', separatorMessage));
+  assert.equal(buttonsOf(forYouLine).length, 5);
+  assert.deepEqual(buttonsOf(forYouLine).slice(-2).map((button) => button.dataset.roundRatingEvent), [
+    'round-s', 'round-s',
+  ]);
+
+  async function actionRequest(view, title) {
+    const rig = forYouRig(messages, {view});
+    settle(rig.timers);
+    const line = view === 'foryou'
+      ? forYouButtonRow(rig.root).querySelector('.separator-line')
+      : separatorLineFor(rig.root, separatorMessage.event_index);
+    const button = buttonsOf(line).find((candidate) => candidate.getAttribute('title') === title);
+    assert.ok(button, `${title} exists in ${view}`);
+    button.onclick();
+    assert.equal(rig.modalElements.get('session-action-modal-overlay').classList.contains('flex'), true);
+    const firstRequest = rig.fetchCalls.length;
+    await rig.context.submitSessionActionModal();
+    const post = rig.fetchCalls.slice(firstRequest).find((request) => request.options.method === 'POST');
+    assert.ok(post, `${title} confirms through its session action request`);
+    return {
+      url: post.url,
+      body: JSON.parse(post.options.body),
+    };
+  }
+
+  for (const title of ['Clone to here', 'Elon-e: retry with a fresh perspective', 'Explain this round with a chosen model']) {
+    assert.deepEqual(await actionRequest('foryou', title), await actionRequest('everything', title));
+  }
+});
+
+test('Everything separator HTML matches the output before button extraction', () => {
+  const rig = forYouRig([]);
+  const html = rig.context.renderMessage(eMsg('separator', 'round-s', '', {
+    thinking_seconds: 4,
+    event_index: 701,
+  }), 'sess-fy');
+  const hash = crypto.createHash('sha256').update(html).digest('hex');
+
+  assert.equal(hash, 'f039b2faf0eb09a1b2a4096e7c736eaad1e30b90da08a333415c6f99e11189e8');
 });
 
 test('For you shows an error row with every line of its text', () => {
@@ -207,7 +423,7 @@ test('an older page lands above the shown rows', () => {
   ]);
   settle(rig.timers);
   assert.deepEqual(rowsOf(rig.root), [
-    'user', 'user', 'web_reply', 'web_reply_notice', 'user', 'system', 'holder',
+    'user', 'user', 'web_reply', 'round-buttons', 'web_reply_notice', 'user', 'system', 'holder',
   ]);
 });
 
@@ -268,10 +484,102 @@ test('no Working row shows while a turn runs, and the stream output stays in the
 test('a reprojection with nothing to move keeps every row element', () => {
   const rig = forYouRig(fixture());
   const before = rig.root.children.slice();
+  assert.ok(forYouButtonRow(rig.root), 'the list contains its cached round button row');
   rig.engine.reproject('resize');
   const after = rig.root.children;
   assert.equal(after.length, before.length);
   after.forEach((el, i) => assert.equal(el, before[i], `row ${i} is the same element`));
+});
+
+test('rating and Explain state repaint on the cached separator after a folded turn is reopened', async () => {
+  const messages = replyRound();
+  const rig = forYouRig(messages, {view: 'everything'});
+  settle(rig.timers);
+  const key = 'round-u|round-a2|round-s';
+  const cachedSeparator = separatorLineFor(rig.root, 701);
+  assert.ok(cachedSeparator, 'Everything rendered the separator before the fold');
+
+  rig.engine.setOverride(key, false);
+  settle(rig.timers);
+  assert.equal(separatorLineFor(rig.root, 701), null, 'the folded turn hides its separator');
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  const rowWrapper = forYouButtonRow(rig.root);
+  const row = rowWrapper.querySelector('.separator-line');
+
+  let ratings = {};
+  rig.context.fetch = async (url, options = {}) => {
+    const body = JSON.parse(options.body);
+    ratings = Object.assign({}, ratings, {'round-s': body.rating});
+    if (body.rating === null) delete ratings['round-s'];
+    return {ok: true, status: 200, json: async () => ({round_ratings: ratings})};
+  };
+  await rig.context.rateRound('sess-fy', 'round-s', 'thumbs_down');
+  assert.equal(buttonsOf(row).find((button) => button.dataset.roundRating === 'thumbs_down')
+      .classList.contains('text-red-400'), true);
+  rig.wsHandlers.get('explain_status')({upto: 701, state: 'ready', backend: 'test'});
+  assert.equal(buttonsOf(row).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'ready');
+
+  rig.engine.setView('everything');
+  settle(rig.timers);
+  rig.engine.setOverride(key, true);
+  settle(rig.timers);
+  const reopenedSeparator = separatorLineFor(rig.root, 701);
+  assert.equal(reopenedSeparator, cachedSeparator, 'the fold restores the cached separator node');
+  assert.equal(buttonsOf(reopenedSeparator).find((button) => button.dataset.roundRating === 'thumbs_down')
+      .classList.contains('text-red-400'), true);
+  assert.equal(buttonsOf(reopenedSeparator).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'ready');
+
+  await rig.context.rateRound('sess-fy', 'round-s', 'thumbs_up');
+  rig.wsHandlers.get('explain_status')({upto: 701, state: 'pending', backend: 'test'});
+  assert.equal(buttonsOf(reopenedSeparator).find((button) => button.dataset.roundRating === 'thumbs_up')
+      .classList.contains('text-green-400'), true);
+
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  assert.equal(forYouButtonRow(rig.root), rowWrapper, 'For-you reuses its row node');
+  assert.equal(buttonsOf(row).find((button) => button.dataset.roundRating === 'thumbs_up')
+      .classList.contains('text-green-400'), true);
+  assert.equal(buttonsOf(row).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'pending');
+});
+
+test('an Explain panel stays inside its For-you row after a live message reprojects the list', async () => {
+  const rig = forYouRig(replyRound());
+  const wrapper = forYouButtonRow(rig.root);
+  const row = wrapper.querySelector('.separator-line');
+  const explain = buttonsOf(row).find((button) => button.classList.contains('explain-toggle'));
+  explain.onclick();
+  await rig.context.submitSessionActionModal();
+  const panel = row.nextElementSibling;
+  assert.ok(panel && panel.classList.contains('explain-panel'));
+  assert.equal(panel.parentElement, wrapper);
+
+  rig.engine.appendMessage(eMsg('web_reply_notice', 'notice-after-round', 'A later notice.'), false);
+  settle(rig.timers);
+
+  assert.equal(forYouButtonRow(rig.root), wrapper);
+  assert.equal(row.nextElementSibling, panel);
+  assert.equal(panel.parentElement, wrapper);
+});
+
+test('an older page can supply the reply for a separator already loaded', () => {
+  const rig = forYouRig([
+    eMsg('assistant', 'loaded-a', 'working'),
+    eMsg('separator', 'loaded-s', '', {event_index: 704}),
+  ]);
+  assert.equal(forYouButtonRow(rig.root), null);
+
+  rig.engine.prependMessages([
+    eMsg('user', 'older-u', 'question'),
+    eMsg('web_reply', 'older-r1', 'opening reply'),
+    eMsg('assistant', 'older-a', 'more work'),
+    eMsg('web_reply', 'older-r2', 'last reply'),
+  ]);
+  settle(rig.timers);
+
+  const wrapper = forYouButtonRow(rig.root);
+  assert.equal(rig.root.children[rig.root.children.indexOf(wrapper) - 1].dataset.messageId, 'older-r2');
+  assert.equal(wrapper.querySelector('.separator-line').dataset.eventIndex, '704');
 });
 
 test('Everything is unchanged after a For you round trip', () => {

@@ -49,14 +49,18 @@ function fakeRowMarginTop(el) {
 // Selector support the turn engine's reading-anchor lookups need: '.class',
 // '[data-attr]' and '[data-attr="value"]'. Anything else stays unsupported.
 function fakeElementMatches(el, selector) {
-  if (selector.startsWith('.')) {
-    return el.classList.contains(selector.slice(1));
-  }
-  const attr = selector.match(/^\[([a-zA-Z-]+)(?:="([^"]*)")?\]$/);
-  if (attr) {
-    const value = el.dataset ? el.dataset[attr[1].replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase())] : undefined;
-    if (!attr[2]) return value != null && value !== '';
-    return String(value) === attr[2];
+  if (selector === 'button') return el.tagName === 'BUTTON';
+  const classes = [...selector.matchAll(/\.([a-zA-Z0-9_-]+)/g)].map((match) => match[1]);
+  const attrs = [...selector.matchAll(/\[([a-zA-Z-]+)(?:="([^"]*)")?\]/g)];
+  const remainder = selector.replace(/\.[a-zA-Z0-9_-]+|\[[a-zA-Z-]+(?:="[^"]*")?\]/g, '');
+  if (!remainder && (classes.length || attrs.length)) {
+    if (!classes.every((className) => el.classList.contains(className))) return false;
+    return attrs.every((attr) => {
+      const key = attr[1].replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      const value = el.dataset ? el.dataset[key] : undefined;
+      if (attr[2] == null) return value != null && value !== '';
+      return String(value) === attr[2];
+    });
   }
   throw new Error(`Unsupported selector: ${selector}`);
 }

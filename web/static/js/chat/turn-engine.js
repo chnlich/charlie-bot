@@ -164,6 +164,7 @@
       // streaming output off the list.
       this.forYouEmpty = null;
       this.forYouHolder = null;
+      this.forYouRoundButtonRows = new Map();
       // A worker page's pagination sentinel (holdWorkerSentinel), or null.
       this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
@@ -536,21 +537,25 @@
     // Returns the DOM node for one segment under the current policy — a READY
     // fragment or an estimated-height placeholder. Never builds HTML here.
     materialize(seg) {
+      let node;
       if (seg.kind === 'turn') {
         const open = this.effectiveOpen(seg);
-        if (!open) return this.buildTurnWrap(seg, false);
-        if (!this.segmentReady(seg)) {
+        if (!open) node = this.buildTurnWrap(seg, false);
+        else if (!this.segmentReady(seg)) {
           this.stats.placeholderAppearances++;
           return this.buildPlaceholder(seg);
+        } else {
+          node = this.buildTurnWrap(seg, true);
         }
-        return this.buildTurnWrap(seg, true);
-      }
-      if (!this.segmentReady(seg)) {
+      } else if (!this.segmentReady(seg)) {
         this.stats.placeholderAppearances++;
         return this.buildPlaceholder(seg);
+      } else {
+        this.stats.segmentMaterializations++;
+        node = this.buildFlatNode(seg);
       }
-      this.stats.segmentMaterializations++;
-      return this.buildFlatNode(seg);
+      Chat.repaintRoundButtons(node);
+      return node;
     }
 
     measureSegment(seg, el) {
@@ -1137,6 +1142,7 @@
       this.resizeRafHandle = null;
       this.resizeRafScheduled = false;
       this.entries = [];
+      this.forYouRoundButtonRows.clear();
       this.messageRecords.clear();
       this.segments = [];
       this.readingAnchor = null;
@@ -1235,9 +1241,34 @@
         if (forYouRules.isWorker()) children.push(forYouRules.summaryCard());
         else children.push(this.forYouEmptyNode());
       }
-      for (const entry of shown) children.push(this.forYouEntryNode(entry));
+      const roundButtonRows = forYouRules.roundButtonRows(this.entries);
+      for (const entry of shown) {
+        children.push(this.forYouEntryNode(entry));
+        const separator = roundButtonRows.get(entry);
+        if (separator) {
+          const row = this.forYouRoundButtonRowNode(separator);
+          if (row.parentNode !== this.container) Chat.repaintRoundButtons(row);
+          children.push(row);
+        }
+      }
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);
+    }
+
+    forYouRoundButtonRowNode(msg) {
+      const key = String(msg.id);
+      let wrapper = this.forYouRoundButtonRows.get(key);
+      if (!wrapper) {
+        wrapper = document.createElement('div');
+        wrapper.className = 'flex justify-start';
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-3 py-2 px-4 separator-line';
+        row.dataset.eventIndex = String(msg.event_index);
+        row.innerHTML = Chat.roundButtonsHtml(this.sessionId, msg);
+        wrapper.appendChild(row);
+        this.forYouRoundButtonRows.set(key, wrapper);
+      }
+      return wrapper;
     }
 
     forYouEntryNode(entry) {

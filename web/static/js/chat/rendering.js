@@ -457,10 +457,30 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
 // registers its renderer when its script loads.
 const separatorButtons = [];
 
-function registerSeparatorButton(render) {
+function registerSeparatorButton(render, repaint) {
   if (typeof render !== 'function') throw new Error('Invalid separator button registration');
-  if (separatorButtons.includes(render)) throw new Error('Duplicate separator button');
-  separatorButtons.push(render);
+  if (arguments.length > 1 && typeof repaint !== 'function') {
+    throw new Error('Invalid separator button repaint');
+  }
+  if (separatorButtons.some((button) => button.render === render)) throw new Error('Duplicate separator button');
+  separatorButtons.push({render, repaint: repaint || null});
+}
+
+function roundButtonsHtml(sessionId, msg) {
+  if (!sessionId || msg.kind === 'run_end') return '';
+  let buttons = '';
+  if (msg.event_index != null) {
+    buttons = separatorButtons.map((button) => button.render(sessionId, msg.event_index)).join('');
+  }
+  if (msg.id != null) buttons += renderRoundRatingButtons(sessionId, msg.id);
+  return buttons;
+}
+
+function repaintRoundButtons(root) {
+  Chat.refreshAllRoundRatingButtons(root);
+  separatorButtons.forEach((button) => {
+    if (button.repaint) button.repaint(root);
+  });
 }
 
 // Message post-processors run over each freshly rendered root in registration order, after
@@ -891,18 +911,11 @@ function renderMessage(msg, sessionId) {
     var secondsAttr = msg.thinking_seconds != null
       ? " data-thinking-seconds=\"" + escapeHtmlAttr(msg.thinking_seconds) + "\"" : "";
     var sepLabel = "response complete" + timeStr;
-    var buttons = "";
+    var buttons = roundButtonsHtml(sessionId, msg);
     if (msg.kind === "run_end") {
       // The end of one Run: its duration, no rating and no clone buttons.
       sepLabel = "run ended" + (msg.thinking_seconds != null
         ? " &middot; " + formatRunDuration(msg.thinking_seconds) : "");
-    } else if (sessionId) {
-      if (msg.event_index != null) {
-        buttons = separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
-      }
-      if (msg.id != null) {
-        buttons += renderRoundRatingButtons(sessionId, msg.id);
-      }
     }
     var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
@@ -996,6 +1009,8 @@ const GLOBALS = {
 const CHAT_ONLY = {
   registerMessagePostProcessor,
   registerSeparatorButton,
+  roundButtonsHtml,
+  repaintRoundButtons,
   registerDeliveryLink,
   CLONE_SVG,
   buildTurnRowFromSpec,

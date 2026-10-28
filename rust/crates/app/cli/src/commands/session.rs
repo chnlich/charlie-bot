@@ -1,12 +1,13 @@
 //! The `session` verbs (`src/runtime/cli/session.py`): create, tree, retry, archive, acknowledge,
-//! cancel, send, dialog.
+//! cancel, reparent, send, dialog.
 //!
 //! `create` builds session metadata only (no first message); with `--parent` it becomes the v2
 //! task create whose (parent, request_id) binds one stable node. `archive` and `cancel` keep the
 //! sent-but-lost readback: a lost response reads this request's own close fact from the target
-//! session's chat events. `send` relays a message as an `agent_message` event and maps the 422
-//! over-limit refusal to exit 2. `dialog` prints one session's chat messages as plain text,
-//! oldest first, for piping into `rg`.
+//! session's chat events. `reparent` reads back its own `task_reparented` fact the same way.
+//! `send` relays a message as an `agent_message` event and maps the 422 over-limit refusal to
+//! exit 2. `dialog` prints one session's chat messages as plain text, oldest first, for piping
+//! into `rg`.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -21,8 +22,10 @@ use charliebot_cli_common::route;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
+use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::{control_events, layout};
 use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -64,6 +67,8 @@ enum SessionCommand {
   Acknowledge(AcknowledgeArgs),
   /// Cancel a task; stop runs and end delegation for workers
   Cancel(CancelArgs),
+  /// Move a task under a new parent; an agent moves tasks inside its own subtree only
+  Reparent(ReparentArgs),
   /// Relay a message to another session as an agent_message
   Send(SendArgs),
   /// Print one session's chat messages as plain text, oldest first (for rg)
@@ -163,6 +168,15 @@ struct CancelArgs {
 }
 
 #[derive(Args)]
+struct ReparentArgs {
+  /// Task id
+  session_id: String,
+  /// The new parent task id
+  #[arg(long)]
+  parent: String,
+}
+
+#[derive(Args)]
 struct SendArgs {
   /// Target session id
   target: String,
@@ -204,6 +218,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     SessionCommand::Archive(args) => archive(&args),
     SessionCommand::Acknowledge(args) => acknowledge(&args),
     SessionCommand::Cancel(args) => cancel(&args),
+    SessionCommand::Reparent(args) => reparent(&args),
     SessionCommand::Send(args) => send(&args),
     SessionCommand::Dialog(args) => dialog(&args),
   }
@@ -418,6 +433,24 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
   std::process::exit(1);
 }
 
+fn reparent(args: &ReparentArgs) -> Result<(), CliExit> {
+  let home = home_dir()?;
+  let task_id = args.session_id.clone();
+  let parent_id = args.parent.clone();
+  let caller_session_id = std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty());
+  let sent_at = UtcDateTime::now();
+  let readback =
+    move || Ok(find_local_task_reparent(&home, &task_id, &parent_id, caller_session_id.as_deref(), sent_at));
+  let result = client::patch(
+    &route::fill(session_routes::SESSION_PATH, &[args.session_id.as_str()]),
+    json!({ "task_parent_id": args.parent }),
+    Some(Box::new(readback)),
+    &[],
+  )?;
+  print_result(&result);
+  Ok(())
+}
+
 fn send(args: &SendArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   let content = match (&args.message, &args.file) {
@@ -468,6 +501,39 @@ fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Option
     }
   }
   deferred
+}
+
+/// The `task_reparented` fact THIS request wrote: the same caller session (`None` for an operator
+/// caller), the same new parent, and a timestamp no earlier than the send. A parent that already
+/// sat there proves nothing, so the readback reads the fact and never the metadata. A missing file
+/// or an unreadable line proves nothing (`None`).
+fn find_local_task_reparent(
+  home: &Path,
+  task_id: &str,
+  parent_id: &str,
+  caller_session_id: Option<&str>,
+  sent_at: UtcDateTime,
+) -> Option<Value> {
+  let session_dir = config::sessions_dir_in(home).join(task_id);
+  let events_path = layout::chat_events_path(&session_dir);
+  for line in chat_events::read_lines(&events_path, LineRule::Lines).ok()? {
+    let event = line.ok()?.decode().ok()?;
+    let object = event.as_object()?;
+    let written_after_send = object
+      .get("timestamp")
+      .and_then(Value::as_str)
+      .and_then(|timestamp| UtcDateTime::parse(timestamp).ok())
+      .is_some_and(|timestamp| timestamp >= sent_at);
+    if object.get("type").and_then(Value::as_str) == Some(event_types::TASK_REPARENTED)
+      && object.get("task_parent_id").and_then(Value::as_str) == Some(parent_id)
+      && object.get("caller_session_id").and_then(Value::as_str) == caller_session_id
+      && written_after_send
+    {
+      let event_id = object.get("id").cloned().unwrap_or(Value::Null);
+      return Some(json!({ "session_id": task_id, "task_parent_id": parent_id, "reparented_event_id": event_id }));
+    }
+  }
+  None
 }
 
 fn dialog(args: &DialogArgs) -> Result<(), CliExit> {

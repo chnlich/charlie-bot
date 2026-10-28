@@ -9,6 +9,7 @@ use std::time::Duration;
 pub enum Method {
   Get,
   Post,
+  Patch,
 }
 
 /// One HTTP request on the wire, as the contract's transport sees it.

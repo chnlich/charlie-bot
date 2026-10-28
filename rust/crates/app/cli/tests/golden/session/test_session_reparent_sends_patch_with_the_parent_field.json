@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "session",
+    "reparent",
+    "task-moved",
+    "--parent",
+    "task-new-parent"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "id": "task-moved",
+        "task_parent_id": "task-new-parent"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"id\": \"task-moved\",\n  \"task_parent_id\": \"task-new-parent\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "PATCH",
+        "path": "/api/sessions/task-moved",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "task_parent_id": "task-new-parent"
+        }
+      }
+    ]
+  }
+}

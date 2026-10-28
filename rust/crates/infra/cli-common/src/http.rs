@@ -39,6 +39,7 @@ async fn send_async(request: &WireRequest) -> Result<WireResponse, TransportErro
   let method = match request.method {
     Method::Get => reqwest::Method::GET,
     Method::Post => reqwest::Method::POST,
+    Method::Patch => reqwest::Method::PATCH,
   };
   let mut pending = client.request(method, &request.url);
   for (name, value) in &request.headers {

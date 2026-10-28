@@ -1,0 +1,59 @@
+{
+  "argv": [
+    "session",
+    "reparent",
+    "task-moved",
+    "--parent",
+    "task-new-parent"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 403,
+      "body": {
+        "detail": "an agent may only reparent within its own subtree: the task must be below the caller's task, and the new parent must be the caller's task or below it"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sha": "cafe567",
+        "started_at": "2026-01-02T03:04:05+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"an agent may only reparent within its own subtree: the task must be below the caller's task, and the new parent must be the caller's task or below it\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "PATCH",
+        "path": "/api/sessions/task-moved",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "task_parent_id": "task-new-parent"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

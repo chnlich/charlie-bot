@@ -126,7 +126,7 @@ pub fn call_api(
 fn unknown_effect(method: Method) -> &'static str {
   match method {
     Method::Get => "none",
-    Method::Post => "unknown",
+    Method::Post | Method::Patch => "unknown",
   }
 }
 
@@ -184,6 +184,23 @@ pub fn post(
 ) -> Result<Value, CliExit> {
   run_call(ApiCall {
     method: Method::Post,
+    endpoint: endpoint.to_string(),
+    payload: Some(payload),
+    params: None,
+    readback,
+    rejection_exit_codes,
+  })
+}
+
+/// One PATCH on the process transport: a mutation, so a sent-but-lost call runs its readback.
+pub fn patch(
+  endpoint: &str,
+  payload: Value,
+  readback: Option<Readback<'_>>,
+  rejection_exit_codes: &[(u16, i32)],
+) -> Result<Value, CliExit> {
+  run_call(ApiCall {
+    method: Method::Patch,
     endpoint: endpoint.to_string(),
     payload: Some(payload),
     params: None,

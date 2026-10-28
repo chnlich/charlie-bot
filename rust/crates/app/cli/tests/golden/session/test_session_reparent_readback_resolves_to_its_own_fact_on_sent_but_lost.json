@@ -1,0 +1,43 @@
+{
+  "argv": [
+    "session",
+    "reparent",
+    "task-moved",
+    "--parent",
+    "task-new-parent"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "task-manager",
+    "CHARLIEBOT_RUN_TOKEN": "synthetic-run-token"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/task-moved/data/chat_events.jsonl": "{\"id\": \"fact-earlier\", \"type\": \"task_reparented\", \"timestamp\": \"2001-01-01T00:00:00+00:00\", \"actor\": \"agent\", \"source_session_id\": \"task-moved\", \"previous_parent_id\": \"task-old-parent\", \"task_parent_id\": \"task-new-parent\", \"caller_session_id\": \"task-manager\", \"carried_subtree_prompt\": null}\n{\"id\": \"fact-own\", \"type\": \"task_reparented\", \"timestamp\": \"2099-01-01T00:00:00+00:00\", \"actor\": \"agent\", \"source_session_id\": \"task-moved\", \"previous_parent_id\": \"task-old-parent\", \"task_parent_id\": \"task-new-parent\", \"caller_session_id\": \"task-manager\", \"carried_subtree_prompt\": null}\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"session_id\": \"task-moved\",\n  \"task_parent_id\": \"task-new-parent\",\n  \"reparented_event_id\": \"fact-own\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "PATCH",
+        "path": "/api/sessions/task-moved",
+        "query": "",
+        "headers": {
+          "Authorization": "Bearer synthetic-run-token",
+          "X-CharlieBot-Caller-Session": "task-manager",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "task_parent_id": "task-new-parent"
+        }
+      }
+    ]
+  }
+}

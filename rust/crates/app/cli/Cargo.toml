@@ -23,6 +23,7 @@ charliebot-packages.workspace = true
 charliebot-registry.workspace = true
 charliebot-slack.workspace = true
 charliebot-store.workspace = true
+charliebot-switch-helper.workspace = true
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 clap.workspace = true

@@ -249,6 +249,10 @@ A lead keeps only coordination state in its context: each later model call re-re
   `jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last' "$CHARLIEBOT_HOME"/sessions/*/data/runs/<run id>/events.jsonl | grep -E '^(mismatch|unverifiable|gap-design:|gap-goal:|scenario:|anchor:|RESULT:)'`
   For a cold-read worker, run the same command without the `grep` stage.
   The worker's material then stays out of your context.
+- When a worker's named report file is missing, read its final message with that command, without the `grep` stage.
+  The final message then serves as its report, and no other file of the worker enters your context.
+- When that final message states no conclusion, delegate the task again and give the new worker the run id.
+  The new worker then writes the conclusion from that run's record, and the material stays out of your context.
 - When the verify output has no `RESULT` line, or the cold-read output is empty, delegate the check again.
   A missing report then never reads as a clean check.
 - When the verify output has fewer `mismatch` lines than its `RESULT` count, give a worker the run id.

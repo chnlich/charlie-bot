@@ -1,0 +1,3 @@
+cron: 30 4 * * *
+timezone: local
+handler: cool_storage

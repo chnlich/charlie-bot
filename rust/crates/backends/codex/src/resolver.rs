@@ -166,7 +166,7 @@ impl CodexUsageResolver {
     {
       return Ok(Some(cached.clone()));
     }
-    let sessions = self.codex_home.join("sessions");
+    let sessions = self.codex_home.join(rollout::CODEX_SESSIONS_DIR_NAME);
     if !sessions.exists() {
       return Ok(None);
     }

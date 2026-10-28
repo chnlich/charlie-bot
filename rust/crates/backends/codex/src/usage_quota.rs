@@ -55,7 +55,7 @@ impl CodexQuotaAccount {
   pub fn new(codex_home: &Path) -> Self {
     Self {
       inner: Arc::new(Inner {
-        sessions_dir: codex_home.join("sessions"),
+        sessions_dir: codex_home.join(rollout::CODEX_SESSIONS_DIR_NAME),
         last_error: Mutex::new("no sessions found".to_string()),
         spend_cache: Mutex::new(SpendMemo::new(SPEND_CACHE_LIMIT)),
       }),

@@ -33,9 +33,9 @@ const AGENTS_MEMORY_PERCENT: u64 = 80;
 
 const SYSTEMCTL: &str = r#"case "$*" in
   *charliebot-agents.slice*)
-    echo ActiveState=active
-    echo MemoryMax={memory_max}
-    echo MemorySwapMax=0
+    echo "ActiveState=${SYSTEMCTL_ACTIVE_STATE:-active}"
+    echo "MemoryMax=${SYSTEMCTL_MEMORY_MAX:-{memory_max}}"
+    echo "MemorySwapMax=${SYSTEMCTL_MEMORY_SWAP_MAX:-0}"
     ;;
   *)
     exit 1

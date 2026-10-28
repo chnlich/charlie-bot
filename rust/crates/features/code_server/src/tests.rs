@@ -45,19 +45,20 @@ fn write_executable(path: &Path, script: &str) {
   fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("the stub is executable");
 }
 
-/// A stub that listens on `port` and exits once the test process does, so it outlives no test run.
+/// A stub that listens on `port` and exits once the test process does, so it outlives no test run. It is a `sh`
+/// wrapper whose `exec` runs the `listening_stub` example, so the example keeps the wrapper's process and parent.
 fn listening_stub(path: &Path, port: u16) {
-  let script = r#"#!/usr/bin/env python3
-import os, socket, time
-parent = os.getppid()
-server = socket.socket()
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(("127.0.0.1", PORT))
-server.listen()
-while os.getppid() == parent:
-    time.sleep(0.05)
-"#;
-  write_executable(path, &script.replace("PORT", &port.to_string()));
+  let binary = built_example("listening_stub");
+  write_executable(path, &format!("#!/bin/sh\nexec '{}' {port}\n", binary.display()));
+}
+
+/// The example `name`, which `cargo test` builds into the `examples` directory beside the test binary's profile.
+fn built_example(name: &str) -> PathBuf {
+  let test_binary = std::env::current_exe().expect("the test binary path reads");
+  let profile = test_binary.parent().and_then(Path::parent).expect("the test binary sits in a profile directory");
+  let binary = profile.join("examples").join(name);
+  assert!(binary.is_file(), "cargo test builds the example at {}", binary.display());
+  binary
 }
 
 /// A port nothing listens on at the moment of the call.

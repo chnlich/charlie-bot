@@ -251,10 +251,6 @@ Known-alive symbols:
   (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
   field), but the error would no longer name `allowed_users`, the successor the
   operator must move each id into.
-- `scripts/v1_session_conversion.py` (the converter for v1 sessions) — kept on purpose for
-  other CharlieBot homes that still hold v1 sessions. This host's primary home holds none in the old format,
-  but the trial home `~/.charliebot-session-task-tree` still held two v1 sessions when counted in 2026-10, so
-  the migration-code kind of Step 1 does not match them. Never delete this file or its tests.
 - `run_scheduled_backup` (`src/features/backup/backup.py`), `run_scheduled_usage_ledger`
   (`src/features/usage/usage_ledger.py`), `run_scheduled_cool_storage`
   (`src/features/usage/storage_cool.py`) and `run_scheduled`

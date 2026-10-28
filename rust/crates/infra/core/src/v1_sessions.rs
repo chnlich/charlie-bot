@@ -10,6 +10,9 @@ use crate::config::CharlieBotConfig;
 
 const CONVERSION_SCRIPT: &str = "scripts/v1_session_conversion.py";
 
+/// Directions for restoring the deleted v1 session conversion script.
+pub const V1_SESSION_CONVERSION_GUIDANCE: &str = "the conversion script was deleted. From the repository root, run `git show d4021ce:scripts/v1_session_conversion.py > scripts/v1_session_conversion.py` to restore it.";
+
 /// Count session directories whose metadata has no non-null `profile` field.
 pub fn count_v1_sessions(sessions_dir: &Path) -> Result<usize, String> {
   if !sessions_dir.is_dir() {
@@ -49,7 +52,7 @@ pub fn require_no_v1_sessions(cfg: &CharlieBotConfig) -> Result<(), String> {
   let home = &cfg.charliebot_home;
   let noun = if count == 1 { "session" } else { "sessions" };
   Err(format!(
-    "{} holds {count} v1 {noun}: a v1 session's metadata.json has no profile, and the server lists only sessions with a profile. Stop every writer of the home, then convert it:\n  uv run python {CONVERSION_SCRIPT} dry-run --home {}\n  uv run python {CONVERSION_SCRIPT} apply --home {}",
+    "{} holds {count} v1 {noun}: a v1 session's metadata.json has no profile, and the server lists only sessions with a profile. Stop every writer of the home; {V1_SESSION_CONVERSION_GUIDANCE}\nAfter restoring the script, run:\n  uv run python {CONVERSION_SCRIPT} dry-run --home {}\n  uv run python {CONVERSION_SCRIPT} apply --home {}",
     home.display(),
     home.display(),
     home.display()
@@ -71,5 +74,23 @@ mod tests {
     fs::create_dir_all(sessions.join(".task-pending.tmp")).unwrap();
     fs::write(sessions.join(".task-pending.tmp/metadata.json"), "{}").unwrap();
     assert_eq!(count_v1_sessions(&sessions).unwrap(), 1);
+  }
+
+  #[test]
+  fn startup_refusal_explains_how_to_restore_the_conversion_script() {
+    let home = tempfile::tempdir().unwrap();
+    let legacy = home.path().join("sessions/old");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(legacy.join("metadata.json"), r#"{"id":"old","name":"old"}"#).unwrap();
+    let cfg = crate::config::load_config(home.path(), &crate::config::ConfigSchema::default()).unwrap();
+
+    let error = require_no_v1_sessions(&cfg).unwrap_err();
+
+    assert!(error.contains("holds 1 v1 session"), "{error}");
+    assert!(error.contains("the conversion script was deleted"), "{error}");
+    assert!(error.contains("scripts/v1_session_conversion.py"), "{error}");
+    assert!(error.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{error}");
+    assert!(error.contains("uv run python scripts/v1_session_conversion.py dry-run"), "{error}");
+    assert!(error.contains("uv run python scripts/v1_session_conversion.py apply"), "{error}");
   }
 }

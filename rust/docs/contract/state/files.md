@@ -188,9 +188,8 @@ Module: `src/runtime/home_writer_fence.py`. One server per home.
   fails.
 - Release (at shutdown, in a `finally`) unlinks `writer_identity.json` first, then unlocks and closes.
 - `probe` (used by other tools) tries `LOCK_SH|LOCK_NB` and reads the identity file.
-- Other holders: `scripts/v1_session_conversion.py` acquires the fence for `apply` (purpose
-  `"v1 session conversion apply"`) and `rollback` (`"v1 session conversion rollback"`), and probes it for
-  `dry-run`.
+- The one-off converter `scripts/v1_session_conversion.py` was deleted with its tests. Restore it from git history
+  at `d4021ce` before converting a v1 home.
 
 A Rust server must take the same `flock` on the same path before any write, so it and a Python server can never
 both write one home.
@@ -407,10 +406,11 @@ The server does not create a speech-model directory. Python removed the local sp
   `src/runtime/run_identity.py`, `src/runtime/v1_sessions.py`, `src/features/artifacts/cli.py` (reads `profile`
   directly), `src/features/usage/storage_cool.py`, and every listing and sidebar path.
 - Validation (`validate_session_metadata`): a missing `profile`, or `schema_version != 2`, raises a message that
-  ends with `run scripts/v1_session_conversion.py`. At startup, `v1_sessions.require_no_v1_sessions` refuses to
-  serve when any session directory's `metadata.json` has a null or missing `profile`. That error names the home,
-  the count and the two commands
-  `uv run python scripts/v1_session_conversion.py dry-run --home <home>` and `... apply --home <home>`.
+  says the conversion script was deleted and gives the restore command from `d4021ce`.
+- At startup, `v1_sessions.require_no_v1_sessions` refuses to serve when any session directory's `metadata.json`
+  has a null or missing `profile`. The error states that the conversion script was deleted; it names the home and
+  count and states that `scripts/v1_session_conversion.py` was deleted. It gives the restore command, then `dry-run` and
+  `apply` commands.
 
 On-disk key order with every baseline package registered (verified by dumping a model). Package-owned fields come
 from `metadata_slot_registration.register_metadata_fields` and are placed after the field they name.

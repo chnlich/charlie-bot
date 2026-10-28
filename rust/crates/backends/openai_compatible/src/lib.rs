@@ -34,5 +34,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     lifecycle: Some(Arc::new(ClaudeCliLifecycle) as Arc<dyn BackendLifecycle>),
     translate_fallback: false,
   })?;
+  registry.option_schema("cc-openai-compatible", options::SCHEMA)?;
   registry.attribute_backend_type("cc-openai-compatible", "Claude Code")
 }

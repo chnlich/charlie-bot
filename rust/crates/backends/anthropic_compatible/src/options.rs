@@ -1,6 +1,7 @@
 //! The endpoint, declared context window, optional credential, optional effort, request headers and fixed request
 //! body fields of a `cc-anthropic-compatible` entry.
 
+use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
@@ -11,6 +12,18 @@ const EFFORT: &str = "effort";
 const HEADERS: &str = "headers";
 const EXTRA_BODY: &str = "extra_body";
 const FIELDS: [&str; 6] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, HEADERS, EXTRA_BODY];
+
+/// The `cc-anthropic-compatible` option's type-specific fields in `CcAnthropicCompatibleBackend`'s declaration
+/// order, each with the value the Python model holds when an entry omits it. `charliebot config get backends`
+/// renders them.
+pub const SCHEMA: &[OptionField] = &[
+  OptionField::field(API_BASE, OptionFieldDefault::Required),
+  OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Required),
+  OptionField::field(CREDENTIAL, OptionFieldDefault::Null),
+  OptionField::field(EFFORT, OptionFieldDefault::Null),
+  OptionField::field(HEADERS, OptionFieldDefault::EmptyMap),
+  OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
+];
 
 /// The type-specific fields of one Anthropic-compatible backend option.
 #[derive(Debug, Clone, PartialEq)]

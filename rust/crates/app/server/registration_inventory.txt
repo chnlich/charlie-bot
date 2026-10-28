@@ -145,6 +145,14 @@ backend type	src.backends.codex	codex
 backend type	src.backends.gemini	gemini
 backend type	src.backends.anthropic_compatible	cc-anthropic-compatible
 backend type	src.backends.opencode	opencode
+option schema	src.backends.openai_compatible	cc-openai-compatible
+option schema	src.backends.antigravity	antigravity
+option schema	src.backends.charlie_code	charlie-code
+option schema	src.backends.claude_code	cc-claude
+option schema	src.backends.codex	codex
+option schema	src.backends.gemini	gemini
+option schema	src.backends.anthropic_compatible	cc-anthropic-compatible
+option schema	src.backends.opencode	opencode
 child env function	src.backends.claude_code	claude_child_env
 reading limits	src.backends.claude_code	claude
 reading limits	src.backends.opencode	snapshot

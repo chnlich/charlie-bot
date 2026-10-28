@@ -52,6 +52,7 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     lifecycle: None,
     translate_fallback: false,
   })?;
+  registry.option_schema("codex", options::SCHEMA)?;
   let codex_home = host.codex_home();
   registry
     .usage_resolver("codex", Arc::new(move |usage_host| resolver::usage_resolver(codex_home.clone(), usage_host)))?;

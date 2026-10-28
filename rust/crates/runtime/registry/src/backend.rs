@@ -48,6 +48,7 @@ impl Registry {
       usage_sources: crate::registry::Ledger::new("usage source"),
       usage_attributions: crate::registry::Ledger::new("usage attribution"),
       backend_types: crate::registry::Ledger::new("backend type"),
+      option_schemas: crate::registry::Ledger::new("option schema"),
       child_envs: crate::registry::Ledger::new("child env function"),
       reading_limits: crate::registry::Ledger::new("reading limits"),
       backend_reading_limits: Vec::new(),

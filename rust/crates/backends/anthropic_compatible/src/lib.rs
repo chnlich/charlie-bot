@@ -31,6 +31,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     lifecycle: Some(Arc::new(ClaudeCliLifecycle) as Arc<dyn BackendLifecycle>),
     translate_fallback: false,
   })?;
+  registry.option_schema(TYPE_NAME, options::SCHEMA)?;
   registry.backend_reading_limits(TYPE_NAME, READING_CLAUDE, usage::claude_reading_limits)?;
   registry.attribute_backend_type(TYPE_NAME, charliebot_claude_code::USAGE_SOURCE)
 }

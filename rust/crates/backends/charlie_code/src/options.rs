@@ -1,6 +1,7 @@
 //! The charlie-code option fields (`src/backends/charlie_code/options.py`). Each field carries the bound pydantic checks
 //! for it, and the type refuses any key it does not name.
 
+use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
 const API_BASE: &str = "api_base";
@@ -12,6 +13,20 @@ const STREAM: &str = "stream";
 const TIMEOUT_SECONDS: &str = "timeout_seconds";
 const TOP_P: &str = "top_p";
 const TEMPERATURE: &str = "temperature";
+
+/// The `charlie-code` option's type-specific fields in `CharlieCodeBackend`'s declaration order, each with the value
+/// the Python model holds when an entry omits it. `charliebot config get backends` renders them.
+pub const SCHEMA: &[OptionField] = &[
+  OptionField::field(API_BASE, OptionFieldDefault::Null),
+  OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Null),
+  OptionField::field(CREDENTIAL, OptionFieldDefault::Null),
+  OptionField::field(PROXY_URL, OptionFieldDefault::Null),
+  OptionField::field(IMAGE_INPUT, OptionFieldDefault::Bool(true)),
+  OptionField::field(STREAM, OptionFieldDefault::Bool(true)),
+  OptionField::field(TIMEOUT_SECONDS, OptionFieldDefault::Null),
+  OptionField::float_field(TOP_P, OptionFieldDefault::Null),
+  OptionField::float_field(TEMPERATURE, OptionFieldDefault::Null),
+];
 
 const FIELDS: [&str; 9] =
   [API_BASE, CONTEXT_WINDOW, CREDENTIAL, PROXY_URL, IMAGE_INPUT, STREAM, TIMEOUT_SECONDS, TOP_P, TEMPERATURE];

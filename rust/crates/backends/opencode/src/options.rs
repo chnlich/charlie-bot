@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use anyhow::bail;
-use charliebot_core::config::BackendOption;
+use charliebot_core::config::{BackendOption, OptionField, OptionFieldDefault};
 use charliebot_core::pyfmt;
 use serde_json::{Map, Value as JsonValue, json};
 use serde_yaml::{Mapping, Value};
@@ -12,6 +12,14 @@ use serde_yaml::{Mapping, Value};
 const PROXY_URL: &str = "proxy_url";
 const CONTEXT_LIMIT: &str = "context_limit";
 const EXTRA_BODY: &str = "extra_body";
+
+/// The `opencode` option's type-specific fields in `OpencodeBackend`'s declaration order, each with the value the
+/// Python model holds when an entry omits it. `charliebot config get backends` renders them.
+pub const SCHEMA: &[OptionField] = &[
+  OptionField::field(PROXY_URL, OptionFieldDefault::Null),
+  OptionField::field(CONTEXT_LIMIT, OptionFieldDefault::Null),
+  OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
+];
 
 /// The type-specific fields of one opencode backend option.
 #[derive(Debug, Clone, Default, PartialEq)]

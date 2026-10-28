@@ -14,7 +14,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_core::RepoRoot;
-use charliebot_core::config::{BackendOption, CharlieBotConfig, ConfigError, ConfigSchema, ConfigSection};
+use charliebot_core::config::{BackendOption, CharlieBotConfig, ConfigError, ConfigSchema, ConfigSection, OptionField};
 use charliebot_core::credentials::Credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator};
@@ -147,6 +147,9 @@ pub struct Registry {
   /// Backend type name to the usage source its usage is attributed to.
   pub(crate) usage_attributions: Ledger<&'static str>,
   pub(crate) backend_types: Ledger<BackendTypeRegistration>,
+  /// Each backend type's `backends.options[]` field schema, keyed by the type name: what
+  /// `charliebot config get backends` renders beside the shared option fields.
+  pub(crate) option_schemas: Ledger<&'static [OptionField]>,
   pub(crate) child_envs: Ledger<ChildEnvFn>,
   pub(crate) reading_limits: Ledger<ReadingLimitsFn>,
   pub(crate) backend_reading_limits: Vec<BackendReadingLimitsRegistration>,
@@ -190,6 +193,7 @@ impl Registry {
       usage_sources,
       usage_attributions,
       backend_types,
+      option_schemas,
       child_envs,
       reading_limits,
       backend_reading_limits,
@@ -235,6 +239,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, usage_sources);
     append_ledger_inventory(&mut inventory, usage_attributions);
     append_ledger_inventory(&mut inventory, backend_types);
+    append_ledger_inventory(&mut inventory, option_schemas);
     append_ledger_inventory(&mut inventory, child_envs);
     append_ledger_inventory(&mut inventory, reading_limits);
     for registration in backend_reading_limits {
@@ -376,6 +381,26 @@ impl Registry {
       self.config_legacy_keys.insert(package, old, new)?;
     }
     Ok(())
+  }
+
+  /// Register a backend type's `backends.options[]` field schema: its type-specific fields in the Python
+  /// option model's declaration order, with the value each holds when the entry omits it.
+  ///
+  /// `charliebot config get backends` renders an option from this schema, so the output carries the same
+  /// fields and defaults as the type's pydantic model. A backend package registers its own schema next to
+  /// its [`Registry::backend_type`] registration.
+  pub fn option_schema(
+    &mut self,
+    backend_type: &'static str,
+    schema: &'static [OptionField],
+  ) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.option_schemas.insert(package, backend_type, schema)
+  }
+
+  /// The option schema `backend_type` registered, or `None` when the type registered none.
+  pub fn registered_option_schema(&self, backend_type: &str) -> Option<&'static [OptionField]> {
+    self.option_schemas.get(backend_type).copied()
   }
 
   /// Register a backend type's traits, option model, factory and lifecycle (`register_backend_type`).

@@ -42,6 +42,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     lifecycle: None,
     translate_fallback: false,
   })?;
+  registry.option_schema("antigravity", options::SCHEMA)?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["antigravity-", "agy-"],

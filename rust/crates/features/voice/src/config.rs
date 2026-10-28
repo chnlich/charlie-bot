@@ -5,12 +5,12 @@ use charliebot_core::credentials::Credentials;
 use charliebot_core::pyfmt;
 use charliebot_registry::FeatureContext;
 use minijinja::Value;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::recording;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VoiceSettings {
   #[serde(default = "default_backend")]
@@ -58,7 +58,13 @@ impl VoiceSettings {
 }
 
 pub(crate) fn section() -> ConfigSection {
-  ConfigSection { key: "voice", legacy_keys: &[], parse: parse_settings }
+  ConfigSection { key: "voice", legacy_keys: &[], parse: parse_settings, dump: dump_settings }
+}
+
+/// Render the section as its model dumps it (`charliebot config get voice`).
+fn dump_settings(value: &SectionValue) -> Result<serde_json::Value, String> {
+  let settings = value.downcast_ref::<VoiceSettings>().ok_or("the voice section holds an unexpected value")?;
+  serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
 fn parse_settings(raw: &serde_yaml::Value) -> Result<SectionValue, String> {

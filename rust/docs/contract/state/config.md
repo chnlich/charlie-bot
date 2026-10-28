@@ -370,3 +370,9 @@ the server never seeds cron files), and `cron_files.write_cron_key`.
 as compact JSON, anything else with `print`. A key that is neither a field nor a section prints `"error: unknown
 config key: <key> (not a CharlieBotConfig field or registered section)"` and exits 2. A null value prints
 `"error: config key <key> is unset"` and exits 1. See `cli.md`.
+
+The Rust port (`rust/crates/app/cli/src/commands/config.rs`) checks the key against the schema before loading, so an
+unknown key exits 2 even when `config.yaml` would fail to load. Core sections render from the loaded structs; a
+registered section renders through the `dump` hook its package registers on the section, and each backend option
+through the field schema its type's package registers (`Registry::option_schema`), so an option's JSON carries the
+type's own fields with the defaults its pydantic model would hold.

@@ -75,7 +75,8 @@ fn register_backend_type(
     factory: Arc::new(OpenCodeFactory::new(host, pool)),
     lifecycle: Some(Arc::new(OpenCodeLifecycle) as Arc<dyn BackendLifecycle>),
     translate_fallback: false,
-  })
+  })?;
+  registry.option_schema("opencode", options::SCHEMA)
 }
 
 /// Registers the opencode usage source and attributes the `opencode` backend type to it (`__init__.py:24-30`). The

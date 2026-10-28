@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "config",
+    "get",
+    "telegram"
+  ],
+  "files": {
+    "home/config.yaml": "{file:rust/crates/app/cli/tests/fixtures/config_get/config.yaml}"
+  },
+  "expect": {
+    "stdout": "{\"chat_id\": null}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

@@ -10,7 +10,7 @@ use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_core::paths;
 use charliebot_core::pyfmt;
 use nix::errno::Errno;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
 const LEGACY_KEYS: &[(&str, &str)] =
@@ -18,7 +18,7 @@ const LEGACY_KEYS: &[(&str, &str)] =
 
 /// The `code_server:` section: `bin` names the executable (`PATH` is searched when unset), and `config` the code-server
 /// config file, relative to the repository.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CodeServerConfig {
   #[serde(default)]
@@ -32,7 +32,13 @@ fn default_config() -> String {
 }
 
 pub(crate) fn section() -> ConfigSection {
-  ConfigSection { key: "code_server", legacy_keys: LEGACY_KEYS, parse: parse_section }
+  ConfigSection { key: "code_server", legacy_keys: LEGACY_KEYS, parse: parse_section, dump: dump_section }
+}
+
+/// Render the section as its model dumps it (`charliebot config get code_server`).
+fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
+  let settings = value.downcast_ref::<CodeServerConfig>().ok_or("the code_server section holds an unexpected value")?;
+  serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
 fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {

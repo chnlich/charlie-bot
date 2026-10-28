@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::io::{BufRead, BufReader};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -9,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, paths};
-use charliebot_store::chat_events::is_chat_events_archive;
+use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
 use charliebot_store::metadata::TaskSpec;
 use charliebot_store::run_records::{RUN_METADATA_NAME, RunRecord};
@@ -394,33 +393,28 @@ fn task_keep_worktree(sessions_root: &Path, session_id: &str) -> Result<Option<b
 }
 
 fn latest_closed_at(session_dir: &Path) -> Result<Option<DateTime<Utc>>> {
-  let archives_dir = layout::archives_dir(session_dir);
-  let mut event_paths = if archives_dir.is_dir() {
-    git::sorted_entries(&archives_dir)?
-      .into_iter()
-      .map(|entry| entry.path())
-      .filter(|path| is_chat_events_archive(&path.file_name().unwrap_or_default().to_string_lossy()))
-      .collect::<Vec<_>>()
-  } else {
-    Vec::new()
-  };
-  let live_path = layout::chat_events_path(session_dir);
-  if live_path.is_file() {
-    event_paths.push(live_path);
-  }
+  let event_paths = chat_events::session_log_paths(session_dir)
+    .with_context(|| format!("reading directory {}", layout::archives_dir(session_dir).display()))?;
   let mut latest = None;
   for event_path in event_paths {
-    let file = fs::File::open(&event_path).with_context(|| format!("reading chat events {}", event_path.display()))?;
-    for (line_index, line) in BufReader::new(file).lines().enumerate() {
-      let line = line.with_context(|| format!("reading {}:{}", event_path.display(), line_index + 1))?;
-      if line.trim().is_empty() {
+    let lines = chat_events::read_lines(&event_path, LineRule::PerLine)
+      .with_context(|| format!("reading chat events {}", event_path.display()))?;
+    for line in lines {
+      let line = match line {
+        Ok(line) => line,
+        Err(LogReadError::Line { number, error }) => {
+          return Err(error).with_context(|| format!("reading {}:{number}", event_path.display()));
+        }
+        Err(error) => return Err(error.into()),
+      };
+      if line.text.trim().is_empty() {
         continue;
       }
-      let event: Value = serde_json::from_str(&line)
-        .with_context(|| format!("invalid chat event at {}:{}", event_path.display(), line_index + 1))?;
+      let event: Value =
+        line.decode().with_context(|| format!("invalid chat event at {}:{}", event_path.display(), line.number))?;
       event
         .as_object()
-        .with_context(|| format!("chat event at {}:{} is not an object", event_path.display(), line_index + 1))?;
+        .with_context(|| format!("chat event at {}:{} is not an object", event_path.display(), line.number))?;
       let kind = event.get("type").and_then(Value::as_str).unwrap_or_default();
       if [event_types::CLONE_START, event_types::TASK_CLOSED, event_types::TASK_REOPENED].contains(&kind) {
         latest = Some(event);

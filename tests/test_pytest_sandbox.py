@@ -236,7 +236,7 @@ def test_unshare_failure_names_call_and_switch(tmp_path: pathlib.Path) -> None:
 def test_disabled_plugin_autoload_refuses_before_collection(tmp_path: pathlib.Path) -> None:
   """Disabling pytest plugin autoload triggers the conftest guard before collection."""
   env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
-  test_file = pathlib.Path(__file__).with_name("test_switch_server.py")
+  test_file = pathlib.Path(__file__).with_name("test_pytest_sandbox.py")
   result = subprocess.run(
       [sys.executable, "-m", "pytest", "-q", "--collect-only",
        str(test_file)],

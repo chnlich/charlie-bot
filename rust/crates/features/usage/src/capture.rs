@@ -203,7 +203,7 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
   };
   let mut logs = Vec::new();
   for session in sessions {
-    let containers: [(CharlieLogKind, PathBuf, fn(&Path) -> PathBuf); 2] = [
+    let containers: [(CharlieLogKind, PathBuf, LogPathFn); 2] = [
       (CharlieLogKind::Thread, layout::threads_dir(&session), thread_log),
       (CharlieLogKind::Master, layout::master_runs_dir(&session), master_log),
     ];
@@ -223,6 +223,9 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
   }
   Ok(logs)
 }
+
+/// Maps a container entry's directory to the log file that holds its usage.
+type LogPathFn = fn(&Path) -> PathBuf;
 
 /// The event log of one thread directory.
 fn thread_log(thread: &Path) -> PathBuf {

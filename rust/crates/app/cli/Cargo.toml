@@ -24,6 +24,7 @@ charliebot-registry.workspace = true
 charliebot-session-api.workspace = true
 charliebot-slack.workspace = true
 charliebot-store.workspace = true
+charliebot-switch-helper.workspace = true
 charliebot-tasks.workspace = true
 charliebot-triggers.workspace = true
 charliebot-voice.workspace = true

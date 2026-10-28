@@ -1,0 +1,19 @@
+[package]
+name = "charliebot-switch-helper"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The reads `scripts/switch-server.sh` makes on the profile home, a run record and an API answer. The CLI dispatches
+# `charliebot switch-helper` here, and the switch tests run the same code through their stand-in `charliebot`.
+
+[dependencies]
+anyhow.workspace = true
+charliebot-cli-common.workspace = true
+charliebot-core.workspace = true
+charliebot-improve.workspace = true
+charliebot-store.workspace = true
+chrono.workspace = true
+regex.workspace = true
+serde_json.workspace = true

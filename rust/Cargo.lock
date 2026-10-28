@@ -571,6 +571,7 @@ dependencies = [
  "charliebot-store",
  "charliebot-tasks",
  "charliebot-triggers",
+ "charliebot-switch-helper",
  "charliebot-voice",
  "charliebot-web-reply",
  "clap",
@@ -1082,6 +1083,7 @@ dependencies = [
  "charliebot-shell-harness",
  "charliebot-store",
  "charliebot-tasks",
+ "charliebot-switch-helper",
  "chrono",
  "http 1.5.0",
  "libc",
@@ -1229,6 +1231,20 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "tempfile",
+]
+
+[[package]]
+name = "charliebot-switch-helper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-cli-common",
+ "charliebot-core",
+ "charliebot-improve",
+ "charliebot-store",
+ "chrono",
+ "regex",
+ "serde_json",
 ]
 
 [[package]]

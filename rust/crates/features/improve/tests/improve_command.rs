@@ -68,9 +68,9 @@ fn a_stopped_loop_releases_its_lock_for_a_new_loop_id() {
   assert_ne!(second.loop_id, first.loop_id);
   assert_eq!(
     command::load_loop_state(&cfg, SESSION, first.loop_id).expect("the first state reads").unwrap().status,
-    "stopped"
+    command::LoopStatus::Stopped
   );
-  assert_eq!(second.status, "running");
+  assert_eq!(second.status, command::LoopStatus::Running);
 }
 
 #[test]

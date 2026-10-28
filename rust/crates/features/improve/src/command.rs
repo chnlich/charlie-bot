@@ -20,14 +20,26 @@ pub const PLAN_FILE: &str = "plan.md";
 /// The session's active-loop lock, holding the running loop's id and a newline.
 pub const ACTIVE_LOCK_FILE: &str = "active.lock";
 
+/// The loop's lifecycle status, written to `state.json` under the name `status`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopStatus {
+  #[default]
+  Running,
+  Stopped,
+  Completed,
+  Failed,
+  Blocked,
+  Interrupted,
+}
+
 /// The state of one loop (`improve_command.ImproveState`). The field order is the order `model_dump_json` writes.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ImproveState {
   pub loop_id: i64,
   pub goal: String,
-  /// running | stopped | completed | failed | blocked | interrupted.
-  #[serde(default = "running_status")]
-  pub status: String,
+  #[serde(default)]
+  pub status: LoopStatus,
   pub work_branch: String,
   #[serde(default)]
   pub base_branch: Option<String>,
@@ -53,10 +65,6 @@ pub struct ImproveState {
   pub blocked_iteration: Option<i64>,
   #[serde(default)]
   pub blocked_reason: Option<String>,
-}
-
-fn running_status() -> String {
-  "running".to_string()
 }
 
 /// A second loop while one is running (`ImproveLoopAlreadyRunningError`).
@@ -230,7 +238,7 @@ pub fn find_running_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Re
   ids.sort_unstable();
   for loop_id in ids {
     if let Some(state) = load_loop_state(cfg, session_id, loop_id)?
-      && state.status == "running"
+      && state.status == LoopStatus::Running
     {
       return Ok(Some(state));
     }
@@ -243,7 +251,7 @@ pub fn stop_improve_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Re
   let Some(mut state) = find_running_loop(cfg, session_id)? else {
     return Ok(false);
   };
-  state.status = "stopped".to_string();
+  state.status = LoopStatus::Stopped;
   save_loop_state(cfg, session_id, &state)?;
   Ok(true)
 }
@@ -309,7 +317,7 @@ pub fn reserve_loop_state(
     let state = ImproveState {
       loop_id,
       goal: reservation.goal.to_string(),
-      status: "running".to_string(),
+      status: LoopStatus::Running,
       work_branch: reservation.work_branch.to_string(),
       base_branch: reservation.base_branch.map(str::to_string),
       repo_path: resolve_path(Path::new(reservation.repo_path))?.to_string_lossy().into_owned(),

@@ -251,5 +251,5 @@ async fn stop_marks_the_running_loop_stopped() {
   assert_eq!(status, StatusCode::OK);
   assert_eq!(body, json!({"status": "stopped", "session_id": SESSION}));
   let stored = command::require_loop_state(&cfg, SESSION, state.loop_id).expect("the loop state reads");
-  assert_eq!(stored.status, "stopped");
+  assert_eq!(stored.status, command::LoopStatus::Stopped);
 }

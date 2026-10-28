@@ -1,0 +1,3662 @@
+{
+  "source": "rust/crates/infra/compat/tests/fixtures/fastapi_body_app.py",
+  "base_commit": "d4021ce3993d7e36b2709f00caf578e1f8541407",
+  "cases": [
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "empty body",
+        "content_type": "application/json",
+        "body_hex": ""
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body"
+              ],
+              "msg": "Field required",
+              "input": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "missing content type keeps raw bytes",
+        "content_type": null,
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "{\"name\":\"sample\",\"note\":null,\"count\":7,\"enabled\":true,\"mode\":\"fast\",\"labels\":[\"one\",\"two\"]}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "text content type keeps raw bytes",
+        "content_type": "text/plain",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "{\"name\":\"sample\",\"note\":null,\"count\":7,\"enabled\":true,\"mode\":\"fast\",\"labels\":[\"one\",\"two\"]}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "application JSON with charset",
+        "content_type": "application/json; charset=utf-8",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 7,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "vendor JSON media type",
+        "content_type": "application/vnd.api+json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 7,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "JSON subtype with a space before +json",
+        "content_type": "application/x y+json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 7,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "expecting value",
+        "content_type": "application/json",
+        "body_hex": "3f"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                0
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Expecting value"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "invalid control character",
+        "content_type": "application/json",
+        "body_hex": "226c696e650a627265616b22"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                5
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Invalid control character at"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "unterminated string",
+        "content_type": "application/json",
+        "body_hex": "22756e66696e6973686564"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                0
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Unterminated string starting at"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "invalid escape",
+        "content_type": "application/json",
+        "body_hex": "225c7822"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                1
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Invalid \\escape"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "invalid unicode escape",
+        "content_type": "application/json",
+        "body_hex": "225c75313222"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                2
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Invalid \\uXXXX escape"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "expecting property name",
+        "content_type": "application/json",
+        "body_hex": "7b783a20317d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                1
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Expecting property name enclosed in double quotes"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "expecting colon",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d652220317d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                8
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Expecting ':' delimiter"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "expecting comma",
+        "content_type": "application/json",
+        "body_hex": "5b3120325d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                3
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Expecting ',' delimiter"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "trailing object comma",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a312c7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                9
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Illegal trailing comma before end of object"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "trailing array comma",
+        "content_type": "application/json",
+        "body_hex": "5b312c5d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                2
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Illegal trailing comma before end of array"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "extra data",
+        "content_type": "application/json",
+        "body_hex": "7b7d207b7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                3
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Extra data"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "UTF-16 body with BOM",
+        "content_type": "application/json; charset=utf-16-le",
+        "body_hex": "fffe7b0022006e0061006d00650022003a002200730061006d0070006c00650022002c0022006e006f007400650022003a006e0075006c006c002c00220063006f0075006e00740022003a0037002c00220065006e00610062006c006500640022003a0074007200750065002c0022006d006f006400650022003a002200660061007300740022002c0022006c006100620065006c00730022003a005b0022006f006e00650022002c002200740077006f0022005d007d00"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 7,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "UTF-32 body without BOM",
+        "content_type": "application/json",
+        "body_hex": "7b000000220000006e000000610000006d00000065000000220000003a0000002200000073000000610000006d000000700000006c00000065000000220000002c000000220000006e0000006f0000007400000065000000220000003a0000006e000000750000006c0000006c0000002c00000022000000630000006f000000750000006e00000074000000220000003a000000370000002c00000022000000650000006e00000061000000620000006c0000006500000064000000220000003a000000740000007200000075000000650000002c000000220000006d0000006f0000006400000065000000220000003a0000002200000066000000610000007300000074000000220000002c000000220000006c0000006100000062000000650000006c00000073000000220000003a0000005b000000220000006f0000006e00000065000000220000002c0000002200000074000000770000006f000000220000005d0000007d000000"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 7,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "invalid UTF-8 body",
+        "content_type": "application/json",
+        "body_hex": "7bff7d"
+      },
+      "expected": {
+        "status": 400,
+        "body": {
+          "detail": "There was an error parsing the body"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "JSON array",
+        "content_type": "application/json",
+        "body_hex": "5b5d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "JSON string",
+        "content_type": "application/json",
+        "body_hex": "22626f647922"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "body"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "JSON null",
+        "content_type": "application/json",
+        "body_hex": "6e756c6c"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body"
+              ],
+              "msg": "Field required",
+              "input": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "str field type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a6e756c6c2c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "name"
+              ],
+              "msg": "Input should be a valid string",
+              "input": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "nullable str field type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a372c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "note"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 7
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "nullable int field type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a5b5d2c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_type",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Input should be a valid integer",
+              "input": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "bool field type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a22756e6b6e6f776e222c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "bool_parsing",
+              "loc": [
+                "body",
+                "enabled"
+              ],
+              "msg": "Input should be a valid boolean, unable to interpret input",
+              "input": "unknown"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "Literal field type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a226f74686572222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "literal_error",
+              "loc": [
+                "body",
+                "mode"
+              ],
+              "msg": "Input should be 'fast' or 'safe'",
+              "input": "other",
+              "ctx": {
+                "expected": "'fast' or 'safe'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "list field type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a7b7d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "labels"
+              ],
+              "msg": "Input should be a valid list",
+              "input": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "list item type",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c325d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "labels",
+                1
+              ],
+              "msg": "Input should be a valid string",
+              "input": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "fractional int field",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a312e352c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_from_float",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Input should be a valid integer, got a number with a fractional part",
+              "input": 1.5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "float above the i64 range",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a392e33652b31382c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_parsing_size",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Unable to parse input string as an integer, exceeded maximum size",
+              "input": 9.3e+18
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "float at the negative i64 bound",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a2d392e323233333732303336383534373736652b31382c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_parsing_size",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Unable to parse input string as an integer, exceeded maximum size",
+              "input": -9.223372036854776e+18
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "float just below the i64 bound",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a392e323233333732303336383534373735652b31382c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 9223372036854774784,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "integer above the i64 range",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a393232333337323033363835343737353830382c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 9223372036854775808,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "boolean coerces to integer",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a747275652c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 1,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "missing required field",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "labels"
+              ],
+              "msg": "Field required",
+              "input": {
+                "name": "sample",
+                "note": null,
+                "count": 7,
+                "enabled": true,
+                "mode": "fast"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/present",
+        "name": "extra fields are ignored",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a372c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d2c2269676e6f726564223a226578747261227d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "name": "sample",
+          "note": null,
+          "count": 7,
+          "enabled": true,
+          "mode": "fast",
+          "labels": [
+            "one",
+            "two"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/missing",
+        "name": "malformed JSON for a missing id",
+        "content_type": "application/json",
+        "body_hex": "7b"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "json_invalid",
+              "loc": [
+                "body",
+                1
+              ],
+              "msg": "JSON decode error",
+              "input": {},
+              "ctx": {
+                "error": "Expecting property name enclosed in double quotes"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/items/missing",
+        "name": "dependency runs before model validation",
+        "content_type": "application/json",
+        "body_hex": "7b226e616d65223a2273616d706c65222c226e6f7465223a6e756c6c2c22636f756e74223a5b5d2c22656e61626c6564223a747275652c226d6f6465223a2266617374222c226c6162656c73223a5b226f6e65222c2274776f225d7d"
+      },
+      "expected": {
+        "status": 404,
+        "body": {
+          "detail": "missing item"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "the valid body",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "offset at its lower bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a302c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 0,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "offset below its lower bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a2d312c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "greater_than_equal",
+              "loc": [
+                "body",
+                "offset"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "input": -1,
+              "ctx": {
+                "ge": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "offset null",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a6e756c6c2c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": null,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "count at its lower bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a312c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 1,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "count below its lower bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "greater_than_equal",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "input": 0,
+              "ctx": {
+                "ge": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "count at its upper bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a3130302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 100,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "count above its upper bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a3130312c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "less_than_equal",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Input should be less than or equal to 100",
+              "input": 101,
+              "ctx": {
+                "le": 100
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio at its upper bound as an integer",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a312c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 1.0,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio above its upper bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a312e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "less_than_equal",
+              "loc": [
+                "body",
+                "ratio"
+              ],
+              "msg": "Input should be less than or equal to 1",
+              "input": 1.5,
+              "ctx": {
+                "le": 1.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio at its lower bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e302c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "greater_than",
+              "loc": [
+                "body",
+                "ratio"
+              ],
+              "msg": "Input should be greater than 0",
+              "input": 0.0,
+              "ctx": {
+                "gt": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio below its lower bound",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a2d302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "greater_than",
+              "loc": [
+                "body",
+                "ratio"
+              ],
+              "msg": "Input should be greater than 0",
+              "input": -0.5,
+              "ctx": {
+                "gt": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio null",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a6e756c6c2c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": null,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio as a numeric string",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a22302e35222c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio as a boolean",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a747275652c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 1.0,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "ratio as a word",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a2268696768222c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "float_parsing",
+              "loc": [
+                "body",
+                "ratio"
+              ],
+              "msg": "Input should be a valid number, unable to parse string as a number",
+              "input": "high"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "label at its minimum length",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "label below its minimum length",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a22222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_too_short",
+              "loc": [
+                "body",
+                "label"
+              ],
+              "msg": "String should have at least 1 character",
+              "input": "",
+              "ctx": {
+                "min_length": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "label above its minimum length",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a226162222c2274616773223a5b2278225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "ab",
+          "tags": [
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "tags at its maximum length",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278222c2279225d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": [
+            "x",
+            "y"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "tags empty",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "offset": 3,
+          "count": 50,
+          "ratio": 0.5,
+          "label": "a",
+          "tags": []
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "tags above its maximum length",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278222c2279222c227a225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "too_long",
+              "loc": [
+                "body",
+                "tags"
+              ],
+              "msg": "List should have at most 2 items after validation, not 3",
+              "input": [
+                "x",
+                "y",
+                "z"
+              ],
+              "ctx": {
+                "field_type": "List",
+                "max_length": 2,
+                "actual_length": 3
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "tags over the maximum with a wrong item",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278222c332c227a225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "too_long",
+              "loc": [
+                "body",
+                "tags"
+              ],
+              "msg": "List should have at most 2 items after validation, not 3",
+              "input": [
+                "x",
+                3,
+                "z"
+              ],
+              "ctx": {
+                "field_type": "List",
+                "max_length": 2,
+                "actual_length": 3
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "tags with a wrong item within the maximum",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278222c335d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "tags",
+                1
+              ],
+              "msg": "Input should be a valid string",
+              "input": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "two extra keys in input order",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a302e352c226c6162656c223a2261222c2274616773223a5b2278225d2c227a657461223a312c22616c706861223a327d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "zeta"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 1
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "alpha"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "a missing field, a wrong type and an extra key",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22726174696f223a302e352c226c6162656c223a352c2274616773223a5b2278225d2c22636f6c6f7572223a22726564227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Field required",
+              "input": {
+                "offset": 3,
+                "ratio": 0.5,
+                "label": 5,
+                "tags": [
+                  "x"
+                ],
+                "colour": "red"
+              }
+            },
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "label"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 5
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "colour"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": "red"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "a bound error and an extra key",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a35302c22726174696f223a322e302c226c6162656c223a2261222c2274616773223a5b2278225d2c226578747261223a317d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "less_than_equal",
+              "loc": [
+                "body",
+                "ratio"
+              ],
+              "msg": "Input should be less than or equal to 1",
+              "input": 2.0,
+              "ctx": {
+                "le": 1.0
+              }
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "extra"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/bounds/present",
+        "name": "bound errors in declaration order",
+        "content_type": "application/json",
+        "body_hex": "7b226f6666736574223a332c22636f756e74223a302c22726174696f223a302e352c226c6162656c223a22222c2274616773223a5b2278222c2279222c227a225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "greater_than_equal",
+              "loc": [
+                "body",
+                "count"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "input": 0,
+              "ctx": {
+                "ge": 1
+              }
+            },
+            {
+              "type": "string_too_short",
+              "loc": [
+                "body",
+                "label"
+              ],
+              "msg": "String should have at least 1 character",
+              "input": "",
+              "ctx": {
+                "min_length": 1
+              }
+            },
+            {
+              "type": "too_long",
+              "loc": [
+                "body",
+                "tags"
+              ],
+              "msg": "List should have at most 2 items after validation, not 3",
+              "input": [
+                "x",
+                "y",
+                "z"
+              ],
+              "ctx": {
+                "field_type": "List",
+                "max_length": 2,
+                "actual_length": 3
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "the valid message",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a22612e747874222c2270617468223a2275706c6f6164732f612e747874222c2273697a65223a337d5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "content": "hi",
+          "uploaded_files": [
+            {
+              "filename": "a.txt",
+              "path": "uploads/a.txt",
+              "size": 3
+            }
+          ],
+          "input_mode": "text"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded_files absent keeps the default",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869227d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "content": "hi"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded_files empty",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "content": "hi",
+          "uploaded_files": [],
+          "input_mode": "text"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "input_mode null",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a22612e747874222c2270617468223a2275706c6f6164732f612e747874222c2273697a65223a337d5d2c22696e7075745f6d6f6465223a6e756c6c7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "content": "hi",
+          "uploaded_files": [
+            {
+              "filename": "a.txt",
+              "path": "uploads/a.txt",
+              "size": 3
+            }
+          ],
+          "input_mode": null
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "an extra key in an uploaded item is ignored",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a22612e747874222c2270617468223a2275706c6f6164732f612e747874222c22636f6c6f7572223a22726564227d5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "content": "hi",
+          "uploaded_files": [
+            {
+              "filename": "a.txt",
+              "path": "uploads/a.txt"
+            }
+          ],
+          "input_mode": "text"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded_files null",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a6e756c6c2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "uploaded_files"
+              ],
+              "msg": "Input should be a valid list",
+              "input": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded_files as a string",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a22612e747874222c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "uploaded_files"
+              ],
+              "msg": "Input should be a valid list",
+              "input": "a.txt"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded_files as an object",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a7b2266696c656e616d65223a22612e747874222c2270617468223a2275706c6f6164732f612e747874227d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "uploaded_files"
+              ],
+              "msg": "Input should be a valid list",
+              "input": {
+                "filename": "a.txt",
+                "path": "uploads/a.txt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded item is a string",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b22612e747874225d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "a.txt"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded item is a number",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b375d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": 7
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded item is a list",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b5b22612e747874222c2275706c6f6164732f612e747874225d5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": [
+                "a.txt",
+                "uploads/a.txt"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded item is null",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b6e756c6c5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "uploaded item missing its path",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a22612e747874227d5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0,
+                "path"
+              ],
+              "msg": "Field required",
+              "input": {
+                "filename": "a.txt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "a wrong content and a bad uploaded item",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a352c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a332c2270617468223a2275706c6f6164732f612e747874227d5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "content"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 5
+            },
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0,
+                "filename"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "two bad uploaded items with two errors each",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a312c2270617468223a327d2c7b2266696c656e616d65223a22622e747874222c2273697a65223a22626967227d5d2c22696e7075745f6d6f6465223a2274657874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0,
+                "filename"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 1
+            },
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "uploaded_files",
+                0,
+                "path"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 2
+            },
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "uploaded_files",
+                1,
+                "path"
+              ],
+              "msg": "Field required",
+              "input": {
+                "filename": "b.txt",
+                "size": "big"
+              }
+            },
+            {
+              "type": "int_parsing",
+              "loc": [
+                "body",
+                "uploaded_files",
+                1,
+                "size"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "input": "big"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "input_mode as a number",
+        "content_type": "application/json",
+        "body_hex": "7b22636f6e74656e74223a226869222c2275706c6f616465645f66696c6573223a5b7b2266696c656e616d65223a22612e747874222c2270617468223a2275706c6f6164732f612e747874222c2273697a65223a337d5d2c22696e7075745f6d6f6465223a357d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "input_mode"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/messages/present",
+        "name": "missing content",
+        "content_type": "application/json",
+        "body_hex": "7b2275706c6f616465645f66696c6573223a5b5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "content"
+              ],
+              "msg": "Field required",
+              "input": {
+                "uploaded_files": []
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "the valid attachments",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a22612e747874227d2c7b2266696c656e616d65223a22622e747874222c2273697a65223a337d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "attachments": [
+            {
+              "filename": "a.txt"
+            },
+            {
+              "filename": "b.txt",
+              "size": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments absent keeps the default",
+        "content_type": "application/json",
+        "body_hex": "7b7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {}
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments null",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a6e756c6c7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "attachments": null
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments at the maximum length",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a2261227d2c7b2266696c656e616d65223a2262227d2c7b2266696c656e616d65223a2263222c2273697a65223a317d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "attachments": [
+            {
+              "filename": "a"
+            },
+            {
+              "filename": "b"
+            },
+            {
+              "filename": "c",
+              "size": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments below the minimum length",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a22612e747874227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "too_short",
+              "loc": [
+                "body",
+                "attachments"
+              ],
+              "msg": "List should have at least 2 items after validation, not 1",
+              "input": [
+                {
+                  "filename": "a.txt"
+                }
+              ],
+              "ctx": {
+                "field_type": "List",
+                "min_length": 2,
+                "actual_length": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments empty",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "too_short",
+              "loc": [
+                "body",
+                "attachments"
+              ],
+              "msg": "List should have at least 2 items after validation, not 0",
+              "input": [],
+              "ctx": {
+                "field_type": "List",
+                "min_length": 2,
+                "actual_length": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments above the maximum length",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a2261227d2c7b2266696c656e616d65223a2262227d2c7b2266696c656e616d65223a2263227d2c7b2266696c656e616d65223a2264227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "too_long",
+              "loc": [
+                "body",
+                "attachments"
+              ],
+              "msg": "List should have at most 3 items after validation, not 4",
+              "input": [
+                {
+                  "filename": "a"
+                },
+                {
+                  "filename": "b"
+                },
+                {
+                  "filename": "c"
+                },
+                {
+                  "filename": "d"
+                }
+              ],
+              "ctx": {
+                "field_type": "List",
+                "max_length": 3,
+                "actual_length": 4
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "too long with bad items reports only the length",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a317d2c2278222c332c5b5d2c7b2266696c656e616d65223a2265227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "too_long",
+              "loc": [
+                "body",
+                "attachments"
+              ],
+              "msg": "List should have at most 3 items after validation, not 5",
+              "input": [
+                {
+                  "filename": 1
+                },
+                "x",
+                3,
+                [],
+                {
+                  "filename": "e"
+                }
+              ],
+              "ctx": {
+                "field_type": "List",
+                "max_length": 3,
+                "actual_length": 5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "too short with a bad item reports only the item",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a317d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "filename"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments as a string",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a22612e747874227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "attachments"
+              ],
+              "msg": "Input should be a valid list",
+              "input": "a.txt"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachments as an object",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a7b2266696c656e616d65223a22612e747874227d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "attachments"
+              ],
+              "msg": "Input should be a valid list",
+              "input": {
+                "filename": "a.txt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachment is a string",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b22612e747874222c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "attachments",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "a.txt"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachment is a number",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b372c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "attachments",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": 7
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachment is a list",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b5b22612e747874225d2c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "attachments",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": [
+                "a.txt"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachment with an extra key",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a22612e747874222c227a7a7a223a317d2c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "zzz"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "attachment with two extra keys in input order",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b227a657461223a312c2266696c656e616d65223a22612e747874222c22616c706861223a327d2c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "zeta"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 1
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "alpha"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "a field error before an extra key",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a312c227a7a7a223a327d2c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "filename"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 1
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "zzz"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "two bad attachments with two errors each",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a312c2273697a65223a2278227d2c7b2273697a65223a312e357d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "filename"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 1
+            },
+            {
+              "type": "int_parsing",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "size"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "input": "x"
+            },
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "attachments",
+                1,
+                "filename"
+              ],
+              "msg": "Field required",
+              "input": {
+                "size": 1.5
+              }
+            },
+            {
+              "type": "int_from_float",
+              "loc": [
+                "body",
+                "attachments",
+                1,
+                "size"
+              ],
+              "msg": "Input should be a valid integer, got a number with a fractional part",
+              "input": 1.5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "bad attachments in index order",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2266696c656e616d65223a317d2c2278222c7b2266696c656e616d65223a226f6b222c227a7a7a223a317d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "filename"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 1
+            },
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "attachments",
+                1
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "x"
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "attachments",
+                2,
+                "zzz"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/attachments/present",
+        "name": "a missing filename",
+        "content_type": "application/json",
+        "body_hex": "7b226174746163686d656e7473223a5b7b2273697a65223a317d2c7b2266696c656e616d65223a2262227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "attachments",
+                0,
+                "filename"
+              ],
+              "msg": "Field required",
+              "input": {
+                "size": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "the valid trigger without watch targets",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869227d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi"
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a local_pid item",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964222c22706964223a31307d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": [
+            {
+              "kind": "local_pid",
+              "pid": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a remote_pid item with its optional fields",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a2272656d6f74655f706964222c22686f7374223a226831222c22706964223a31312c22657869745f66696c65223a222f78222c226c6f67223a222f79227d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": [
+            {
+              "kind": "remote_pid",
+              "host": "h1",
+              "pid": 11,
+              "exit_file": "/x",
+              "log": "/y"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a slurm_job item with a null host",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a22736c75726d5f6a6f62222c22686f7374223a6e756c6c2c226a6f625f6964223a31327d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": [
+            {
+              "kind": "slurm_job",
+              "host": null,
+              "job_id": 12
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a slurm_job item without a host",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a22736c75726d5f6a6f62222c226a6f625f6964223a31327d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": [
+            {
+              "kind": "slurm_job",
+              "job_id": 12
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "one item of each variant",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964222c22706964223a317d2c7b226b696e64223a2272656d6f74655f706964222c22686f7374223a226831222c22706964223a327d2c7b226b696e64223a22736c75726d5f6a6f62222c226a6f625f6964223a337d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": [
+            {
+              "kind": "local_pid",
+              "pid": 1
+            },
+            {
+              "kind": "remote_pid",
+              "host": "h1",
+              "pid": 2
+            },
+            {
+              "kind": "slurm_job",
+              "job_id": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "watch_targets null",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a6e756c6c7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": null
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "watch_targets empty",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": []
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an extra key in an item is ignored",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964222c22706964223a312c227a7a7a223a327d5d7d"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 5,
+          "message": "hi",
+          "watch_targets": [
+            {
+              "kind": "local_pid",
+              "pid": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "watch_targets as a string",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a2278227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "watch_targets"
+              ],
+              "msg": "Input should be a valid list",
+              "input": "x"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "watch_targets as a number",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a357d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "watch_targets"
+              ],
+              "msg": "Input should be a valid list",
+              "input": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "watch_targets as an object",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a7b226b696e64223a226c6f63616c5f706964227d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "list_type",
+              "loc": [
+                "body",
+                "watch_targets"
+              ],
+              "msg": "Input should be a valid list",
+              "input": {
+                "kind": "local_pid"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item missing its kind",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b22706964223a31307d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_not_found",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Unable to extract tag using discriminator 'kind'",
+              "input": {
+                "pid": 10
+              },
+              "ctx": {
+                "discriminator": "'kind'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item with an unknown kind",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a2270696466696c65227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_invalid",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input tag 'pidfile' found using 'kind' does not match any of the expected tags: 'local_pid', 'remote_pid', 'slurm_job'",
+              "input": {
+                "kind": "pidfile"
+              },
+              "ctx": {
+                "discriminator": "'kind'",
+                "tag": "pidfile",
+                "expected_tags": "'local_pid', 'remote_pid', 'slurm_job'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item with kind unknown",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a22756e6b6e6f776e227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_invalid",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input tag 'unknown' found using 'kind' does not match any of the expected tags: 'local_pid', 'remote_pid', 'slurm_job'",
+              "input": {
+                "kind": "unknown"
+              },
+              "ctx": {
+                "discriminator": "'kind'",
+                "tag": "unknown",
+                "expected_tags": "'local_pid', 'remote_pid', 'slurm_job'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item with kind as a number",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a357d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_invalid",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input tag '5' found using 'kind' does not match any of the expected tags: 'local_pid', 'remote_pid', 'slurm_job'",
+              "input": {
+                "kind": 5
+              },
+              "ctx": {
+                "discriminator": "'kind'",
+                "tag": "5",
+                "expected_tags": "'local_pid', 'remote_pid', 'slurm_job'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item with kind null",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a6e756c6c7d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_invalid",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input tag 'None' found using 'kind' does not match any of the expected tags: 'local_pid', 'remote_pid', 'slurm_job'",
+              "input": {
+                "kind": null
+              },
+              "ctx": {
+                "discriminator": "'kind'",
+                "tag": "None",
+                "expected_tags": "'local_pid', 'remote_pid', 'slurm_job'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a local_pid with a string pid",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964222c22706964223a2278227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_parsing",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "local_pid",
+                "pid"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "input": "x"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a local_pid without a pid",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "local_pid",
+                "pid"
+              ],
+              "msg": "Field required",
+              "input": {
+                "kind": "local_pid"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a remote_pid with a number host",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a2272656d6f74655f706964222c22686f7374223a332c22706964223a317d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "remote_pid",
+                "host"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a remote_pid with neither host nor pid",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a2272656d6f74655f706964227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "remote_pid",
+                "host"
+              ],
+              "msg": "Field required",
+              "input": {
+                "kind": "remote_pid"
+              }
+            },
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "remote_pid",
+                "pid"
+              ],
+              "msg": "Field required",
+              "input": {
+                "kind": "remote_pid"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a slurm_job with a fractional job_id",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a22736c75726d5f6a6f62222c226a6f625f6964223a312e357d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_from_float",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "slurm_job",
+                "job_id"
+              ],
+              "msg": "Input should be a valid integer, got a number with a fractional part",
+              "input": 1.5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a local_pid with two field errors",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964222c22706964223a2278222c226c6f67223a337d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "int_parsing",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "local_pid",
+                "pid"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "input": "x"
+            },
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "watch_targets",
+                0,
+                "local_pid",
+                "log"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item that is a string",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b22616263225d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": "abc"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item that is a number",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b375d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": 7
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item that is a list",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b5b226c6f63616c5f706964222c315d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": [
+                "local_pid",
+                1
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an item that is null",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b6e756c6c5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "model_attributes_type",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "input": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a wrong message with a bad item",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a352c2277617463685f74617267657473223a5b7b22706964223a317d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_type",
+              "loc": [
+                "body",
+                "message"
+              ],
+              "msg": "Input should be a valid string",
+              "input": 5
+            },
+            {
+              "type": "union_tag_not_found",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Unable to extract tag using discriminator 'kind'",
+              "input": {
+                "pid": 1
+              },
+              "ctx": {
+                "discriminator": "'kind'"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a message over its maximum length",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "string_too_long",
+              "loc": [
+                "body",
+                "message"
+              ],
+              "msg": "String should have at most 200 characters",
+              "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "ctx": {
+                "max_length": 200
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "two bad items",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a2270696466696c65227d2c7b226b696e64223a226c6f63616c5f706964227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_invalid",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Input tag 'pidfile' found using 'kind' does not match any of the expected tags: 'local_pid', 'remote_pid', 'slurm_job'",
+              "input": {
+                "kind": "pidfile"
+              },
+              "ctx": {
+                "discriminator": "'kind'",
+                "tag": "pidfile",
+                "expected_tags": "'local_pid', 'remote_pid', 'slurm_job'"
+              }
+            },
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "watch_targets",
+                1,
+                "local_pid",
+                "pid"
+              ],
+              "msg": "Field required",
+              "input": {
+                "kind": "local_pid"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "a valid item beside a slurm_job without its job_id",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b226b696e64223a226c6f63616c5f706964222c22706964223a317d2c7b226b696e64223a22736c75726d5f6a6f62227d5d7d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "watch_targets",
+                1,
+                "slurm_job",
+                "job_id"
+              ],
+              "msg": "Field required",
+              "input": {
+                "kind": "slurm_job"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "path": "/triggers/present",
+        "name": "an extra key after a bad item",
+        "content_type": "application/json",
+        "body_hex": "7b2273657373696f6e5f6964223a227331222c2264656c61795f7365636f6e6473223a352c226d657373616765223a226869222c2277617463685f74617267657473223a5b7b22706964223a317d5d2c227a7a7a223a317d"
+      },
+      "expected": {
+        "status": 422,
+        "body": {
+          "detail": [
+            {
+              "type": "union_tag_not_found",
+              "loc": [
+                "body",
+                "watch_targets",
+                0
+              ],
+              "msg": "Unable to extract tag using discriminator 'kind'",
+              "input": {
+                "pid": 1
+              },
+              "ctx": {
+                "discriminator": "'kind'"
+              }
+            },
+            {
+              "type": "extra_forbidden",
+              "loc": [
+                "body",
+                "zzz"
+              ],
+              "msg": "Extra inputs are not permitted",
+              "input": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

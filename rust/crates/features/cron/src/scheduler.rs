@@ -860,6 +860,7 @@ mod tests {
   use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
   use charliebot_store::run_records::{RunKind, RunRecord};
   use charliebot_store::{CreateTask, TaskCaller};
+  use charliebot_tasks::git::git_worktree_dir_name;
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
   use std::collections::HashMap;
@@ -868,7 +869,7 @@ mod tests {
 
   use super::{CronExpression, CronScheduler, python_isoformat};
   use crate::config::{ScheduledTaskConfig, StepConfig};
-  use crate::test_support::{ProcessGroupGuard, feature_context, init_repo_with_origin, manager};
+  use crate::test_support::{FakeGit, GIT_PROGRAM_LOCK, ProcessGroupGuard, feature_context, manager};
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
     let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
@@ -1068,6 +1069,8 @@ mod tests {
   #[tokio::test]
   async fn auto_bind_migration_registers_the_due_fire_leaf_under_its_node() {
     // Python: tests/test_cron_auto_bind.py::test_due_fire_after_migration_creates_its_leaf_under_the_node
+    // The launch below spawns real git, so no worktree test may install its fake git meanwhile.
+    let _git_lock = GIT_PROGRAM_LOCK.lock().await;
     let (home, features) = feature_context();
     let repo_home = tempfile::tempdir().unwrap();
     let repo = crate::test_support::init_repo_with_origin(repo_home.path()).unwrap();
@@ -1543,13 +1546,13 @@ mod tests {
   }
 
   async fn assert_repo_fire_prepares_a_worktree(scheduled: bool) {
-    // The test build's git limit is 300 ms, and a git call past it fails the launch before its worktree is recorded.
-    // These tests run real git under parallel test load, so they take a 30 s limit.
-    charliebot_tasks::git::set_git_timeout_override(std::time::Duration::from_secs(30));
+    let _git_lock = GIT_PROGRAM_LOCK.lock().await;
+    let git = FakeGit::install();
     let (_home, features) = feature_context();
     install_execution(&features).await;
-    let origin = tempfile::tempdir().unwrap();
-    let repo = init_repo_with_origin(origin.path()).unwrap();
+    let checkout_home = tempfile::tempdir().unwrap();
+    let repo = checkout_home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
     let node = manager(&features, "synthetic-worktree-node").await.unwrap();
     let task = worker_task("synthetic-worktree-task", &node.id, Some(&repo));
 
@@ -1557,13 +1560,25 @@ mod tests {
 
     assert_eq!(run.kind, RunKind::Work);
     let worktree_path = run.worktree_path.clone().expect("a repo-backed work run records its worktree");
-    let worktree_dir = std::fs::canonicalize(features.config.get().unwrap().paths.worktree_dir.clone()).unwrap();
+    let configured_worktree_dir = features.config.get().unwrap().paths.worktree_dir.clone();
+    let worktree_dir = std::fs::canonicalize(&configured_worktree_dir).unwrap();
     assert!(Path::new(&worktree_path).starts_with(&worktree_dir), "{worktree_path}");
     let branch_name = run.branch_name.as_deref().expect("a repo-backed work run records its branch");
     assert!(branch_name.starts_with("charliebot/task-"), "{branch_name}");
     let launch = launch_text(&features, &leaf_id, &run);
     assert!(launch.contains(&worktree_path), "{launch}");
     assert!(launch.contains("Synthetic scheduled work"), "{launch}");
+    let requested_worktree = Path::new(&configured_worktree_dir).join(git_worktree_dir_name(branch_name));
+    let launch_calls = [
+      "-c protocol.version=0 ls-remote --symref origin".to_string(),
+      "rev-parse --verify --quiet refs/remotes/origin/main".to_string(),
+      format!("worktree add -b {branch_name} {} origin/main", requested_worktree.display()),
+    ];
+    // Delivery removes the worktree after the terminal fact, so the snapshot may stop at any call of that cleanup.
+    let cleanup_calls = [format!("worktree remove --force {worktree_path}"), "worktree prune".to_string()];
+    let calls = git.calls();
+    assert!(calls.starts_with(&launch_calls), "{calls:?}");
+    assert!(cleanup_calls.starts_with(&calls[launch_calls.len()..]), "{calls:?}");
   }
 
   #[tokio::test]

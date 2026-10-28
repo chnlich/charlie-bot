@@ -17,9 +17,10 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{self, JsonStyle};
-use charliebot_store::control_events;
+use charliebot_store::{control_events, layout};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
@@ -427,7 +428,8 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
 /// unreadable line proves nothing (`None`), never a borrowed answer; the closed fact outranks the
 /// deferral.
 fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Option<Value> {
-  let events_path = home.join("sessions").join(task_id).join("data").join("chat_events.jsonl");
+  let session_dir = config::sessions_dir_in(home).join(task_id);
+  let events_path = layout::chat_events_path(&session_dir);
   let text = std::fs::read_to_string(events_path).ok()?;
   let closed_id = control_events::stable_close_event_id(task_id, request_id);
   let mut deferred: Option<Value> = None;

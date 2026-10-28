@@ -15,6 +15,8 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_core::config;
+use charliebot_store::layout;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde_json::{Map, Value, json};
 
@@ -142,7 +144,8 @@ pub fn stop_main(args: &[OsString]) -> Result<(), CliExit> {
 ///
 /// Every missing piece returns `None`, so the caller reports `outcome_unknown`.
 fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>, iterations: i64) -> Option<Value> {
-  let loops_dir = home.join("sessions").join(session_id).join("loops");
+  let session_dir = config::sessions_dir_in(home).join(session_id);
+  let loops_dir = session_dir.join("loops");
   if !loops_dir.is_dir() {
     return None;
   }
@@ -163,7 +166,7 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
   let loop_id = candidates.into_iter().max()?;
 
   // The session's metadata must have been written: the loop's child is admitted under it.
-  let metadata_text = std::fs::read_to_string(home.join("sessions").join(session_id).join("metadata.json")).ok()?;
+  let metadata_text = std::fs::read_to_string(layout::metadata_path(&session_dir)).ok()?;
   charliebot_store::metadata::SessionMetadata::from_json(&metadata_text, None).ok()?;
 
   let loop_dir = loops_dir.join(loop_id.to_string());

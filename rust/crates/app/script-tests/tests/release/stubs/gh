@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
 # The stub gh: answers the authentication, repository, run and artifact queries from the gh_behavior/ directory beside
-# it. `run download` copies the artifact fixture into the directory its --dir names.
+# it. A query's `--jq` filter runs over the JSON answer with jq, as gh runs it. `run download` copies the artifact
+# fixture into the directory its --dir names.
 here="${BASH_SOURCE[0]%/*}"
 behavior="$here/gh_behavior"
+filter=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--jq" ]; then
+    filter="$argument"
+  fi
+  previous="$argument"
+done
+emit() {
+  if [ -n "$filter" ]; then
+    printf '%s\n' "$1" | jq --raw-output "$filter"
+  else
+    printf '%s\n' "$1"
+  fi
+}
 case "$1 $2" in
   "auth status")
     test "$(cat "$behavior/auth")" = 1
@@ -12,10 +28,10 @@ case "$1 $2" in
     cat "$behavior/slug"
     ;;
   "run list")
-    cat "$behavior/runs"
+    emit "$(cat "$behavior/runs")"
     ;;
   "run view")
-    cat "$behavior/jobs-$3" 2> /dev/null || printf '{"jobs": []}\n'
+    emit "$(cat "$behavior/jobs-$3" 2> /dev/null || printf '{"jobs": []}\n')"
     ;;
   "run download")
     test "$(cat "$behavior/download_ok")" = 1 || exit 1

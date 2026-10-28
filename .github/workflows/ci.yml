@@ -151,11 +151,11 @@ jobs:
       - name: Install Python environment
         run: uv sync --locked
 
-      # The terminal tests start tmux.
+      # The terminal tests start tmux, and the release tests' gh stub applies gh's --jq with jq.
       - name: Install system tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends tmux
+          sudo apt-get install -y --no-install-recommends jq tmux
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.99.0

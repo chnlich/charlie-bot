@@ -51,9 +51,12 @@ static CRON_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new
 #[cfg(test)]
 static PROMPT_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
 
+/// The directory under `config.d` that holds the cron jobs, one YAML file per job.
+pub const CRON_D_DIR_NAME: &str = "cron.d";
+
 /// Return the file directory owned by this profile.
 pub fn cron_dir(cfg: &CharlieBotConfig) -> PathBuf {
-  cfg.config_d_dir().join("cron.d")
+  cfg.config_d_dir().join(CRON_D_DIR_NAME)
 }
 
 /// Return one task's config file path.

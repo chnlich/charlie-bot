@@ -478,7 +478,8 @@ impl TriggerManager {
   }
 
   async fn load_trigger_path(&self, path: &Path) -> anyhow::Result<PendingTrigger> {
-    trigger_files::read_trigger(path)
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || trigger_files::read_trigger(&path)).await.expect("trigger read task completes")
   }
 
   async fn save_trigger(&self, trigger: &PendingTrigger) -> anyhow::Result<()> {

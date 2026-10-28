@@ -56,15 +56,11 @@ pub fn read_run_metadata(path: &Path) -> Result<Value, MetadataReadError> {
   crate::metadata::read_metadata_value(path)
 }
 
-/// Read one run's metadata file as a run record, `None` when the file is missing. A file the read fails on is `Err`,
-/// and the caller decides what each failure means.
-pub fn read_run_record_file(path: &Path) -> Result<Option<RunRecord>, MetadataReadError> {
-  let text = match crate::metadata::read_metadata_text(path) {
-    Ok(text) => text,
-    Err(MetadataReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-    Err(error) => return Err(error),
-  };
-  serde_json::from_str(&text).map(Some).map_err(|error| MetadataReadError::Json(error.to_string()))
+/// Read one run's metadata file as a run record. A missing file is `Err` with `NotFound`, so the caller decides whether
+/// that means no record.
+pub fn read_run_record_file(path: &Path) -> Result<RunRecord, MetadataReadError> {
+  let text = crate::metadata::read_metadata_text(path)?;
+  serde_json::from_str(&text).map_err(|error| MetadataReadError::Json(error.to_string()))
 }
 
 /// Write one run's metadata file as `record` rendered under `style`, replacing the file. The release helper's seed
@@ -1175,7 +1171,7 @@ impl Store {
 
 fn read_run_path(path: &Path) -> StoreResult<Option<RunRecord>> {
   match read_run_record_file(path) {
-    Ok(record) => Ok(record),
+    Ok(record) => Ok(Some(record)),
     Err(MetadataReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
     Err(MetadataReadError::Io(error)) => Err(path_error(path, error)),
     Err(error) => Err(StoreError::new(format!("run metadata unreadable at {}: {error}", path.display()))),
@@ -1339,13 +1335,14 @@ mod tests {
   }
 
   #[test]
-  fn read_run_record_file_answers_none_for_a_missing_file_and_decodes_a_record() {
+  fn read_run_record_file_reports_a_missing_file_by_kind_and_decodes_a_record() {
     let (dir, path) = run_metadata_with(br#"{"id": "run-a", "session_id": "session-a"}"#);
-    let record = read_run_record_file(&path).unwrap().expect("the record");
+    let record = read_run_record_file(&path).unwrap();
     assert_eq!(record.id, "run-a");
     assert_eq!(record.kind, RunKind::Work);
 
-    assert_eq!(read_run_record_file(&dir.path().join("absent")).unwrap(), None);
+    let missing = read_run_record_file(&dir.path().join("absent")).unwrap_err();
+    assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
 
     let (_dir, bad) = run_metadata_with(b"[1]");
     let error = read_run_record_file(&bad).unwrap_err();

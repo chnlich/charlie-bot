@@ -264,8 +264,7 @@ fn load_run_groups(sessions_root: &Path) -> Result<RunGroups> {
         continue;
       }
       let record: RunRecord = match read_run_record_file(&metadata_path) {
-        Ok(Some(record)) => record,
-        Ok(None) => continue,
+        Ok(record) => record,
         Err(MetadataReadError::Io(error)) => {
           return Err(anyhow::Error::new(error).context(format!("reading run metadata {}", metadata_path.display())));
         }

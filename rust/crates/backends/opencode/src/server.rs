@@ -260,17 +260,17 @@ impl OpenCodeServerPool {
       for run in fs::read_dir(runs_directory)? {
         let run = run?;
         let metadata_path = run.path().join(charliebot_store::run_records::RUN_METADATA_NAME);
-        let Some(record) = read_run_record_file(&metadata_path).map_err(|error| match error {
+        if !metadata_path.is_file() {
+          continue;
+        }
+        let record = read_run_record_file(&metadata_path).map_err(|error| match error {
           MetadataReadError::Io(error) => {
             anyhow::Error::new(error).context(format!("reading {}", metadata_path.display()))
           }
           MetadataReadError::Json(message) => {
             anyhow::Error::msg(message).context(format!("decoding {}", metadata_path.display()))
           }
-        })?
-        else {
-          continue;
-        };
+        })?;
         if record.ended_at.is_some()
           || !record.backend.as_ref().is_some_and(|backend| opencode_backend_ids.contains(backend))
           || !record.pid.zip(record.pid_start.as_deref()).is_some_and(|(pid, start)| relay::same_process(pid, start))

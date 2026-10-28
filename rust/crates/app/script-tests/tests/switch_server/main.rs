@@ -1,9 +1,11 @@
 //! The switch command's tests (scripts/switch-server.sh), run for real against stub commands and the stand-in servers.
 //!
-//! These are the fourteen test functions of tests/test_switch_server.py that this port moved, with every parametrized
-//! case as its own test. Each asserts the output lines and the exit code of its original. The probe-turn and
-//! delegation tests stay in that file until tests-switch-b ports them.
+//! These are the tests of tests/test_switch_server.py, with every parametrized case as its own test. Each asserts the
+//! output lines and the exit code of its original: the main module holds the preflight, readback, escalation and pane
+//! tests, `probe` the probe-turn tests, and `delegation` the delegation-check tests and the restore they drive.
 
+mod delegation;
+mod probe;
 mod world;
 
 use std::fs::{self, OpenOptions};

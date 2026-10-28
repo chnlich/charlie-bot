@@ -224,8 +224,8 @@ fn sweep_check_reports_each_removed_name_against_the_home(log_text: &str, expect
   let log = sandbox.root().join("server.log");
   fs::write(&log, log_text).expect("the server log");
 
-  let mut command = harness::command("python3", &sandbox.env());
-  command.arg("-I").arg(harness::repo_root().join("scripts/release/sweep-check.py")).arg(&log).arg(&sessions);
+  let mut command = harness::command(harness::built_binary("charliebot"), &sandbox.env());
+  command.arg("release-helper").arg("sweep-check").arg(&log).arg(&sessions);
   let run = harness::run(&mut command);
 
   assert_eq!(run.code, expected_rc, "{}", run.describe());
@@ -237,10 +237,10 @@ fn sweep_check_reports_each_removed_name_against_the_home(log_text: &str, expect
 }
 
 #[test]
-fn test_trial_helper_self_test_passes() {
+fn test_release_helper_self_test_passes() {
   let sandbox = Sandbox::new();
-  let mut command = harness::command("bash", &sandbox.env());
-  command.arg(harness::repo_root().join("scripts/release/trial.sh")).arg("--self-test");
+  let mut command = harness::command(harness::built_binary("charliebot"), &sandbox.env());
+  command.arg("release-helper").arg("self-test");
 
   let run = harness::run(&mut command);
 
@@ -250,6 +250,54 @@ fn test_trial_helper_self_test_passes() {
     "{}",
     run.describe()
   );
+}
+
+#[test]
+fn test_trial_refuses_a_server_binary_whose_cli_lacks_release_helper() {
+  let sandbox = Sandbox::new();
+  let release = sandbox.dir("release");
+  let server = release.join("charliebot-server");
+  write_executable(&server, "#!/usr/bin/env bash\nexit 0\n");
+  let cli = release.join("charliebot");
+  write_executable(&cli, "#!/usr/bin/env bash\nexit 2\n");
+  let commit = "abcdef0123456789abcdef0123456789abcdef01";
+  let tree = PathBuf::from(format!("/tmp/charliebot-release-trial-{commit}"));
+  let mut env = sandbox.env();
+  env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("home").display().to_string());
+
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("scripts/release/trial.sh")).arg(commit).arg(&server);
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("release-helper"), "{}", run.describe());
+  assert!(!tree.exists(), "the refusal started the trial tree {}", tree.display());
+}
+
+#[test]
+fn test_rehearsal_refuses_a_new_release_without_a_release_helper_cli() {
+  let sandbox = Sandbox::new();
+  let releases = sandbox.dir("releases");
+  let logs = sandbox.root().join("logs");
+  let release = sandbox.dir("new-release");
+  write_executable(&release.join("charliebot"), "#!/usr/bin/env bash\nexit 2\n");
+  let mut env = sandbox.env();
+  env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("home").display().to_string());
+  env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
+  env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), logs.display().to_string());
+
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("scripts/release/switch-rehearsal.sh")).arg("a".repeat(40)).arg(&release);
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("release-helper"), "{}", run.describe());
+  assert!(!logs.exists(), "the refusal wrote {}", logs.display());
+}
+
+fn write_executable(path: &PathBuf, body: &str) {
+  fs::write(path, body).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+  fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("make the stand-in executable");
 }
 
 #[test]

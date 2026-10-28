@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher (`src/app/main.py`).
 //!
-//! The vocabulary is the 23 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 24 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a name this port has not reached yet prints
 //! the not-ported JSON error and exits 1 — it never calls the Python CLI.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 23] = [
+const COMMANDS: [&str; 24] = [
   "artifact",
   "compaction-context",
   "config",
@@ -33,6 +33,7 @@ const COMMANDS: [&str; 23] = [
   "memory",
   "plan",
   "publish",
+  "release-helper",
   "router",
   "schedule-trigger",
   "session",
@@ -112,6 +113,7 @@ fn run_subcommand(
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
     "publish" => charliebot_artifacts::cli::publish::main(args, host),
+    "release-helper" => commands::release_helper::main(args),
     "router" => {
       commands::router::main(args);
       Ok(())

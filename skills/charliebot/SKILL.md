@@ -29,12 +29,12 @@ If the reviewer's push fails (base moved), the work branch and worktree are kept
 
 Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, compare `git rev-parse <branch> origin/<branch>`. When origin lacks the delivered commit, push it from the kept worktree.
 
-Keep the runtime checkout (the clone the server runs from) and its `.venv` at their current commit. The live server and its agents then use the files of the live release.
+Keep the runtime checkout (the clone the server runs from) at its current commit. The live server and its agents then use the files of the live release.
 The live server and its agents read these files from the checkout:
 - prompt documents and skills;
 - page templates under `web/templates`;
 - `web/static` assets;
-- the `charliebot` CLI in `.venv`.
+- the `charliebot` CLI of the live release.
 
 Only a release switch or the rollback in README.md (Quick start) moves the checkout.
 
@@ -245,7 +245,6 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
   `scripts/switch-server.sh rust <commit>` switches the live release in these steps:
   - it stops the live server;
   - it moves the runtime checkout to the release commit with `git reset --keep`, forward or back;
-  - it runs `uv sync --frozen` in the checkout;
   - it points `current` at the new release;
   - it starts the live server from the new release.
 

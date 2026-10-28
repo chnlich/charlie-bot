@@ -93,6 +93,8 @@ OLD_RELEASE="$RELEASES_DIR/$OLD_COMMIT"
 (cd "$NEW_RELEASE" && sha256sum -c sha256sums.txt) > "$EVIDENCE/new-release-checksums.txt" 2>&1 \
   || preflight_fail "the new release does not match its sha256sums.txt (see new-release-checksums.txt)"
 
+# The old side of this rehearsal is the release that `current` selects, which predates the venv removal: it needs uv
+# and its .venv. Task final-delete removes the uv requirement.
 for tool in git tmux ss uv curl setsid flock sha256sum; do
   command -v "$tool" > /dev/null || preflight_fail "$tool is on PATH"
 done
@@ -286,6 +288,8 @@ backends:
 EOF
 chmod 600 "$CB_HOME/config.yaml"
 
+# The old release runs from this tree's .venv, as its own start-server.sh exports that directory. Task final-delete
+# removes the uv sync, the CHARLIEBOT_VENV_BIN export and the .venv PATH entry below.
 (cd "$REPO" && uv sync --locked) > "$EVIDENCE/uv-sync.log" 2>&1 || preflight_fail "uv sync --locked in the tree"
 
 # The environment every switch and server reads: the tree's home, releases and logs, and a private tmux server.
@@ -296,12 +300,12 @@ export XDG_CACHE_HOME="$TREE/xdg-cache" XDG_CONFIG_HOME="$TREE/xdg-config" XDG_D
 export UV_CACHE_DIR="$TREE/uv-cache"
 export CHARLIEBOT_HOME="$CB_HOME"
 export CHARLIEBOT_REPO_ROOT="$REPO"
-export CHARLIEBOT_VENV_BIN="$REPO/.venv/bin"
+export CHARLIEBOT_VENV_BIN="$REPO/.venv/bin"   # for the old release; task final-delete removes it
 export CHARLIEBOT_RELEASES_DIR="$RELEASES"
 export CHARLIEBOT_LOG_DIR="$LOGS"
 export CHARLIEBOT_SWITCH_READY_WAIT_S="$READY_WAIT_S"
 export CHARLIEBOT_SWITCH_STOP_WAIT_S="$STOP_WAIT_S"
-export PATH="$REPO/.venv/bin:$ORIGINAL_PATH"
+export PATH="$REPO/.venv/bin:$ORIGINAL_PATH"   # for the old release; task final-delete removes it
 unset CHARLIE_CODE_API_KEY AIGW_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY
 SOCK="rehearsal-$$"
 export CHARLIEBOT_TMUX_SOCKET="$SOCK"

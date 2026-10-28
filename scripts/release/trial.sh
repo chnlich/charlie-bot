@@ -232,7 +232,6 @@ if LIVE_SCALAR=$(yaml_scalar charliebot access_key "$LIVE_HOME/credentials.yaml"
   LIVE_ACCESS_KEY=$(unquote_yaml_scalar "$LIVE_SCALAR")
 fi
 
-ORIGINAL_PATH=$PATH
 if ! mkdir -m 700 "$TREE"; then
   preflight_fail "create trial tree $TREE"
 fi
@@ -247,7 +246,6 @@ fi
 readonly TRIAL_HOME="$TREE/home"
 readonly TRIAL_CB_HOME="$TRIAL_HOME/.charliebot"
 readonly REPO_ROOT="$TREE/repo"
-readonly VENV_BIN="$REPO_ROOT/.venv/bin"
 readonly WORKSPACE="$TREE/workspace"
 readonly SYNTH_REPO="$WORKSPACE/trial-repo"
 # The delegation repository is a clone of a local bare repository, so its origin is a real remote: the server's base-branch
@@ -324,8 +322,6 @@ export TEMP="$TMP_ROOT"
 export TMUX_TMPDIR="$TMUX_ROOT"
 export CHARLIEBOT_HOME="$TRIAL_CB_HOME"
 export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
-export CHARLIEBOT_VENV_BIN="$VENV_BIN"
-export PATH="$VENV_BIN:$ORIGINAL_PATH"
 export UV_CACHE_DIR="$TREE/uv-cache"
 export XDG_CACHE_HOME="$TREE/xdg-cache"
 export XDG_CONFIG_HOME="$TREE/xdg-config"
@@ -413,13 +409,6 @@ Confirm that the worktree is clean.
 ## Out of Scope
 Change no other file.
 EOF
-
-if ! (cd "$REPO_ROOT" && uv sync --locked) >"$TREE/uv-sync.log" 2>&1; then
-  printf 'trial setup failed: uv sync --locked in the extracted commit\n' >&2
-  tail -n 20 "$TREE/uv-sync.log" >&2
-  exit 1
-fi
-readonly PYTHON="$VENV_BIN/python"
 
 EVIDENCE_ROOT="$EVIDENCE_PARENT/trial-$(date -u +%Y%m%dT%H%M%S.%NZ)"
 if ! mkdir -m 700 -p "$EVIDENCE_ROOT"; then
@@ -807,11 +796,6 @@ if (( SERVE_MODE == 0 )); then
     OVERALL_FAIL=1
     printf 'LIVE_BEFORE FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
   fi
-fi
-
-if [[ ! -x $PYTHON ]]; then
-  printf 'trial setup failed: the extracted venv has no Python executable\n' >&2
-  exit 1
 fi
 
 AUTH_STATUS_FILE="$HTTP_ROOT/auth-status.json"

@@ -33,21 +33,18 @@ and `PYTHONUNBUFFERED=1`, which the script sets for the server process.
 | `CHARLIEBOT_HOME` | `home.py` | Same home rule as the server; selects `config.yaml`, `credentials.yaml` and the port cache |
 | `CHARLIEBOT_SESSION_ID` | `src/runtime/cli/common.py::resolve_session_id`, `_caller_headers`; `src/features/artifacts/cli.py` | The caller's own session. Sent as `X-CharlieBot-Caller-Session`. It wins over a cwd-derived session; a `--session` that disagrees with it is an ambiguity error (exit 2). |
 | `CHARLIEBOT_RUN_TOKEN` | `src/runtime/run_token.py::load_run_token` (from `cli/common.py`) | Sent as `Authorization: Bearer <token>`; without it the CLI sends `Bearer <credentials.charliebot.access_key>` when one is set |
-| `CHARLIEBOT_VENV_BIN` | `src/runtime/agent_entry_points/charliebot` (shell shim) | `exec "$CHARLIEBOT_VENV_BIN/charliebot"`; the shim fails with `is unset; the CharlieBot server sets it for agent processes` when it is missing |
 | `COLUMNS`, `PYTHON_COLORS`, `NO_COLOR`, `FORCE_COLOR`, `TERM` | `src/infra/help_formatter.py` | Help text width and color |
 
-## 3. Server environment rewrite at start (`src/runtime/agent_environment.py::apply_agent_environment`)
+## 3. Server environment rewrite at start (`runtime/agents/src/agent_environment.rs`)
 
-Every agent child copies the server's `os.environ`, so `server.py::main` rewrites it once before anything spawns:
+Every agent child copies the server's environment, so `charliebot-server` rewrites it once before anything spawns:
 
 - `VIRTUAL_ENV` and `UV_RUN_RECURSION_DEPTH` are removed.
-- Every `PATH` entry that resolves (`realpath`) to the venv's `bin` directory is removed.
-- `ENTRY_POINT_DIR` (`<repo>/src/runtime/agent_entry_points`, holding the `charliebot` shim) is prepended to
-  `PATH` unless it is already an entry.
-- `CHARLIEBOT_VENV_BIN=<venv>/bin` is set, so the shim finds the real entry point.
+- The server binary's directory is placed first on `PATH`; an entry that names it elsewhere is dropped.
+- `PYDANTIC_DISABLE_PLUGINS` keeps a host value and defaults to `__all__`.
 
-The effect: an agent's `charliebot` resolves to this server's venv, while no venv interpreter is on `PATH` for
-`uv` to install into.
+No virtualenv directory is removed from `PATH`, and the server sets no venv bin variable: the server, the CLI and the
+scripts start no Python (task venv-removal).
 
 ## 4. Agent child environments
 

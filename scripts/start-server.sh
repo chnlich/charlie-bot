@@ -176,9 +176,9 @@ main() {
   # -i makes tee ignore SIGINT: Ctrl-C reaches the whole foreground process group, and
   # tee must outlive it to record the server's shutdown lines, then ends on EOF when
   # the server exits.
-  # The release reads its configuration and venv from these two variables. --check-config validates the home without
-  # taking its writer lock or starting the server; a failure stops here with the binary's error and the rollback.
-  export CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"
+  # The release reads its configuration root from this variable. --check-config validates the home without taking its
+  # writer lock or starting the server; a failure stops here with the binary's error and the rollback.
+  export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
   "$CURRENT/charliebot-server" --check-config
   CHECK_RC=$?
   if [ "$CHECK_RC" -ne 0 ]; then

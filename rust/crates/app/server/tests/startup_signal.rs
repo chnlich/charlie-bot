@@ -32,7 +32,6 @@ fn config_text() -> &'static str {
 fn prepare_home(root: &Path) -> PathBuf {
   let home = root.join("home");
   std::fs::create_dir_all(&home).expect("the synthetic home is created");
-  std::fs::create_dir_all(root.join("venv/bin")).expect("the synthetic venv bin directory is created");
   std::fs::write(home.join("config.yaml"), config_text()).expect("the synthetic config is written");
   std::fs::write(home.join("credentials.yaml"), "").expect("the synthetic credentials file is written");
   home
@@ -68,7 +67,6 @@ fn start_server(root: &Path, home: &Path, gate_recovery: bool) -> (ServerChild, 
     .env("HOME", root)
     .env("CHARLIEBOT_HOME", home)
     .env("CHARLIEBOT_REPO_ROOT", &repo_root)
-    .env("CHARLIEBOT_VENV_BIN", root.join("venv/bin"))
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::null());

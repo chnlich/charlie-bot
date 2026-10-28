@@ -784,6 +784,8 @@ preflight() {
   git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
   git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
     || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"
+  # A rollback target from before the venv removal requires CHARLIEBOT_VENV_BIN to name the runtime clone's existing
+  # .venv/bin. Task final-delete removes this export with that .venv.
   CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
     "$RELEASE_DIR/charliebot-server" --check-config \
     || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
@@ -888,7 +890,6 @@ restore() {
     fi
   fi
   git -C "$REPO_ROOT" reset --keep -q "$OLD_SHA" || restore_failed "git reset --keep $OLD_SHA failed"
-  (cd "$REPO_ROOT" && uv sync --frozen) || restore_failed "uv sync failed at $OLD_SHA"
   set_current "$PREV_CURRENT" || restore_failed "could not put current back"
   if [ "$OLD_STOPPED" = 1 ]; then
     start_in_pane || restore_failed "could not type the launcher into pane $PANE"
@@ -914,7 +915,6 @@ switch_forward() {
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"
   stop_old || die "the old server did not stop"
   git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
-  (cd "$REPO_ROOT" && uv sync --frozen) || die "uv sync failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
   start_in_pane || die "could not type the launcher into pane $PANE"
   wait_ready || die "the new server did not reach server_ready"

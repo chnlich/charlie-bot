@@ -38,7 +38,6 @@ use charliebot_agents::agent_environment::{self, AgentBaseEnvironment};
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
-use charliebot_core::venv::{VENV_BIN_ENV, VenvBin};
 use charliebot_core::{config, home, logging, paths, v1_sessions};
 use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
 use charliebot_registry::templating::Templating;
@@ -136,7 +135,7 @@ fn main() -> ExitCode {
 }
 
 fn check_config() -> ExitCode {
-  let (_, repo_root, _) = match replace_environment() {
+  let (repo_root, _) = match replace_environment() {
     Ok(inputs) => inputs,
     Err(message) => {
       eprintln!("charliebot-server: {message}");
@@ -164,7 +163,7 @@ fn check_config() -> ExitCode {
 
 fn run_server() -> ExitCode {
   // Before the logger and the runtime start, so the environment changes while this is the only thread.
-  let (venv_bin, repo_root, agent_base) = match replace_environment() {
+  let (repo_root, agent_base) = match replace_environment() {
     Ok(inputs) => inputs,
     Err(message) => {
       eprintln!("charliebot-server: {message}");
@@ -173,10 +172,10 @@ fn run_server() -> ExitCode {
   };
   logging::init();
   let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("the tokio runtime builds");
-  runtime.block_on(run(venv_bin, repo_root, agent_base))
+  runtime.block_on(run(repo_root, agent_base))
 }
 
-async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode {
+async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode {
   let mut stop = match StopSignal::install() {
     Ok(stop) => stop,
     Err(error) => {
@@ -259,7 +258,6 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
   }
   tracing::info!(path = %paths::display(&cfg.charliebot_home), "charliebot_home_ready");
   let startup = StartupState::with_stop(startup_stop.clone());
-  startup.insert(venv_bin).expect("the startup state is empty before the lifespan begins");
   startup.insert(repo_root.clone()).expect("the startup state is empty before the lifespan begins");
   startup.insert(agent_base).expect("the startup state is empty before the lifespan begins");
   startup
@@ -464,10 +462,8 @@ struct StateParts {
   credentials: Arc<charliebot_core::hot_reload::HotReload<charliebot_core::credentials::Credentials>>,
 }
 
-/// The venv bin and the checkout, read once, and the process environment rewritten from them. Any error names the input
-/// it concerns.
-fn replace_environment() -> Result<(VenvBin, RepoRoot, AgentBaseEnvironment), String> {
-  let venv_bin = VenvBin::new(std::env::var_os(VENV_BIN_ENV)).map_err(|error| error.to_string())?;
+/// The checkout, read once, and the process environment rewritten from it. Any error names the input it concerns.
+fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
   let server_executable =
     std::env::current_exe().map_err(|error| format!("cannot resolve charliebot-server path: {error}"))?;
@@ -475,8 +471,8 @@ fn replace_environment() -> Result<(VenvBin, RepoRoot, AgentBaseEnvironment), St
     .parent()
     .ok_or_else(|| format!("charliebot-server path has no parent: {}", server_executable.display()))?;
   let agent_base =
-    agent_environment::replace_process_environment(&venv_bin, server_bin_dir).map_err(|error| format!("{error:#}"))?;
-  Ok((venv_bin, repo_root, agent_base))
+    agent_environment::replace_process_environment(server_bin_dir).map_err(|error| format!("{error:#}"))?;
+  Ok((repo_root, agent_base))
 }
 
 /// The home's loaded files, checked against the checkout; any error names the input it concerns.

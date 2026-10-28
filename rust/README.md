@@ -33,7 +33,6 @@ Run the same configuration checks without starting the server or taking the home
 
 ```sh
 CHARLIEBOT_REPO_ROOT=/path/to/charlie-bot \
-CHARLIEBOT_VENV_BIN=/path/to/charlie-bot/.venv/bin \
 CHARLIEBOT_HOME=/tmp/charliebot-demo/home \
   rust/target/release/charliebot-server --check-config
 ```
@@ -45,9 +44,6 @@ failure. Any other argument prints the usage line and exits 2.
   (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The Python server
   derives the same root from its own location. The binary exits 1 when the variable is unset or the
   directory holds no `web/templates`.
-- `CHARLIEBOT_VENV_BIN` (required) names the server virtualenv's `bin` directory. Startup reads it
-  once before the home writer fence. The server exits 1 and names `CHARLIEBOT_VENV_BIN` when it is
-  unset, empty, or not valid Unicode.
 - `CHARLIEBOT_HOME` selects the profile home exactly as `src/infra/home.py` does: unset or blank is
   `~/.charliebot`, otherwise an absolute or `~` path.
 - `config.yaml` in the home sets `server.host` and `server.port`. `credentials.yaml` sets
@@ -121,7 +117,7 @@ roots copy.
 
 - **A name that two crates agree on has one owner.** A file or directory name, an environment variable name, an event
   name or an HTTP path has one owner module, and the other crates reference that module's const or function.
-  Environment variable names live in `infra/core` (`home.rs`, `repo_root.rs`, `run_token.rs`, `venv.rs`). The structure
+  Environment variable names live in `infra/core` (`home.rs`, `repo_root.rs`, `run_token.rs`). The structure
   test `no_name_is_spelled_outside_its_owner` in `crates/app/structure/tests/structure.rs` protects each kind of name.
   A session layout name has one row each in `OWNER_TABLE`, and the crate that owns a new shared file or directory name
   adds its row in the same commit. An event name needs no table edit: the rule reads `infra/core/src/event_types.rs`

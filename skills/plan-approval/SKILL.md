@@ -157,6 +157,15 @@ An understanding page lists the divergences of a request that admits several rea
 - Before each consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
 - Before you ask a take off for a deletion, show its dry-run list: each path and its size.
+- Before you ask a take off, try the step on a scratch copy up to its first real use.
+- When the step changes rules or code that other nodes follow, send the draft to each such manager node.
+- Re-read each number that the ask cites when you write the ask.
+- When a draft patches a procedure that an earlier draft patched, first ask whether the procedure should exist.
+- Attach each result to the ask.
+  The user then approves a step that already works, and approves it once.
+- Open the ask with the goal and the method.
+- Explain them with a diagram or a worked example, and list the alternatives with their consequences.
+  The user then understands the ask at one read.
 - After `charliebot plan approve` and before delegation, post one English comment on
   the plan's ticket carrying the design conclusion and the resolved choices. One comment
   per plan lineage. The plan stage never creates a ticket; a plan whose work has no ticket
@@ -185,6 +194,9 @@ An understanding page lists the divergences of a request that admits several rea
   restates them. Quote the understanding page's file path in the spec as the
   adequacy reference when one exists; otherwise quote the originating request. Without
   one of these, adequacy cannot judge section 1 against what was asked.
+- Verify also checks each wait, test and user question in the plan.
+  Each one names the requirement it protects (prompts/manager_workflows.md, Design section).
+  A step that names none is a finding, so a plan carries no step that only adds a wait.
 - Every spec declares its scope, and a spec that declares neither is verified as full.
   The first round of a lineage declares full; a revision round answering findings
   declares delta and re-checks the declared terms, their dependents, and whether prior

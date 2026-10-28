@@ -243,16 +243,11 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - The launcher `tee` keeps the server log open on fd 3 after cleanup unlinks its path.
 - Read an unlinked log through `/proc/<tee-pid>/fd/3`.
 - The server reloads prompt documents on each master run (`read_source_file` in `rust/crates/runtime/tasks/src/prompts/sources.rs` reads each file fresh). Static assets under `web/static` load on the next page load.
-- Each release pins two charlie-bot commits:
-  - its build commit, the sha that `scripts/switch-server.sh rust <sha>` takes, holds the server code;
-  - its `PORT_BASELINE` file names the commit of the runtime checkout, which holds the files listed above.
-
-  A server-code change goes live with the first release whose build commit contains the change.
-  A change to a file in the runtime checkout goes live with the first release whose `PORT_BASELINE` contains the change.
-  The two commits of one release can differ.
-  `scripts/switch-server.sh` switches the live release in these steps:
+- Each release is one commit on main. `scripts/release.sh <commit>` installs the server and CLI that CI built for that commit.
+- A change is live when the commit of the live release contains it. This holds for server code and for files in the runtime checkout.
+  `scripts/switch-server.sh rust <commit>` switches the live release in these steps:
   - it stops the live server;
-  - it fast-forwards the runtime checkout to the release's `PORT_BASELINE`;
+  - it moves the runtime checkout to the release commit with `git reset --keep`, forward or back;
   - it runs `uv sync --frozen` in the checkout;
   - it points `current` at the new release;
   - it starts the live server from the new release.

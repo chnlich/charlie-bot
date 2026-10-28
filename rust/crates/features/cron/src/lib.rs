@@ -5,6 +5,7 @@ mod boundary;
 pub mod config;
 mod loader;
 mod scheduler;
+pub mod seed;
 mod sequence_controller;
 #[cfg(test)]
 mod test_support;

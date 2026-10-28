@@ -608,7 +608,9 @@ async fn update_cron_slots(features: &FeatureContext, session_id: &str, values: 
   Ok(())
 }
 
-fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
+/// The backend a scheduled task fires on (`cron_sequence.effective_scheduled_task_backend`); the setup seed lists
+/// it per task.
+pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
   if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
     if cfg.get_backend_option(backend).is_none() {
       anyhow::bail!("scheduled task backend '{backend}' is not in backends.options");

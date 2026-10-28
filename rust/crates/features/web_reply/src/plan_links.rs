@@ -5,14 +5,13 @@
 //! so a rewording or a newer version keeps the item's start time.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use charliebot_compat::file_urls::{self, ScanContext};
 use charliebot_core::paths;
+use charliebot_registry::registry::PlanRegistryFn;
 use regex::Regex;
 use serde_json::Value;
 
@@ -59,12 +58,13 @@ pub struct PlanLinks {
   sessions_dir: PathBuf,
   root: PathBuf,
   registries: HashMap<String, Option<Vec<Value>>>,
+  read_plans: PlanRegistryFn,
 }
 
 impl PlanLinks {
-  pub fn new(sessions_dir: PathBuf) -> Self {
+  pub fn new(sessions_dir: PathBuf, read_plans: PlanRegistryFn) -> Self {
     let root = paths::realpath(&sessions_dir);
-    Self { sessions_dir, root, registries: HashMap::new() }
+    Self { sessions_dir, root, registries: HashMap::new(), read_plans }
   }
 
   /// The session id and session-relative posix path that `path` names, or None outside the sessions directory
@@ -81,30 +81,11 @@ impl PlanLinks {
     Some((session_id, posix_normpath(&rest.join("/"))))
   }
 
-  /// The plans of `session_id`, or None when its registry is missing (`PlanLinks._registry`). A registry that exists
-  /// but does not read fails: Python's dict and list indexing raise into a 500 the same way.
+  /// The plans of `session_id`, or None when its registry is missing (`PlanLinks._registry`). The registered reader
+  /// decides what a registry that does not read means.
   fn registry(&mut self, session_id: &str) -> Result<Option<Vec<Value>>, WebReplyError> {
     if !self.registries.contains_key(session_id) {
-      let path = self.sessions_dir.join(session_id).join("plans.json");
-      let plans = match fs::read_to_string(&path) {
-        Ok(text) => {
-          let data: Value = serde_json::from_str(&text).map_err(|error| {
-            WebReplyError::Failed(anyhow!("{} holds an unreadable plan registry: {error}", path.display()))
-          })?;
-          let plans =
-            data.get("plans").ok_or_else(|| WebReplyError::Failed(anyhow!("{} has no plans key", path.display())))?;
-          Some(
-            plans
-              .as_array()
-              .cloned()
-              .ok_or_else(|| WebReplyError::Failed(anyhow!("{} holds plans that are not a list", path.display())))?,
-          )
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => {
-          return Err(WebReplyError::Failed(anyhow!("{} is unreadable: {error}", path.display())));
-        }
-      };
+      let plans = (self.read_plans)(&self.sessions_dir.join(session_id)).map_err(WebReplyError::Failed)?;
       self.registries.insert(session_id.to_string(), plans);
     }
     Ok(self.registries.get(session_id).expect("the registry was just read").clone())
@@ -320,9 +301,12 @@ pub fn stale_detail(stale: &[StaleLink]) -> String {
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
   use serde_json::json;
 
   use super::*;
+  use crate::test_support::read_plans_fixture;
 
   fn item(text: &str, link: Option<&str>) -> WaitingItem {
     let raw = json!({"text": text, "context": "The line is active now.", "link": link});
@@ -351,7 +335,7 @@ mod tests {
       "s1",
       json!([{"id": 1, "versions": [version(1, "artifacts/plan_01_v1.html"), version(2, "artifacts/plan_01_v2.html")], "closed": null}]),
     );
-    let mut links = PlanLinks::new(dir.path().to_path_buf());
+    let mut links = PlanLinks::new(dir.path().to_path_buf(), read_plans_fixture);
 
     let binding = links.binding(&page).expect("the registry reads").expect("the version binds");
 
@@ -380,7 +364,7 @@ mod tests {
         {"id": 2, "versions": [version(1, "artifacts/plan_02_v1.html")], "closed": {"as": "completed"}},
       ]),
     );
-    let mut links = PlanLinks::new(dir.path().to_path_buf());
+    let mut links = PlanLinks::new(dir.path().to_path_buf(), read_plans_fixture);
 
     let old_binding = links.binding(&old).expect("the registry reads").expect("the old version binds");
     let closed_binding = links.binding(&closed_page).expect("the registry reads").expect("the closed version binds");
@@ -400,7 +384,7 @@ mod tests {
     let outside = tempfile::tempdir().expect("the outside directory exists");
     let outside_page = outside.path().join("page.html");
     fs::write(&outside_page, "page").expect("the page writes");
-    let mut links = PlanLinks::new(dir.path().to_path_buf());
+    let mut links = PlanLinks::new(dir.path().to_path_buf(), read_plans_fixture);
 
     let no_registry = links.binding(&page).expect("the registry reads");
     let outside_binding = links.binding(&outside_page).expect("the outside path resolves");
@@ -418,7 +402,7 @@ mod tests {
     fs::create_dir_all(page.parent().unwrap()).expect("the artifact directory writes");
     fs::write(&page, "page").expect("the page writes");
     fs::write(dir.path().join("s1").join("plans.json"), "invalid JSON").expect("the broken registry writes");
-    let mut links = PlanLinks::new(dir.path().to_path_buf());
+    let mut links = PlanLinks::new(dir.path().to_path_buf(), read_plans_fixture);
     assert!(links.binding(&page).is_err(), "invalid JSON fails");
 
     let dir = tempfile::tempdir().expect("the registry directory exists");
@@ -430,7 +414,7 @@ mod tests {
       "s1",
       json!([{"id": 1, "versions": [version(1, "artifacts/plan_01_v1.html"), {"v": "2", "file": "artifacts/plan_01_v2.html"}], "closed": null}]),
     );
-    let mut links = PlanLinks::new(dir.path().to_path_buf());
+    let mut links = PlanLinks::new(dir.path().to_path_buf(), read_plans_fixture);
     assert!(links.binding(&page).is_err(), "a version without an integer v fails");
   }
 
@@ -457,7 +441,7 @@ mod tests {
       "s1",
       json!([{"id": 7, "versions": [version(2, "artifacts/plan_01_v2.html")], "closed": null}]),
     );
-    let mut links = PlanLinks::new(dir.path().to_path_buf());
+    let mut links = PlanLinks::new(dir.path().to_path_buf(), read_plans_fixture);
     let plan_link = format!("{}{}", file_urls::FILE_SERVER_MOUNT, page.display());
 
     let plan_target = links.target(&item("Decide", Some(&plan_link))).expect("the lineage target resolves");

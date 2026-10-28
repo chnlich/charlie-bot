@@ -11,6 +11,7 @@ use std::io;
 use std::path::Path;
 use std::str::Utf8Error;
 
+use anyhow::anyhow;
 use charliebot_compat::python_json;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use serde_json::{Map, Value, json};
@@ -167,6 +168,23 @@ fn project_and_derive(plan: &Value) -> Result<Map<String, Value>, String> {
 /// `{field: source.get(field)}` for each field, with `null` for a field the source lacks.
 fn picked(source: &Map<String, Value>, fields: &[&str]) -> Map<String, Value> {
   fields.iter().map(|field| (field.to_string(), source.get(*field).cloned().unwrap_or(Value::Null))).collect()
+}
+
+/// The session's plan list for item links, read strictly: `None` when the session has no `plans.json`, and the plans of
+/// the file otherwise. A file that exists but does not read or parse fails, because the status page's link check must
+/// refuse a link it cannot resolve.
+pub fn read_session_plans(session_dir: &Path) -> anyhow::Result<Option<Vec<Value>>> {
+  let path = session_dir.join(PLANS_FILE);
+  let text = match fs::read_to_string(&path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(anyhow!("{} is unreadable: {error}", path.display())),
+  };
+  let data: Value = serde_json::from_str(&text)
+    .map_err(|error| anyhow!("{} holds an unreadable plan registry: {error}", path.display()))?;
+  let plans = data.get("plans").ok_or_else(|| anyhow!("{} has no plans key", path.display()))?;
+  let plans = plans.as_array().cloned().ok_or_else(|| anyhow!("{} holds plans that are not a list", path.display()))?;
+  Ok(Some(plans))
 }
 
 /// `read_plans_tolerant(plans_path, session_id)`: the session's plans as the listing and the sidebar read them.

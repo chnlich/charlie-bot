@@ -2,7 +2,8 @@
 //! registrations and the origin slots a thread session carries, and the route calls the tests make.
 
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -22,6 +23,26 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use crate::reply;
+
+/// The plan-registry reader the server's artifacts package registers; these tests read the same file the same way.
+pub fn read_plans_fixture(session_dir: &Path) -> anyhow::Result<Option<Vec<Value>>> {
+  let path = session_dir.join("plans.json");
+  let text = match fs::read_to_string(&path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(anyhow::anyhow!("{} is unreadable: {error}", path.display())),
+  };
+  let data: Value = serde_json::from_str(&text)
+    .map_err(|error| anyhow::anyhow!("{} holds an unreadable plan registry: {error}", path.display()))?;
+  let plans = data.get("plans").ok_or_else(|| anyhow::anyhow!("{} has no plans key", path.display()))?;
+  let plans =
+    plans.as_array().cloned().ok_or_else(|| anyhow::anyhow!("{} holds plans that are not a list", path.display()))?;
+  Ok(Some(plans))
+}
+
+fn register_plans(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.plan_registry(read_plans_fixture)
+}
 
 /// The origin slots a thread session carries; the web test only reads them, so each is a null field.
 fn register_origins(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -56,6 +77,7 @@ impl Home {
     let mut registry = Registry::new();
     registry.register_package("src.features.web_reply", crate::register).expect("the web reply package registers");
     registry.register_package("tests.origins", register_origins).expect("the origin slots register");
+    registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.

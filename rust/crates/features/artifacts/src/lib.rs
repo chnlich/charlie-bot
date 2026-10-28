@@ -33,6 +33,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     dump: dump_section,
   })?;
   registry.sidebar_contribution("artifacts", Arc::new(sidebar::ArtifactsSidebar))?;
+  registry.plan_registry(plans::read_session_plans)?;
   registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
 }
 

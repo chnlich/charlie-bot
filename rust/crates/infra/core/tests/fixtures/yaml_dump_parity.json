@@ -1,0 +1,595 @@
+{
+  "source": "rust/crates/infra/core/tests/yaml_dump_parity.py",
+  "base_commit": "d4021ce3993d7e36b2709f00caf578e1f8541407",
+  "cases": [
+    {
+      "request": {
+        "value": {
+          "name": "daily",
+          "cron": "0 8 * * *",
+          "enabled": true,
+          "project": null,
+          "blank": "",
+          "toggle": "on",
+          "yes": "yes",
+          "colon": "a: b",
+          "comment": "x # y",
+          "leading": " leading",
+          "trailing": "trailing ",
+          "date": "2026-10-20",
+          "unicode": "雪と café",
+          "multiline": "line one\n\nline three",
+          "items": [
+            "simple",
+            1,
+            true,
+            null,
+            {
+              "nested": "value"
+            }
+          ]
+        },
+        "rust": "name: daily\ncron: 0 8 * * *\nenabled: true\nproject: null\nblank: ''\ntoggle: 'on'\n'yes': 'yes'\ncolon: 'a: b'\ncomment: 'x # y'\nleading: ' leading'\ntrailing: 'trailing '\ndate: '2026-10-20'\nunicode: 雪と café\nmultiline: 'line one\n\n\n  line three'\nitems:\n- simple\n- 1\n- true\n- null\n- nested: value\n"
+      },
+      "expected": {
+        "pyyaml": "name: daily\ncron: 0 8 * * *\nenabled: true\nproject: null\nblank: ''\ntoggle: 'on'\n'yes': 'yes'\ncolon: 'a: b'\ncomment: 'x # y'\nleading: ' leading'\ntrailing: 'trailing '\ndate: '2026-10-20'\nunicode: 雪と café\nmultiline: 'line one\n\n\n  line three'\nitems:\n- simple\n- 1\n- true\n- null\n- nested: value\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "1_000"
+        },
+        "rust": "k: '1_000'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '1_000'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "0x1F"
+        },
+        "rust": "k: '0x1F'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '0x1F'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "0b101"
+        },
+        "rust": "k: '0b101'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '0b101'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "12:30"
+        },
+        "rust": "k: '12:30'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '12:30'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "2026-10-20 08:00:00"
+        },
+        "rust": "k: '2026-10-20 08:00:00'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '2026-10-20 08:00:00'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "="
+        },
+        "rust": "k: '='\n"
+      },
+      "expected": {
+        "pyyaml": "k: '='\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "<<"
+        },
+        "rust": "k: '<<'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '<<'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "1e3"
+        },
+        "rust": "k: 1e3\n"
+      },
+      "expected": {
+        "pyyaml": "k: 1e3\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "inf"
+        },
+        "rust": "k: inf\n"
+      },
+      "expected": {
+        "pyyaml": "k: inf\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "017"
+        },
+        "rust": "k: '017'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '017'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "+1"
+        },
+        "rust": "k: '+1'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '+1'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "y"
+        },
+        "rust": "k: y\n"
+      },
+      "expected": {
+        "pyyaml": "k: y\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "-foo"
+        },
+        "rust": "k: -foo\n"
+      },
+      "expected": {
+        "pyyaml": "k: -foo\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "?foo"
+        },
+        "rust": "k: ?foo\n"
+      },
+      "expected": {
+        "pyyaml": "k: ?foo\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": ":foo"
+        },
+        "rust": "k: :foo\n"
+      },
+      "expected": {
+        "pyyaml": "k: :foo\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "- foo"
+        },
+        "rust": "k: '- foo'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '- foo'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "? foo"
+        },
+        "rust": "k: '? foo'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '? foo'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": "-"
+        },
+        "rust": "k: '-'\n"
+      },
+      "expected": {
+        "pyyaml": "k: '-'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": 0.5
+        },
+        "rust": "k: 0.5\n"
+      },
+      "expected": {
+        "pyyaml": "k: 0.5\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": 1e+20
+        },
+        "rust": "k: 1.0e+20\n"
+      },
+      "expected": {
+        "pyyaml": "k: 1.0e+20\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": 1e-7
+        },
+        "rust": "k: 1.0e-07\n"
+      },
+      "expected": {
+        "pyyaml": "k: 1.0e-07\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": -0.0
+        },
+        "rust": "k: -0.0\n"
+      },
+      "expected": {
+        "pyyaml": "k: -0.0\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "k": 100.0
+        },
+        "rust": "k: 100.0\n"
+      },
+      "expected": {
+        "pyyaml": "k: 100.0\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "word word word word word word word word word word word word word word word word word word word word"
+        },
+        "rust": "prompt: word word word word word word word word word word word word word word word\n  word word word word word\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: word word word word word word word word word word word word word word word\n  word word word word word\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "items": [
+            "word word word word word word word word word word word word word word word word word word word word",
+            {
+              "name": "x",
+              "prompt": "word word word word word word word word word word word word word word word word word word word word"
+            },
+            {
+              "a": {
+                "b": 1
+              }
+            },
+            {
+              "c": [
+                "x",
+                "y"
+              ]
+            },
+            [
+              [
+                "a",
+                "b"
+              ],
+              []
+            ]
+          ],
+          "nested": {
+            "prompt": "word word word word word word word word word word word word word word word word word word word word"
+          }
+        },
+        "rust": "items:\n- word word word word word word word word word word word word word word word word\n  word word word word\n- name: x\n  prompt: word word word word word word word word word word word word word word word\n    word word word word word\n- a:\n    b: 1\n- c:\n  - x\n  - y\n- - - a\n    - b\n  - []\nnested:\n  prompt: word word word word word word word word word word word word word word word\n    word word word word word\n"
+      },
+      "expected": {
+        "pyyaml": "items:\n- word word word word word word word word word word word word word word word word\n  word word word word\n- name: x\n  prompt: word word word word word word word word word word word word word word word\n    word word word word word\n- a:\n    b: 1\n- c:\n  - x\n  - y\n- - - a\n    - b\n  - []\nnested:\n  prompt: word word word word word word word word word word word word word word word\n    word word word word word\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "a\n  b"
+        },
+        "rust": "prompt: \"a\\n  b\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"a\\n  b\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "a \nb"
+        },
+        "rust": "prompt: \"a \\nb\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"a \\nb\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "tab\there"
+        },
+        "rust": "prompt: \"tab\\there\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"tab\\there\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "it's\nfine"
+        },
+        "rust": "prompt: 'it''s\n\n  fine'\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: 'it''s\n\n  fine'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "ends with a newline\n"
+        },
+        "rust": "prompt: 'ends with a newline\n\n  '\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: 'ends with a newline\n\n  '\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "Review the open pull requests in the release branch and summarize what changed since the last cut.\n\nFor each pull request, name its author, the files it touches, and whether its tests pass. Flag any change that edits a migration, because a migration cannot be rolled back.\nEnd with one line that says whether the branch is ready to cut, and don't merge anything else."
+        },
+        "rust": "prompt: 'Review the open pull requests in the release branch and summarize what changed\n  since the last cut.\n\n\n  For each pull request, name its author, the files it touches, and whether its tests\n  pass. Flag any change that edits a migration, because a migration cannot be rolled\n  back.\n\n  End with one line that says whether the branch is ready to cut, and don''t merge\n  anything else.'\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: 'Review the open pull requests in the release branch and summarize what changed\n  since the last cut.\n\n\n  For each pull request, name its author, the files it touches, and whether its tests\n  pass. Flag any change that edits a migration, because a migration cannot be rolled\n  back.\n\n  End with one line that says whether the branch is ready to cut, and don''t merge\n  anything else.'\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long prompt\ttail tail tail tail tail tail tail tail "
+        },
+        "rust": "prompt: \"long long long long long long long long long long long long long long long\n  long long long long long long long long long long long long long long long long\n  long long long long long prompt\\ttail tail tail tail tail tail tail tail \"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"long long long long long long long long long long long long long long long\n  long long long long long long long long long long long long long long long long\n  long long long long long prompt\\ttail tail tail tail tail tail tail tail \"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \nsecond line second line second line second line second line second line second line second line "
+        },
+        "rust": "prompt: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  \\nsecond line second line second line second line second line second line second\n  line second line \"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  \\nsecond line second line second line second line second line second line second\n  line second line \"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "\u0000\u0007\b\t\n\u000b\f\r\u001b\u0001   ﻿\"\\"
+        },
+        "rust": "prompt: \"\\0\\a\\b\\t\\n\\v\\f\\r\\e\\x01\\x7F\\N \\L\\P\\uFEFF\\\"\\\\\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"\\0\\a\\b\\t\\n\\v\\f\\r\\e\\x01\\x7F\\N \\L\\P\\uFEFF\\\"\\\\\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "\u0001"
+        },
+        "rust": "prompt: \"\\x01\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"\\x01\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "\u001b"
+        },
+        "rust": "prompt: \"\\e\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"\\e\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": ""
+        },
+        "rust": "prompt: \"\\x7F\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"\\x7F\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": ""
+        },
+        "rust": "prompt: \"\\N\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"\\N\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": " "
+        },
+        "rust": "prompt: '   '\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: '   '\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "﻿"
+        },
+        "rust": "prompt: \"\\uFEFF\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"\\uFEFF\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "key\tneeds quotes": "value"
+        },
+        "rust": "\"key\\tneeds quotes\": value\n"
+      },
+      "expected": {
+        "pyyaml": "\"key\\tneeds quotes\": value\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "Ship it 🚀"
+        },
+        "rust": "prompt: \"Ship it \\U0001F680\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"Ship it \\U0001F680\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "café 😀\ttab"
+        },
+        "rust": "prompt: \"café \\U0001F600\\ttab\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"café \\U0001F600\\ttab\"\n",
+        "reads_back": true
+      }
+    },
+    {
+      "request": {
+        "value": {
+          "prompt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  \ttail"
+        },
+        "rust": "prompt: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  \\ \\ttail\"\n"
+      },
+      "expected": {
+        "pyyaml": "prompt: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  \\ \\ttail\"\n",
+        "reads_back": true
+      }
+    }
+  ]
+}

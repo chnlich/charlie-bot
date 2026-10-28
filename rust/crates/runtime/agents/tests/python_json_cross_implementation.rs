@@ -1,15 +1,14 @@
-//! `charliebot_compat::python_json` against `json.loads` in the worktree's Python, over one deterministic corpus.
+//! `charliebot_compat::python_json` against recorded `json.loads` outputs over one deterministic corpus.
 //!
-//! `python_json_reference.py` prints what `json.loads` does to each input. The port must give the same outcome class
-//! and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The corpus must
-//! reach every message the JSON decoder and scanner raise.
-
-use std::path::{Path, PathBuf};
-use std::process::Command;
+//! The fixture records what `python_json_reference.py` returned at its named commit. The port must give the same outcome
+//! class and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The corpus
+//! must reach every message the JSON decoder and scanner raise.
 
 use charliebot_compat::python_json::{self, LoadError};
 use charliebot_core::pyfmt;
-use serde_json::Value;
+use serde_json::{Value, json};
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/python_json_reference.json");
 
 /// The messages `json.loads` raises, with the C scanner's wording (`_json.c`). The decoder's two `repr` forms, `Invalid
 /// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by `json/decoder.py`'s pure-Python
@@ -47,7 +46,7 @@ enum Outcome {
 
 #[test]
 fn python_json_matches_json_loads_over_the_corpus() {
-  let records = python_reference();
+  let records = recorded_reference();
   assert!(records.len() > 9000, "the corpus holds {} inputs", records.len());
 
   let mut mismatches = Vec::new();
@@ -108,24 +107,22 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
   (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect()
 }
 
-/// The records `python_json_reference.py` prints, one JSON object per line.
-fn python_reference() -> Vec<Value> {
-  let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/python_json_reference.py");
-  let repo_root = repo_root();
-  let output = Command::new("uv")
-    .args(["run", "python"])
-    .arg(&helper)
-    .current_dir(repo_root)
-    .output()
-    .expect("uv runs the Python reference");
-  assert!(output.status.success(), "python_json_reference.py failed: {}", String::from_utf8_lossy(&output.stderr));
-  String::from_utf8(output.stdout)
-    .expect("the reference prints UTF-8")
-    .lines()
-    .map(|line| serde_json::from_str(line).expect("each reference line is JSON"))
+/// The outputs `json.loads` recorded for the deterministic input corpus.
+fn recorded_reference() -> Vec<Value> {
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/python_json_reference.py");
+  assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
+  fixture["cases"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|case| {
+      json!({
+        "mode": case["request"]["mode"],
+        "input": case["request"]["input"],
+        "outcome": case["expected"]["outcome"],
+        "text": case["expected"]["text"],
+      })
+    })
     .collect()
-}
-
-fn repo_root() -> &'static Path {
-  Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap()
 }

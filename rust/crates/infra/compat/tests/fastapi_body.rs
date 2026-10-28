@@ -1,9 +1,4 @@
-use std::io::Read;
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::net::SocketAddr;
 
 use axum::Router;
 use axum::body::Body;
@@ -15,8 +10,9 @@ use charliebot_compat::responses;
 use charliebot_compat::validation::Bound;
 use reqwest::Client;
 use serde_json::{Value, json};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{sleep, timeout};
+use tokio::net::TcpListener;
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/fastapi_body.json");
 
 const FIELDS: &[Field] = &[
   Field::required("name", FieldType::String),
@@ -101,79 +97,11 @@ struct Case {
   compare_body: bool,
 }
 
-struct PythonServer {
-  child: Child,
-}
-
-impl PythonServer {
-  async fn start(address: SocketAddr) -> Self {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest.join("../../../..").canonicalize().expect("the worktree root exists");
-    let script = manifest.join("tests/fixtures/fastapi_body_app.py");
-    let mut command = Command::new("uv");
-    command
-      .args(["run", "python"])
-      .arg(script)
-      .arg("--port")
-      .arg(address.port().to_string())
-      .current_dir(root)
-      .stdout(Stdio::null())
-      .stderr(Stdio::piped());
-    command.process_group(0);
-    let child = command.spawn().expect("uv run starts the FastAPI test app");
-    let mut server = Self { child };
-    server.wait_ready(address).await;
-    server
-  }
-
-  async fn wait_ready(&mut self, address: SocketAddr) {
-    timeout(Duration::from_secs(10), async {
-      loop {
-        if let Some(status) = self.child.try_wait().expect("the FastAPI process status is readable") {
-          let mut stderr = String::new();
-          if let Some(stream) = self.child.stderr.as_mut() {
-            stream.read_to_string(&mut stderr).expect("the FastAPI error log is readable");
-          }
-          panic!("FastAPI test app exited with {status}: {stderr}");
-        }
-        match TcpStream::connect(address).await {
-          Ok(stream) => {
-            drop(stream);
-            return;
-          }
-          Err(_) => sleep(Duration::from_millis(50)).await,
-        }
-      }
-    })
-    .await
-    .expect("FastAPI test app starts within 10 seconds");
-  }
-}
-
-impl Drop for PythonServer {
-  fn drop(&mut self) {
-    if self.child.try_wait().expect("the FastAPI process status is readable").is_none() {
-      let process_group = format!("-{}", self.child.id());
-      let signal = Command::new("/usr/bin/kill")
-        .args(["-TERM", "--", process_group.as_str()])
-        .status()
-        .expect("the FastAPI process group can be stopped");
-      assert!(signal.success(), "the FastAPI process group stop succeeded");
-    }
-    self.child.wait().expect("the FastAPI process is reaped");
-  }
-}
-
 #[tokio::test]
 async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
   rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
-  let python_reservation = StdTcpListener::bind("127.0.0.1:0").expect("a loopback port is available");
-  let python_address = python_reservation.local_addr().expect("the Python address is readable");
-  let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a second loopback port is available");
+  let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
-  drop(python_reservation);
-
-  let python = PythonServer::start(python_address).await;
   let rust_server = tokio::spawn(async move {
     let router = Router::new()
       .route("/items/{item_id}", post(read_item))
@@ -185,21 +113,28 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
   });
 
   let client = Client::new();
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/infra/compat/tests/fixtures/fastapi_body_app.py");
+  assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
+  let fixture_cases = fixture["cases"].as_array().unwrap();
+  assert_eq!(fixture_cases.len(), 137);
+  let mut fixture_index = 0;
   let items = corpus();
   assert_eq!(items.len(), 40);
-  compare_corpus(&client, python_address, rust_address, "/items", &items).await;
+  compare_corpus(&client, rust_address, "/items", &items, fixture_cases, &mut fixture_index).await;
   let bounded = bounded_corpus();
   assert_eq!(bounded.len(), 28);
-  compare_corpus(&client, python_address, rust_address, "/bounds", &bounded).await;
+  compare_corpus(&client, rust_address, "/bounds", &bounded, fixture_cases, &mut fixture_index).await;
   let messages = message_corpus();
   assert_eq!(messages.len(), 17);
-  compare_corpus(&client, python_address, rust_address, "/messages", &messages).await;
+  compare_corpus(&client, rust_address, "/messages", &messages, fixture_cases, &mut fixture_index).await;
   let attachments = attachment_corpus();
   assert_eq!(attachments.len(), 20);
-  compare_corpus(&client, python_address, rust_address, "/attachments", &attachments).await;
+  compare_corpus(&client, rust_address, "/attachments", &attachments, fixture_cases, &mut fixture_index).await;
   let triggers = trigger_corpus();
   assert_eq!(triggers.len(), 32);
-  compare_corpus(&client, python_address, rust_address, "/triggers", &triggers).await;
+  compare_corpus(&client, rust_address, "/triggers", &triggers, fixture_cases, &mut fixture_index).await;
+  assert_eq!(fixture_index, fixture_cases.len());
 
   rust_server.abort();
   match rust_server.await {
@@ -207,7 +142,6 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
     Err(error) => panic!("axum test app stopped with {error}"),
     Ok(()) => panic!("axum test app ended before cancellation"),
   }
-  drop(python);
 }
 
 async fn read_item(request: Request<Body>) -> Response {
@@ -250,24 +184,39 @@ async fn read_model(request: Request<Body>, model: &BodyModel) -> Response {
 
 async fn compare_corpus(
   client: &Client,
-  python_address: SocketAddr,
   rust_address: SocketAddr,
   route: &str,
   cases: &[Case],
+  fixture_cases: &[Value],
+  fixture_index: &mut usize,
 ) {
   for case in cases {
-    let (python_status, python_body) =
-      send(client, python_address, route, case.item_id, case.content_type, &case.body).await;
+    let recorded = &fixture_cases[*fixture_index];
+    let request = json!({
+      "path": format!("{route}/{}", case.item_id),
+      "name": case.name,
+      "content_type": case.content_type,
+      "body_hex": hex_bytes(&case.body),
+    });
+    assert_eq!(recorded["request"], request, "recorded request for {}", case.name);
+    let status = u16::try_from(recorded["expected"]["status"].as_u64().unwrap()).unwrap();
+    let recorded_status = StatusCode::from_u16(status).unwrap();
+    let recorded_body = &recorded["expected"]["body"];
     let (rust_status, rust_body) = send(client, rust_address, route, case.item_id, case.content_type, &case.body).await;
 
-    assert_eq!(python_status, case.expected_status, "FastAPI status for {}", case.name);
-    assert_eq!(rust_status, python_status, "status for {}", case.name);
+    assert_eq!(recorded_status, case.expected_status, "FastAPI status for {}", case.name);
+    assert_eq!(rust_status, recorded_status, "status for {}", case.name);
     if case.compare_body {
-      assert_eq!(rust_body, python_body, "body for {}", case.name);
-    } else if case.expected_status == StatusCode::UNPROCESSABLE_ENTITY {
-      assert_eq!(error_shape(&rust_body), error_shape(&python_body), "validation shape for {}", case.name);
+      assert_eq!(&rust_body, recorded_body, "body for {}", case.name);
+    } else if recorded_status == StatusCode::UNPROCESSABLE_ENTITY {
+      assert_eq!(error_shape(&rust_body), error_shape(recorded_body), "validation shape for {}", case.name);
     }
+    *fixture_index += 1;
   }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+  bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 async fn send(

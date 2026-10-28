@@ -691,6 +691,22 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn present_refuses_a_page_with_a_raw_tsv_link_before_registering_it() {
+    let (_home, features) = plan_session("sess", None);
+    let page = plan_page(r#"The result is <a href="https://example.invalid/result.tsv">here</a>."#);
+    write_plan_artifact(&features, "sess", "plan_01.html", &page);
+
+    let error = present_p1(&features, "sess", "artifacts/plan_01.html").await.unwrap_err();
+
+    let VerbError::Refused(detail) = error else { panic!("the raw link is refused: {error:?}") };
+    assert!(detail.starts_with("plan artifact fails 1 check assertion(s): link-renderable: "), "{detail}");
+    assert!(detail.contains("result.tsv"), "{detail}");
+    assert!(detail.contains("block"), "{detail}");
+    assert!(detail.contains("link an HTML page, or the directory that holds the file"), "{detail}");
+    assert!(!features.store.session_dir("sess").join(PLANS_FILE).exists());
+  }
+
+  #[tokio::test]
   async fn amend_requires_non_empty_note() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));

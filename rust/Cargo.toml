@@ -40,6 +40,7 @@ members = [
     "crates/features/terminal",
     "crates/features/trace",
     "crates/features/usage",
+    "crates/features/user_text_checks",
     "crates/features/voice",
     "crates/features/web_reply",
     "crates/features/web_search",
@@ -180,6 +181,7 @@ charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }
 charliebot-usage = { path = "crates/runtime/usage" }
 charliebot-usage-page = { path = "crates/features/usage" }
+charliebot-user-text-checks = { path = "crates/features/user_text_checks" }
 charliebot-voice = { path = "crates/features/voice" }
 charliebot-web-reply = { path = "crates/features/web_reply" }
 charliebot-web-search = { path = "crates/features/web_search" }

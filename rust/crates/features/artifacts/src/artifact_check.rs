@@ -9,6 +9,7 @@ use charliebot_core::pyfmt;
 use charliebot_core::pyregex::compile_python_regex;
 use charliebot_core::pystr;
 use charliebot_pyhtml::{EventKind, parse_with, unescape};
+use charliebot_user_text_checks::{self as user_text_checks, UserTextChecksConfig};
 use fancy_regex::Regex;
 use serde::Serialize;
 use url::Url;
@@ -30,6 +31,9 @@ const GOAL_BUDGET: &str = "goal-budget";
 const PAGE_HEIGHT: &str = "page-height";
 const ORDINAL_NAMED: &str = "ordinal-named";
 const BYTE_INTEGRITY: &str = "byte-integrity";
+const TRACKER_ID_NEARBY: &str = user_text_checks::TRACKER_ID_NEARBY;
+const SESSION_LINKED: &str = user_text_checks::SESSION_LINKED;
+const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 
 /// The registered genres in the order the parser states them. Python's `constants.ARTIFACT_GENRES` lists the first
 /// five; `waiting` exists only here.
@@ -136,6 +140,9 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       GOAL_BUDGET,
       PAGE_HEIGHT,
       ORDINAL_NAMED,
+      TRACKER_ID_NEARBY,
+      SESSION_LINKED,
+      LINK_RENDERABLE,
     ]),
     "understanding" => Some(&[
       BYTE_INTEGRITY,
@@ -146,6 +153,9 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_EXPLAINER,
       PAGE_HEIGHT,
       ORDINAL_NAMED,
+      TRACKER_ID_NEARBY,
+      SESSION_LINKED,
+      LINK_RENDERABLE,
     ]),
     "sitrep" => Some(&[
       BYTE_INTEGRITY,
@@ -157,10 +167,21 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       REQ_CHIPS,
       RUN_STATED,
       ORDINAL_NAMED,
+      TRACKER_ID_NEARBY,
+      SESSION_LINKED,
+      LINK_RENDERABLE,
     ]),
-    "debug" => {
-      Some(&[BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FACT_ANCHORED, ORDINAL_NAMED])
-    }
+    "debug" => Some(&[
+      BYTE_INTEGRITY,
+      STYLE_VERBATIM,
+      SECTIONS_NUMBERED,
+      FORK_OPEN_SHAPE,
+      FACT_ANCHORED,
+      ORDINAL_NAMED,
+      TRACKER_ID_NEARBY,
+      SESSION_LINKED,
+      LINK_RENDERABLE,
+    ]),
     "explain" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
@@ -169,8 +190,20 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       EXPLAIN_TRIAD,
       FORK_OPEN_SHAPE,
       ORDINAL_NAMED,
+      TRACKER_ID_NEARBY,
+      SESSION_LINKED,
+      LINK_RENDERABLE,
     ]),
-    "waiting" => Some(&[BYTE_INTEGRITY, STYLE_VERBATIM, FORK_OPEN_SHAPE, FORK_EXPLAINER, ORDINAL_NAMED]),
+    "waiting" => Some(&[
+      BYTE_INTEGRITY,
+      STYLE_VERBATIM,
+      FORK_OPEN_SHAPE,
+      FORK_EXPLAINER,
+      ORDINAL_NAMED,
+      TRACKER_ID_NEARBY,
+      SESSION_LINKED,
+      LINK_RENDERABLE,
+    ]),
     _ => None,
   }
 }
@@ -236,7 +269,15 @@ pub async fn run_assertions(
   config: &CharlieBotConfig,
   repo_root: PathBuf,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
-  run_assertions_with_chrome(genre, artifact, config.headless_chrome_bin.clone(), repo_root).await
+  run_assertions_with_chrome(
+    genre,
+    artifact,
+    config.headless_chrome_bin.clone(),
+    repo_root,
+    config.section::<UserTextChecksConfig>("user_text_checks").clone(),
+    config.charliebot_home.clone(),
+  )
+  .await
 }
 
 /// Run one genre's assertion set with an explicit Chrome path on a blocking thread.
@@ -245,18 +286,24 @@ pub async fn run_assertions_with_chrome(
   artifact: PathBuf,
   chrome_bin: String,
   repo_root: PathBuf,
+  checks_config: UserTextChecksConfig,
+  home: PathBuf,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   let genre = genre.to_owned();
-  tokio::task::spawn_blocking(move || run_assertions_sync(&genre, &artifact, &chrome_bin, &repo_root))
-    .await
-    .context("plan assertion worker failed")?
+  tokio::task::spawn_blocking(move || {
+    run_assertions_sync_with_user_text(&genre, &artifact, &chrome_bin, &repo_root, &checks_config, &home)
+  })
+  .await
+  .context("plan assertion worker failed")?
 }
 
-pub(crate) fn run_assertions_sync(
+fn run_assertions_sync_with_user_text(
   genre: &str,
   artifact: &Path,
   chrome_bin: &str,
   repo_root: &Path,
+  checks_config: &UserTextChecksConfig,
+  home: &Path,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   let names = assertion_set(genre).ok_or_else(|| {
     anyhow!(
@@ -267,10 +314,23 @@ pub(crate) fn run_assertions_sync(
   })?;
   let source =
     fs::read_to_string(artifact).with_context(|| format!("could not read artifact {}", artifact.display()))?;
+  let text_checks = user_text_checks::UserTextChecks::new(checks_config, home)?;
+  let text_violations = text_checks.check_page(&source)?;
   let nodes = parse_dom(&source)?;
   let context = Context { genre, artifact, chrome_bin, repo_root, nodes };
   let mut outcomes = Vec::new();
   for name in names {
+    if user_text_checks::CHECK_NAMES.contains(name) {
+      let hits = text_violations.iter().filter(|violation| violation.check == *name).collect::<Vec<_>>();
+      if hits.is_empty() {
+        outcomes.push(outcome(name, true, "no violations"));
+      } else {
+        outcomes.extend(
+          hits.into_iter().map(|violation| outcome(name, false, user_text_checks::page_failure_detail(violation))),
+        );
+      }
+      continue;
+    }
     let check: AssertionCheck = match *name {
       BYTE_INTEGRITY => check_byte_integrity,
       STYLE_VERBATIM => check_style_verbatim,
@@ -1251,6 +1311,24 @@ mod tests {
     path
   }
 
+  fn run_assertions_sync(
+    genre: &str,
+    artifact: &Path,
+    chrome_bin: &str,
+    repo_root: &Path,
+  ) -> anyhow::Result<Vec<AssertionOutcome>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("sessions"))?;
+    run_assertions_sync_with_user_text(
+      genre,
+      artifact,
+      chrome_bin,
+      repo_root,
+      &UserTextChecksConfig::default(),
+      home.path(),
+    )
+  }
+
   fn run_plan(path: &Path, chrome: &str) -> Vec<AssertionOutcome> {
     run_plan_with_height(path, chrome, 800)
   }
@@ -1377,7 +1455,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join("prompts/plan_template.html");
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 9);
+    assert_eq!(outcomes.len(), 12);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
@@ -1562,8 +1640,69 @@ mod tests {
   fn the_waiting_sample_passes_every_waiting_assertion_in_order() {
     let outcomes = run_assertions_sync("waiting", &waiting_sample(), "", &repo_root()).unwrap();
     let names = outcomes.iter().map(|outcome| outcome.name.as_str()).collect::<Vec<_>>();
-    assert_eq!(names, [BYTE_INTEGRITY, STYLE_VERBATIM, FORK_OPEN_SHAPE, FORK_EXPLAINER, ORDINAL_NAMED]);
+    assert_eq!(
+      names,
+      [
+        BYTE_INTEGRITY,
+        STYLE_VERBATIM,
+        FORK_OPEN_SHAPE,
+        FORK_EXPLAINER,
+        ORDINAL_NAMED,
+        TRACKER_ID_NEARBY,
+        SESSION_LINKED,
+        LINK_RENDERABLE,
+      ]
+    );
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
+  }
+
+  #[test]
+  fn every_genre_runs_the_three_shared_user_text_checks() {
+    for genre in ARTIFACT_GENRES {
+      let names = assertion_set(genre).expect("every artifact genre has an assertion set");
+      assert!(user_text_checks::CHECK_NAMES.iter().all(|check| names.contains(check)), "{genre}: {names:?}");
+    }
+  }
+
+  #[test]
+  fn each_user_text_hit_fails_with_its_snippet_block_and_fix() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir(home.path().join("sessions")).unwrap();
+    fs::write(home.path().join("config.yaml"), "user_text_checks:\n  internal_id_patterns: ['zz\\d{3}']\n").unwrap();
+    let mut registry = charliebot_registry::Registry::new();
+    registry.register_package("src.features.user_text_checks", charliebot_user_text_checks::register).unwrap();
+    let config = registry.load_config(home.path()).unwrap();
+    let id = Uuid::new_v4().to_string();
+    fs::create_dir(home.path().join("sessions").join(&id)).unwrap();
+    let chrome = stub_chrome(home.path(), 800);
+    let cases = [
+      ("tracker-id-nearby", "Internal id zz123.", "zz123", "write the Linear id right next to the internal id"),
+      ("session-linked", id.as_str(), id.as_str(), "write the id as"),
+      (
+        "link-renderable",
+        r#"<a href="https://example.invalid/export.tsv">the raw table</a>"#,
+        "export.tsv",
+        "link an HTML page, or the directory that holds the file",
+      ),
+    ];
+    for (index, (check, source, snippet, fix)) in cases.into_iter().enumerate() {
+      let page = write_page(home.path(), &format!("user-text-{index}.html"), &plan_page(source));
+      let outcomes = run_assertions_sync_with_user_text(
+        "plan",
+        &page,
+        chrome.to_str().unwrap(),
+        &repo_root(),
+        config.section::<UserTextChecksConfig>("user_text_checks"),
+        home.path(),
+      )
+      .unwrap();
+      let failures = by_name(&outcomes, check);
+      assert_eq!(failures.len(), 1, "{check}: {outcomes:#?}");
+      assert!(!failures[0].passed, "{check}: {outcomes:#?}");
+      assert!(failures[0].detail.contains(snippet), "{check}: {}", failures[0].detail);
+      assert!(failures[0].detail.contains("block"), "{check}: {}", failures[0].detail);
+      assert!(failures[0].detail.contains(fix), "{check}: {}", failures[0].detail);
+    }
   }
 
   #[test]

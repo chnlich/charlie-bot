@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::net::Ipv6Addr;
+use std::ops::Range;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -263,6 +264,16 @@ impl FileLink {
 struct Candidate {
   link: String,
   markdown_target: bool,
+  span: Range<usize>,
+}
+
+/// One URL or Markdown link target found in reply text, with its byte span.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkTarget {
+  /// The link target without Markdown delimiters or trailing URL punctuation.
+  pub target: String,
+  /// The target's byte span in the source text.
+  pub span: Range<usize>,
 }
 
 /// Trailing punctuation that a link in prose does not keep (`LINK_TRAILING_PUNCTUATION_RE`).
@@ -278,7 +289,7 @@ fn candidates(text: &str) -> Vec<Candidate> {
     let link = trim_url_punctuation(url.as_str());
     if !link.is_empty() {
       let span = (url.start(), url.start() + link.len());
-      found.insert(span, Candidate { link: link.to_string(), markdown_target: false });
+      found.insert(span, Candidate { link: link.to_string(), markdown_target: false, span: span.0..span.1 });
     }
   }
   for pattern in [&*MARKDOWN_INLINE_TARGET_RE, &*MARKDOWN_REFERENCE_TARGET_RE] {
@@ -290,10 +301,26 @@ fn candidates(text: &str) -> Vec<Candidate> {
       };
       let link = if has_url_scheme(raw) { trim_url_punctuation(raw) } else { raw };
       if !link.is_empty() {
-        found.insert((start, start + link.len()), Candidate { link: link.to_string(), markdown_target: true });
+        let span = start..start + link.len();
+        found.insert((span.start, span.end), Candidate { link: link.to_string(), markdown_target: true, span });
       }
     }
   }
+  let markdown_targets = found
+    .values()
+    .filter(|candidate| candidate.markdown_target)
+    .map(|candidate| (candidate.span.start, candidate.link.clone()))
+    .collect::<Vec<_>>();
+  found.retain(|_, candidate| {
+    candidate.markdown_target
+      || !markdown_targets.iter().any(|(start, target)| {
+        candidate.span.start == *start
+          && candidate
+            .link
+            .strip_prefix(target)
+            .is_some_and(|trailing| !trailing.is_empty() && trailing.chars().all(|character| character == ')'))
+      })
+  });
   found.into_values().collect()
 }
 
@@ -510,6 +537,17 @@ pub fn scan_file_links(text: &str, context: Option<&ScanContext>) -> io::Result<
     findings.extend(scan_candidate(&candidate, context)?);
   }
   Ok(findings)
+}
+
+/// Finds URL and Markdown link targets in text without classifying the targets as host files.
+pub fn scan_link_targets(text: &str) -> Vec<LinkTarget> {
+  candidates(text).into_iter().map(|candidate| LinkTarget { target: candidate.link, span: candidate.span }).collect()
+}
+
+/// Classifies one hyperlink target, treating it as a Markdown target so retired mounts and local paths resolve.
+pub fn scan_file_link_target(link: &str, context: Option<&ScanContext>) -> io::Result<Option<FileLink>> {
+  let candidate = Candidate { link: link.to_string(), markdown_target: true, span: 0..link.len() };
+  scan_candidate(&candidate, context)
 }
 
 /// The HTTP 422 detail for the dead findings in `findings` (`dead_links_detail`).

@@ -3,6 +3,7 @@ page_packages	runtime.usage	runtime.usage
 page_packages	runtime.session_api	runtime.session_api
 page_packages	runtime.tasks	runtime.tasks
 page_packages	runtime.triggers	runtime.triggers
+page_packages	src.features.user_text_checks	src.features.user_text_checks
 page_packages	src.features.artifacts	src.features.artifacts
 page_packages	src.features.backup	src.features.backup
 page_packages	src.features.backend_pool	src.features.backend_pool
@@ -72,6 +73,7 @@ startup check	src.features.cron	cron_backend_refs
 startup check	src.features.usage	backend_ids
 config check	src.features.voice	check_default_backend
 config check	src.backends.claude_code	check_claude_pools
+config section	src.features.user_text_checks	user_text_checks
 config section	src.features.artifacts	publish
 config section	src.features.code_server	code_server
 config section	src.features.slack	slack

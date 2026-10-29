@@ -412,7 +412,12 @@ const planPanel = (() => {
     var empty = _getEl('plan-empty-state');
     var viewer = _getEl('plan-viewer');
     var plans = _registry.plans || [];
+    // Every toolbar control but Refresh acts on a plan: the two selectors would
+    // draw as empty boxes and Open in tab would open nothing. A plan-less
+    // session keeps the empty state alone, and the empty state carries Refresh.
+    var toolbar = _getEl('plan-toolbar');
     if (!plans.length) {
+      if (toolbar) toolbar.classList.toggle('hidden', true);
       if (empty) empty.style.display = '';
       if (viewer) { viewer.src = ''; viewer.style.display = 'none'; }
       _loadedViewerKey = null;
@@ -428,6 +433,7 @@ const planPanel = (() => {
       if (bar) bar.innerHTML = '';
       return;
     }
+    if (toolbar) toolbar.classList.toggle('hidden', false);
     if (empty) empty.style.display = 'none';
     if (viewer) viewer.style.display = '';
     _renderSelector();

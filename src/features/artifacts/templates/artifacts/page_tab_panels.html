@@ -15,8 +15,9 @@
         <div id="plan-stale-notice" class="hidden px-4 py-1.5 text-xs text-yellow-400 bg-yellow-900/20 border-b border-yellow-700/40">
           Viewing an older version — the latest version may differ.
         </div>
-        <div id="plan-empty-state" class="flex-1 flex items-center justify-center text-sm text-gray-500">
-          No plans registered for this session.
+        <div id="plan-empty-state" class="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-gray-500">
+          <span>No plans registered for this session.</span>
+          <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
         </div>
         <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
         <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>

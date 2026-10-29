@@ -854,13 +854,20 @@ test('_commitRegistry warns and renders normally when the response carries a non
 
 function makePanelElements() {
   const elements = {};
-  for (const id of ['tab-plans', 'plan-empty-state', 'plan-selector', 'plan-version-selector',
+  for (const id of ['tab-plans', 'plan-toolbar', 'plan-empty-state', 'plan-selector', 'plan-version-selector',
     'plan-stale-notice', 'plan-action-bar']) {
+    const classes = new Set();
     elements[id] = {
       style: {},
       innerHTML: '',
       classList: {
-        add() {}, toggle() {}, contains() { return false; },
+        add(name) { classes.add(name); },
+        remove(name) { classes.delete(name); },
+        toggle(name, force) {
+          if (force) classes.add(name);
+          else classes.delete(name);
+        },
+        contains(name) { return classes.has(name); },
       },
     };
   }
@@ -1168,10 +1175,12 @@ test('onActiveSessionChanged renders the empty state and clears the iframe when 
   await planPanel.refresh();
   assert.ok(viewer.src.indexOf('sessions/A/') !== -1, 'viewer loaded for session A');
   assert.equal(elements['plan-empty-state'].style.display, 'none', 'empty state hidden when A has plans');
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), false, 'toolbar shown when A has plans');
 
   context.SESSION_ID = 'B';
   await planPanel.onActiveSessionChanged();
   assert.equal(elements['plan-empty-state'].style.display, '', 'empty state is shown for the plan-less session B');
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), true, 'toolbar hidden for the plan-less session B');
   assert.equal(viewer.src, '', 'iframe src is cleared');
   assert.equal(elements['plan-viewer'].style.display, 'none', 'viewer is hidden');
 });

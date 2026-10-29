@@ -28,6 +28,16 @@
     .event-row:hover { background: #0f172a; }
 
     pre { white-space: pre-wrap; word-break: break-all; }
+
+    /* A phone cannot fit these two rows at their desktop width. The header's
+       title is its only flexible item, so the download label yields its width
+       first and the icon alone keeps the action reachable. The filter bar keeps
+       its label and input on the first row and moves "Expand all" and "Clear"
+       to a second row rather than squeezing that row. */
+    @media (max-width: 768px) {
+      .events-download-label { display: none; }
+      .events-filter { flex-wrap: wrap; }
+    }
   </style>
 </head>
 <body class="dark bg-slate-900 text-slate-100 min-h-screen">
@@ -45,19 +55,19 @@
     <h1 class="text-sm font-semibold text-slate-200 truncate flex-1">
       <span class="text-slate-500 mr-1">Events:</span>{{ session.name }}
     </h1>
-    <a href="{{ events_url }}" download
+    <a href="{{ events_url }}" download aria-label="Download JSONL"
        class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
       </svg>
-      Download JSONL
+      <span class="events-download-label">Download JSONL</span>
     </a>
     <span id="event-count" class="text-xs text-slate-500"></span>
   </header>
 
   <!-- Filter bar -->
-  <div class="border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900/80 sticky top-14 z-10">
+  <div class="events-filter border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900/80 sticky top-14 z-10">
     <label class="text-xs text-slate-500">Filter by type:</label>
     <input id="type-filter"
            type="text"

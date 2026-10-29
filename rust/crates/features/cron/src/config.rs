@@ -21,31 +21,6 @@ pub struct StepConfig {
   pub distinct_backend_from: Option<String>,
 }
 
-/// Shared fields of the API create model and the strict cron file model.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ScheduledTaskFields {
-  pub name: String,
-  pub cron: String,
-  #[serde(default)]
-  pub prompt_file: Option<String>,
-  #[serde(default)]
-  pub repo: Option<String>,
-  #[serde(default)]
-  pub backend: Option<String>,
-  #[serde(default = "default_timezone")]
-  pub timezone: String,
-  #[serde(default = "default_true")]
-  pub enabled: bool,
-  #[serde(default)]
-  pub project: Option<String>,
-  #[serde(default)]
-  pub allow_failure: bool,
-  #[serde(default)]
-  pub session_id: Option<String>,
-  #[serde(default)]
-  pub mode: Option<String>,
-}
-
 /// A complete scheduled task after prompt pointers have been resolved.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

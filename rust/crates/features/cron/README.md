@@ -11,7 +11,6 @@ waiters in `boundary.rs` are the leaf module the scheduler and the sequence cont
 | `register` | `src/features/cron/__init__.py:5-14` |
 | `config::DEFAULT_TIMEZONE` | `src/features/cron/config.py:14` |
 | `config::StepConfig` | `src/features/cron/config.py:17-37` |
-| `config::ScheduledTaskFields` | `src/features/cron/config.py:40-70` |
 | `config::ScheduledTaskConfig` and its source/backend validation | `src/features/cron/config.py:73-145` |
 | `config::ScheduledTaskError` | `src/features/cron/config.py:148-160` |
 | `GET /api/cron/tasks` | `src/features/cron/api.py:163-196` |

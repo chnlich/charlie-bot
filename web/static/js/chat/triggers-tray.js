@@ -2,15 +2,16 @@
 // Pending triggers tray (chat column)
 // ---------------------------------------------------------------------------
 // The chat column's view of the session's pending delayed triggers: one
-// collapsible tray between the thinking indicator and the input area, listing
-// the schedule_trigger records GET /api/sessions/{id}/pending-triggers
-// returns (pending only, fire_at ascending) with an inline two-step cancel
-// through POST /api/internal/triggers/{sid}/{tid}/cancel. A worker session
-// (no input area) shows it too; a session with zero pending triggers shows
-// nothing at all.
+// collapsible tray between the thinking indicator and the input area. It
+// lists the schedule_trigger records that
+// GET /api/sessions/{id}/pending-triggers returns (pending only, fire_at
+// ascending). Each row's inline two-step cancel posts to
+// POST /api/internal/triggers/{sid}/{tid}/cancel. A worker session (no input
+// area) shows it too; a session with zero pending triggers shows nothing at
+// all.
 //
 // The sidebar bell and this tray are the same signal — the same amber, the
-// same bell glyph — so the status poll is the only refetch signal here: the
+// same bell glyph. So the status poll is the only refetch signal here. The
 // tray remembers the session's last (pending_trigger_count, next_trigger_at)
 // as applySessionStatus hands it over, and refetches when either changes. No
 // timer of its own; an in-tray cancel refetches immediately.
@@ -56,7 +57,7 @@
   }
 
   // The --watch spellings: a local pid renders with its kind prefix so the
-  // bare number cannot read as any other count; remote and slurm targets keep
+  // bare number cannot read as any other count. Remote and slurm targets keep
   // the schedule-trigger --watch form the master registered them with.
   function watchTargetLabel(t) {
     if (t.kind === 'slurm_job') return (t.host ? t.host + ':' : '') + 'slurm:' + t.job_id;
@@ -120,7 +121,7 @@
 
   // The collapsed row container is a flex row (direction row) that wraps below
   // sm: and never wraps from sm: up. Below sm: the message takes the full flex
-  // basis and the last order, so it always starts a second line of its own,
+  // basis and the last order. So it always starts a second line of its own,
   // whatever other nodes join the first line (bell, label, time, +N, chevron).
   // The watch target, the relative time and both separators are sm:-only:
   // line 1 has no room for them, and line 2 belongs to the message.
@@ -187,7 +188,7 @@
   }
 
   // The (count, next) pair the fetched list itself proves: the open fetch
-  // seeds the remembered pair, so the first status poll after a session open
+  // seeds the remembered pair. So the first status poll after a session open
   // refetches only when the state actually moved.
   function statusFromTriggers(triggers) {
     return {

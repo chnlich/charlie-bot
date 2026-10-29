@@ -12,41 +12,64 @@ Your branch prefix is `improve/perf/`.
 
 ## Topics
 
-Read the `duration_ms` median of each `http_request` route in `/tmp/charliebot-logs/server-latest.log`.
-Take the slowest route, or the startup time, or the memory, or the CPU as the topic.
-The live log names the delay that the user feels.
+Measure each GET route that the pages call, on the mock home described below.
+Take the slowest route by median latency as the topic, or take startup, memory or CPU.
+The slowest route is the one a user waits on, so cutting it is the change a user feels.
+The mock home has the production number of sessions, so the numbers show the load that a user meets.
 
-## Measurement
+## Mock home
 
-Measure both sides with `scripts/release/trial.sh --serve <commit> <server binary> -- <command>`.
-Before the change, use main's CI artifact `charliebot-server-<main sha>` on the main tree.
-After the change, use the pull request's artifact `charliebot-server-pr-<head sha>` on the branch tree.
-Serve each artifact at the commit in its name, so the binary and the tree match.
-The command reads `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID`; the `/proc` reads use that pid.
-Measure the two sides back to back in one round.
-The host and the procedure are the same on both sides, so the change is the only difference.
+Generate the mock home only when `~/improve/mock-home/<blob>/` is missing.
+The `<blob>` is `git rev-parse <commit>:tools/improve/mock-home.py`, for the branch commit.
+Run `python3 -I tools/improve/mock-home.py generate <blob dir>` on an empty directory to create it.
+The fixed data keeps the before and after servers on the same bytes, so the two sides compare like with like.
 
-Measure a latency topic this way:
-send 5 warm-up requests, then 50 requests, and keep the median.
-The warm-up keeps cold-start cost out of the sample.
+## Binaries
 
-Measure a startup topic this way:
-measure the time from the process start to the first 200 response, 5 times, and keep the median.
-Each run of `trial.sh --serve` starts the server once, so five runs make five starts.
-The repetition keeps one slow start out of the report.
+Build each server on the round's host, from source with `cargo build --release --locked -p charliebot-server -p charliebot-cli` in `rust/`.
+Build the before server from an export of `origin/main`, and the after server from the branch.
+Both sides use one release profile on one machine, so the change under test is the only difference between them.
 
-Measure a memory topic this way:
-send a fixed 200 requests, then read `VmHWM` from `/proc/<pid>/status`.
+For a change to web files only, build one server from `origin/main` and start it twice, once per tree.
+The server binary then stays equal, so the web files are the only difference.
+
+## Serving
+
+Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-perf/ --seed-home <blob dir> --in-caller-scope <commit> <server binary> -- <command>`.
+The tree root keeps the two trees apart, and the seed gives both servers the same data.
+Create the tree root first: the preflight refuses a missing one, so a round never writes outside its own directory.
+The caller's scope already caps memory on the round's host, so the trial adds no scope of its own.
+
+Run `python3 -I tools/improve/mock-home.py check <blob dir> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
+Stop the round when it exits 1, because that server reads data other than the mock home.
+The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to `<command>`, so every request and every `/proc` read names this trial's server and no other.
+
+Measure the two sides back to back in one round, in the same order.
+Both sides then see the same host load, so the change is the only difference.
+
+## Measures
+
+Measure latency this way: send 5 warm-up requests, then 50 requests, and keep the median of the 50.
+The warm-up keeps first-request cost out of the sample, and the median keeps one slow request out.
+
+Measure startup this way: after the trial exits, read the first line of `server-1.log` in its evidence directory, and the first `http_request` line with `"status":200`; subtract the first timestamp from the second.
+The first line is the server's own first log line, written just after the process starts, so the difference is the run's startup time rather than a wall clock the measuring shell reads.
+Repeat five runs and keep the median, so one slow start does not set the number.
+
+Measure memory this way: after a fixed 200 requests, read `VmHWM` from `/proc/$CHARLIEBOT_SERVE_PID/status`.
 The fixed request count makes the two runs comparable.
 
-Measure a CPU topic this way:
-read `utime` and `stime` from `/proc/<pid>/stat` before and after the same 200 requests.
-Sum `utime` and `stime` in each read, subtract the before sum from the after sum, and divide by `getconf CLK_TCK` to get seconds.
+Measure CPU this way: read `utime` and `stime` from `/proc/$CHARLIEBOT_SERVE_PID/stat` before and after the same 200 requests.
+Sum `utime` and `stime` in each read, subtract the before sum from the after sum, and divide by `getconf CLK_TCK`.
 The fixed request count and the unit conversion make the two runs comparable.
 
 ## Evidence
 
 Write one line per metric in the pull request's `## Evidence` section.
-A line states the numbers: the metric, the before value, the after value, the sample count, and the change.
+Each line gives the metric, the before value, the after value, the sample count and the change.
+A reviewer checks the numbers from the line alone, without a rerun.
+
+Write that the absolute values differ from production, because the host and the content differ.
+Compare the before and after values only within one round, so that no reader sets them against production numbers.
+
 The raw measurement logs stay in the round's evidence directory from the landing protocol; their links go only into the final message.
-A reviewer checks the numbers without rerunning the measurement.

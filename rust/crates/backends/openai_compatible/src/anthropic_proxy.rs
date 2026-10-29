@@ -213,8 +213,8 @@ fn relay_frames(state: Relay) -> impl Stream<Item = Result<sse::Event, io::Error
         return Some((Ok(frame), relay));
       }
       if let Some(failure) = relay.failure.take() {
-        // hyper writes the frames it has been given only when the body waits, so yield once: the frames already
-        // produced reach the client before the failure closes the connection, as the Python server's writes do.
+        // hyper writes the frames it has been given only when the body waits, so yield once. The frames already
+        // produced then reach the client before the failure closes the connection, as the Python server's writes do.
         tokio::task::yield_now().await;
         return Some((Err(failure), relay));
       }

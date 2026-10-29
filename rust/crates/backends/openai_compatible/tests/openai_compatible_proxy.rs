@@ -1,11 +1,11 @@
 //! The Anthropic proxy route of the cc-openai-compatible backend, checked against the Python route.
 //!
 //! `openai_compatible_reference.py` runs the Python route over one case matrix and prints what it did for each case.
-//! This test serves each case's upstream from a loopback server that answers with the case's status and chunks and
-//! records the request it was sent, posts the case's body to the Rust route, and compares: the status, the body with
-//! message ids masked, the request sent upstream, and whether a stream reached its message_stop frame. The route's own
-//! cases (the backend checks, the missing credential, the type factory, the raw separators) follow, as ports of the
-//! Python tests.
+//! This test serves each case's upstream from a loopback server. The server answers with the case's status and
+//! chunks, and records the request it was sent. The test posts the case's body to the Rust route and compares four
+//! results. It checks the status, the body with message ids masked, the request sent upstream, and whether a stream
+//! reached its message_stop frame. The route's own cases (the backend checks, the missing credential, the type
+//! factory, the raw separators) follow, as ports of the Python tests.
 
 use std::collections::HashMap;
 use std::fs;
@@ -252,8 +252,8 @@ fn no_proxy_client() -> reqwest::Client {
   http_client::client(&Settings::default()).unwrap()
 }
 
-/// Posts `body` to a case's route and reads the answer until it ends or breaks: the status, the bytes received, and
-/// the transport failure that cut the body short, if any.
+/// Posts `body` to a case's route and reads the answer until it ends or breaks. It returns the status, the bytes
+/// received, and the transport failure that cut the body short, if any.
 async fn post_case(
   client: &reqwest::Client,
   proxy: SocketAddr,
@@ -410,7 +410,7 @@ fn find(haystack: &[u8], needle: &str) -> usize {
   haystack.windows(needle.len()).position(|window| window == needle.as_bytes()).unwrap()
 }
 
-/// A stream whose JSON string carries raw U+0085 and U+2028 is translated whole, with each frame's name equal to its
+/// A stream whose JSON string carries raw U+0085 and U+2028 is translated whole. Each frame's name stays equal to its
 /// `type`, even when the upstream cuts the frame inside those characters.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stream_with_raw_separator_characters_translates_to_the_same_text() {

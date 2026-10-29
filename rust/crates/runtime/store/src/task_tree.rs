@@ -20,7 +20,9 @@ use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
-use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
+use crate::metadata::{
+  EventRef, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime,
+};
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
 use crate::task_reparent;
@@ -81,17 +83,18 @@ pub struct PatchTask {
   pub task: Option<Option<TaskSpec>>,
   pub subtree_prompt: Option<Option<String>>,
   pub node_prompt: Option<Option<String>>,
+  pub approver: Option<TaskApprover>,
 }
 
 impl PatchTask {
-  /// Whether the body sets `task_parent_id` and no other field: the one change an agent may ask for.
-  fn sets_only_parent(&self) -> bool {
-    self.task_parent_id.is_some()
-      && self.name.is_none()
-      && self.profile.is_none()
-      && self.task.is_none()
-      && self.subtree_prompt.is_none()
-      && self.node_prompt.is_none()
+  /// Whether the body sets `task_parent_id` or `approver` and no other field: the two changes an agent may ask for.
+  fn sets_only_agent_fields(&self) -> bool {
+    let other_fields = self.name.is_some()
+      || self.profile.is_some()
+      || self.task.is_some()
+      || self.subtree_prompt.is_some()
+      || self.node_prompt.is_some();
+    !other_fields && self.task_parent_id.is_some() != self.approver.is_some()
   }
 }
 
@@ -1500,7 +1503,7 @@ impl Store {
   ) -> StoreResult<SessionMetadata> {
     let caller_session_id = match &caller {
       TaskCaller::Operator => None,
-      TaskCaller::Agent { session_id: caller_task } if patch.sets_only_parent() => Some(caller_task.clone()),
+      TaskCaller::Agent { session_id: caller_task } if patch.sets_only_agent_fields() => Some(caller_task.clone()),
       _ => return Err(StoreError::forbidden("task metadata mutations require operator credentials")),
     };
     let guard = self.control_lock().await;
@@ -1508,9 +1511,13 @@ impl Store {
     self.invalidate_tree_index();
     let index = self.tree_index()?;
     let meta = self.load_task_meta(session_id).await?;
-    let PatchTask { name, task_parent_id, profile, task, subtree_prompt, node_prompt } = patch;
+    let PatchTask { name, task_parent_id, profile, task, subtree_prompt, node_prompt, approver } = patch;
     if let Some(caller_task) = caller_session_id.as_deref() {
-      let new_parent = task_parent_id.as_ref().and_then(Option::as_deref);
+      // An approver change keeps the task's parent, so the same subtree scope decides it.
+      let new_parent = match &task_parent_id {
+        Some(parent) => parent.as_deref(),
+        None => meta.task_parent_id.as_deref(),
+      };
       task_reparent::check_agent_scope(&index, caller_task, session_id, new_parent)?;
     }
     let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
@@ -1563,7 +1570,12 @@ impl Store {
           meta.profile = profile;
         }
         if let Some(task) = task {
-          meta.task = task;
+          // A task body carries no approver, so the replaced record keeps the approver it had.
+          let approver = meta.task.as_ref().map_or(TaskApprover::User, |current| current.approver);
+          meta.task = task.map(|task| TaskSpec { approver, ..task });
+        }
+        if let Some(approver) = approver {
+          meta.task.get_or_insert_with(TaskSpec::default).approver = approver;
         }
         if let Some(parent) = task_parent_id {
           meta.task_parent_id = parent;
@@ -4659,6 +4671,7 @@ pub(crate) mod tests {
       task_type: Some(TaskType::Implement),
       keep_worktree: true,
       cold_read: None,
+      ..TaskSpec::default()
     };
     let text = serde_json::to_string(&implement).unwrap();
     assert_eq!(

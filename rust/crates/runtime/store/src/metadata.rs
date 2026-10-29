@@ -136,6 +136,24 @@ pub enum TaskType {
   ColdRead,
 }
 
+/// Who approves a task and takes over its delivery, persisted in `TaskSpec`. `User` holds a manager's self-archive
+/// until the user has opened the session; `Parent` closes it when its run ends.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TaskApprover {
+  #[default]
+  #[serde(rename = "user")]
+  User,
+  #[serde(rename = "parent")]
+  Parent,
+}
+
+impl TaskApprover {
+  /// Whether this is the default approver, which a task record leaves out so that its canonical text stays as it was.
+  pub fn is_user(&self) -> bool {
+    *self == TaskApprover::User
+  }
+}
+
 /// Round feedback value persisted in `round_ratings`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +254,8 @@ pub struct TaskSpec {
   pub keep_worktree: bool,
   #[serde(default)]
   pub cold_read: Option<ColdReadSpec>,
+  #[serde(default, skip_serializing_if = "TaskApprover::is_user")]
+  pub approver: TaskApprover,
 }
 
 impl<'de> Deserialize<'de> for TaskSpec {
@@ -262,6 +282,8 @@ impl<'de> Deserialize<'de> for TaskSpec {
       keep_worktree: bool,
       #[serde(default)]
       cold_read: Option<ColdReadSpec>,
+      #[serde(default)]
+      approver: TaskApprover,
     }
     let fields = Fields::deserialize(deserializer)?;
     if fields.task_type == Some(TaskType::ColdRead) && fields.cold_read.is_none() {
@@ -280,6 +302,7 @@ impl<'de> Deserialize<'de> for TaskSpec {
       task_type: fields.task_type,
       keep_worktree: fields.keep_worktree,
       cold_read: fields.cold_read,
+      approver: fields.approver,
     })
   }
 }

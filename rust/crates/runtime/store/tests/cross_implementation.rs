@@ -905,6 +905,7 @@ async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_by
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
     cold_read: None,
+    ..TaskSpec::default()
   };
   let store = make_store(&shared_home);
   let child = store

@@ -111,6 +111,30 @@ jobs:
         working-directory: rust
         run: cargo test --locked
 
+      # A script test that leaves a stand-in behind reparents it to pid 1. Run after a failed test too, which is
+      # exactly when a leak appears.
+      - name: Check for leaked script-test processes
+        if: always()
+        run: |
+          prefix=/tmp/charliebot-script-
+          leaked=""
+          for entry in /proc/[0-9]*/stat; do
+            pid=${entry#/proc/}
+            pid=${pid%/stat}
+            ppid=$(sed 's/^.*) //' "$entry" 2>/dev/null | cut -d' ' -f2)
+            [ "$ppid" = "1" ] || continue
+            if tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "^${prefix}"; then
+              leaked="$leaked $pid"
+            fi
+          done
+          if [ -n "$leaked" ]; then
+            echo "leaked script-test processes:$leaked" >&2
+            for pid in $leaked; do
+              printf '  %s: %s\n' "$pid" "$(tr '\0' ' ' < "/proc/$pid/cmdline")" >&2
+            done
+            exit 1
+          fi
+
   rust-lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 45

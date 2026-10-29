@@ -203,6 +203,11 @@ fn start_cdp_server(listener: TcpListener, remove_probe_on_measurement: bool) ->
         if let Some(session) = request.get("sessionId") {
           reply["sessionId"] = session.clone();
         }
+        // The CLI removes the probe once it reads this reply, so this removal must come before the reply is sent.
+        if method == "Runtime.evaluate" && remove_probe_on_measurement {
+          let probe = Url::parse(probe_url.as_deref().unwrap()).unwrap().to_file_path().unwrap();
+          fs::remove_file(probe).unwrap();
+        }
         socket.send(Message::Text(reply.to_string().into())).await.unwrap();
         if method == "Page.navigate" {
           probe_url = Some(request["params"]["url"].as_str().unwrap().to_owned());
@@ -210,10 +215,6 @@ fn start_cdp_server(listener: TcpListener, remove_probe_on_measurement: bool) ->
           socket.send(Message::Text(event.to_string().into())).await.unwrap();
         }
         if method == "Runtime.evaluate" {
-          if remove_probe_on_measurement {
-            let probe = Url::parse(probe_url.as_deref().unwrap()).unwrap().to_file_path().unwrap();
-            fs::remove_file(probe).unwrap();
-          }
           server_measurements.fetch_add(1, Ordering::SeqCst);
           return;
         }

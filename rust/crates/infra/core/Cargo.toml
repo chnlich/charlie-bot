@@ -34,6 +34,7 @@ wait-timeout.workspace = true
 test-support = []
 
 [dev-dependencies]
+charliebot-shell-harness.workspace = true
 tempfile.workspace = true
 
 [[bench]]

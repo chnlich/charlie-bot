@@ -169,6 +169,7 @@ pre-recovery step	runtime.agents	backend_pool
 pre-recovery step	runtime.usage	session_usage
 pre-recovery step	runtime.tasks	task_execution
 recovery step	runtime.tasks	task_recovery
+recovery step	src.features.artifacts	headless_renderer_orphans
 trigger step	runtime.triggers	triggers
 let-go step	runtime.tasks	task_execution
 let-go step	src.features.artifacts	headless_renderer

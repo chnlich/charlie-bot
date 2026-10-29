@@ -3,8 +3,8 @@
 //! Startup runs in this order, after the home writer fence and the home seeding:
 //!
 //! 1. the pre-recovery steps, in registration order;
-//! 2. the recovery step, at most one: started as a task before the early services start, and awaited after them, so
-//!    no route, trigger or cron fire starts an agent process before it completes;
+//! 2. the recovery steps, in registration order: each started as a task before the early services start, and awaited
+//!    after them, so no route, trigger or cron fire starts an agent process before they complete;
 //! 3. the early services, in registration order;
 //! 4. the trigger step, at most one, after recovery;
 //! 5. the ready services, in registration order.
@@ -99,13 +99,7 @@ impl Lifespan {
       return Ok(false);
     }
 
-    let recovery = registry.recovery_entry().map(|(name, step)| {
-      let run = step(Arc::clone(&self.features));
-      let outcome = async move { run.await.map_err(|error| format!("{name:?}: {error:#}")) }.boxed().shared();
-      // Python's `create_task`: the recovery runs while the early services start.
-      tokio::spawn(outcome.clone());
-      outcome
-    });
+    let recovery = self.spawn_recovery_steps();
     let recovery_done: Shared<BoxFuture<'static, ()>> = match &recovery {
       Some(outcome) => outcome.clone().map(|_| ()).boxed().shared(),
       None => futures_util::future::ready(()).boxed().shared(),
@@ -134,6 +128,36 @@ impl Lifespan {
       }
     }
     self.start_services(Phase::Ready, &recovery_done).await
+  }
+
+  /// Spawns every registered recovery step as its own task, as Python's `create_task` spawns the one recovery, and
+  /// returns their joined outcome: the early services start while the steps run. The first failing step's error ends
+  /// the join, with the step's name in it.
+  fn spawn_recovery_steps(&self) -> Option<Shared<BoxFuture<'static, Result<(), String>>>> {
+    let runs: Vec<_> = self
+      .features
+      .registry
+      .recovery_steps()
+      .into_iter()
+      .map(|(name, step)| {
+        let run = step(Arc::clone(&self.features));
+        let outcome = async move { run.await.map_err(|error| format!("{name:?}: {error:#}")) }.boxed().shared();
+        tokio::spawn(outcome.clone());
+        outcome
+      })
+      .collect();
+    if runs.is_empty() {
+      return None;
+    }
+    let joined = async move {
+      for run in runs {
+        run.await?;
+      }
+      Ok(())
+    }
+    .boxed()
+    .shared();
+    Some(joined)
   }
 
   async fn start_services(
@@ -324,6 +348,49 @@ mod tests {
 
   fn let_go_only(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.let_go_step("let_go", let_go)
+  }
+
+  /// A second package's recovery step, slow enough that the first recovery's start and end interleave with it.
+  fn recover_second(_features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
+    Box::pin(async {
+      log("second_recovery_start");
+      tokio::time::sleep(Duration::from_millis(20)).await;
+      log("second_recovery_end");
+      Ok(())
+    })
+  }
+
+  fn second_recovery(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.recovery_step("second_recover", recover_second)
+  }
+
+  /// Every registered recovery step runs, and each completes before the trigger step.
+  #[tokio::test]
+  async fn lifespan_runs_every_registered_recovery_step() {
+    let _guard = TEST_LOCK.lock().await;
+    TRACE.lock().unwrap().clear();
+    let home = tempfile::tempdir().unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.features.alpha", alpha).unwrap();
+    registry.register_package("src.features.second", second_recovery).unwrap();
+    registry.register_package("src.features.beta", beta).unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+
+    let mut lifespan = match Lifespan::start(features).await.unwrap() {
+      StartupOutcome::Ready(lifespan) => lifespan,
+      StartupOutcome::Stopped(_) => panic!("startup stopped without a stop request"),
+    };
+    charliebot_compat::http_client::shared_client().unwrap();
+    let started = TRACE.lock().unwrap().clone();
+    let position = |entry: &str| {
+      started.iter().position(|logged| logged == entry).unwrap_or_else(|| panic!("{entry} did not run: {started:?}"))
+    };
+    assert!(position("recovery_end") < position("trigger"));
+    assert!(position("second_recovery_end") < position("trigger"));
+
+    let shutdown = lifespan.shutdown().await;
+    assert!(shutdown.error.is_none(), "{:?}", shutdown.error);
+    assert!(!charliebot_compat::http_client::close_shared_client(), "the shutdown left the shared HTTP client open");
   }
 
   #[tokio::test]

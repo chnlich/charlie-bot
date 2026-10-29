@@ -58,7 +58,7 @@ impl Registry {
       default_lifecycle: Arc::new(DefaultLifecycle),
       default_lifecycle_name: type_name::<DefaultLifecycle>(),
       pre_recovery_steps: crate::registry::Ledger::new("pre-recovery step"),
-      recovery_step: crate::registry::Ledger::new("recovery step"),
+      recovery_steps: crate::registry::Ledger::new("recovery step"),
       trigger_step: crate::registry::Ledger::new("trigger step"),
       let_go_steps: crate::registry::Ledger::new("let-go step"),
       feature_context: std::sync::OnceLock::new(),

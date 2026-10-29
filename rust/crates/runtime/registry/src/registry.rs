@@ -161,7 +161,7 @@ pub struct Registry {
   pub(crate) default_lifecycle: Arc<dyn BackendLifecycle>,
   pub(crate) default_lifecycle_name: &'static str,
   pub(crate) pre_recovery_steps: Ledger<StepFn>,
-  pub(crate) recovery_step: Ledger<StepFn>,
+  pub(crate) recovery_steps: Ledger<StepFn>,
   pub(crate) trigger_step: Ledger<StepFn>,
   pub(crate) let_go_steps: Ledger<StepFn>,
   /// The server's feature context, bound once right after the server builds it. The store's after-turn hooks read it
@@ -205,7 +205,7 @@ impl Registry {
       default_lifecycle: _,
       default_lifecycle_name,
       pre_recovery_steps,
-      recovery_step,
+      recovery_steps,
       trigger_step,
       let_go_steps,
       feature_context: _,
@@ -256,7 +256,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, plan_registry);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
-    append_ledger_inventory(&mut inventory, recovery_step);
+    append_ledger_inventory(&mut inventory, recovery_steps);
     append_ledger_inventory(&mut inventory, trigger_step);
     append_ledger_inventory(&mut inventory, let_go_steps);
     inventory
@@ -1712,10 +1712,10 @@ impl Registry {
     self.pre_recovery_steps.insert(package, name, step)
   }
 
-  /// Register the recovery step. At most one package registers it.
+  /// Register a recovery step. Steps run in registration order, each in its own task.
   pub fn recovery_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
-    self.recovery_step.insert_single(package, name, step)
+    self.recovery_steps.insert(package, name, step)
   }
 
   /// Register the trigger step, which runs after recovery and before the ready services. At most one registers it.
@@ -1737,9 +1737,9 @@ impl Registry {
     self.pre_recovery_steps.pairs().map(|(name, step)| (name, *step)).collect()
   }
 
-  /// The recovery step, if one is registered.
-  pub(crate) fn recovery_entry(&self) -> Option<(&'static str, StepFn)> {
-    self.recovery_step.pairs().next().map(|(name, step)| (name, *step))
+  /// The recovery steps in registration order.
+  pub(crate) fn recovery_steps(&self) -> Vec<(&'static str, StepFn)> {
+    self.recovery_steps.pairs().map(|(name, step)| (name, *step)).collect()
   }
 
   /// The trigger step, if one is registered.

@@ -943,11 +943,6 @@ impl Store {
     Ok(self.tree_index()?.derived_archived_ids.clone())
   }
 
-  /// Return the revision used by task-tree pagination from its cached two-second index.
-  pub fn task_tree_revision(&self) -> StoreResult<String> {
-    Ok(self.tree_index()?.revision.clone())
-  }
-
   /// Return a shared snapshot for a task-tree read page.
   pub fn task_tree_snapshot(&self) -> StoreResult<TaskTreeSnapshot> {
     Ok(TaskTreeSnapshot { index: self.tree_index()? })

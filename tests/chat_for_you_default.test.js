@@ -39,13 +39,13 @@ function pageRig() {
   installScrollTopClamp(root);
   root.appendChild(new FakeElement('DIV', {id: 'streaming-msg'}));
   const stream = root.children[0];
-  const panel = new FakeElement('DIV', {id: 'chat-status-panel', className: 'hidden'});
+  const panel = new FakeElement('DIV', {id: 'chat-status-view', className: 'hidden'});
   const elements = new Map([
     ['messages', root],
     ['streaming-msg', stream],
     ['thinking', new FakeElement('DIV', {id: 'thinking', className: 'hidden'})],
     ['thinking-time', new FakeElement('SPAN', {id: 'thinking-time'})],
-    ['chat-status-panel', panel],
+    ['chat-status-view', panel],
   ]);
   const toggles = ['foryou', 'everything', 'status'].map((option) => {
     const btn = new FakeElement('BUTTON');
@@ -161,24 +161,31 @@ test('a worker session opens in For you, root or child', () => {
   assert.equal(openedView(rig, {profile: 'worker', task_parent_id: 'parent-1'}), 'foryou');
 });
 
-test('a web session shows the status panel in both views', () => {
+test('a web session shows the Status view from either message view', () => {
   const rig = pageRig();
   openedView(rig, {});
-  assert.equal(rig.panel.classList.contains('hidden'), false, 'For you shows the panel');
+  rig.context.setChatView('status');
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'For you selects the Status view');
   rig.context.setChatView('everything');
-  assert.equal(rig.panel.classList.contains('hidden'), false, 'Everything shows the panel');
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'the message views hide it again');
+  rig.context.setChatView('status');
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'Everything selects the Status view too');
   openedView(rig, {id: 'child-a', task_parent_id: 'parent-1'});
-  assert.equal(rig.panel.classList.contains('hidden'), false, 'a child web session shows the panel');
+  rig.context.setChatView('status');
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'a child web session shows the Status view');
 });
 
-test('a thread session and a worker session show no status panel', () => {
+test('a thread session and a worker session show no Status view', () => {
   const rig = pageRig();
   openedView(rig, {slack_origin: SLACK_ORIGIN});
-  assert.equal(rig.panel.classList.contains('hidden'), true, 'a Slack thread session has no panel');
+  rig.context.setChatView('status');
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'a Slack thread session has no Status view');
   openedView(rig, {discord_origin: DISCORD_ORIGIN});
-  assert.equal(rig.panel.classList.contains('hidden'), true, 'a Discord thread session has no panel');
+  rig.context.setChatView('status');
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'a Discord thread session has no Status view');
   openedView(rig, {profile: 'worker'});
-  assert.equal(rig.panel.classList.contains('hidden'), true, 'a worker session has no panel');
+  rig.context.setChatView('status');
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'a worker session has no Status view');
 });
 
 // The toggle's third button: index 2 in the rig's data-chat-view-option list.

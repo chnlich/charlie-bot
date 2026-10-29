@@ -158,8 +158,9 @@
       // The projection the container shows: VIEW_EVERYTHING or VIEW_FOR_YOU.
       this.view = view;
       // The reader's place in Everything, kept while For you is shown, so a
-      // switch back restores it.
+      // switch back restores it. For you keeps its own the same way.
       this.everythingPlace = null;
+      this.forYouPlace = null;
       // For-you state: the empty-state row, and the stream holder that keeps the
       // streaming output off the list.
       this.forYouEmpty = null;
@@ -1164,6 +1165,7 @@
       this.lastUserScrollTop = null;
       this.registry.clear();
       this.everythingPlace = null;
+      this.forYouPlace = null;
       this.measuredFolded.clear();
       this.measuredOpen.clear();
       this.measuredFlat = new WeakMap();
@@ -1183,18 +1185,15 @@
     // the container changes, so a stream paint that moves nothing writes nothing.
 
     // Leaving Everything keeps the reader's place; entering For you pins the
-    // bottom, where the newest message is. Returning restores the place.
+    // bottom, where the newest message is, on the first entry only. Each view's
+    // place saves when the reader leaves it and restores on the return.
     setView(view) {
       if (view !== VIEW_EVERYTHING && view !== VIEW_FOR_YOU) {
         throw new Error('Unknown chat view: ' + view);
       }
       if (view === this.view) return;
-      if (this.view === VIEW_EVERYTHING) {
-        this.everythingPlace = {
-          pinned: this.pinnedIntent,
-          readingAnchor: this.pinnedIntent ? null : this.captureReadingAnchor(),
-        };
-      }
+      if (this.view === VIEW_EVERYTHING) this.everythingPlace = this.readingPlace();
+      else this.forYouPlace = this.readingPlace();
       this.view = view;
       // The pagination sentinel is a page fixture the attach wipe drops; a
       // same-session switch hands it to attach, which puts it back first,
@@ -1203,7 +1202,36 @@
       // keeps it first (the For-you list leads with it). A worker page's
       // sentinel is the engine's own (holdWorkerSentinel), which attach places.
       const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
-      this.attach(Object.assign({sentinel}, view === VIEW_FOR_YOU ? {pinned: true} : this.everythingPlace));
+      const place = view === VIEW_FOR_YOU ? (this.forYouPlace || {pinned: true}) : this.everythingPlace;
+      this.attach(Object.assign({sentinel}, place));
+    }
+
+    // The reader's place as an overlay saves and writes it back: the pin
+    // intent when the reader follows the newest message, otherwise the
+    // reading anchor. The Status view saves it at open and restores it at
+    // close; the view switches save it per view.
+    readingPlace() {
+      return {
+        pinned: this.pinnedIntent,
+        readingAnchor: this.pinnedIntent ? null : this.captureReadingAnchor(),
+      };
+    }
+
+    // Writes a saved place back without remounting the list. A pinned place
+    // needs nothing — the engine kept following the new messages. A historical
+    // place restores its anchor; when the anchored node is not in the DOM yet,
+    // the anchor waits in pendingAnchor and the next projection completes it,
+    // as attach does.
+    restoreReadingPlace(place) {
+      if (!place || place.pinned) return;
+      const anchor = place.readingAnchor;
+      if (!anchor) return;
+      if (this.restoreReadingAnchor(anchor)) {
+        this.readingAnchor = anchor;
+        this.pendingAnchor = null;
+      } else {
+        this.pendingAnchor = anchor;
+      }
     }
 
     // A worker's For you holds only its summary card, so a worker page's

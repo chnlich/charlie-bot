@@ -659,3 +659,162 @@ test('a bottom-pinned reader stays pinned through a strip round trip', () => {
   settle(rig.timers);
   assert.equal(distanceFromBottom(rig.root), 0, 'the strip show kept the pin');
 });
+
+// ---------------------------------------------------------------------------
+// The Status view covers the laid-out list, so the engine keeps projecting
+// under it and a side row (the thinking row, the tray) showing or hiding
+// changes the list's height the way any resize does. The page saves the
+// reader's place at open (readingPlace) and writes it back at close
+// (restoreReadingPlace); these cases drive the two engine methods the way the
+// status panel does. A side row's height stands in for the row: the list
+// grows when the row disappears and shrinks when it comes back.
+// ---------------------------------------------------------------------------
+
+// A mid-history reader whose place the page would save at a Status open.
+function statusOpenRig(prefix, turns, anchorTurn = Math.floor(turns / 2)) {
+  const state = mountEngine(ePage(prefix, turns), {clientHeight: 300, clampScrollTop: true});
+  openAllTurns(state.engine);
+  settle(state.timers);
+  const coarse = engineDebug(state.context, state.root);
+  scrollTo(state.timers, state.root, Math.max(0, coarse.offsets[anchorTurn] - 100));
+  settle(state.timers);
+  const anchorId = `${prefix}t${anchorTurn}_h0`;
+  const target = state.root.querySelector(`[data-message-id="${anchorId}"]`);
+  assert.ok(target, 'the anchor turn rendered after the coarse scroll');
+  const contentTop = target.getBoundingClientRect().top
+    - state.root.getBoundingClientRect().top + state.root.scrollTop;
+  scrollTo(state.timers, state.root, Math.max(0, Math.floor(contentTop) - 20));
+  settle(state.timers);
+  const place = state.engine.readingPlace();
+  assert.equal(place.pinned, false, 'the reader is in history');
+  return {...state, anchorId, place,
+    beforeTop: state.root.scrollTop, beforeY: anchorY(state.root, anchorId)};
+}
+
+test('a side row appearing and disappearing under the Status view moves nothing on the return', () => {
+  const rig = statusOpenRig('sv_', 10, 5);
+
+  // The thinking row appears (the message region shrinks), then disappears.
+  rig.root.clientHeight -= 36;
+  rig.engine.handleResize();
+  settle(rig.timers);
+  rig.root.clientHeight += 36;
+  rig.engine.handleResize();
+  settle(rig.timers);
+
+  rig.engine.restoreReadingPlace(rig.place);
+  assert.equal(rig.root.scrollTop, rig.beforeTop, 'the return wrote the open-time scrollTop back');
+  assert.equal(anchorY(rig.root, rig.anchorId), rig.beforeY,
+      'the read message holds its viewport offset');
+});
+
+// A near-bottom reader for the clamp cases: mounted pinned, then one upward
+// wheel to 10px above the bottom — the only way a reader sits that close to
+// the bottom with the pin intent off.
+function nearBottomRig(prefix) {
+  const state = mountEngine(ePage(prefix, 8), {clientHeight: 300, clampScrollTop: true});
+  openAllTurns(state.engine);
+  settle(state.timers);
+  const bottom = state.root.scrollHeight - state.root.clientHeight;
+  scrollTo(state.timers, state.root, bottom - 10);
+  settle(state.timers);
+  const place = state.engine.readingPlace();
+  assert.equal(place.pinned, false, 'the wheel-up cleared the pin');
+  return {...state, place, bottom, openTop: state.root.scrollTop};
+}
+
+test('a row lost below the list clamps the return to the reachable bottom, pin intent stays off', () => {
+  const rig = nearBottomRig('sw_');
+  const anchorId = rig.place.readingAnchor.id;
+
+  // Status open: a 36px row below the list disappears; the browser clamps the
+  // out-of-range position and reports the echo, and the resize re-projects.
+  rig.root.clientHeight += 36;
+  rig.root.fire('scroll');
+  settle(rig.timers);
+  rig.engine.handleResize();
+  settle(rig.timers);
+
+  rig.engine.restoreReadingPlace(rig.place);
+  const max = rig.root.scrollHeight - rig.root.clientHeight;
+  assert.equal(rig.root.scrollTop, max, 'the return stopped at the reachable bottom');
+  assert.equal(rig.engine.pinnedIntent, false, 'the clamp did not re-arm the pin');
+  const clamp = rig.engine.lastRestoreClamp;
+  assert.ok(clamp, 'the impossible restore was recorded');
+  assert.equal(clamp.id, anchorId);
+  assert.ok(Math.abs((clamp.requestedScrollTop - clamp.limitedScrollTop) - 26) <= 0.5,
+      `the requested position exceeded the limit by the lost 26px (${JSON.stringify(clamp)})`);
+  const heldY = anchorY(rig.root, anchorId);
+  assert.ok(heldY >= 0 && heldY < rig.root.clientHeight, 'the anchored message stays in the viewport');
+  assert.notEqual(rig.root.scrollTop, rig.openTop, 'the reachable bottom sits below the open-time position');
+});
+
+test('the lost row returning before the switch restores the exact open-time position', () => {
+  const rig = nearBottomRig('sx_');
+  const anchorId = rig.place.readingAnchor.id;
+  const openY = anchorY(rig.root, anchorId);
+
+  // The row disappears, then comes back before the reader returns.
+  rig.root.clientHeight += 36;
+  rig.root.fire('scroll');
+  settle(rig.timers);
+  rig.root.clientHeight -= 36;
+  rig.engine.handleResize();
+  settle(rig.timers);
+
+  rig.engine.restoreReadingPlace(rig.place);
+  assert.equal(rig.root.scrollTop, rig.openTop, 'the return sat at the open-time scrollTop');
+  assert.equal(anchorY(rig.root, anchorId), openY, 'the read message holds its open-time offset');
+});
+
+test('a pinned reader returns onto the newest message after arrivals under the Status view', () => {
+  const state = mountEngine(ePage('pn_', 6), {clientHeight: 300, clampScrollTop: true});
+  settle(state.timers);
+  assert.equal(state.engine.pinnedIntent, true, 'mounted pinned');
+  const place = state.engine.readingPlace();
+  assert.equal(place.pinned, true, 'the saved place holds the pin');
+
+  state.engine.appendMessage(eMsg('assistant', 'pn-live', 'arrived under the Status view'), false);
+  settle(state.timers);
+
+  state.engine.restoreReadingPlace(place);
+  assert.equal(state.engine.pinnedIntent, true, 'the return kept the follow');
+  assert.equal(distanceFromBottom(state.root), 0, 'the return sits on the newest message');
+});
+
+test('a For-you history reader returns to the saved message and offset after a round trip', () => {
+  const state = mountEngine(ePage('fp_', 8), {clientHeight: 300, clampScrollTop: true, view: 'foryou'});
+  settle(state.timers);
+  assert.equal(state.engine.view, 'foryou', 'mounted in For you');
+  // The reader wheels up into history.
+  scrollTo(state.timers, state.root, 200);
+  settle(state.timers);
+  assert.equal(state.engine.pinnedIntent, false, 'the reader left the bottom');
+  const cTop = state.root.getBoundingClientRect().top;
+  const anchorEl = [...state.root.querySelectorAll('[data-message-id]')]
+    .filter((el) => el.getBoundingClientRect().height > 0)
+    .find((el) => el.getBoundingClientRect().top - cTop >= -4);
+  assert.ok(anchorEl, 'the viewport shows a message to hold');
+  const anchorId = anchorEl.dataset.messageId;
+  const anchorTop = anchorEl.getBoundingClientRect().top - cTop;
+
+  state.engine.setView('everything');
+  settle(state.timers);
+  state.engine.setView('foryou');
+  settle(state.timers);
+
+  const held = state.root.querySelector(`[data-message-id="${anchorId}"]`);
+  assert.ok(held, 'the read message shows in For you again');
+  const heldY = held.getBoundingClientRect().top - cTop;
+  assert.ok(Math.abs(heldY - anchorTop) <= 0.5, 'the return restored the saved message and offset');
+});
+
+test('a first entry into For you has no saved place and pins the bottom', () => {
+  const state = mountEngine(ePage('fe_', 8), {clientHeight: 300, clampScrollTop: true});
+  settle(state.timers);
+  assert.equal(state.engine.view, 'everything', 'mounted in Everything');
+  state.engine.setView('foryou');
+  settle(state.timers);
+  assert.equal(state.engine.pinnedIntent, true, 'no saved place: the entry pins');
+  assert.equal(distanceFromBottom(state.root), 0, 'the entry landed at the newest message');
+});

@@ -13,12 +13,12 @@ const {loadWebsocketModules} = require('./websocket_context_stub');
 
 // ---------------------------------------------------------------------------
 // The session status surfaces (chat/status-panel.js) on a page of the real chat,
-// sidebar and WebSocket modules. The summary strip (#chat-status-panel) and the
-// full Status view (#chat-status-view) draw from one status state. Rows are read
-// back by their data attributes, so a case asserts structure and the values the
-// panel carries, not the labels. The phone layout comes from a platform stub
-// that switchLayout drives the way platform.js does: a mode change runs each
-// onChange callback.
+// sidebar and WebSocket modules. The Status view (#chat-status-view) covers the
+// message region while the Status view is selected; the waiting count shows on
+// the Status tab's badge. Rows are read back by their data attributes, so a case
+// asserts structure and the values the view carries, not the labels. The phone
+// layout comes from a platform stub that switchLayout drives the way
+// platform.js does: a mode change runs each onChange callback.
 // ---------------------------------------------------------------------------
 
 const STATUS = {
@@ -77,12 +77,18 @@ function panelRig() {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
-  const panel = new FakeElement('DIV', {id: 'chat-status-panel', className: 'hidden'});
-  const view = new FakeElement('DIV', {id: 'chat-status-view', className: 'hidden'});
+  // The view element carries the template's classes (index.html), the way the
+  // page's markup builds it.
+  const view = new FakeElement('DIV', {
+    id: 'chat-status-view',
+    className: 'hidden absolute inset-0 z-20 overflow-y-auto bg-slate-900 p-4 text-xs space-y-1',
+  });
+  const badge = new FakeElement('SPAN', {id: 'status-waiting-count', className: 'hidden'});
+  const newMessagesRow = new FakeElement('BUTTON', {id: 'status-new-messages', className: 'hidden'});
   const scrollButton = new FakeElement('BUTTON', {id: 'scroll-to-bottom', className: 'hidden'});
   const elements = new Map([
-    ['messages', root], ['streaming-msg', stream], ['chat-status-panel', panel], ['chat-status-view', view],
-    ['scroll-to-bottom', scrollButton],
+    ['messages', root], ['streaming-msg', stream], ['chat-status-view', view], ['status-waiting-count', badge],
+    ['status-new-messages', newMessagesRow], ['scroll-to-bottom', scrollButton],
   ]);
   const page = {web_status: null, descendants: [], children: []};
   const statusGets = [];
@@ -122,7 +128,8 @@ function panelRig() {
   // The message list is the other suites' subject: a live message lands there
   // through the stub, and the status panel reads the message it is handed.
   context.appendMessageObject = () => {};
-  return {context, panel, view, scrollButton, page, statusGets, layout, FakeWebSocket: context.WebSocket};
+  return {context, root, view, badge, newMessagesRow, scrollButton, page, statusGets, layout,
+    FakeWebSocket: context.WebSocket};
 }
 
 // A layout switch as platform.js makes it: the mode changes, then each callback runs with the new and old mode.
@@ -167,25 +174,6 @@ async function openSession(rig, session, messages = []) {
   await settled();
 }
 
-// The strip's rows, in order: a row names its kind.
-function stripKinds(panel) {
-  return panel.children.map((el) => el.dataset.statusRow);
-}
-
-function stripRow(panel, kind) {
-  return panel.children.find((el) => el.dataset.statusRow === kind);
-}
-
-// The strip's line 1.
-function summaryLine(panel) {
-  return stripRow(panel, 'summary');
-}
-
-// Line 1's segments without the dot separators.
-function summarySegments(line) {
-  return line.children.filter((el) => el.textContent !== '·');
-}
-
 // The Status view's rows, in order.
 function viewKinds(view) {
   return view.children.map((el) => el.dataset.statusRow);
@@ -220,120 +208,45 @@ async function deliver(rig, frame) {
   await settled();
 }
 
-test('the strip line 1 holds the waiting count, the counts, the Now text and the Status link in order', async () => {
+test('the Status tab badge carries this session\'s waiting count and hides at 0', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(2, 1);
-  await openSession(rig, {web_status: WITH_REMAINING});
-  assert.equal(rig.panel.classList.contains('hidden'), false);
-  assert.deepEqual(stripKinds(rig.panel), ['summary', 'waiting-item', 'waiting-item']);
+  await openSession(rig, {web_status: STATUS});
+  assert.equal(rig.badge.classList.contains('hidden'), false, 'two waiting items show the badge');
+  assert.equal(rig.badge.textContent, '2');
 
-  const segments = summarySegments(summaryLine(rig.panel)).map((el) => el.textContent);
-  assert.deepEqual(segments, [
-    'Waiting on you · 2',
-    'In child sessions · 3',
-    '1 of 2 left',
-    'Now: ' + WITH_REMAINING.now,
-    'Status ›',
-  ], 'the segments read in order');
-
-  const line = summaryLine(rig.panel);
-  assert.equal(line.children[0].dataset.waitingCount, '2');
-  assert.equal(line.querySelector('[data-child-count]').dataset.childCount, '3');
-  assert.equal(line.querySelector('[data-remaining-count]').dataset.remainingCount, '1');
-  assert.equal(line.querySelector('[data-now-text]').dataset.nowText, WITH_REMAINING.now);
-  assert.equal(line.querySelectorAll('[data-status-view-link]').length, 1, 'line 1 ends with one Status link');
-});
-
-test('an empty waiting list reads "Nothing" and a status without Remaining carries no count', async () => {
-  const rig = panelRig();
+  // A child session's waiting items stay out of the badge: the count is this
+  // session's own Waiting on you list.
   await openSession(rig, {web_status: {...STATUS, waiting: []}});
-  const line = summaryLine(rig.panel);
-  assert.equal(line.children[0].textContent, 'Waiting on you · Nothing');
-  assert.equal(line.children[0].dataset.waitingCount, '0');
-  assert.equal(line.querySelectorAll('[data-remaining-count]').length, 0);
-  assert.equal(line.querySelectorAll('[data-child-count]').length, 0);
+  assert.equal(rig.badge.classList.contains('hidden'), true, 'an empty waiting list hides the badge');
+  assert.equal(rig.badge.textContent, '');
+
+  await openSession(rig, {web_status: null});
+  assert.equal(rig.badge.classList.contains('hidden'), true, 'no status hides the badge');
 });
 
-test('the Now segment drops out when the status has no Now text', async () => {
+test('opening the Status view sets inert on the list and closing removes it', async () => {
   const rig = panelRig();
-  await openSession(rig, {web_status: {...STATUS, now: ''}});
-  const segments = summarySegments(summaryLine(rig.panel)).map((el) => el.textContent);
-  assert.deepEqual(segments, ['Waiting on you · 2', 'Status ›']);
+  await openSession(rig, {web_status: STATUS});
+  assert.equal(rig.root.getAttribute('inert'), null, 'the message list takes input in the message views');
+  rig.context.setChatView('status');
+  assert.equal(rig.root.getAttribute('inert'), '', 'the covered list takes no clicks or focus');
+  rig.context.setChatView('foryou');
+  assert.equal(rig.root.getAttribute('inert'), null, 'the return frees the list again');
+
+  // A session switch with the Status view shown clears the attribute too.
+  rig.context.setChatView('status');
+  await openSession(rig, {id: 'session-b', web_status: STATUS});
+  assert.equal(rig.root.getAttribute('inert'), null, 'the new session\'s list is not covered');
 });
 
-test('three own items draw three item lines under line 1, four lines in all', async () => {
-  const rig = panelRig();
-  const items = [1, 2, 3].map((n) => ({text: 'item ' + n, link: n === 1 ? 'https://example.com/a' : null}));
-  await openSession(rig, {web_status: {...STATUS, waiting: items}});
-  assert.deepEqual(stripKinds(rig.panel), ['summary', 'waiting-item', 'waiting-item', 'waiting-item']);
-  assert.equal(stripRow(rig.panel, 'waiting-item').textContent.includes('item 1'), true);
-  assert.equal(stripRow(rig.panel, 'waiting-item').querySelectorAll('[data-open-link]').length, 1,
-      'a safe link ends the item line');
-  assert.equal(rig.panel.querySelectorAll('[data-more-count]').length, 0, 'three items need no more line');
-});
-
-test('five own items draw the first two and a "+3 more" line that opens the Status view', async () => {
-  const rig = panelRig();
-  const items = [1, 2, 3, 4, 5].map((n) => ({text: 'item ' + n, link: null}));
-  await openSession(rig, {web_status: {...STATUS, waiting: items}});
-  assert.deepEqual(stripKinds(rig.panel), ['summary', 'waiting-item', 'waiting-item', undefined],
-      'two item lines and the more line');
-  const more = rig.panel.children[3];
-  assert.equal(more.dataset.moreCount, '3');
-  assert.equal(more.textContent, '+3 more');
-
-  more.onclick();
-  assert.equal(rig.panel.classList.contains('hidden'), true, 'the more line selects the Status view, so the strip hides');
-  assert.equal(rig.view.classList.contains('hidden'), false, 'the Status view shows');
-});
-
-test('an item line cuts its text to one line, carries the waited age and renders the text literally', async () => {
-  const rig = panelRig();
-  const since = new Date(Date.now() - 6.5 * 60 * 60 * 1000).toISOString();
-  const text = 'Retire <b>old</b> server & keep the log';
-  await openSession(rig, {web_status: {...STATUS, waiting: [{text, link: null, since, since_exact: true}]}});
-  const line = stripRow(rig.panel, 'waiting-item');
-  assert.equal(line.children[0].textContent, text, 'the text goes in through textContent');
-  assert.equal(line.children[0].classList.contains('truncate'), true, 'the text cuts to one line');
-  assert.equal(line.querySelector('[data-waiting-age]').textContent, '6h');
-});
-
-test('an item whose link is not a web or host-absolute URL gets no link', async () => {
-  const rig = panelRig();
-  await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Run it', link: 'javascript:alert(1)'}]}});
-  assert.equal(stripRow(rig.panel, 'waiting-item').querySelectorAll('[data-open-link]').length, 0);
-});
-
-test('a phone strip is one line with the counts and the Status link, without the Now text or item lines', async () => {
-  const rig = panelRig();
-  switchLayout(rig, 'mobile');
-  rig.page.descendants = descendantRows(2, 1);
-  await openSession(rig, {web_status: WITH_REMAINING});
-  assert.deepEqual(stripKinds(rig.panel), ['summary']);
-  const line = summaryLine(rig.panel);
-  const segments = summarySegments(line).map((el) => el.textContent);
-  assert.deepEqual(segments, ['Waiting · 2', 'Child · 3', '1 of 2 left', 'Status ›']);
-  assert.equal(line.querySelectorAll('[data-now-text]').length, 0, 'a phone leaves out the Now text');
-});
-
-test('a session with no status shows "No status yet" on both platforms', async () => {
-  for (const mode of ['desktop', 'mobile']) {
-    const rig = panelRig();
-    switchLayout(rig, mode);
-    await openSession(rig, {web_status: null});
-    assert.deepEqual(stripKinds(rig.panel), ['none']);
-    assert.equal(stripRow(rig.panel, 'none').textContent, 'No status yet');
-  }
-});
-
-test('the strip has no Goal row, no context fold and no height cap', async () => {
+test('the Status view scrolls as one page with no height cap', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
-  await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Decide', context: 'Why now.', link: null}]}});
-  assert.equal(stripRow(rig.panel, 'goal'), undefined);
-  assert.equal(rig.panel.querySelectorAll('[data-context]').length, 0);
-  assert.equal(rig.panel.classList.contains('max-h-48'), false);
-  assert.equal(rig.panel.classList.contains('overflow-y-auto'), false);
+  await openSession(rig, {web_status: STATUS});
+  rig.context.setChatView('status');
+  assert.equal(rig.view.classList.contains('overflow-y-auto'), true, 'the whole view scrolls');
+  assert.equal(/max-h-/.test(rig.view.className), false, 'no height cap cuts the waiting items off');
 });
 
 test('the Status view shows the Goal, Remaining, Now, Waiting on you, children and child Now rows in order', async () => {
@@ -345,7 +258,6 @@ test('the Status view shows the Goal, Remaining, Now, Waiting on you, children a
   assert.equal(rig.view.classList.contains('hidden'), false);
   assert.deepEqual(viewKinds(rig.view), ['goal', 'remaining', 'now', 'waiting', 'children', 'children-now']);
   assert.equal(viewRow(rig.view, 'goal').children[1].textContent, WITH_REMAINING.goal);
-  assert.equal(rig.panel.classList.contains('hidden'), true, 'the strip hides while the Status view shows');
 });
 
 test('selecting Status through the toggle holds for the session across a re-open', async () => {
@@ -555,19 +467,6 @@ test('waiting ages show for own items and for descendant items in the Status vie
   assert.equal(viewChildItems(rig.view)[0].querySelector('[data-waiting-age]').textContent, '至少 3d');
 });
 
-test('the strip hides while the Status view shows and returns after the switch back', async () => {
-  const rig = panelRig();
-  await openSession(rig, {web_status: STATUS});
-  rig.context.setChatView('everything');
-  assert.equal(rig.panel.classList.contains('hidden'), false, 'Everything shows the strip');
-  rig.context.setChatView('status');
-  assert.equal(rig.panel.classList.contains('hidden'), true);
-  assert.equal(rig.view.classList.contains('hidden'), false);
-  rig.context.setChatView('foryou');
-  assert.equal(rig.panel.classList.contains('hidden'), false, 'For you shows the strip again');
-  assert.equal(rig.view.classList.contains('hidden'), true);
-});
-
 test('the scroll-to-bottom button hides under the Status view and returns as it was', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
@@ -583,7 +482,7 @@ test('the scroll-to-bottom button hides under the Status view and returns as it 
   assert.equal(rig.scrollButton.classList.contains('hidden'), true, 'a hidden button stays hidden');
 });
 
-test('a live web_status message redraws the strip and the shown Status view', async () => {
+test('a live web_status message redraws the badge and the shown Status view', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
   await deliver(rig, {
@@ -591,10 +490,10 @@ test('a live web_status message redraws the strip and the shown Status view', as
     message: {role: 'web_status', id: 'w1', content: 'Status updated: Now, Waiting on you', web_status: NEWER,
       timestamp: '2026-10-16T21:00:00Z'},
   });
-  assert.equal(summaryLine(rig.panel).querySelector('[data-now-text]').dataset.nowText, NEWER.now);
-  assert.equal(rig.panel.querySelectorAll('[data-waiting-item]').length, 1);
-
+  assert.equal(rig.badge.textContent, '1', 'the badge follows the live status');
   rig.context.setChatView('status');
+  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now);
+
   await deliver(rig, {
     type: 'message',
     message: {role: 'web_status', id: 'w2', content: 'Status updated: Now', web_status: OLDER, timestamp: 't2'},
@@ -608,59 +507,61 @@ test('a web_status message from history replaces the status only when it is newe
   await openSession(rig, {web_status: NEWER}, [
     {role: 'web_status', id: 'w0', content: 'Status updated: Now', web_status: OLDER, timestamp: 't0'},
   ]);
-  assert.equal(summaryLine(rig.panel).querySelector('[data-now-text]').dataset.nowText, NEWER.now,
-      'an older message in history does not move the panel back');
+  rig.context.setChatView('status');
+  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now,
+      'an older message in history does not move the view back');
 
-  await openSession(rig, {id: 'session-b', web_status: null}, [
+  const other = panelRig();
+  await openSession(other, {id: 'session-b', web_status: null}, [
     {role: 'web_status', id: 'w1', content: 'Status updated: Now', web_status: OLDER, timestamp: 't1'},
     {role: 'web_status', id: 'w2', content: 'Status updated: Now', web_status: NEWER, timestamp: 't2'},
   ]);
-  assert.equal(summaryLine(rig.panel).querySelector('[data-now-text]').dataset.nowText, NEWER.now,
+  other.context.setChatView('status');
+  assert.equal(viewRow(other.view, 'now').children[1].children[0].textContent, NEWER.now,
       'the newest message in history sets the status');
 });
 
-test('a web_status_subtree notice triggers one GET and redraws the strip count and the Status view', async () => {
+test('a web_status_subtree notice triggers one GET and redraws the shown Status view', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: STATUS});
   assert.equal(rig.statusGets.length, 1, 'the open fetches the child rows once');
-  assert.equal(summaryLine(rig.panel).querySelector('[data-child-count]').dataset.childCount, '1');
+  rig.context.setChatView('status');
+  assert.equal(viewChildItems(rig.view).length, 1);
 
   rig.page.descendants = descendantRows(2, 2);
   await deliver(rig, {type: 'web_status_subtree', source_session_id: OTHER_CHILD_ID});
   assert.equal(rig.statusGets.length, 2, 'the notice triggers exactly one GET');
-  assert.equal(summaryLine(rig.panel).querySelector('[data-child-count]').dataset.childCount, '4');
-
-  rig.context.setChatView('status');
   assert.equal(viewChildItems(rig.view).length, 4, 'the Status view redraws with the new rows');
 });
 
-test('a session switch redraws the strip for the session it opens and resets the Status view', async () => {
+test('a session switch resets the Status view and draws the session it opens', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {id: 'session-a', web_status: STATUS});
-  assert.equal(summaryLine(rig.panel).querySelector('[data-now-text]').dataset.nowText, STATUS.now);
-
   rig.context.setChatView('status');
+
   rig.page.descendants = [];
   await openSession(rig, {id: 'session-b', web_status: NEWER});
-  assert.equal(rig.view.classList.contains('hidden'), true, 'the Status view resets to the strip');
-  assert.equal(summaryLine(rig.panel).querySelector('[data-now-text]').dataset.nowText, NEWER.now);
-  assert.equal(rig.panel.querySelectorAll('[data-child-count]').length, 0, 'the child count of session-a is gone');
+  assert.equal(rig.view.classList.contains('hidden'), true, 'the Status view resets to the message view');
+  assert.equal(rig.badge.classList.contains('hidden'), false, 'the new session\'s badge shows');
+  assert.equal(rig.badge.textContent, String(NEWER.waiting.length), 'session-a\'s badge count is gone');
+  rig.context.setChatView('status');
+  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now);
+  assert.equal(viewChildItems(rig.view).length, 0, 'the child rows of session-a are gone');
   assert.equal(rig.statusGets.length, 2);
 });
 
-test('a thread session keeps both surfaces hidden when a web_status message lands', async () => {
+test('a thread session keeps the Status view hidden when a web_status message lands', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
   await openSession(rig, {id: 'session-b', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}});
-  assert.equal(rig.panel.classList.contains('hidden'), true);
   assert.equal(rig.view.classList.contains('hidden'), true);
   await deliver(rig, {
     type: 'message',
     message: {role: 'web_status', id: 'w1', content: 'Status updated: Now', web_status: NEWER, timestamp: 't'},
   });
-  assert.equal(rig.panel.classList.contains('hidden'), true, 'a thread session keeps no strip');
+  assert.equal(rig.view.classList.contains('hidden'), true, 'a thread session keeps no Status view');
   assert.equal(rig.statusGets.length, 1, 'and makes no descendant GET');
 });
 
@@ -682,16 +583,18 @@ test('a phone Status view stacks each label above its value, with no label colum
   assert.equal(viewWaitingItems(rig.view).length, 2);
 });
 
-test('a platform.onChange switch redraws both surfaces in the new layout', async () => {
+test('a platform.onChange switch redraws the shown Status view in the new layout', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  assert.deepEqual(stripKinds(rig.panel), ['summary', 'waiting-item', 'waiting-item']);
+  rig.context.setChatView('status');
+  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), false, 'desktop keeps a label column');
 
-  const panel = rig.panel;
+  const view = rig.view;
   switchLayout(rig, 'mobile');
-  assert.equal(rig.panel, panel, 'the panel element is the same');
-  assert.deepEqual(stripKinds(rig.panel), ['summary']);
+  assert.equal(rig.view, view, 'the view element is the same');
+  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), true,
+      'a phone stacks each label above its value');
 
   switchLayout(rig, 'desktop');
-  assert.deepEqual(stripKinds(rig.panel), ['summary', 'waiting-item', 'waiting-item']);
+  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), false, 'back to the label column');
 });

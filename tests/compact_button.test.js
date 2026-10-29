@@ -55,6 +55,7 @@ function loadChatContext(elements) {
     restoreBottomPin: () => {},
     hideStreaming: () => {},
     observeWebStatusMessages: () => {},
+    noteMessageForStatusView: () => {},
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'session-a',
     confirm: () => true,

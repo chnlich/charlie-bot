@@ -344,7 +344,13 @@ class FakeElement {
   }
 
   getAttribute(name) {
-    return this.attributes.get(name) || null;
+    // Like the DOM: an attribute set to the empty string reads back as '', and
+    // only a missing one reads as null.
+    return this.attributes.has(name) ? this.attributes.get(name) : null;
+  }
+
+  removeAttribute(name) {
+    this.attributes.delete(name);
   }
 }
 
@@ -574,7 +580,7 @@ function installScrollTopClamp(root) {
   });
 }
 
-function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}) {
+function mountEngine(messages, {clientHeight = 900, clampScrollTop = false, view = null} = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   root.clientHeight = clientHeight;
   if (clampScrollTop) installScrollTopClamp(root);
@@ -594,7 +600,7 @@ function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}
   installEngineTimers(context, timers);
   context.fetch = async () => ({ok: false, status: 500, json: async () => ({})});
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
-  const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-eng');
+  const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-eng', view ? {view} : {});
   assert.ok(engine, 'engine mounts on a document with createTreeWalker');
   return {context, root, stream, timers, engine};
 }

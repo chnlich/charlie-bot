@@ -1,46 +1,54 @@
 // ---------------------------------------------------------------------------
 // Session status panel (chat column)
 // ---------------------------------------------------------------------------
-// A web session's status draws on two surfaces from one state. The summary
-// strip (#chat-status-panel) sits above the message list in the For-you and
-// Everything views: one line of counts and the Now text, then the session's
-// own Waiting on you items, at most four lines on desktop and one on a phone.
-// The full status (Status view, #chat-status-view) covers the message list
-// area while the Status view is selected; the list stays laid out underneath
-// so the turn engine keeps reading its real height. Chat.ForYou owns the
-// toggle that selects the view (for-you.js); this file owns both surfaces.
-// A thread session and a worker session show neither surface. A web session
-// is one that Chat.ForYou.isWebSession (for-you.js) accepts.
+// A web session's status shows in the Status view (#chat-status-view), which
+// covers the whole message region while the Status view is selected: no border,
+// radius or margin, the same box as the message list, which stays laid out
+// underneath so the turn engine keeps reading its real height. The waiting
+// count shows on the Status tab's badge. Chat.ForYou owns the toggle that
+// selects the view (for-you.js); this file owns the view, the badge and the
+// new-message count row. A thread session and a worker session show none of
+// them. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
 //
 // The status is the session's web_status at open, then the web_status messages of
 // this session, live or in history: the newest updated_at wins, so an older page
-// of history never moves the panel back. The descendant and child rows come from
+// of history never moves the view back. The descendant and child rows come from
 // GET /api/internal/web/status, fetched at open and on each web_status_subtree
 // notice (websocket-handlers.js).
+//
+// Opening the Status view saves the reader's place in the underlying list
+// (turn-engine.js readingPlace) and closes the list to clicks and focus (the
+// inert attribute); closing writes the place back for a reader who was in
+// history and shows the new-message count row when messages arrived.
 (function() {
   const Chat = globalThis.Chat;
 
-  const PANEL_ID = 'chat-status-panel';
   const VIEW_ID = 'chat-status-view';
   const SCROLL_BUTTON_ID = 'scroll-to-bottom';
+  const MESSAGES_ID = 'messages';
+  const BADGE_ID = 'status-waiting-count';
+  const NEW_MESSAGES_ID = 'status-new-messages';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
   // The view name for-yous's toggle carries for the full status.
   const STATUS_VIEW = 'status';
-  // The desktop strip lists its own Waiting on you items up to this many before
-  // the "+K more" line keeps the strip at four lines.
-  const STRIP_ITEM_LINES = 3;
 
   // The session the page shows the status for, and what it draws from. A null
-  // panelSessionId means the page shows neither surface. statusViewShown holds
-  // the Status view's visibility; the strip hides while it is on.
+  // panelSessionId means the page shows none of the surfaces. statusViewShown
+  // holds the Status view's visibility.
   let panelSessionId = null;
   let panelStatus = null;
   let panelDescendants = [];
   let panelChildren = [];
   let statusViewShown = false;
   let panelFetchGen = 0;
+  // The reader's place in the underlying list, saved when the Status view
+  // opens with the session it was saved for, written back when it closes.
+  let savedReadingPlace = null;
+  // Messages that arrived while the Status view showed and that the returning
+  // view will show. Zeroed at each open.
+  let statusViewNewCount = 0;
 
   function textSpan(className, text) {
     const span = document.createElement('span');
@@ -277,106 +285,6 @@
     return el;
   }
 
-  function descendantItemCount() {
-    return panelDescendants.reduce((total, row) => total + row.waiting.length, 0);
-  }
-
-  // ---- Summary strip -------------------------------------------------------
-
-  // The dot separator between the strip line's segments.
-  function stripDot() {
-    return textSpan('shrink-0 text-slate-600', '·');
-  }
-
-  // The strip's one clickable link to the Status view: line 1's "Status ›" and
-  // the "+K more" line of a long own-item list.
-  function statusViewLink(label, className) {
-    const link = document.createElement('button');
-    link.type = 'button';
-    link.className = className;
-    link.textContent = label;
-    link.dataset.statusViewLink = 'true';
-    link.onclick = () => Chat.setChatView(STATUS_VIEW);
-    return link;
-  }
-
-  // Line 1: the Waiting on you count, the descendant count, the Remaining count,
-  // the Now text cut to one line, and the link to the Status view. A phone keeps
-  // the counts and the link only, under the short labels the narrow line holds.
-  function stripLine1() {
-    const phone = platform.isMobile;
-    const line = document.createElement('div');
-    line.className = 'flex items-center gap-2 min-w-0 overflow-hidden whitespace-nowrap';
-    line.dataset.statusRow = 'summary';
-    const waiting = panelStatus.waiting.length;
-    const waitingSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
-      (phone ? 'Waiting · ' : 'Waiting on you · ') + (waiting || 'Nothing'));
-    waitingSpan.dataset.waitingCount = String(waiting);
-    line.appendChild(waitingSpan);
-    const childCount = descendantItemCount();
-    if (childCount) {
-      line.appendChild(stripDot());
-      const childSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
-        (phone ? 'Child · ' : 'In child sessions · ') + childCount);
-      childSpan.dataset.childCount = String(childCount);
-      line.appendChild(childSpan);
-    }
-    if (panelStatus.remaining && panelStatus.remaining.length) {
-      const open = panelStatus.remaining.filter((item) => !item.done).length;
-      line.appendChild(stripDot());
-      const remainingSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
-        open + ' of ' + panelStatus.remaining.length + ' left');
-      remainingSpan.dataset.remainingCount = String(open);
-      line.appendChild(remainingSpan);
-    }
-    if (!phone && panelStatus.now) {
-      line.appendChild(stripDot());
-      const now = textSpan('min-w-0 truncate', 'Now: ' + panelStatus.now);
-      now.dataset.nowText = panelStatus.now;
-      line.appendChild(now);
-    }
-    line.appendChild(statusViewLink('Status ›', 'shrink-0 text-blue-400 hover:text-blue-300'));
-    return line;
-  }
-
-  // The desktop strip's own-item lines: one per item up to three, then a
-  // "+K more" line that opens the Status view. Each line cuts its text to one
-  // line and carries the waited age and the item's safe link.
-  function stripWaitingItem(item) {
-    const line = document.createElement('div');
-    line.className = 'flex items-baseline gap-2 min-w-0';
-    line.dataset.statusRow = 'waiting-item';
-    line.dataset.waitingItem = 'true';
-    line.appendChild(textSpan('min-w-0 truncate text-amber-200', item.text));
-    const age = waitedAgeSpan(item);
-    if (age) line.appendChild(age);
-    const href = safeLink(item.link);
-    if (href) line.appendChild(openLink(href));
-    return line;
-  }
-
-  function stripBody(el) {
-    if (!panelStatus) {
-      const row = statusRow('none');
-      row.appendChild(textSpan('text-slate-400', 'No status yet'));
-      el.appendChild(row);
-      return;
-    }
-    el.appendChild(stripLine1());
-    if (platform.isMobile) return;
-    const items = panelStatus.waiting;
-    // More items than the strip's lines hold: the first two make room for the
-    // "+K more" line that opens the Status view.
-    const shown = items.length > STRIP_ITEM_LINES ? STRIP_ITEM_LINES - 1 : items.length;
-    for (const item of items.slice(0, shown)) el.appendChild(stripWaitingItem(item));
-    if (items.length > STRIP_ITEM_LINES) {
-      const more = statusViewLink('+' + (items.length - shown) + ' more',
-        'text-left text-slate-400 hover:text-slate-200 transition-colors');
-      more.dataset.moreCount = String(items.length - shown);
-      el.appendChild(more);
-    }
-  }
-
   // ---- Status view ---------------------------------------------------------
 
   // The descendants' items, grouped by session: one header per session, its
@@ -448,36 +356,111 @@
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
 
-  // The whole panel: the strip redraws on every status update, and the Status
-  // view redraws with it while it is shown.
+  // The Status view redraws on every status update, and the badge follows the
+  // same state.
   function renderPanel() {
-    const el = document.getElementById(PANEL_ID);
-    if (el) {
-      clearChildren(el);
-      el.classList.toggle('hidden', !panelSessionId || statusViewShown);
-      if (panelSessionId) stripBody(el);
-    }
     const view = document.getElementById(VIEW_ID);
-    if (!view) return;
-    clearChildren(view);
-    view.classList.toggle('hidden', !statusViewShown || !panelSessionId);
-    if (statusViewShown && panelSessionId) statusViewBody(view);
+    if (view) {
+      clearChildren(view);
+      view.classList.toggle('hidden', !statusViewShown || !panelSessionId);
+      if (statusViewShown && panelSessionId) statusViewBody(view);
+    }
+    renderWaitingBadge();
   }
 
-  // The Status view's show and hide, through the toggle's control. Showing it
-  // hides the strip and the floating scroll-to-bottom button, which would
-  // otherwise hover over the status text; hiding it puts the button back as it was.
+  // The Status tab's waiting count: this session's own Waiting on you items
+  // only — a child session's waiting items show in the Status view's child
+  // rows. Hidden at 0 and when the page shows no web session.
+  function renderWaitingBadge() {
+    const badge = document.getElementById(BADGE_ID);
+    if (!badge) return;
+    const count = panelSessionId && panelStatus ? panelStatus.waiting.length : 0;
+    badge.textContent = count ? String(count) : '';
+    badge.classList.toggle('hidden', !count);
+  }
+
+  function engineForMessages() {
+    return Chat.activeTurnEngineFor(document.getElementById(MESSAGES_ID));
+  }
+
+  // The covered list takes no clicks and no focus while the Status view shows.
+  function setListInert(inert) {
+    const list = document.getElementById(MESSAGES_ID);
+    if (!list) return;
+    if (inert) list.setAttribute('inert', '');
+    else list.removeAttribute('inert');
+  }
+
+  function showNewMessagesRow(show) {
+    const row = document.getElementById(NEW_MESSAGES_ID);
+    if (!row) return;
+    row.textContent = show
+      ? statusViewNewCount + ' new message' + (statusViewNewCount === 1 ? '' : 's')
+      : '';
+    row.classList.toggle('hidden', !show);
+  }
+
+  // The count row's jump: back to the newest message, the row goes away.
+  function revealStatusNewMessages() {
+    statusViewNewCount = 0;
+    showNewMessagesRow(false);
+    if (typeof scrollToBottom === 'function') scrollToBottom();
+  }
+
+  // The Status view's show and hide, through the toggle's control. Opening it
+  // hides the floating scroll-to-bottom button, which would otherwise hover
+  // over the status text, saves the reader's place in the underlying list and
+  // zeroes the new-message count; closing it puts the button back as it was,
+  // writes the place back and offers the count row's jump.
   let scrollButtonWasShown = false;
   function setStatusViewShown(shown) {
+    shown = Boolean(shown);
     const btn = document.getElementById(SCROLL_BUTTON_ID);
-    if (shown && !statusViewShown && btn) {
-      scrollButtonWasShown = !btn.classList.contains('hidden');
-      btn.classList.add('hidden');
-    } else if (!shown && statusViewShown && btn) {
-      btn.classList.toggle('hidden', !scrollButtonWasShown);
+    if (shown && !statusViewShown) {
+      if (btn) {
+        scrollButtonWasShown = !btn.classList.contains('hidden');
+        btn.classList.add('hidden');
+      }
+      const engine = engineForMessages();
+      savedReadingPlace = {session: panelSessionId, place: engine ? engine.readingPlace() : null};
+      statusViewNewCount = 0;
+      setListInert(true);
+      showNewMessagesRow(false);
+    } else if (!shown && statusViewShown) {
+      if (btn) btn.classList.toggle('hidden', !scrollButtonWasShown);
+      setListInert(false);
+      restoreReadingPlaceOnClose();
     }
-    statusViewShown = Boolean(shown);
+    statusViewShown = shown;
     renderPanel();
+  }
+
+  // The close-time write-back. A pinned reader needs nothing: the engine kept
+  // following the new messages, so the return lands on the newest one. A
+  // history reader returns to the place saved at open — not the engine's live
+  // anchor, which a mid-Status clamp may have moved. Only the same session's
+  // place restores: a session switch disposes the reader's place with its
+  // engine.
+  function restoreReadingPlaceOnClose() {
+    const saved = savedReadingPlace;
+    savedReadingPlace = null;
+    let restored = false;
+    if (saved && saved.session === panelSessionId && saved.place && !saved.place.pinned) {
+      const engine = engineForMessages();
+      if (engine) engine.restoreReadingPlace(saved.place);
+      restored = true;
+    }
+    showNewMessagesRow(restored && statusViewNewCount > 0);
+  }
+
+  // A committed message of this session while the Status view shows: it counts
+  // for the return view's jump row when that view will show it — For you
+  // applies its row filter (for-you.js), Everything counts every message.
+  function noteMessageForStatusView(msg) {
+    if (!statusViewShown || !panelSessionId) return;
+    const engine = engineForMessages();
+    if (engine && engine.view === 'foryou' && !Chat.ForYou.items([{msg}]).length) return;
+    statusViewNewCount++;
   }
 
   Chat.registerStatusViewControl({setShown: setStatusViewShown});
@@ -558,11 +541,16 @@
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
 
+  // The count row is a page fixture; its click wires once here.
+  const newMessagesRow = document.getElementById(NEW_MESSAGES_ID);
+  if (newMessagesRow) newMessagesRow.onclick = revealStatusNewMessages;
+
   Chat.wire({
     openSessionStatusPanel,
     clearSessionStatusPanel,
     observeWebStatusMessages,
     refreshSessionStatusPanel,
+    noteMessageForStatusView,
   });
 
 })();

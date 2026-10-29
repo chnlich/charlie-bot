@@ -188,13 +188,13 @@
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">For you</button>
           <button type="button" data-chat-view-option="everything" onclick="setChatView('everything')" aria-pressed="false"
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Everything</button>
-          <!-- Status view option: shown for a web session only (chat/for-you.js renderToggle) -->
+          <!-- Status view option: shown for a web session only (chat/for-you.js renderToggle).
+               The badge holds this session's waiting count (chat/status-panel.js), hidden at 0. -->
           <button type="button" data-chat-view-option="status" onclick="setChatView('status')" aria-pressed="false"
-                  class="hidden px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Status</button>
+                  class="hidden px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Status<span id="status-waiting-count" class="hidden ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-white"></span></button>
         </div>
-        <!-- Session status summary strip (chat/status-panel.js); web sessions only -->
-        <div id="chat-status-panel" class="hidden mx-4 mt-2 bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1"></div>
-        <!-- Messages region: the list, and the full Status view that covers it while that view is selected -->
+        <!-- Messages region: the list, the full Status view that covers it while that view is
+             selected, and the new-message count row that offers the jump back to the newest -->
         <div id="chat-messages-region" class="relative flex-1 min-h-0 flex flex-col">
           <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
             <!-- Streaming target (initialized from pending_draft if present) -->
@@ -204,8 +204,15 @@
                    {% if pending_draft and pending_draft.content %}data-md{% endif %}>{% if pending_draft and pending_draft.content %}{{ pending_draft.content }}{% endif %}</div>
             </div>
           </div>
-          <!-- Full status (Goal, Remaining, Now, Waiting on you, child sessions; chat/status-panel.js) -->
-          <div id="chat-status-view" class="hidden absolute inset-0 z-20 m-4 overflow-y-auto bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1"></div>
+          <!-- Full status (Goal, Remaining, Now, Waiting on you, child sessions; chat/status-panel.js).
+               It fills the message region with no border, radius or margin, so the three views are
+               one page size and the list's box never moves across open and close. -->
+          <div id="chat-status-view" class="hidden absolute inset-0 z-20 overflow-y-auto bg-slate-900 p-4 text-xs space-y-1"></div>
+          <!-- New-message count row: messages that arrive while the Status view shows and that the
+              returning view will show count here; the row shows on return for a reader who was in
+              history, and a click jumps to the newest message (chat/status-panel.js). -->
+          <button id="status-new-messages" type="button"
+                  class="hidden absolute top-0 left-0 right-0 z-10 mx-4 mt-2 rounded-lg bg-blue-600/20 px-3 py-2 text-center text-xs text-blue-300 hover:text-slate-200 transition-colors"></button>
         </div>
 
         <!-- Scroll-to-bottom floating button -->

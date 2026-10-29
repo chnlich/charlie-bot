@@ -40,6 +40,11 @@ pub fn agent_environment(inherited: &Env, server_bin_dir: &Path) -> anyhow::Resu
     .into_string()
     .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
   values.insert("PATH".to_string(), rewritten_path);
+  // Chrome asks systemd over the session bus to move itself into its own scope; with the bus disabled it cannot, so a
+  // browser stays in the cgroup of the process that started it: an agent's in the session cgroup, the server's
+  // renderer in the server's. `systemctl --user` and `systemd-run --user` reach systemd over its private socket and
+  // keep working.
+  values.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   values.entry("PYDANTIC_DISABLE_PLUGINS".to_string()).or_insert_with(|| "__all__".to_string());
   Ok(AgentBaseEnvironment { values })
 }
@@ -189,6 +194,22 @@ mod tests {
     assert!(inherited.contains_key("VIRTUAL_ENV"));
   }
 
+  /// The agent environment disables the session bus even when the server inherited a live one, so a browser stays in
+  /// the cgroup of the process that started it.
+  #[test]
+  fn the_agent_environment_disables_the_session_bus() {
+    let root = tempfile::tempdir().unwrap();
+    let server_bin_dir = server_bin_dir_under(root.path());
+    let inherited = Env::from([
+      ("PATH".to_string(), "/usr/bin".to_string()),
+      ("DBUS_SESSION_BUS_ADDRESS".to_string(), "unix:path=/run/user/1001/bus".to_string()),
+    ]);
+
+    let rewritten = agent_environment(&inherited, &server_bin_dir).unwrap();
+
+    assert_eq!(rewritten.values["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
+  }
+
   #[test]
   fn moves_existing_server_dir_to_the_front_and_keeps_pydantic_values() {
     let root = tempfile::tempdir().unwrap();
@@ -281,6 +302,7 @@ mod tests {
     assert_eq!(entries[0], server_bin_dir.to_str().unwrap());
     assert!(entries.contains(&venv_bin.to_str().unwrap()), "the venv bin stays on PATH: {entries:?}");
     assert_eq!(vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
+    assert_eq!(vars["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
   }
 
   /// The startup step as `main` runs it, then the grandchild whose environment the parent checks.

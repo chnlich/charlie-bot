@@ -1,7 +1,7 @@
 {
   "source": "rust/crates/runtime/agents/tests/launch_environment_reference.py",
   "base_commit": "2b212ebd8549c0d3bc86885ae9c30ac648039a0d",
-  "deviation": "Task venv-removal drops the server's venv bin variable from the agent environment and keeps the venv bin entry on PATH, so the recorded Python environment below omits that variable and carries the entry.",
+  "deviation": "Task venv-removal drops the server's venv bin variable from the agent environment and keeps the venv bin entry on PATH, so the recorded Python environment below omits that variable and carries the entry. The session-browser line adds DBUS_SESSION_BUS_ADDRESS=disabled: to every agent environment, which the recorded Python environment below carries in each base and child environment.",
   "expected": [
     {
       "id": "tool-capable-one-shot-cc-claude-pydantic-unset",
@@ -11,7 +11,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -24,7 +25,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -35,7 +37,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -48,7 +51,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -59,7 +63,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
@@ -67,7 +72,8 @@
         "HOME": "$HOME",
         "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -78,7 +84,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
@@ -86,7 +93,8 @@
         "HOME": "$HOME",
         "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -97,7 +105,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
@@ -105,7 +114,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -116,7 +126,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
@@ -124,7 +135,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -135,7 +147,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
@@ -143,7 +156,8 @@
         "HOME": "$HOME",
         "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -154,7 +168,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
@@ -162,7 +177,8 @@
         "HOME": "$HOME",
         "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -173,7 +189,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -188,7 +205,8 @@
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "RUN_ADDITION": "manager-turn",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -199,7 +217,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -214,7 +233,8 @@
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "RUN_ADDITION": "manager-turn",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -225,7 +245,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "current-session",
@@ -235,7 +256,8 @@
         "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "RUN_ADDITION": "manager-turn",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -246,7 +268,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "current-session",
@@ -256,7 +279,8 @@
         "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "RUN_ADDITION": "manager-turn",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -267,7 +291,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -280,7 +305,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     },
     {
@@ -291,7 +317,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -304,7 +331,8 @@
         "HOME": "$HOME",
         "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
-        "SYNTHETIC_SERVER_VALUE": "retained"
+        "SYNTHETIC_SERVER_VALUE": "retained",
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
       }
     }
   ]

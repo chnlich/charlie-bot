@@ -278,7 +278,7 @@ start_in_pane() {
 new_output() { tail -c "+$((NEW_OFFSET + 1))" "$NEW_LOG"; }
 
 # launch_has EVENT [KEY=VALUE...]: this launch's output has an EVENT line whose fields include each KEY=VALUE. It reads
-# the Rust server's JSON-lines log; a line of another event never matches.
+# the server's log in either form `launch-has` reads; a line of another event never matches.
 launch_has() {
   new_output > "$WORK/launch.log"
   helper launch-has "$WORK/launch.log" "$@"

@@ -132,15 +132,19 @@
       + '<span class="text-slate-200 whitespace-nowrap">' + escapeHtml(clockTimeHM(new Date(next.fire_at))) + '</span>'
       + '<span class="hidden sm:inline text-slate-500 whitespace-nowrap">' + relTimeSpan(next.fire_at) + '</span>';
     if (targets.length) {
-      html += '<span class="shrink-0 text-slate-600">·</span>'
-        + '<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate" title="'
+      html += '<span class="shrink-0 text-slate-600 hidden sm:inline">·</span>'
+        + '<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate hidden sm:inline" title="'
         + escapeHtmlAttr(watchTargetsLabel(targets)) + '">' + escapeHtml(watchTargetsLabel(targets)) + '</span>';
     }
     html += '<span class="shrink-0 text-slate-600">·</span>'
       + '<span class="truncate text-slate-400 flex-1 min-w-[3rem]" title="' + escapeHtmlAttr(next.message) + '">'
       + escapeHtml(next.message) + '</span>';
     if (trayTriggers.length > 1) {
-      html += '<span class="text-xs text-slate-500 whitespace-nowrap">+' + (trayTriggers.length - 1) + ' more</span>';
+      // A phone row has no room for " more": the count alone shows below sm,
+      // and the title keeps the full text.
+      html += '<span class="text-xs text-slate-500 whitespace-nowrap" title="'
+        + '+' + (trayTriggers.length - 1) + ' more">+' + (trayTriggers.length - 1)
+        + '<span class="hidden sm:inline"> more</span></span>';
     }
     return html + chevronSvg(false) + '</div>';
   }

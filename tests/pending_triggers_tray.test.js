@@ -124,9 +124,11 @@ test('collapsed tray with one trigger shows no +N more', async () => {
   assert.ok(!tray.innerHTML.includes('more'), tray.innerHTML);
 });
 
-// The narrow-width spellings of the collapsed row: the label noun and the
-// relative time drop out under sm:, the watch label shrinks with its full text
-// in title, and the message keeps a reserved width, truncates and titles.
+// The narrow-width spellings of the collapsed row: the label noun, the
+// relative time and the whole watch target drop out under sm:, the watch
+// label keeps its full text in title for the widths that show it, the message
+// keeps a reserved width, truncates and titles, and "+N more" reads "+N"
+// below sm: with the full text in its title.
 test('the collapsed row shrinks for a 390 px screen and reads as today on desktop', async () => {
   const {context, tray} = buildTrayContext();
   context.setTriggers([
@@ -140,12 +142,17 @@ test('the collapsed row shrinks for a 390 px screen and reads as today on deskto
   assert.match(html, /<span class="hidden sm:inline text-amber-300 font-medium whitespace-nowrap">Next trigger<\/span>/);
   assert.match(html, /<span class="sm:hidden text-amber-300 font-medium whitespace-nowrap">Next<\/span>/);
   assert.match(html, /<span class="hidden sm:inline text-slate-500 whitespace-nowrap"><span class="tray-reltime"/);
-  assert.match(html, /<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate" title="pid 2626907">pid 2626907<\/span>/);
+  // Below sm: the watch target and its dot leave the row; at sm: and wider
+  // the span shows as before with its full text in title.
+  assert.match(html, /<span class="shrink-0 text-slate-600 hidden sm:inline">·<\/span>/);
+  assert.match(html, /<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate hidden sm:inline" title="pid 2626907">pid 2626907<\/span>/);
   assert.match(html, /<span class="truncate text-slate-400 flex-1 min-w-\[3rem\]" title="DeepSeek 恢复或帖子新回复">/);
+  // "+N more" reads "+N" below sm:; the title keeps the full text.
+  assert.match(html, /<span class="text-xs text-slate-500 whitespace-nowrap" title="\+1 more">\+1<span class="hidden sm:inline"> more<\/span><\/span>/);
   // Desktop: the same items as before, none of them dropped from the markup.
   assert.match(html, /Next trigger/);
   assert.match(html, /\(in 3h 52m\)/);
-  assert.match(html, /\+1 more/);
+  assert.match(html, /\+1<span class="hidden sm:inline"> more<\/span>/);
 });
 
 test('a long watch label keeps its full text in title while the span can shrink', async () => {

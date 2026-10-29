@@ -924,13 +924,10 @@ impl TaskCompletion {
     Ok((202, self.pending_close_answer(session_id, request_id)?))
   }
 
-  /// The archive answer while a close request waits. A session whose last reply is unread holds it until the user
-  /// opens the session; every other session closes when its run ends.
+  /// The archive answer while a close request waits, read from the session's metadata as it is on disk now.
   fn pending_close_answer(&self, session_id: &str, request_id: &str) -> StoreResult<Value> {
-    if self.store().read_metadata_fresh(session_id)?.is_some_and(|meta| waits_for_user_view(&meta)) {
-      return Ok(json!({"archived": [], "pending": PENDING_UNTIL_USER_VIEW}));
-    }
-    Ok(json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}))
+    let meta = self.store().read_metadata_fresh(session_id)?;
+    Ok(pending_archive_answer(meta.as_ref(), session_id, request_id))
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -2134,7 +2131,7 @@ fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidenc
 }
 
 /// The archive answer's `pending` text for a session that waits for the user's view.
-const PENDING_UNTIL_USER_VIEW: &str = "closes when the user opens this session";
+pub const PENDING_UNTIL_USER_VIEW: &str = "closes when the user opens this session";
 
 /// Whether the session's close waits for the user's view now: its approver is the user, it is not a Slack or Discord
 /// thread session (whose replies the user reads in the thread, never on the web), and its last reply is unread.
@@ -2143,6 +2140,15 @@ fn waits_for_user_view(meta: &SessionMetadata) -> bool {
     ["slack_origin", "discord_origin"].iter().any(|key| meta.extra.get(*key).is_some_and(|value| !value.is_null()));
   let approver = meta.task.as_ref().map_or(TaskApprover::User, |task| task.approver);
   approver == TaskApprover::User && !thread_origin && meta.has_unread
+}
+
+/// The archive answer while a close request waits. `meta` is `None` when the session has no metadata file. The CLI's
+/// lost-response readback answers through this function too, so the user-view text and its condition have one owner.
+pub fn pending_archive_answer(meta: Option<&SessionMetadata>, session_id: &str, request_id: &str) -> Value {
+  if meta.is_some_and(waits_for_user_view) {
+    return json!({"archived": [], "pending": PENDING_UNTIL_USER_VIEW});
+  }
+  json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"})
 }
 
 fn sorted_unique(mut values: Vec<String>) -> Vec<String> {

@@ -103,6 +103,10 @@ struct Module {
   literals: Vec<Literal>,
   /// The production functions of the module's own items; empty for a test module.
   functions: Vec<FunctionRecord>,
+  /// The production statics of the module's own items and macro invocations; empty for a test module.
+  statics: Vec<StaticRecord>,
+  /// The production `use` items that import a process-environment writer; empty for a test module.
+  environment_uses: Vec<EnvironmentUse>,
 }
 
 struct Literal {
@@ -271,6 +275,7 @@ impl Builder<'_> {
     }
     let literals = if test { Vec::new() } else { production_literals(items) };
     let functions = if test { Vec::new() } else { production_functions(items) };
+    let (statics, environment_uses) = if test { (Vec::new(), Vec::new()) } else { production_global_state(items) };
     let child_mods = collector.child_mods;
     let children = child_mods.iter().map(|node| node.ident.to_string()).collect();
     self.modules.insert(
@@ -287,6 +292,8 @@ impl Builder<'_> {
         idents: collector.idents,
         literals,
         functions,
+        statics,
+        environment_uses,
       },
     );
 
@@ -1141,7 +1148,8 @@ const FORMAT_TABLE: &[FormatRow] = &[
   },
 ];
 
-/// A production function of a module, with the names its body uses and the decode and encode calls it makes.
+/// A production function of a module, with the names its body uses and the decode, encode and environment-write calls
+/// it makes.
 struct FunctionRecord {
   name: String,
   line: usize,
@@ -1151,6 +1159,8 @@ struct FunctionRecord {
   decodes: BTreeSet<String>,
   /// The encode calls, by callee path.
   encodes: BTreeSet<String>,
+  /// The calls to a process-environment writer in the body.
+  environment_writes: Vec<EnvironmentWrite>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1171,6 +1181,13 @@ impl FunctionRecord {
         self.encodes.insert(joined);
       }
       None => {}
+    }
+  }
+
+  /// Record a call by its callee path when the path ends in a process-environment writer.
+  fn note_environment_write(&mut self, path: &[String], line: usize) {
+    if let Some(writer) = path.last().filter(|writer| ENVIRONMENT_WRITERS.contains(&writer.as_str())) {
+      self.environment_writes.push(EnvironmentWrite { writer: writer.clone(), line });
     }
   }
 }
@@ -1209,6 +1226,7 @@ impl FunctionCollector {
       names: BTreeSet::new(),
       decodes: BTreeSet::new(),
       encodes: BTreeSet::new(),
+      environment_writes: Vec::new(),
     });
   }
 
@@ -1287,7 +1305,9 @@ impl<'ast> Visit<'ast> for FunctionCollector {
     if let Expr::Path(callee) = &*node.func
       && let Some(record) = self.current()
     {
-      record.note_call(&path_segments(&callee.path));
+      let path = path_segments(&callee.path);
+      record.note_call(&path);
+      record.note_environment_write(&path, callee.path.span().start().line);
     }
     syn::visit::visit_expr_call(self, node);
   }
@@ -1319,7 +1339,9 @@ fn scan_macro_tokens(tokens: TokenStream, record: &mut FunctionRecord) {
         if let Some(TokenTree::Group(group)) = trees.get(index + 1)
           && group.delimiter() == Delimiter::Parenthesis
         {
-          record.note_call(&call_path_before(&trees, index));
+          let path = call_path_before(&trees, index);
+          record.note_call(&path);
+          record.note_environment_write(&path, ident.span().start().line);
         }
       }
       TokenTree::Group(group) => scan_macro_tokens(group.stream(), record),
@@ -1388,6 +1410,175 @@ fn format_failure(file: &str, function: &FunctionRecord, row: &FormatRow) -> Str
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The global-state rule.
+
+/// The process-environment writers. A production call whose callee path ends in one of these names changes the
+/// environment, and so does a production `use` that imports one.
+const ENVIRONMENT_WRITERS: [&str; 6] = ["set_var", "remove_var", "setenv", "unsetenv", "putenv", "clearenv"];
+
+/// The one file whose production code may change the process environment.
+const ENVIRONMENT_OWNER: &str = "runtime/agents/src/agent_environment.rs";
+
+const PRIVATE_STATIC_HINT: &str = "Remove the visibility modifier: the module exposes mutable state through \
+                                   functions, and shared data that never changes is a `const` or an access function.";
+
+const OWNED_ENVIRONMENT_HINT: &str = "Change the process environment in `replace_process_environment`.";
+
+/// A production `static` declaration: its name, its line and whether it carries a visibility modifier.
+struct StaticRecord {
+  name: String,
+  line: usize,
+  has_visibility: bool,
+}
+
+/// A production `use` that imports a process-environment writer.
+struct EnvironmentUse {
+  writer: String,
+  line: usize,
+}
+
+/// A call in a production function whose callee path ends in a process-environment writer.
+struct EnvironmentWrite {
+  writer: String,
+  line: usize,
+}
+
+/// The global-state rule's failures: each production `static` with a visibility modifier, and each production place
+/// outside the owner file that changes the process environment, sorted by file and line.
+fn global_state_failures(workspace: &Workspace) -> Vec<String> {
+  let mut failures: Vec<(String, usize, String)> = Vec::new();
+  for item in &workspace.crates {
+    for target in &item.targets {
+      for module in target.modules.values() {
+        let file = rel(&workspace.root, &module.file);
+        for record in &module.statics {
+          if record.has_visibility {
+            failures.push((
+              file.clone(),
+              record.line,
+              format!(
+                "{file}:{}: `{}` is a production `static` with a visibility modifier. {PRIVATE_STATIC_HINT}",
+                record.line, record.name
+              ),
+            ));
+          }
+        }
+        if file.ends_with(ENVIRONMENT_OWNER) {
+          continue;
+        }
+        for record in &module.environment_uses {
+          failures.push((
+            file.clone(),
+            record.line,
+            format!(
+              "{file}:{}: a `use` imports the process-environment writer `{}`. {OWNED_ENVIRONMENT_HINT}",
+              record.line, record.writer
+            ),
+          ));
+        }
+        for function in &module.functions {
+          for write in &function.environment_writes {
+            failures.push((
+              file.clone(),
+              write.line,
+              format!(
+                "{file}:{}: `{}` calls the process-environment writer `{}`. {OWNED_ENVIRONMENT_HINT}",
+                write.line, function.name, write.writer
+              ),
+            ));
+          }
+        }
+      }
+    }
+  }
+  failures.sort_by(|left, right| (&left.0, left.1).cmp(&(&right.0, right.1)));
+  failures.into_iter().map(|(_, _, message)| message).collect()
+}
+
+/// Collects a module's production statics and the production `use` items that import a process-environment writer.
+#[derive(Default)]
+struct GlobalStateCollector {
+  statics: Vec<StaticRecord>,
+  environment_uses: Vec<EnvironmentUse>,
+}
+
+impl<'ast> Visit<'ast> for GlobalStateCollector {
+  fn visit_item(&mut self, node: &'ast Item) {
+    if !is_cfg_test(item_attrs(node)) {
+      syn::visit::visit_item(self, node);
+    }
+  }
+
+  fn visit_item_mod(&mut self, _node: &'ast ItemMod) {
+    // An inline module is its own scope, and `process_scope` reads it.
+  }
+
+  fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+    self.statics.push(StaticRecord {
+      name: node.ident.to_string(),
+      line: node.ident.span().start().line,
+      has_visibility: !matches!(node.vis, syn::Visibility::Inherited),
+    });
+  }
+
+  fn visit_item_use(&mut self, node: &'ast ItemUse) {
+    let line = node.use_token.span.start().line;
+    let mut flattened = Vec::new();
+    flatten_use(&node.tree, &mut Vec::new(), &mut flattened);
+    for item in flattened {
+      let FlatUse::Name { path, .. } = item else { continue };
+      if let Some(writer) = path.last().filter(|writer| ENVIRONMENT_WRITERS.contains(&writer.as_str())) {
+        self.environment_uses.push(EnvironmentUse { writer: writer.clone(), line });
+      }
+    }
+  }
+
+  fn visit_macro(&mut self, node: &'ast syn::Macro) {
+    collect_macro_statics(node.tokens.clone(), &mut self.statics);
+    syn::visit::visit_macro(self, node);
+  }
+}
+
+/// The `static` declarations that a macro invocation's tokens spell with a visibility modifier. Syn expands no macro,
+/// so a `thread_local!` block's `pub static` is read from its tokens.
+fn collect_macro_statics(tokens: TokenStream, statics: &mut Vec<StaticRecord>) {
+  let trees: Vec<TokenTree> = tokens.into_iter().collect();
+  for (index, tree) in trees.iter().enumerate() {
+    match tree {
+      TokenTree::Group(group) => collect_macro_statics(group.stream(), statics),
+      TokenTree::Ident(ident) if ident == "static" && has_visibility_before(&trees, index) => {
+        if let Some(TokenTree::Ident(name)) = trees.get(index + 1) {
+          statics.push(StaticRecord { name: name.to_string(), line: ident.span().start().line, has_visibility: true });
+        }
+      }
+      TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+    }
+  }
+}
+
+/// Whether the tokens before `trees[index]` hold a visibility modifier: `pub`, or `pub` and its `(..)` group.
+fn has_visibility_before(trees: &[TokenTree], index: usize) -> bool {
+  let before = index.checked_sub(1).and_then(|position| trees.get(position));
+  let group_before = index.checked_sub(2).and_then(|position| trees.get(position));
+  match (before, group_before) {
+    (Some(TokenTree::Ident(ident)), _) => ident == "pub",
+    (Some(TokenTree::Group(group)), Some(TokenTree::Ident(ident))) => {
+      group.delimiter() == Delimiter::Parenthesis && ident == "pub"
+    }
+    _ => false,
+  }
+}
+
+/// The production statics and process-environment imports of a module's items.
+fn production_global_state(items: &[Item]) -> (Vec<StaticRecord>, Vec<EnvironmentUse>) {
+  let mut collector = GlobalStateCollector::default();
+  for item in items {
+    collector.visit_item(item);
+  }
+  (collector.statics, collector.environment_uses)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The real workspace.
 
 fn real_workspace() -> &'static Workspace {
@@ -1449,6 +1640,12 @@ fn no_name_is_spelled_outside_its_owner() {
 fn every_file_kind_is_read_and_written_by_its_owner() {
   let failures = format_failures(real_workspace(), FORMAT_TABLE);
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn no_global_state_outside_its_owner() {
+  let failures = global_state_failures(real_workspace());
+  assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -2019,6 +2216,75 @@ fn fixture_count(home: &Path) -> usize {
         .to_string(),
     ],
     "the format rule fails each decode and encode outside the owner, and passes the owner, a pass-on and a test fn"
+  );
+}
+
+/// The global-state rule on a synthetic workspace. Each public static fails, the one whose type is a type alias of a
+/// `Mutex` and the plain `&str` one alike, and so do `pub(crate)`, `pub(super)` and `pub(in ..)` and the `pub static`
+/// inside `thread_local!`. The production calls to `set_var` and `setenv` fail, and so does the aliased `use`. A private
+/// static and a `#[cfg(test)]` function pass. Each line number below is the line of the fixture text.
+#[test]
+fn the_global_state_rule_finds_each_break() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  let lib = r##"use std::sync::{Mutex, OnceLock};
+
+pub type Shared = Mutex<u8>;
+
+pub static SHARED: OnceLock<Shared> = OnceLock::new();
+
+pub(crate) static PLAIN: &str = "synthetic";
+
+pub(super) static SUPER: &str = "synthetic";
+
+pub(in crate) static IN_CRATE: &str = "synthetic";
+
+static PRIVATE: OnceLock<u8> = OnceLock::new();
+
+thread_local! {
+  pub static STEPS: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn write_std() {
+  std::env::set_var("SYNTHETIC_NAME", "synthetic");
+}
+
+pub fn write_libc() {
+  unsafe { libc::setenv("SYNTHETIC_NAME", "synthetic", 1) };
+}
+
+use std::env::set_var as other_name;
+
+#[cfg(test)]
+fn test_write() {
+  std::env::set_var("SYNTHETIC_NAME", "synthetic");
+}
+"##;
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/owner"])),
+      ("crates/infra/owner/Cargo.toml", crate_manifest("owner-crate", &[], &[])),
+      ("crates/infra/owner/src/lib.rs", lib.to_string()),
+    ],
+  );
+  let workspace = load_workspace(root);
+  let file = "crates/infra/owner/src/lib.rs";
+
+  assert_eq!(
+    global_state_failures(&workspace),
+    vec![
+      format!("{file}:5: `SHARED` is a production `static` with a visibility modifier. {PRIVATE_STATIC_HINT}"),
+      format!("{file}:7: `PLAIN` is a production `static` with a visibility modifier. {PRIVATE_STATIC_HINT}"),
+      format!("{file}:9: `SUPER` is a production `static` with a visibility modifier. {PRIVATE_STATIC_HINT}"),
+      format!("{file}:11: `IN_CRATE` is a production `static` with a visibility modifier. {PRIVATE_STATIC_HINT}"),
+      format!("{file}:16: `STEPS` is a production `static` with a visibility modifier. {PRIVATE_STATIC_HINT}"),
+      format!("{file}:20: `write_std` calls the process-environment writer `set_var`. {OWNED_ENVIRONMENT_HINT}"),
+      format!("{file}:24: `write_libc` calls the process-environment writer `setenv`. {OWNED_ENVIRONMENT_HINT}"),
+      format!("{file}:27: a `use` imports the process-environment writer `set_var`. {OWNED_ENVIRONMENT_HINT}"),
+    ],
+    "the global-state rule fails each public static and each environment write, and passes a private static and a \
+     cfg(test) function"
   );
 }
 

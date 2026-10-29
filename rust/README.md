@@ -128,13 +128,18 @@ roots copy.
   `{}` parameters.
   *Purpose:* a rename in one crate otherwise leaves the other crate compiling, and the break shows only at run time.
 - **The process environment changes only at startup.** `runtime/agents/src/agent_environment.rs` is the one production
-  place that sets or removes a process environment variable, and it does so before any thread starts.
+  place that sets or removes a process environment variable, and it does so before any thread starts. The structure
+  test `no_global_state_outside_its_owner` in `crates/app/structure/tests/structure.rs` checks the rule: a production
+  call to `set_var`, `remove_var`, `setenv`, `unsetenv`, `putenv` or `clearenv`, and a production `use` of one, fail
+  outside that file.
   *Purpose:* a write to the environment races with every thread that reads it, so one owner that runs first keeps that
   race out of the server.
-- **Mutable statics stay private to their module.** A `static` that holds mutable state (a `Lazy`, `OnceLock`, `Mutex`
-  or atomic) has no visibility modifier, and its module exposes it through functions.
-  *Purpose:* a public static lets any crate change shared state without the owning module's checks, so no reader can
-  tell which code changed it.
+- **A production `static` stays private to its module.** A production `static` has no visibility modifier; its module
+  exposes mutable state through functions, and shared data that never changes is a `const` or an access function. The
+  structure test `no_global_state_outside_its_owner` in `crates/app/structure/tests/structure.rs` checks the rule, a
+  `static` declared inside `thread_local!` included.
+  *Purpose:* a public static lets any module change shared state without the owning module's checks, so no reader can
+  tell which code changed it, and the access function gives those checks one place to live.
 - **The PACKAGES list alone decides registration order.** The `PACKAGES` list in `rust/crates/app/packages/src/lib.rs`
   sets the order in which packages register; `RUNTIME` in the same file registers before it.
   *Purpose:* routes, page parts, metadata keys, template paths and lifespan steps follow registration order

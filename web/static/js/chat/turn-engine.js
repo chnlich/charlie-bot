@@ -1289,11 +1289,26 @@
       return this.forYouHolder;
     }
 
+    // Whether a node carries a layout box. A display:none row (a collapsed
+    // N-steps band's messages, the hidden stream holder) has none: its rect
+    // reads (0, 0), so a rect scan would take it for a node pinned to the
+    // viewport's top edge and anchor an offset that tracks the container's
+    // top instead of the content. Only a laid-out node holds a reading
+    // position.
+    hasLayoutBox(el) {
+      for (let n = el; n; n = n.parentElement) {
+        if (n.classList && n.classList.contains('hidden')) return false;
+        if (n.hasAttribute && n.hasAttribute('hidden')) return false;
+      }
+      return true;
+    }
+
     // The reader's place in the For-you list: the message straddling the top
     // edge, or the first message when the list starts below the edge.
     captureForYouAnchor() {
       const cTop = this.container.getBoundingClientRect().top;
-      const nodes = this.container.querySelectorAll('[data-message-id]');
+      const nodes = [...this.container.querySelectorAll('[data-message-id]')]
+        .filter((node) => this.hasLayoutBox(node));
       let pick = nodes[0] || null;
       for (const node of nodes) {
         if (node.getBoundingClientRect().top <= cTop + 1) pick = node;
@@ -1359,21 +1374,21 @@
       const turnAnchor = () => (segEl.dataset.turnKey != null
         ? {kind: 'turn', key: segEl.dataset.turnKey, offset: segTop - cTop}
         : null);
+      const nodes = [...segEl.querySelectorAll('[data-message-id]')]
+        .filter((node) => this.hasLayoutBox(node));
       if (segTop > cTop + 1) {
         // The top edge sits in the spacer or margin above this segment's real
         // box: anchor its first message, wherever it lands below the edge.
-        const first = segEl.querySelector('[data-message-id]');
+        const first = nodes[0];
         if (first) return anchorOf(first);
         return turnAnchor();
       }
-      if (seg.kind === 'turn' && segEl.dataset.turnKey != null
-          && !segEl.querySelector('[data-message-id]')) {
+      if (seg.kind === 'turn' && segEl.dataset.turnKey != null && !nodes.length) {
         // A fold row or placeholder fills the segment: the wrap identity is
         // the only stable anchor.
         return turnAnchor();
       }
       let straddling = null;
-      const nodes = segEl.querySelectorAll('[data-message-id]');
       for (const node of nodes) {
         if (node.getBoundingClientRect().top <= cTop + 1) straddling = node;
         else break;

@@ -243,8 +243,17 @@ class FakeElement {
   // Deterministic layout stand-in for the turn engine: inline pixel heights
   // win (spacers, placeholders), `.hidden` collapses, otherwise the height is
   // the element's own base plus the sum of its children, with a default leaf
-  // height for text-bearing leaves.
+  // height for text-bearing leaves. A hidden element (or one inside one) has
+  // no box: like the browser over display:none, its rect reads (0, 0) — a
+  // rect scan must not mistake that for a position at the viewport's top
+  // edge.
   getBoundingClientRect() {
+    for (let node = this; node; node = node.parentElement) {
+      if ((node.classList && node.classList.contains('hidden'))
+          || (node.hasAttribute && node.hasAttribute('hidden'))) {
+        return {height: 0, top: 0};
+      }
+    }
     return {
       height: fakeElementHeight(this),
       top: fakeElementTop(this) - fakeAncestorScrollOffset(this),

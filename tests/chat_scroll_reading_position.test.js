@@ -13,6 +13,7 @@ const {
   distanceFromBottom,
   openAllTurns,
   fakeEngineNode,
+  loadChatContext,
   makeEngineTimers,
   installEngineTimers,
   installScrollTopClamp,
@@ -167,9 +168,11 @@ test('a genuine wheel-up inside the 150px band stops both append and stream foll
 
   const pausedTop = state.root.scrollTop;
   // The reader's place is the first message at or below the viewport top, the
-  // node a real reader would be holding.
+  // node a real reader would be holding. A collapsed steps band's rows have
+  // no box (their rect reads (0, 0)), so they are not holders.
   const cTop = state.root.getBoundingClientRect().top;
   const anchorEl = [...state.root.querySelectorAll('[data-message-id]')]
+    .filter((el) => el.getBoundingClientRect().height > 0)
     .find((el) => el.getBoundingClientRect().top - cTop >= -4);
   assert.ok(anchorEl, 'the viewport shows a message to hold');
   const anchorId = anchorEl.dataset.messageId;
@@ -532,4 +535,120 @@ test('folding the read turn parks its row at the reading offset and reopening re
   const held = messageYOrHidden(rig.root, rig.anchorId);
   assert.ok(held != null && Math.abs(held - rig.anchorY) <= 0.5,
       'reopening put the reading message back at its offset');
+});
+
+// ---------------------------------------------------------------------------
+// The status strip sits above the list in the page column: selecting the
+// Status view hides it and moves the list's top edge by the strip's height
+// plus its margin. The reading anchor must be a node that moves with the
+// content — a hidden row (a collapsed steps band's messages) has no box, its
+// rect reads (0, 0), and anchoring it makes every strip move come back as a
+// scroll correction of exactly the strip's height.
+// ---------------------------------------------------------------------------
+
+// A column rig: the strip element above the list, inside one parent, so
+// hiding the strip moves the container's top the way the page's does. The
+// message builder hides the step messages the way the N-steps band does.
+function stripRig(prefix, turns) {
+  const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
+  root.clientHeight = 300;
+  installScrollTopClamp(root);
+  const stream = new FakeElement('DIV', {id: 'streaming-msg'});
+  root.appendChild(stream);
+  const strip = new FakeElement('DIV', {id: 'chat-status-panel'});
+  strip.__baseHeight = 42;
+  const column = new FakeElement('DIV');
+  column.appendChild(strip);
+  column.appendChild(root);
+  const timers = makeEngineTimers();
+  const {context} = loadChatContext({
+    createTreeWalker() {
+      return {};
+    },
+    getElementById(id) {
+      if (id === 'messages') return root;
+      if (id === 'streaming-msg') return stream;
+      return null;
+    },
+  });
+  installEngineTimers(context, timers);
+  context.fetch = async () => ({ok: false, status: 500, json: async () => ({})});
+  context.Chat.buildTurnEngineMessageNode = (msg) => {
+    const el = fakeEngineNode(msg);
+    if (/^step/.test(msg.content)) el.classList.add('hidden');
+    return el;
+  };
+  const engine = context.Chat.TurnEngine.mountIfAvailable(root, ePage(prefix, turns), 'sess-strip');
+  assert.ok(engine && engine.alive, 'the engine mounts the chat container');
+  return {context, root, strip, timers, engine};
+}
+
+// A mid-history reader whose top edge cuts an open turn between its head and
+// its conclusion, with the turn's hidden step rows between them in tree
+// order — the exact scan state the collapsed steps band creates.
+function stripReadingRig(prefix, turns, anchorTurn = Math.floor(turns / 2)) {
+  const rig = stripRig(prefix, turns);
+  openAllTurns(rig.engine);
+  settle(rig.timers);
+  const anchorId = `${prefix}t${anchorTurn}_h0`;
+  // Stage one: a coarse genuine scroll toward the anchor's model offset, the
+  // way a wheel journey materializes the turns around it. Stage two: the fine
+  // scroll that parks the top edge inside the anchor turn.
+  const coarse = engineDebug(rig.context, rig.root);
+  scrollTo(rig.timers, rig.root, Math.max(0, coarse.offsets[anchorTurn] - 100));
+  settle(rig.timers);
+  const head = rig.root.querySelector(`[data-message-id="${anchorId}"]`);
+  assert.ok(head, 'the anchor turn rendered after the coarse scroll');
+  const contentTop = head.getBoundingClientRect().top
+    - rig.root.getBoundingClientRect().top + rig.root.scrollTop;
+  scrollTo(rig.timers, rig.root, Math.floor(contentTop) + 20);
+  settle(rig.timers);
+  return {...rig, anchorId};
+}
+
+const stripAnchorY = (root, id) => {
+  const el = root.querySelector(`[data-message-id="${id}"]`);
+  assert.ok(el, `message ${id} is in the DOM`);
+  return el.getBoundingClientRect().top - root.getBoundingClientRect().top;
+};
+
+test('a hidden step row never carries the reading position across a strip move', () => {
+  const rig = stripReadingRig('st_', 10, 5);
+  const anchor = rig.engine.readingAnchor;
+  assert.equal(anchor.kind, 'message', 'the reader holds a message');
+  assert.equal(anchor.id, rig.anchorId, 'the anchor is the visible straddling head');
+  const before = rig.root.scrollTop;
+  const headY = stripAnchorY(rig.root, rig.anchorId);
+
+  // Status selected: the strip hides and the list's top edge moves up.
+  rig.strip.classList.add('hidden');
+  rig.engine.handleResize();
+  settle(rig.timers);
+  assert.equal(rig.root.scrollTop, before, 'the strip hide moved the scroll nothing');
+  assert.equal(stripAnchorY(rig.root, rig.anchorId), headY,
+      'the read message held its viewport offset');
+
+  // Back to the message view: the strip shows again.
+  rig.strip.classList.remove('hidden');
+  rig.engine.handleResize();
+  settle(rig.timers);
+  assert.equal(rig.root.scrollTop, before, 'the round trip returned the exact scrollTop');
+  assert.equal(stripAnchorY(rig.root, rig.anchorId), headY,
+      'the read message held its viewport offset through the round trip');
+});
+
+test('a bottom-pinned reader stays pinned through a strip round trip', () => {
+  const rig = stripRig('stp_', 8);
+  settle(rig.timers);
+  assert.equal(distanceFromBottom(rig.root), 0, 'fresh mount is bottom-pinned');
+
+  rig.strip.classList.add('hidden');
+  rig.engine.handleResize();
+  settle(rig.timers);
+  assert.equal(distanceFromBottom(rig.root), 0, 'the strip hide kept the pin');
+
+  rig.strip.classList.remove('hidden');
+  rig.engine.handleResize();
+  settle(rig.timers);
+  assert.equal(distanceFromBottom(rig.root), 0, 'the strip show kept the pin');
 });

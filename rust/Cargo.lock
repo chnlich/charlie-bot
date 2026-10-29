@@ -362,7 +362,6 @@ dependencies = [
  "memchr",
  "mime-db",
  "nix",
- "procfs",
  "regex",
  "serde",
  "serde_json",

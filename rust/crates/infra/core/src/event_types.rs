@@ -59,7 +59,6 @@ pub const UNREAD_CHANGED: &str = "unread_changed";
 pub const SESSION_RENAMED: &str = "session_renamed";
 pub const SESSION_GROUP_CHANGED: &str = "session_group_changed";
 pub const TASK_TREE_CHANGED: &str = "task_tree_changed";
-pub const RUN_LAUNCHED: &str = "run_launched";
 pub const TASK_CREATED: &str = "task_created";
 pub const TASK_CLOSE_REQUESTED: &str = "task_close_requested";
 pub const TASK_CLOSED: &str = "task_closed";

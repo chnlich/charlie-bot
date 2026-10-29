@@ -10,7 +10,6 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use crate::exit::CliExit;
-use crate::json_out;
 use crate::skew;
 use crate::urlencode::urlencode;
 use crate::wire::{Method, TransportError, WireRequest, WireResponse};
@@ -168,11 +167,6 @@ fn rejection_exit(
   let exit_code =
     rejection_exit_codes.iter().find(|(status, _)| *status == response.status).map(|(_, code)| *code).unwrap_or(1);
   CliExit::contract(Value::Object(error), exit_code)
-}
-
-/// One JSON error line exactly as the CLI prints it, for tests that assert on the shape.
-pub fn exit_line(error: &Value) -> String {
-  json_out::render(error, None)
 }
 
 /// `post_internal_api` on the process transport: base URL and auth headers read per call.

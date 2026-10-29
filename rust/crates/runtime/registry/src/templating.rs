@@ -141,6 +141,23 @@ impl Templating {
     context: &serde_json::Value,
     request: &Parts,
   ) -> Result<Response, RenderError> {
+    self.render_page_with_substitutions(features, name, context, request, &[])
+  }
+
+  /// Render a page, then write each `(placeholder, text)` pair's text where the page carries its placeholder.
+  ///
+  /// The template engine copies every value it writes, and a page can carry one value far larger than its template.
+  /// Such a value renders as a short placeholder and is substituted into the finished HTML, so one request copies it
+  /// once instead of once per engine stage. A placeholder that the rendered page does not carry fails the render,
+  /// because serving the placeholder would break the page's script.
+  pub fn render_page_with_substitutions(
+    &self,
+    features: &FeatureContext,
+    name: &str,
+    context: &serde_json::Value,
+    request: &Parts,
+    substitutions: &[(&str, &str)],
+  ) -> Result<Response, RenderError> {
     let globals = features
       .registry
       .template_globals()
@@ -151,7 +168,14 @@ impl Templating {
       .as_object_mut()
       .expect("a page context is a JSON object")
       .insert("request".to_string(), request_context(request));
-    let html = self.render(name, &context, globals)?;
+    let mut html = self.render(name, &context, globals)?;
+    for (placeholder, text) in substitutions {
+      if !html.contains(placeholder) {
+        let message = format!("{name}: the rendered page does not carry the placeholder {placeholder:?}");
+        return Err(RenderError::Template(Error::new(ErrorKind::InvalidOperation, message)));
+      }
+      html = html.replace(placeholder, text);
+    }
     // `no-store` sends every back navigation and tab restore to the server, so the page never runs
     // JavaScript from a cached copy that references an older static asset version.
     let mut response = responses::html(html);
@@ -364,6 +388,41 @@ mod tests {
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body, "synthetic-label GET /notes?page=2");
+  }
+
+  /// A substitution writes the text where the page carries the placeholder, and an absent placeholder fails the
+  /// render instead of serving the page with the placeholder in place of its text.
+  #[tokio::test]
+  async fn render_page_substitutes_a_placeholder_and_refuses_a_page_without_it() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("splice.html"), "const DATA = {{ payload|safe }};").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/splice").body(()).unwrap().into_parts();
+    let context = json!({"payload": "PLACEHOLDER"});
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    let response = templating
+      .render_page_with_substitutions(
+        &features,
+        "splice.html",
+        &context,
+        &parts,
+        &[("PLACEHOLDER", "[{\"name\": \"Synthetic\"}]")],
+      )
+      .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body, "const DATA = [{\"name\": \"Synthetic\"}];");
+
+    let error = templating
+      .render_page_with_substitutions(&features, "splice.html", &context, &parts, &[("ABSENT", "[]")])
+      .unwrap_err();
+    assert_eq!(error.kind(), "TemplateError");
   }
 
   #[test]

@@ -306,7 +306,7 @@ test('For-you and Everything use the same round buttons and action boundaries', 
   settle(forYou.timers);
   const separatorLine = separatorLineFor(forYou.root, separatorMessage.event_index);
   assert.deepEqual(buttonInventory(forYouLine), buttonInventory(separatorLine));
-  assert.equal(forYouLine.innerHTML, forYou.context.Chat.roundButtonsHtml('sess-fy', separatorMessage));
+  assert.equal(forYouLine.innerHTML, forYou.context.Chat.separatorRowInnerHtml('sess-fy', separatorMessage));
   assert.equal(buttonsOf(forYouLine).length, 5);
   assert.deepEqual(buttonsOf(forYouLine).slice(-2).map((button) => button.dataset.roundRatingEvent), [
     'round-s', 'round-s',
@@ -346,6 +346,43 @@ test('Everything separator HTML matches the output before button extraction', ()
   const hash = crypto.createHash('sha256').update(html).digest('hex');
 
   assert.equal(hash, 'b3b5d700bd9a4c066c2201175dde400ab370db4fb3e96551dbbc1e8ef013d06e');
+});
+
+// The For-you row as its element serializes: its class, its data attributes in the
+// order the engine sets them, and its inner markup.
+function serializedRow(el) {
+  const attrs = Object.entries(el.dataset)
+      .map(([key, value]) => ` data-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}="${value}"`);
+  return `<div class="${el.className}"${attrs.join('')}>${el.innerHTML}</div>`;
+}
+
+test('a For-you round row is the Everything separator row without its data-message attributes', () => {
+  const messages = replyRound();
+  const rig = forYouRig(messages);
+  const row = forYouButtonRow(rig.root).querySelector('.separator-line');
+  const everything = rig.context.renderMessage(messages[messages.length - 1], 'sess-fy');
+
+  assert.equal(serializedRow(row), everything.replace(/ data-message-[a-z-]+="[^"]*"/g, ''));
+  assert.equal(row.innerHTML.split('separator-hairline').length - 1, 2, 'the row has both hairlines');
+  assert.ok(row.innerHTML.includes('response complete'), 'the row has the response complete label');
+});
+
+// The Everything separator markup for the shapes the shared row must leave unchanged: a Run's
+// end, a round without an event index and a round without thinking seconds.
+test('Everything separator HTML for run_end, no event index and no thinking seconds is unchanged', () => {
+  const rig = forYouRig([]);
+  const shapes = [
+    [eMsg('separator', 'end-s', '', {kind: 'run_end', thinking_seconds: 65, event_index: 703}),
+      'b48ec3e1a9da713f77bc0f6757e89231f10ba6395902a9797a60f1fe93fbf7d4'],
+    [eMsg('separator', 'noidx-s', '', {thinking_seconds: 4}),
+      '8c80c1309e30bbd6b78e3e7b2075bdbe2135018b8f7e28165084759082cc043d'],
+    [eMsg('separator', 'nosec-s', '', {event_index: 705}),
+      'f6cc9dc995a5bfeeac99160fd39c9d72b8359e9777b49c9073b6c0203dc3805c'],
+  ];
+  for (const [msg, expected] of shapes) {
+    const html = rig.context.renderMessage(msg, 'sess-fy');
+    assert.equal(crypto.createHash('sha256').update(html).digest('hex'), expected, msg.id);
+  }
 });
 
 test('For you shows an error row with every line of its text', () => {

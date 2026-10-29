@@ -1261,9 +1261,10 @@
       if (!wrapper) {
         wrapper = document.createElement('div');
         const row = document.createElement('div');
-        row.className = 'flex items-center gap-3 py-2 px-4 separator-line';
+        row.className = Chat.SEPARATOR_ROW_CLASS;
         row.dataset.eventIndex = String(msg.event_index);
-        row.innerHTML = Chat.roundButtonsHtml(this.sessionId, msg);
+        if (msg.thinking_seconds != null) row.dataset.thinkingSeconds = String(msg.thinking_seconds);
+        row.innerHTML = Chat.separatorRowInnerHtml(this.sessionId, msg);
         wrapper.appendChild(row);
         this.forYouRoundButtonRows.set(key, wrapper);
       }

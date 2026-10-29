@@ -99,7 +99,7 @@
    (#messages), and a phone is narrower than that line, so the controls past the right edge
    had no visible position. A phone draws the divider as the row's own top border and stacks
    the label above the controls, which wrap when the next one does not fit. The For-you
-   view's button-only row carries no separator-label and keeps the desktop line. */
+   round row carries the same markup and takes the same phone layout. */
 @media (max-width: 768px) {
   .separator-line:has(> .separator-label) {
     flex-wrap: wrap; justify-content: center; row-gap: 0.25rem;

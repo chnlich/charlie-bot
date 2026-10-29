@@ -476,6 +476,26 @@ function roundButtonsHtml(sessionId, msg) {
   return buttons;
 }
 
+// The round separator's row class, shared by the Everything separator (renderMessage) and
+// the For-you round row (turn-engine.js), so both draw the same line.
+const SEPARATOR_ROW_CLASS = 'flex items-center gap-3 py-2 px-4 separator-line group/sep';
+
+// The row's inner markup: a hairline, the label, the round's buttons and a second hairline.
+// separator-hairline and separator-label are the phone layout's hooks (styles.css):
+// a phone hides the hairlines and stacks the label above the controls.
+function separatorRowInnerHtml(sessionId, msg) {
+  let sepLabel = "response complete" + (msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "");
+  if (msg.kind === "run_end") {
+    // The end of one Run: its duration, no rating and no clone buttons.
+    sepLabel = "run ended" + (msg.thinking_seconds != null
+      ? " &middot; " + formatRunDuration(msg.thinking_seconds) : "");
+  }
+  return "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>"
+    + "<span class=\"text-xs text-slate-500 whitespace-nowrap separator-label\">" + sepLabel + "</span>"
+    + roundButtonsHtml(sessionId, msg)
+    + "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>";
+}
+
 function repaintRoundButtons(root) {
   Chat.refreshAllRoundRatingButtons(root);
   separatorButtons.forEach((button) => {
@@ -907,25 +927,12 @@ function renderMessage(msg, sessionId) {
       + escapeHtml(msg.content) + "</div></div>";
   }
   if (msg.role === "separator") {
-    var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
     var secondsAttr = msg.thinking_seconds != null
       ? " data-thinking-seconds=\"" + escapeHtmlAttr(msg.thinking_seconds) + "\"" : "";
-    var sepLabel = "response complete" + timeStr;
-    var buttons = roundButtonsHtml(sessionId, msg);
-    if (msg.kind === "run_end") {
-      // The end of one Run: its duration, no rating and no clone buttons.
-      sepLabel = "run ended" + (msg.thinking_seconds != null
-        ? " &middot; " + formatRunDuration(msg.thinking_seconds) : "");
-    }
     var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
-    // separator-hairline and separator-label are the phone layout's hooks (styles.css):
-    // a phone hides the hairlines and stacks the label above the controls.
-    return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
+    return "<div class=\"" + SEPARATOR_ROW_CLASS + "\""
       + messageIdentityAttrs(msg) + eventIndexAttr + secondsAttr + ">"
-      + "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>"
-      + "<span class=\"text-xs text-slate-500 whitespace-nowrap separator-label\">" + sepLabel + "</span>"
-      + buttons
-      + "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div></div>";
+      + separatorRowInnerHtml(sessionId, msg) + "</div>";
   }
   return "";
 }
@@ -1012,6 +1019,8 @@ const CHAT_ONLY = {
   registerMessagePostProcessor,
   registerSeparatorButton,
   roundButtonsHtml,
+  SEPARATOR_ROW_CLASS,
+  separatorRowInnerHtml,
   repaintRoundButtons,
   registerDeliveryLink,
   CLONE_SVG,

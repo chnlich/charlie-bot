@@ -332,10 +332,18 @@ function buildSidebarIndicatorContext(ids) {
 // Map keys are the element ids renderUsageFromData looks up in
 // web/static/js/sidebar/session-view.js; an id rename on either side breaks the lookup.
 function buildUsageElements() {
+  // The bar and the compact line sit inside the meter track, as they do in
+  // index.html: renderUsageFromData hides the track through the bar's parent.
+  const meter = createElement();
+  const bar = createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}});
+  const compactLine = createElement({className: 'absolute top-0 h-full w-0.5 bg-white hidden', style: {left: '0%'}});
+  meter.appendChild(bar);
+  meter.appendChild(compactLine);
   return new Map([
     ['usage-indicator', createElement({className: 'hidden'})],
-    ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
-    ['usage-compact-line', createElement({className: 'absolute top-0 h-full w-0.5 bg-white hidden', style: {left: '0%'}})],
+    ['usage-meter', meter],
+    ['usage-bar', bar],
+    ['usage-compact-line', compactLine],
     ['usage-text', createElement({textContent: ''})],
     ['usage-cost', createElement({textContent: ''})],
   ]);

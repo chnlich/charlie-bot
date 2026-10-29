@@ -367,10 +367,10 @@ test('first paint does not fetch when the tail page already fills the container'
 });
 
 // ---------------------------------------------------------------------------
-// renderUsageFromData: unknown context + cost cell rendering
+// renderUsageFromData: context and cost cell rendering
 // ---------------------------------------------------------------------------
 
-test('renderUsageFromData shows unknown and hides the bar when context_tokens is null', () => {
+test('renderUsageFromData shows the cost alone when the context reading is missing', () => {
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
@@ -385,12 +385,33 @@ test('renderUsageFromData shows unknown and hides the bar when context_tokens is
   assert.equal(elements.get('usage-text').textContent, 'unknown');
   assert.match(elements.get('usage-bar').className, /hidden/);
   assert.equal(elements.get('usage-bar').style.width, '0%');
-  // The cost cell still renders.
+  // The cost cell still renders, and the empty meter and the unknown reading stay hidden beside it.
   assert.equal(elements.get('usage-cost').textContent, '$0.50');
   assert.equal(elements.get('usage-indicator').classList.contains('hidden'), false);
+  assert.equal(elements.get('usage-meter').classList.contains('hidden'), true);
+  assert.equal(elements.get('usage-text').classList.contains('hidden'), true);
+  assert.equal(elements.get('usage-cost').classList.contains('hidden'), false);
 });
 
-test('renderUsageFromData shows unknown when only context_full is null', () => {
+test('renderUsageFromData keeps the indicator hidden when the record has no readings', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: null,
+    context_full: null,
+    context_compact_at: null,
+    total_cost_usd: null,
+    model: '',
+  });
+
+  assert.equal(elements.get('usage-indicator').classList.contains('hidden'), true);
+  assert.equal(elements.get('usage-meter').classList.contains('hidden'), true);
+  assert.equal(elements.get('usage-text').classList.contains('hidden'), true);
+  assert.equal(elements.get('usage-cost').classList.contains('hidden'), true);
+});
+
+test('renderUsageFromData hides an incomplete context reading with no cost', () => {
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
@@ -404,8 +425,9 @@ test('renderUsageFromData shows unknown when only context_full is null', () => {
 
   assert.equal(elements.get('usage-text').textContent, 'unknown');
   assert.match(elements.get('usage-bar').className, /hidden/);
-  // N/A cost still renders in the cell.
+  // An incomplete reading with no cost leaves the header empty.
   assert.equal(elements.get('usage-cost').textContent, 'N/A');
+  assert.equal(elements.get('usage-indicator').classList.contains('hidden'), true);
 });
 
 test('renderUsageFromData draws the bar when both context fields are present', () => {
@@ -424,6 +446,9 @@ test('renderUsageFromData draws the bar when both context fields are present', (
   assert.doesNotMatch(elements.get('usage-bar').className, /hidden/);
   assert.equal(elements.get('usage-bar').style.width, '50.0%');
   assert.equal(elements.get('usage-cost').textContent, '$1.25');
+  assert.equal(elements.get('usage-indicator').classList.contains('hidden'), false);
+  assert.equal(elements.get('usage-meter').classList.contains('hidden'), false);
+  assert.equal(elements.get('usage-text').classList.contains('hidden'), false);
 });
 
 test('renderUsageFromData hides the indicator when usage is null', () => {

@@ -8,7 +8,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
 use charliebot_core::pyregex::compile_python_regex;
 use charliebot_core::pystr;
-use charliebot_pyhtml::{EventKind, parse_with, unescape};
+use charliebot_pyhtml::{EventKind, folds_at_open, parse_with, unescape};
 use charliebot_user_text_checks::{self as user_text_checks, UserTextChecksConfig};
 use fancy_regex::Regex;
 use serde::Serialize;
@@ -684,7 +684,7 @@ fn check_fork_open_shape(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
   Ok(failures)
 }
 
-/// The `li` lines of one fork that no `details.details-layer` holds: the options the page shows at open.
+/// The `li` lines of one fork that no folded `details` holds: the options the page shows at open.
 fn visible_option_lines(nodes: &[Element], fork: usize) -> Vec<usize> {
   find(nodes, fork, "li", &[])
     .into_iter()
@@ -694,10 +694,11 @@ fn visible_option_lines(nodes: &[Element], fork: usize) -> Vec<usize> {
         if index == fork {
           return true;
         }
-        if nodes[index].tag == "details" && nodes[index].classes.contains("details-layer") {
+        let node = &nodes[index];
+        if folds_at_open(&node.tag, node.attrs.keys().map(String::as_str)) {
           return false;
         }
-        ancestor = nodes[index].parent;
+        ancestor = node.parent;
       }
       true
     })
@@ -1947,6 +1948,26 @@ mod tests {
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("has 0 option line outside folds (2 required)"), "{}", outcomes[0].detail);
+  }
+
+  const ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS: &str = "<ul><li>「keep」: keep the file.</li></ul>\
+     <details><summary>More</summary><ul><li>「delete」: delete the file.</li></ul></details>\
+     <p class=\"rec\">Recommendation: 「keep」.</p>";
+
+  #[test]
+  fn a_plain_closed_details_hides_its_option_from_the_check() {
+    let page = fork_page("Ship the fix.", ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS);
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("has 1 option line outside folds (2 required)"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn an_open_details_shows_its_option_to_the_check() {
+    let body = ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS.replacen("<details>", "<details open>", 1);
+    let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
   #[test]

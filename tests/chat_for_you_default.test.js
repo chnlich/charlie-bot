@@ -47,7 +47,7 @@ function pageRig() {
     ['thinking-time', new FakeElement('SPAN', {id: 'thinking-time'})],
     ['chat-status-panel', panel],
   ]);
-  const toggles = ['foryou', 'everything'].map((option) => {
+  const toggles = ['foryou', 'everything', 'status'].map((option) => {
     const btn = new FakeElement('BUTTON');
     btn.dataset.chatViewOption = option;
     return btn;
@@ -136,13 +136,13 @@ function pressed(rig) {
 test('a root web session opens in For you', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {}), 'foryou');
-  assert.deepEqual(pressed(rig), ['true', 'false']);
+  assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
 test('a child web session opens in For you', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {task_parent_id: 'parent-1'}), 'foryou');
-  assert.deepEqual(pressed(rig), ['true', 'false']);
+  assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
 test('a Slack thread session opens in Everything', () => {
@@ -181,11 +181,54 @@ test('a thread session and a worker session show no status panel', () => {
   assert.equal(rig.panel.classList.contains('hidden'), true, 'a worker session has no panel');
 });
 
+// The toggle's third button: index 2 in the rig's data-chat-view-option list.
+test('the Status option shows for a web session and stays hidden for thread and worker sessions', () => {
+  const rig = pageRig();
+  openedView(rig, {});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a web session shows the Status option');
+  openedView(rig, {id: 'child-a', task_parent_id: 'parent-1'});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a child web session shows it too');
+
+  openedView(rig, {id: 'thread-a', slack_origin: SLACK_ORIGIN});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a Slack thread session keeps two options');
+  openedView(rig, {id: 'thread-d', discord_origin: DISCORD_ORIGIN});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a Discord thread session keeps two options');
+  openedView(rig, {id: 'worker-a', profile: 'worker'});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a worker session keeps two options');
+});
+
+test('selecting Status keeps the turn engine on its message view and holds the choice for the session', () => {
+  const rig = pageRig();
+  openedView(rig, {});
+  const engine = rig.context.Chat.activeTurnEngineFor(rig.root);
+  rig.context.setChatView('status');
+  assert.equal(engine.view, 'foryou', 'the engine keeps its message view under the Status overlay');
+  assert.equal(rig.root.classList.contains('hidden'), false, '#messages stays laid out');
+  assert.equal(rig.context.Chat.ForYou.viewFor({id: 'session-a'}), 'status', 'the choice holds for the session');
+  assert.deepEqual(pressed(rig), ['false', 'false', 'true']);
+
+  assert.equal(openedView(rig, {}), 'foryou', 'the engine still mounts a message view');
+  assert.deepEqual(pressed(rig), ['false', 'false', 'true'], 'the re-open carries the Status choice');
+
+  rig.context.setChatView('everything');
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'everything', 'the return switches the engine');
+  assert.equal(rig.context.Chat.ForYou.viewFor({id: 'session-a'}), 'everything');
+});
+
+test('a Status choice forgotten by a reload and never set for other sessions', () => {
+  const first = pageRig();
+  openedView(first, {});
+  first.context.setChatView('status');
+
+  const reloaded = pageRig();
+  assert.equal(openedView(reloaded, {}), 'foryou', 'a reload returns the session to its default');
+});
+
 test('a manual switch holds for its session across a re-open, and other sessions keep their default', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {}), 'foryou');
   rig.context.setChatView('everything');
-  assert.deepEqual(pressed(rig), ['false', 'true']);
+  assert.deepEqual(pressed(rig), ['false', 'true', 'false']);
 
   assert.equal(openedView(rig, {}), 'everything', 'the same session re-opens in its choice');
   assert.equal(openedView(rig, {id: 'session-b'}), 'foryou', 'another root session keeps the default');

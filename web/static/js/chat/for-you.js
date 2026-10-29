@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------------
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
+const STATUS = 'status';
 const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice'];
 // The manual view choice of each session on this page: a reload empties it, as
 // the sidebar's expanded nodes reset.
@@ -32,9 +33,17 @@ const manualViews = new Map();
 // (session-view.js renderSessionView). The worker's For you holds only its
 // summary card, so the row filter and the empty row need to know it.
 let currentProfile = null;
+// The session this page shows, set beside the profile: the toggle reads it to
+// show the Status option for a web session only.
+let currentSession = null;
 let summaryCardRenderer = null;
+// The Status view's show and hide, registered by chat/status-panel.js (the
+// registerStatusViewControl entry below). The toggle selects Status; the
+// status panel owns the view the selection shows.
+let statusViewControl = null;
 
 function setSession(session) {
+  currentSession = session;
   currentProfile = session ? (session.profile || null) : null;
 }
 
@@ -110,15 +119,50 @@ function viewFor(session) {
   return manualViews.get(session.id) || defaultView(session);
 }
 
-// The toggle's buttons carry aria-pressed, and their styles follow it.
+// The view the turn engine runs: the session's selected view, unless it is
+// Status. Status is an overlay over the list, so the engine keeps a message
+// view underneath it and the list stays laid out.
+function messageViewFor(session) {
+  const view = viewFor(session);
+  return view === STATUS ? defaultView(session) : view;
+}
+
+// The Status view's show and hide, registered by chat/status-panel.js after
+// this file loads. A selection before the registration is a wiring bug.
+function registerStatusViewControl(control) {
+  if (statusViewControl) throw new Error('Status view control is already registered');
+  if (!control || typeof control.setShown !== 'function') {
+    throw new Error('Status view control needs a setShown function');
+  }
+  statusViewControl = control;
+}
+
+function showStatusView(shown) {
+  if (!statusViewControl) throw new Error('Status view control is not registered');
+  statusViewControl.setShown(shown);
+}
+
+// The toggle's buttons carry aria-pressed, and their styles follow it. The
+// Status option shows for a web session only; a thread session and a worker
+// session keep the two message views.
 function renderToggle(view) {
+  const statusShown = currentSession ? isWebSession(currentSession) : false;
   document.querySelectorAll('[data-chat-view-option]').forEach((btn) => {
     btn.setAttribute('aria-pressed', String(btn.dataset.chatViewOption === view));
+    if (btn.dataset.chatViewOption === STATUS) btn.classList.toggle('hidden', !statusShown);
   });
 }
 
 // The toggle's switch. The choice holds for this session until the page reloads.
+// Status leaves the turn engine on its message view: only the overlay changes.
 function setChatView(view) {
+  if (view === STATUS) {
+    showStatusView(true);
+    manualViews.set(SESSION_ID, view);
+    renderToggle(view);
+    return;
+  }
+  showStatusView(false);
   const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
   if (!engine) throw new Error('No turn engine is mounted for the chat view');
   engine.setView(view);
@@ -131,6 +175,7 @@ function setChatView(view) {
 const ForYou = {
   FOR_YOU,
   EVERYTHING,
+  STATUS,
   setSession,
   items,
   roundButtonRows,
@@ -141,9 +186,10 @@ const ForYou = {
   isWebSession,
   defaultView,
   viewFor,
+  messageViewFor,
   renderToggle,
 };
 Chat.registerForYouRules(ForYou);
-Chat.wire({setChatView}, {ForYou});
+Chat.wire({setChatView, registerStatusViewControl}, {ForYou});
 
 })();

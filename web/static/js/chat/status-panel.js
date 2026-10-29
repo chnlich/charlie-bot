@@ -1,13 +1,16 @@
 // ---------------------------------------------------------------------------
 // Session status panel (chat column)
 // ---------------------------------------------------------------------------
-// The panel under the view toggle, above the message list, shows a web session's
-// Goal, Remaining, Now and Waiting on you, how long each waiting item has waited,
-// and in a parent session the Waiting on you items of its open descendant sessions
-// and a folded block of the Now of its open direct children. A web session is one
-// that Chat.ForYou.isWebSession (for-you.js) accepts.
-// A thread session and a worker session show no panel. Both platforms draw the
-// toggle row; the phone starts folded and desktop state persists in localStorage.
+// A web session's status draws on two surfaces from one state. The summary
+// strip (#chat-status-panel) sits above the message list in the For-you and
+// Everything views: one line of counts and the Now text, then the session's
+// own Waiting on you items, at most four lines on desktop and one on a phone.
+// The full status (Status view, #chat-status-view) covers the message list
+// area while the Status view is selected; the list stays laid out underneath
+// so the turn engine keeps reading its real height. Chat.ForYou owns the
+// toggle that selects the view (for-you.js); this file owns both surfaces.
+// A thread session and a worker session show neither surface. A web session
+// is one that Chat.ForYou.isWebSession (for-you.js) accepts.
 //
 // The status is the session's web_status at open, then the web_status messages of
 // this session, live or in history: the newest updated_at wins, so an older page
@@ -18,23 +21,25 @@
   const Chat = globalThis.Chat;
 
   const PANEL_ID = 'chat-status-panel';
-  const PANEL_EXPANDED_STORAGE_KEY = 'chat-status-panel-expanded';
-  const CHILD_BLOCK_TOGGLE_CLASS =
-    'flex items-center gap-2 w-full text-left text-slate-400 hover:text-slate-200 transition-colors';
+  const VIEW_ID = 'chat-status-view';
+  const SCROLL_BUTTON_ID = 'scroll-to-bottom';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
+  // The view name for-yous's toggle carries for the full status.
+  const STATUS_VIEW = 'status';
+  // The desktop strip lists its own Waiting on you items up to this many before
+  // the "+K more" line keeps the strip at four lines.
+  const STRIP_ITEM_LINES = 3;
 
-  // The session the page shows the panel for, and what the panel draws from. A
-  // null panelSessionId means the page shows no panel. panelExpanded holds the
-  // phone's tap state until reload; desktop reads its choice from localStorage.
+  // The session the page shows the status for, and what it draws from. A null
+  // panelSessionId means the page shows neither surface. statusViewShown holds
+  // the Status view's visibility; the strip hides while it is on.
   let panelSessionId = null;
   let panelStatus = null;
   let panelDescendants = [];
-  let panelChildrenOpen = false;
   let panelChildren = [];
-  let panelChildrenNowOpen = false;
-  let panelExpanded = false;
+  let statusViewShown = false;
   let panelFetchGen = 0;
 
   function textSpan(className, text) {
@@ -108,23 +113,24 @@
     if (cursor < text.length) parent.appendChild(textSpan('', text.slice(cursor)));
   }
 
-  // An item's context: one fold under the item's line, closed until the operator clicks it.
-  function contextFold(context) {
+  // An item's context: one fold under the item's line. Own items open with their
+  // context shown; descendant items keep it folded until the operator clicks.
+  function contextFold(context, open) {
     const block = document.createElement('div');
     block.className = 'mt-1';
     block.dataset.context = 'true';
     const body = document.createElement('div');
-    body.className = 'hidden mt-1 whitespace-pre-wrap text-xs text-slate-300';
+    body.className = (open ? '' : 'hidden ') + 'mt-1 whitespace-pre-wrap text-xs text-slate-300';
     body.dataset.contextBody = 'true';
     appendContextText(body, context);
     const toggle = foldToggle(
       'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors',
-      false,
+      open,
       'Context',
       () => {
-        const open = body.classList.contains('hidden');
-        body.classList.toggle('hidden', !open);
-        setFoldOpen(toggle, open);
+        const nextOpen = body.classList.contains('hidden');
+        body.classList.toggle('hidden', !nextOpen);
+        setFoldOpen(toggle, nextOpen);
       });
     toggle.dataset.contextToggle = 'true';
     block.appendChild(toggle);
@@ -151,14 +157,15 @@
     return row;
   }
 
-  // The milestones between the session and its Goal: how many remain, when the list
-  // was last set, then one line per milestone. The text is agent-written, so it goes
-  // in through textContent like the Goal.
+  // The milestones between the session and its Goal: how many remain and when the
+  // list was last set, then the open items in written order and the done items in
+  // one fold. The text is agent-written, so it goes in through textContent like
+  // the Goal.
   function remainingRow(status) {
     const row = statusRow('remaining');
     row.appendChild(labelSpan('Remaining'));
     const value = document.createElement('div');
-    value.className = 'min-w-0 break-words text-slate-200';
+    value.className = 'min-w-0 break-words text-slate-200 space-y-1';
     const open = status.remaining.filter((item) => !item.done).length;
     const count = textSpan('', open + ' of ' + status.remaining.length + ' left');
     count.dataset.remainingCount = String(open);
@@ -167,17 +174,41 @@
       'updated ' + relativeTime(status.remaining_updated_at));
     updated.dataset.statusUpdated = status.remaining_updated_at;
     value.appendChild(updated);
-    const list = document.createElement('div');
-    list.className = 'space-y-1';
     for (const item of status.remaining) {
+      if (item.done) continue;
       const line = document.createElement('div');
       line.className = 'break-words';
-      line.dataset.remainingItem = item.done ? 'done' : 'open';
-      line.appendChild(textSpan('mr-2 text-slate-400', item.done ? '✓' : '○'));
+      line.dataset.remainingItem = 'open';
+      line.appendChild(textSpan('mr-2 text-slate-400', '○'));
       line.appendChild(textSpan('', item.text));
-      list.appendChild(line);
+      value.appendChild(line);
     }
-    value.appendChild(list);
+    const done = status.remaining.filter((item) => item.done);
+    if (done.length) {
+      const body = document.createElement('div');
+      body.className = 'hidden space-y-1';
+      body.dataset.remainingDone = 'true';
+      for (const item of done) {
+        const line = document.createElement('div');
+        line.className = 'break-words';
+        line.dataset.remainingItem = 'done';
+        line.appendChild(textSpan('mr-2 text-slate-400', '✓'));
+        line.appendChild(textSpan('', item.text));
+        body.appendChild(line);
+      }
+      const toggle = foldToggle(
+        'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors',
+        false,
+        done.length + ' done',
+        () => {
+          const nextOpen = body.classList.contains('hidden');
+          body.classList.toggle('hidden', !nextOpen);
+          setFoldOpen(toggle, nextOpen);
+        });
+      toggle.dataset.remainingDoneToggle = 'true';
+      value.appendChild(toggle);
+      value.appendChild(body);
+    }
     row.appendChild(value);
     return row;
   }
@@ -208,12 +239,14 @@
   function waitedAgeSpan(item) {
     const age = waitedAge(item);
     if (!age) return null;
-    const span = textSpan('whitespace-nowrap text-slate-500', age);
+    const span = textSpan('shrink-0 whitespace-nowrap text-slate-500', age);
     span.dataset.waitingAge = 'true';
     return span;
   }
 
-  function waitingItem(item) {
+  // A Waiting on you item. contextOpen: the Status view shows an own item's
+  // context open; the strip and the descendant rows keep it folded.
+  function waitingItem(item, contextOpen) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
     el.dataset.waitingItem = 'true';
@@ -225,37 +258,22 @@
     const href = safeLink(item.link);
     if (href) line.appendChild(openLink(href));
     el.appendChild(line);
-    if (item.context) el.appendChild(contextFold(item.context));
+    if (item.context) el.appendChild(contextFold(item.context, contextOpen));
     return el;
   }
 
-  function waitingRow(items) {
-    const row = statusRow('waiting');
-    row.appendChild(labelSpan('Waiting on you'));
-    const column = document.createElement('div');
-    column.className = 'min-w-0 flex-1 space-y-1';
-    if (!items.length) {
-      const nothing = textSpan('text-slate-400', 'Nothing');
-      nothing.dataset.waitingEmpty = 'true';
-      column.appendChild(nothing);
-    }
-    for (const item of items) column.appendChild(waitingItem(item));
-    row.appendChild(column);
-    return row;
-  }
-
-  function childItem(prefix, item, sessionId) {
+  function childItem(item, sessionId) {
     const el = document.createElement('div');
-    el.className = 'pl-6 break-words text-amber-200';
+    el.className = 'break-words text-amber-200';
     el.dataset.childItem = 'true';
     const line = document.createElement('div');
     line.className = 'flex gap-2';
-    line.appendChild(textSpan('min-w-0', prefix + item.text));
+    line.appendChild(textSpan('min-w-0', item.text));
     const age = waitedAgeSpan(item);
     if (age) line.appendChild(age);
     line.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
     el.appendChild(line);
-    if (item.context) el.appendChild(contextFold(item.context));
+    if (item.context) el.appendChild(contextFold(item.context, false));
     return el;
   }
 
@@ -263,71 +281,125 @@
     return panelDescendants.reduce((total, row) => total + row.waiting.length, 0);
   }
 
-  // The shared toggle row counts Waiting on you items and any descendant items.
-  function toggleRow(expanded) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'sticky -top-2 z-10 bg-slate-900 block w-full text-left text-slate-200 hover:text-slate-100 transition-colors';
-    row.dataset.statusRow = 'toggle';
-    row.setAttribute('aria-expanded', String(expanded));
-    row.onclick = () => {
-      const nextExpanded = !panelIsExpanded();
-      if (platform.isMobile) {
-        panelExpanded = nextExpanded;
-      } else {
-        localStorage.setItem(PANEL_EXPANDED_STORAGE_KEY, nextExpanded ? '1' : '0');
-      }
-      renderPanel();
-    };
-    let summary = 'No status yet';
-    if (panelStatus) {
-      const waiting = panelStatus.waiting.length;
-      row.dataset.waitingCount = String(waiting);
-      summary = 'Waiting on you · ' + (waiting || 'Nothing');
-    }
+  // ---- Summary strip -------------------------------------------------------
+
+  // The dot separator between the strip line's segments.
+  function stripDot() {
+    return textSpan('shrink-0 text-slate-600', '·');
+  }
+
+  // The strip's one clickable link to the Status view: line 1's "Status ›" and
+  // the "+K more" line of a long own-item list.
+  function statusViewLink(label, className) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = className;
+    link.textContent = label;
+    link.dataset.statusViewLink = 'true';
+    link.onclick = () => Chat.setChatView(STATUS_VIEW);
+    return link;
+  }
+
+  // Line 1: the Waiting on you count, the descendant count, the Remaining count,
+  // the Now text cut to one line, and the link to the Status view. A phone keeps
+  // the counts and the link only.
+  function stripLine1() {
+    const line = document.createElement('div');
+    line.className = 'flex items-center gap-2 min-w-0';
+    line.dataset.statusRow = 'summary';
+    const waiting = panelStatus.waiting.length;
+    const waitingSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
+      'Waiting on you · ' + (waiting || 'Nothing'));
+    waitingSpan.dataset.waitingCount = String(waiting);
+    line.appendChild(waitingSpan);
     const childCount = descendantItemCount();
-    row.dataset.childCount = String(childCount);
-    if (childCount) summary += ' · In child sessions · ' + childCount;
-    row.textContent = foldGlyph(expanded) + ' ' + summary;
-    return row;
-  }
-
-  function panelIsExpanded() {
-    if (platform.isMobile) return panelExpanded;
-    const stored = localStorage.getItem(PANEL_EXPANDED_STORAGE_KEY);
-    if (stored === null || stored === '1') return true;
-    if (stored === '0') return false;
-    throw new Error('Invalid desktop status panel state: ' + stored);
-  }
-
-  // The row that counts the descendants' items and, opened, lists them. It starts folded.
-  function childrenBlock() {
-    const count = descendantItemCount();
-    const block = document.createElement('div');
-    block.className = 'space-y-1 pt-1';
-    block.dataset.statusRow = 'children';
-    const toggle = foldToggle(
-      CHILD_BLOCK_TOGGLE_CLASS,
-      panelChildrenOpen,
-      'In child sessions · ' + count,
-      () => {
-        panelChildrenOpen = !panelChildrenOpen;
-        renderPanel();
-      });
-    toggle.dataset.childCount = String(count);
-    block.appendChild(toggle);
-    if (panelChildrenOpen) {
-      for (const row of panelDescendants) {
-        const prefix = row.name + ' · ' + row.session_id.slice(0, 8) + ': ';
-        for (const item of row.waiting) block.appendChild(childItem(prefix, item, row.session_id));
-      }
+    if (childCount) {
+      line.appendChild(stripDot());
+      const childSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200', 'In child sessions · ' + childCount);
+      childSpan.dataset.childCount = String(childCount);
+      line.appendChild(childSpan);
     }
-    return block;
+    if (panelStatus.remaining && panelStatus.remaining.length) {
+      const open = panelStatus.remaining.filter((item) => !item.done).length;
+      line.appendChild(stripDot());
+      const remainingSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
+        open + ' of ' + panelStatus.remaining.length + ' left');
+      remainingSpan.dataset.remainingCount = String(open);
+      line.appendChild(remainingSpan);
+    }
+    if (!platform.isMobile && panelStatus.now) {
+      line.appendChild(stripDot());
+      const now = textSpan('min-w-0 truncate', 'Now: ' + panelStatus.now);
+      now.dataset.nowText = panelStatus.now;
+      line.appendChild(now);
+    }
+    line.appendChild(statusViewLink('Status ›', 'shrink-0 text-blue-400 hover:text-blue-300'));
+    return line;
+  }
+
+  // The desktop strip's own-item lines: one per item up to three, then a
+  // "+K more" line that opens the Status view. Each line cuts its text to one
+  // line and carries the waited age and the item's safe link.
+  function stripWaitingItem(item) {
+    const line = document.createElement('div');
+    line.className = 'flex items-baseline gap-2 min-w-0';
+    line.dataset.statusRow = 'waiting-item';
+    line.dataset.waitingItem = 'true';
+    line.appendChild(textSpan('min-w-0 truncate text-amber-200', item.text));
+    const age = waitedAgeSpan(item);
+    if (age) line.appendChild(age);
+    const href = safeLink(item.link);
+    if (href) line.appendChild(openLink(href));
+    return line;
+  }
+
+  function stripBody(el) {
+    if (!panelStatus) {
+      const row = statusRow('none');
+      row.appendChild(textSpan('text-slate-400', 'No status yet'));
+      el.appendChild(row);
+      return;
+    }
+    el.appendChild(stripLine1());
+    if (platform.isMobile) return;
+    const items = panelStatus.waiting;
+    // More items than the strip's lines hold: the first two make room for the
+    // "+K more" line that opens the Status view.
+    const shown = items.length > STRIP_ITEM_LINES ? STRIP_ITEM_LINES - 1 : items.length;
+    for (const item of items.slice(0, shown)) el.appendChild(stripWaitingItem(item));
+    if (items.length > STRIP_ITEM_LINES) {
+      const more = statusViewLink('+' + (items.length - shown) + ' more',
+        'text-left text-slate-400 hover:text-slate-200 transition-colors');
+      more.dataset.moreCount = String(items.length - shown);
+      el.appendChild(more);
+    }
+  }
+
+  // ---- Status view ---------------------------------------------------------
+
+  // The descendants' items, grouped by session: one header per session, its
+  // items under it with their contexts folded.
+  function childrenRow() {
+    const row = statusRow('children');
+    row.appendChild(labelSpan('In child sessions'));
+    const column = document.createElement('div');
+    column.className = 'min-w-0 flex-1 space-y-2';
+    for (const child of panelDescendants) {
+      const group = document.createElement('div');
+      group.className = 'space-y-1';
+      const header = textSpan('text-slate-400', child.name + ' · ' + child.session_id.slice(0, 8));
+      header.dataset.childGroup = child.session_id;
+      group.appendChild(header);
+      for (const item of child.waiting) group.appendChild(childItem(item, child.session_id));
+      column.appendChild(group);
+    }
+    row.appendChild(column);
+    return row;
   }
 
   function childNowItem(row) {
     const el = document.createElement('div');
-    el.className = 'flex gap-2 pl-6 break-words text-slate-200';
+    el.className = 'flex gap-2 break-words text-slate-200';
     el.dataset.childNowItem = 'true';
     el.appendChild(textSpan('min-w-0', row.name + ' · ' + row.session_id.slice(0, 8) + ': ' + row.now));
     const updated = textSpan('whitespace-nowrap text-slate-500', 'updated ' + relativeTime(row.updated_at));
@@ -337,54 +409,72 @@
     return el;
   }
 
-  // The folded block of the open direct children's Now, one row each when opened. It starts folded.
-  function childrenNowBlock() {
-    const block = document.createElement('div');
-    block.className = 'space-y-1 pt-1';
-    block.dataset.statusRow = 'children-now';
-    const toggle = foldToggle(
-      CHILD_BLOCK_TOGGLE_CLASS,
-      panelChildrenNowOpen,
-      "Child sessions' Now · " + panelChildren.length,
-      () => {
-        panelChildrenNowOpen = !panelChildrenNowOpen;
-        renderPanel();
-      });
-    toggle.dataset.childCount = String(panelChildren.length);
-    block.appendChild(toggle);
-    if (panelChildrenNowOpen) {
-      for (const row of panelChildren) block.appendChild(childNowItem(row));
-    }
-    return block;
+  // The open direct children's Now, one row each.
+  function childrenNowRow() {
+    const row = statusRow('children-now');
+    row.appendChild(labelSpan("Child sessions' Now"));
+    const column = document.createElement('div');
+    column.className = 'min-w-0 flex-1 space-y-1';
+    for (const child of panelChildren) column.appendChild(childNowItem(child));
+    row.appendChild(column);
+    return row;
   }
 
-  function renderPanel() {
-    const el = document.getElementById(PANEL_ID);
-    if (!el) return;
-    clearChildren(el);
-    if (!panelSessionId) {
-      el.classList.add('hidden');
-      return;
-    }
-    el.classList.remove('hidden');
-    // Desktop scrolls within its height cap; an expanded phone panel uses its full height.
-    el.classList.toggle('max-h-48', !platform.isMobile);
-    const expanded = panelIsExpanded();
-    el.appendChild(toggleRow(expanded));
-    if (!expanded) return;
-    if (panelStatus) {
+  function statusViewBody(el) {
+    if (!panelStatus) {
+      const none = statusRow('none');
+      none.appendChild(textSpan('text-slate-400', 'No status yet'));
+      el.appendChild(none);
+    } else {
       el.appendChild(goalRow(panelStatus.goal));
       if (panelStatus.remaining && panelStatus.remaining.length) el.appendChild(remainingRow(panelStatus));
       el.appendChild(nowRow(panelStatus));
-      el.appendChild(waitingRow(panelStatus.waiting));
-    } else {
-      const row = statusRow('none');
-      row.appendChild(textSpan('text-slate-400', 'No status yet'));
-      el.appendChild(row);
+      const waiting = statusRow('waiting');
+      waiting.appendChild(labelSpan('Waiting on you'));
+      const column = document.createElement('div');
+      column.className = 'min-w-0 flex-1 space-y-1';
+      if (!panelStatus.waiting.length) {
+        const nothing = textSpan('text-slate-400', 'Nothing');
+        nothing.dataset.waitingEmpty = 'true';
+        column.appendChild(nothing);
+      }
+      for (const item of panelStatus.waiting) column.appendChild(waitingItem(item, true));
+      waiting.appendChild(column);
+      el.appendChild(waiting);
     }
-    if (panelDescendants.length) el.appendChild(childrenBlock());
-    if (panelChildren.length) el.appendChild(childrenNowBlock());
+    if (panelDescendants.length) el.appendChild(childrenRow());
+    if (panelChildren.length) el.appendChild(childrenNowRow());
   }
+
+  // The whole panel: the strip redraws on every status update, and the Status
+  // view redraws with it while it is shown.
+  function renderPanel() {
+    const el = document.getElementById(PANEL_ID);
+    if (el) {
+      clearChildren(el);
+      el.classList.toggle('hidden', !panelSessionId || statusViewShown);
+      if (panelSessionId) stripBody(el);
+    }
+    const view = document.getElementById(VIEW_ID);
+    if (!view) return;
+    clearChildren(view);
+    view.classList.toggle('hidden', !statusViewShown || !panelSessionId);
+    if (statusViewShown && panelSessionId) statusViewBody(view);
+  }
+
+  // The Status view's show and hide, through the toggle's control. Showing it
+  // hides the strip and the floating scroll-to-bottom button, which would
+  // otherwise hover over the status text.
+  function setStatusViewShown(shown) {
+    statusViewShown = Boolean(shown);
+    if (statusViewShown) {
+      const btn = document.getElementById(SCROLL_BUTTON_ID);
+      if (btn && !btn.classList.contains('hidden')) btn.classList.add('hidden');
+    }
+    renderPanel();
+  }
+
+  Chat.registerStatusViewControl({setShown: setStatusViewShown});
 
   // A web_status message's status replaces the panel's, unless the panel already
   // holds a newer one.
@@ -420,7 +510,8 @@
   }
 
   // Session open (first load and SPA switch): the session's own status, then the
-  // history's web_status messages, then the descendant rows.
+  // history's web_status messages, then the descendant rows. The Status view
+  // opens shown when the session's held view choice is Status.
   function openSessionStatusPanel(session, messages) {
     if (!Chat.ForYou.isWebSession(session)) {
       clearSessionStatusPanel();
@@ -429,9 +520,8 @@
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
     panelDescendants = [];
-    panelChildrenOpen = false;
     panelChildren = [];
-    panelChildrenNowOpen = false;
+    statusViewShown = Chat.ForYou.viewFor(session) === STATUS_VIEW;
     absorbWebStatusMessages(messages);
     renderPanel();
     fetchDescendants(session.id);
@@ -442,6 +532,7 @@
     panelStatus = null;
     panelDescendants = [];
     panelChildren = [];
+    statusViewShown = false;
     renderPanel();
   }
 

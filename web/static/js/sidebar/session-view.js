@@ -717,14 +717,16 @@ function renderSessionView(data) {
   const container = document.getElementById('messages');
   if (!container) return;
   // The For you view opens at the bottom, where its newest message is: the
-  // reply an idle open anchors on is one For you does not show.
+  // reply an idle open anchors on is one For you does not show. A held Status
+  // choice is an overlay, so the engine mounts with the session's message view.
   const view = Chat.ForYou.viewFor(session);
-  const mountOptions = view === Chat.ForYou.FOR_YOU ? null : openMountOptions(session, data, messages);
+  const engineView = Chat.ForYou.messageViewFor(session);
+  const mountOptions = engineView === Chat.ForYou.FOR_YOU ? null : openMountOptions(session, data, messages);
   const turnEngine = globalThis.Chat && Chat.TurnEngine
-    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, Object.assign({view}, mountOptions))
+    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, Object.assign({view: engineView}, mountOptions))
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
-  Chat.ForYou.renderToggle(turnEngine ? turnEngine.view : Chat.ForYou.EVERYTHING);
+  Chat.ForYou.renderToggle(turnEngine ? view : Chat.ForYou.EVERYTHING);
 
   if (sessionHasMore) {
     // The mount's own projection may have started the first page already.

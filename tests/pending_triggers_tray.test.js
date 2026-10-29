@@ -109,7 +109,7 @@ test('collapsed tray shows the next trigger line, target, message and +N more', 
   assert.match(html, /\+2 more/);
   // Separator dots ride between the time, the target and the message, as in
   // the mockup's collapsed frames (one even without a watch target).
-  assert.ok(html.includes('<span class="text-slate-600">·</span>'));
+  assert.ok(html.includes('<span class="shrink-0 text-slate-600">·</span>'));
   // Collapsed: no cancel button anywhere.
   assert.ok(!html.includes('Cancel'));
 });
@@ -122,6 +122,43 @@ test('collapsed tray with one trigger shows no +N more', async () => {
 
   assert.equal(tray.classList.contains('hidden'), false);
   assert.ok(!tray.innerHTML.includes('more'), tray.innerHTML);
+});
+
+// The narrow-width spellings of the collapsed row: the label noun and the
+// relative time drop out under sm:, the watch label shrinks with its full text
+// in title, and the message keeps a reserved width, truncates and titles.
+test('the collapsed row shrinks for a 390 px screen and reads as today on desktop', async () => {
+  const {context, tray} = buildTrayContext();
+  context.setTriggers([
+    trigger('t1', at(3, 52), 'DeepSeek 恢复或帖子新回复', [{kind: 'local_pid', pid: 2626907}]),
+    trigger('t2', at(16, 17), 'check the eval sweep results'),
+  ]);
+  await context.renderPendingTriggersTray('session-a');
+  await tick();
+
+  const html = tray.innerHTML;
+  assert.match(html, /<span class="hidden sm:inline text-amber-300 font-medium whitespace-nowrap">Next trigger<\/span>/);
+  assert.match(html, /<span class="sm:hidden text-amber-300 font-medium whitespace-nowrap">Next<\/span>/);
+  assert.match(html, /<span class="hidden sm:inline text-slate-500 whitespace-nowrap"><span class="tray-reltime"/);
+  assert.match(html, /<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate" title="pid 2626907">pid 2626907<\/span>/);
+  assert.match(html, /<span class="truncate text-slate-400 flex-1 min-w-\[3rem\]" title="DeepSeek 恢复或帖子新回复">/);
+  // Desktop: the same items as before, none of them dropped from the markup.
+  assert.match(html, /Next trigger/);
+  assert.match(html, /\(in 3h 52m\)/);
+  assert.match(html, /\+1 more/);
+});
+
+test('a long watch label keeps its full text in title while the span can shrink', async () => {
+  const {context, tray} = buildTrayContext();
+  context.setTriggers([
+    trigger('t1', at(1, 0), 'training epoch boundary', [{kind: 'slurm_job', host: 'host3', job_id: 1234567}]),
+  ]);
+  await context.renderPendingTriggersTray('session-a');
+  await tick();
+
+  assert.match(tray.innerHTML,
+    /title="host3:slurm:1234567">host3:slurm:1234567<\/span>/);
+  assert.match(tray.innerHTML, /min-w-0 truncate/);
 });
 
 test('expanded tray lists every trigger in fire_at order with header and condition lines', async () => {

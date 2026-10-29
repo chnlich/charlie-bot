@@ -188,17 +188,24 @@
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">For you</button>
           <button type="button" data-chat-view-option="everything" onclick="setChatView('everything')" aria-pressed="false"
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Everything</button>
+          <!-- Status view option: shown for a web session only (chat/for-you.js renderToggle) -->
+          <button type="button" data-chat-view-option="status" onclick="setChatView('status')" aria-pressed="false"
+                  class="hidden px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Status</button>
         </div>
-        <!-- Session status panel: Goal, Now and Waiting on you (chat/status-panel.js); web sessions only -->
-        <div id="chat-status-panel" class="hidden mx-4 mt-2 max-h-48 overflow-y-auto bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1"></div>
-        <!-- Messages -->
-        <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
-          <!-- Streaming target (initialized from pending_draft if present) -->
-          <div id="streaming-msg" class="{% if not pending_draft %}hidden {% endif %}flex justify-start"
-               {% if pending_draft and pending_draft.event_index is not none %}data-event-index="{{ pending_draft.event_index }}"{% endif %}>
-            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" id="streaming-content"
-                 {% if pending_draft and pending_draft.content %}data-md{% endif %}>{% if pending_draft and pending_draft.content %}{{ pending_draft.content }}{% endif %}</div>
+        <!-- Session status summary strip (chat/status-panel.js); web sessions only -->
+        <div id="chat-status-panel" class="hidden mx-4 mt-2 bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1"></div>
+        <!-- Messages region: the list, and the full Status view that covers it while that view is selected -->
+        <div id="chat-messages-region" class="relative flex-1 min-h-0 flex flex-col">
+          <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
+            <!-- Streaming target (initialized from pending_draft if present) -->
+            <div id="streaming-msg" class="{% if not pending_draft %}hidden {% endif %}flex justify-start"
+                 {% if pending_draft and pending_draft.event_index is not none %}data-event-index="{{ pending_draft.event_index }}"{% endif %}>
+              <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" id="streaming-content"
+                   {% if pending_draft and pending_draft.content %}data-md{% endif %}>{% if pending_draft and pending_draft.content %}{{ pending_draft.content }}{% endif %}</div>
+            </div>
           </div>
+          <!-- Full status (Goal, Remaining, Now, Waiting on you, child sessions; chat/status-panel.js) -->
+          <div id="chat-status-view" class="hidden absolute inset-0 z-20 m-4 overflow-y-auto bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1"></div>
         </div>
 
         <!-- Scroll-to-bottom floating button -->

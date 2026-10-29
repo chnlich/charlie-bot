@@ -434,8 +434,24 @@ test('a web status message adds no row to For you', () => {
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
-test('a reader scrolled into history keeps their message in place when an older page lands', () => {
+test('selecting Status leaves #messages laid out and keeps its scroll position through the return', () => {
   const rig = forYouRig(fixture(), {clientHeight: 60});
+  installScrollTopClamp(rig.root);
+  scrollTo(rig.timers, rig.root, 0);
+  const place = rig.root.scrollTop;
+  assert.equal(rig.engine.pinnedIntent, false, 'an upward scroll unpins the reader');
+
+  rig.context.Chat.setChatView('status');
+  assert.equal(rig.engine.view, 'foryou', 'the engine keeps its message view under the Status overlay');
+  assert.equal(rig.root.classList.contains('hidden'), false, '#messages stays laid out');
+  assert.equal(rig.root.scrollTop, place, 'the list keeps its scroll position while Status shows');
+
+  rig.context.Chat.setChatView('foryou');
+  assert.equal(rig.root.scrollTop, place, 'the return shows the list where it was');
+  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
+});
+
+test('a reader scrolled into history keeps their message in place when an older page lands', () => {  const rig = forYouRig(fixture(), {clientHeight: 60});
   installScrollTopClamp(rig.root);
   scrollTo(rig.timers, rig.root, 0);
   assert.equal(rig.engine.pinnedIntent, false, 'an upward scroll unpins the reader');

@@ -1191,7 +1191,6 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
  "tower",
  "tracing",
  "uuid",

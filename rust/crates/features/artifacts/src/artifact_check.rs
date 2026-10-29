@@ -368,8 +368,16 @@ fn run_assertions_sync_with_user_text(
   })?;
   let source =
     fs::read_to_string(artifact).with_context(|| format!("could not read artifact {}", artifact.display()))?;
-  let text_checks = user_text_checks::UserTextChecks::new(checks_config, home)?;
-  let text_violations = text_checks.check_page(&source)?;
+  // The user-text checks parse the page and read the session directories. A run narrowed to other assertions skips
+  // both, so a missing or unreadable sessions directory cannot turn the assertion's verdict into an error.
+  let wants_user_text =
+    only.as_ref().is_none_or(|only| only.iter().any(|name| user_text_checks::CHECK_NAMES.contains(&name.as_str())));
+  let text_violations = if wants_user_text {
+    let text_checks = user_text_checks::UserTextChecks::new(checks_config, home)?;
+    text_checks.check_page(&source)?
+  } else {
+    Vec::new()
+  };
   let nodes = parse_dom(&source)?;
   let context = Context { genre, artifact, chrome_bin, repo_root, nodes };
   let mut outcomes = Vec::new();
@@ -2029,6 +2037,24 @@ mod tests {
     assert_eq!(genre_from_file_name("waiting_release.html"), Some("waiting"));
     assert_eq!(genre_from_file_name("linked-page.html"), None);
     assert_eq!(genre_from_file_name("planning.html"), None);
+  }
+
+  #[test]
+  fn the_fork_assertion_entry_returns_a_verdict_without_the_user_text_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let body = "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
+       <p class=\"rec\">Recommendation: 「keep」.</p><p class=\"trade\">Tradeoff.</p>\
+       <details class=\"details-layer\"><summary>More</summary><p>More.</p></details>";
+    let page = write_page(directory.path(), "plan_page.html", &fork_page("Ship the fix.", body));
+    let home = tempfile::tempdir().unwrap();
+    // A regular file where the sessions directory belongs makes the user-text checks fail to read their input.
+    fs::write(home.path().join("sessions"), b"not a directory").unwrap();
+    let outcomes = run_fork_assertions(&page, home.path()).unwrap().expect("the plan_ prefix names a genre");
+    assert_eq!(
+      outcomes.iter().map(|outcome| outcome.name.as_str()).collect::<Vec<_>>(),
+      [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_EXPLAINER]
+    );
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
   /// A waiting page as `charliebot artifact wrap --genre waiting` assembles it: one context sentence and one fork.

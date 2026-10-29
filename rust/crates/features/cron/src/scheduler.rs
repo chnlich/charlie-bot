@@ -1236,6 +1236,102 @@ mod tests {
     assert_eq!(features.store.read_run_sync(&leaf.id, &run.id).unwrap().unwrap().task_spec_ref, run.task_spec_ref);
   }
 
+  /// A fire without `mode`, `handler` or `steps` is a work run on a type-less worker leaf, and no reviewer run follows
+  /// it. The leaf's harness then must not promise one: it carries the type-less contract instead of the implement
+  /// STOP line (`spawner_prompt::reviewer_run_follows` is the one decision both sides read).
+  #[tokio::test]
+  async fn fired_leaf_without_mode_handler_or_steps_harness_states_no_reviewer_contract() {
+    // The launch spawns real git, so no worktree test may install its fake git meanwhile.
+    let _git_lock = GIT_PROGRAM_LOCK.lock().await;
+    let (_home, features) = feature_context();
+    let repo_home = tempfile::tempdir().unwrap();
+    let repo = crate::test_support::init_repo_with_origin(repo_home.path()).unwrap();
+    let parent = manager(&features, "synthetic-leaf-harness-parent").await.unwrap();
+    let task = ScheduledTaskConfig {
+      name: "synthetic-leaf-harness".to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: Some(repo.display().to_string()),
+      backend: Some("synthetic".to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: Some(parent.id.clone()),
+      mode: None,
+      prompt: Some("Synthetic leaf harness work".to_string()),
+      handler: None,
+      steps: None,
+    };
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    let cfg = features.config.get().unwrap();
+    let (leaf, run, _prompt, _) = scheduler
+      .register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", "synthetic", Some("synthetic-model"), &cfg)
+      .await
+      .unwrap();
+    assert_eq!(run.kind, RunKind::Work);
+    assert_eq!(leaf.task.as_ref().unwrap().task_type, None);
+
+    std::fs::write(
+      features.config.get().unwrap().credentials_file(),
+      "charliebot:\n  access_key: synthetic-access-key\n",
+    )
+    .unwrap();
+    charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
+    let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
+    dispatcher.set_executor(None);
+    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
+    let mut process_guard = crate::test_support::ProcessGroupGuard::new();
+    adapter.launch(&leaf.id, &run.id).unwrap();
+
+    let harness_path = features.store.run_dir(&leaf.id, &run.id).join("harness_instructions.md");
+    let harness = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+      loop {
+        if harness_path.exists() {
+          break std::fs::read_to_string(&harness_path).unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the launched run writes its harness instructions");
+    assert!(!harness.contains("A reviewer will handle that"), "{harness}");
+    assert!(harness.contains("No reviewer run follows this run."), "{harness}");
+    assert!(harness.contains("Finish the landing steps that the task spec names."), "{harness}");
+
+    let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+      loop {
+        let current = features.store.read_run_sync(&leaf.id, &run.id).unwrap().unwrap();
+        if let Some(pid) = current.pid {
+          process_guard.track(pid);
+        }
+        if let Some(outcome) =
+          charliebot_store::run_records::terminal_outcome(&features.store.load_all_facts(&leaf.id).unwrap(), &run.id)
+            .unwrap()
+        {
+          break (current, outcome);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the fired work run reaches a terminal fact");
+    assert_eq!(outcome, charliebot_store::run_records::RunOutcomeKind::Success);
+    assert_eq!(finished_run.kind, RunKind::Work);
+
+    // The after-run branch reads the same decision the harness read: the type-less success registers no review run.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+      loop {
+        let runs = features.store.list_run_records_sync(&leaf.id).unwrap();
+        assert!(!runs.iter().any(|record| record.kind == RunKind::Review), "a review run registered: {runs:?}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+      }
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(features.store.list_run_records_sync(&leaf.id).unwrap().len(), 1);
+  }
+
   #[tokio::test]
   async fn auto_bind_replays_each_durable_migration_boundary_to_one_node_and_binding() {
     // Python: tests/test_cron_auto_bind.py::test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_active_cron_session

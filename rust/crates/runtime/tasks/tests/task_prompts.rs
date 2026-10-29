@@ -350,6 +350,71 @@ fn type_less_task_renders_the_implement_contract() {
   assert_eq!(prompt_task_type(Some(&quick)), TaskType::QuickEdit);
 }
 
+/// The harness promises a reviewer exactly when the after-run branch spawns one: its workflow sections end with the
+/// implement STOP section only for a task that `reviewer_run_follows` sends to review.
+#[test]
+fn harness_sections_and_after_run_branch_agree_on_reviewer_presence() {
+  let typed = |task_type: Option<TaskType>| TaskSpec {
+    goal: "goal".to_string(),
+    repo_path: Some("/tmp/repo".to_string()),
+    task_type,
+    ..TaskSpec::default()
+  };
+  let cases: [(&str, Option<TaskSpec>, bool); 6] = [
+    ("no task record", None, true),
+    ("type-less record", Some(typed(None)), false),
+    ("implement", Some(typed(Some(TaskType::Implement))), true),
+    ("quick-edit", Some(typed(Some(TaskType::QuickEdit))), false),
+    ("script-run", Some(typed(Some(TaskType::ScriptRun))), false),
+    ("verify", Some(typed(Some(TaskType::Verify))), false),
+  ];
+  for (name, task, reviewer) in cases {
+    assert_eq!(charliebot_tasks::prompts::reviewer_run_follows(task.as_ref()), reviewer, "{name}");
+    let ends_with_implement_stop = charliebot_tasks::spawner_prompt::task_workflow_sections(task.as_ref())
+      .is_some_and(|sections| sections.last() == Some(&"workflow_implement"));
+    assert_eq!(ends_with_implement_stop, reviewer, "{name}");
+  }
+}
+
+#[tokio::test]
+async fn type_less_work_harness_states_the_no_reviewer_contract() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+  let snapshot = harness.snapshot_for(&tree.worker1, "work").await;
+  let worker = worker_block(&snapshot);
+  assert!(!worker.contains("A reviewer will handle that"), "{worker}");
+  assert!(worker.contains("No reviewer run follows this run."), "{worker}");
+  assert!(worker.contains("stop after your commit and report the commit and its branch"), "{worker}");
+}
+
+#[tokio::test]
+async fn implement_work_harness_keeps_the_reviewer_stop_line() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+  let implement = TaskSpec {
+    goal: "implement goal".to_string(),
+    repo_path: Some("/tmp/repo-w".to_string()),
+    task_type: Some(TaskType::Implement),
+    ..TaskSpec::default()
+  };
+  let leaf = harness.node("w-implement", Some(&tree.low), TaskProfile::Worker, Some(implement), "WI").await;
+  let snapshot = harness.snapshot_for(&leaf.id, "work").await;
+  assert!(
+    worker_block(&snapshot)
+      .contains("STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.")
+  );
+}
+
+/// The joined task_base and worker blocks are separate segments; the workflow contract lives in the worker block.
+fn worker_block(snapshot: &PromptSnapshot) -> &str {
+  snapshot
+    .blocks
+    .iter()
+    .find(|block| block.sources.iter().any(|source| source.source_ref == "prompts/worker.md"))
+    .map(|block| block.text.as_str())
+    .expect("the worker contract block")
+}
+
 #[tokio::test]
 async fn three_levels_with_both_scopes_prove_inheritance_and_ordering() {
   let mut harness = Harness::new();

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
 use lru::LruCache;
 use serde_json::Value;
 
@@ -14,7 +15,7 @@ use crate::{StoreError, StoreResult};
 const PAGE_BODY_CACHE_LIMIT: usize = 4;
 
 struct PageBodyCache {
-  values: LruCache<(usize, usize), Vec<u8>>,
+  values: LruCache<(usize, usize), Bytes>,
 }
 
 impl Default for PageBodyCache {
@@ -24,11 +25,11 @@ impl Default for PageBodyCache {
 }
 
 impl PageBodyCache {
-  fn get(&mut self, key: (usize, usize)) -> Option<Vec<u8>> {
+  fn get(&mut self, key: (usize, usize)) -> Option<Bytes> {
     self.values.get(&key).cloned()
   }
 
-  fn store(&mut self, key: (usize, usize), body: Vec<u8>) {
+  fn store(&mut self, key: (usize, usize), body: Bytes) {
     self.values.put(key, body);
   }
 }
@@ -115,23 +116,24 @@ impl MessageProjection {
     self.event_count
   }
 
-  /// Return the cached serialized body for one page.
-  pub fn cached_page_body(&self, before: usize, limit: usize) -> Option<Vec<u8>> {
+  /// Return the cached serialized body for one page. The body is shared: a request hands the cached bytes to its
+  /// response by refcount, so a page of any size costs no copy per request.
+  pub fn cached_page_body(&self, before: usize, limit: usize) -> Option<Bytes> {
     self.page_bodies.lock().expect("page body cache mutex is not poisoned").get((before, limit))
   }
 
   /// Cache the serialized body for one page.
-  pub fn store_page_body(&self, before: usize, limit: usize, body: Vec<u8>) {
+  pub fn store_page_body(&self, before: usize, limit: usize, body: Bytes) {
     self.page_bodies.lock().expect("page body cache mutex is not poisoned").store((before, limit), body);
   }
 
   /// Return the cached gzip body for one page.
-  pub fn cached_page_body_gzip(&self, before: usize, limit: usize) -> Option<Vec<u8>> {
+  pub fn cached_page_body_gzip(&self, before: usize, limit: usize) -> Option<Bytes> {
     self.page_body_gzips.lock().expect("gzip page body cache mutex is not poisoned").get((before, limit))
   }
 
   /// Cache the gzip body for one page.
-  pub fn store_page_body_gzip(&self, before: usize, limit: usize, body: Vec<u8>) {
+  pub fn store_page_body_gzip(&self, before: usize, limit: usize, body: Bytes) {
     self.page_body_gzips.lock().expect("gzip page body cache mutex is not poisoned").store((before, limit), body);
   }
 
@@ -476,14 +478,14 @@ mod tests {
   fn page_body_caches_are_lru_capped_and_reset_on_advance() {
     let projection = MessageProjection::new(&[], 0, HashMap::new()).unwrap();
     for before in 0..4 {
-      projection.store_page_body(before, 10, vec![before as u8]);
-      projection.store_page_body_gzip(before, 10, vec![before as u8 + 10]);
+      projection.store_page_body(before, 10, Bytes::from(vec![before as u8]));
+      projection.store_page_body_gzip(before, 10, Bytes::from(vec![before as u8 + 10]));
     }
-    assert_eq!(projection.cached_page_body(0, 10), Some(vec![0]));
-    projection.store_page_body(4, 10, vec![4]);
-    assert_eq!(projection.cached_page_body(0, 10), Some(vec![0]));
+    assert_eq!(projection.cached_page_body(0, 10), Some(Bytes::from_static(&[0])));
+    projection.store_page_body(4, 10, Bytes::from_static(&[4]));
+    assert_eq!(projection.cached_page_body(0, 10), Some(Bytes::from_static(&[0])));
     assert_eq!(projection.cached_page_body(1, 10), None);
-    assert_eq!(projection.cached_page_body_gzip(1, 10), Some(vec![11]));
+    assert_eq!(projection.cached_page_body_gzip(1, 10), Some(Bytes::from_static(&[11])));
 
     let advanced = projection.advanced(&[]).unwrap();
     assert_eq!(advanced.cached_page_body(0, 10), None);

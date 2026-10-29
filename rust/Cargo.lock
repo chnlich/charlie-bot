@@ -1138,6 +1138,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
@@ -1204,6 +1205,7 @@ name = "charliebot-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

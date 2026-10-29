@@ -393,11 +393,25 @@ pub async fn reconcile_task_tree(
       return Ok(counters);
     }
     counters.full += 1;
-    let result = reconcile_node_until_stopped(
-      &stop,
-      reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop)),
-    )
-    .await;
+    // A session with no task boundary, no run directory and no prompt ref has nothing to reconcile: its pass can
+    // only report the absence. `has_no_task_node` proves that from the raw event bytes, so the pass here reports
+    // the same absence without folding the log. A probe that cannot read the session's files fails the node, as a
+    // node pass that cannot read them does.
+    let no_node = features.store.has_no_task_node(&meta);
+    if stop.is_cancelled() {
+      return Ok(counters);
+    }
+    let result = match no_node {
+      Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
+      Ok(false) => {
+        reconcile_node_until_stopped(
+          &stop,
+          reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop)),
+        )
+        .await
+      }
+      Err(error) => Some(Err(anyhow::Error::new(error))),
+    };
     let Some(result) = result else {
       return Ok(counters);
     };

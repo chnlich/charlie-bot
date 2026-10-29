@@ -1,0 +1,57 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool:\n    - claude-light\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "artifacts/waiting_bad.html": "<html><body><section><h2><span class=\"n\">1</span> Waiting</h2>\n<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which?</p><p class=\"rec\">Recommendation: 1A.</p><p class=\"trade\">Tradeoff.</p></div>\n</section></body></html>",
+    "status.json": "{\"waiting\": [{\"text\": \"Which export interval?\", \"context\": \"The line is ready now. Option 1A is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/artifacts/waiting_bad.html\"}]}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": [
+          {
+            "text": "Which export interval?",
+            "context": "The line is ready now. Option 1A is recommended.",
+            "link": "http://localhost:9443/absolute_filepath{root}/artifacts/waiting_bad.html"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "page {root}/artifacts/waiting_bad.html fails its fork assertions:\nFAIL fork-options: fork #1 (section '1 Waiting') has 0 option line outside folds (2 required)\nFAIL fork-options: fork #1 (section '1 Waiting') p.rec quotes no option name (quoted: none)\nFAIL fork-explainer: fork #1 (section '1 Waiting') has no details.details-layer\nNothing was stored.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Which export interval?\", \"context\": \"The line is ready now. Option 1A is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/artifacts/waiting_bad.html\"}]}"
+        }
+      }
+    ]
+  }
+}

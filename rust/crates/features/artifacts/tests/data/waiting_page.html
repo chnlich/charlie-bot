@@ -79,7 +79,11 @@
 
     <div class="fork">
       <p class="q"><span class="fn">1</span> Run the export every hour, or once a day?</p>
-      <p class="rec"><b>Recommendation:</b> once a day, at 02:00, when the database is idle.</p>
+      <ul>
+        <li>「Hourly」: run the export every hour, and the table stays at most an hour old.</li>
+        <li>「Once a day」: run the export at 02:00, and the table stays at most a day old.</li>
+      </ul>
+      <p class="rec"><b>Recommendation:</b> 「Once a day」, at 02:00, when the database is idle.</p>
       <p class="trade">Tradeoff: hourly runs keep the table fresher, but they read the database 24 times a day.</p>
       <details class="details-layer">
         <summary>Full story, expand to check the recommendation by hand</summary>

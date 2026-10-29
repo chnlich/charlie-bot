@@ -2253,7 +2253,7 @@ async fn cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is
   assert_eq!(block_texts, [system_prompt.as_str()]);
   let launch_text = std::fs::read_to_string(run_dir.join(LAUNCH_TEXT_FILENAME))?;
   let page_text = std::fs::read_to_string(&page)?;
-  assert_eq!(launch_text, cold_read::probe_input(&page_text, &questions, "where are we?"));
+  assert_eq!(launch_text, cold_read::probe_input(&page_text, &questions, "where are we?").unwrap());
   let builds = scripts.builds();
   let prompt = builds[0].prompt.lock().expect("prompt mutex is not poisoned").clone();
   assert_eq!(prompt.as_deref(), Some(launch_text.as_str()));

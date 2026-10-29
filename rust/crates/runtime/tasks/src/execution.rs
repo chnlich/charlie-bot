@@ -1191,7 +1191,7 @@ impl TaskExecutionAdapter {
     let (_system_prompt, questions) = cold_read::load_texts(checkout.path())?;
     let page_text =
       String::from_utf8(page_bytes).with_context(|| format!("decoding cold-read page {}", cold.page_path))?;
-    Ok(cold_read::probe_input(&page_text, &questions, &cold.trigger))
+    cold_read::probe_input(&page_text, &questions, &cold.trigger)
   }
 
   fn build_step_context(

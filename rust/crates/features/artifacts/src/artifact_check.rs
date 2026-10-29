@@ -24,6 +24,7 @@ const EXPLAIN_TRIAD: &str = "explain-triad";
 const EXPLAIN_FIGURES: &str = "explain-figures";
 const EXPLAIN_EXAMPLES: &str = "explain-examples";
 const FORK_OPEN_SHAPE: &str = "fork-open-shape";
+const FORK_OPTIONS: &str = "fork-options";
 const FORK_EXPLAINER: &str = "fork-explainer";
 const FACT_ANCHORED: &str = "fact-anchored";
 const REQ_CHIPS: &str = "req-chips";
@@ -142,6 +143,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       SECTIONS_NUMBERED,
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
+      FORK_OPTIONS,
       FORK_EXPLAINER,
       GOAL_BUDGET,
       PAGE_HEIGHT,
@@ -156,6 +158,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       SECTIONS_NUMBERED,
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
+      FORK_OPTIONS,
       FORK_EXPLAINER,
       PAGE_HEIGHT,
       ORDINAL_NAMED,
@@ -168,6 +171,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       STYLE_VERBATIM,
       SECTIONS_NUMBERED,
       FORK_OPEN_SHAPE,
+      FORK_OPTIONS,
       FORK_EXPLAINER,
       FACT_ANCHORED,
       REQ_CHIPS,
@@ -182,6 +186,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       STYLE_VERBATIM,
       SECTIONS_NUMBERED,
       FORK_OPEN_SHAPE,
+      FORK_OPTIONS,
       FACT_ANCHORED,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -197,6 +202,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       EXPLAIN_FIGURES,
       EXPLAIN_EXAMPLES,
       FORK_OPEN_SHAPE,
+      FORK_OPTIONS,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
@@ -206,6 +212,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       FORK_OPEN_SHAPE,
+      FORK_OPTIONS,
       FORK_EXPLAINER,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -214,6 +221,39 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     ]),
     _ => None,
   }
+}
+
+/// The genre whose `<genre>_` prefix starts `file_name`, such as `plan_` in `plan_export_interval_v2.html`.
+pub fn genre_from_file_name(file_name: &str) -> Option<&'static str> {
+  ARTIFACT_GENRES.into_iter().find(|genre| file_name.starts_with(&format!("{genre}_")))
+}
+
+/// The fork assertions a genre's set holds, in set order: the web status set gate runs exactly these.
+pub fn fork_assertions(genre: &str) -> Vec<&'static str> {
+  const FORK: [&str; 3] = [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_EXPLAINER];
+  assertion_set(genre)
+    .map(|names| names.iter().copied().filter(|name| FORK.contains(name)).collect())
+    .unwrap_or_default()
+}
+
+/// Run the fork assertions of the genre that `page`'s file name names, or `None` when the name carries no genre
+/// prefix. The web status set gate reaches this through `Registry::fork_assertions_runner`.
+pub fn run_fork_assertions(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<AssertionOutcome>>> {
+  let Some(genre) = page.file_name().and_then(|name| name.to_str()).and_then(genre_from_file_name) else {
+    return Ok(None);
+  };
+  let names = fork_assertions(genre);
+  // The fork assertions read neither the repository nor a Chrome binary, so both paths stay empty.
+  let outcomes = run_assertions_sync_with_user_text(
+    genre,
+    page,
+    "",
+    Path::new(""),
+    &UserTextChecksConfig::default(),
+    home,
+    Some(names.iter().map(|name| (*name).to_owned()).collect()),
+  )?;
+  Ok(Some(outcomes))
 }
 
 static GOAL_SECTION_RE: LazyLock<Regex> =
@@ -270,12 +310,14 @@ struct CodeText {
 type AssertionCheck = for<'a> fn(&Context<'a>) -> anyhow::Result<Vec<AssertionOutcome>>;
 type OrdinalFailure = (usize, Vec<String>, String);
 
-/// Run one genre's assertion set on a blocking thread.
+/// Run one genre's assertion set on a blocking thread. `only` narrows the run to the named assertions; `None` runs
+/// the whole set.
 pub async fn run_assertions(
   genre: &str,
   artifact: PathBuf,
   config: &CharlieBotConfig,
   repo_root: PathBuf,
+  only: Option<&[&str]>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   run_assertions_with_chrome(
     genre,
@@ -284,6 +326,7 @@ pub async fn run_assertions(
     repo_root,
     config.section::<UserTextChecksConfig>("user_text_checks").clone(),
     config.charliebot_home.clone(),
+    only,
   )
   .await
 }
@@ -296,10 +339,12 @@ pub async fn run_assertions_with_chrome(
   repo_root: PathBuf,
   checks_config: UserTextChecksConfig,
   home: PathBuf,
+  only: Option<&[&str]>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   let genre = genre.to_owned();
+  let only = only.map(|names| names.iter().map(|name| (*name).to_owned()).collect::<Vec<String>>());
   tokio::task::spawn_blocking(move || {
-    run_assertions_sync_with_user_text(&genre, &artifact, &chrome_bin, &repo_root, &checks_config, &home)
+    run_assertions_sync_with_user_text(&genre, &artifact, &chrome_bin, &repo_root, &checks_config, &home, only)
   })
   .await
   .context("plan assertion worker failed")?
@@ -312,6 +357,7 @@ fn run_assertions_sync_with_user_text(
   repo_root: &Path,
   checks_config: &UserTextChecksConfig,
   home: &Path,
+  only: Option<Vec<String>>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   let names = assertion_set(genre).ok_or_else(|| {
     anyhow!(
@@ -328,6 +374,9 @@ fn run_assertions_sync_with_user_text(
   let context = Context { genre, artifact, chrome_bin, repo_root, nodes };
   let mut outcomes = Vec::new();
   for name in names {
+    if only.as_ref().is_some_and(|only| !only.iter().any(|wanted| wanted == name)) {
+      continue;
+    }
     if user_text_checks::CHECK_NAMES.contains(name) {
       let hits = text_violations.iter().filter(|violation| violation.check == *name).collect::<Vec<_>>();
       if hits.is_empty() {
@@ -348,6 +397,7 @@ fn run_assertions_sync_with_user_text(
       EXPLAIN_FIGURES => check_explain_figures,
       EXPLAIN_EXAMPLES => check_explain_examples,
       FORK_OPEN_SHAPE => check_fork_open_shape,
+      FORK_OPTIONS => check_fork_options,
       FORK_EXPLAINER => check_fork_explainer,
       FACT_ANCHORED => check_fact_anchored,
       REQ_CHIPS => check_req_chips,
@@ -630,6 +680,100 @@ fn check_fork_open_shape(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
   }
   if failures.is_empty() {
     failures.push(outcome(FORK_OPEN_SHAPE, true, ""));
+  }
+  Ok(failures)
+}
+
+/// The `li` lines of one fork that no `details.details-layer` holds: the options the page shows at open.
+fn visible_option_lines(nodes: &[Element], fork: usize) -> Vec<usize> {
+  find(nodes, fork, "li", &[])
+    .into_iter()
+    .filter(|&line| {
+      let mut ancestor = nodes[line].parent;
+      while let Some(index) = ancestor {
+        if index == fork {
+          return true;
+        }
+        if nodes[index].tag == "details" && nodes[index].classes.contains("details-layer") {
+          return false;
+        }
+        ancestor = nodes[index].parent;
+      }
+      true
+    })
+    .collect()
+}
+
+/// The name an option line opens with, in 「」, when a non-empty line follows the closing bracket.
+fn option_name(line: &str) -> Option<&str> {
+  let rest = line.trim_start().strip_prefix('「')?;
+  let (name, after) = rest.split_once('」')?;
+  let name = name.trim();
+  (!name.is_empty() && !after.trim().is_empty()).then_some(name)
+}
+
+/// The 「...」, “...” and "..." spans of a line, in order.
+fn quoted_spans(text: &str) -> Vec<&str> {
+  let mut spans = Vec::new();
+  let mut rest = text;
+  while let Some((start, opener)) = rest.char_indices().find(|(_, character)| matches!(character, '「' | '“' | '"'))
+  {
+    let closer = match opener {
+      '「' => '」',
+      '“' => '”',
+      _ => '"',
+    };
+    let after = &rest[start + opener.len_utf8()..];
+    let Some(end) = after.find(closer) else { break };
+    spans.push(after[..end].trim());
+    rest = &after[end + closer.len_utf8()..];
+  }
+  spans
+}
+
+fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let mut failures = Vec::new();
+  for (index, fork) in open_forks(&context.nodes) {
+    let section = pyfmt::str_repr(&section_heading(&context.nodes, fork));
+    let lines = visible_option_lines(&context.nodes, fork);
+    let mut names = Vec::new();
+    for (position, &line) in lines.iter().enumerate() {
+      let text = pystr::collapse_whitespace(&element_text(&context.nodes, line));
+      match option_name(&text) {
+        Some(name) => names.push(name.to_owned()),
+        None => failures.push(outcome(
+          FORK_OPTIONS,
+          false,
+          format!("fork #{index} (section {section}) option line {} does not open with its name in 「」", position + 1),
+        )),
+      }
+    }
+    if lines.len() < 2 {
+      failures.push(outcome(
+        FORK_OPTIONS,
+        false,
+        format!("fork #{index} (section {section}) has {} option line outside folds (2 required)", lines.len()),
+      ));
+    }
+    if let Some(&recommendation) = find(&context.nodes, fork, "p", &["rec"]).first() {
+      let text = pystr::collapse_whitespace(&element_text(&context.nodes, recommendation));
+      let quoted = quoted_spans(&text);
+      if !quoted.iter().any(|span| names.iter().any(|name| name == span)) {
+        let listed = if quoted.is_empty() {
+          "none".to_owned()
+        } else {
+          quoted.iter().map(|span| format!("「{span}」")).collect::<Vec<_>>().join(", ")
+        };
+        failures.push(outcome(
+          FORK_OPTIONS,
+          false,
+          format!("fork #{index} (section {section}) p.rec quotes no option name (quoted: {listed})"),
+        ));
+      }
+    }
+  }
+  if failures.is_empty() {
+    failures.push(outcome(FORK_OPTIONS, true, ""));
   }
   Ok(failures)
 }
@@ -1433,6 +1577,7 @@ mod tests {
       repo_root,
       &UserTextChecksConfig::default(),
       home.path(),
+      None,
     )
   }
 
@@ -1512,7 +1657,9 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      let actual = outcomes.iter().map(outcome_value).collect::<Vec<_>>();
+      // The fixture predates `fork-options`, so that outcome has no recorded Python counterpart to compare with.
+      let actual =
+        outcomes.iter().filter(|outcome| outcome.name != FORK_OPTIONS).map(outcome_value).collect::<Vec<_>>();
       let mut expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
       for outcome in &mut expected {
         let detail = outcome["detail"].as_str().expect("each outcome has detail");
@@ -1562,7 +1709,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join("prompts/plan_template.html");
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 12);
+    assert_eq!(outcomes.len(), 13);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
@@ -1738,6 +1885,131 @@ mod tests {
     assert_eq!(value["detail"], "detail");
   }
 
+  /// Runs only `names` over `source` as a page file, so a fork test needs no Chrome and no template.
+  fn run_only(genre: &str, source: &str, names: &[&str]) -> Vec<AssertionOutcome> {
+    let directory = tempfile::tempdir().unwrap();
+    let page = write_page(directory.path(), "page.html", source);
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir(home.path().join("sessions")).unwrap();
+    run_assertions_sync_with_user_text(
+      genre,
+      &page,
+      "",
+      &repo_root(),
+      &UserTextChecksConfig::default(),
+      home.path(),
+      Some(names.iter().map(|name| (*name).to_owned()).collect()),
+    )
+    .unwrap()
+  }
+
+  /// A plan page whose open fork holds `body` between its question and the end of the block.
+  fn fork_page(goal: &str, body: &str) -> String {
+    plan_page(goal).replacen(
+      "<p>Trade-offs</p>",
+      &format!("<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p>{body}</div>"),
+      1,
+    )
+  }
+
+  #[test]
+  fn two_named_option_lines_with_a_matching_recommendation_pass() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
+       <p class=\"rec\">Recommendation: 「keep」.</p><p class=\"trade\">Tradeoff.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn one_visible_option_line_fails() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>「keep」: keep the file.</li></ul><p class=\"rec\">Recommendation: 「keep」.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("has 1 option line outside folds (2 required)"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn option_lines_inside_a_fold_do_not_count() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<details class=\"details-layer\"><summary>More</summary>\
+       <ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul></details>\
+       <p class=\"rec\">Recommendation: 「keep」.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("has 0 option line outside folds (2 required)"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn an_option_line_that_does_not_open_with_its_name_fails() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>keep: keep the file.</li><li>「delete」: delete the file.</li></ul>\
+       <p class=\"rec\">Recommendation: 「delete」.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("option line 1 does not open with its name in 「」"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn a_recommendation_that_quotes_no_option_name_fails() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
+       <p class=\"rec\">Recommendation: 「archive」.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("p.rec quotes no option name (quoted: 「archive」)"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn yes_or_no_options_pass() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>「做」：现在就改。</li><li>「不做」：留着以后改。</li></ul>\
+       <p class=\"rec\">推荐：「做」。</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn prose_names_that_look_like_codes_do_not_break_the_name_match() {
+    let page = fork_page(
+      "Support 3D, 4K and 7B inputs.",
+      "<ul><li>「GPU」: render on the GPU.</li><li>「CPU」: render on the CPU.</li></ul>\
+       <p class=\"rec\">Recommendation: 「GPU」.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn a_resolved_fork_is_skipped() {
+    let page = fork_page("Ship the fix.", "<p class=\"resolved\">Resolved: keep the file.</p>");
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn a_file_name_without_a_genre_prefix_has_no_genre() {
+    assert_eq!(genre_from_file_name("plan_export_interval_v2.html"), Some("plan"));
+    assert_eq!(genre_from_file_name("waiting_release.html"), Some("waiting"));
+    assert_eq!(genre_from_file_name("linked-page.html"), None);
+    assert_eq!(genre_from_file_name("planning.html"), None);
+  }
+
   /// A waiting page as `charliebot artifact wrap --genre waiting` assembles it: one context sentence and one fork.
   fn waiting_sample() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/waiting_page.html")
@@ -1753,6 +2025,7 @@ mod tests {
         BYTE_INTEGRITY,
         STYLE_VERBATIM,
         FORK_OPEN_SHAPE,
+        FORK_OPTIONS,
         FORK_EXPLAINER,
         ORDINAL_NAMED,
         TRACKER_ID_NEARBY,
@@ -1801,6 +2074,7 @@ mod tests {
         &repo_root(),
         config.section::<UserTextChecksConfig>("user_text_checks"),
         home.path(),
+        None,
       )
       .unwrap();
       let failures = by_name(&outcomes, check);
@@ -2083,7 +2357,7 @@ mod tests {
   fn test_shipped_explain_template_passes_its_explain_set() {
     let template = repo_root().join("prompts/explain_template.html");
     let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
-    assert_eq!(outcomes.len(), 12, "{outcomes:#?}");
+    assert_eq!(outcomes.len(), 13, "{outcomes:#?}");
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

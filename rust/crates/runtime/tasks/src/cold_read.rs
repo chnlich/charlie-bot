@@ -13,6 +13,7 @@ use charliebot_agents::backend_pool::is_quota_error;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
 use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_pyhtml::{EventKind, parse_with};
 use charliebot_registry::backend::LaunchArgs;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -60,9 +61,80 @@ pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
   ))
 }
 
-/// The cold-read run's whole input: the page text, one blank line, then the questions with the trigger filled in.
-pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> String {
-  format!("{page_text}\n\n{}", questions.replace(TRIGGER_PLACEHOLDER, trigger))
+/// The block a probe adds after the full source: the text the reader sees at page open, folded blocks closed.
+pub const VISIBLE_TEXT_HEADER: &str = "VISIBLE TEXT";
+
+/// The text a page shows at open, as one line per source line: every element's text, except the body of a folded
+/// `details` block, whose `summary` stays. `style` and `script` text is not text the reader sees.
+pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
+  struct Frame {
+    tag: String,
+    /// Whether text directly inside this element is visible.
+    content_visible: bool,
+    /// Whether a `summary` directly inside this element is visible, when the element is a `details`.
+    summary_visible: bool,
+  }
+  let mut frames = vec![Frame { tag: "#root".to_owned(), content_visible: true, summary_visible: true }];
+  let mut text = String::new();
+  parse_with(page_text, true, |event| match event.kind {
+    EventKind::StartTag | EventKind::StartEndTag => {
+      let arguments = event.args.as_array().expect("a start-tag event has arguments");
+      let tag = arguments[0].as_str().expect("a start-tag event has a tag").to_owned();
+      let parent = frames.last().expect("the root frame stays on the stack");
+      let parent_content = parent.content_visible;
+      let (content_visible, summary_visible) = match tag.as_str() {
+        "details" => {
+          let open = arguments[1].as_array().is_some_and(|attributes| {
+            attributes.iter().any(|attribute| {
+              attribute.as_array().and_then(|pair| pair.first()).and_then(Value::as_str) == Some("open")
+            })
+          });
+          (parent_content && open, parent_content)
+        }
+        "summary" => {
+          let visible = if parent.tag == "details" { parent.summary_visible } else { parent_content };
+          (visible, visible)
+        }
+        "style" | "script" => (false, false),
+        _ => (parent_content, parent_content),
+      };
+      if event.kind == EventKind::StartTag {
+        frames.push(Frame { tag, content_visible, summary_visible });
+      }
+    }
+    EventKind::EndTag => {
+      let tag = event.args[0].as_str().expect("an end-tag event has a tag");
+      if let Some(position) = (1..frames.len()).rev().find(|&position| frames[position].tag == tag) {
+        frames.truncate(position);
+      }
+    }
+    EventKind::Data => {
+      if frames.last().expect("the root frame stays on the stack").content_visible
+        && let Value::String(chunk) = &event.args[0]
+      {
+        text.push_str(chunk);
+      }
+    }
+    EventKind::EntityReference
+    | EventKind::CharacterReference
+    | EventKind::Comment
+    | EventKind::Declaration
+    | EventKind::ProcessingInstruction
+    | EventKind::UnknownDeclaration => {}
+  })
+  .map_err(|error| anyhow::anyhow!("{}: {}", error.exception, error.message))?;
+  let lines = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>();
+  Ok(lines.join("\n"))
+}
+
+/// The cold-read run's whole input: the page text, the VISIBLE TEXT block, then the questions with the trigger
+/// filled in.
+pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> anyhow::Result<String> {
+  Ok(format!(
+    "{page_text}\n\n{VISIBLE_TEXT_HEADER}\n{}\n\n{}",
+    visible_text(page_text)?,
+    questions.replace(TRIGGER_PLACEHOLDER, trigger)
+  ))
 }
 
 /// The system prompt and the five questions one Waiting on you item is cold-read with, read fresh from
@@ -79,15 +151,16 @@ pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
   ))
 }
 
-/// The ask probe's whole input: the item JSON, the host-served page text when there is one, then the questions
-/// (`ask_probe_input`), joined by blank lines.
-pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str) -> String {
+/// The ask probe's whole input: the item JSON, the host-served page text and its VISIBLE TEXT block when there is a
+/// page, then the questions (`ask_probe_input`), joined by blank lines.
+pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str) -> anyhow::Result<String> {
   let mut pieces = vec![pyfmt::json_dumps(item, &ITEM_JSON)];
   if let Some(page) = linked_page {
     pieces.push(page.to_string());
+    pieces.push(format!("{VISIBLE_TEXT_HEADER}\n{}", visible_text(page)?));
   }
   pieces.push(questions.to_string());
-  pieces.join("\n\n")
+  Ok(pieces.join("\n\n"))
 }
 
 /// The outcome of one light-backend probe: the failed attempts in order, then the answering backend and its verbatim
@@ -294,6 +367,56 @@ mod tests {
       telegram: TelegramConfig { chat_id: None },
       sections: Sections::default(),
     }
+  }
+
+  const FOLDED_PAGE: &str = r#"<html><body>
+<p>Visible opening.</p>
+<details class="details-layer"><summary>Fold title</summary><p>Folded body.</p></details>
+<details open><summary>Open title</summary><p>Open body.</p></details>
+</body></html>"#;
+
+  #[test]
+  fn visible_text_keeps_a_closed_folds_summary_and_drops_its_body() {
+    let text = visible_text(FOLDED_PAGE).unwrap();
+    assert!(text.contains("Fold title"), "{text}");
+    assert!(!text.contains("Folded body."), "{text}");
+  }
+
+  #[test]
+  fn visible_text_keeps_an_open_folds_body() {
+    let text = visible_text(FOLDED_PAGE).unwrap();
+    assert!(text.contains("Open title"), "{text}");
+    assert!(text.contains("Open body."), "{text}");
+  }
+
+  #[test]
+  fn visible_text_drops_a_nested_folds_body() {
+    let page =
+      "<details><summary>Outer</summary><details><summary>Inner</summary><p>Inner body.</p></details></details>";
+    let text = visible_text(page).unwrap();
+    assert!(text.contains("Outer"), "{text}");
+    assert!(!text.contains("Inner"), "{text}");
+  }
+
+  #[test]
+  fn probe_input_keeps_the_full_source_before_the_visible_text_block() {
+    let input = probe_input(FOLDED_PAGE, "questions", "the trigger").unwrap();
+    let (source, rest) = input.split_once(VISIBLE_TEXT_HEADER).expect("the probe carries the visible text block");
+    assert_eq!(source, format!("{FOLDED_PAGE}\n\n"));
+    assert!(source.contains("Folded body."), "the other questions still read the whole source");
+    assert!(rest.contains("Fold title"), "{rest}");
+    assert!(!rest.contains("Folded body."), "{rest}");
+  }
+
+  #[test]
+  fn ask_probe_input_carries_the_linked_pages_visible_text_block() {
+    let item = serde_json::json!({"text": "Choose."});
+    let input = ask_probe_input(&item, Some(FOLDED_PAGE), "questions").unwrap();
+    let (source, rest) = input.split_once(VISIBLE_TEXT_HEADER).expect("the ask probe carries the visible text block");
+    assert!(source.contains("Folded body."), "{source}");
+    assert!(!rest.contains("Folded body."), "{rest}");
+    let without_page = ask_probe_input(&item, None, "questions").unwrap();
+    assert!(!without_page.contains(VISIBLE_TEXT_HEADER), "{without_page}");
   }
 
   #[tokio::test]

@@ -157,6 +157,8 @@ pub struct Registry {
   pub(crate) sequence_controllers: Ledger<Arc<dyn SequenceController>>,
   /// The one reader of a session's plan registry, which `features/artifacts` registers.
   pub(crate) plan_registry: Ledger<PlanRegistryFn>,
+  /// The one fork-assertion runner of a page, which `features/artifacts` registers.
+  pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
   /// The lifecycle of a backend type that registered none: one process per run.
   pub(crate) default_lifecycle: Arc<dyn BackendLifecycle>,
   pub(crate) default_lifecycle_name: &'static str,
@@ -202,6 +204,7 @@ impl Registry {
       usage_resolvers,
       sequence_controllers,
       plan_registry,
+      fork_assertions,
       default_lifecycle: _,
       default_lifecycle_name,
       pre_recovery_steps,
@@ -254,6 +257,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, usage_resolvers);
     append_ledger_inventory(&mut inventory, sequence_controllers);
     append_ledger_inventory(&mut inventory, plan_registry);
+    append_ledger_inventory(&mut inventory, fork_assertions);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
     append_ledger_inventory(&mut inventory, recovery_steps);
@@ -469,6 +473,10 @@ pub type ChildEnvFn = fn(&mut Env);
 
 /// Read one session directory's plan registry: the `plans` list of its `plans.json`, or `None` when it has none.
 pub type PlanRegistryFn = fn(&Path) -> anyhow::Result<Option<Vec<Value>>>;
+
+/// Run one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file name
+/// carries no genre prefix, so no assertion set applies to it.
+pub type ForkAssertionsFn = fn(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<(String, String)>>>;
 
 /// The context limits of one reading kind. `declared_window` is `None` when the reading carries the window itself;
 /// `compact_reserve` is `None` when the compaction point is unknown.
@@ -1276,6 +1284,22 @@ impl Registry {
   /// The registered plan-registry reader; a server with none fails rather than reading plan links without it.
   pub fn plan_registry_reader(&self) -> anyhow::Result<PlanRegistryFn> {
     self.plan_registry.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the plan registry"))
+  }
+
+  /// Register the fork-assertion runner. `web_reply`'s status gate runs a linked page through it.
+  pub fn fork_assertions(&mut self, run: ForkAssertionsFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.fork_assertions.insert_single(package, "fork_assertions", run)
+  }
+
+  /// The registered fork-assertion runner; a host with none fails rather than gating a page without it.
+  pub fn fork_assertions_runner(&self) -> anyhow::Result<ForkAssertionsFn> {
+    self
+      .fork_assertions
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the fork assertions"))
   }
 
   /// Register a file view (`wiring.register_file_view`).

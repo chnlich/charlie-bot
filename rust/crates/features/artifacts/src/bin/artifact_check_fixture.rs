@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     repo_root.to_path_buf(),
     charliebot_user_text_checks::UserTextChecksConfig::default(),
     home.path().to_path_buf(),
+    None,
   ));
   let close = charliebot_artifacts::close_renderer();
   let outcomes = outcomes?;

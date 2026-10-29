@@ -164,6 +164,7 @@ fn check_with_host(
     artifact.to_path_buf(),
     &host.cfg,
     inputs.repo_root.clone(),
+    None,
   ));
   let close = crate::close_renderer();
   let outcomes = match (assertions, close) {
@@ -341,7 +342,8 @@ fn run_probe(
   let page_sha256 = cold_read::page_sha256(&page_bytes);
   let page_text =
     String::from_utf8(page_bytes).map_err(|error| CliExit::error(format!("the artifact is not UTF-8: {error}")))?;
-  let prompt = cold_read::probe_input(&page_text, &questions, trigger);
+  let prompt =
+    cold_read::probe_input(&page_text, &questions, trigger).map_err(|error| CliExit::error(format!("{error:#}")))?;
   let probe = runtime
     .block_on(cold_read::run_light_probe(host, &prompt, &system_prompt))
     .map_err(|error| CliExit::error(format!("{error:#}")))?;

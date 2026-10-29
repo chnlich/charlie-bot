@@ -16,6 +16,7 @@ axum.workspace = true
 charliebot-agents.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
+charliebot-pyhtml.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
 charliebot-usage.workspace = true

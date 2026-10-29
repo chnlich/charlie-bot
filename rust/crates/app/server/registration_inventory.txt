@@ -163,6 +163,7 @@ usage resolver	src.backends.codex	codex
 sequence controller	src.features.cron	cron
 sequence controller	src.features.improve	improve
 plan registry	src.features.artifacts	plan_registry
+fork assertions	src.features.artifacts	fork_assertions
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups
 pre-recovery step	runtime.agents	backend_pool

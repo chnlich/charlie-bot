@@ -1,14 +1,15 @@
 //! The `web` verbs (`src/features/web_reply/cli.py`): record a web reply, print the For-you layer, and set, confirm or
 //! show the session status.
 //!
-//! `status set` cold-reads each unread Waiting on you item before it stores anything. The item's host-served link is
-//! read, the ask probe goes to the light backends in pool rotation, and each answer is recorded with `ask-check`. When
-//! any item was read, the status is not stored: the verb exits 3 so the caller revises and runs it again.
+//! `status set` runs the fork assertions of each unread item's linked page, then cold-reads each unread Waiting on you
+//! item before it stores anything. The item's host-served link is read, the ask probe goes to the light backends in
+//! pool rotation, and each answer is recorded with `ask-check`. When a page fails its fork assertions or any item was
+//! read, the status is not stored: the verb exits 3 so the caller revises and runs it again.
 
 use std::ffi::OsString;
 use std::future::Future;
 
-use charliebot_agents::cli_host::LazyHost;
+use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -141,6 +142,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   }
 
   let host = lazy_host.get().map_err(anyhow_exit)?;
+  gate_fork_assertions(host, unread)?;
   let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
   for item in unread {
     let link = item.get("link").and_then(Value::as_str);
@@ -148,7 +150,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
       None => None,
       Some(path) => Some(files::read_text_mode(&path)?),
     };
-    let probe_prompt = cold_read::ask_probe_input(item, linked_page.as_deref(), &questions);
+    let probe_prompt = cold_read::ask_probe_input(item, linked_page.as_deref(), &questions).map_err(anyhow_exit)?;
     let probe = block_on(cold_read::run_light_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     let Some(backend) = probe.backend_id else {
       for (backend, error) in &probe.attempts {
@@ -170,6 +172,30 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   }
   println!("Nothing was stored.");
   std::process::exit(3);
+}
+
+/// The gate before the cold reads: every unread item's host-served page runs the fork assertions of its genre, taken
+/// from the page's file-name prefix. A failing page stops the command before any item is read.
+fn gate_fork_assertions(host: &CliHost, unread: &[Value]) -> Result<(), CliExit> {
+  let run = host.registry.fork_assertions_runner().map_err(anyhow_exit)?;
+  for item in unread {
+    let Some(path) = file_urls::host_file(item.get("link").and_then(Value::as_str)).map_err(CliExit::error)? else {
+      continue;
+    };
+    let Some(failures) = run(&path, &host.cfg.charliebot_home).map_err(anyhow_exit)? else {
+      continue;
+    };
+    if failures.is_empty() {
+      continue;
+    }
+    println!("page {} fails its fork assertions:", path.display());
+    for (name, detail) in failures {
+      println!("FAIL {name}: {detail}");
+    }
+    println!("Nothing was stored.");
+    std::process::exit(3);
+  }
+  Ok(())
 }
 
 fn status_confirm() -> Result<(), CliExit> {

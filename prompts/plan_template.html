@@ -135,7 +135,15 @@
                     acceptance to 4.2, and choices the user must judge to Trade-offs.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
-                    (p.trade). Every open item also carries a folded explainer, a details.details-layer block
+                    (p.trade). When a question asks the reader to choose, list each option as one li outside
+                    every details-layer. This lets the reader see every choice without opening a fold.
+                    Open each option li with its name in 「」, then its action and its consequence.
+                    The reader then matches each choice to the name that the recommendation uses.
+                    For a yes/no question, list 「做」 and 「不做」 as the two options.
+                    Each answer then states its consequence, so the reader does not infer it.
+                    Write the recommendation (p.rec) with one option name in 「」.
+                    The fork-options check then matches that name against the option lines.
+                    Every open item also carries a folded explainer, a details.details-layer block
                     collapsed by default, so the reader can verify the recommendation from the block alone while
                     the decision surface stays short: it retells the decision from scratch, glosses per the
                     Vocabulary rule (prompts/master.md), walks the causal chain through one worked example small
@@ -169,7 +177,7 @@
                     wholesale pruning.
                     The always-visible minimum is the surface approval binds to:
                     the header, sections 1 and 3, 4.1's short definitions and folded-block summary lines,
-                    and each Trade-off's question, recommendation, and trade lines. Shrink or split a plan
+                    and each Trade-off's question, option lines, recommendation, and trade lines. Shrink or split a plan
                     whose minimum alone overflows. The assertions report the height against the target.
                     Registration accepts any height. Both page kinds run the Cold-Read Gate of the
                     file-server skill.
@@ -244,7 +252,11 @@
       <h2><span class="n">5</span> Trade-offs</h2>
       <div class="fork">
         <p class="q"><span class="fn">1</span> Scope: list triggers for the current session only, or across all sessions?</p>
-        <p class="rec"><b>Recommendation:</b> current session only, keeping the command's scope explicit.</p>
+        <ul>
+          <li>「current session only」: list this session directory's triggers, and triggers written by other sessions stay invisible.</li>
+          <li>「all sessions」: list every trigger on the host, and the command reads directories this session did not write.</li>
+        </ul>
+        <p class="rec"><b>Recommendation:</b> 「current session only」, keeping the command's scope explicit.</p>
         <p class="trade">Tradeoff: consistent with the rest of the CLI, but triggers created from other sessions stay invisible.</p>
         <details class="details-layer">
           <summary>Full story, no prior knowledge required — expand to check the recommendation by hand</summary>

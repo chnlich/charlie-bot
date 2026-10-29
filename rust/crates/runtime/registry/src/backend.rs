@@ -55,6 +55,7 @@ impl Registry {
       usage_resolvers: crate::registry::Ledger::new("usage resolver"),
       sequence_controllers: crate::registry::Ledger::new("sequence controller"),
       plan_registry: crate::registry::Ledger::new("plan registry"),
+      fork_assertions: crate::registry::Ledger::new("fork assertions"),
       default_lifecycle: Arc::new(DefaultLifecycle),
       default_lifecycle_name: type_name::<DefaultLifecycle>(),
       pre_recovery_steps: crate::registry::Ledger::new("pre-recovery step"),

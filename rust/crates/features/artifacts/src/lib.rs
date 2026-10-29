@@ -35,7 +35,18 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.sidebar_contribution("artifacts", Arc::new(sidebar::ArtifactsSidebar))?;
   registry.plan_registry(plans::read_session_plans)?;
   registry.recovery_step("headless_renderer_orphans", sweep_headless_renderer_orphans_at_startup)?;
+  registry.fork_assertions(registered_fork_assertions)?;
   registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
+}
+
+/// The fork-assertion runner the registry hands `web_reply`'s status gate: each failing page line as a pair.
+fn registered_fork_assertions(
+  page: &std::path::Path,
+  home: &std::path::Path,
+) -> anyhow::Result<Option<Vec<(String, String)>>> {
+  Ok(artifact_check::run_fork_assertions(page, home)?.map(|outcomes| {
+    outcomes.into_iter().filter(|outcome| !outcome.passed).map(|outcome| (outcome.name, outcome.detail)).collect()
+  }))
 }
 
 /// Close the process-wide headless renderer.

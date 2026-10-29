@@ -1278,6 +1278,7 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-gemini",
+ "charliebot-pyhtml",
  "charliebot-registry",
  "charliebot-shell-harness",
  "charliebot-store",

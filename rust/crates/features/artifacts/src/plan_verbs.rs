@@ -263,7 +263,7 @@ async fn validate_new_version_file(
     .startup
     .require::<RepoRoot>()
     .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: error.to_string() })?;
-  let outcomes = artifact_check::run_assertions("plan", artifact, &config, repo_root.path().to_path_buf())
+  let outcomes = artifact_check::run_assertions("plan", artifact, &config, repo_root.path().to_path_buf(), None)
     .await
     .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: format!("{error:#}") })?;
   let failures: Vec<String> = outcomes

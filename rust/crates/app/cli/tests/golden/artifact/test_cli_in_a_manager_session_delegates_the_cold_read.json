@@ -32,7 +32,7 @@
     }
   ],
   "expect": {
-    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\ncold read started: session child-1 run run-1\n",
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-options\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\ncold read started: session child-1 run run-1\n",
     "stderr": "",
     "exit": 0,
     "requests": [

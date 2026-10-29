@@ -14,6 +14,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use charliebot_shell_harness::{self as harness, Env};
+use sha2::{Digest as _, Sha256};
 use world::{DIRECTION, GATEWAY_TOKEN, World};
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
@@ -81,6 +82,21 @@ fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let text = fs::read_to_string(&world.claude_stdin).expect("the fake claude recorded its standard input");
   assert_eq!(text, PROMPT, "the remote claude did not receive the prompt:\n{}", run.describe());
+}
+
+#[test]
+fn the_round_claude_gets_the_gateway_token_in_its_environment() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let env = world.claude_environment();
+  let digest = format!("{:x}", Sha256::digest(GATEWAY_TOKEN));
+  assert_eq!(
+    env.get("ANTHROPIC_AUTH_TOKEN_SHA256").map(String::as_str),
+    Some(digest.as_str()),
+    "claude did not get the gateway token: {}",
+    run.describe()
+  );
 }
 
 #[test]

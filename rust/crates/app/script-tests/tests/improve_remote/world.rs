@@ -74,7 +74,11 @@ fi
 
 const CLAUDE: &str = r#"# Fake claude: record the arguments and environment it receives, then exit as the round asks.
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
-env >"$FAKE_CLAUDE_ENV"
+# The record keeps the token out of the evidence: a real claude holds its environment in memory only, so the record
+# carries the token's digest in its place.
+env | grep -v '^ANTHROPIC_AUTH_TOKEN=' >"$FAKE_CLAUDE_ENV"
+printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\n' "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
+  >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"
 fi

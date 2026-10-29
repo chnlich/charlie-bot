@@ -261,11 +261,23 @@ record_memory_peak() {
   fi
 }
 
+# Export the gateway token that claude reads as ANTHROPIC_AUTH_TOKEN. The prepare step wrote the token to the
+# round's credentials file, and the launcher keeps it out of the environment file, so this is the one place it enters
+# the round: the environment of claude, with no argument and no other file that carries it.
+export_gateway_token() {
+  local tokens token
+  tokens=$(sed -n 's/^[[:space:]]*api_key:[[:space:]]*//p' "$ROUND_HOME/credentials.yaml")
+  token=${tokens%%$'\n'*}
+  [[ -n $token ]] || fail 1 "the round's credentials file holds no gateway token: $ROUND_HOME/credentials.yaml"
+  export ANTHROPIC_AUTH_TOKEN=$token
+}
+
 run_in_scope() {
   # The marker tells the heartbeat that this launch owns the scope: a refusal leaves no marker,
   # so a heartbeat that closes cannot stop the previous round's scope.
   : >"$LAUNCH_DIR/started"
   empty_tmpdir
+  export_gateway_token
   local status=0
   python3 -- "$LAUNCH_DIR/landlock_exec.py" "$direction" -- claude "${REWRITTEN[@]}" || status=$?
   record_memory_peak

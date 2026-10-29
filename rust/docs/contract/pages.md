@@ -101,7 +101,7 @@ The route does not write to disk. Rendering the page does not mark the session a
 
 | Variable | Type | Value |
 |---|---|---|
-| `initial_sessions` | list of objects | The sidebar rows. Each row is the full session JSON (`task.goal` included), with the six model `schedule_*` fields replaced by the listing fields. See [shapes.md](shapes.md#listing-rows). |
+| `initial_sessions_json` | string | The sidebar rows as Jinja `tojson` text: the listing rows (each the full session JSON, `task.goal` included, with the six model `schedule_*` fields replaced by the listing fields; see [shapes.md](shapes.md#listing-rows)) with sorted keys and the `< > & '` escapes. The handler renders the text, so the page does not walk every row through the template engine. |
 | `active_session` | session or null | The active session model. |
 | `pending_draft` | object or null | The bootstrap `pending_draft`. |
 | `event_count` | int | The bootstrap total event count. 0 with no active session. |
@@ -123,7 +123,7 @@ The template uses these expressions, among others:
 
 - `{{ hostname }}` in the title `CharlieBot@<hostname>`;
 - `window.SESSIONS_ROOT = {{ sessions_root|tojson }}`;
-- `{{ session_bootstrap|tojson }}`, `{{ initial_sessions|tojson }}`, `{{ load_errors|tojson }}`, `{{ backend_compact|tojson }}`, `{{ auth_enabled|tojson }}`;
+- `{{ session_bootstrap|tojson }}`, `{{ initial_sessions_json|safe }}`, `{{ load_errors|tojson }}`, `{{ backend_compact|tojson }}`, `{{ auth_enabled|tojson }}`;
 - `active_session.id`, `active_session.name`, `active_session.profile` and `active_session.thinking_since.isoformat()`;
 - `pending_draft.event_index` and `pending_draft.content`;
 - the includes `partials/prologue.html`, `partials/close_button.html` and `partials/welcome_view.html`.

@@ -160,7 +160,7 @@ The raw model dump has `work_state: null` until the sidebar state is probed.
 |---|---|---|
 | model | `response_model=SessionMetadata` routes (create, fork, elone, backend switch, star, unstar, rate, group) | none |
 | row | lists and `session` in bootstrap and usage | `task.goal` is removed (the rest of `task` stays). |
-| listing row | `GET /api/sessions/`, `/chat-threads`, `/archived`, `/starred`, index `initial_sessions` | See below. |
+| listing row | `GET /api/sessions/`, `/chat-threads`, `/archived`, `/starred`, and the index page's `initial_sessions_json` | See below. |
 | detail | `GET /api/sessions/{session_id}`, `PATCH`, task cancel, complete (200) | See below. |
 
 ### Listing rows
@@ -172,7 +172,7 @@ A listing row is the row form with the schedule join applied (`apply_listing_fie
    - an unbound row gets `"schedule_task": null`;
    - a row bound to a scheduled task gets `schedule_task` (task name), `schedule_cron`, `schedule_timezone`, `schedule_enabled`, `schedule_next_run` (ISO string of the next run) and `schedule_allow_failure`, in that order.
 
-The index page `initial_sessions` rows keep `task.goal`. Every other listing row removes it.
+The index page's `initial_sessions_json` rows keep `task.goal`. Every other listing row removes it.
 
 `GET /api/sessions/` and `/chat-threads` also overlay the derived sidebar state onto each row, in the model positions: `thinking_since`, `has_running_tasks`, `has_pending_trigger`, `pending_trigger_count`, `next_trigger_at`, `has_pending_plan_approval`, `backend` (for a worker row: its newest run's backend, else its own), and `work_state` when the state has one.
 

@@ -139,8 +139,9 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     .or_else(|| active_session.get("backend").and_then(Value::as_str).filter(|backend| !backend.is_empty()))
     .unwrap_or(default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
+  let initial_sessions_json = charliebot_compat::jinja::tojson_text(&Value::Array(initial_sessions));
   let context = json!({
-    "initial_sessions": initial_sessions,
+    "initial_sessions_json": initial_sessions_json,
     "active_session": active_session,
     "pending_draft": pending_draft,
     "event_count": event_count,

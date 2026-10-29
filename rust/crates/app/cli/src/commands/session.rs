@@ -69,6 +69,8 @@ enum SessionCommand {
   Cancel(CancelArgs),
   /// Move a task under a new parent; an agent moves tasks inside its own subtree only
   Reparent(ReparentArgs),
+  /// Set who approves a task: `user` holds its self-archive until the user opens the session, `parent` closes it at run end
+  SetApprover(SetApproverArgs),
   /// Relay a message to another session as an agent_message
   Send(SendArgs),
   /// Print one session's chat messages as plain text, oldest first (for rg)
@@ -98,6 +100,9 @@ struct CreateArgs {
   /// Request id binding the stable node id (defaults to a fresh UUID)
   #[arg(long)]
   request_id: Option<String>,
+  /// Who approves the task (v2 task create; defaults to `user`)
+  #[arg(long, value_parser = ["user", "parent"])]
+  approver: Option<String>,
 }
 
 #[derive(Args)]
@@ -181,6 +186,15 @@ struct ReparentArgs {
 }
 
 #[derive(Args)]
+struct SetApproverArgs {
+  /// Task id
+  session_id: String,
+  /// The approver: `user` or `parent`
+  #[arg(value_parser = ["user", "parent"])]
+  approver: String,
+}
+
+#[derive(Args)]
 struct SendArgs {
   /// Target session id
   target: String,
@@ -223,6 +237,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     SessionCommand::Acknowledge(args) => acknowledge(&args),
     SessionCommand::Cancel(args) => cancel(&args),
     SessionCommand::Reparent(args) => reparent(&args),
+    SessionCommand::SetApprover(args) => set_approver(&args),
     SessionCommand::Send(args) => send(&args),
     SessionCommand::Dialog(args) => dialog(&args),
   }
@@ -292,6 +307,9 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
     payload.insert("profile".to_string(), json!(profile));
     payload
       .insert("request_id".to_string(), json!(args.request_id.clone().unwrap_or_else(control_events::new_request_id)));
+    if let Some(approver) = &args.approver {
+      payload.insert("approver".to_string(), json!(approver));
+    }
   }
   let mut result = client::post(session_routes::SESSIONS_PATH, Value::Object(payload), None, &[])?;
   if let Some(group) = &args.group {
@@ -438,6 +456,17 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
   }
   eprint!("{lines}");
   std::process::exit(1);
+}
+
+fn set_approver(args: &SetApproverArgs) -> Result<(), CliExit> {
+  let result = client::patch(
+    &route::fill(session_routes::SESSION_PATH, &[args.session_id.as_str()]),
+    json!({ "approver": args.approver }),
+    None,
+    &[],
+  )?;
+  print_result(&result);
+  Ok(())
 }
 
 fn reparent(args: &ReparentArgs) -> Result<(), CliExit> {

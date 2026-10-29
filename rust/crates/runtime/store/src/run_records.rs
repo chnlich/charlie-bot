@@ -1182,19 +1182,6 @@ impl Store {
     Ok(supplied.to_vec())
   }
 
-  /// Append input ids to a run record while holding the control lock.
-  pub async fn claim_input_events(
-    &self,
-    session_id: &str,
-    run_id: &str,
-    event_ids: &[String],
-  ) -> StoreResult<RunRecord> {
-    let guard = self.control_lock().await;
-    let run = self.claim_input_events_locked(&guard, session_id, run_id, event_ids)?;
-    drop(guard);
-    Ok(run)
-  }
-
   /// Append input ids for a caller that already holds the control lock.
   pub fn claim_input_events_locked(
     &self,

@@ -952,12 +952,6 @@ pub fn owner_not_landed_text(owner: &str) -> String {
   format!("owned by the {owner} task, which has not landed; the node pass cannot replay it")
 }
 
-/// Assert that the node pass refused a replay step with the named error of `owner`.
-pub fn assert_named_error(error: &anyhow::Error, owner: &str) {
-  let text = format!("{error:#}");
-  assert!(text.contains(&owner_not_landed_text(owner)), "expected the {owner} named error, got: {text}");
-}
-
 /// Assert that the startup pass logged its node failure with the named error of `owner`.
 pub fn assert_logged_node_failure(log: &LogCapture, owner: &str) {
   let logged = log.text();

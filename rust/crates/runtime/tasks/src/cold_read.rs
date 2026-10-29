@@ -13,7 +13,7 @@ use charliebot_agents::backend_pool::is_quota_error;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
 use charliebot_core::pyfmt::{self, JsonStyle};
-use charliebot_pyhtml::{EventKind, parse_with};
+use charliebot_pyhtml::{EventKind, folds_at_open, parse_with};
 use charliebot_registry::backend::LaunchArgs;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -64,8 +64,62 @@ pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
 /// The block a probe adds after the full source: the text the reader sees at page open, folded blocks closed.
 pub const VISIBLE_TEXT_HEADER: &str = "VISIBLE TEXT";
 
-/// The text a page shows at open, as one line per source line: every element's text, except the body of a folded
-/// `details` block, whose `summary` stays. `style` and `script` text is not text the reader sees.
+/// The elements that start and end a line in the visible text. Text joined across inline elements stays on one line;
+/// each of these elements begins and ends its own line.
+const BLOCK_TAGS: &[&str] = &[
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "body",
+  "br",
+  "dd",
+  "details",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hr",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+];
+
+/// Ends the visible text's current line, unless it is already at a line start.
+fn end_line(text: &mut String) {
+  if !text.is_empty() && !text.ends_with('\n') {
+    text.push('\n');
+  }
+}
+
+/// The text a page shows at open: every visible element's text, one line per block element and per source line break.
+/// The body of a folded `details` block is left out, while its `summary` stays. `style` and `script` text is not text
+/// the reader sees.
 pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
   struct Frame {
     tag: String,
@@ -80,16 +134,17 @@ pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
     EventKind::StartTag | EventKind::StartEndTag => {
       let arguments = event.args.as_array().expect("a start-tag event has arguments");
       let tag = arguments[0].as_str().expect("a start-tag event has a tag").to_owned();
+      let attribute_names = arguments[1]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|attribute| attribute.as_array().and_then(|pair| pair.first()).and_then(Value::as_str));
       let parent = frames.last().expect("the root frame stays on the stack");
       let parent_content = parent.content_visible;
       let (content_visible, summary_visible) = match tag.as_str() {
         "details" => {
-          let open = arguments[1].as_array().is_some_and(|attributes| {
-            attributes.iter().any(|attribute| {
-              attribute.as_array().and_then(|pair| pair.first()).and_then(Value::as_str) == Some("open")
-            })
-          });
-          (parent_content && open, parent_content)
+          let folded = folds_at_open(&tag, attribute_names);
+          (parent_content && !folded, parent_content)
         }
         "summary" => {
           let visible = if parent.tag == "details" { parent.summary_visible } else { parent_content };
@@ -98,14 +153,23 @@ pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
         "style" | "script" => (false, false),
         _ => (parent_content, parent_content),
       };
+      let block = BLOCK_TAGS.contains(&tag.as_str());
+      if block {
+        end_line(&mut text);
+      }
       if event.kind == EventKind::StartTag {
         frames.push(Frame { tag, content_visible, summary_visible });
+      } else if block {
+        end_line(&mut text);
       }
     }
     EventKind::EndTag => {
       let tag = event.args[0].as_str().expect("an end-tag event has a tag");
       if let Some(position) = (1..frames.len()).rev().find(|&position| frames[position].tag == tag) {
         frames.truncate(position);
+      }
+      if BLOCK_TAGS.contains(&tag) {
+        end_line(&mut text);
       }
     }
     EventKind::Data => {
@@ -380,6 +444,16 @@ mod tests {
     let text = visible_text(FOLDED_PAGE).unwrap();
     assert!(text.contains("Fold title"), "{text}");
     assert!(!text.contains("Folded body."), "{text}");
+  }
+
+  #[test]
+  fn visible_text_puts_each_block_element_on_its_own_line() {
+    let page = "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
+                <div><p>Inline <b>text</b> stays.</p></div>";
+    assert_eq!(
+      visible_text(page).unwrap(),
+      "「keep」: keep the file.\n「delete」: delete the file.\nInline text stays."
+    );
   }
 
   #[test]

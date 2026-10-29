@@ -8,11 +8,22 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use charliebot_core::logline;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
 const RECOVERY_GATE_MS: &str = "30000";
 const BOOT_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether a server log line is a record of `event`. A line that is not a log line is no record.
+fn is_event(line: &str, event: &str) -> bool {
+  logline::parse(line).is_some_and(|row| row.event == event)
+}
+
+/// The value of one field of a server log line, when the line is a log line that has the field.
+fn field_of(line: &str, key: &str) -> Option<String> {
+  logline::parse(line)?.field(key).map(str::to_string)
+}
 
 struct ServerChild(Child);
 
@@ -99,7 +110,7 @@ fn wait_for_event(
     assert!(!remaining.is_zero(), "the server did not log {event}; output: {lines:?}");
     match receiver.recv_timeout(remaining) {
       Ok(Ok(line)) => {
-        let matched = line.contains(&format!("\"event\":\"{event}\""));
+        let matched = is_event(&line, event);
         lines.push(line);
         if matched {
           return lines;
@@ -168,21 +179,24 @@ fn assert_boot_signal(signal_to_send: Signal) {
   let (mut server, receiver) = start_server(temporary.path(), &home, true);
   let mut lines = wait_for_event(&mut server, &receiver, "task_tree_recovery_test_gate", Duration::from_secs(20));
   assert!(
-    lines.iter().any(|line| line.contains(&format!("\"delay_ms\":{RECOVERY_GATE_MS}"))),
+    lines.iter().any(|line| field_of(line, "delay_ms").as_deref() == Some(RECOVERY_GATE_MS)),
     "the test recovery delay is 30 seconds: {lines:?}"
   );
-  assert!(!lines.iter().any(|line| line.contains("\"event\":\"server_ready\"")));
+  assert!(!lines.iter().any(|line| is_event(line, "server_ready")));
 
   send_signal(&server, signal_to_send);
   let (status, elapsed) = wait_for_exit(&mut server, &receiver, &mut lines, BOOT_STOP_TIMEOUT);
   drain_logs(&receiver, &mut lines);
   println!("{signal_to_send:?} during task recovery exited in {:.3}s", elapsed.as_secs_f64());
   assert!(elapsed < BOOT_STOP_TIMEOUT, "the process took {elapsed:?} to stop");
-  assert!(!lines.iter().any(|line| line.contains("\"event\":\"server_ready\"")), "{lines:?}");
-  let shutdowns: Vec<&String> =
-    lines.iter().filter(|line| line.contains("\"event\":\"charliebot_shutdown\"")).collect();
+  assert!(!lines.iter().any(|line| is_event(line, "server_ready")), "{lines:?}");
+  let shutdowns: Vec<&String> = lines.iter().filter(|line| is_event(line, "charliebot_shutdown")).collect();
   assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {lines:?}");
-  assert!(shutdowns[0].contains("\"boot\":true"), "the shutdown line marks a boot stop: {shutdowns:?}");
+  assert_eq!(
+    field_of(shutdowns[0], "boot").as_deref(),
+    Some("true"),
+    "the shutdown line marks a boot stop: {shutdowns:?}"
+  );
   match signal_to_send {
     Signal::SIGTERM => assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}"),
     Signal::SIGINT => assert_eq!(status.code(), Some(0), "{status:?}"),
@@ -193,7 +207,7 @@ fn assert_boot_signal(signal_to_send: Signal) {
   let mut restarted_lines =
     wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(30));
   assert!(
-    !restarted_lines.iter().any(|line| line.contains("\"event\":\"task_recovery_node_failed\"")),
+    !restarted_lines.iter().any(|line| is_event(line, "task_recovery_node_failed")),
     "the restarted home recovers without a failed node: {restarted_lines:?}"
   );
   send_signal(&restarted, Signal::SIGTERM);
@@ -248,10 +262,12 @@ fn write_sessions(home: &Path, count: usize) {
 fn recovery_elapsed_ms(lines: &[String]) -> u64 {
   let line = lines
     .iter()
-    .find(|line| line.contains("\"event\":\"task_tree_recovery_done\""))
+    .find(|line| is_event(line, "task_tree_recovery_done"))
     .expect("the boot pass logs task_tree_recovery_done");
-  let value: serde_json::Value = serde_json::from_str(line).expect("the done line is JSON");
-  value["elapsed_ms"].as_u64().expect("the done line has elapsed_ms")
+  field_of(line, "elapsed_ms")
+    .expect("the done line has elapsed_ms")
+    .parse()
+    .expect("elapsed_ms is a whole number of milliseconds")
 }
 
 /// SIGTERM during a real node walk. Neither boot sets the delay gate, so the walk's own stop checks end it.
@@ -272,14 +288,17 @@ fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   assert!(elapsed < Duration::from_millis(WALK_MIN_MS), "the stop took {elapsed:?}; the walk ran to its end");
   assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
   assert!(
-    !lines.iter().any(|line| line.contains("\"event\":\"task_tree_recovery_done\"")),
+    !lines.iter().any(|line| is_event(line, "task_tree_recovery_done")),
     "the walk finished before the stop reached it: {lines:?}"
   );
-  assert!(!lines.iter().any(|line| line.contains("\"event\":\"server_ready\"")), "{lines:?}");
-  let shutdowns: Vec<&String> =
-    lines.iter().filter(|line| line.contains("\"event\":\"charliebot_shutdown\"")).collect();
+  assert!(!lines.iter().any(|line| is_event(line, "server_ready")), "{lines:?}");
+  let shutdowns: Vec<&String> = lines.iter().filter(|line| is_event(line, "charliebot_shutdown")).collect();
   assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {lines:?}");
-  assert!(shutdowns[0].contains("\"boot\":true"), "the shutdown line marks a boot stop: {shutdowns:?}");
+  assert_eq!(
+    field_of(shutdowns[0], "boot").as_deref(),
+    Some("true"),
+    "the shutdown line marks a boot stop: {shutdowns:?}"
+  );
 
   let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false);
   let mut restarted_lines =
@@ -288,7 +307,7 @@ fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   println!("the node walk over {WALK_SESSIONS} sessions took {walk_ms} ms");
   assert!(walk_ms >= WALK_MIN_MS, "the node walk took {walk_ms} ms, under the {WALK_MIN_MS} ms the test needs");
   assert!(
-    !restarted_lines.iter().any(|line| line.contains("\"event\":\"task_recovery_node_failed\"")),
+    !restarted_lines.iter().any(|line| is_event(line, "task_recovery_node_failed")),
     "the restarted home walks every node without a failure: {restarted_lines:?}"
   );
   send_signal(&restarted, Signal::SIGTERM);

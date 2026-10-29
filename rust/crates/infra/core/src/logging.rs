@@ -1,26 +1,25 @@
-//! Structured logging: one JSON line per event on stdout.
+//! Structured logging: one line per event on stdout, in the grammar `logline` writes and reads.
 //!
 //! An event's message is its name, the same name the Python server's structlog call logs
-//! (`tracing::info!(path = ..., "charliebot_home_ready")`). A line reads
-//! `{"event": <name>, <fields in call order>, "level": <level>, "timestamp": <ISO 8601 UTC>}`, the key
-//! layout of structlog's JSON renderer with `add_log_level` and an ISO `TimeStamper`.
+//! (`tracing::info!(path = ..., "charliebot_home_ready")`). A line reads `<UTC time> [<level>] <event> <key=value>...`,
+//! with the fields in call order.
 
 use std::io::Write;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-use crate::timefmt;
+use crate::{logline, timefmt};
 
-/// Install the JSON line layer as the process's global subscriber: CharlieBot's own events from INFO,
-/// library events (axum, hyper, tower) from WARN.
+/// Install the line layer as the process's global subscriber: CharlieBot's own events from INFO, library events (axum,
+/// hyper, tower) from WARN.
 pub fn init() {
   let filter = targets_filter();
-  let subscriber = Registry::default().with(JsonLines.with_filter(filter));
+  let subscriber = Registry::default().with(StdoutLines.with_filter(filter));
   tracing::subscriber::set_global_default(subscriber).expect("logging initializes once, before any event");
 }
 
@@ -28,10 +27,10 @@ fn targets_filter() -> Targets {
   Targets::new().with_target("charliebot", Level::INFO).with_default(Level::WARN)
 }
 
-/// Writes each event as one flushed JSON line on stdout.
-struct JsonLines;
+/// Writes each event as one flushed line on stdout.
+struct StdoutLines;
 
-impl<S: Subscriber> Layer<S> for JsonLines {
+impl<S: Subscriber> Layer<S> for StdoutLines {
   fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
     let line = render_line(event);
     let mut stdout = std::io::stdout().lock();
@@ -42,29 +41,15 @@ impl<S: Subscriber> Layer<S> for JsonLines {
 }
 
 fn render_line(event: &Event<'_>) -> String {
-  let mut fields = FieldMap { event: None, fields: Map::new() };
+  let mut fields = FieldMap { event: None, fields: Vec::new() };
   event.record(&mut fields);
-  let mut line = Map::new();
-  line.insert("event".to_string(), Value::String(fields.event.unwrap_or_default()));
-  line.extend(fields.fields);
-  line.insert("level".to_string(), Value::String(level_name(event.metadata().level()).to_string()));
-  line.insert("timestamp".to_string(), Value::String(timefmt::log_timestamp()));
-  Value::Object(line).to_string()
-}
-
-fn level_name(level: &Level) -> &'static str {
-  match *level {
-    Level::ERROR => "error",
-    Level::WARN => "warning",
-    Level::INFO => "info",
-    Level::DEBUG => "debug",
-    Level::TRACE => "trace",
-  }
+  let level = logline::level_word(event.metadata().level());
+  logline::render(&timefmt::log_timestamp(), level, &fields.event.unwrap_or_default(), &fields.fields)
 }
 
 struct FieldMap {
   event: Option<String>,
-  fields: Map<String, Value>,
+  fields: Vec<(String, Value)>,
 }
 
 impl FieldMap {
@@ -75,7 +60,7 @@ impl FieldMap {
         other => other.to_string(),
       });
     } else {
-      self.fields.insert(field.name().to_string(), value);
+      self.fields.push((field.name().to_string(), value));
     }
   }
 }

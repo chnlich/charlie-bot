@@ -12,6 +12,7 @@ pub mod home;
 pub mod home_init;
 pub mod hot_reload;
 pub mod logging;
+pub mod logline;
 pub mod metadata_slot;
 pub mod paths;
 mod printable_table;

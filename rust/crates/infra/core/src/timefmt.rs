@@ -59,18 +59,18 @@ pub fn http_date(unix_seconds: i64) -> String {
   moment.format(HTTP_DATE.as_slice()).expect("an HTTP date formats")
 }
 
-/// The log line timestamp: ISO 8601 UTC with microseconds and a `Z` suffix.
+/// The log line's time: UTC to the millisecond, `YYYY-MM-DD HH:MM:SS.mmmZ`, the stamp `logline` reads.
 pub fn log_timestamp() -> String {
   let moment = OffsetDateTime::from(SystemTime::now());
   format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}Z",
     moment.year(),
     u8::from(moment.month()),
     moment.day(),
     moment.hour(),
     moment.minute(),
     moment.second(),
-    moment.microsecond()
+    moment.millisecond()
   )
 }
 

@@ -129,10 +129,11 @@ fn a_cron_sessions_own_turn_without_a_local_claude_exits_1_and_names_it() {
   let mut probe = harness::command("bash", &env);
   probe.arg("-c").arg("type -P claude");
   let found = harness::run(&mut probe);
-  if !found.stdout.trim().is_empty() {
-    println!("skipped: /usr/bin or /bin holds a claude");
-    return;
-  }
+  assert!(
+    found.stdout.trim().is_empty(),
+    "/usr/bin or /bin holds a claude, so this PATH cannot test a missing one:\n{}",
+    found.describe()
+  );
 
   let run = world.run(&env);
 

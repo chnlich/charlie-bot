@@ -110,18 +110,43 @@ fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
   serde_json::to_value(value).map_err(|error| Error::new(ErrorKind::BadSerialization, error.to_string()))
 }
 
+/// `htmlsafe_json_dumps`'s escaping of the JSON text: `< > & '` as unicode escapes.
+///
+/// One scan that copies the runs between matches; four `str::replace` calls would each scan the whole
+/// text. A text with no match keeps its buffer.
+fn html_safe_json(json: String) -> String {
+  fn escape(byte: u8) -> Option<&'static str> {
+    match byte {
+      b'<' => Some("\\u003c"),
+      b'>' => Some("\\u003e"),
+      b'&' => Some("\\u0026"),
+      b'\'' => Some("\\u0027"),
+      _ => None,
+    }
+  }
+  let bytes = json.as_bytes();
+  let Some(first) = bytes.iter().position(|byte| escape(*byte).is_some()) else { return json };
+  let mut out = String::with_capacity(json.len() + 16);
+  let mut copied = 0;
+  for (index, byte) in bytes.iter().enumerate().skip(first) {
+    if let Some(replacement) = escape(*byte) {
+      out.push_str(&json[copied..index]);
+      out.push_str(replacement);
+      copied = index + 1;
+    }
+  }
+  out.push_str(&json[copied..]);
+  out
+}
+
 /// Jinja2's `tojson` (`htmlsafe_json_dumps` with `sort_keys=True`): `json.dumps` text with `< > & '`
 /// escaped as JSON unicode escapes, marked safe.
 fn tojson(value: Value) -> Result<Value, Error> {
   if value.is_undefined() {
     return Err(Error::new(ErrorKind::BadSerialization, "Object of type Undefined is not JSON serializable"));
   }
-  let text = pyfmt::json_dumps(&to_json(&value)?, &pyfmt::JINJA_TOJSON)
-    .replace('<', "\\u003c")
-    .replace('>', "\\u003e")
-    .replace('&', "\\u0026")
-    .replace('\'', "\\u0027");
-  Ok(Value::from_safe_string(text))
+  let json = pyfmt::json_dumps(&to_json(&value)?, &pyfmt::JINJA_TOJSON);
+  Ok(Value::from_safe_string(html_safe_json(json)))
 }
 
 /// Jinja2's `do_urlencode`. A scalar's text is quoted with `/` kept (`urllib.parse.quote`). A mapping, or a

@@ -393,6 +393,17 @@ fn write_closing_indent(out: &mut String, style: &JsonStyle, level: usize) {
   }
 }
 
+/// Appends one `\uXXXX` escape without allocating: `format!` here runs per non-ASCII character, and a
+/// page's embedded JSON is mostly non-ASCII text.
+fn push_unicode_escape(out: &mut String, unit: u16) {
+  const HEX: [char; 16] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
+  out.push('\\');
+  out.push('u');
+  for shift in [12, 8, 4, 0] {
+    out.push(HEX[usize::from((unit >> shift) & 0xf)]);
+  }
+}
+
 /// Appends one JSON string literal as `json.dumps(ensure_ascii=True)` writes it: the control set and the
 /// two structural characters escaped, and every character above `~` as CPython's `\uXXXX` pairs.
 ///
@@ -416,12 +427,12 @@ pub fn write_ascii_json_str(out: &mut String, text: &str) {
       '\t' => out.push_str("\\t"),
       '\u{8}' => out.push_str("\\b"),
       '\u{c}' => out.push_str("\\f"),
-      c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+      c if (c as u32) < 0x20 => push_unicode_escape(out, c as u16),
       c if (c as u32) <= 0x7e => out.push(c),
       c => {
         let mut units = [0u16; 2];
         for unit in c.encode_utf16(&mut units) {
-          out.push_str(&format!("\\u{unit:04x}"));
+          push_unicode_escape(out, *unit);
         }
       }
     }

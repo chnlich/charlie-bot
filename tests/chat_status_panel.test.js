@@ -240,6 +240,35 @@ test('opening the Status view sets inert on the list and closing removes it', as
   assert.equal(rig.root.getAttribute('inert'), null, 'the new session\'s list is not covered');
 });
 
+// A history reader's engine for the count-row case: the page saves a mid-history
+// place at the Status open, and the rig's list has no layout to read it from.
+function historyEngine() {
+  return {
+    view: 'everything',
+    hasMessage: () => false,
+    readingPlace: () => ({pinned: false, readingAnchor: {kind: 'message', id: 'h1', offset: 12}}),
+    restoreReadingPlace() {},
+    setView() {},
+    jumpToBottom() {},
+  };
+}
+
+test('a session switch drops the new-message row that a close left showing', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  const realEngineFor = rig.context.Chat.activeTurnEngineFor;
+  rig.context.Chat.activeTurnEngineFor = () => historyEngine();
+  rig.context.setChatView('status');
+  await deliver(rig, {type: 'message', message: {role: 'assistant', id: 'm1', content: 'New reply', timestamp: 't1'}});
+  rig.context.setChatView('everything');
+  rig.context.Chat.activeTurnEngineFor = realEngineFor;
+  assert.equal(rig.newMessagesRow.classList.contains('hidden'), false,
+      'the history reader sees the count row on return');
+
+  await openSession(rig, {id: 'session-b', web_status: NEWER});
+  assert.equal(rig.newMessagesRow.classList.contains('hidden'), true, 'the row counted session-a and leaves with it');
+});
+
 test('the Status view scrolls as one page with no height cap', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);

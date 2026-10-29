@@ -402,9 +402,15 @@
 
   // The count row's jump: back to the newest message, the row goes away.
   function revealStatusNewMessages() {
+    dropNewMessagesCount();
+    if (typeof scrollToBottom === 'function') scrollToBottom();
+  }
+
+  // The count belongs to the session it counted: a Status open or a session
+  // switch zeroes it and takes the row down, whether a close left the row showing.
+  function dropNewMessagesCount() {
     statusViewNewCount = 0;
     showNewMessagesRow(false);
-    if (typeof scrollToBottom === 'function') scrollToBottom();
   }
 
   // The Status view's show and hide, through the toggle's control. Opening it
@@ -423,9 +429,8 @@
       }
       const engine = engineForMessages();
       savedReadingPlace = {session: panelSessionId, place: engine ? engine.readingPlace() : null};
-      statusViewNewCount = 0;
+      dropNewMessagesCount();
       setListInert(true);
-      showNewMessagesRow(false);
     } else if (!shown && statusViewShown) {
       if (btn) btn.classList.toggle('hidden', !scrollButtonWasShown);
       setListInert(false);
@@ -506,6 +511,7 @@
       clearSessionStatusPanel();
       return;
     }
+    dropNewMessagesCount();
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
     panelDescendants = [];
@@ -517,6 +523,7 @@
   }
 
   function clearSessionStatusPanel() {
+    dropNewMessagesCount();
     panelSessionId = null;
     panelStatus = null;
     panelDescendants = [];

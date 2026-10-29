@@ -2,9 +2,10 @@
 //!
 //! Starlette's `Jinja2Templates` builds a Jinja2 environment with autoescaping, and a page prints values
 //! through it: markup prints as is, anything else prints as Python's `str()` escaped with markupsafe's table.
-//! Three filters carry bytes the pages depend on, so they are Jinja2's own: `tojson` (`htmlsafe_json_dumps` with
-//! `sort_keys`), `urlencode` (`do_urlencode`) and `format` (`do_format` with one positional argument, the `%` operator
-//! on the value). minijinja's `tojson`, `urlencode` and `format` are replaced here.
+//! Three filters carry bytes the pages depend on, so they are Jinja2's own. They are `tojson`
+//! (`htmlsafe_json_dumps` with `sort_keys`), `urlencode` (`do_urlencode`) and `format` (`do_format` with one
+//! positional argument, the `%` operator on the value). minijinja's `tojson`, `urlencode` and `format` are replaced
+//! here.
 
 use std::path::PathBuf;
 

@@ -2,14 +2,15 @@
 //!
 //! A document that `serde_json` reads to the same value as `json.loads` is taken from `serde_json` (see
 //! [`loads_serde`]). Every other document goes through the scanner, which follows `_json.c`, which `json.loads` uses,
-//! and `json/decoder.py` where the two agree. The scanner's messages and positions are the ones `json.loads` raises: a
-//! `JSONDecodeError` renders as `<message>: line L column C (char P)`, and a body that is not UTF-8 gives the
+//! and `json/decoder.py` where the two agree. The scanner's messages and positions are the ones `json.loads` raises.
+//! A `JSONDecodeError` renders as `<message>: line L column C (char P)`, and a body that is not UTF-8 gives the
 //! `UnicodeDecodeError` text. `json/__init__.py`'s `detect_encoding` picks the codec of a body, so a body with null
 //! bytes decodes as UTF-16 or UTF-32, as Python decodes it.
 //!
 //! Positions count code points, as Python `str` indexes do. A document Python loads but a `serde_json::Value` cannot
 //! hold (a non-finite float, an integer beyond 64 bits, a lone surrogate, nesting past [`MAX_DEPTH`]) is parsed to its
-//! end, so the syntax errors before it win as in Python, and then refused as [`LoadError::Unrepresentable`].
+//! end. The syntax errors before it therefore win as in Python, and the document is then refused as
+//! [`LoadError::Unrepresentable`].
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -19,8 +20,9 @@ use serde_json::{Map, Number, Value};
 
 /// The integer forms that serde_json reads as a different value than `json.loads`, so a body holding one goes to the
 /// scanner. A run of 19 digits: serde_json reads an integer past 64 bits as a float, where `json.loads` gives an int
-/// that [`Value`] cannot hold, and a negative one past `i64::MIN` likewise. An integer `-0`: serde_json reads the float
-/// -0.0, where `json.loads` gives the int 0. Other digit runs and the float forms read the same in both.
+/// that [`Value`] cannot hold. A negative one past `i64::MIN` likewise gives an int that [`Value`] cannot hold. An
+/// integer `-0`: serde_json reads the float -0.0, where `json.loads` gives the int 0. Other digit runs and the float
+/// forms read the same in both.
 static INTEGER_FORM_OF_SCANNER: LazyLock<Regex> =
   LazyLock::new(|| Regex::new("[0-9]{19}|-0([^.0-9eE]|$)").expect("a literal pattern compiles"));
 
@@ -74,8 +76,8 @@ pub fn loads(body: &[u8]) -> Result<Value, LoadError> {
 
 /// `json.loads(body)` with the distinction FastAPI uses between JSON and body-decoding failures.
 ///
-/// A body serde_json reads needs no codec: a body that `detect_encoding` would decode as UTF-16 or UTF-32 or with a
-/// byte-order mark is not valid JSON text, so serde_json refuses it and the scanner decodes it.
+/// A body serde_json reads needs no codec. A body that `detect_encoding` would decode as UTF-16 or UTF-32 or with a
+/// byte-order mark is not valid JSON text. serde_json refuses it and the scanner decodes it.
 pub fn loads_classified(body: &[u8]) -> Result<Value, LoadFailure> {
   if let Some(value) = loads_serde(body) {
     return Ok(value);

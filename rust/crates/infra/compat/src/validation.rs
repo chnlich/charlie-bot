@@ -2,8 +2,8 @@
 //!
 //! A request whose parameters or body fail validation gets status 422 and `{"detail": [...]}`, one entry
 //! per failed value in declaration order. An entry names its `type`, its `loc` (the request part, the field,
-//! and a list index where one applies), pydantic's `msg`, the `input` that failed and, for some types, a
-//! `ctx` with the bound or the choices. [`Kind`] lists the pydantic error types the routes produce with
+//! and a list index where one applies), pydantic's `msg` and the `input` that failed. Some types add a `ctx`
+//! with the bound or the choices. [`Kind`] lists the pydantic error types the routes produce with
 //! their texts; [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value the
 //! way pydantic's lax mode does and return the entry for a value that it rejects.
 //!
@@ -11,7 +11,7 @@
 //! `rust/fixtures/python/validation_422.json`
 //! holds the bodies the Python app answers for these inputs, and the fixture test compares them.
 //!
-//! Parsing a JSON body is not here: pydantic reads the body while it validates it, and the JSON decoder's
+//! Parsing a JSON body is not here: pydantic reads the body while it validates it. The JSON decoder's
 //! messages (`json_invalid`) come from CPython's `json` module, which these kinds only carry.
 
 use axum::response::Response;

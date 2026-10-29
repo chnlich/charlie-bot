@@ -2,9 +2,9 @@
 //! `JSONResponse.render`.
 //!
 //! The two renderings differ only in float text. orjson writes the shortest round-trip digits in plain
-//! notation when the decimal exponent is -5 to 15, and in `e+N` or `e-N` notation outside that range,
-//! with no exponent padding. CPython's `repr`, which `json.dumps` uses, switches at -4 and 16 and pads
-//! the exponent to two digits. Strings, containers and integers render the same in both.
+//! notation when the decimal exponent is -5 to 15. Outside that range it writes `e+N` or `e-N` notation, with
+//! no exponent padding. CPython's `repr`, which `json.dumps` uses, switches at -4 and 16 and pads the exponent to
+//! two digits. Strings, containers and integers render the same in both.
 
 use charliebot_core::pyfmt;
 use serde::Serialize;
@@ -14,9 +14,9 @@ use std::io;
 
 /// orjson's `dumps(value)`: compact separators, members in insertion order, raw UTF-8.
 ///
-/// The bytes come from `serde_json`'s serializer: its ESCAPE-table string scan and container walk are
-/// orjson's own semantics for strings and containers, and [`OrjsonFormatter`] supplies the one form
-/// serde_json lacks, orjson's float text.
+/// The bytes come from `serde_json`'s serializer, whose ESCAPE-table string scan and container walk are orjson's
+/// own semantics for strings and containers. [`OrjsonFormatter`] supplies the one form serde_json lacks, orjson's
+/// float text.
 pub fn fast_json_bytes(value: &Value) -> Vec<u8> {
   let mut buffer = Vec::new();
   value

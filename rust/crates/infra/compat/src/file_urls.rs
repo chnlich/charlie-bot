@@ -436,7 +436,8 @@ fn unsplit(parts: &SplitUrl, path: &str) -> String {
 }
 
 /// The host path a Markdown target names: a `~/` path under the user's home, a path under the session directory, or an
-/// absolute path whose first segment is a directory on this host (`_local_path_target`).
+/// absolute path. An absolute path names a file only when its first segment is a directory on this host
+/// (`_local_path_target`).
 fn local_path_target(parts: &SplitUrl, context: Option<&ScanContext>) -> io::Result<Option<PathBuf>> {
   let path = percent_decode_lossy(&parts.path);
   if !parts.scheme.is_empty() || !parts.netloc.is_empty() || path.is_empty() {
@@ -498,8 +499,8 @@ fn scan_candidate(candidate: &Candidate, context: Option<&ScanContext>) -> io::R
   Ok(None)
 }
 
-/// `stat` as `pathlib` uses it for `exists`, `is_file` and `is_dir`: a path with an embedded NUL byte, and the errors
-/// `pathlib` ignores (ENOENT, ENOTDIR, EBADF and ELOOP), name no file.
+/// `stat` as `pathlib` uses it for `exists`, `is_file` and `is_dir`. A path with an embedded NUL byte names no file,
+/// and neither do the errors `pathlib` ignores (ENOENT, ENOTDIR, EBADF and ELOOP).
 fn stat_path(path: &Path) -> io::Result<Option<fs::Metadata>> {
   if path.as_os_str().as_bytes().contains(&0) {
     return Ok(None);

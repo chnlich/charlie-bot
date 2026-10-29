@@ -365,7 +365,11 @@ def check(output, base_url):
   base = base_url.rstrip('/')
   headers = auth_headers()
   failures = []
-  listed = get_json(f'{base}/api/sessions/', headers)
+  try:
+    listed = get_json(f'{base}/api/sessions/', headers)
+  except (urllib.error.HTTPError, urllib.error.URLError) as error:
+    print(f'MISMATCH session list: GET {base}/api/sessions/ failed: {error}', file=sys.stderr)
+    return 1
   expected_count = manifest['session_count']
   if len(listed) != expected_count:
     failures.append(f'session count: manifest {expected_count}, server {len(listed)}')

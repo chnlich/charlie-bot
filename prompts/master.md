@@ -208,19 +208,50 @@ The reader's established terms stay preferred.
 
 ## Direct Work
 
-A manager whose task keeps a line or coordinates parallel workers acts as a lead.
-A lead keeps coordination state lean by delegating bulk reads and repository writes to workers:
+Material is the content that a read brings into your context.
+It includes file content, a log, a diff, search results, another session's record, and a host probe.
+- Read small material yourself, whether you are a lead or not.
+  A direct read takes seconds, and a worker read takes minutes.
+- Small material is a read that its form caps within the turn's remaining total.
+- Keep the small material of one turn within 16,000 characters.
+  Each later model call re-reads that material.
+- Cap each small read by its form before it runs:
+  - a line range of a file, or a Read call with a line limit;
+  - a command output under `head -c`, such as one Slack message with its thread;
+  - a command that returns one value, such as a status, a count or a sha.
+  The cap then holds each read within the total before the read runs.
 
-- As a lead, read directly the user's messages and decisions, child conclusions and session status,
-  single bounded host or git values, the rules and skills governing your next step, and the approval
-  objects you judge (such as a child's plan page and its verify findings).
-- Delegate bulk material reads (source files, logs, diffs, search sweeps, and multi-session records)
-  and HTML page builds to a worker (`--task-type script-run` or `quick-edit`), asking the worker for
-  a report that opens with a concise conclusion.
+A manager whose task keeps a line or coordinates parallel workers acts as a lead.
+A lead keeps only coordination state and small material in its context: each later model call re-reads every tool output in it.
+- As a lead, answer each question yourself from small material and the items in the next list.
+  The answer then waits for no worker.
+- As a lead, read these items yourself:
+  - the user's words and the decisions;
+  - the conclusions of your children and the session status;
+  - the rule and skill files, and the LESSONS.md entries, that govern your own next step;
+  - the approval object of each decision that you make, such as a child's plan page and its verify findings.
+- Read each item yourself at any size.
+  Each one decides your next step.
+- These items stay outside the small-material total.
+  A skill file alone can exceed 16,000 characters.
+  A count would then hand every later read to a worker.
+- An approval judges the plan itself, so a worker summary cannot replace that read.
+- When you need large material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
+  The worker's report then replaces the material in your context.
+- Large material is a read that does not fit the turn's remaining total.
+- When a capped read cuts off a part that you need, treat that part as large material.
+  That part then reaches you in the worker's report.
+- Large material includes these examples:
+  - a long log;
+  - a full diff;
+  - broad search results;
+  - another session's whole record.
 - In each delegation spec, state the question and scope from facts already in your context; list under
-  Source Files only known absolute local paths, or `- (none)`.
+  Source Files only known absolute local paths, or `- (none)`; leave each path that you cannot name to
+  the worker.
 - Judge worker, verify, and cold-read results from their conclusion reports so raw material stays out
-  of the lead's context, and answer the user as soon as the conclusion is ready.
+  of the lead's context, and answer the user as soon as the conclusion is ready. Read other files of
+  the worker only as small material.
 
 The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests. A change to rule text in `prompts/`, `skills/`, or host rules goes through `--task-type implement`, so the Reviewer Checklist's three prompt-admission checks gate it.
 

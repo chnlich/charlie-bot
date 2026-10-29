@@ -198,10 +198,16 @@ pub fn command(program: impl AsRef<OsStr>, env: &Env) -> Command {
   command
 }
 
-/// Runs `command` to its end, with stdout and stderr captured. A command that outlives `RUN_TIMEOUT` is killed, and
-/// the test fails.
+/// Runs `command` to its end, with an empty standard input and stdout and stderr captured. A command that outlives
+/// `RUN_TIMEOUT` is killed, and the test fails.
 pub fn run(command: &mut Command) -> Run {
-  command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+  run_with_stdin(command, Stdio::null())
+}
+
+/// Runs `command` like [`run`], with `stdin` as its standard input. A file passed as `stdin` shares its offset with
+/// every child that inherits it, so a child that reads the input first leaves nothing for the next one.
+pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
+  command.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped());
   let mut child = spawn(command);
   let mut stdout = child.stdout.take().expect("piped stdout");
   let mut stderr = child.stderr.take().expect("piped stderr");

@@ -10,10 +10,14 @@ mod world;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use charliebot_shell_harness::{self as harness, Env};
 use world::{DIRECTION, GATEWAY_TOKEN, World};
+
+/// The prompt the server writes to the launcher's standard input for a plain-text run.
+const PROMPT: &str = "Improve one topic in the performance direction.\nReply with the word OK.\n";
 
 fn stderr(run: &harness::Run) -> String {
   run.stderr.clone()
@@ -59,6 +63,24 @@ fn the_round_receives_claudes_arguments_with_the_launch_directory_paths() {
     received.windows(2).any(|pair| pair == ["--settings", "{\"disableClaudeAiConnectors\":true}"]),
     "{received:?}"
   );
+}
+
+#[test]
+fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
+  let world = World::new();
+  let prompt = world.sandbox.root().join("prompt.txt");
+  fs::write(&prompt, PROMPT).expect("the prompt");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_STDIN".to_string(), world.claude_stdin.display().to_string());
+  // The launcher's standard input is a file here, as the server's pipe is in production. Every process that inherits
+  // it shares one offset, so a process that reads the prompt before the round's own ssh leaves that ssh nothing.
+  let stdin = fs::File::open(&prompt).expect("open the prompt");
+  let mut command = world.launcher_command(&env);
+  let run = harness::run_with_stdin(&mut command, Stdio::from(stdin));
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  let text = fs::read_to_string(&world.claude_stdin).expect("the fake claude recorded its standard input");
+  assert_eq!(text, PROMPT, "the remote claude did not receive the prompt:\n{}", run.describe());
 }
 
 #[test]
@@ -262,7 +284,9 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
   let world = World::new();
   let mut env = world.env();
   env.insert("FAKE_CLAUDE_WAIT_FOR".to_string(), world.scope_stopped.display().to_string());
+  // The fake ssh forwards standard input, so the launcher gets an input that ends, as `run` gives it.
   let mut command = world.launcher_command(&env);
+  command.stdin(Stdio::null());
   let mut launcher = harness::spawn(&mut command);
   let started = wait_until(Duration::from_secs(30), || {
     world.launch_directory().is_some_and(|launch| launch.join("started").exists())

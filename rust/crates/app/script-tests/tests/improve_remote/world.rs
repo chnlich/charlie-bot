@@ -5,7 +5,8 @@
 //! `tools/improve/inflight-files.sh` lists this repository's own worktrees only. The stub `ssh` records its arguments
 //! and then runs the remote command locally under `SSH_REMOTE_HOME`, with a clean environment that carries the
 //! `FAKE_` variables the stubs read: a real ssh sends no other variable, so a variable that the launcher fails to
-//! forward is absent on the remote side here too.
+//! forward is absent on the remote side here too. Like a real ssh, the stub sends its standard input to the remote
+//! command unless `-n` is given, and the remote command may drop what it never reads.
 //!
 //! Every path this world hands out is under its own `mkdtemp` sandbox, and the sandbox removes it when it drops. A
 //! test that needs an absent input removes that one fixture path inside the sandbox. No test removes the profile home,
@@ -60,12 +61,23 @@ while IFS= read -r name; do
     FAKE_*) environment+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
-exec env -i "HOME=$SSH_REMOTE_HOME" "PATH=$SSH_REMOTE_PATH" "${environment[@]}" bash -c "$remote"
+forward=1
+for argument in "$@"; do
+  [[ $argument == -n ]] && forward=0
+done
+if [[ $forward == 1 ]]; then
+  cat | env -i "HOME=$SSH_REMOTE_HOME" "PATH=$SSH_REMOTE_PATH" "${environment[@]}" bash -c "$remote"
+else
+  exec env -i "HOME=$SSH_REMOTE_HOME" "PATH=$SSH_REMOTE_PATH" "${environment[@]}" bash -c "$remote" </dev/null
+fi
 "#;
 
 const CLAUDE: &str = r#"# Fake claude: record the arguments and environment it receives, then exit as the round asks.
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
 env >"$FAKE_CLAUDE_ENV"
+if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
+  cat >"$FAKE_CLAUDE_STDIN"
+fi
 if [[ -n ${FAKE_CLAUDE_INFLIGHT:-} && -e $IMPROVE_LAUNCH_DIR/inflight-files.txt ]]; then
   cp -- "$IMPROVE_LAUNCH_DIR/inflight-files.txt" "$FAKE_CLAUDE_INFLIGHT"
 fi
@@ -124,6 +136,8 @@ pub struct World {
   pub claude_env: PathBuf,
   /// Where the fake claude copies the round's in-flight files list, inside the round's boundary.
   pub claude_inflight: PathBuf,
+  /// Where the fake claude copies its standard input when a test asks for it, inside the round's boundary.
+  pub claude_stdin: PathBuf,
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
@@ -205,6 +219,7 @@ impl World {
       claude_argv: evidence.join("claude-argv.txt"),
       claude_env: evidence.join("claude-env.txt"),
       claude_inflight: evidence.join("claude-inflight.txt"),
+      claude_stdin: evidence.join("claude-stdin.txt"),
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),

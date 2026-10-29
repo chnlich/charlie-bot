@@ -36,6 +36,9 @@ readonly PREFLIGHT_SECONDS=4
 # The copy-back limit. The server stops following 90 seconds after output goes silent, so a slow
 # copy stops here and the next launch of this direction copies the rest.
 readonly EVIDENCE_COPY_SECONDS=${IMPROVE_EVIDENCE_COPY_SECONDS:-60}
+# A call that sends no input of its own adds -n. Without -n, ssh reads this launcher's standard input, which
+# carries the round's prompt, and the remote command drops what it does not read. Only the main run passes that
+# standard input on to the remote claude.
 readonly SSH=(ssh -T -o BatchMode=yes -o ConnectTimeout=10)
 
 fail() {
@@ -96,7 +99,7 @@ copy_evidence() {
   set +e
   timeout --kill-after=5 "$limit" bash -c '
     set -o pipefail
-    ssh -T -o BatchMode=yes -o ConnectTimeout=10 "$1" \
+    ssh -n -T -o BatchMode=yes -o ConnectTimeout=10 "$1" \
       "if [ -d \"$2\" ]; then tar -C \"$2\" -cf - .; else tar -cf - --files-from=/dev/null; fi" \
       | tar -C "$3" -xf -
   ' copy "$REMOTE_HOST" "$remote_evidence" "$local_evidence" 3>&-
@@ -110,7 +113,7 @@ copy_evidence() {
 
 # ---------- 1. Preflight ----------
 set +e
-preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" "$REMOTE_HOST" true 2>&1)
+preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" -n "$REMOTE_HOST" true 2>&1)
 preflight_status=$?
 set -e
 if (( preflight_status != 0 )); then

@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use charliebot_agents::runner::AgentRunner;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::Env;
 use charliebot_registry::context::FeatureContext;
@@ -41,17 +40,12 @@ pub struct SessionCallbacks {
   pub after_round: Option<AfterRoundFn>,
 }
 
-/// The run-tracking operations one live manager turn performs on the queue's shared state: the active-runner
-/// registration for cancellation, the other sessions' running turns, and the running turn's web-reply input ids. The
-/// `master_cc_state` module dicts hold the same state in Python. The queue implements it; the run and delivery modules
-/// work through it, so they never name the queue type.
+/// The run-tracking operations one live manager turn performs on the queue's shared state: the other sessions'
+/// running turns and the running turn's web-reply input ids. The `master_cc_state` module dicts hold the same state in
+/// Python. The queue implements it; the run and delivery modules work through it, so they never name the queue type.
 pub trait RunTracking: Send + Sync {
   /// The metadata of the turns running in other sessions.
   fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata>;
-  /// Register the session's live runner for external cancellation.
-  fn set_active_runner(&self, session_id: &str, runner: Arc<AgentRunner>);
-  /// Drop the session's live-runner registration.
-  fn clear_active_runner(&self, session_id: &str);
   /// Append one acknowledged input id to the running turn's web-reply binding.
   fn append_running_user_event_id(&self, session_id: &str, input_id: &str);
 }

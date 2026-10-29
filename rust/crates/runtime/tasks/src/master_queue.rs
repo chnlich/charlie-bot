@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, anyhow};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_agents::runner::AgentRunner;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, EmitFn, IdleArmContext, IdleStartGate, SessionContextStateFn};
@@ -36,7 +35,6 @@ struct QueueState {
   current_items: HashMap<String, Vec<String>>,
   idle_reservations: HashMap<String, watch::Sender<bool>>,
   running_turns: HashMap<String, Arc<Mutex<SessionMetadata>>>,
-  active_procs: HashMap<String, Arc<AgentRunner>>,
   shutdown: bool,
 }
 
@@ -280,14 +278,6 @@ impl MasterQueue {
       .unwrap_or_default()
   }
 
-  pub async fn terminate_active(&self, session_id: &str) -> anyhow::Result<()> {
-    let runner = self.state.lock().expect("master queue mutex is not poisoned").active_procs.get(session_id).cloned();
-    if let Some(runner) = runner {
-      runner.terminate().await?;
-    }
-    Ok(())
-  }
-
   /// Cancel every per-session consumer at server stop.
   pub async fn shutdown(&self) -> anyhow::Result<()> {
     let handles = {
@@ -419,7 +409,6 @@ impl MasterQueue {
     state.consumer_cancel.remove(session_id);
     state.current_items.remove(session_id);
     state.running_turns.remove(session_id);
-    state.active_procs.remove(session_id);
     let queued = state.session_queues.remove(session_id).unwrap_or_default();
     for mut item in queued {
       if let Some(completion) = item.completion.take() {
@@ -680,14 +669,6 @@ impl RunTracking for MasterQueue {
       .into_iter()
       .map(|metadata| metadata.lock().expect("running turn metadata mutex is not poisoned").clone())
       .collect()
-  }
-
-  fn set_active_runner(&self, session_id: &str, runner: Arc<AgentRunner>) {
-    self.state.lock().expect("master queue mutex is not poisoned").active_procs.insert(session_id.to_string(), runner);
-  }
-
-  fn clear_active_runner(&self, session_id: &str) {
-    self.state.lock().expect("master queue mutex is not poisoned").active_procs.remove(session_id);
   }
 
   /// Append one acknowledged input id to the running session's binding (`running_user_event_ids`).

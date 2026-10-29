@@ -1,7 +1,7 @@
 # charliebot-tasks
 
-This crate owns manager turns. `MasterQueue` contains the per-session work queues, consumers, current items, active
-runners, and the shared backend pool used by after-round naming. Each session consumer runs one manager turn at a time,
+This crate owns manager turns. `MasterQueue` contains the per-session work queues, consumers, current items, running
+turns, and the shared backend pool used by after-round naming. Each session consumer runs one manager turn at a time,
 persists its translated events through `charliebot-store`, and finishes with the unread decision and session anchors.
 
 The execution task inserts `MasterQueue` into typed startup state and wires chat routes. The recovery task wires
@@ -20,7 +20,6 @@ shutdown and re-attachment into server lifespan.
 | `MasterQueue::enqueue_master_resume` | `src/runtime/master_cc_queue.py:402-444` |
 | `MasterQueue::queued_user_event_ids` and `master_queue::queued_user_event_ids` | `src/runtime/master_cc_queue.py:446` |
 | `MasterQueue::running_user_event_ids` and `master_state::running_user_event_ids` | `src/runtime/master_cc_state.py:58` |
-| `MasterQueue::terminate_active` | `src/runtime/master_cc_state.py:17`; `src/runtime/master_cc_run.py:407-702` |
 | `MasterQueue::shutdown` | `src/runtime/master_cc_queue.py:186-354` (consumer cancellation at server stop) |
 | `TaskRunBinding` and its fields | `src/runtime/master_cc_state.py:21-29` |
 | `MasterResumeRecord` and its fields | `src/infra/models.py:337-350` |

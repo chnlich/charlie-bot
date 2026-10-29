@@ -451,7 +451,8 @@ pub(crate) fn end_orphaned_renderers() {
     match end_orphaned_renderer(&orphan) {
       Ok(()) => ended += 1,
       Err(error) => {
-        tracing::warn!(pid = orphan.pid, error = format!("{error:#}"), "headless_renderer_orphan_end_failed")
+        let path = renderer_user_data_dir(&orphan.argv);
+        tracing::warn!(pid = orphan.pid, path, error = format!("{error:#}"), "headless_renderer_orphan_end_failed")
       }
     }
   }

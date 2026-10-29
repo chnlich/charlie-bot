@@ -1,5 +1,5 @@
-//! The endpoint, declared context window, optional credential, optional effort, request headers and fixed request
-//! body fields of a `cc-anthropic-compatible` entry.
+//! The endpoint, declared context window, optional credential, optional effort, optional executable, request headers
+//! and fixed request body fields of a `cc-anthropic-compatible` entry.
 
 use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_json::{Map, Value as JsonValue};
@@ -9,18 +9,20 @@ const API_BASE: &str = "api_base";
 const CONTEXT_WINDOW: &str = "context_window";
 const CREDENTIAL: &str = "credential";
 const EFFORT: &str = "effort";
+const CLI_BINARY: &str = "cli_binary";
 const HEADERS: &str = "headers";
 const EXTRA_BODY: &str = "extra_body";
-const FIELDS: [&str; 6] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, HEADERS, EXTRA_BODY];
+const FIELDS: [&str; 7] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
 
-/// The `cc-anthropic-compatible` option's type-specific fields in `CcAnthropicCompatibleBackend`'s declaration
-/// order, each with the value the Python model holds when an entry omits it. `charliebot config get backends`
-/// renders them.
+/// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
+/// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
+/// them. `cli_binary` has no Python reference: the Python option model refused the field.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Required),
   OptionField::field(CREDENTIAL, OptionFieldDefault::Null),
   OptionField::field(EFFORT, OptionFieldDefault::Null),
+  OptionField::field(CLI_BINARY, OptionFieldDefault::Null),
   OptionField::field(HEADERS, OptionFieldDefault::EmptyMap),
   OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
 ];
@@ -36,6 +38,8 @@ pub struct CcAnthropicCompatibleOption {
   pub credential: Option<String>,
   /// The Claude Code `--effort` level, passed on only when set.
   pub effort: Option<String>,
+  /// The executable that replaces `claude`, as `cli_binary` does for a `cc-claude` entry, when set.
+  pub cli_binary: Option<String>,
   /// The request headers the launch routes to the endpoint, in the entry's order.
   pub headers: Vec<(String, String)>,
   /// The JSON object Claude Code merges into the body of every request to the endpoint.
@@ -80,6 +84,11 @@ impl CcAnthropicCompatibleOption {
       Some(Value::String(effort)) => Some(effort.clone()),
       Some(_) => return Err("cc-anthropic-compatible option effort must be a string or null".to_string()),
     };
+    let cli_binary = match fields.get(CLI_BINARY) {
+      None | Some(Value::Null) => None,
+      Some(Value::String(cli_binary)) => Some(cli_binary.clone()),
+      Some(_) => return Err("cc-anthropic-compatible option cli_binary must be a string or null".to_string()),
+    };
     let headers = match fields.get(HEADERS) {
       None => Vec::new(),
       Some(Value::Mapping(headers)) => {
@@ -103,7 +112,7 @@ impl CcAnthropicCompatibleOption {
         .map_err(|error| format!("cc-anthropic-compatible option extra_body: {error}"))?,
       Some(_) => return Err("cc-anthropic-compatible option extra_body must be a mapping".to_string()),
     };
-    Ok(Self { api_base, context_window, credential, effort, headers, extra_body })
+    Ok(Self { api_base, context_window, credential, effort, cli_binary, headers, extra_body })
   }
 }
 

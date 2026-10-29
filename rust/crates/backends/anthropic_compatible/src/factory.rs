@@ -46,6 +46,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
       launch,
       SessionCgroupConfig::from_config(cfg),
     )?
+    .with_cli_binary(fields.cli_binary)
     .with_headers(fields.headers)
     .with_extra_body(fields.extra_body);
     Ok(Box::new(backend))
@@ -96,6 +97,25 @@ mod tests {
     assert!(plain.is_ok(), "the factory refused an option without effort: {:?}", plain.as_ref().err());
     let command = plain.unwrap().build_command("prompt").unwrap();
     assert!(!command.iter().any(|value| value == "--effort"), "{command:?}");
+  }
+
+  /// `cli_binary` replaces argv[0] and nothing else: the launcher it names runs on another host with the arguments,
+  /// environment, stdin and stdout that `claude` would receive.
+  #[test]
+  fn cli_binary_replaces_the_claude_executable_and_keeps_every_argument() {
+    let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
+    let plain = build(endpoint).unwrap().build_command("prompt").unwrap();
+    let replaced = build(&format!("{endpoint}cli_binary: /path/to/fake\n")).unwrap().build_command("prompt").unwrap();
+    assert_eq!(plain[0], "claude", "{plain:?}");
+    assert_eq!(replaced[0], "/path/to/fake", "{replaced:?}");
+    assert_eq!(replaced[1..], plain[1..]);
+  }
+
+  #[test]
+  fn cli_binary_refuses_a_value_that_is_not_a_string() {
+    let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
+    let error = build(&format!("{endpoint}cli_binary: 42\n")).err().expect("a non-string cli_binary is refused");
+    assert!(error.contains("cli_binary must be a string or null"), "{error}");
   }
 
   // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_custom_headers

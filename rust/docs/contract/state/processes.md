@@ -107,6 +107,10 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   `ANTHROPIC_CUSTOM_HEADERS`. It is the same `claude` command, but without `--model` (the model rides env). Output is
   as cc-claude. The context limits come from `usage.py::claude_reading_limits`: the declared window and the cc-claude
   compaction reserves.
+- **Executable:** `claude` from `PATH`, or `option.cli_binary` (`with_cli_binary`). The Rust option accepts the field;
+  the Python option model refused it, so it has no Python reference. The replacement receives the arguments,
+  environment, stdin and stdout that `claude` receives. The improve rounds set it to a launcher that runs the round on
+  another host (`tools/improve/remote-launch.sh`).
 
 ### `src/backends/openai_compatible` (type `cc-openai-compatible`)
 

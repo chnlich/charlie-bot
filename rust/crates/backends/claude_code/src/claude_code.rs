@@ -602,6 +602,13 @@ impl AnthropicEndpointBackend {
     self
   }
 
+  /// Replace the `claude` executable with `cli_binary`, as a `cc-claude` entry's own `cli_binary` does. The
+  /// replacement receives the arguments, environment, stdin and stdout that `claude` receives.
+  pub fn with_cli_binary(mut self, cli_binary: Option<String>) -> Self {
+    self.backend.cli_binary = cli_binary.filter(|value| !value.is_empty());
+    self
+  }
+
   /// The one-shot environment: the environment of this entry's runs, so the one-shot reaches the same endpoint,
   /// model, headers and request body.
   fn one_shot_env(&self, base_env: &Env) -> anyhow::Result<Env> {

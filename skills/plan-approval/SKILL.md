@@ -167,11 +167,11 @@ An understanding page lists the divergences of a request that admits several rea
 - Open the ask with the goal and the method.
 - Explain them with a diagram or a worked example, and list the alternatives with their consequences.
   The user then understands the ask at one read.
-- After `charliebot plan approve` and before delegation, post one English comment on
-  the plan's ticket carrying the design conclusion and the resolved choices. One comment
-  per plan lineage. The plan stage never creates a ticket; a plan whose work has no ticket
-  posts nothing. Design changes after plan approval reach the user as deviations; Linear
-  keeps the approved design.
+- When work under a Linear ticket lands, draft one English comment for that ticket.
+  The comment states the landed design, the resolved choices and the commit.
+  Ask its take off in the completion report. Delegation then waits for no ticket write.
+- Post one comment per plan lineage or direct change. Work without a ticket posts nothing;
+  the plan stage never creates a ticket. Linear then records the design that landed.
 
 ## Verify
 

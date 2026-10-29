@@ -19,7 +19,7 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
-use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
+use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, terminal_outcome};
 use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::completion::ArchiveAuthority;
@@ -2049,4 +2049,252 @@ async fn closing_a_task_starts_the_session_browser_sweep() {
   assert!(bystander.try_wait().unwrap().is_none(), "the plain sleep stays");
   bystander.kill().unwrap();
   bystander.wait().unwrap();
+}
+
+/// Starts each launched run as the production launch does: it registers the run record and leaves the run live, so a
+/// wake leaves a run that is newer than the run it woke.
+struct RunStartingExecutor {
+  store: Arc<charliebot_store::Store>,
+  next_run: AtomicUsize,
+}
+
+impl DispatchExecutor for RunStartingExecutor {
+  fn launch<'a>(
+    &'a self,
+    session_id: &'a str,
+    _pending_inputs: &'a [charliebot_store::ChatEvent],
+    launch_run_id: Option<&'a str>,
+  ) -> BoxFuture<'a, StoreResult<Option<String>>> {
+    Box::pin(async move {
+      let run_id = match launch_run_id {
+        Some(run_id) => run_id.to_string(),
+        None => format!("wake-run-{}", self.next_run.fetch_add(1, Ordering::SeqCst) + 1),
+      };
+      let guard = self.store.control_lock().await;
+      self
+        .store
+        .register_run_locked(&guard, session_id, live_run(session_id, &run_id, RunKind::ManagerTurn), None)
+        .await?;
+      Ok(Some(run_id))
+    })
+  }
+}
+
+fn use_run_starting_executor(h: &CompletionHarness) {
+  h.dispatcher.set_executor(Some(Arc::new(RunStartingExecutor {
+    store: Arc::clone(&h.base.store),
+    next_run: AtomicUsize::new(0),
+  })));
+}
+
+fn blocked_notices(h: &CompletionHarness, session_id: &str, request_id: &str) -> usize {
+  let notice_id = control_events::stable_close_blocked_notice_id(session_id, request_id);
+  h.base
+    .store
+    .load_all_facts(session_id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::SCHEDULED_TRIGGER && event["id"] == notice_id)
+    .count()
+}
+
+fn child_report_count(h: &CompletionHarness, parent_id: &str) -> usize {
+  h.base
+    .store
+    .load_all_facts(parent_id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::CHILD_REPORT)
+    .count()
+}
+
+/// Archives `session_id` from its own live run, as the agent's `charliebot session archive` does.
+async fn archive_from_run(h: &CompletionHarness, session_id: &str, run_id: &str, request_id: &str) -> (usize, Value) {
+  h.completion
+    .archive_task(
+      session_id,
+      request_id,
+      &evidence("page delivered", &[format!("run:{run_id}").as_str()], &[run_id]),
+      &agent(session_id, run_id),
+      false,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn user_approved_archive_waits_for_the_view_and_closes_when_the_view_clears_has_unread() {
+  // The turn's web reply set has_unread, so the archive holds: the run end neither closes it nor sends a blocked
+  // notice, and the view that clears the flag completes it and reports to the parent.
+  let h = CompletionHarness::new();
+  let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
+  let manager = h.base.create_task("manager", Some(&parent.id), TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "owner-run", RunKind::ManagerTurn)).await;
+  h.base.store.mark_unread(&manager.id).await.unwrap();
+
+  let (status, body) = archive_from_run(&h, &manager.id, "owner-run", "await-view").await;
+  assert_eq!(status, 202);
+  assert_eq!(body, json!({"archived": [], "pending": "closes when the user opens this session"}));
+
+  h.finish(&manager.id, "owner-run", RunOutcomeKind::Success).await;
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open");
+  assert_eq!(blocked_notices(&h, &manager.id, "await-view"), 0);
+  assert_eq!(child_report_count(&h, &parent.id), 0);
+
+  h.base.store.mark_read(&manager.id).await.unwrap();
+  h.completion.recheck_after_user_view(&manager.id).await.unwrap();
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "archived");
+  assert_eq!(child_report_count(&h, &parent.id), 1);
+}
+
+#[tokio::test]
+async fn a_view_before_the_run_ends_closes_the_archive_at_the_run_end() {
+  let h = CompletionHarness::new();
+  let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "owner-run", RunKind::ManagerTurn)).await;
+  h.base.store.mark_unread(&manager.id).await.unwrap();
+  assert_eq!(archive_from_run(&h, &manager.id, "owner-run", "view-first").await.0, 202);
+
+  h.base.store.mark_read(&manager.id).await.unwrap();
+  h.finish(&manager.id, "owner-run", RunOutcomeKind::Success).await;
+
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "archived");
+}
+
+#[tokio::test]
+async fn a_later_run_voids_a_pending_close_whatever_wakes_it() {
+  // A user message, a server-generated status reminder (an agent message that the audit posts) and a scheduled trigger
+  // each start a run that the close request does not own. The view that follows then leaves the session open, and the
+  // newest turn decides again.
+  for (label, event_type, actor) in [
+    ("user message", event_types::USER, ACTOR_USER),
+    ("status reminder", event_types::AGENT_MESSAGE, ACTOR_AGENT),
+    ("scheduled trigger", event_types::SCHEDULED_TRIGGER, ACTOR_SYSTEM),
+  ] {
+    let h = CompletionHarness::new();
+    use_run_starting_executor(&h);
+    let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+    h.register_record(live_run(&manager.id, "owner-run", RunKind::ManagerTurn)).await;
+    h.base.store.mark_unread(&manager.id).await.unwrap();
+    assert_eq!(archive_from_run(&h, &manager.id, "owner-run", "voided").await.0, 202, "{label}");
+    h.finish(&manager.id, "owner-run", RunOutcomeKind::Success).await;
+
+    h.dispatcher.admit_input(&manager.id, event_type, "wake", actor, json!({"input_id": "wake-input"})).await.unwrap();
+    h.dispatcher.dispatch_pending(&manager.id).await.unwrap();
+    let newest = h.base.store.newest_run_record_sync(&manager.id).unwrap().expect("the wake starts a run");
+    assert_ne!(newest.id, "owner-run", "{label}");
+    h.finish(&manager.id, &newest.id, RunOutcomeKind::Success).await;
+
+    h.base.store.mark_read(&manager.id).await.unwrap();
+    h.completion.recheck_after_user_view(&manager.id).await.unwrap();
+    assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open", "{label}");
+  }
+}
+
+#[tokio::test]
+async fn a_newer_run_that_finishes_first_voids_the_pending_close_at_the_owner_run_end() {
+  // The view clears has_unread while the owner run is still live, and a newer run starts and finishes first. The
+  // owner's run end then meets no blocker and a clear flag, so only the newest-run rule keeps the close from completing.
+  let h = CompletionHarness::new();
+  let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "owner-run", RunKind::ManagerTurn)).await;
+  h.base.store.mark_unread(&manager.id).await.unwrap();
+  assert_eq!(archive_from_run(&h, &manager.id, "owner-run", "overtaken").await.0, 202);
+  h.base.store.mark_read(&manager.id).await.unwrap();
+  h.register_record(live_run(&manager.id, "newer-run", RunKind::ManagerTurn)).await;
+  h.finish(&manager.id, "newer-run", RunOutcomeKind::Success).await;
+
+  h.finish(&manager.id, "owner-run", RunOutcomeKind::Success).await;
+
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open");
+}
+
+#[tokio::test]
+async fn a_child_report_before_the_view_keeps_the_session_open() {
+  // The child's report wakes the manager, which starts a run. The manager's close then waits for a view that found a
+  // newer turn: the request stays voided after the user opens the session.
+  let h = CompletionHarness::new();
+  use_run_starting_executor(&h);
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "owner-run", RunKind::ManagerTurn)).await;
+  h.base.store.mark_unread(&manager.id).await.unwrap();
+  assert_eq!(archive_from_run(&h, &manager.id, "owner-run", "before-report").await.0, 202);
+  h.finish(&manager.id, "owner-run", RunOutcomeKind::Success).await;
+  // The child is opened after the archive: an archive cannot pass an open child, and the view has not come yet.
+  let child = h.base.create_task("child", Some(&manager.id), TaskProfile::Manager, "Child").await;
+
+  h.completion
+    .archive_subtree(&child.id, Some("archive-child"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
+    .await
+    .unwrap();
+  let wake = h.base.store.newest_run_record_sync(&manager.id).unwrap().expect("the report starts a run");
+  assert_ne!(wake.id, "owner-run");
+  h.finish(&manager.id, &wake.id, RunOutcomeKind::Success).await;
+
+  h.base.store.mark_read(&manager.id).await.unwrap();
+  h.completion.recheck_after_user_view(&manager.id).await.unwrap();
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open");
+}
+
+#[tokio::test]
+async fn parent_approved_and_thread_sessions_close_at_run_end_without_a_view() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let parent_approved = h
+    .create_with_task(
+      "parent-approved",
+      Some(&root.id),
+      TaskProfile::Manager,
+      "Parent approved",
+      TaskSpec { approver: TaskApprover::Parent, ..TaskSpec::default() },
+    )
+    .await;
+  let slack_thread = h
+    .base
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "slack-thread".to_string(),
+        task_parent_id: Some(root.id.clone()),
+        profile: TaskProfile::Manager,
+        task: Some(TaskSpec::default()),
+        name: Some("Slack thread".to_string()),
+        backend: Some("synthetic".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::from_iter([("slack_origin".to_string(), json!({"team_id": "T", "channel_id": "C", "thread_ts": "1.0"}))]),
+    )
+    .await
+    .expect("thread task node is created");
+  for session_id in [&parent_approved.id, &slack_thread.id] {
+    h.register_record(live_run(session_id, "owner-run", RunKind::ManagerTurn)).await;
+    h.base.store.mark_unread(session_id).await.unwrap();
+    let (status, body) = archive_from_run(&h, session_id, "owner-run", "run-end").await;
+    assert_eq!(status, 202);
+    assert_eq!(body["status"], "pending_run_finish");
+    h.finish(session_id, "owner-run", RunOutcomeKind::Success).await;
+    assert_eq!(h.base.store.task_state(session_id).unwrap(), "archived", "{session_id}");
+  }
+}
+
+#[tokio::test]
+async fn a_read_after_an_operator_close_leaves_the_task_archived() {
+  let h = CompletionHarness::new();
+  let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "owner-run", RunKind::ManagerTurn)).await;
+  h.base.store.mark_unread(&manager.id).await.unwrap();
+  assert_eq!(archive_from_run(&h, &manager.id, "owner-run", "superseded").await.0, 202);
+  h.finish(&manager.id, "owner-run", RunOutcomeKind::Success).await;
+  h.completion
+    .archive_subtree(&manager.id, Some("operator-close"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
+    .await
+    .unwrap();
+
+  h.base.store.mark_read(&manager.id).await.unwrap();
+  h.completion.recheck_after_user_view(&manager.id).await.unwrap();
+
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "archived");
 }

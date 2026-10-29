@@ -16,6 +16,7 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::RoundRating;
 use charliebot_store::{Store, TaskCaller};
+use charliebot_tasks::completion::TaskCompletion;
 use serde_json::{Map, Value, json};
 
 use crate::api;
@@ -86,8 +87,15 @@ async fn mark_session_read(
   if let Err(error) = features.store.require_session(&session_id).await {
     return task_http_error(error);
   }
+  let completion = match features.startup.require::<TaskCompletion>() {
+    Ok(completion) => completion,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
   match features.store.mark_read(&session_id).await {
-    Ok(Some(_)) => responses::fast_json(StatusCode::OK, &json!({"session_id": session_id, "has_unread": false})),
+    Ok(Some(_)) => match completion.recheck_after_user_view(&session_id).await {
+      Ok(()) => responses::fast_json(StatusCode::OK, &json!({"session_id": session_id, "has_unread": false})),
+      Err(error) => task_http_error(error),
+    },
     Ok(None) => session_not_found(),
     Err(error) => task_http_error(error),
   }
@@ -372,6 +380,7 @@ mod tests {
   #[tokio::test(flavor = "current_thread")]
   async fn metadata_write_routes_match_success_errors_broadcasts_and_logs() {
     let (_home, features) = feature_context();
+    crate::test_support::install_dispatcher(&features);
     add_session(&features, SESSION_ID, Some("Old group"), true);
     add_session(&features, "group-session", Some("Old group"), false);
     let router = crate::routes::routes(&features);

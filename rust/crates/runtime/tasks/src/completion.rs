@@ -12,7 +12,7 @@ use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskType};
 use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::ReplacedSourceArchive;
 use charliebot_store::{ControlGuard, StoreError, StoreHookFuture, StoreResult, layout};
@@ -849,10 +849,7 @@ impl TaskCompletion {
       if event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CLOSE_REQUESTED)
         && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id)
       {
-        return Ok(Some((
-          202,
-          json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}),
-        )));
+        return Ok(Some((202, self.pending_close_answer(session_id, request_id)?)));
       }
     }
     for event in events.iter() {
@@ -924,7 +921,16 @@ impl TaskCompletion {
       "{}",
       event_types::TASK_CLOSE_REQUESTED
     );
-    Ok((202, json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"})))
+    Ok((202, self.pending_close_answer(session_id, request_id)?))
+  }
+
+  /// The archive answer while a close request waits. A session whose last reply is unread holds it until the user
+  /// opens the session; every other session closes when its run ends.
+  fn pending_close_answer(&self, session_id: &str, request_id: &str) -> StoreResult<Value> {
+    if self.store().read_metadata_fresh(session_id)?.is_some_and(|meta| waits_for_user_view(&meta)) {
+      return Ok(json!({"archived": [], "pending": PENDING_UNTIL_USER_VIEW}));
+    }
+    Ok(json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}))
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -1746,6 +1752,15 @@ impl TaskCompletion {
     )
   }
 
+  /// The session's view cleared `has_unread`: complete the close that waited for it, when the newest run decided it.
+  pub async fn recheck_after_user_view(&self, session_id: &str) -> StoreResult<()> {
+    let Some(newest) = self.store().newest_run_record_sync(session_id)? else {
+      return Ok(());
+    };
+    self.recheck_close_requests(session_id, &newest.id).await?;
+    Ok(())
+  }
+
   /// Recheck saved own-run close requests during startup, returning `None` when recovery is stopped.
   pub async fn recheck_close_requests_until(
     &self,
@@ -1767,11 +1782,21 @@ impl TaskCompletion {
     }
     let facts = self.store().node_facts(session_id)?;
     let task = facts.task()?;
-    if task.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
+    if task.task_state != "open" || task.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
       return Ok(Some(Vec::new()));
     }
     let close_requests = task.close_requests.clone();
     drop(facts);
+    // Any later run of the session voids the requests of the earlier runs: a wake starts a run, and that run decides.
+    if self.store().newest_run_record_sync(session_id)?.is_none_or(|newest| newest.id != run_id) {
+      return Ok(Some(Vec::new()));
+    }
+    let meta = self.store().load_task_meta(session_id).await?;
+    // A user-approved session closes after the user opens it. The wait is silent: no blocked notice, which would
+    // start a run and void the request.
+    if waits_for_user_view(&meta) {
+      return Ok(Some(Vec::new()));
+    }
     let mut remaining = Vec::new();
     for request in close_requests {
       if stop.is_some_and(StartupStop::is_cancelled) {
@@ -2106,6 +2131,18 @@ fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidenc
     run_ids: strings_field("run_ids")?,
     ..CompletionEvidence::default()
   })
+}
+
+/// The archive answer's `pending` text for a session that waits for the user's view.
+const PENDING_UNTIL_USER_VIEW: &str = "closes when the user opens this session";
+
+/// Whether the session's close waits for the user's view now: its approver is the user, it is not a Slack or Discord
+/// thread session (whose replies the user reads in the thread, never on the web), and its last reply is unread.
+fn waits_for_user_view(meta: &SessionMetadata) -> bool {
+  let thread_origin =
+    ["slack_origin", "discord_origin"].iter().any(|key| meta.extra.get(*key).is_some_and(|value| !value.is_null()));
+  let approver = meta.task.as_ref().map_or(TaskApprover::User, |task| task.approver);
+  approver == TaskApprover::User && !thread_origin && meta.has_unread
 }
 
 fn sorted_unique(mut values: Vec<String>) -> Vec<String> {

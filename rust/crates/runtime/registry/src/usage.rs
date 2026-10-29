@@ -18,7 +18,6 @@ pub const PANEL_WINDOWS: &str = "windows";
 pub const PANEL_FETCHED_AT: &str = "fetched_at";
 pub const PANEL_PROVIDER: &str = "provider";
 pub const PANEL_PROVIDER_LABEL: &str = "provider_label";
-pub const PANEL_STATE_LABEL: &str = "state_label";
 pub const PANEL_WINDOW_MINUTES: &str = "window_minutes";
 pub const PANEL_UTILIZATION: &str = "utilization";
 pub const PANEL_RESETS_AT: &str = "resets_at";

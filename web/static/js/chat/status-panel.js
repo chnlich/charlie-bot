@@ -1,24 +1,24 @@
 // ---------------------------------------------------------------------------
 // Session status panel (chat column)
 // ---------------------------------------------------------------------------
-// A web session's status shows in the Status view (#chat-status-view), which
-// covers the whole message region while the Status view is selected: no border,
-// radius or margin, the same box as the message list, which stays laid out
-// underneath so the turn engine keeps reading its real height. The waiting
+// A web session's status shows in the Status view (#chat-status-view). While
+// that view is selected it covers the whole message region: no border, radius
+// or margin, the same box as the message list. The list stays laid out
+// underneath, so the turn engine keeps reading its real height. The waiting
 // count shows on the Status tab's badge. Chat.ForYou owns the toggle that
 // selects the view (for-you.js); this file owns the view, the badge and the
 // new-message count row. A thread session and a worker session show none of
 // them. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
 //
-// The status is the session's web_status at open, then the web_status messages of
-// this session, live or in history: the newest updated_at wins, so an older page
-// of history never moves the view back. The descendant and child rows come from
-// GET /api/internal/web/status, fetched at open and on each web_status_subtree
-// notice (websocket-handlers.js).
+// The status is the session's web_status at open, then the web_status messages
+// of this session, live or in history. The newest updated_at wins, so an older
+// page of history never moves the view back. The descendant and child rows
+// come from GET /api/internal/web/status, fetched at open and on each
+// web_status_subtree notice (websocket-handlers.js).
 //
 // Opening the Status view saves the reader's place in the underlying list
 // (turn-engine.js readingPlace) and closes the list to clicks and focus (the
-// inert attribute); closing writes the place back for a reader who was in
+// inert attribute). Closing writes the place back for a reader who was in
 // history and shows the new-message count row when messages arrived.
 (function() {
   const Chat = globalThis.Chat;
@@ -66,8 +66,8 @@
     return open ? '▾' : '▸';
   }
 
-  // A fold toggle: the button, its glyph span and its label span are the same in every
-  // fold, so a caller names the style, the state, the label and the click.
+  // A fold toggle: the button, its glyph span and its label span are the same
+  // in every fold. A caller names the style, the state, the label and the click.
   function foldToggle(className, open, label, onToggle) {
     const toggle = document.createElement('button');
     toggle.type = 'button';
@@ -165,10 +165,10 @@
     return row;
   }
 
-  // The milestones between the session and its Goal: how many remain and when the
-  // list was last set, then the open items in written order and the done items in
-  // one fold. The text is agent-written, so it goes in through textContent like
-  // the Goal.
+  // The milestones between the session and its Goal: how many remain and when
+  // the list was last set. Then the open items in written order, and the done
+  // items in one fold. The text is agent-written, so it goes in through
+  // textContent like the Goal.
   function remainingRow(status) {
     const row = statusRow('remaining');
     row.appendChild(labelSpan('Remaining'));
@@ -415,9 +415,9 @@
 
   // The Status view's show and hide, through the toggle's control. Opening it
   // hides the floating scroll-to-bottom button, which would otherwise hover
-  // over the status text, saves the reader's place in the underlying list and
-  // zeroes the new-message count; closing it puts the button back as it was,
-  // writes the place back and offers the count row's jump.
+  // over the status text. It also saves the reader's place in the underlying
+  // list and zeroes the new-message count. Closing it puts the button back as
+  // it was, writes the place back and offers the count row's jump.
   let scrollButtonWasShown = false;
   function setStatusViewShown(shown) {
     shown = Boolean(shown);
@@ -459,8 +459,8 @@
   }
 
   // A committed message of this session while the Status view shows: it counts
-  // for the return view's jump row when that view will show it — For you
-  // applies its row filter (for-you.js), Everything counts every message.
+  // for the return view's jump row when that view will show it. For you applies
+  // its row filter (for-you.js), and Everything counts every message.
   function noteMessageForStatusView(msg) {
     if (!statusViewShown || !panelSessionId) return;
     const engine = engineForMessages();

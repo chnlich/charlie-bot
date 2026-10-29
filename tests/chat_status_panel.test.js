@@ -310,7 +310,7 @@ test('a phone strip is one line with the counts and the Status link, without the
   assert.deepEqual(stripKinds(rig.panel), ['summary']);
   const line = summaryLine(rig.panel);
   const segments = summarySegments(line).map((el) => el.textContent);
-  assert.deepEqual(segments, ['Waiting on you · 2', 'In child sessions · 3', '1 of 2 left', 'Status ›']);
+  assert.deepEqual(segments, ['Waiting · 2', 'Child · 3', '1 of 2 left', 'Status ›']);
   assert.equal(line.querySelectorAll('[data-now-text]').length, 0, 'a phone leaves out the Now text');
 });
 

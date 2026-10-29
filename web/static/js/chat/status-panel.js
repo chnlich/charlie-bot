@@ -302,20 +302,22 @@
 
   // Line 1: the Waiting on you count, the descendant count, the Remaining count,
   // the Now text cut to one line, and the link to the Status view. A phone keeps
-  // the counts and the link only.
+  // the counts and the link only, under the short labels the narrow line holds.
   function stripLine1() {
+    const phone = platform.isMobile;
     const line = document.createElement('div');
-    line.className = 'flex items-center gap-2 min-w-0';
+    line.className = 'flex items-center gap-2 min-w-0 overflow-hidden whitespace-nowrap';
     line.dataset.statusRow = 'summary';
     const waiting = panelStatus.waiting.length;
     const waitingSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
-      'Waiting on you · ' + (waiting || 'Nothing'));
+      (phone ? 'Waiting · ' : 'Waiting on you · ') + (waiting || 'Nothing'));
     waitingSpan.dataset.waitingCount = String(waiting);
     line.appendChild(waitingSpan);
     const childCount = descendantItemCount();
     if (childCount) {
       line.appendChild(stripDot());
-      const childSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200', 'In child sessions · ' + childCount);
+      const childSpan = textSpan('shrink-0 whitespace-nowrap text-slate-200',
+        (phone ? 'Child · ' : 'In child sessions · ') + childCount);
       childSpan.dataset.childCount = String(childCount);
       line.appendChild(childSpan);
     }
@@ -327,7 +329,7 @@
       remainingSpan.dataset.remainingCount = String(open);
       line.appendChild(remainingSpan);
     }
-    if (!platform.isMobile && panelStatus.now) {
+    if (!phone && panelStatus.now) {
       line.appendChild(stripDot());
       const now = textSpan('min-w-0 truncate', 'Now: ' + panelStatus.now);
       now.dataset.nowText = panelStatus.now;

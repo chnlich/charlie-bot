@@ -9,6 +9,7 @@ use std::path::Path;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::event_types;
+use charliebot_core::logline;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_store::layout;
 use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
@@ -65,8 +66,8 @@ fn newest_run_values(page: &Value, fields: &[String]) -> Result<Vec<String>, Cli
 }
 
 /// `launch-has LAUNCH_LOG EVENT [KEY=VALUE...]`: exit 0 when a complete line of the log is an EVENT record whose
-/// fields include every KEY=VALUE, and 1 otherwise. The log holds the Rust server's JSON lines; a line of another event
-/// never matches.
+/// fields include every KEY=VALUE, and 1 otherwise. The log holds the server's lines in either form `logline` reads;
+/// a line of another event never matches.
 pub fn launch_has(args: &[OsString]) -> Result<(), CliExit> {
   let (path, event, pairs) = match args {
     [path, event, pairs @ ..] => (path, event, pairs),
@@ -93,15 +94,11 @@ fn matches(path: &Path, event: &str, wanted: &BTreeMap<String, String>) -> anyho
   let mut lines: Vec<&str> = text.split('\n').collect();
   lines.pop();
   for line in lines {
-    if !line.starts_with("{\"") {
+    let Some(row) = logline::parse(line) else { continue };
+    if row.event != event {
       continue;
     }
-    let record = serde_json::from_str::<Value>(line)?;
-    let fields = record.as_object().ok_or_else(|| anyhow::anyhow!("a launch line is not an object"))?;
-    if fields.get("event").and_then(Value::as_str) != Some(event) {
-      continue;
-    }
-    if wanted.iter().all(|(key, value)| fields.get(key).is_some_and(|field| pyfmt::python_str(field) == *value)) {
+    if wanted.iter().all(|(key, value)| row.field(key) == Some(value.as_str())) {
       return Ok(true);
     }
   }
@@ -255,6 +252,27 @@ mod tests {
         .expect("the log reads")
     );
     assert!(!matches(&dir, "tsk", &none).expect("the log reads"));
+  }
+
+  #[test]
+  fn a_text_launch_line_matches_by_event_and_quoted_fields_and_skips_a_partial_line() {
+    let dir = std::env::temp_dir().join(format!("switch-helper-launch-text-{}", std::process::id()));
+    fs::write(
+      &dir,
+      concat!(
+        "2026-10-29 07:11:32.244Z [info     ] server_ready                   ready_in_ms=1\n",
+        "2026-10-29 07:11:33.000Z [info     ] task_recovery_resume           run_id='r s'\n",
+        "2026-10-26 02:16:37 [info     ] task_recovery_resume           run_id=old\n",
+        "2026-10-29 07:11:34.000Z [info     ] task_recovery_resume           run_id=late",
+      ),
+    )
+    .expect("the launch log");
+
+    assert!(matches(&dir, "server_ready", &BTreeMap::new()).expect("the log reads"));
+    let run = |id: &str| BTreeMap::from([("run_id".to_string(), id.to_string())]);
+    assert!(matches(&dir, "task_recovery_resume", &run("r s")).expect("the log reads"));
+    assert!(!matches(&dir, "task_recovery_resume", &run("old")).expect("the log reads"));
+    assert!(!matches(&dir, "task_recovery_resume", &run("late")).expect("the log reads"));
   }
 
   #[test]

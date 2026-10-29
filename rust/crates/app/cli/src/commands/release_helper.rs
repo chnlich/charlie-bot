@@ -21,6 +21,7 @@ use charliebot_core::cgroup;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
+use charliebot_core::logline::{self, Row};
 use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_session_api::api;
@@ -40,12 +41,6 @@ const COMPACT_JSON: JsonStyle =
 /// `json.dumps` with every option at its default: the seeded run record and a chat message body.
 const PYTHON_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
-
-/// A console server log line: timestamp, level, event name and the rest.
-const CONSOLE_PATTERN: &str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})? \[\w+\s*\] (\S+)\s*(.*)";
-
-/// One `key=value` field of a console server log line.
-const FIELD_PATTERN: &str = r"(\w+)=(\[[^\]]*\]|\S+)";
 
 /// The startup sweep's removal event, whose `names` list the sweep check reads.
 const SWEEP_REMOVED: &str = "session_cgroup_sweep_removed";
@@ -230,16 +225,6 @@ fn emit_nul(fields: &[String]) -> Result<(), String> {
   let joined = fields.join("\0");
   let mut stdout = io::stdout().lock();
   stdout.write_all(joined.as_bytes()).and_then(|()| stdout.write_all(b"\0")).map_err(|error| error.to_string())
-}
-
-fn console_pattern() -> &'static Regex {
-  static CONSOLE: OnceLock<Regex> = OnceLock::new();
-  CONSOLE.get_or_init(|| Regex::new(CONSOLE_PATTERN).expect("the console log pattern compiles"))
-}
-
-fn field_pattern() -> &'static Regex {
-  static FIELD: OnceLock<Regex> = OnceLock::new();
-  FIELD.get_or_init(|| Regex::new(FIELD_PATTERN).expect("the console field pattern compiles"))
 }
 
 // ---- the trial's checks ---------------------------------------------------------------------------------------------
@@ -763,62 +748,14 @@ fn delegation_error(args: &[String]) -> Result<i32, String> {
   }
 }
 
-/// One server log row: its event name and its fields.
-struct LogRow {
-  event: String,
-  fields: Map<String, Value>,
-}
-
-fn log_event_name(row: &Value) -> String {
-  for key in ["event", "message"] {
-    if let Some(Value::String(text)) = row.get(key) {
-      return text.clone();
-    }
-  }
-  if let Some(Value::Object(fields)) = row.get("fields")
-    && let Some(Value::String(text)) = fields.get("message")
-  {
-    return text.clone();
-  }
-  String::new()
-}
-
-fn log_event_fields(row: &Value) -> Map<String, Value> {
-  let mut merged = match row.get("fields") {
-    Some(Value::Object(fields)) => fields.clone(),
-    _ => Map::new(),
-  };
-  if let Value::Object(top) = row {
-    for (key, value) in top {
-      merged.insert(key.clone(), value.clone());
-    }
-  }
-  merged
-}
-
-fn log_rows(path: &str) -> Result<Vec<LogRow>, String> {
+/// The rows of a server log: each line `logline` reads, in file order. Other lines are skipped.
+fn log_rows(path: &str) -> Result<Vec<Row>, String> {
   let text = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
-  let mut rows = Vec::new();
-  for line in text.lines() {
-    let trimmed = line.trim();
-    if trimmed.starts_with('{') {
-      let row: Value = serde_json::from_str(trimmed).map_err(|error| format!("{path}: {error}"))?;
-      rows.push(LogRow { event: log_event_name(&row), fields: log_event_fields(&row) });
-      continue;
-    }
-    if let Some(captures) = console_pattern().captures(trimmed) {
-      let mut fields = Map::new();
-      for field in field_pattern().captures_iter(&captures[2]) {
-        fields.insert(field[1].to_string(), Value::String(field[2].to_string()));
-      }
-      rows.push(LogRow { event: captures[1].to_string(), fields });
-    }
-  }
-  Ok(rows)
+  Ok(text.lines().filter_map(logline::parse).collect())
 }
 
-fn field_or_empty(fields: &Map<String, Value>, key: &str) -> String {
-  fields.get(key).map(pyfmt::python_str).unwrap_or_default()
+fn field_or_empty(row: &Row, key: &str) -> String {
+  row.field(key).unwrap_or_default().to_string()
 }
 
 fn cgroup_enabled(args: &[String]) -> Result<i32, String> {
@@ -829,9 +766,9 @@ fn cgroup_enabled(args: &[String]) -> Result<i32, String> {
     }
     emit_nul(&[
       "enabled".to_string(),
-      field_or_empty(&row.fields, "memory_max_mb"),
-      field_or_empty(&row.fields, "swap_max_mb"),
-      field_or_empty(&row.fields, "tasks_max"),
+      field_or_empty(&row, "memory_max_mb"),
+      field_or_empty(&row, "swap_max_mb"),
+      field_or_empty(&row, "tasks_max"),
     ])?;
     return Ok(0);
   }
@@ -841,7 +778,7 @@ fn cgroup_enabled(args: &[String]) -> Result<i32, String> {
 fn created_cgroups(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "created-cgroups")?;
   for row in log_rows(path)? {
-    if let Some(Value::String(cgroup_path)) = row.fields.get("path")
+    if let Some(cgroup_path) = row.field("path")
       && row.event == CGROUP_CREATED
     {
       println!("{cgroup_path}");
@@ -871,68 +808,16 @@ fn session_cgroup_names(sessions: &str) -> Result<BTreeSet<String>, String> {
 
 /// The names a `session_cgroup_sweep_removed` line removed, or `None` for any other line.
 fn sweep_removed_names(line: &str) -> Result<Option<Vec<String>>, String> {
-  let text = line.trim();
-  if text.starts_with('{') {
-    let row: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    if row.get("event").and_then(Value::as_str) != Some(SWEEP_REMOVED) {
-      return Ok(None);
-    }
-    // The Rust server logs `names = ?removed`, which its JSON formatter writes as the Debug text of the list: a string
-    // holding a JSON array.
-    let names = row.get("names").ok_or("the sweep line has no names")?;
-    let names = match names {
-      Value::String(encoded) => serde_json::from_str(encoded).map_err(|error| error.to_string())?,
-      other => other.clone(),
-    };
-    return match names {
-      Value::Array(items) => Ok(Some(items.iter().map(pyfmt::python_str).collect())),
-      _ => Err("the sweep line's names are not a list".to_string()),
-    };
-  }
-  let Some(captures) = console_pattern().captures(text) else { return Ok(None) };
-  if &captures[1] != SWEEP_REMOVED {
+  let Some(row) = logline::parse(line) else { return Ok(None) };
+  if row.event != SWEEP_REMOVED {
     return Ok(None);
   }
-  let mut fields = Map::new();
-  for field in field_pattern().captures_iter(&captures[2]) {
-    fields.insert(field[1].to_string(), Value::String(field[2].to_string()));
+  // The server logs `names = ?removed`: the Debug text of the list, which a line holds as a quoted JSON array.
+  let encoded = row.field("names").ok_or("the sweep line has no names")?;
+  match serde_json::from_str::<Value>(encoded).map_err(|error| error.to_string())? {
+    Value::Array(items) => Ok(Some(items.iter().map(pyfmt::python_str).collect())),
+    _ => Err("the sweep line's names are not a list".to_string()),
   }
-  let names = fields.get("names").and_then(Value::as_str).ok_or("the sweep line has no names")?;
-  Ok(Some(python_string_list(names)?))
-}
-
-/// `ast.literal_eval` of a list of quoted strings, the console log's rendering of the sweep's removed names.
-fn python_string_list(text: &str) -> Result<Vec<String>, String> {
-  let text = text.trim();
-  let Some(body) = text.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) else {
-    return Err(format!("not a list of strings: {text}"));
-  };
-  let mut items = Vec::new();
-  let mut characters = body.chars().peekable();
-  loop {
-    while characters.peek().is_some_and(|character| character.is_whitespace() || *character == ',') {
-      characters.next();
-    }
-    let Some(next) = characters.next() else { break };
-    let quote = match next {
-      '\'' | '"' => next,
-      other => return Err(format!("not a quoted string: {other} in {text}")),
-    };
-    let mut item = String::new();
-    loop {
-      match characters.next() {
-        Some(character) if character == quote => break,
-        Some('\\') => match characters.next() {
-          Some(escaped) => item.push(escaped),
-          None => return Err(format!("an unterminated escape in {text}")),
-        },
-        Some(character) => item.push(character),
-        None => return Err(format!("an unterminated string in {text}")),
-      }
-    }
-    items.push(item);
-  }
-  Ok(items)
 }
 
 fn sweep_check(args: &[String]) -> Result<i32, String> {
@@ -964,20 +849,10 @@ fn sweep_check(args: &[String]) -> Result<i32, String> {
 
 // ---- the rehearsal's checks -----------------------------------------------------------------------------------------
 
-/// The event name of one console or JSON-lines server log line; `None` for a line that names no event.
-fn event_name(line: &str) -> Result<Option<String>, String> {
-  let text = line.trim();
-  if text.starts_with('{') {
-    let row: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    return Ok(row.get("event").and_then(Value::as_str).map(str::to_string));
-  }
-  Ok(console_pattern().captures(text).map(|captures| captures[1].to_string()))
-}
-
 fn event(args: &[String]) -> Result<i32, String> {
   let [log, wanted] = arguments::<2>(args, "event")?;
   for line in complete_lines(log)? {
-    if event_name(&line)?.as_deref() == Some(wanted) {
+    if logline::parse(&line).is_some_and(|row| row.event == wanted) {
       return Ok(0);
     }
   }
@@ -1450,61 +1325,75 @@ mod tests {
     tempfile::tempdir().expect("a temporary directory")
   }
 
+  /// The time of the fixture lines.
+  const STAMP: &str = "2026-10-21 10:00:01.000Z";
+
   #[test]
-  fn the_sweep_line_is_read_from_console_and_json_logs() {
-    let console = "2026-10-21 10:00:01 [info     ] session_cgroup_sweep_removed   \
-count=2 names=['charliebot-sess-aaaaaaaa', \"charliebot-sess-bbbbbbbb\"]";
+  fn the_sweep_line_is_read_from_text_and_json_logs() {
+    // The server's `names = ?removed`: the Debug text of the list.
+    let removed = format!("{:?}", ["charliebot-sess-aaaaaaaa", "charliebot-sess-bbbbbbbb"]);
+    let text = logline::render(
+      STAMP,
+      "info",
+      SWEEP_REMOVED,
+      &[("count".to_string(), json!(2)), ("names".to_string(), json!(removed))],
+    );
     assert_eq!(
-      sweep_removed_names(console).unwrap(),
+      sweep_removed_names(&text).unwrap(),
       Some(vec!["charliebot-sess-aaaaaaaa".to_string(), "charliebot-sess-bbbbbbbb".to_string()])
     );
     let encoded = r#"{"event": "session_cgroup_sweep_removed", "names": "[\"charliebot-sess-cccccccc\"]"}"#;
     assert_eq!(sweep_removed_names(encoded).unwrap(), Some(vec!["charliebot-sess-cccccccc".to_string()]));
     let listed = r#"{"event": "session_cgroup_sweep_removed", "names": ["charliebot-sess-dddddddd"]}"#;
     assert_eq!(sweep_removed_names(listed).unwrap(), Some(vec!["charliebot-sess-dddddddd".to_string()]));
-    assert_eq!(sweep_removed_names("2026-10-21 10:00:00 [info     ] server_ready").unwrap(), None);
+    assert_eq!(sweep_removed_names(&logline::render(STAMP, "info", "server_ready", &[])).unwrap(), None);
   }
 
   #[test]
-  fn a_console_log_line_splits_into_its_event_and_fields() {
+  fn a_text_log_line_splits_into_its_event_and_fields() {
     let directory = temporary();
     let path = directory.path().join("server.log");
-    fs::write(
-      &path,
-      concat!(
-        "2026-10-21 10:00:00 [info     ] session_cgroup_enabled        ",
-        "memory_max_mb=1024 swap_max_mb=0 tasks_max=256\n",
-        "2026-10-21 10:00:01 [info     ] session_cgroup_created        path=/a/charliebot-sess-aaaaaaaa\n",
-      ),
-    )
-    .unwrap();
+    let enabled = logline::render(
+      STAMP,
+      "info",
+      CGROUP_ENABLED,
+      &[
+        ("memory_max_mb".to_string(), json!(1024)),
+        ("swap_max_mb".to_string(), json!(0)),
+        ("tasks_max".to_string(), json!(256)),
+      ],
+    );
+    let created =
+      logline::render(STAMP, "info", CGROUP_CREATED, &[("path".to_string(), json!("/a/charliebot-sess-aaaaaaaa"))]);
+    fs::write(&path, format!("{enabled}\n{created}\n")).unwrap();
 
     let rows = log_rows(&path.to_string_lossy()).unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].event, CGROUP_ENABLED);
-    assert_eq!(field_or_empty(&rows[0].fields, "memory_max_mb"), "1024");
-    assert_eq!(field_or_empty(&rows[0].fields, "tasks_max"), "256");
+    assert_eq!(field_or_empty(&rows[0], "memory_max_mb"), "1024");
+    assert_eq!(field_or_empty(&rows[0], "tasks_max"), "256");
     assert_eq!(rows[1].event, CGROUP_CREATED);
-    assert_eq!(field_or_empty(&rows[1].fields, "path"), "/a/charliebot-sess-aaaaaaaa");
+    assert_eq!(field_or_empty(&rows[1], "path"), "/a/charliebot-sess-aaaaaaaa");
   }
 
   #[test]
-  fn a_json_log_line_carries_its_fields_and_the_row_keys() {
+  fn a_json_log_line_carries_its_event_and_fields_without_level_or_timestamp() {
     let directory = temporary();
     let path = directory.path().join("server.log");
     fs::write(
       &path,
-      "{\"event\": \"session_cgroup_created\", \"fields\": {\"path\": \"fields/path\", \"message\": \"x\"}, \
-\"path\": \"row/path\"}\n",
+      "{\"event\": \"session_cgroup_created\", \"path\": \"/a/charliebot-sess-bbbbbbbb\", \"level\": \"info\", \
+\"timestamp\": \"2026-10-21T10:00:02.000000Z\"}\n",
     )
     .unwrap();
 
     let rows = log_rows(&path.to_string_lossy()).unwrap();
 
     assert_eq!(rows[0].event, CGROUP_CREATED);
-    // `{**fields, **row}`: the row's own key wins.
-    assert_eq!(field_or_empty(&rows[0].fields, "path"), "row/path");
+    assert_eq!(field_or_empty(&rows[0], "path"), "/a/charliebot-sess-bbbbbbbb");
+    assert_eq!(rows[0].field("level"), None);
+    assert_eq!(rows[0].field("timestamp"), None);
   }
 
   #[test]

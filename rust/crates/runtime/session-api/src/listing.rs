@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
-use charliebot_store::{Store, StoreResult};
+use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use lru::LruCache;
 use serde_json::{Map, Value, json};
@@ -96,21 +96,27 @@ pub struct PageRows {
   sequence_fields: HashMap<String, Map<String, Value>>,
 }
 
-impl PageRows {
-  /// The first row's id: the session that a page opened without one redirects to.
-  pub fn first_id(&self) -> Option<&str> {
-    self.rows.first().map(|row| row.id.as_str())
-  }
-}
-
 /// Read the chat page's sidebar corpus without rendering a row.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let ListingCorpus { mut rows, derived, sequence_fields } = active_listing_corpus(store, registry)?;
   let roots = store.subtree_roots_shared()?;
-  rows.retain(|row| {
-    !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
-  });
+  rows.retain(|row| outside_owned_subtrees(row, &roots));
   Ok(PageRows { rows, derived, sequence_fields })
+}
+
+/// The id of the row that a page opened without a session redirects to.
+///
+/// The redirect reads only the row order, so it skips the derived overlays and the controller row fields that the
+/// rendered page needs.
+pub fn first_page_row_id(store: &Arc<Store>) -> StoreResult<Option<String>> {
+  let rows = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
+  let roots = store.subtree_roots_shared()?;
+  Ok(rows.iter().find(|row| outside_owned_subtrees(row, &roots)).map(|row| row.id.clone()))
+}
+
+/// Whether a row stands outside every sequence subtree and every view subtree.
+fn outside_owned_subtrees(row: &SessionMetadata, roots: &SharedSubtreeRoots) -> bool {
+  !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
 }
 
 /// The chat page's row projection: running and trigger state, the run backend, and no plan badge.
@@ -483,6 +489,18 @@ mod tests {
     let active = active_page_json_text(&features.store, &page, Some(&first.id), &memo).unwrap();
     assert_eq!(active.as_str(), page_array_text(&features.store, &page, Some(&first.id)));
     assert_eq!(memo.render_calls(), rendered + 1);
+  }
+
+  /// A page opened without a session redirects to the row that the rendered page puts first.
+  #[tokio::test]
+  async fn the_redirect_row_is_the_rendered_page_first_row() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "redirect-first", None, TaskProfile::Manager).await;
+    crate::test_support::create_node(&features.store, "redirect-second", None, TaskProfile::Manager).await;
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let first_row = page.rows.first().map(|row| row.id.as_str());
+    assert_eq!(first_page_row_id(&features.store).unwrap().as_deref(), first_row);
   }
 
   /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared.

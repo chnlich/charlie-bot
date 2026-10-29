@@ -119,11 +119,11 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let features = Arc::clone(&state.features);
   let redirect_to_first = session.is_none();
   let listing_result = tokio::task::spawn_blocking(move || -> StoreResult<PageListing> {
-    let page = listing::active_page_rows(&features.store, &features.registry)?;
     // As Python's index: a page opened without a session redirects to the first row before any row renders.
-    if redirect_to_first && let Some(first) = page.first_id() {
-      return Ok(PageListing::Redirect(first.to_string()));
+    if redirect_to_first && let Some(first) = listing::first_page_row_id(&features.store)? {
+      return Ok(PageListing::Redirect(first));
     }
+    let page = listing::active_page_rows(&features.store, &features.registry)?;
     listing::active_page_json_text(&features.store, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
       .map(PageListing::Text)
   })

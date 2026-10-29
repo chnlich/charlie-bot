@@ -201,6 +201,19 @@ impl Store {
     starred: Option<bool>,
     scheduled: Option<bool>,
   ) -> StoreResult<MetadataListing> {
+    let rows = self.list_session_rows(status, starred, scheduled)?;
+    let ids: Vec<String> = rows.iter().map(|meta| meta.id.clone()).collect();
+    let sequence_fields = self.sequence_listing.listing_fields(&ids, UtcDateTime::now())?;
+    Ok(MetadataListing { rows, sequence_fields })
+  }
+
+  /// List the rows of one listing without asking the sequence controllers for their row fields.
+  pub fn list_session_rows(
+    &self,
+    status: Option<SessionStatus>,
+    starred: Option<bool>,
+    scheduled: Option<bool>,
+  ) -> StoreResult<Vec<Arc<SessionMetadata>>> {
     let (snapshot, _) = self.load_session_metas_snapshot_versioned(status)?;
     let mut rows = self.apply_derived_archive_shared(snapshot.as_slice(), status)?;
     rows.retain(|meta| {
@@ -208,9 +221,7 @@ impl Store {
         && scheduled.is_none_or(|value| self.sequence_listing.owns_session(meta) == value)
     });
     rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
-    let ids: Vec<String> = rows.iter().map(|meta| meta.id.clone()).collect();
-    let sequence_fields = self.sequence_listing.listing_fields(&ids, UtcDateTime::now())?;
-    Ok(MetadataListing { rows, sequence_fields })
+    Ok(rows)
   }
 
   /// Read rows of one stored status without projecting sequence fields.

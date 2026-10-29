@@ -1799,19 +1799,21 @@ mod tests {
     // A manual run executes while a handle is in flight and leaves the recorded handle untouched: manual
     // rounds neither block nor are blocked.
     let pending = insert_pending_handle(&scheduler, "code-health");
+    let recorded_id =
+      scheduler.handles.lock().expect("cron handle mutex is not poisoned").get("code-health").map(|handle| handle.id());
     match scheduler.run_now("code-health").await {
       Ok(_) => {}
       Err(super::RunError::Failed(message)) => panic!("the manual run failed: {message}"),
       Err(_) => panic!("the manual run failed"),
     }
     assert_eq!(handler_results(&features, &node.id), 3);
-    let unfinished = scheduler
+    let after = scheduler
       .handles
       .lock()
       .expect("cron handle mutex is not poisoned")
       .get("code-health")
-      .map(|handle| !handle.is_finished());
-    assert_eq!(unfinished, Some(true), "the manual run left the handle unchanged");
+      .map(|handle| (handle.id(), handle.is_finished()));
+    assert_eq!(after, recorded_id.map(|id| (id, false)), "the manual run left the recorded handle unchanged");
     drop(pending);
   }
 }

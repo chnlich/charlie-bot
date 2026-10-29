@@ -323,6 +323,26 @@ fn a_push_updates_the_bare_repository() {
 }
 
 #[test]
+fn a_tilde_profile_home_names_the_pattern_file_under_home() {
+  let sandbox = Sandbox::new();
+  let (mut env, gh_log, _home) = post(&sandbox);
+  // The server's home rule expands a leading `~` to HOME; the pattern file sits at `<root>/charliebot-home`.
+  env.insert("CHARLIEBOT_HOME".to_string(), "~/charliebot-home".to_string());
+  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nthe {PATTERN_TERM} value\n"));
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-comment", "--body-file"]).arg(&body).arg("123");
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log).is_empty());
+
+  env.remove("EXTRA_PATTERNS_FILE");
+  let mut scan = harness::command("bash", &env);
+  scan.arg(leak_scanner()).arg("--stdin");
+  let scan = run_with_stdin(&mut scan, sandbox.root(), &format!("the {PATTERN_TERM} value\n"));
+  assert_eq!(scan.code, 1, "{}", scan.describe());
+}
+
+#[test]
 fn the_stdin_mode_exit_codes() {
   let sandbox = Sandbox::new();
   let (mut env, _gh_log, home) = post(&sandbox);

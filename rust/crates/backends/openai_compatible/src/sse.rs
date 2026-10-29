@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use super::pyvalue::COMPACT_ASCII_JSON;
 
-/// Splits a byte stream into lines as `sse.iter_sse_lines` frames them: CRLF, LF and CR each end a line, and a CR at a
+/// Splits a byte stream into lines as `sse.iter_sse_lines` frames them. CRLF, LF and CR each end a line. A CR at a
 /// chunk's end waits for the next byte, so a CRLF split across chunks is still one terminator.
 #[derive(Default)]
 pub struct LineFramer {

@@ -240,8 +240,8 @@ pub fn spawn(command: &mut Command) -> Child {
       if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
         return Err(std::io::Error::last_os_error());
       }
-      // The kernel watches the thread that starts this process. When that thread ended before prctl ran, the
-      // signal would never arrive, so leave now instead of outliving the test.
+      // The kernel sends the signal only if the parent is still there at prctl. A child whose spawning process has
+      // already exited was reparented without it, so it leaves now instead of outliving the test.
       if libc::getppid() != parent {
         libc::_exit(1);
       }

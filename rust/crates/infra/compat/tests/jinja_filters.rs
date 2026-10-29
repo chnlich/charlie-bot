@@ -21,3 +21,18 @@ fn filters_and_printing_match_jinja2() {
     assert_eq!(output, case["output"].as_str().expect("a case has its output"), "{template} with {}", case["context"]);
   }
 }
+
+/// A page renders a value as text in the handler and prints it with `|safe`; those bytes are the filter's.
+#[test]
+fn tojson_text_matches_the_filter() {
+  let value = serde_json::json!({
+    "text": "<a href=\"x\">&'</a> ünïcode \u{7f}",
+    "sorted": {"z": 1, "a": 2, "m": [null, true, 2.5]},
+    "empty": [],
+  });
+  let environment = jinja::environment(|_| Ok(None));
+  let rendered = environment
+    .render_str("{{ value|tojson }}", Value::from_serialize(serde_json::json!({"value": value})))
+    .expect("the tojson filter renders");
+  assert_eq!(rendered, jinja::tojson_text(&value));
+}

@@ -145,8 +145,15 @@ fn tojson(value: Value) -> Result<Value, Error> {
   if value.is_undefined() {
     return Err(Error::new(ErrorKind::BadSerialization, "Object of type Undefined is not JSON serializable"));
   }
-  let json = pyfmt::json_dumps(&to_json(&value)?, &pyfmt::JINJA_TOJSON);
-  Ok(Value::from_safe_string(html_safe_json(json)))
+  Ok(Value::from_safe_string(tojson_text(&to_json(&value)?)))
+}
+
+/// The text [`tojson`] renders: `json.dumps(sort_keys=True)` with the `htmlsafe_json_dumps` escapes.
+///
+/// A page that carries a large value as text renders this once in the handler. The filter's path walks the
+/// value into the template engine's value tree and back out again, which costs one pass per element.
+pub fn tojson_text(value: &serde_json::Value) -> String {
+  html_safe_json(pyfmt::json_dumps(value, &pyfmt::JINJA_TOJSON))
 }
 
 /// Jinja2's `do_urlencode`. A scalar's text is quoted with `/` kept (`urllib.parse.quote`). A mapping, or a

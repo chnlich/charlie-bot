@@ -25,7 +25,7 @@
     // asset_version, and a stale value gets the 4409 close that reloads the page (websocket.js).
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
-    const INITIAL_SESSIONS = {{ initial_sessions|tojson }};
+    const INITIAL_SESSIONS = {{ initial_sessions_json|safe }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};
     const BACKEND_OPTIONS = {
       {% for opt in backend_options %}

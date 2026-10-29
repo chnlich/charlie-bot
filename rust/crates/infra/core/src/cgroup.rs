@@ -108,23 +108,16 @@ pub fn end_session_browsers(base_dir: &Path, session_id: &str) -> usize {
 
 fn end_session_browsers_with_wait(base_dir: &Path, session_id: &str, wait: Duration) -> usize {
   let mut killed = Vec::new();
-  for slice in session_slice_dirs(base_dir) {
-    let procs_path = session_cgroup_path(&slice, session_id).join("cgroup.procs");
-    let Ok(procs) = fs::read_to_string(&procs_path) else { continue };
-    for pid in procs.split_whitespace().filter_map(|entry| entry.parse::<u32>().ok()) {
-      if killed.contains(&pid) || !is_browser_process(pid) {
-        continue;
-      }
-      match kill_browser(pid) {
-        Ok(()) => killed.push(pid),
-        Err(error) => {
-          tracing::warn!(target: "charliebot_agents", session_id, pid, error = %error, "session_browser_kill_failed")
-        }
+  for pid in session_procs(base_dir, session_id) {
+    if killed.contains(&pid) || !is_browser_process(pid) {
+      continue;
+    }
+    match kill_browser(pid) {
+      Ok(()) => killed.push(pid),
+      Err(error) => {
+        tracing::warn!(target: "charliebot_agents", session_id, pid, error = %error, "session_browser_kill_failed")
       }
     }
-  }
-  if killed.is_empty() {
-    return 0;
   }
   let deadline = Instant::now() + wait;
   while Instant::now() < deadline && browsers_still_listed(base_dir, session_id, &killed) {
@@ -132,6 +125,24 @@ fn end_session_browsers_with_wait(base_dir: &Path, session_id: &str, wait: Durat
   }
   tracing::info!(target: "charliebot_agents", session_id, count = killed.len(), "session_browsers_ended");
   killed.len()
+}
+
+/// The pids in the session's `cgroup.procs` under every slice. A slice without the session's cgroup contributes none;
+/// any other read error is logged, and that slice contributes none.
+fn session_procs(base_dir: &Path, session_id: &str) -> Vec<u32> {
+  let mut pids = Vec::new();
+  for slice in session_slice_dirs(base_dir) {
+    let procs_path = session_cgroup_path(&slice, session_id).join("cgroup.procs");
+    match fs::read_to_string(&procs_path) {
+      Ok(procs) => pids.extend(procs.split_whitespace().filter_map(|entry| entry.parse::<u32>().ok())),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+      Err(error) => {
+        let path = procs_path.display();
+        tracing::warn!(target: "charliebot_agents", session_id, %path, error = %error, "session_procs_read_failed")
+      }
+    }
+  }
+  pids
 }
 
 /// Whether `pid`'s `/proc/<pid>/exe` names one of [`BROWSER_EXE_NAMES`], with the kernel's ` (deleted)` marker of an
@@ -158,16 +169,7 @@ fn kill_browser(pid: u32) -> io::Result<()> {
 /// Whether any of `pids` is still listed in the session's `cgroup.procs`. A pid that no longer runs — a kill takes
 /// effect even before its parent reaps it — has left for good.
 fn browsers_still_listed(base_dir: &Path, session_id: &str, pids: &[u32]) -> bool {
-  for slice in session_slice_dirs(base_dir) {
-    let procs_path = session_cgroup_path(&slice, session_id).join("cgroup.procs");
-    let Ok(procs) = fs::read_to_string(&procs_path) else { continue };
-    for pid in procs.split_whitespace().filter_map(|entry| entry.parse::<u32>().ok()) {
-      if pids.contains(&pid) && !has_exited(pid) {
-        return true;
-      }
-    }
-  }
-  false
+  session_procs(base_dir, session_id).into_iter().any(|pid| pids.contains(&pid) && !has_exited(pid))
 }
 
 /// Whether `pid` no longer runs: its `/proc/<pid>/stat` is gone, or the kernel keeps the entry only as a zombie.

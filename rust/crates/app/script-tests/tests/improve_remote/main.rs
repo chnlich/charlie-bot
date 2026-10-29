@@ -1,7 +1,7 @@
-//! One improve round runs on the remote host: `tools/improve/remote-launch.sh` on this host and
-//! `tools/improve/remote-runner.sh` there. A fake `ssh` records its arguments and runs the remote side locally, and
-//! fake `claude`, `systemd-run` and `systemctl` record what they receive, so each test checks the round's contract
-//! without a network, a server or a real remote host.
+//! One improve run: `tools/improve/remote-launch.sh` on this host, and `tools/improve/remote-runner.sh` on the
+//! remote host for a round or this host's local claude for a cron session's own turn. A fake `ssh` records its
+//! arguments and runs the remote side locally, and fake `claude`, `systemd-run` and `systemctl` record what they
+//! receive, so each test checks the run's contract without a network, a server or a real remote host.
 //!
 //! The tests that assert a bound on time measure it: the approval preflight and the heartbeat stop must both finish
 //! inside five seconds.
@@ -82,6 +82,81 @@ fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let text = fs::read_to_string(&world.claude_stdin).expect("the fake claude recorded its standard input");
   assert_eq!(text, PROMPT, "the remote claude did not receive the prompt:\n{}", run.describe());
+}
+
+#[test]
+fn a_cron_sessions_own_turn_runs_this_hosts_claude_with_its_arguments_and_input() {
+  let world = World::new();
+  let prompt = world.sandbox.root().join("node-prompt.txt");
+  fs::write(&prompt, PROMPT).expect("the prompt");
+  let mut env = world.node_env();
+  env.insert("FAKE_CLAUDE_STDIN".to_string(), world.node_claude_stdin.display().to_string());
+  env.insert("FAKE_CLAUDE_EXIT".to_string(), "7".to_string());
+  let stdin = fs::File::open(&prompt).expect("open the prompt");
+  let mut command = world.launcher_command(&env);
+
+  let run = harness::run_with_stdin(&mut command, Stdio::from(stdin));
+
+  assert_eq!(run.code, 7, "the launcher did not exit with the local claude's code:\n{}", run.describe());
+  assert!(world.ssh_arguments().is_empty(), "the node turn opened an ssh connection:\n{}", world.ssh_arguments());
+  assert_eq!(world.node_claude_arguments(), world.claude_arguments());
+  let received = fs::read_to_string(&world.node_claude_stdin).expect("the local claude recorded its standard input");
+  assert_eq!(received, PROMPT, "the local claude did not receive the prompt:\n{}", run.describe());
+}
+
+#[test]
+fn a_cron_sessions_own_turn_keeps_this_hosts_profile_home_config_dir_and_token() {
+  let world = World::new();
+  let run = world.run(&world.node_env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+
+  let env = world.node_claude_environment();
+  let value = |name: &str| env.get(name).map(String::as_str);
+  let profile_home = world.profile_home.display().to_string();
+  assert_eq!(value("CHARLIEBOT_HOME"), Some(profile_home.as_str()));
+  assert_eq!(value("CLAUDE_CONFIG_DIR"), Some(world.local_config_dir));
+  assert_eq!(value("CHARLIEBOT_RUN_TOKEN"), Some(world::RUN_TOKEN));
+  let digest = format!("{:x}", Sha256::digest(GATEWAY_TOKEN));
+  assert_eq!(value("ANTHROPIC_AUTH_TOKEN_SHA256"), Some(digest.as_str()));
+}
+
+#[test]
+fn a_cron_sessions_own_turn_without_a_local_claude_exits_1_and_names_it() {
+  let world = World::new();
+  let mut env = world.node_env();
+  // A PATH without the stub directory. The launcher's node branch needs only dirname, sed and head there.
+  env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+  let mut probe = harness::command("bash", &env);
+  probe.arg("-c").arg("type -P claude");
+  let found = harness::run(&mut probe);
+  if !found.stdout.trim().is_empty() {
+    println!("skipped: /usr/bin or /bin holds a claude");
+    return;
+  }
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("claude"), "the error names no missing CLI: {}", run.describe());
+  assert!(world.ssh_arguments().is_empty(), "the node turn fell back to the remote host:\n{}", world.ssh_arguments());
+  assert!(!world.node_claude_ran());
+}
+
+#[test]
+fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
+  let world = World::new();
+  // The worker's metadata names PARENT_ID as its task_parent_id, and the cron task file binds
+  // PARENT_ID, so this run is a round even though a cron session is one link away.
+  let approval = world.sandbox.root().join("approval-needed");
+  fs::write(&approval, "1\n").expect("the approval marker");
+  let mut env = world.env();
+  env.insert("SSH_APPROVAL_FILE".to_string(), approval.display().to_string());
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 3, "{}", run.describe());
+  assert!(world.ssh_arguments().contains("\ntrue\n"), "the preflight did not reach ssh:\n{}", world.ssh_arguments());
+  assert!(!world.node_claude_ran(), "the round ran on this host");
 }
 
 #[test]
@@ -253,6 +328,7 @@ fn a_worker_session_without_a_parent_exits_6() {
   let run = world.run(&world.env());
   assert_eq!(run.code, 6, "{}", run.describe());
   assert!(!world.claude_ran());
+  assert!(!world.node_claude_ran(), "a session that no cron task file names ran on this host");
 }
 
 #[test]

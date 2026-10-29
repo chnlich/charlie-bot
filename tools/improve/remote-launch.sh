@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# Launch one improve round on the remote host.
+# Launch one improve run on the host that can run it.
 #
 #   tools/improve/remote-launch.sh <claude arguments...>
 #
 # The backend starts this script where it would start `claude`, with claude's arguments,
-# environment, stdin and stdout. The script connects to the host named by IMPROVE_REMOTE_HOST
-# (host config only, because the repository is public), sends the round's inputs, runs
-# tools/improve/remote-runner.sh there and passes claude's stdin and stdout through unchanged.
+# environment, stdin and stdout. The session id in that environment decides the kind of run.
+#
+# A round runs on the host named by IMPROVE_REMOTE_HOST (host config only, because the repository
+# is public). The script connects there, sends the round's inputs, runs
+# tools/improve/remote-runner.sh and passes claude's stdin and stdout through unchanged.
 # No command of the round runs on this host, so a round that forgets a variable, sets a wrong
 # path or runs rm cannot reach this host's profile home or runtime clone: on 2026-10-04 a round's
 # own probe deleted the whole profile home.
 #
-# This host reads five inputs and writes one directory:
+# A cron session's own turn runs here, in this host's claude. The turn reads this host's CharlieBot
+# server for status, replies, messages and child reads, and the remote host runs no server. This
+# script recognizes the turn by the session's own id alone: the id equals the `session_id` of a
+# cron task file under $CHARLIEBOT_HOME/config.d/cron.d. A round worker is a child session whose id
+# names no task file, so no round reaches this host through that branch.
+#
+# The round path reads five inputs on this host and writes one directory:
 #   - the instructions file that --append-system-prompt-file names;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which tools/improve/inflight-files.sh prints here;
@@ -19,10 +27,11 @@
 #   - the cron task file of that parent session, for prompt_file.
 # It writes only ~/improve/<direction>/evidence/.
 #
-# Exit codes: claude's exit code; 1 a local failure, such as a missing input file; 3 the host asks
-# for a Tailscale approval or cannot be reached; 4 the direction's clone is missing or is not this
-# protocol's clone; 5 the previous round of this direction still runs; 6 the round's direction
-# cannot be read. Codes 3 to 6 start no claude and no scope.
+# Exit codes: claude's exit code; 1 a local failure, such as a missing input file or no local
+# claude CLI for a cron session's own turn; 3 the host asks for a Tailscale approval or cannot be
+# reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
+# of this direction still runs; 6 the round's direction cannot be read. Codes 3 to 6 start no claude
+# and no scope.
 #
 # The token values reach the host on ssh's standard input only, so no token value appears in any
 # process command line or in an input file: the runner writes them into
@@ -51,18 +60,44 @@ fail() {
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly SCRIPT_DIR=$script_dir
 readonly PROFILE_HOME=${CHARLIEBOT_HOME:-$HOME/.charliebot}
+readonly CRON_DIR="$PROFILE_HOME/config.d/cron.d"
 readonly REMOTE_HOST=${IMPROVE_REMOTE_HOST:-}
 readonly SESSION_ID=${CHARLIEBOT_SESSION_ID:-}
-
-[[ -n ${HOME:-} ]] || fail 1 'HOME is not set, so the evidence copy has no target'
-[[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
-[[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
 
 # The value of one top-level YAML key in a file, unquoted, without a trailing comment.
 yaml_value() {
   local file=$1 key=$2
   sed -n "s/^$key:[[:space:]]*//p" "$file" | head -n 1 | sed 's/[[:space:]]*#.*//; s/^["'\'']//; s/["'\'']$//'
 }
+
+# Whether this run is a cron session's own turn. The scheduler binds each task to one session and
+# wakes that session for its own turn, so the turn's id is the task file's bound session_id. A round
+# worker is a child session of that bound session, and no task file names a child.
+is_cron_session_turn() {
+  local candidate
+  [[ -n $SESSION_ID ]] || return 1
+  for candidate in "$CRON_DIR"/*.yaml; do
+    [[ -f $candidate ]] || continue
+    if [[ $(yaml_value "$candidate" session_id) == "$SESSION_ID" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ---------- 1. A cron session's own turn ----------
+# It runs here for its server: the turn reads status, replies, messages and its children, and the
+# remote host runs no CharlieBot server. The local claude CLI is `claude` from PATH, which is the
+# executable a backend runs when its option names no cli_binary.
+if is_cron_session_turn; then
+  claude=$(type -P claude) || fail 1 'a cron session turn runs the local claude CLI, and no claude executable is on PATH'
+  exec "$claude" "$@"
+fi
+
+# ---------- 2. A round ----------
+[[ -n ${HOME:-} ]] || fail 1 'HOME is not set, so the evidence copy has no target'
+[[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
+[[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
 
 # The direction is the name of the task session's prompt file: `tools/improve/perf.md` gives
 # `perf`. Every link is checked here because the direction names the scope, the boundary and
@@ -74,7 +109,7 @@ resolve_direction() {
   parent=$(sed -n 's/^[[:space:]]*"task_parent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$metadata" | head -n 1)
   [[ -n $parent ]] || fail 6 "the worker session's metadata.json names no task_parent_id: $metadata"
   local candidate session prompt
-  for candidate in "$PROFILE_HOME"/config.d/cron.d/*.yaml; do
+  for candidate in "$CRON_DIR"/*.yaml; do
     [[ -f $candidate ]] || continue
     session=$(yaml_value "$candidate" session_id)
     [[ $session == "$parent" ]] || continue
@@ -86,7 +121,7 @@ resolve_direction() {
     printf '%s' "$name"
     return
   done
-  fail 6 "no cron task file under $PROFILE_HOME/config.d/cron.d names session_id $parent"
+  fail 6 "no cron task file under $CRON_DIR names session_id $parent"
 }
 
 # Copy the evidence that the previous launch of this direction did not finish copying. A killed
@@ -111,7 +146,7 @@ copy_evidence() {
   fi
 }
 
-# ---------- 1. Preflight ----------
+# ---------- 3. Preflight ----------
 set +e
 preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" -n "$REMOTE_HOST" true 2>&1)
 preflight_status=$?
@@ -123,12 +158,12 @@ if (( preflight_status != 0 )); then
   fail 3 "cannot reach the improve host $REMOTE_HOST; approve the connection on the /host-auth page"
 fi
 
-# ---------- 2. Direction ----------
+# ---------- 4. Direction ----------
 if ! direction=$(resolve_direction); then
   exit 6
 fi
 
-# ---------- 3. Send ----------
+# ---------- 5. Send ----------
 launch_id=$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM
 payload_parent=${TMPDIR:-/tmp}
 payload=$(mktemp -d "$payload_parent/improve-launch.XXXXXXXX") || fail 1 'cannot make the launch directory'
@@ -223,7 +258,7 @@ if (( prepare_status == 255 )); then
 fi
 (( prepare_status == 0 )) || fail 1 "the runner could not write the round's credentials.yaml on $REMOTE_HOST"
 
-# ---------- 4. Start ----------
+# ---------- 6. Start ----------
 # The heartbeat reads its standard input on the remote side. EOF tells it that the launcher is
 # gone, and only then does it stop the scope: a Tailscale connection that is killed leaves remote
 # processes alive, so the launcher's death cannot be detected on the host any other way.
@@ -240,7 +275,7 @@ set +e
 run_status=$?
 set -e
 
-# ---------- 5. End ----------
+# ---------- 7. End ----------
 copy_evidence "$EVIDENCE_COPY_SECONDS"
 
 exec 3>&-

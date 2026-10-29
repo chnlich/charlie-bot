@@ -1,5 +1,5 @@
 //! The improve round's test world: a throwaway repository that holds the launcher, a profile home, a remote home and
-//! the stub commands of both sides.
+//! the stub commands of both sides, with a local `claude` stub for a cron session's own turn.
 //!
 //! The repository is a real git repository with `origin/main`, so the launcher reads its commit and
 //! `tools/improve/inflight-files.sh` lists this repository's own worktrees only. The stub `ssh` records its arguments
@@ -28,7 +28,9 @@ const IDENTITY: [(&str, &str); 4] = [
 
 /// The direction of every test round.
 pub const DIRECTION: &str = "perf";
+/// A round worker: a child of the cron session, so its id names no cron task file.
 pub const SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
+/// The cron session: the task file binds it as `session_id`, and the round worker calls it its parent.
 pub const PARENT_ID: &str = "99999999-8888-7777-6666-555555555555";
 pub const GATEWAY_TOKEN: &str = "synthetic-gateway-token";
 pub const API_KEY: &str = "synthetic-api-key";
@@ -145,6 +147,12 @@ pub struct World {
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
+  /// Where the local claude of a cron session's own turn writes its arguments and environment: this
+  /// host's records, outside the round's boundary.
+  pub node_claude_argv: PathBuf,
+  pub node_claude_env: PathBuf,
+  /// Where the local claude copies its standard input when a test asks for it.
+  pub node_claude_stdin: PathBuf,
   /// The in-memory `$CLAUDE_CONFIG_DIR` of the launcher; it must not reach the round.
   pub local_config_dir: &'static str,
 }
@@ -160,6 +168,7 @@ impl World {
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
     let profile_home = sandbox.dir("profile");
+    let node_records = sandbox.dir("node");
     let git_env: Env = IDENTITY.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
     git(&sandbox, &git_env, &repo, &["init", "-q", "-b", "main"]);
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
@@ -169,6 +178,8 @@ impl World {
 
     sandbox.stub("gh", "exit 0\n");
     sandbox.stub("ssh", SSH);
+    // The local claude that a cron session's own turn runs.
+    sandbox.stub("claude", CLAUDE);
 
     let instructions = sandbox.root().join("harness_instructions.md");
     fs::write(&instructions, INSTRUCTIONS).expect("the instructions file");
@@ -227,6 +238,9 @@ impl World {
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),
+      node_claude_argv: node_records.join("claude-argv.txt"),
+      node_claude_env: node_records.join("claude-env.txt"),
+      node_claude_stdin: node_records.join("claude-stdin.txt"),
       instructions,
       commit,
       sandbox,
@@ -280,6 +294,16 @@ impl World {
     env
   }
 
+  /// The variables of a cron session's own turn: the world's environment with the cron session's id,
+  /// which a cron task file binds, and the local claude's records.
+  pub fn node_env(&self) -> Env {
+    let mut env = self.env();
+    env.insert("CHARLIEBOT_SESSION_ID".to_string(), PARENT_ID.to_string());
+    env.insert("FAKE_CLAUDE_ARGV".to_string(), self.node_claude_argv.display().to_string());
+    env.insert("FAKE_CLAUDE_ENV".to_string(), self.node_claude_env.display().to_string());
+    env
+  }
+
   /// The command line the server builds for a worker run of this backend.
   pub fn claude_arguments(&self) -> Vec<String> {
     vec![
@@ -330,6 +354,28 @@ impl World {
 
   pub fn ssh_arguments(&self) -> String {
     fs::read_to_string(&self.ssh_args).unwrap_or_default()
+  }
+
+  /// Whether a cron session's own turn ran the local claude.
+  pub fn node_claude_ran(&self) -> bool {
+    self.node_claude_argv.exists()
+  }
+
+  pub fn node_claude_arguments(&self) -> Vec<String> {
+    fs::read_to_string(&self.node_claude_argv)
+      .expect("the local claude recorded its arguments")
+      .lines()
+      .map(str::to_string)
+      .collect()
+  }
+
+  pub fn node_claude_environment(&self) -> Env {
+    fs::read_to_string(&self.node_claude_env)
+      .expect("the local claude recorded its environment")
+      .lines()
+      .filter_map(|line| line.split_once('='))
+      .map(|(name, value)| (name.to_string(), value.to_string()))
+      .collect()
   }
 
   pub fn systemctl_calls(&self) -> String {

@@ -109,9 +109,9 @@
          The read-before rule for data graphics lives in the dataviz skill by name; read it
          before drafting the diagram.
       3 "Why did it happen?": causal chain end to end, one hand-checkable worked example.
-      4 "Evidence and boundaries": fact/hyp labels; headline epistemic state explicit; the title claims exactly the labeled state.
-         The labels are span.tag.fact and span.tag.hyp with the semantics defined in
-         prompts/sitrep_template.html's GRAMMAR, which stays their canonical home.
+      4 "Evidence and boundaries": separate confirmed facts from open hypotheses, with span.tag.fact and
+         span.tag.hyp (semantics: prompts/sitrep_template.html's GRAMMAR, their canonical home), and state
+         the headline's epistemic state.
       5 "What does it mean for us, and what happens next?": impact and decisions as forks; "Nothing waits on you." is valid.
          Fork grammar: plan_template.html's block kit, section 5.
 
@@ -191,12 +191,20 @@
       <p>Frames re-exported within about four minutes of their frame's previous sync could not reach the wall between Sunday 18:00 and Tuesday 09:47; a forced re-copy of everything cached in that window clears the backlog. Two decisions are open.</p>
       <div class="fork">
         <p class="q"><span class="fn">1</span>Re-enable the clock-sync service now, or after the image audit?</p>
-        <p class="rec"><b>Recommendation:</b> re-enable now. The confirmed mechanism needs true clocks regardless of how the audit resolves the trigger.</p>
+        <ul>
+          <li>「now」: re-enable the service, and the render node's stamps turn true before the audit finishes.</li>
+          <li>「after the audit」: leave the service disabled until the audit names the trigger, and stamps stay four minutes ahead meanwhile.</li>
+        </ul>
+        <p class="rec"><b>Recommendation:</b> 「now」. The confirmed mechanism needs true clocks regardless of how the audit resolves the trigger.</p>
         <p class="trade">Tradeoff: none material; the image audit continues in parallel.</p>
       </div>
       <div class="fork">
         <p class="q"><span class="fn">2</span>Change the fetcher to preserve primary mtimes as cache stamps?</p>
-        <p class="rec"><b>Recommendation:</b> adopt. Stamps in the primary's timeline remove the whole failure class instead of bounding its size.</p>
+        <ul>
+          <li>「adopt」: stamp each cache copy with the primary's mtime, and the comparison uses one timeline.</li>
+          <li>「keep the current stamps」: keep the render node's clock stamp, and a skewed clock still skips a fresh re-export.</li>
+        </ul>
+        <p class="rec"><b>Recommendation:</b> 「adopt」. Stamps in the primary's timeline remove the whole failure class instead of bounding its size.</p>
         <p class="trade">Tradeoff: the "cached at" reading moves from the stamp into the fetch log.</p>
       </div>
     </section>

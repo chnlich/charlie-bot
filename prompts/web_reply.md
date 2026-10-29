@@ -11,8 +11,6 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - An opening reply is a web reply that states the reading of the message and the steps of this turn.
 - An answer reply is the web reply that carries the answer of this turn.
 - When a user message woke this turn or arrived during it, post one opening reply for it before your next work step:
-  - State your reading of the message in one sentence.
-  - List the steps that you will take.
   - Name each step that changes something outside this session, a reversible step included.
 - A user message can arrive during the turn. It follows a tool result under the line
   "The user sent a new message while you were working".
@@ -33,8 +31,6 @@ The For-you view shows your web replies and hides the rest of your turn output.
   - completed a request that a user message in this session made.
 - When this turn did no action from the list, end the turn without a web reply.
   The For-you view then holds only results that the user reads or acts on.
-- Before you post, name in your reasoning the action from the list that the reply reports.
-  This check keeps progress reports out of the For-you view.
 - When a child reports progress, a correction or a retraction, handle it with the **Now** rule of the next section.
   The status panel then carries the progress of each line.
 - When you correct a web reply of a turn that another input woke, record the correction in **Now**.
@@ -85,6 +81,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
   The user then reads the options with their layout, and comments on the page reach this session.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.
+- For an item whose options compare in the item text alone, name each option in `text` and `context`, and set
+  `link` to the page that carries the work. The user then decides without a waiting page of its own.
 - For any other item, write the page body to a fragment file.
 - Then run `charliebot artifact wrap --genre waiting --output artifacts/waiting_<slug>.html <fragment>`.
   The command adds the head and style of the decision-page template.
@@ -118,8 +116,6 @@ Remaining lists the milestones between the session and its Goal, so the user rea
 ## Delivery
 
 - Write the web reply text to a file.
-- Before you run the command, count the characters of the file.
-  The reply then fits the budget on its first post.
 - Then run `charliebot web reply --file <path>`.
 - The command records the web reply in the session. It prints a readback with the character count.
 - The readback sets `over_budget` for a reply over 500 characters.
@@ -130,35 +126,26 @@ Remaining lists the milestones between the session and its Goal, so the user rea
 - The JSON object takes any of the keys `goal`, `now`, `waiting` and `remaining`.
 - `remaining` is a list of objects with the keys `text` and `done`. An empty list removes Remaining.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`.
-- When the file holds `waiting`, run `charliebot web status show` right before you write the file.
-  Start from your own Waiting on you list in that output.
-  Write the whole list: each item that stays, and each new or changed item.
-  Each set replaces the whole list, so a list from a fresh `show` keeps every item that still waits on the user.
+- When the file holds `waiting`, run `charliebot web status show` right before you write the file, and write the
+  whole list from it: each item that stays, and each new or changed item. Each set replaces the whole list.
 - Then run `charliebot web status set --file <path>`.
-- The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file. The
-  panel then shows the version that the user decides on.
-- The command gives each remaining Waiting on you item to a cold reader, unless the reader has already read it as it
-  stands.
-- The cold reader reads the item, and the page at its link when this host serves that page. It has no other context.
+- The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file.
+- The command cold-reads each remaining Waiting on you item and its linked page, and prints each restatement
+  without storing.
 - When an item's linked page fails a fork assertion of its genre, fix the page, then run the set again.
   The reader then sees only pages that pass those fork assertions.
   The command takes the genre from the page's file-name prefix: plan, understanding, sitrep, debug, explain or waiting.
   A linked page whose name has no such prefix is not checked.
   When an assertion fails, the command prints each FAIL line and stores nothing.
-- The reader restates the decision, the line's state, the options with your recommendation, and the evidence links.
-  It also names the kind of step.
-- When the command prints these restatements, it stored nothing.
 - Compare each restatement with your intent:
   - When a part reads NOT STATED, reads FOLDED, or differs from your intent, revise the item.
     The user then reads each option where the page shows it.
   - When the reader names an undoable step, check that the item holds no decision that only the user makes.
     Then remove the item, and carry out the step on your recommendation.
     The list then holds only what the next milestone needs from the user.
-- Then run the command again.
-- The command stores the status when the reader has read every item as it stands.
-- The command prints the stored session status.
-- The printout also holds `now_chars` and `now_over_budget`.
-- When `now_over_budget` is true, shorten **Now** and set it again.
+- Run the command again. It stores the status once the reader has read every item as it stands, and prints the
+  stored session status with `now_chars` and `now_over_budget`. Shorten **Now** and set it again when
+  `now_over_budget` is true.
 - `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan
   link and names the newest file.
 - After a context reset, read the session status with `charliebot web status show`.

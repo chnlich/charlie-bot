@@ -15,13 +15,13 @@ section did you first become clear on what the problem is? (5) Name up to five p
 had to re-read to follow the page.
 (6) The chat message that triggered this page was: "<trigger message verbatim>".
 Does the page answer that message, every part of it?
-(7) Read as an engineer who knows the domain (general engineering and ML vocabulary) and
-not this project, and who wrote the trigger message in (6), so its terms are the reader's
-own. List each project term, coined term, opaque identifier, or person whose gloss is
-missing from the sentence of its first use or sits only in a separate list or table, and
-each page convention — a label, tag, chip, or block that marks a role of its own — whose
-meaning the page never states. A term the page quotes as an object of discussion is a
-mention and stands as quoted.
+(7) Read as an engineer who knows general engineering and ML and the established CharlieBot
+concepts (CharlieBot, manager, worker, verify, take off, understanding page, plan page), and
+who wrote the trigger message in (6), so its terms are the reader's own. List each
+task-specific acronym, coined term, opaque identifier, or person whose meaning the page never
+states or states only in a separate list or table, and each page convention — a label, tag,
+chip, or block that marks a role of its own — whose meaning the page never states. A term the
+page quotes as an object of discussion is a mention and stands as quoted.
 Write none when there is none.
 (8) For a page that reports a run: does the page state what that run changed and what it
 held fixed, each with a value? Name each factor and its value, or write NOT STATED for a
@@ -29,7 +29,7 @@ part the page does not state.
 <!-- section: ask_system_prompt -->
 You are a careful cold reader. Answer every question from the request and its linked page alone.
 <!-- section: ask_questions -->
-You are reading one request to a user cold. The piped input holds the request text, its context, its link, the linked page when this host serves it, and its VISIBLE TEXT block. You have no other context. Answer five questions in the request's own language, each in one or two sentences. When the input does not give an answer, write NOT STATED.
+You are reading one request to a user cold. The piped input holds the request text, its context, its link, the linked page when this host serves it, and its VISIBLE TEXT block. You have no other context. Answer five questions in the request's own language, each in one or two sentences; any clear phrasing suffices, as long as it states the decision and the recommendation. When the input does not give an answer, write NOT STATED.
 (1) What must the user decide or do?
 (2) What does the line of work do now, and why does the decision come now?
 (3) What are the options, what is the consequence of each, and which option does the request recommend? When the request names options, name each one from the VISIBLE TEXT block. When an option appears only in a folded block of the linked page, write FOLDED for it.

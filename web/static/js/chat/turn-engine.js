@@ -14,30 +14,31 @@
   // separator message ids). Spacer heights come from measurements once a turn
   // has materialized, from estimates otherwise, with scroll position corrected
   // whenever a measurement refines an estimate above the viewport. Every
-  // height is a layout extent — the row's border-box height plus the row's
-  // own margin-top (the container's space-y-3 row gap) — so spacer sums
+  // height is a layout extent: the row's border-box height plus the row's
+  // own margin-top (the container's space-y-3 row gap). Spacer sums then
   // equal the space the rows they stand for occupied.
   //
   // Scroll-path frames (rAF after a scroll event, inside the trailing
   // scroll-activity window) do only window bookkeeping, batched
   // measure-then-mutate DOM work, spacer updates and READY-fragment swaps.
-  // The pre-render queue starts no new slice while scroll is active and never
-  // uses a forcing requestIdleCallback timeout; unready turns entering the
-  // window appear as estimated-height placeholder rows and are replaced when
-  // ready. Queue order is nearer-to-viewport first; a manual fold-open jumps
+  // The pre-render queue starts no new slice while scroll is active, and it
+  // never uses a forcing requestIdleCallback timeout. Unready turns entering
+  // the window appear as estimated-height placeholder rows and are replaced
+  // when ready. Queue order is nearer-to-viewport first; a manual fold-open jumps
   // the queue and renders that single turn synchronously.
   //
   // The For-you view is a second projection of the same store, chosen per
-  // engine: a flat list of the shown messages in place, or one empty-state row
-  // when none shows, and no window, spacers or measurements. The store and the
-  // turn registry carry across a view switch; only the DOM is rebuilt.
+  // engine. It is a flat list of the shown messages in place, or one
+  // empty-state row when none shows, with no window, spacers or measurements.
+  // The store and the turn registry carry across a view switch; only the DOM
+  // is rebuilt.
   // ---------------------------------------------------------------------------
   const VIEW_EVERYTHING = 'everything';
   const VIEW_FOR_YOU = 'foryou';
   const WINDOW_MARGIN_SCREENS = 2;
-  // Safety bound, not the operative policy: the ±2-screen margins size the
-  // window in pixels, and the cap only binds when rows are so thin that even
-  // the margins hold more turns than this (small viewports, 4k screens). If
+  // Safety bound, not the operative policy. The ±2-screen margins size the
+  // window in pixels. The cap only binds when rows are so thin that even the
+  // margins hold more turns than this (small viewports, 4k screens). If
   // the cap binds where it shouldn't, its smaller window also collapses the
   // scroll hysteresis runway and forces a migration per wheel impulse.
   const MAX_WINDOW_TURNS = 256;
@@ -45,10 +46,11 @@
   const FRAME_BUDGET_MS = 16.7;
   const FOLDED_ROW_DEFAULT_EST = 30;
   // Pre-measurement row gap: the margin-top the container's `space-y-3` rule
-  // gives every non-first, non-hidden row (.space-y-3 > :not([hidden]) ~
-  // :not([hidden]) { margin-top: 0.75rem } in tailwind.css — 12px at the
-  // default root font size). measureSegment replaces it with the measured
-  // margin-top of the first measured row.
+  // gives every non-first, non-hidden row. The selector is
+  // `.space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.75rem }` in
+  // tailwind.css, and 0.75rem is 12px at the default root font size.
+  // measureSegment replaces it with the measured margin-top of the first
+  // measured row.
   const ROW_GAP_EST = 12;
   const OPEN_BASE_EST = 64;
   const LINE_HEIGHT_EST = 21;
@@ -88,9 +90,9 @@
   }
 
   // The 9953270 rule over message JSON, computed by the one shared span rule
-  // (shared.js): any separator-terminated span with a non-empty body is a
-  // turn; its own inputs sit before its first assistant message, later
-  // stimuli are carried out to the next span, and the fold holds the work
+  // (shared.js). Any separator-terminated span with a non-empty body is a
+  // turn. Its own inputs sit before its first assistant message, and later
+  // stimuli are carried out to the next span. The fold holds the work
   // between the first assistant message and the conclusion. An empty-body
   // bare separator stays flat.
   function describeSpan(span) {
@@ -170,9 +172,9 @@
       this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
       // the front, a live message at the back. attach derives the segments from
-      // it; Everything projects their order, while For you projects this store
-      // directly, so its rows stay in server order where the shared span rule
-      // carries an input out of the turn that shows it.
+      // it. Everything projects their order, while For you projects this store
+      // directly. Its rows therefore stay in server order, where the shared
+      // span rule carries an input out of the turn that shows it.
       this.entries = [];
       // Event ids can identify distinct message rows, so records include the display fields.
       this.messageRecords = new Set();
@@ -197,9 +199,9 @@
       // reads "pinned" inside the 150px band a reader paused in.
       this.pinnedIntent = true;
       // "Follow the next turn": the engine sets this at the end of every
-      // anchor restore that leaves the view at the bottom (a reply that fits
-      // the view lands there without the pin), so the next append re-arms
-      // the follow pin while late layout changes leave the restored position
+      // anchor restore that leaves the view at the bottom. A reply that fits
+      // the view lands there without the pin. The next append then re-arms
+      // the follow pin, while late layout changes leave the restored position
       // alone. Cleared by mount, by jumpToBottom, and by any genuine reader
       // scroll; engine write echoes and the browser's clamp over shrunk
       // content keep it.
@@ -209,8 +211,8 @@
       this.lastUserScrollTop = null;
       // The reading position: one content node's identity plus its offset
       // from the container's visible top. `readingAnchor` is maintained on
-      // every frame (the recovery input when a hidden container loses its
-      // scrollTop); `pendingAnchor` is a restore target that outlives single
+      // every frame, the recovery input when a hidden container loses its
+      // scrollTop. `pendingAnchor` is a restore target that outlives single
       // reprojections until the anchored node is back in the DOM.
       this.readingAnchor = null;
       this.pendingAnchor = null;
@@ -221,7 +223,7 @@
       this.lastRestoreClamp = null;
       this.rafScheduled = false;
       this.rafHandle = null;
-      // scrollHeight and scroll range at the last write or scroll event; an
+      // scrollHeight and scroll range at the last write or scroll event. An
       // upward event that arrives with a shrunk container or scroll range is
       // the browser's clamp of an out-of-range position, not the user's wheel.
       this.lastSeenScrollHeight = null;
@@ -238,7 +240,7 @@
       this.onScroll = () => this.handleScroll();
       container.addEventListener('scroll', this.onScroll, {passive: true});
       // Container size is a projection input, so the engine observes it
-      // itself: tab visibility flips and window/sidebar resizes all funnel
+      // itself. Tab visibility flips and window/sidebar resizes all funnel
       // into reproject('resize'), coalesced to one frame per burst on its own
       // scheduling flag (never the scroll flag). Runtimes without
       // ResizeObserver install nothing and project on scroll alone.
@@ -312,7 +314,7 @@
 
     // Closes one separator-terminated span into its segment. Entries a later
     // round will handle (the shared rule's carry) leave the segment here and
-    // come back as `carried`: deriveSegments seeds the next span with them,
+    // come back as `carried`. deriveSegments seeds the next span with them,
     // appendMessage drops them into a new pending flat tail, and the
     // pagination merge feeds them to the following settled segment.
     closeSpan(span) {
@@ -323,10 +325,10 @@
       const carriedSet = new Set(turn.carried);
       const entries = span.filter((entry) => !carriedSet.has(entry));
       const foldEntries = turn.fold.slice();
-      // The fold counts and folds this segment's own entries: installTurnFold
+      // The fold counts and folds this segment's own entries. installTurnFold
       // uses the first fold entry as its insertion reference inside the wrap
-      // being built, so an entry outside `entries` would point at a node
-      // another segment owns and throw only when the turn opens. The shared
+      // being built. An entry outside `entries` would point at a node another
+      // segment owns and throw only when the turn opens. The shared
       // rule guarantees the fold is disjoint from the carry — a rule change
       // that breaks that fails here, at derivation, not deep in buildTurnWrap.
       for (const entry of foldEntries) {
@@ -563,7 +565,7 @@
     measureSegment(seg, el) {
       // The measured height is the layout extent: the border box plus the
       // row's own margin-top. The margin reads as the gap between the row's
-      // box and its predecessor's bottom edge — every row and spacer has
+      // box and its predecessor's bottom edge. Every row and spacer has
       // margin-bottom 0, so the gap is the row's margin-top; a first child
       // carries no space-y-3 margin.
       const rect = el.getBoundingClientRect();
@@ -578,7 +580,7 @@
       this.stats.measuredTurnCount++;
       if (el.classList.contains('turn-placeholder')) return height;
       // The measurement belongs to the materialization the node was built
-      // for, not to the current open state: a manual collapse swaps an open
+      // for, not to the current open state. A manual collapse swaps an open
       // wrap for a folded row, and recording the outgoing open wrap's 400px
       // into the folded table would poison every folded-row height with it.
       const parts = (seg.cachedSig || '').split(':');
@@ -725,8 +727,8 @@
     }
 
     isPinned() {
-      // The height model counts every row's layout extent, so the browser's
-      // real scroll range exceeds it only by the tail no segment owns — the
+      // The height model counts every row's layout extent. The browser's real
+      // scroll range therefore exceeds it only by the tail no segment owns: the
       // container's padding and the streaming fixture. Pinning to the model
       // would still leave that tail unreachable, so the pin reads geometry.
       const el = this.container;
@@ -760,7 +762,7 @@
       this.ensureOffsets();
       // A resize that finds the viewport away from the reading position has
       // lost its scroll state (the browser resets scrollTop across
-      // display:none): re-enter at the reading anchor's segment before
+      // display:none). Re-enter at the reading anchor's segment before
       // projecting, and make its exact viewport offset the restore target.
       // This runs before the fresh capture below, which would otherwise
       // anchor whatever sits at the reset scrollTop.
@@ -775,14 +777,14 @@
       }
       // The reading position is re-read only when the reader themselves moved
       // (a scroll frame). Every other frame mutates the DOM around the
-      // reader — prerender materialization shifts content by the estimate
-      // error, a reset re-derives the whole store, a manual collapse swaps an
-      // open wrap for a fold row — and a capture here would bake the
+      // reader. Prerender materialization shifts content by the estimate
+      // error, a reset re-derives the whole store, and a manual collapse
+      // swaps an open wrap for a fold row. A capture here would bake the
       // mid-mutation viewport into the anchor, abandoning the message the
       // reader was actually holding. A collapse that re-captured would be
       // worse: it would re-anchor whatever row the previous collapse's clamp
-      // left at the top edge, so repeated collapse-and-reopen drifts the
-      // place one turn per fold and the reader's message ends screens away.
+      // left at the top edge. Repeated collapse-and-reopen then drifts the
+      // place one turn per fold, and the reader's message ends screens away.
       // Those frames restore the existing anchor instead (the branch below);
       // the recovery path after a hidden container reads the same preserved
       // anchor. While the anchor's turn hides its message, its fold row
@@ -806,8 +808,8 @@
           return;
         }
       }
-      // Every follow decision reads the user's intent, never live geometry:
-      // geometry still reports "pinned" inside the 150px band a reader paused
+      // Every follow decision reads the user's intent, never live geometry.
+      // Geometry still reports "pinned" inside the 150px band a reader paused
       // in, which is what let appends, stream growth and resizes yank a
       // reader back down. 'scroll' keeps geometry for its range choice only —
       // the user is mid-gesture, and their motion already set the intent.
@@ -819,12 +821,12 @@
       const snapToBottom = wasPinned && reason !== 'scroll';
       // At the pinned bottom the browser's scrollTop still sits outside the
       // height model by the tail no segment owns (container padding,
-      // streaming fixture), so the pinned range is derived from the model's
-      // own offsets — stable by construction.
+      // streaming fixture). The pinned range is derived from the model's
+      // own offsets, which is stable by construction.
       const range = wasPinned ? this.pinnedRange() : this.computeTargetRange();
       // The restore target's segment stays projected even when the update
-      // shrank the content above the reader (a manual collapse): without it
-      // the anchor node cannot come back and the position is lost until the
+      // shrank the content above the reader (a manual collapse). Without it
+      // the anchor node cannot come back, and the position is lost until the
       // reader scrolls blind through collapsed rows.
       const restoreTarget = snapToBottom
         ? null
@@ -956,9 +958,10 @@
     }
 
     // Browser scroll events arrive asynchronously, so the engine's own
-    // corrections mark their value target: an event whose scrollTop equals the
-    // last programmatic write is the echo of that write, not user activity —
-    // it must not pause the pre-render queue nor kick a redundant reproject.
+    // corrections mark their value target. An event whose scrollTop equals
+    // the last programmatic write is the echo of that write, not user
+    // activity. It must not pause the pre-render queue nor kick a redundant
+    // reproject.
     writeScrollTop(value) {
       this.container.scrollTop = value;
       this.lastProgrammaticScrollTop = this.container.scrollTop;
@@ -976,12 +979,12 @@
       const height = this.container.scrollHeight;
       const shrank = this.lastSeenScrollHeight != null
         && height < this.lastSeenScrollHeight - 0.5;
-      // The scroll range itself can shrink under a stationary bottom reader:
-      // the viewport growing (the status strip hiding, a window resize) pulls
+      // The scroll range itself can shrink under a stationary bottom reader.
+      // The viewport growing (the status strip hiding, a window resize) pulls
       // maxScroll down and the browser clamps the pinned position up to it.
-      // That event reads upward with the content unshrunk — the same clamp,
-      // and not the reader's wheel, when the old position sat at the old range
-      // and the reported one at the new.
+      // That event reads upward with the content unshrunk: the same browser
+      // clamp, not the reader's wheel. It happens when the old position sat
+      // at the old range and the reported one at the new.
       const max = height - this.container.clientHeight;
       const rangeShrank = this.lastSeenMaxScrollTop != null
         && max < this.lastSeenMaxScrollTop - 0.5;
@@ -998,12 +1001,12 @@
       // content is not the reader's motion and keeps it — the same ruling the
       // pin intent below applies.
       if (!((shrank || rangeClamp) && prev != null && top < prev - 0.5)) this.followNextTurn = false;
-      // Pin intent follows the user's motion, not the 150px geometry band: any
-      // upward scroll stops the follow (a 100px wheel-up from the bottom sits
-      // inside the band but is still reading), and only a downward scroll that
-      // reaches the band re-arms it. An upward event over shrunk content is
-      // the browser clamping an out-of-range position after an update — the
-      // reported mount-time unpin — and says nothing about the user's wheel.
+      // Pin intent follows the user's motion, not the 150px geometry band.
+      // Any upward scroll stops the follow (a 100px wheel-up from the bottom
+      // sits inside the band but is still reading). Only a downward scroll
+      // that reaches the band re-arms it. An upward event over shrunk content
+      // is the browser clamping an out-of-range position after an update —
+      // the reported mount-time unpin — and says nothing about the user's wheel.
       if (prev != null && top < prev - 0.5 && !(shrank || rangeClamp)) {
         this.pinnedIntent = false;
         if (typeof showScrollToBottom === 'function') showScrollToBottom();
@@ -1035,9 +1038,9 @@
     }
 
     // ---- lifecycle -----------------------------------------------------------
-    // `options.pinned: false` mounts a reader who is mid-history: the window
+    // `options.pinned: false` mounts a reader who is mid-history. The window
     // projects around `options.readingAnchor` (a captureReadingAnchor() value
-    // taken from the view this mount replaces) and the anchor's viewport
+    // taken from the view this mount replaces), and the anchor's viewport
     // offset is restored once its segment is real. Default mount stays
     // bottom-pinned.
     mount(messages, options = {}) {
@@ -1116,8 +1119,8 @@
     }
 
     // The fold-open rule applied to mounts: one synchronously rendered turn
-    // puts the anchored node in the DOM immediately, so the reader's exact
-    // position restores at mount instead of waiting for idle slices.
+    // puts the anchored node in the DOM immediately. The reader's exact
+    // position then restores at mount instead of waiting for idle slices.
     renderAnchorSegmentSync(anchor) {
       const segIndex = this.segmentIndexOfAnchor(anchor);
       if (segIndex < 0) return;
@@ -1181,8 +1184,8 @@
     // ---- For-you view -------------------------------------------------------
     // The list reads the store flat: each shown message's own node in place, or
     // one empty-state row when no message shows. A node the store already built
-    // is the node the list shows, and the list's children are compared before
-    // the container changes, so a stream paint that moves nothing writes nothing.
+    // is the node the list shows. The list's children are compared before the
+    // container changes, so a stream paint that moves nothing writes nothing.
 
     // Leaving Everything keeps the reader's place; entering For you pins the
     // bottom, where the newest message is, on the first entry only. Each view's
@@ -1195,10 +1198,10 @@
       if (this.view === VIEW_EVERYTHING) this.everythingPlace = this.readingPlace();
       else this.forYouPlace = this.readingPlace();
       this.view = view;
-      // The pagination sentinel is a page fixture the attach wipe drops; a
+      // The pagination sentinel is a page fixture the attach wipe drops. A
       // same-session switch hands it to attach, which puts it back first,
-      // before the projection that runs the page's check (that check looks the
-      // sentinel up by id and would create a second one). Each projection then
+      // before the projection that runs the page's check. That check looks the
+      // sentinel up by id and would create a second one. Each projection then
       // keeps it first (the For-you list leads with it). A worker page's
       // sentinel is the engine's own (holdWorkerSentinel), which attach places.
       const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
@@ -1219,7 +1222,7 @@
 
     // Writes a saved place back without remounting the list. A pinned place
     // needs nothing — the engine kept following the new messages. A historical
-    // place restores its anchor; when the anchored node is not in the DOM yet,
+    // place restores its anchor. When the anchored node is not in the DOM yet,
     // the anchor waits in pendingAnchor and the next projection completes it,
     // as attach does.
     restoreReadingPlace(place) {
@@ -1337,10 +1340,10 @@
 
     // Whether a node carries a layout box. A display:none row (a collapsed
     // N-steps band's messages, the hidden stream holder) has none: its rect
-    // reads (0, 0), so a rect scan would take it for a node pinned to the
-    // viewport's top edge and anchor an offset that tracks the container's
-    // top instead of the content. Only a laid-out node holds a reading
-    // position.
+    // reads (0, 0). A rect scan would therefore take it for a node pinned to
+    // the viewport's top edge, and anchor an offset that tracks the
+    // container's top instead of the content. Only a laid-out node holds a
+    // reading position.
     hasLayoutBox(el) {
       for (let n = el; n; n = n.parentElement) {
         if (n.classList && n.classList.contains('hidden')) return false;
@@ -1370,7 +1373,7 @@
 
     // ---- reading position -----------------------------------------------------
     // The reader's place is one content node's identity plus its offset from
-    // the container's visible top. Message nodes are the precise anchor; a
+    // the container's visible top. Message nodes are the precise anchor. A
     // turn wrap is the fallback when the top edge sits on a fold row or a
     // placeholder (identities survive re-materialization through their
     // data attributes). All measurements are live-rect deltas, so container
@@ -1394,8 +1397,8 @@
       if (this.view === VIEW_FOR_YOU) return this.captureForYouAnchor();
       if (!this.segments.length) return null;
       const cTop = this.container.getBoundingClientRect().top;
-      // The top-edge segment is read off the real boxes, in segment order:
-      // the height model carries estimates for never-materialized turns, so
+      // The top-edge segment is read off the real boxes, in segment order.
+      // The height model carries estimates for never-materialized turns, so
       // the model segment at scrollTop can sit screens away from the content
       // the reader actually sees at the top edge.
       const rendered = [];
@@ -1454,10 +1457,10 @@
       return this.writeRestoreDelta(target, top);
     }
 
-    // Viewport-relative top of the fold row standing in for a hidden message:
-    // a manual collapse replaced the message's turn body with the row, so
-    // the row is the position that carries the reader's place until the turn
-    // reopens and the message returns to it. Null when
+    // Viewport-relative top of the fold row standing in for a hidden message.
+    // A manual collapse replaced the message's turn body with the row, so the
+    // row is the position that carries the reader's place. That position lasts
+    // until the turn reopens and the message returns to it. Null when
     // no row stands in (placeholder period, segment out of the window) — the
     // restore keeps waiting instead.
     foldRowTopForAnchor(target) {
@@ -1471,9 +1474,9 @@
     }
 
     // One restore write: move the positioned element back to the anchor's
-    // viewport offset, and record the browser's clamp whenever the scroll
-    // range cannot deliver that offset (a fold collapsed the document the
-    // offset was measured against). The record is evidence, not state.
+    // viewport offset. Record the browser's clamp whenever the scroll range
+    // cannot deliver that offset (a fold collapsed the document the offset
+    // was measured against). The record is evidence, not state.
     writeRestoreDelta(target, top) {
       const delta = top - this.container.getBoundingClientRect().top - target.offset;
       if (delta) {
@@ -1498,7 +1501,7 @@
       return true;
     }
 
-    // True when the anchored node is merely out of the DOM for now — its
+    // True when the anchored node is merely out of the DOM for now. Its
     // segment is projected as a placeholder (or not yet projected) and will
     // carry the node again. False when the update removed the content. A
     // folded segment is neither: its fold row carries the reader's place and
@@ -1515,7 +1518,7 @@
       this.followNextTurn = false;
       this.pendingAnchor = null;
       // Project as a pinned frame: the pinned range brings the trailing
-      // segments into the DOM and the pin branch snaps the scroll position
+      // segments into the DOM. The pin branch then snaps the scroll position
       // to the bottom through writeScrollTop, whose echo stays an echo.
       this.reproject('jump');
     }
@@ -1547,9 +1550,9 @@
       this.pendingAnchor = captured && captured.kind === 'message'
         ? captured
         : (this.pendingAnchor && this.pendingAnchor.kind === 'message' ? this.pendingAnchor : captured);
-      // Pagination never flips the follow pin by itself: a pinned reader is at
+      // Pagination never flips the follow pin by itself. A pinned reader is at
       // the bottom and stays there while older content lands above (the
-      // mount-time fill), and a reader inside history already unpinned
+      // mount-time fill). A reader inside history already unpinned
       // themselves with their wheel.
 
       this.ensureOffsets();
@@ -1557,10 +1560,10 @@
 
       const firstPage = this.deriveSegments(fresh);
       // Insert the page's settled prefix first. The page tail must then be
-      // merged with the existing leading segment after that prefix; using
-      // index 0 here would merge it back into the page's newest turn and lose
-      // the tail when an archived page contains both complete and partial
-      // spans.
+      // merged with the existing leading segment after that prefix. Using
+      // index 0 here would merge it back into the page's newest turn, and
+      // lose the tail when an archived page contains both complete and
+      // partial spans.
       this.segments.splice(0, 0, ...firstPage.segments);
       let boundaryIndex = firstPage.segments.length;
       let region = firstPage.tailSpan.slice();
@@ -1700,8 +1703,8 @@
   // ---------------------------------------------------------------------------
   // Separator panels: a package's panel that opens right after a turn's
   // separator line. A package registers its kind ({panelClass, toggleSelector,
-  // toggle(btn, sessionId, eventIndex)}) when its script loads, and opens and
-  // closes the panel through the tracked toggle it gets back: after the toggle
+  // toggle(btn, sessionId, eventIndex)}) when its script loads. It opens and
+  // closes the panel through the tracked toggle it gets back. After the toggle
   // runs, the active engine records the panel's open state, and it reopens the
   // panel when the turn re-materializes.
   // ---------------------------------------------------------------------------
@@ -1736,8 +1739,8 @@
   // The page's projection check (sidebar/session-view.js) registers once when
   // that script loads. The engine calls it with the container at the end of
   // every projection that ran, so the page learns each moment the list's height
-  // can have changed: a mount, a view switch, a resize, a landed page. A page
-  // that registers no check projects as before.
+  // can have changed. Such a moment is a mount, a view switch, a resize or a
+  // landed page. A page that registers no check projects as before.
   let projectionCheck = null;
   function registerProjectionCheck(check) {
     if (projectionCheck) throw new Error('A projection check is already registered');

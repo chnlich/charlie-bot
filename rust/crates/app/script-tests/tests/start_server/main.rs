@@ -518,12 +518,13 @@ fn replace_text(path: &Path, old: &str, new: &str) {
 /// cleanup when this process is killed and no guard runs. The launcher gets SIGINT's default action, because the
 /// test sends SIGINT to the whole group.
 fn start_launcher(env: &Env) -> ProcessGroup {
-  // The watchdog's `$$` is its pid, and as group leader its group id. It ignores the group's SIGINT.
-  const WATCHDOG: &str = "trap '' INT; read _; kill -KILL -- -$$";
+  // The watchdog's `$$` is its pid, and as group leader its group id. It ignores the group's SIGINT. `kill -s` is the
+  // spelling dash, the /bin/sh of Debian and Ubuntu, accepts with a group id.
+  const WATCHDOG: &str = "trap '' INT; read _; kill -s KILL -- -$$";
   // Both ends are close-on-exec and the write end is kept here alone, so no child holds it past exec: the read ends
   // exactly when this process's write end drops.
   let (reader, writer) = std::io::pipe().expect("the watchdog's pipe");
-  let mut watchdog = Command::new("bash");
+  let mut watchdog = Command::new("/bin/sh");
   watchdog
     .args(["-c", WATCHDOG])
     .stdin(Stdio::from(reader))

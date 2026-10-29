@@ -1273,8 +1273,6 @@ dependencies = [
  "futures-util",
  "ignore",
  "libc",
- "memchr",
- "memmap2",
  "nix",
  "regex",
  "serde",

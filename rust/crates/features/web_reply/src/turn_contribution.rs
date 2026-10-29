@@ -380,10 +380,11 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_pending_close_request_skips_only_the_status_reminder() {
+  async fn a_pending_close_request_skips_the_status_reminder_and_the_nudge() {
     for missing_reply in [false, true] {
       let home = Home::new();
       let sid = home.manager("session", None).await;
+      home.launch_run(&sid, "run-1");
       let mut input_ids: Vec<String> = Vec::new();
       if missing_reply {
         let user = home.append(&sid, user_event("the question")).await;
@@ -397,7 +398,7 @@ mod tests {
       after_turn(&home, &sid, &done_with_id(&input_refs, "turn-1")).await;
 
       assert!(status_reminders(&home, &sid).is_empty(), "missing reply {missing_reply}");
-      assert_eq!(home.nudges(&sid).len(), usize::from(missing_reply), "missing reply {missing_reply}");
+      assert!(home.nudges(&sid).is_empty(), "missing reply {missing_reply}");
     }
   }
 

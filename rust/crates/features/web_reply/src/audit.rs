@@ -4,7 +4,8 @@
 //! The status reminder covers every finished turn of an open task, background turns included. A turn that ran
 //! `charliebot web status set` or `charliebot web status confirm` needs no reminder, and neither does a turn that a
 //! status reminder woke. The reply nudge covers a turn that answered a user message without a web reply. When one
-//! turn misses both, one combined reminder covers both and wakes one turn.
+//! turn misses both, one combined reminder covers both and wakes one turn. A turn that leaves a close request pending
+//! gets neither a reminder nor a nudge, since a run the server starts would void that request.
 //!
 //! Each step leaves a log marker (the status reminder, the nudge, the notice), so each happens at most once per turn
 //! or user message.
@@ -19,7 +20,6 @@ use charliebot_core::event_types::{
 };
 use charliebot_registry::FeatureContext;
 use charliebot_store::MessageProvenance;
-use charliebot_store::TaskFacts;
 use charliebot_store::compact::CompactValue;
 use charliebot_tasks::master_trigger::{TriggerMasterRequest, trigger_master};
 use serde_json::{Value, json};
@@ -52,7 +52,8 @@ pub fn is_status_reminder(event: &impl EventFields) -> bool {
 ///
 /// The status reminder needs a session that is not archived, an open task, no pending close request, a turn without a
 /// status event and a turn that no status reminder woke. The reply step is [`audit_reply`]'s. A turn that needs both
-/// gets one combined reminder and one wake.
+/// gets one combined reminder and one wake. A turn that leaves a close request pending gets neither a reminder nor a
+/// nudge: a run that the server starts would void the request.
 pub async fn audit_turn(
   features: &Arc<FeatureContext>,
   session_id: &str,
@@ -61,7 +62,9 @@ pub async fn audit_turn(
 ) -> anyhow::Result<()> {
   let input_ids = features.store.master_done_input_event_ids(done);
   let loaded = reply::load_events(features, session_id).await?;
-  let status_needed = !archived && status_reminder_needed(features, session_id, done, &input_ids, &loaded).await?;
+  let pending_close = close_request_pending(features, session_id).await?;
+  let status_needed =
+    !archived && status_reminder_needed(features, session_id, done, &input_ids, &loaded, pending_close).await?;
   let (action, user_event_id) = reply_action(&loaded, &input_ids);
   let turn_id = done.get("id").and_then(Value::as_str);
   match (status_needed, action) {
@@ -77,8 +80,10 @@ pub async fn audit_turn(
       }
     }
     (false, ReplyAction::Nudge) => {
-      let user_event_id = user_event_id.expect("a reply nudge names the user message it answers");
-      nudge(features, session_id, &user_event_id).await?;
+      if !pending_close {
+        let user_event_id = user_event_id.expect("a reply nudge names the user message it answers");
+        nudge(features, session_id, &user_event_id).await?;
+      }
     }
     (false, ReplyAction::Notice) => {
       let user_event_id = user_event_id.expect("a reply notice names the user message it answers");
@@ -188,14 +193,24 @@ fn woken_by_status_reminder(loaded: &[charliebot_store::SharedChatEvent], input_
   })
 }
 
-/// Whether the task holds a close request that no close event has answered (`audit._has_pending_close_request`).
-fn has_pending_close_request(facts: &TaskFacts) -> bool {
-  let closed: HashSet<Option<&str>> =
-    facts.close_events.iter().map(|event| event.get("request_id").and_then(CompactValue::as_str)).collect();
-  facts.close_requests.iter().any(|request| {
-    let request_id = request.get("request_id").and_then(CompactValue::as_str);
-    !closed.contains(&request_id)
+/// Whether the session's newest run left a close request pending (`audit._has_pending_close_request`). A request that a
+/// later run owns was voided by the wake that started that run, so it does not count.
+async fn close_request_pending(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<bool> {
+  let store = Arc::clone(&features.store);
+  let session = session_id.to_string();
+  tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+    let facts = store.facts_of(&session)?;
+    let newest = store.newest_run_record_sync(&session)?;
+    let newest_run_id = newest.as_ref().map(|run| run.id.as_str());
+    let closed: HashSet<Option<&str>> =
+      facts.close_events.iter().map(|event| event.get("request_id").and_then(CompactValue::as_str)).collect();
+    Ok(facts.close_requests.iter().any(|request| {
+      let request_id = request.get("request_id").and_then(CompactValue::as_str);
+      request.get("owner_run_id").and_then(CompactValue::as_str) == newest_run_id && !closed.contains(&request_id)
+    }))
   })
+  .await
+  .context("the task-tree read stopped")?
 }
 
 /// Whether one turn needs one status reminder (`audit._status_reminder_needed`).
@@ -205,20 +220,17 @@ async fn status_reminder_needed(
   done: &Value,
   input_ids: &[String],
   loaded: &[charliebot_store::SharedChatEvent],
+  pending_close: bool,
 ) -> anyhow::Result<bool> {
   let store = Arc::clone(&features.store);
   let session = session_id.to_string();
-  let (state, facts) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-    let state = store.task_state(&session)?.to_string();
-    let facts = store.facts_of(&session)?;
-    Ok((state, facts))
-  })
-  .await
-  .context("the task-tree read stopped")??;
+  let state = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok(store.task_state(&session)?.to_string()) })
+    .await
+    .context("the task-tree read stopped")??;
   if state != "open" {
     return Ok(false);
   }
-  if has_pending_close_request(&facts) {
+  if pending_close {
     return Ok(false);
   }
   if status_recorded(turn_events(loaded, done)) {
@@ -383,5 +395,40 @@ mod tests {
       .map(|event| event[WEB_REPLY]["answers"].clone())
       .collect();
     assert_eq!(answers, vec![json!(id_of(&user))]);
+  }
+
+  #[tokio::test]
+  async fn a_close_request_that_a_later_run_voided_gates_nothing() {
+    // The newest run owns the live request. The request of an older run was voided by the wake that started it, so it
+    // must not hold the session's audit: the status reminder and the nudge still apply.
+    let home = Home::new();
+    let stale = home.manager("stale", None).await;
+    let control = home.manager("control", None).await;
+    home.launch_run(&stale, "run-1");
+    home
+      .append(
+        &stale,
+        json!({
+          "type": charliebot_core::event_types::TASK_CLOSE_REQUESTED,
+          "request_id": "close-1",
+          "owner_run_id": "run-0",
+          "summary": "page delivered",
+          "result_refs": [],
+          "run_ids": [],
+        }),
+      )
+      .await;
+    let mut turns = Vec::new();
+    for session in [&stale, &control] {
+      let user = home.append(session, user_event("the question")).await;
+      turns.push((session.clone(), master_done(&[id_of(&user)], 0)));
+    }
+
+    for (session, done) in &turns {
+      audit_turn(&home.features, session, done, false).await.expect("the audit runs");
+    }
+
+    assert_eq!(home.nudges(&stale).len(), 1, "a voided close gates nothing");
+    assert_eq!(home.nudges(&control).len(), 1, "without a close request the turn is nudged");
   }
 }

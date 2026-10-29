@@ -126,6 +126,14 @@ impl Home {
   }
 
   /// Names the input events the running turn answers, for every session.
+  /// Writes a manager run record that the store lists as the session's newest run.
+  pub fn launch_run(&self, session_id: &str, run_id: &str) {
+    let run_path = self.features.store.run_metadata_path(session_id, run_id);
+    std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run = json!({"id": run_id, "session_id": session_id, "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+    std::fs::write(&run_path, run.to_string()).expect("run record");
+  }
+
   pub fn set_running(&self, input_event_ids: &[&str]) {
     let ids = input_event_ids.iter().map(|id| id.to_string()).collect();
     *self.running.lock().expect("the stub lock is never poisoned") = ids;

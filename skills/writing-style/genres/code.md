@@ -21,8 +21,7 @@ implementing; master includes them as constraints in task specs.
   writing convention checks, point the checker at the authoritative
   definition rather than restating the rule and maintaining a second copy.
 - Phrase guidance as correct usage; reserve prohibition for hard invariants.
-  Keep prescriptive commands, fixed judgment categories, and named tools out
-  of agent-facing prompts; hard procedural constraints belong in the harness.
+  For rule text a model reads, follow the "Text a model reads" section of `prompts/master.md`.
 
 ## Code Style
 

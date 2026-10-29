@@ -168,11 +168,12 @@ Each item below is a signal to revise the page:
 - A re-read point in answer 5 names a decision fork (a div.fork block) in section 1, or a jump between a fork and another section.
 - A re-read point in answer 5 names the run, its variables, or the difference between the compared legs.
 
-Judge the answers on these signals alone.
-For each signal, revise the page in place.
+Revise each genuine clarity gap that these signals surface, and skip a false-positive flag on an established
+project or domain term.
+For each real gap, revise the page in place.
 For a plan, register the revision with `charliebot plan amend`.
 When a verify round runs, fold the cold-read revisions and the verify findings into one amend.
-In the reply, state the count of terms that answer 7 listed and the count that you glossed.
+Leave term-count tallies out of the chat reply.
 A revision from cold-read findings closes the gate. That revision gets no cold read.
 
 The cold-reader instructions and the eight questions live in `prompts/cold_read.md`.
@@ -184,32 +185,10 @@ that the user acts on. A derived number is a sum, a ratio, or a difference
 that the page computes. The cold read judges readability, and the source
 check judges the facts.
 
-- Before you share such a page, run the source check.
-- This applies to every page that you share, whatever its genre.
-- A plan page takes the verify round of the plan-approval skill in place of
-  the source check.
-- A page whose every statement reads a current value back from a system
-  (a count, a time, a status) keeps its genre checks only.
-
-To run the source check:
-
-1. Write the draft hand-over message to a file in your session's `specs/`
-   directory.
-2. Copy `source_check_spec.md` from this skill's directory into the same
-   directory.
-3. In the copy, replace `{page}` with the absolute page path. Replace
-   `{message}` with the absolute path of the draft message.
-4. Delegate the copy:
-
-       charliebot delegate --task-spec-file <copy> --task-type verify --keep-worktree 0
-
-5. End the turn. The report arrives as a wake.
-
-When the report arrives:
-
-- For each finding, use the value that the report gives, or label the claim
-  Open on the page.
-- A revision limited to these corrections closes the check. Then share the
-  page.
-- When a revision adds a cause, a mechanism, or a derived number, run the
-  source check again.
+- The page author or the worker that built the page verifies every cited `path:line` and derived number before
+  sharing, and corrects the page or labels the claim Open.
+- A plan page takes the verify round of the plan-approval skill in place of this check.
+- A page whose every statement reads a current value back from a system (a count, a time, a status) keeps its genre
+  checks only.
+- When a separate fact-check worker is wanted, `source_check_spec.md` in this skill's directory is an optional
+  reference template; delegating it never blocks sharing the page.

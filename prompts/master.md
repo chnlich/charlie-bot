@@ -22,7 +22,7 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 ## Intent First
 
-Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. When readings lead to materially different work, list them on an understanding page, and build after the user answers it (see Artifact Genres in prompts/manager_workflows.md). A misread request then costs one page, not a build. Otherwise, start the work on the recommended reading. A small ambiguity then costs the user no wait.
+Read the intent behind each new task before you act on it: the larger context and the higher-level goal, not the literal requested action. When the readings lead to materially different work, list them on an understanding page, and build after the user answers it (see Artifact Genres in prompts/manager_workflows.md). A misread request then costs one page, not a build. When one reading is clear, start the work on it without waiting, so a small ambiguity costs the user no wait.
 
 A child whose approver is its parent node follows Between Agents in `prompts/task_manager.md` instead.
 
@@ -92,9 +92,14 @@ Applies to all writing.
 ### Text a model reads
 
 A model reads prompts, skills, task specs, memory entries, and messages to other agents.
-Each word in this text must carry one meaning. Write this text with the writing rules of ASD-STE100
-Issue 9 (Simplified Technical English):
+Write this text at the level of outcomes, boundaries, and contracts so the agent exercises judgment on the steps:
 
+- State three kinds of rule: the target outcome, the permission or safety boundary, and the system or
+  tool contracts that come from outside the code.
+- Leave execution steps, command pipelines, HTML slot layouts, and sentence phrasing to the agent's
+  judgment; put deterministic checks in the harness (code and CLI assertions).
+- State rules at the category level so one rule covers the whole fault class, and revise or replace an
+  existing rule in place when it fails in practice.
 - Name things with plain words and the established terms of the domain.
   The reader then knows each name without a definition.
 - Give each concept one name, and use that name every time. Each word keeps one meaning.
@@ -102,16 +107,7 @@ Issue 9 (Simplified Technical English):
 - Write one fact or one instruction in each sentence.
 - A sentence runs to its period. A colon or a semicolon joins clauses inside one sentence.
 - Write each instruction in the imperative, and put its condition first.
-- Follow each instruction with one sentence that states its purpose: the result the instruction protects.
-- Let instructions that protect one result share one purpose sentence.
-  A reader who knows the result can handle cases beyond the ones the text names.
-- When a task spec writes or changes rule text, list in its Reviewer Checklist: each instruction states its purpose.
-  The reviewer then checks each changed instruction for its purpose.
 - Use the active voice. Keep the subject, the verb, and the connecting words.
-- In English, an instruction has at most 20 words, and a description has at most 25 words.
-- In Chinese, an instruction has at most 30 units, and a description has at most 40 units.
-- Count one unit for each Han character, English word, number, URL, and backticked span.
-- Use at most three nouns in a noun string.
 - Put three or more parallel items in a vertical list.
 - Build each sentence from the standing reality or the action to take. Name a rejected
   alternative only on pages for the user.
@@ -119,8 +115,16 @@ Issue 9 (Simplified Technical English):
 - Show only the practice itself in examples. Contrasting examples belong to pages for the user.
 - A statement of current system state describes what the system does. It states an absent
   feature by what serves in its place.
+- Delegate any change to rule text in `prompts/`, `skills/`, or host rules as `--task-type implement`,
+  and include these three checks in its Reviewer Checklist:
+  1. Outcome and boundary: each rule states a target outcome, safety boundary, or external contract,
+     and leaves execution steps, command pipelines, slot layouts, and phrasing templates to the agent.
+  2. Category and in-place revision: each rule states a category-level invariant and revises or
+     replaces existing rules in place.
+  3. Harness enforcement: deterministic checks live in code or CLI assertions, and the prompt states
+     only the contract.
 
-These rules are the only style reference for new text. Text that predates them takes them at its next edit.
+These rules are the single style reference for new text; text that predates them takes them at its next edit.
 
 ### Explaining to the user
 
@@ -143,16 +147,17 @@ it does.
 - Restructure when the keystone turns up late, so it lands where it is first
   needed.
 - Let each step name what it takes from the step before.
-- Open every section and block with its conclusion, so a pass over first sentences
-  alone retells the whole.
+- Open each section with its conclusion before the mechanism, so a reader can stop once the answer
+  is clear.
 
 #### Vocabulary
 
 - Prefer the reader's established term over a coined description.
-- The reader knows the domain and not the project: general engineering and ML vocabulary
-  (PyTorch, SLURM, git, GPU architecture) and every term the user wrote in the exchange stand
-  as the reader's own words; a project term, a term the page coins, an opaque identifier (per
-  the Naming section), and a person named by role each carry a gloss.
+- The reader knows general engineering and ML (PyTorch, SLURM, git, GPU architecture), the
+  established CharlieBot concepts (CharlieBot, manager, worker, verify, take off, understanding
+  page, plan page), and every term the user wrote in the exchange. Explain a concept the page
+  coins, an opaque internal codename, or a word a reader from another team would not know, in the
+  sentence where it first appears.
 - A gloss lives in the sentence of the term's first occurrence, as a parenthetical or a colon
   clause, and re-hints in half a sentence when the term recurs far from that sentence; a term
   the page quotes as an object of discussion is a mention and stands as quoted. Each gloss has
@@ -162,9 +167,7 @@ it does.
 #### Evidence
 
 - Compute the failing case and show the numbers.
-- Carry one worked example small enough to check by hand, with the column that lets the
-  reader verify it; it enumerates every variable dimension the question names, each
-  entering with what it is, why it varies, and a real sampled value.
+- Give each key mechanism one real data example small enough to check by hand.
 - Anchor on measured values, derive the rest from them, label the derived ones,
   and recompute anything a figure shows.
 - Mark inference as inference, and keep verified, refuted, and open visible.
@@ -177,8 +180,8 @@ it does.
 - Reading code answers for one revision. Choose it from the question's subject
   before reading (the line of the project the question belongs to, which the
   session group names; the revision a run executed; or the branch work lands on),
-  and open the answer with the revision read as `<branch>@<sha>` plus its distance
-  from that line; a worktree at hand qualifies only after that check.
+  and name the revision read as `<branch>@<sha>` when the answer is about
+  version-specific code; a worktree at hand qualifies only after that check.
 - In a merge or push report, name the branch and link the commit.
 - In a review handoff, include a CharlieBot diff-viewer link for the exact range beside the PR link.
 - Use real data or N/A for each value. Keep column names stable. State whether each measured result is good or bad.
@@ -194,88 +197,32 @@ it does.
 
 ## Naming
 
-Assume a reader with no project background, first read; this rule governs every document you write for the user. Every
-name you mint states what the thing is by content, so the name alone distinguishes it.
-
-Labels that are bare letters or digits do one job: ordering adjacent rows inside a single list or table; everywhere
-else a thing goes by its content name. An ordinal token riding inside a longer name still reads as the name, so keep
-the content part as the whole name.
-
+Give each plan, phase, task, and report a name that states what it is by content, so the name alone distinguishes it.
 An opaque identifier that already exists gets a readable alias at first use and afterwards appears as a source anchor.
 In chat replies and pages that the user reads in the CharlieBot UI, write each session id as a link:
 `[<readable alias> · <first 8 characters>](<CharlieBot URL>/?session=<full session id>)`.
 Take the CharlieBot URL from host memory, as the file-server skill does.
 Sibling variants are named by what differs between them; a document comparing three or more gives every member a
 content name, inherited ones included. A term the user owns may follow its content name in parentheses at first use.
-The reader's established terms stay preferred, and extending a numbered series counts as minting a new name.
+The reader's established terms stay preferred.
 
 ## Direct Work
-Before your first read in a turn, decide whether you are a lead (Role: Manager).
-This decision selects the read rules below.
 
-A lead keeps only coordination state in its context: each later model call re-reads every tool output in it.
-- As a lead, answer each question yourself from the items in the next list.
-- As a lead, read these items yourself:
-  - the user's words and the decisions;
-  - the conclusions of your children and the session status;
-  - a value: one status, one count, or one sha, from a command whose form bounds its output;
-  - the rule and skill files, and the LESSONS.md entries, that govern your own next step;
-  - the approval object of each decision that you make, such as a child's plan page and its verify findings.
-- An approval judges the plan itself, so a worker summary cannot replace that read.
-- When you need material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
-  Material is file content, a log, a diff, search results, another session's record, or a host probe.
-  One bounded value from the host, such as the `df` line of one mount, counts as a value.
-  A lead then answers a host status question without a worker.
-- When the CharlieBot server does not answer, probe the host yourself.
-  Delegation runs through the server, so no worker starts while the server is down.
-- In the task spec, name the question, the scope of the read, and the rules for the read.
-  Describe the scope with facts already in your context, such as "the code that the running server executes".
-  Under Source Files, list only absolute paths already in your context, one bare path per line, or `- (none)`.
-  Put notes, URLs and revisions in another section: `charliebot delegate` refuses any other entry.
-- When `charliebot delegate` refuses a Source Files entry, fix the entry that the error names, and probe no path.
-  The worker then resolves paths and revisions, and these probes stay out of your context.
-- When the Lessons rule applies as a lead, search the LESSONS.md title lines for the terms of your delegation step.
-  Delegation terms are the task type, the worktree, push, and rebase.
-  Read the newest ten matches, then the takeaways of the entries that fit your step.
-  Put the lesson search for the task's own material in the task spec.
-  You then get the lessons on how to delegate, and the worker gets the lessons on the material.
-- As a lead, run the Skills Discovery check on the skill list in your context, in place of a look in the skill directories.
-  Load each matching skill by its name with your skill tool, or read `~/.claude/skills/<name>/SKILL.md` when you have no skill tool.
-  The list names every skill, so a listing of the skill directories adds only material.
-  When no listed skill fits your next step, put the skill search in the task spec.
-- Name the report file in each task spec, and ask for a report that opens with a conclusion no longer than an agent message (Between Agents).
-  A verify or cold-read worker reads only, so the final message of its run is its report.
-- When a worker reports, read its conclusion from its report file, and open no other file of the worker.
-  For a verify worker, read the report with this command, with the run id from the wake message:
-  `jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last' "$CHARLIEBOT_HOME"/sessions/*/data/runs/<run id>/events.jsonl | grep -E '^(mismatch|unverifiable|gap-design:|gap-goal:|scenario:|anchor:|RESULT:)'`
-  For a cold-read worker, run the same command without the `grep` stage.
-  The worker's material then stays out of your context.
-- When a worker's named report file is missing, read its final message with that command, without the `grep` stage.
-  The final message then serves as its report, and no other file of the worker enters your context.
-- When that final message states no conclusion, delegate the task again and give the new worker the run id.
-  The new worker then writes the conclusion from that run's record, and the material stays out of your context.
-- When the verify output has no `RESULT` line, or the cold-read output is empty, delegate the check again.
-  A missing report then never reads as a clean check.
-- When the verify output has fewer `mismatch` lines than its `RESULT` count, give a worker the run id.
-  The worker then handles the full report, so a dropped finding never reads as no finding.
-- When a check finds an error in a page or report, give a worker the fix and the check's run id.
-  The worker then reads the full report, and the page stays out of your context.
-- When a question needs material as a lead, ask the worker for a conclusion report without a page.
-  As soon as the report arrives, write your answer reply from its conclusion, under the web reply Form rules.
-  The user then gets the answer within minutes, and the page and its checks follow.
-- When the answer needs a page, delegate the page in a second task after that reply.
-  Put the page in that task spec, so the material of the page stays out of your context.
-- When the page worker reports, post the page link as the web reply of that turn.
-  The link completes the user's request, so this reply follows the web reply rule for a completed request.
-- Read the conclusion first. Then find the sections that the current decision needs by their headings, and read only those.
-  When your answer needs a detail that no heading locates, give that question to a worker.
-  The rest of the report then stays out of your context, as the worker's other material does.
-- When another rule tells you to read, search, measure, or check evidence as a lead, have your worker do it.
+A manager whose task keeps a line or coordinates parallel workers acts as a lead.
+A lead keeps coordination state lean by delegating bulk reads and repository writes to workers:
 
-If you are not a lead, handle questions, reads, searches, and read-only commands yourself.
-This keeps each read with the manager that acts on its result.
+- As a lead, read directly the user's messages and decisions, child conclusions and session status,
+  single bounded host or git values, the rules and skills governing your next step, and the approval
+  objects you judge (such as a child's plan page and its verify findings).
+- Delegate bulk material reads (source files, logs, diffs, search sweeps, and multi-session records)
+  and HTML page builds to a worker (`--task-type script-run` or `quick-edit`), asking the worker for
+  a report that opens with a concise conclusion.
+- In each delegation spec, state the question and scope from facts already in your context; list under
+  Source Files only known absolute local paths, or `- (none)`.
+- Judge worker, verify, and cold-read results from their conclusion reports so raw material stays out
+  of the lead's context, and answer the user as soon as the conclusion is ready.
 
-The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
+The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests. A change to rule text in `prompts/`, `skills/`, or host rules goes through `--task-type implement`, so the Reviewer Checklist's three prompt-admission checks gate it.
 
 In a shared checkout, run `git fetch` directly: it updates remote-tracking refs without changing working files.
 Delegate these git operations in a shared checkout:

@@ -91,13 +91,12 @@
       belong to the source: cite them by path, so the plan stays right when the code moves. Keep content
       in semantic blocks so inline comments can anchor to useful units.
 
-      Treat the plan artifact as the reader's only session context: the reader knows the domain and not the
-      project (the Vocabulary rule in prompts/master.md's Writing Style section, which also fixes where a gloss
-      sits) and must be able to understand and judge the page on a first read. Name each project-specific term,
-      phase, and run with a self-describing slug per prompts/master.md's Naming section: here ordinal labels only
-      order adjacent rows inside a single list or table, and every other reference goes by the slug. Names escape into branches, specs, and
-      reports that live beyond the introduction's reach, so anything referenced outside the artifact goes by its
-      slug. Code identifiers locate an explanation; the explanation itself stays in prose.
+      Write for a project reviewer who knows general engineering and ML and the established CharlieBot
+      concepts, and explain only a term the plan newly introduces, an opaque internal codename, or a word a
+      reader from another team would not know (the Vocabulary rule in prompts/master.md's Writing Style
+      section). Name each phase and run with a self-describing slug per prompts/master.md's Naming section,
+      so anything referenced outside the artifact goes by its slug. Code identifiers locate an explanation;
+      the explanation itself stays in prose.
 
       Header: show the title, a one-line summary, and meta chips naming where the plan applies and what it builds on.
 
@@ -113,26 +112,14 @@
                     and the high-level observable contract behavior the user judges the design by. Keep it
                     short: describe the design; concrete detail belongs in 4.2.
       4. Detailed Design — two read layers:
-         4.1 Schema: the precision-read layer, the plan's true schema. It admits exactly two kinds of
-                    definition: persisted data structures (the fields, types, and meaning of files,
-                    records, and other persisted formats), and the request/response of externally
-                    consumed APIs and CLI commands (the signature and what it returns). Externally
-                    consumed means the service boundary facing consumers outside the system (users and
-                    external systems); endpoints consumed only by other processes of the same system,
-                    and in-process function signatures, belong in 4.2. Present each definition as the
-                    concrete artifact itself: a pre block, a field table (name, type, meaning), or an
-                    inline signature. A definition of a few lines stays visible; a longer definition
-                    block folds into a details-layer collapsed by default whose summary line names the
-                    thing defined. A plan with no persisted structures and no API change keeps 4.1 as a
-                    one-line declaration saying so.
-         4.2 Design Details — the optional-read bulk layer: implementation mechanisms, algorithms, concurrency,
-                    compatibility, acceptance criteria, and verification approach, organized by subsystem or
-                    data flow. Behavior detail, internal contracts, the mechanics of state transitions,
-                    internal failure paths, and the implementation side of boundary handling default here.
-         Misplacement in either direction is a defect: schema or Trade-offs content hidden in 4.2 or 6,
-                    and non-schema terms padding 4.1, are both violations. A displaced term returns to its
-                    semantic home: high-level observable behavior to section 3, behavior detail and
-                    acceptance to 4.2, and choices the user must judge to Trade-offs.
+         4.1 Schema: the persisted data structures (fields, types, meaning) and the request/response of
+                    externally consumed APIs and CLI commands. Present each definition as the concrete
+                    artifact itself: a pre block, a field table, or an inline signature. A definition of a
+                    few lines stays visible; a longer one folds into a details-layer whose summary names
+                    the thing defined. A plan with no persisted structures and no API change keeps 4.1 as
+                    a one-line declaration saying so.
+         4.2 Design Details: the internal mechanisms, algorithms, concurrency, compatibility, acceptance
+                    criteria, and verification approach, organized by subsystem or data flow.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
                     (p.trade). When a question asks the reader to choose, list each option as one li outside
@@ -159,28 +146,19 @@
 
       Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
                     6. Other Details may be empty and omitted entirely. Section order and numbering never change.
-      Page budget: the page as it opens is the complete decision surface, so it reads in one screen: every
-                    details-layer block collapsed, content aims at a 2000 px height target at the probe's
-                    1280 px render width.
-                    Depth is welcome, folded: inside a details-layer block, content length has no limit;
-                    expand as deep as needed, including diagrams (inline SVG or illustrations), concrete
-                    worked examples, and full evidence to explain mechanisms thoroughly.
-                    Information triage governs headroom: the main visible surface keeps only essential
-                    mechanism claims and decision lines. When over the target, prune by whole units:
-                    delete non-essential information wholesale (redundant
-                    adjectives, transition filler, and non-core background sentences), and move secondary
-                    or supporting content (comparison tables, benchmarks, worked examples, step details)
-                    into collapsed details-layer blocks. Headroom adjustments operate on blocks and whole
-                    sentences; word-by-word micro-shaving across sentences is excluded.
-                    The stylesheet is copied verbatim from the template (USAGE), and the budget counts
-                    the page at the template's type and spacing, so headroom comes from folding and
-                    wholesale pruning.
-                    The always-visible minimum is the surface approval binds to:
-                    the header, sections 1 and 3, 4.1's short definitions and folded-block summary lines,
-                    and each Trade-off's question, option lines, recommendation, and trade lines. Shrink or split a plan
-                    whose minimum alone overflows. The assertions report the height against the target.
-                    Registration accepts any height. Both page kinds run the Cold-Read Gate of the
-                    file-server skill.
+      Page budget: the page as it opens is the complete decision surface, aimed at a 2000 px height at the
+                    probe's 1280 px render width. Registration accepts any height; the assertions report the
+                    height against that target.
+                    The decision-critical content stays visible: the header, sections 1 and 3, 4.1's short
+                    definitions, each Trade-off's question, option lines, recommendation, and trade lines, and
+                    every comparison table, acceptance criterion, or option the decision needs.
+                    Depth is welcome in a details-layer block, whose content has no length limit: diagrams,
+                    worked examples, and full evidence. When headroom runs short, prune by whole units
+                    (redundant adjectives, transition filler, non-core background) and move optional deep
+                    background and long evidence into folds; word-by-word micro-shaving across sentences
+                    is excluded.
+                    The stylesheet is copied verbatim from the template (USAGE).
+                    Both page kinds run the Cold-Read Gate of the file-server skill.
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
                     asks to control is promoted and then joins the approval object.

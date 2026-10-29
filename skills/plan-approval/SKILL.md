@@ -45,29 +45,16 @@ An understanding page lists the divergences of a request that admits several rea
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
   `prompts/plan_template.html`. Six blocks: goal in one sentence carrying the why one level up; the
   deliverable through two or three concrete examples; acceptance criteria, each a trigger
-  condition plus an observable behavior (EARS phrasing, "WHEN <condition> THE SYSTEM
-  SHALL <behavior>", is an example shape, not a requirement); non-goals; numbered
+  condition and an observable result in the page's natural language; non-goals; numbered
   divergences rendered as `div.fork` blocks, each carrying its option lines outside folds
   and the fork grammar's folded explainer (block kit section 5, `prompts/plan_template.html`);
   Linear.
-- The Linear block carries the whitelist gate, the two-path recall, the candidate or
-  draft choice, the take off gate, and the identifier readback. It appears only for
-  repos marked Linear-tracked on the memory entry `charliebot/workspace-repos`, read
-  with `charliebot memory query --topic charliebot` while drafting; a repo not tracked
-  carries no Linear block and no explanation. When the marker list is absent altogether
-  the block states in one line that the whitelist is not configured, because an absent
-  list and an all-untracked list are otherwise indistinguishable and the mechanism
-  would fail silently. Two-path recall per the `linear` skill is presented as either a
-  candidate list (identifier, title, state, project, each with a one-line relevance
-  judgement) or a conclusion that nothing matches plus a ready-to-file draft; never pick
-  a match silently, the user decides. The draft's fields are an English title and body
-  (goal, deliverables, acceptance), team, project, assignee, and priority, resolved from
-  the Linear defaults held in memory with priority defaulting to medium; a new ticket's
-  project follows the closest candidate's project and is named in the draft so the user
-  can change it. The write waits for take off per the master prompt's External System
-  Writes rule, and the authorization may ride in the same message that answers the
-  divergences. After the ticket is created, read its identifier back from the API and carry
-  it as a header meta chip on the understanding page and on the plan that follows.
+- The Linear block appears only for a repo marked Linear-tracked on the memory entry
+  `charliebot/workspace-repos`; a repo not tracked carries no block, and an absent marker list gets one line
+  saying the whitelist is not configured. Recall per the `linear` skill gives a candidate list or a
+  ready-to-file draft, and the user decides which; the draft's fields come from the Linear defaults in memory.
+  The write waits for take off per the master prompt's External System Writes rule. After the ticket exists,
+  carry its identifier as a header meta chip on the understanding page and the plan that follows.
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
 - Map each outcome that the request names to a deliverable or a divergence.
@@ -94,8 +81,8 @@ An understanding page lists the divergences of a request that admits several rea
 - External system writes follow the master prompt's External System Writes rule.
 - Before sharing, the page passes the mechanical assertions with
   `--genre understanding`. Its cold read runs after sharing, with the originating request as the
-  trigger, per the Cold-Read Gate of the file-server skill. When the page states a root cause,
-  it passes the Source Check of the file-server skill before sharing.
+  trigger, per the Cold-Read Gate of the file-server skill. The page author or the worker that built it
+  verifies each cited `path:line` and derived number before the page goes out.
 - The plan carries the understanding page's file path as a header meta chip;
   section 1 states the goal in its own words.
 - The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in
@@ -107,13 +94,8 @@ An understanding page lists the divergences of a request that admits several rea
 - Research the codebase first; present the plan as a decision surface following the
   template block kit, with numbered Trade-offs for the choices the user must judge.
 - Contract text (rule sentences the plan lands verbatim in prompt docs, skills, or task
-  specs) is drafted to the standing-reality form and checked block by block before
-  `charliebot plan present`: each sentence opens with what stands or works ("one post
-  carries the whole reply up to the limit", over "in one post unless it exceeds the
-  limit"), a bare prohibition is recast as the working practice it protects ("each rule
-  keeps one home; other files reference it", in place of the ban it replaces), the
-  exception arrives as a bounded case rather than the sentence's spine, and dashes give
-  way to commas, colons, semicolons, or a restructure (code excepted).
+  specs) is drafted to the standing-reality form before `charliebot plan present`, and each
+  block passes the three prompt-admission checks in `prompts/master.md` ("Text a model reads").
 - Render the artifact per the USAGE note atop the BLOCK KIT comment in `prompts/plan_template.html`.
 - Run the Cold-Read Gate of the file-server skill with `--genre plan`.
 - Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the code baseline when the plan pins one.
@@ -158,16 +140,11 @@ An understanding page lists the divergences of a request that admits several rea
   Each such decision then waits for the user's answer in the child's session.
 - Before each consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
-- Before you ask a take off for a deletion, show its dry-run list: each path and its size.
-- Before you ask a take off, try the step on a scratch copy up to its first real use.
-- When the step changes rules or code that other nodes follow, send the draft to each such manager node.
-- Re-read each number that the ask cites when you write the ask.
-- When a draft patches a procedure that an earlier draft patched, first ask whether the procedure should exist.
-- Attach each result to the ask.
-  The user then approves a step that already works, and approves it once.
-- Open the ask with the goal and the method.
-- Explain them with a diagram or a worked example, and list the alternatives with their consequences.
-  The user then understands the ask at one read.
+- Before you ask a take off, state the goal, the blast radius, and how to undo the step. A deletion also lists
+  each path and its size, and a rule or code change that other nodes follow goes to each such manager.
+- Re-read each number the ask cites, and attach each result so the user approves a step that already works.
+- Explain the ask with a diagram or a worked example, and list the alternatives with their consequences, so
+  the user judges it at one read.
 - When work under a Linear ticket lands, draft one English comment for that ticket.
   The comment states the landed design, the resolved choices and the commit.
   Ask its take off in the completion report. Delegation then waits for no ticket write.
@@ -182,80 +159,33 @@ An understanding page lists the divergences of a request that admits several rea
   3. Register the plan with `charliebot plan present`.
   4. Run one Improve round: answer the plan page's Improve prompt
      (src/features/artifacts/static/artifact-comments.js) yourself.
-  5. Start verify round 1 and the cold read in the same turn, following the revision rule below.
-  6. Complete the revision under that rule.
+  5. Start verify round 1 and the cold read in the same turn.
+  6. Complete the revision under the rules below.
   7. Approve the plan with `charliebot plan approve`, and send the user its link.
-  The order puts approval after the revision is complete.
-  Verify is a read-only repo-less delegation and runs on
-  a registered plan, so the goal it measures against has one home and the plan is listed
-  while the rounds run.
-- An Improve round narrows the affected system and tests the mechanism.
-- Verify checks fidelity — claims against evidence — and adequacy: whether the design,
-  assumed accurate and implemented, entails what section 1 claims. Adequacy reads
-  section 1 as the goal statement only; scope boundaries, thresholds, and exemptions
-  stated in Context, section 3, 4.1, or Trade-offs bind adequacy equally, so section 1 never
-  restates them. Quote the understanding page's file path in the spec as the
-  adequacy reference when one exists; otherwise quote the originating request. Without
-  one of these, adequacy cannot judge section 1 against what was asked.
-- Verify also checks each wait, test and user question in the plan.
-  Each one names the requirement it protects (prompts/manager_workflows.md, Design section).
-  A step that names none is a finding, so a plan carries no step that only adds a wait.
-- Treat the initial plan as the first revision.
-  This starts the lineage's review sequence.
-  Treat the versions between triggers as one revision.
-  This keeps versions from one review cycle together.
-  When the user gives feedback or the author changes the design outside a findings fold, start a new revision.
-  This gives each independent design change its own review cycle.
-  Keep verify and cold-read findings folds in the current revision.
-  This stops findings folds from resetting the round limit.
-  Run verify round 1 on each revision.
-  This checks each revision under its declared scope.
-  For each revision of a plan for the user, run at most two verify rounds.
-  This stops findings folds from starting an endless review loop.
-  When a cold read starts in the same turn as verify, count it in that verify round.
-  This keeps the cold read within the round limit.
-  When a verify round 1 finding holds, fold it into the plan.
-  This gives verify round 2 a defined change set to re-check.
-  When verify round 1 findings change the plan, run verify round 2 on those changes.
-  This checks the fold before finalization.
-  For verify round 2, declare delta.
-  This confines verify round 2 to the verify round 1 fold.
-  For verify round 2, quote only verify round 1 fold changes from `charliebot plan diff` into the spec.
-  This keeps verify round 2 scoped to changes from verify round 1.
-  Re-check those changes and whether verify round 1 findings are closed.
-  This confirms whether the fold closed verify round 1 findings.
-  After verify round 2, fold its findings into the plan.
-  This records findings from the final round.
-  Then finalize the revision.
-  This ends verification without a third round.
-  When verify round 1 findings do not change the plan, finalize the revision.
-  This avoids verify round 2 when round 1 changes nothing.
-- Declare the scope in every spec.
-  This tells the reviewer which terms to re-check.
-  When a spec omits its scope, verify it as full.
-  This keeps missing scope from narrowing the review.
-  For verify round 1 of a lineage, declare full.
-  This gives adequacy the whole plan to refute.
-  For verify round 1 of a later revision, declare delta or full.
-  This matches the check to the revision's changes.
-  When the revision changes the design's structure, declare full for verify round 1.
-  This lets adequacy check the whole design after structural changes.
-  When verify round 1 of a later revision declares delta, quote its terms from `charliebot plan diff` into the spec.
-  This anchors the review in recorded changes.
-  Re-check those terms and their dependents.
-  This checks the effects of those changes.
-  Re-check whether prior findings are closed.
-  This confirms earlier findings are resolved.
-- Every round of one plan measures with the same ruler: the spec's Goal quotes the registered
-  version's section 1 by path, and cites fidelity and adequacy as defined here. A round that
-  wants a wider question puts that question to the user.
-- Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the
-  goal — weigh it and revise the design if it holds. `gap-goal:` says the goal itself may
-  be misread — put that question to the user.
-- A revision answers findings by correcting the plan against the goal it was registered with;
-  section 1 keeps saying what the first version said. When a finding argues the goal itself
-  is the problem, that is a `gap-goal:` question for the user.
-- Report the adequacy findings when you send the user the plan link, so the user can weigh them too.
+- Verify is a read-only repo-less delegation on a registered plan. It checks fidelity — claims against evidence —
+  and adequacy: whether the design, assumed accurate and implemented, entails what section 1 claims. Adequacy reads
+  section 1 as the goal statement only; scope boundaries, thresholds, and exemptions stated in Context, section 3,
+  4.1, or Trade-offs bind adequacy equally. Quote the understanding page's path in the spec as the adequacy
+  reference when one exists, and otherwise the originating request.
+- Verify also checks each wait, test and user question against the requirement it protects
+  (prompts/manager_workflows.md, Design section), and checks each rule change against the three prompt-admission
+  checks in `prompts/master.md` ("Text a model reads"). A step that names no requirement, or a rule change that
+  fails a check, is a finding.
+- Treat the initial plan as the first revision, and the versions between triggers as one revision. User feedback or
+  a design change outside a findings fold starts a new revision; keep verify and cold-read folds in the current one.
+- Run verify round 1 on each revision, as full for a lineage's first revision. For a later revision declare delta or
+  full, and declare full when the structure changes; a delta spec quotes its terms from `charliebot plan diff`.
+  Verify an undeclared scope as full.
+- Run at most two verify rounds on a revision of a plan for the user: round 1 as declared, then round 2 as delta over
+  the round-1 fold only, quoting those changes from `charliebot plan diff`. A cold read started with verify counts in
+  that round. When round 1 findings change nothing, finalize after round 1; after round 2, fold its findings and
+  finalize, with no third round.
+- Every round measures with the same ruler: the spec's Goal quotes the registered version's section 1 by path, and
+  cites fidelity and adequacy as defined here. A round that wants a wider question puts that question to the user.
+- Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the goal — weigh it and revise the
+  design if it holds. `gap-goal:` says the goal itself may be misread — put that question to the user.
+- A revision answers findings by correcting the plan against the goal it was registered with; section 1 keeps saying
+  what the first version said. Report the adequacy findings when you send the user the plan link.
 
 ## Runtime delegation authorization
 

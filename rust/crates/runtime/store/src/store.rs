@@ -1081,7 +1081,13 @@ impl Store {
       .await
       .map_err(|error| StoreError::new(format!("{}: {error}", session_dir.display())))?
       .map_err(|error| StoreError::new(format!("{}: {error}", session_dir.display())))?;
-    let base_dir = charliebot_core::cgroup::system_cgroup_base_dir();
+    let base_dir = charliebot_core::cgroup::session_cgroup_base_dir();
+    // The browsers end before the cleanup: it removes only an empty cgroup.
+    let sweep_session = session_id.to_string();
+    let sweep_base = base_dir.clone();
+    tokio::task::spawn_blocking(move || charliebot_core::cgroup::end_session_browsers(&sweep_base, &sweep_session))
+      .await
+      .map_err(|error| StoreError::new(format!("ending the browsers of session {session_id} failed: {error}")))?;
     charliebot_core::cgroup::cleanup_session_cgroup(&base_dir, session_id);
     self.drop_session_runtime_state(session_id);
     self.invalidate_cache(session_id);

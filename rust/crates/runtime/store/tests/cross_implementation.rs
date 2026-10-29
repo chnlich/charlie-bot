@@ -2613,3 +2613,43 @@ fn message_aggregator_accepts_every_shape_python_accepts() {
   }
   assert_eq!(Value::Array(rust_frames), run_python_message_aggregator(&events));
 }
+
+/// A running copy of the system sleep binary named `name`, whose `/proc/<pid>/exe` file name is `name`.
+fn sleep_stub(directory: &Path, name: &str) -> (Child, PathBuf) {
+  let source = ["/bin/sleep", "/usr/bin/sleep"]
+    .iter()
+    .find(|path| Path::new(path).is_file())
+    .expect("the sleep binary exists")
+    .to_owned();
+  let binary = directory.join(name);
+  fs::copy(source, &binary).expect("the sleep binary copies");
+  let child = Command::new(&binary).arg("300").spawn().expect("the stub starts");
+  (child, binary)
+}
+
+/// The delete runs the session's browser sweep to completion: the chrome stub in the session's fake cgroup is dead
+/// when `delete_session_permanently` returns, and the plain sleep beside it is not.
+#[tokio::test]
+async fn delete_session_permanently_ends_the_session_browsers_before_the_cgroup_cleanup() {
+  let root = tempfile::tempdir().unwrap();
+  let home = root.path().join("home");
+  let base = root.path().join("cgroup-base");
+  let store = make_store(&home);
+  fs::create_dir_all(home.join("sessions").join(SESSION_ID)).unwrap();
+  let slice = charliebot_core::cgroup::agents_slice_dir(&base);
+  let cgroup = charliebot_core::cgroup::session_cgroup_path(&slice, SESSION_ID);
+  fs::create_dir_all(&cgroup).unwrap();
+  let (mut browser, _) = sleep_stub(root.path(), "chrome");
+  let (mut bystander, _) = sleep_stub(root.path(), "sleeper");
+  fs::write(cgroup.join("cgroup.procs"), format!("{}\n{}\n", browser.id(), bystander.id())).unwrap();
+
+  {
+    let _base_guard = charliebot_core::cgroup::use_test_cgroup_base_dir(base);
+    assert!(store.delete_session_permanently(SESSION_ID).await.unwrap());
+  }
+
+  assert!(browser.try_wait().unwrap().is_some(), "the chrome stub ended before the delete returned");
+  assert!(bystander.try_wait().unwrap().is_none(), "the plain sleep stays");
+  bystander.kill().unwrap();
+  bystander.wait().unwrap();
+}

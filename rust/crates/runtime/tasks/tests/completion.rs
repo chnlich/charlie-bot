@@ -2007,3 +2007,46 @@ async fn agent_cancel_route_stops_a_live_worker_and_returns_its_outcome() {
     Some(RunOutcomeKind::Interrupted)
   );
 }
+
+/// A running copy of the system sleep binary named `name`, whose `/proc/<pid>/exe` file name is `name`. The fake
+/// session cgroup lists its pid, and the close's browser sweep reads that list.
+fn sleep_stub(directory: &Path, name: &str) -> (std::process::Child, std::path::PathBuf) {
+  let source = ["/bin/sleep", "/usr/bin/sleep"]
+    .iter()
+    .find(|path| Path::new(path).is_file())
+    .expect("the sleep binary exists")
+    .to_owned();
+  let binary = directory.join(name);
+  fs::copy(source, &binary).expect("the sleep binary copies");
+  let child = Command::new(&binary).arg("300").spawn().expect("the stub starts");
+  (child, binary)
+}
+
+#[tokio::test]
+async fn closing_a_task_starts_the_session_browser_sweep() {
+  let h = CompletionHarness::new();
+  let caller = CallerIdentity::Operator { session_id: None };
+  let worker = h.base.create_task("worker", None, TaskProfile::Worker, "Worker").await;
+  let directory = tempfile::tempdir().unwrap();
+  let base = directory.path().join("cgroup-base");
+  let slice = charliebot_core::cgroup::agents_slice_dir(&base);
+  let cgroup = charliebot_core::cgroup::session_cgroup_path(&slice, &worker.id);
+  fs::create_dir_all(&cgroup).unwrap();
+  let (mut browser, _) = sleep_stub(directory.path(), "chrome");
+  let (mut bystander, _) = sleep_stub(directory.path(), "sleeper");
+  fs::write(cgroup.join("cgroup.procs"), format!("{}\n{}\n", browser.id(), bystander.id())).unwrap();
+
+  {
+    let _base_guard = charliebot_core::cgroup::use_test_cgroup_base_dir(base);
+    h.completion.cancel_task(&worker.id, "cancel-worker", "stop", &caller).await.unwrap();
+    // The close does not wait for the spawned sweep: poll until its SIGKILL lands.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while browser.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  }
+  assert!(browser.try_wait().unwrap().is_some(), "the close ended the session's chrome stub");
+  assert!(bystander.try_wait().unwrap().is_none(), "the plain sleep stays");
+  bystander.kill().unwrap();
+  bystander.wait().unwrap();
+}

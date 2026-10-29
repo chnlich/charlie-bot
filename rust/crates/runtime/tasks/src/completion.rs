@@ -1066,7 +1066,8 @@ impl TaskCompletion {
     )))
   }
 
-  /// Append one `task_closed` fact, then deliver its parent report. The caller holds the control lock.
+  /// Append one `task_closed` fact, start the closed session's browser sweep, then deliver its parent report. The
+  /// caller holds the control lock.
   async fn append_closed(
     &self,
     guard: &ControlGuard,
@@ -1121,6 +1122,7 @@ impl TaskCompletion {
       other => return Err(StoreError::new(format!("unknown task close outcome: {other}"))),
     };
     let close_event = self.store().append_control_fact(guard, session_id, close_event).await?;
+    Self::spawn_session_browser_sweep(session_id);
     let report_outcome = sequence_outcome.unwrap_or(outcome);
     let (report, report_created) = self
       .dispatcher()?
@@ -1137,6 +1139,14 @@ impl TaskCompletion {
       .await?;
     self.store().invalidate_tree_index();
     Ok((close_event, report, report_created))
+  }
+
+  /// End the closed session's browsers without waiting for them: the close returns while the sweep runs on the
+  /// blocking pool, and the sweep logs `session_browsers_ended` with its count.
+  fn spawn_session_browser_sweep(session_id: &str) {
+    let base_dir = charliebot_core::cgroup::session_cgroup_base_dir();
+    let session_id = session_id.to_string();
+    tokio::task::spawn_blocking(move || charliebot_core::cgroup::end_session_browsers(&base_dir, &session_id));
   }
 
   /// Cancel an open task, stopping non-terminal runs when the target is a worker.

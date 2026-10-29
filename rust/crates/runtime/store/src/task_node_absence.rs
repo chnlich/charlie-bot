@@ -7,6 +7,7 @@
 use std::fs;
 use std::path::Path;
 
+use charliebot_core::event_types;
 use memchr::memmem;
 
 use crate::layout;
@@ -15,7 +16,13 @@ use crate::{Store, StoreError, StoreResult};
 
 /// The event types that set a task-tree boundary or a prompt fact: a history holding any of them still has a node
 /// for the boot pass to reconcile.
-const TASK_EVENT_TYPES: [&str; 5] = ["task_created", "task_imported", "task_closed", "task_reopened", "prompt_changed"];
+const TASK_EVENT_TYPES: [&str; 5] = [
+  event_types::TASK_CREATED,
+  event_types::TASK_IMPORTED,
+  event_types::TASK_CLOSED,
+  event_types::TASK_REOPENED,
+  event_types::PROMPT_CHANGED,
+];
 /// The JSON key whose string value is an event's type.
 const TYPE_KEY: &[u8] = b"\"type\"";
 /// The longest task event name, an upper bound on the bytes a `"type"` value needs to hold.

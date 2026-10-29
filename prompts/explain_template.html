@@ -82,6 +82,12 @@
   .varb .vh .vc{margin-left:auto;font-size:11px;color:var(--mut);font-family:var(--mono);white-space:nowrap}
   .varb p{font-size:12.8px;margin:5px 0}
   .varb pre{margin-top:8px}
+  .step{background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:11px 15px;margin:10px 0}
+  .step h3{margin:0 0 6px}
+  .step svg{display:block;width:100%;height:auto;margin:6px 0}
+  .example{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--grn);border-radius:9px;padding:11px 15px;margin:10px 0}
+  .example h3{margin:0 0 6px}
+  .example.contrast{border-left-color:var(--amb)}
   .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
   .foot p{margin:0}
   @media(max-width:760px){body{padding:18px}}
@@ -120,23 +126,36 @@
       Wrap each triad row's post-label content in a &lt;div&gt;: .triad .row is a flex
       container, and bare text interleaved with inline elements (&lt;code&gt;, &lt;b&gt;,
       &lt;span class="tag"&gt;) splits into multiple anonymous flex items that shrink into
-      broken narrow columns.
+      broken narrow columns. When the reader states no contradiction, use the rows "You know",
+      "You ask" and "Short answer". "You know" holds the premise of the question, "You ask" the
+      question verbatim, and "Short answer" one sentence. The answer then stands on the first screen.
 
       1 affirm: where the reader's model is right and the exact step where it stops. Affirm
         with evidence, and teaching begins at that step. When the reader points out a
-        contradiction, the first sentence rules who is right.
+        contradiction, the first sentence rules who is right. When the reader states no
+        contradiction, affirm the premise of the question with evidence. Then name the step where
+        the answer starts. The reader then knows what holds before the new part begins.
       2 mechanism: the missing mechanism, why before what. Every mechanism claim seats three
         things together, the reader's own premises included: the real code (path and named
-        symbol), its position in the larger call chain, and a hand-checkable example.
+        symbol), its position in the larger call chain, and a hand-checkable example. Split the
+        mechanism into steps, one div.step block per step. Give each step a content-name h3, one
+        drawn figure (inline svg or img), and its text. Put every paragraph of the section in a
+        step, except one opening paragraph. A div.flow box strip may sit beside the figure. Write
+        figure labels in the page's language. The reader then sees each step before reading about it.
       3 worked example: every variable dimension the question names, enumerated. Each opens
         with what pipeline part it is and why it varies, then its real sampled value; each
         name is glossed per the Vocabulary rule (prompts/master.md) before its first use in a table.
+        Give one div.example.e2e block, one case end to end. Give one div.example.contrast block,
+        a case with a different result. Anchor each example to its source with a span.src. The
+        reader then checks the mechanism on a real case and sees what changes the result.
       4 reconcile: recompute the reader's own number inside the corrected model, so the
-        contradiction dissolves inside the reader's own arithmetic.
+        contradiction dissolves inside the reader's own arithmetic. When the reader states no
+        contradiction, check the short answer against the numbers of the end-to-end example. The
+        reader then sees the answer hold on real numbers.
       5 boundaries: epistemic labels (fact / inference / open) ride inline at each claim's
         first occurrence; this section carries what stays open and where a new anomaly routes
         (back to debugging, the pages cross-referencing).
-      Foot: the exchange closes when the reader confirms the contradiction dissolved. A
+      Foot: the exchange closes when the reader confirms the question is answered. A
         renewed miss signal revises this page in place.
 
       Self-checks before sharing: Run the Cold-Read Gate of the file-server skill with --genre explain; the
@@ -159,9 +178,50 @@
 
     <section class="plan-section">
       <h2><span class="n">2</span> The missing mechanism: the frame cache keys on the joint state, not the bin<span class="slot">mechanism</span></h2>
-      <p>When the compiler builds one frame, it records every int, shape, and branch result it touched as a guard. The next call re-checks each guard against the raw values that step actually carried; if any guard fails, the whole frame recompiles. The check happens before binning, so it compares not "is the bin the same" but "is the raw value still in the recorded band".</p>
-      <p><b>The real code, its place in the chain, and a hand-checkable case:</b></p>
-      <pre># ~/workspace/photonfarm/shade_ops.py, the binner the reader names
+      <p>The frame cache checks raw values, not bins. The sixteen bins protect only the shader cache, which sits later in the chain. Two steps show why.</p>
+      <div class="step">
+        <h3>The compiler records a guard for each raw value a frame touches</h3>
+        <svg viewBox="0 0 900 100" width="100%" role="img" aria-label="Frame 41 records two guards on raw values">
+          <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" font-size="12" fill="#1b2430">
+            <rect x="10" y="20" width="230" height="60" rx="7" fill="#eef1f5" stroke="#d9dfe6"/>
+            <text x="22" y="45" font-weight="700">frame 41 compiles once</text>
+            <text x="22" y="66">guard 1: row-count = 14</text>
+            <line x1="240" y1="50" x2="290" y2="50" stroke="#5b6774"/>
+            <rect x="290" y="20" width="250" height="60" rx="7" fill="#eaf5ec" stroke="#187f37"/>
+            <text x="302" y="45" font-weight="700">guard 2: radius in 257..512</text>
+            <text x="302" y="66">checks the raw value, not the bin</text>
+            <line x1="540" y1="50" x2="590" y2="50" stroke="#5b6774"/>
+            <rect x="590" y="20" width="300" height="60" rx="7" fill="#ffffff" stroke="#d9dfe6"/>
+            <text x="602" y="45" font-weight="700">next call re-checks both guards</text>
+            <text x="602" y="66">one failed guard recompiles the frame</text>
+          </g>
+        </svg>
+        <p>When the compiler builds one frame, it records every int, shape, and branch result it touches as a guard. The next call re-checks each guard against the raw values that step actually carried. If any guard fails, the whole frame recompiles.</p>
+      </div>
+      <div class="step">
+        <h3>The bin comes after the frame guard, so the guard sees the raw radius</h3>
+        <svg viewBox="0 0 900 100" width="100%" role="img" aria-label="Path from the packer through the frame guard and the glow pass to the shader cache">
+          <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" font-size="12" fill="#1b2430">
+            <rect x="10" y="20" width="160" height="60" rx="7" fill="#eef1f5" stroke="#d9dfe6"/>
+            <text x="22" y="45" font-weight="700">packer</text>
+            <text x="22" y="66">max_radius = 300</text>
+            <line x1="170" y1="50" x2="200" y2="50" stroke="#5b6774"/>
+            <rect x="200" y="20" width="170" height="60" rx="7" fill="#ffffff" stroke="#cf222e"/>
+            <text x="212" y="45" font-weight="700">frame guard</text>
+            <text x="212" y="66">checks raw 300</text>
+            <line x1="370" y1="50" x2="400" y2="50" stroke="#5b6774"/>
+            <rect x="400" y="20" width="170" height="60" rx="7" fill="#ffffff" stroke="#d9dfe6"/>
+            <text x="412" y="45" font-weight="700">glow pass</text>
+            <text x="412" y="66">rounds 300 up to 512</text>
+            <line x1="570" y1="50" x2="600" y2="50" stroke="#5b6774"/>
+            <rect x="600" y="20" width="170" height="60" rx="7" fill="#eaf5ec" stroke="#187f37"/>
+            <text x="612" y="45" font-weight="700">shader cache</text>
+            <text x="612" y="66">keyed by bin 512</text>
+          </g>
+        </svg>
+        <p>The check happens before binning. It compares not "is the bin the same" but "is the raw value still in the recorded band".</p>
+        <p><b>The real code, its place in the chain, and a hand-checkable case:</b></p>
+        <pre># ~/workspace/photonfarm/shade_ops.py, the binner the reader names
 _BINS = (16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
          32768, 65536, 131072, 262144, 524288)   # sixteen bins
 
@@ -175,44 +235,31 @@ def bin_radius(r: int) -> int:
 # call site, inside the glow pass
 S_bucket = bin_radius(max_radius)   # returns a python constant
 # S_bucket enters the shader cache key</pre>
-      <p>For a hand check, <code>max_radius = 300</code> maps to <code>S_bucket = 512</code>; <code>max_radius = 400</code> maps to the same shader bin, while a changed row count can still fail the frame guard before the bin is used.</p>
-      <div class="flow">
-        <span class="b">packer emits max_radius</span><span class="ar">→</span><span class="b miss">frame entry: dynamo checks guards (raw value)</span><span class="ar">→</span><span class="b">block forward (compiled frame)</span><span class="ar">→</span><span class="b">glow pass bins the radius</span><span class="ar">→</span><span class="b hit">shader cache (16 bins)</span><span class="ar">→</span><span class="b">kernel</span>
+        <p>For a hand check, <code>max_radius = 300</code> maps to <code>S_bucket = 512</code>; <code>max_radius = 400</code> maps to the same shader bin, while a changed row count can still fail the frame guard before the bin is used.</p>
+        <p class="muted">Binning sits after the frame guard and before the shader: it protects the shader cache, not the frame cache.</p>
       </div>
-      <p class="muted">Binning sits after the frame guard and before the shader: it protects the shader cache, not the frame cache.</p>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">3</span> Beyond the radius: each varying quantity, introduced in a table<span class="slot">worked example</span></h2>
-      <p>Each quantity below is introduced as a table row first (what it is), then told why it varies and given a real sampled value. Row counts are the printed guard lines, not recompile events.</p>
-      <table>
-        <tr><th>Quantity</th><th>What it is</th><th>Why it varies</th><th>Sampled</th></tr>
-        <tr><td class="f">row-count</td><td>samples packed into one frame</td><td>radius per sample differs</td><td class="f">9 to 23 rows across 4 bands</td></tr>
-        <tr><td class="f">tone-band</td><td>radius bin, the shader-side key</td><td>radii cross band edges</td><td class="f">7 bands</td></tr>
-        <tr><td class="f">offset-set</td><td>storage offset of the glow view</td><td>view split layout changes</td><td class="f">3 groups, 2,412 lines</td></tr>
-      </table>
-      <div class="varb">
-        <p class="vh"><b>row-count → cuSamples size</b><span class="vc">27 lines · fact</span></p>
-        <p><b>What it is:</b> each sample's radial segments are concatenated into one fixed-token frame; <code>cuSamples</code> (cumulative segment lengths) is the boundary table the kernel reads. Its length equals row-count plus one, and the frame guard pins that length.</p>
-        <p><b>Why it varies:</b> <span class="tag fact">Fact</span> how many samples fit the budget drifts with the shot; row-count moves across the band, and each new length misses the guard once.</p>
-        <pre>cu_segments size mismatch at index 0. expected 24, actual 14</pre>
+      <h2><span class="n">3</span> Worked example: frames 41 and 42 from one ramp<span class="slot">worked example</span></h2>
+      <p>Both frames fall in the same radius bin. Only their guards decide what each frame does.</p>
+      <div class="example e2e">
+        <h3>End to end: frame 42 recompiles although its bin did not change</h3>
+        <p>Frame 41 packs 14 rows with max_radius 300, which rounds up to bin 512. It compiles once, and its guards record row-count = 14 and the radius band 257 to 512.</p>
+        <p>Frame 42 packs 17 rows with max_radius 301. Its bin is still 512, so the shader cache hits. The row-count guard fails, because 17 is not 14, so the whole frame recompiles.</p>
+        <p><span class="src">Source: ~/workspace/photonfarm/logs/ramp_frames_41_42.log</span></p>
       </div>
-      <div class="varb">
-        <p class="vh"><b>tensor-band values</b><span class="vc">3,716 lines · fact, attribution inferred</span></p>
-        <p><b>What it is:</b> the shader's bin membership for the frame's glow view. It is the number the reader expects to bound everything.</p>
-        <p><b>Why it varies:</b> the raw radius crosses a bin edge, so the compiled constant changes and the guard recompiles the frame, even though the shader bin itself is shared.</p>
-        <pre>_shade.radius_band in {16..524288}  # the guard records the raw edge, not the bin</pre>
-      </div>
-      <div class="varb">
-        <p class="vh"><b>offset-set</b><span class="vc">2,412 lines · fact, attribution open</span></p>
-        <p><b>What it is:</b> a tensor is a buffer plus a read offset; a split or slice view changes only the offset. <span class="tag hyp">Hypothesis</span> the offset shifts when the packing layout of the frame changes each step.</p>
-        <p><b>Why it varies:</b> layout per step changes which buffer position the glow view begins at; offset zero needs a constant-specialized frame that the range guard cannot serve.</p>
+      <div class="example contrast">
+        <h3>Contrast: the same bin, and no recompile</h3>
+        <p>Frame 42 again, but with 14 rows and max_radius 301. Its bin is 512 and its radius is inside the recorded band, so every guard holds. The frame cache hits and nothing recompiles.</p>
+        <p>The only change from the end-to-end case is the row count. A changed row count alone is enough to break a guard.</p>
+        <p><span class="src">Source: ~/workspace/photonfarm/logs/ramp_frames_41_42.log</span></p>
       </div>
     </section>
 
     <section class="plan-section">
       <h2><span class="n">4</span> Recomposing the reader's arithmetic<span class="slot">reconcile</span></h2>
-      <p>The "sixteen variants" account holds under a one-dimensional key; under the joint key the first three quantities alone are 4 × 7 × 3 = 84 slots, each paid with a full frame recompile. <span class="tag fact">Fact</span> The farm's run confirms it: ~76 recompile frames per node across the ramp, about 29 minutes of serial compilation per node, which is where "68% of the stall" lives.</p>
+      <p>The "sixteen variants" account holds under a one-dimensional key. Frame 42 shows the second key at work: its row count, not its bin, forced the recompile. <span class="tag fact">Fact</span> Under the joint key, the three guarded quantities multiply: 4 row counts × 7 radius bands × 3 offset groups = 84 frame variants, each paid with a full frame recompile. The run logged about 76 recompile frames per node across the ramp, about 29 minutes of serial compilation per node, which is where "68% of the stall" lives. <span class="src">Source: ramp guard log, four nodes</span></p>
       <div class="callout"><p>The sixteen bins cap the shader-side variant count; the frame-side variant count is set by the guard product and the frame cache limit, and the two caps do not bound each other.</p></div>
     </section>
 

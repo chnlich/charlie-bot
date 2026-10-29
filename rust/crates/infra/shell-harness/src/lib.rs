@@ -10,7 +10,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
@@ -228,7 +228,26 @@ pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
 
 /// Starts `command` and returns the child. A file that another test thread is still writing can refuse to run with
 /// ETXTBSY until that thread's fork has exec'd, so the start retries that error for a moment.
+///
+/// The child dies with the thread that starts it: `PR_SET_PDEATHSIG` makes the kernel send it SIGKILL when that
+/// thread exits, so a test thread that panics or is cancelled while its process still runs leaves nothing behind.
+/// Spawn from the test's own thread, not a helper thread that ends early.
 pub fn spawn(command: &mut Command) -> Child {
+  let parent = std::process::id() as libc::pid_t;
+  // SAFETY: prctl, getppid and _exit are async-signal-safe, which is all a hook between fork and exec may call.
+  unsafe {
+    command.pre_exec(move || {
+      if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+        return Err(std::io::Error::last_os_error());
+      }
+      // The kernel watches the thread that starts this process. When that thread ended before prctl ran, the
+      // signal would never arrive, so leave now instead of outliving the test.
+      if libc::getppid() != parent {
+        libc::_exit(1);
+      }
+      Ok(())
+    });
+  }
   let mut attempts = 0;
   loop {
     match command.spawn() {
@@ -269,4 +288,56 @@ pub fn memtotal_percent_bytes(percent: u64) -> u64 {
     .and_then(|kb| kb.parse().ok())
     .expect("/proc/meminfo has a MemTotal line");
   ((total_kb / 4) * percent / 100) * 4096
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::mpsc;
+  use std::time::Instant;
+
+  /// libtest runs each test on a thread named for it, and `spawn`'s parent-death signal relies on that: the kernel
+  /// signals a process when the thread that started it exits.
+  #[test]
+  fn a_test_runs_on_a_thread_named_for_it() {
+    assert_eq!(thread::current().name(), Some("tests::a_test_runs_on_a_thread_named_for_it"));
+  }
+
+  /// A process started through `spawn` ends when the thread that started it ends, here by panicking.
+  #[test]
+  fn a_process_ends_when_the_thread_that_started_it_panics() {
+    let (pid_tx, pid_rx) = mpsc::channel();
+    let starter = thread::spawn(move || {
+      let mut command = Command::new("sleep");
+      command.arg("300").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+      pid_tx.send(spawn(&mut command).id()).expect("the thread reports its child");
+      panic!("the starting thread ends while its process runs");
+    });
+    let pid = pid_rx.recv().expect("the child's pid");
+    assert!(starter.join().is_err(), "the starting thread panicked");
+    assert!(ends_within(pid, Duration::from_secs(2)), "pid {pid} outlived the thread that started it");
+  }
+
+  /// Whether `pid` exits within `timeout`. A process still running then is killed and reaped, so a failed test
+  /// leaves nothing behind.
+  fn ends_within(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+      let mut status = 0;
+      // SAFETY: `pid` is a child of this process and `status` is a valid pointer.
+      let reaped = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+      if reaped == pid as libc::pid_t {
+        return true;
+      }
+      if Instant::now() > deadline {
+        // SAFETY: `pid` is the process this test started.
+        unsafe {
+          libc::kill(pid as libc::pid_t, libc::SIGKILL);
+          libc::waitpid(pid as libc::pid_t, &mut status, 0);
+        }
+        return false;
+      }
+      thread::sleep(Duration::from_millis(20));
+    }
+  }
 }

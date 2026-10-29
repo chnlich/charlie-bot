@@ -60,7 +60,7 @@ fn run_in(command: &mut Command, cwd: &Path) -> Run {
 
 fn run_with_stdin(command: &mut Command, cwd: &Path, input: &str) -> Run {
   command.current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-  let mut child = command.spawn().expect("spawn the scanner");
+  let mut child = harness::spawn(command);
   child.stdin.as_mut().expect("piped stdin").write_all(input.as_bytes()).expect("write stdin");
   let output = child.wait_with_output().expect("wait for the scanner");
   Run {

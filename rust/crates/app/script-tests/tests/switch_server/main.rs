@@ -18,6 +18,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use charliebot_core::logline;
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
@@ -443,7 +444,8 @@ fn readlink_opt(path: &Path) -> Option<PathBuf> {
 /// The launch output the adoption check reads: the drain line the new server writes for a run whose process had ended.
 /// Its resume line is the one the check wants instead for a run whose process still runs.
 fn drain_line(run_id: &str) -> String {
-  format!("2026-10-26 02:15:04.200 [warning  ] task_recovery_drain session={SESSION} run_id={run_id}")
+  let fields = [("session".to_string(), json!(SESSION)), ("run_id".to_string(), json!(run_id))];
+  logline::render("2026-10-26 02:15:04.200Z", "warning", "task_recovery_drain", &fields)
 }
 
 #[test]
@@ -819,7 +821,11 @@ fn test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3() {
   assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), new_sha);
   assert!(world.serves_release(&new_sha), "the new release does not serve");
   assert_eq!(world.version_status(), 200);
-  assert!(world.latest_log().contains("\"run_id\":\"run-live\""), "{}", world.latest_log());
+  assert!(
+    world.latest_log().lines().filter_map(logline::parse).any(|row| row.field("run_id") == Some("run-live")),
+    "{}",
+    world.latest_log()
+  );
 
   // The way back moves the clone to the earlier release commit.
   let run = world.switch(&["rust", &old_sha]);

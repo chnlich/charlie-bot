@@ -3,7 +3,7 @@
 //!
 //! Each request past the version probe is appended to `calls.log` beside the program, as "METHOD PATH". At startup it
 //! logs a recovery line for each live run record when it adopts runs, and a line for each live run that names the
-//! run; then it logs `server_ready`. Every log line is one JSON object, as the server writes them.
+//! run; then it logs `server_ready`. Every log line comes from `logline::render`, as the server writes its lines.
 
 use std::collections::HashMap;
 use std::env;
@@ -14,13 +14,15 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
 use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_core::logline;
+use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::metadata::MetadataReadError;
@@ -28,7 +30,7 @@ use charliebot_store::run_records::{RUN_EVENTS_NAME, event_line, read_run_metada
 use charliebot_tasks::routes as task_routes;
 use regex::Regex;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 const PROBE_SESSION: &str = "probe-session";
 /// The delegation check's parent session, the child session its task runs in, and the task's run.
@@ -178,21 +180,11 @@ fn sorted_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
   Ok(paths)
 }
 
-/// One JSON line on stdout: the event, its fields, the level and the time.
+/// One log line on stdout, in the server's text form: the time, the level, the event and its fields.
 fn log(event: &str, fields: Value) {
-  let mut record = Map::new();
-  record.insert("event".to_string(), json!(event));
-  if let Value::Object(fields) = fields {
-    record.extend(fields);
-  }
-  record.insert("level".to_string(), json!("info"));
-  record.insert("timestamp".to_string(), json!(timestamp()));
-  println!("{}", Value::Object(record));
-}
-
-fn timestamp() -> String {
-  let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-  format!("{}.{:06}", since.as_secs(), since.subsec_micros())
+  let Value::Object(fields) = fields else { panic!("a log line's fields are a JSON object") };
+  let fields: Vec<(String, Value)> = fields.into_iter().collect();
+  println!("{}", logline::render(&timefmt::log_timestamp(), "info", event, &fields));
 }
 
 impl Server {

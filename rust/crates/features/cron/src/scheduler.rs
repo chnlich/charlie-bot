@@ -856,10 +856,10 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 #[cfg(test)]
 mod tests {
   use charliebot_registry::context::FeatureContext;
+  use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
   use charliebot_store::run_records::{RunKind, RunRecord};
   use charliebot_store::{CreateTask, TaskCaller};
-  use charliebot_store::compact::CompactValue;
   use charliebot_tasks::git::git_worktree_dir_name;
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
@@ -1693,11 +1693,7 @@ mod tests {
     let handle = tokio::spawn(async move {
       let _ = rx.await;
     });
-    scheduler
-      .handles
-      .lock()
-      .expect("cron handle mutex is not poisoned")
-      .insert(task_name.to_string(), handle);
+    scheduler.handles.lock().expect("cron handle mutex is not poisoned").insert(task_name.to_string(), handle);
     tx
   }
 
@@ -1707,7 +1703,9 @@ mod tests {
       .load_chat_events_sync(session_id)
       .unwrap()
       .iter()
-      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::HANDLER_RESULT))
+      .filter(|event| {
+        event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::HANDLER_RESULT)
+      })
       .count()
   }
 
@@ -1730,7 +1728,9 @@ mod tests {
     let events = features.store.load_chat_events_sync(&node.id).unwrap();
     let skips: Vec<&CompactValue> = events
       .iter()
-      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::SCHEDULED_RUN_SKIPPED))
+      .filter(|event| {
+        event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::SCHEDULED_RUN_SKIPPED)
+      })
       .collect();
     assert_eq!(skips.len(), 1, "{events:?}");
     assert_eq!(skips[0].get("task").and_then(CompactValue::as_str), Some("code-health"));

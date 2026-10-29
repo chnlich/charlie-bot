@@ -44,11 +44,8 @@ fn post_env(sandbox: &Sandbox, home: &Path, gh_log: &Path) -> Env {
 /// The profile home with one local pattern term in its pattern file.
 fn pattern_home(sandbox: &Sandbox) -> PathBuf {
   let home = sandbox.dir("charliebot-home");
-  std::fs::write(
-    home.join("skills_leak_patterns.local.txt"),
-    format!("{PATTERN_FILE_COMMENT}\n{PATTERN_TERM}\n"),
-  )
-  .unwrap();
+  std::fs::write(home.join("skills_leak_patterns.local.txt"), format!("{PATTERN_FILE_COMMENT}\n{PATTERN_TERM}\n"))
+    .unwrap();
   home
 }
 
@@ -198,7 +195,7 @@ fn a_pr_create_checks_title_and_body() {
   command
     .arg(github_post())
     .args(["pr-create", "--title"])
-    .arg(&format!("fix {HOME_PATH_TEXT}"))
+    .arg(format!("fix {HOME_PATH_TEXT}"))
     .args(["--body-file"])
     .arg(&body)
     .args(["--base", "main"]);
@@ -224,11 +221,7 @@ fn a_pr_close_sends_the_comment_from_its_file() {
   let (env, gh_log, _home) = post(&sandbox);
   let comment = body_file(&sandbox, "comment.txt", "improve-abandoned: topic — reason\n");
   let mut command = harness::command("bash", &env);
-  command
-    .arg(github_post())
-    .args(["pr-close", "--comment-file"])
-    .arg(&comment)
-    .args(["--delete-branch", "123"]);
+  command.arg(github_post()).args(["pr-close", "--comment-file"]).arg(&comment).args(["--delete-branch", "123"]);
   let run = run_in(&mut command, sandbox.root());
   assert_eq!(run.code, 0, "{}", run.describe());
   let line = &gh_log_lines(&gh_log)[0];
@@ -253,7 +246,7 @@ fn inline_text_flags_are_refused() {
     .arg(github_post())
     .args(["pr-comment", "--body-file"])
     .arg(&body)
-    .arg(&format!("--body={TAILNET_TEXT}"))
+    .arg(format!("--body={TAILNET_TEXT}"))
     .arg("123");
   assert_eq!(run_in(&mut inline_comment, sandbox.root()).code, 2);
 

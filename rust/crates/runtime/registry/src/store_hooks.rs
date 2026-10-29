@@ -309,13 +309,13 @@ mod tests {
   use tracing::{Event, Level};
 
   use super::*;
-  use charliebot_core::config::BackendOption;
   use crate::context::{FeatureContext, features_over};
   use crate::registry::{
-    AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, LaunchArgs,
-    RegistryError, ResumeStyle,
+    AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, LaunchArgs, RegistryError,
+    ResumeStyle,
   };
   use crate::turn::TurnContribution;
+  use charliebot_core::config::BackendOption;
 
   /// The session ids the recording contribution saw, held in the test context's startup state.
   #[derive(Default)]

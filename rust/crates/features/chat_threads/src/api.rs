@@ -31,17 +31,18 @@ pub(crate) fn matches(path: &str) -> bool {
 /// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the complement over the
 /// same corpus.
 async fn list_chat_threads(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let (mut rows, derived) = match listing::active_listing_corpus(&features.store, &features.registry) {
-    Ok(corpus) => corpus,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-  };
+  let listing::ListingCorpus { mut rows, derived, sequence_fields } =
+    match listing::active_listing_corpus(&features.store, &features.registry) {
+      Ok(corpus) => corpus,
+      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+    };
   let views = match features.store.view_subtree_roots() {
     Ok(views) => views,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   let threads = views.get(THREADS_VIEW);
   rows.retain(|row| threads.is_some_and(|members| members.contains_key(&row.id)));
-  listing::sessions_list_response(&request, &features.store, &features.registry, &rows, &derived, &CHAT_THREADS_MEMOS)
+  listing::sessions_list_response(&request, &features.store, &rows, &derived, &sequence_fields, &CHAT_THREADS_MEMOS)
 }
 
 #[cfg(test)]

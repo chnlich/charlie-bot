@@ -98,12 +98,13 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let response = blocking_store(move || {
-    let (mut rows, derived) = listing::active_listing_corpus(&features.store, &features.registry)?;
+    let listing::ListingCorpus { mut rows, derived, sequence_fields } =
+      listing::active_listing_corpus(&features.store, &features.registry)?;
     let roots = features.store.subtree_roots_shared()?;
     let sequence = roots.sequence;
     let views = roots.views;
     rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
-    Ok(listing::sessions_list_response(&request, &features.store, &features.registry, &rows, &derived, &ACTIVE_MEMOS))
+    Ok(listing::sessions_list_response(&request, &features.store, &rows, &derived, &sequence_fields, &ACTIVE_MEMOS))
   })
   .await;
   response.unwrap_or_else(store_error)
@@ -225,9 +226,9 @@ fn starred_response(features: &FeatureContext) -> Response {
     };
   let rows = match listing::listed_values(
     &features.store,
-    &features.registry,
     &listed.rows,
     &derived,
+    &listed.sequence_fields,
     listing::SidebarProjection {
       include_running: true,
       include_trigger: true,

@@ -8,8 +8,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
-use charliebot_store::{Store, StoreResult};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
+use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use lru::LruCache;
 use serde_json::{Map, Value, json};
@@ -72,37 +72,51 @@ pub struct SessionsListMemos {
   state: Mutex<SessionsListMemoState>,
 }
 
-/// Fetch active, non-scheduled sessions and their sidebar overlays.
-pub fn active_listing_corpus(
-  store: &Arc<Store>,
-  registry: &Arc<Registry>,
-) -> StoreResult<(Vec<Arc<SessionMetadata>>, DerivedSidebarMap)> {
+/// The active corpus a sidebar listing renders from: its rows, their derived overlays, and the controllers' row fields.
+pub struct ListingCorpus {
+  /// Active, unscheduled sessions, newest first.
+  pub rows: Vec<Arc<SessionMetadata>>,
+  /// The derived overlay of each row, keyed by session id.
+  pub derived: DerivedSidebarMap,
+  /// The controllers' listing fields of each row, keyed by session id.
+  pub sequence_fields: HashMap<String, Map<String, Value>>,
+}
+
+/// Fetch active, non-scheduled sessions, their sidebar overlays and their controller row fields.
+pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<ListingCorpus> {
   let listed = store.list_sessions(Some(SessionStatus::Active), None, Some(false))?;
   let derived = sidebar::resolve_sidebar_state(store, registry, &listed.rows, true, true, true, false)?;
-  Ok((listed.rows, derived))
+  Ok(ListingCorpus { rows: listed.rows, derived, sequence_fields: listed.sequence_fields })
 }
 
 /// The chat page's sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
 pub struct PageRows {
   rows: Vec<Arc<SessionMetadata>>,
   derived: DerivedSidebarMap,
-}
-
-impl PageRows {
-  /// The first row's id: the session that a page opened without one redirects to.
-  pub fn first_id(&self) -> Option<&str> {
-    self.rows.first().map(|row| row.id.as_str())
-  }
+  sequence_fields: HashMap<String, Map<String, Value>>,
 }
 
 /// Read the chat page's sidebar corpus without rendering a row.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
-  let (mut rows, derived) = active_listing_corpus(store, registry)?;
+  let ListingCorpus { mut rows, derived, sequence_fields } = active_listing_corpus(store, registry)?;
   let roots = store.subtree_roots_shared()?;
-  rows.retain(|row| {
-    !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
-  });
-  Ok(PageRows { rows, derived })
+  rows.retain(|row| outside_owned_subtrees(row, &roots));
+  Ok(PageRows { rows, derived, sequence_fields })
+}
+
+/// The id of the row that a page opened without a session redirects to.
+///
+/// The redirect reads only the row order, so it skips the derived overlays and the controller row fields that the
+/// rendered page needs.
+pub fn first_page_row_id(store: &Arc<Store>) -> StoreResult<Option<String>> {
+  let rows = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
+  let roots = store.subtree_roots_shared()?;
+  Ok(rows.iter().find(|row| outside_owned_subtrees(row, &roots)).map(|row| row.id.clone()))
+}
+
+/// Whether a row stands outside every sequence subtree and every view subtree.
+fn outside_owned_subtrees(row: &SessionMetadata, roots: &SharedSubtreeRoots) -> bool {
+  !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
 }
 
 /// The chat page's row projection: running and trigger state, the run backend, and no plan badge.
@@ -114,22 +128,30 @@ const PAGE_PROJECTION: SidebarProjection = SidebarProjection {
   include_run_backend: true,
 };
 
-/// One row's rendered JSON text and the inputs it renders from.
-struct PageRowText {
-  inputs: RowInputs,
-  text: String,
+/// The page's whole sidebar text and the inputs it rendered from.
+struct WholePageText {
+  inputs: Vec<RowInputs>,
+  clear_unread: Option<String>,
+  text: Arc<String>,
 }
 
-/// The chat page's rendered row texts, one per session id.
+/// The chat page's rendered sidebar texts.
 ///
-/// Every page request renders the same rows from the same inputs, so a row serves its previous text until one of the
-/// inputs [`render_row_text`] reads moves. The memo holds the page's whole sidebar text, about as much memory as one
-/// response body.
+/// Every page request renders the same rows from the same inputs, so the memo serves the whole sidebar text until one
+/// of the inputs [`render_row_text`] reads moves. A row whose inputs did not move keeps its text across a rebuild, so
+/// one changed row costs one row render rather than the whole sidebar. The memo holds the page's whole sidebar text,
+/// about as much memory as one response body.
 #[derive(Default)]
 pub struct PageRowsMemo {
-  rows: Mutex<HashMap<String, PageRowText>>,
+  state: Mutex<PageRowsMemoState>,
   #[cfg(test)]
   renders: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct PageRowsMemoState {
+  rows: HashMap<String, String>,
+  whole: Option<WholePageText>,
 }
 
 impl PageRowsMemo {
@@ -145,39 +167,57 @@ impl PageRowsMemo {
 /// later request that names another active session does not serve the marked row.
 pub fn active_page_json_text(
   store: &Store,
-  registry: &Registry,
   page: &PageRows,
   clear_unread: Option<&str>,
   memo: &PageRowsMemo,
-) -> StoreResult<String> {
-  let inputs = row_inputs(store, registry, &page.rows, &page.derived, PAGE_PROJECTION)?;
-  let mut state = memo.rows.lock().expect("the page row memo mutex is not poisoned");
+) -> StoreResult<Arc<String>> {
+  let inputs = row_inputs(store, &page.rows, &page.derived, &page.sequence_fields, PAGE_PROJECTION)?;
+  let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
+  if let Some(whole) = &state.whole
+    && whole.clear_unread.as_deref() == clear_unread
+    && whole.inputs == inputs
+  {
+    return Ok(Arc::clone(&whole.text));
+  }
+  let previous: HashMap<String, RowInputs> = state
+    .whole
+    .take()
+    .map_or_else(HashMap::new, |whole| whole.inputs.into_iter().map(|row| (row.meta.id.clone(), row)).collect());
   let current: HashSet<&str> = inputs.iter().map(|row| row.meta.id.as_str()).collect();
-  state.retain(|session_id, _| current.contains(session_id.as_str()));
-  let cached_bytes: usize = state.values().map(|entry| entry.text.len()).sum();
+  state.rows.retain(|session_id, _| current.contains(session_id.as_str()));
+  let cached_bytes: usize = state.rows.values().map(String::len).sum();
   let mut text = String::with_capacity(2 + cached_bytes + 256 * inputs.len());
   text.push('[');
-  for (index, row) in inputs.into_iter().enumerate() {
+  for (index, row) in inputs.iter().enumerate() {
     if index > 0 {
       text.push_str(", ");
     }
     let clear = clear_unread == Some(row.meta.id.as_str());
+    let inputs_moved = previous.get(row.meta.id.as_str()) != Some(row);
     if !clear
-      && let Some(entry) = state.get(row.meta.id.as_str())
-      && entry.inputs == row
+      && !inputs_moved
+      && let Some(row_text) = state.rows.get(row.meta.id.as_str())
     {
-      text.push_str(&entry.text);
+      text.push_str(row_text);
       continue;
     }
     #[cfg(test)]
     memo.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let row_text = render_row_text(store, &row, clear)?;
+    let row_text = render_row_text(store, row, clear)?;
     text.push_str(&row_text);
-    if !clear {
-      state.insert(row.meta.id.clone(), PageRowText { inputs: row, text: row_text });
+    if clear {
+      // The active row renders without its unread mark, so its text cannot answer an ordinary request. A row whose
+      // inputs moved drops its older text here, which keeps that text from serving the next request with them.
+      if inputs_moved {
+        state.rows.remove(row.meta.id.as_str());
+      }
+    } else {
+      state.rows.insert(row.meta.id.clone(), row_text);
     }
   }
   text.push(']');
+  let text = Arc::new(text);
+  state.whole = Some(WholePageText { inputs, clear_unread: clear_unread.map(str::to_string), text: Arc::clone(&text) });
   Ok(text)
 }
 
@@ -197,13 +237,13 @@ fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreR
   Ok(charliebot_compat::jinja::tojson_text(&value))
 }
 
-/// Render sidebar rows with sequence fields and route-local body and gzip memos.
+/// Render sidebar rows with their controller fields and route-local body and gzip memos.
 pub fn sessions_list_response(
   request: &Request<Body>,
   store: &Store,
-  registry: &Registry,
   rows: &[Arc<SessionMetadata>],
   derived: &DerivedSidebarMap,
+  sequence_fields: &HashMap<String, Map<String, Value>>,
   memos: &SessionsListMemos,
 ) -> Response {
   let projection = SidebarProjection {
@@ -213,7 +253,7 @@ pub fn sessions_list_response(
     display_backend: true,
     include_run_backend: false,
   };
-  let inputs = match row_inputs(store, registry, rows, derived, projection) {
+  let inputs = match row_inputs(store, rows, derived, sequence_fields, projection) {
     Ok(inputs) => inputs,
     Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
   };
@@ -290,24 +330,25 @@ fn display_backend(store: &Store, meta: &SessionMetadata) -> StoreResult<Option<
 
 pub(crate) fn listed_values(
   store: &Store,
-  registry: &Registry,
   rows: &[Arc<SessionMetadata>],
   derived: &DerivedSidebarMap,
+  sequence_fields: &HashMap<String, Map<String, Value>>,
   projection: SidebarProjection,
 ) -> StoreResult<Vec<Value>> {
-  row_inputs(store, registry, rows, derived, projection)?.iter().map(|row| render_row(store, row, projection)).collect()
+  row_inputs(store, rows, derived, sequence_fields, projection)?
+    .iter()
+    .map(|row| render_row(store, row, projection))
+    .collect()
 }
 
 /// Read every input that the rows of one listing render from.
 fn row_inputs(
   store: &Store,
-  registry: &Registry,
   rows: &[Arc<SessionMetadata>],
   derived: &DerivedSidebarMap,
+  sequence_fields: &HashMap<String, Map<String, Value>>,
   projection: SidebarProjection,
 ) -> StoreResult<Vec<RowInputs>> {
-  let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
-  let listing_fields = registry.sequence_listing_fields(&ids, UtcDateTime::now());
   rows
     .iter()
     .map(|row| {
@@ -317,7 +358,7 @@ fn row_inputs(
         thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
         run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
         display_backend: if projection.display_backend { display_backend(store, row)? } else { None },
-        listing: listing_fields.get(&row.id).cloned(),
+        listing: sequence_fields.get(&row.id).cloned(),
       })
     })
     .collect()
@@ -398,10 +439,11 @@ mod tests {
     features: &charliebot_registry::FeatureContext,
     rows: &[Arc<SessionMetadata>],
     derived: &DerivedSidebarMap,
+    sequence_fields: &HashMap<String, Map<String, Value>>,
     memos: &SessionsListMemos,
   ) -> Value {
     let request = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
-    let response = sessions_list_response(&request, &features.store, &features.registry, rows, derived, memos);
+    let response = sessions_list_response(&request, &features.store, rows, derived, sequence_fields, memos);
     serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
   }
 
@@ -414,20 +456,21 @@ mod tests {
     let mut derived = DerivedSidebarMap::new();
     derived
       .insert(node.id.clone(), json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone());
+    let sequence_fields = HashMap::new();
 
-    let first = list_body(&features, &rows, &derived, &memos).await;
+    let first = list_body(&features, &rows, &derived, &sequence_fields, &memos).await;
     assert_eq!(memos.state.lock().unwrap().render_calls, 1);
-    assert_eq!(list_body(&features, &rows, &derived, &memos).await, first);
+    assert_eq!(list_body(&features, &rows, &derived, &sequence_fields, &memos).await, first);
     assert_eq!(memos.state.lock().unwrap().render_calls, 1);
     assert_eq!(first[0]["work_state"], "idle");
 
     derived.get_mut(&node.id).unwrap().insert("work_state".to_string(), json!("waiting"));
-    assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["work_state"], "waiting");
+    assert_eq!(list_body(&features, &rows, &derived, &sequence_fields, &memos).await[0]["work_state"], "waiting");
     assert_eq!(memos.state.lock().unwrap().render_calls, 2);
 
     let renamed = (*rows[0]).clone();
     rows[0] = Arc::new(SessionMetadata { name: "renamed".to_string(), ..renamed });
-    assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["name"], "renamed");
+    assert_eq!(list_body(&features, &rows, &derived, &sequence_fields, &memos).await[0]["name"], "renamed");
     assert_eq!(memos.state.lock().unwrap().render_calls, 3);
   }
 
@@ -440,24 +483,64 @@ mod tests {
     let memo = PageRowsMemo::default();
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    let text = active_page_json_text(&features.store, &features.registry, &page, None, &memo).unwrap();
-    assert_eq!(text, page_array_text(&features.store, &features.registry, &page, None));
+    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    assert_eq!(text.as_str(), page_array_text(&features.store, &page, None));
     let rendered = memo.render_calls();
     assert_eq!(rendered, page.rows.len());
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    assert_eq!(active_page_json_text(&features.store, &features.registry, &page, None, &memo).unwrap(), text);
+    assert_eq!(active_page_json_text(&features.store, &page, None, &memo).unwrap().as_str(), text.as_str());
     assert_eq!(memo.render_calls(), rendered);
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    let active = active_page_json_text(&features.store, &features.registry, &page, Some(&first.id), &memo).unwrap();
-    assert_eq!(active, page_array_text(&features.store, &features.registry, &page, Some(&first.id)));
+    let active = active_page_json_text(&features.store, &page, Some(&first.id), &memo).unwrap();
+    assert_eq!(active.as_str(), page_array_text(&features.store, &page, Some(&first.id)));
     assert_eq!(memo.render_calls(), rendered + 1);
   }
 
+  /// The page corpus over given rows, with the controller fields that a listing supplies for each row.
+  fn page_rows_over(rows: Vec<Arc<SessionMetadata>>) -> PageRows {
+    let sequence_fields = rows.iter().map(|row| (row.id.clone(), Map::new())).collect();
+    PageRows { rows, derived: DerivedSidebarMap::new(), sequence_fields }
+  }
+
+  /// A row whose inputs move while it is the active session does not serve its older text to a later request.
+  #[tokio::test]
+  async fn a_moved_active_row_does_not_serve_its_older_text() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "moved-active-row", None, TaskProfile::Manager).await;
+    let memo = PageRowsMemo::default();
+
+    let page = page_rows_over(vec![Arc::new(meta.clone())]);
+    active_page_json_text(&features.store, &page, None, &memo).unwrap();
+
+    let renamed = SessionMetadata { name: "renamed while active".to_string(), ..meta.clone() };
+    let changed = page_rows_over(vec![Arc::new(renamed)]);
+    let active_text = active_page_json_text(&features.store, &changed, Some(&meta.id), &memo).unwrap();
+    let active: Vec<Value> = serde_json::from_str(active_text.as_str()).unwrap();
+    assert_eq!(active[0]["name"], "renamed while active");
+    assert_eq!(active[0]["has_unread"], false);
+
+    let ordinary_text = active_page_json_text(&features.store, &changed, None, &memo).unwrap();
+    let ordinary: Vec<Value> = serde_json::from_str(ordinary_text.as_str()).unwrap();
+    assert_eq!(ordinary[0]["name"], "renamed while active");
+  }
+
+  /// A page opened without a session redirects to the row that the rendered page puts first.
+  #[tokio::test]
+  async fn the_redirect_row_is_the_rendered_page_first_row() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "redirect-first", None, TaskProfile::Manager).await;
+    crate::test_support::create_node(&features.store, "redirect-second", None, TaskProfile::Manager).await;
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let first_row = page.rows.first().map(|row| row.id.as_str());
+    assert_eq!(first_page_row_id(&features.store).unwrap().as_deref(), first_row);
+  }
+
   /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared.
-  fn page_array_text(store: &Store, registry: &Registry, page: &PageRows, clear_unread: Option<&str>) -> String {
-    let inputs = row_inputs(store, registry, &page.rows, &page.derived, PAGE_PROJECTION).unwrap();
+  fn page_array_text(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> String {
+    let inputs = row_inputs(store, &page.rows, &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
     let values: Vec<Value> = inputs
       .iter()
       .map(|row| {

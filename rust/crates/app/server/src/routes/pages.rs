@@ -46,8 +46,15 @@ fn is_page_path(path: &str) -> bool {
 /// The chat page's sidebar outcome: the redirect of a page opened without a session, or the rendered rows as text.
 enum PageListing {
   Redirect(String),
-  Text(String),
+  Text(Arc<String>),
 }
+
+/// Stands in for the chat page's sidebar JSON inside the template.
+///
+/// The sidebar text is far larger than its template, and the template engine copies every value it writes, so the
+/// template writes this placeholder and the finished page substitutes the text once. JSON escapes control characters,
+/// so the sidebar text itself never carries this placeholder.
+const INITIAL_SESSIONS_PLACEHOLDER: &str = "\u{1}charliebot-initial-sessions\u{1}";
 
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
@@ -112,12 +119,12 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let features = Arc::clone(&state.features);
   let redirect_to_first = session.is_none();
   let listing_result = tokio::task::spawn_blocking(move || -> StoreResult<PageListing> {
-    let page = listing::active_page_rows(&features.store, &features.registry)?;
     // As Python's index: a page opened without a session redirects to the first row before any row renders.
-    if redirect_to_first && let Some(first) = page.first_id() {
-      return Ok(PageListing::Redirect(first.to_string()));
+    if redirect_to_first && let Some(first) = listing::first_page_row_id(&features.store)? {
+      return Ok(PageListing::Redirect(first));
     }
-    listing::active_page_json_text(&features.store, &features.registry, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
+    let page = listing::active_page_rows(&features.store, &features.registry)?;
+    listing::active_page_json_text(&features.store, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
       .map(PageListing::Text)
   })
   .await
@@ -128,7 +135,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     Err(error) => {
       tracing::error!(error = %error, "list_sessions_failed");
       load_errors.push("Failed to load sessions. Check server logs for details.".to_string());
-      "[]".to_string()
+      Arc::new("[]".to_string())
     }
   };
 
@@ -141,7 +148,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     .unwrap_or(default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
   let context = json!({
-    "initial_sessions_json": initial_sessions_json,
+    "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "active_session": active_session,
     "pending_draft": pending_draft,
     "event_count": event_count,
@@ -165,7 +172,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     request,
     "index.html",
     context,
-    PageRuntime::Index { cfg, auth_enabled: credentials.access_key().is_some() },
+    PageRuntime::Index { cfg, auth_enabled: credentials.access_key().is_some(), sidebar_text: initial_sessions_json },
   )
   .await
 }
@@ -232,9 +239,19 @@ async fn events_viewer(
 }
 
 enum PageRuntime {
-  Index { cfg: Arc<CharlieBotConfig>, auth_enabled: bool },
+  Index { cfg: Arc<CharlieBotConfig>, auth_enabled: bool, sidebar_text: Arc<String> },
   Home,
   Events,
+}
+
+impl PageRuntime {
+  /// The values the page carries as placeholders, as `(placeholder, text)` pairs for the finished page.
+  fn substitutions(&self) -> Vec<(&'static str, &str)> {
+    match self {
+      Self::Index { sidebar_text, .. } => vec![(INITIAL_SESSIONS_PLACEHOLDER, sidebar_text.as_str())],
+      Self::Home | Self::Events => Vec::new(),
+    }
+  }
 }
 
 async fn render_page(
@@ -250,13 +267,13 @@ async fn render_page(
     let hostname = hostname()?;
     let object = context.as_object_mut().expect("a page context is a JSON object");
     object.insert("hostname".to_string(), Value::String(hostname));
-    match runtime {
-      PageRuntime::Index { cfg, auth_enabled } => {
+    match &runtime {
+      PageRuntime::Index { cfg, auth_enabled, .. } => {
         let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
         object.insert("sessions_root".to_string(), Value::String(paths::display(&cfg.sessions_dir())));
         object.insert("version".to_string(), Value::String(templating.git_version().to_string()));
         object.insert("static_asset_version".to_string(), Value::String(asset_version));
-        object.insert("auth_enabled".to_string(), Value::Bool(auth_enabled));
+        object.insert("auth_enabled".to_string(), Value::Bool(*auth_enabled));
       }
       PageRuntime::Home => {}
       PageRuntime::Events => {
@@ -264,7 +281,9 @@ async fn render_page(
         object.insert("static_asset_version".to_string(), Value::String(asset_version));
       }
     }
-    templating.render_page(&state.features, name, &context, &request).map_err(|error| failure(error.kind(), error))
+    templating
+      .render_page_with_substitutions(&state.features, name, &context, &request, &runtime.substitutions())
+      .map_err(|error| failure(error.kind(), error))
   })
   .await
   .expect("rendering a page does not panic");

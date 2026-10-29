@@ -7,13 +7,8 @@ use std::sync::{Mutex, OnceLock};
 use lru::LruCache;
 use serde_json::{Map, Value};
 
-pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
-pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
 pub const HAS_PENDING_PLAN_APPROVAL: &str = "has_pending_plan_approval";
-pub const HAS_RUNNING_TASKS: &str = "has_running_tasks";
-pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 pub const TASK_TREE_ACTIVITY: &str = "task_tree_activity";
-pub const WORK_STATE: &str = "work_state";
 const FORCE_FULL_EVERY: u64 = 10;
 const DERIVED_MAP_MEMO_LIMIT: usize = 4;
 /// A memoized sidebar row per session.
@@ -77,17 +72,6 @@ pub fn discard_dirty(session_ids: &[String]) {
 /// Return a copy of one session's probe snapshot, or `None` when it is cold.
 pub fn snapshot_entry(session_id: &str) -> Option<Map<String, Value>> {
   state().lock().expect("sidebar state mutex is not poisoned").snapshot.get(session_id).cloned()
-}
-
-/// Return one session's probe snapshot and fail if it has not been populated.
-pub fn required_snapshot_entry(session_id: &str) -> Map<String, Value> {
-  state()
-    .lock()
-    .expect("sidebar state mutex is not poisoned")
-    .snapshot
-    .get(session_id)
-    .cloned()
-    .expect("the sidebar poll must probe a cold session before reading its snapshot")
 }
 
 /// Store a probe snapshot and bump the derived-state generation.

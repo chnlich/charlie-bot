@@ -750,7 +750,7 @@ function writeWavHeader(view, sampleCount) {
 
 // --- Upload transport -------------------------------------------------------
 
-function sendVoiceXhr(path, body, {onSent = null, onXhr = null} = {}) {
+function sendVoiceXhr(path, body, {onSent, onXhr}) {
   // XHR, not fetch: the two-state progress needs upload.onload, the one event
   // that fires when the body is fully sent, to switch Uploading -> Decoding.
   // XHR gets no auth from the fetch wrapper, so the header goes on explicitly.
@@ -780,7 +780,8 @@ function sendVoiceXhr(path, body, {onSent = null, onXhr = null} = {}) {
 // The upload's transport: a multipart form with the audio plus the
 // backend the browser selected and the recording's device object as JSON — the
 // server persists the recording, transcribes it, and returns the text.
-function postVoiceRecording(path, wavBuffer, {backendId = null, devices = null, ...opts} = {}) {
+// A null backendId or devices leaves that form field out.
+function postVoiceRecording(path, wavBuffer, {backendId, devices, ...opts}) {
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer]), 'recording.wav');
   if (backendId !== null) form.append('backend', backendId);

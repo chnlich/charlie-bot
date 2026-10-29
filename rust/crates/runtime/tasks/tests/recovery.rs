@@ -3206,6 +3206,34 @@ async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() ->
 }
 
 #[tokio::test]
+async fn a_session_whose_probe_fails_fails_its_node_and_the_walk_goes_on() -> anyhow::Result<()> {
+  // No Python test case: a node-absence probe that cannot read the session's files is a node failure like any other.
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("walk-owner", None, TaskProfile::Manager, None).await?;
+  let mut template: Value = serde_json::from_slice(&std::fs::read(stack.store().metadata_path(&manager.id))?)?;
+  let session_id = "unreadable-chat";
+  template["id"] = json!(session_id);
+  let session_dir = stack.store().session_dir(session_id);
+  std::fs::create_dir_all(charliebot_store::layout::data_dir(&session_dir))?;
+  std::fs::write(charliebot_store::layout::metadata_path(&session_dir), serde_json::to_vec(&template)?)?;
+  std::fs::write(
+    charliebot_store::layout::chat_events_path(&session_dir),
+    "{\"id\": \"e1\", \"type\": \"user\", \"content\": \"hello\"}\n",
+  )?;
+  // A runs path that is a file makes the probe's run-directory read fail.
+  std::fs::write(charliebot_store::layout::runs_dir(&session_dir), "")?;
+
+  let counters = stack.boot().await?;
+  assert_eq!(counters.full, 2, "the walk still checks the node beside the unreadable session");
+  let text = log.text();
+  assert!(text.contains("task_recovery_node_failed"), "the probe failure is a node failure: {text}");
+  assert!(text.contains(session_id), "the failure names the unreadable session: {text}");
+  Ok(())
+}
+
+#[tokio::test]
 async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
   // No Python test case: the display warm-up of src/runtime/task_recovery.py:166-168.
   let stack = Stack::start("exit 0").await?;

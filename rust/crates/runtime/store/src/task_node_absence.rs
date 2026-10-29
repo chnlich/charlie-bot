@@ -86,13 +86,14 @@ fn file_holds_task_event(path: &Path) -> StoreResult<bool> {
 /// Whether the bytes name a task boundary or prompt-change event anywhere. A boundary event type appears as its own
 /// word in the JSON, so a plain substring search finds every one and reads the event types before a parse would.
 fn holds_task_event(bytes: &[u8]) -> bool {
-  if memmem::find(bytes, PROMPT_CHANGED_EVENT_TYPE).is_some() {
+  // The boundary search goes first: a node's creation fact stands at its head, so a node answers without reading
+  // the rest. A prompt change can stand anywhere, so its search runs only once no boundary turned up.
+  if memmem::find_iter(bytes, BOUNDARY_EVENT_PREFIX)
+    .any(|at| BOUNDARY_EVENT_TYPES.iter().any(|event_type| bytes[at..].starts_with(event_type)))
+  {
     return true;
   }
-  memmem::find_iter(bytes, BOUNDARY_EVENT_PREFIX).any(|at| {
-    let rest = &bytes[at..];
-    BOUNDARY_EVENT_TYPES.iter().any(|event_type| rest.starts_with(event_type))
-  })
+  memmem::find(bytes, PROMPT_CHANGED_EVENT_TYPE).is_some()
 }
 
 #[cfg(test)]

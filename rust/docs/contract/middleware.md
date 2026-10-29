@@ -38,19 +38,21 @@ Every HTTP request produces exactly one structlog event named `http_request` at 
 
 On the exception path, `status` is 500 and the line is written before the exception propagates.
 
-The server does not call `structlog.configure`, so the structlog defaults apply:
+The server writes each log line to stdout in the grammar of `charliebot_core::logline`, the one module that writes and reads it:
 
-- output to stdout;
-- local time stamp `%Y-%m-%d %H:%M:%S`;
-- the level in brackets, padded;
-- the event name, padded to 30 characters;
-- the fields as `key=value`, sorted by key.
+- the UTC time to the millisecond, `YYYY-MM-DD HH:MM:SS.mmmZ`;
+- the level in brackets, padded to nine columns;
+- the event name, padded to 30 columns;
+- the fields as `key=value`, in the order the event logs them;
+- a value that is empty, or holds whitespace, a control character, `=`, `'` or `"`, is quoted with Python's `repr(str)` escapes, so one event stays on one line.
 
 Example (synthetic values):
 
 ```text
-2026-01-01 12:00:00 [info     ] http_request                   client=127.0.0.1 duration_ms=4 method=GET path=/api/sessions/ status=200
+2026-01-01 12:00:00.000Z [info     ] http_request                   method=GET path=/api/sessions/ status=200 duration_ms=4 client=127.0.0.1
 ```
+
+The Python server rendered the same layout with structlog's console renderer, in local time with the fields sorted by key.
 
 uvicorn runs with `log_level="warning"` (`server.py:600`). Thus uvicorn writes no access log. The `http_request` line is the only request log.
 

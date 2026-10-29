@@ -62,8 +62,9 @@ cancels pending tasks and joins the default executor (`asyncio/runners.py:63-75`
 then its `atexit` hook closes the browser
 (`src/features/artifacts/headless_render.py:184`). Turn cancellation follows `src/runtime/master_cc_run.py:648-664`.
 
-Logs are JSON lines on stdout. Each line is `{"event": ..., <fields>, "level": ..., "timestamp": ...}`
-and uses the Python server's event names and fields. Every HTTP response logs one `http_request` line
+Logs are text lines on stdout that open with the UTC time, the level and the event name, then `key=value`
+fields in call order (`rust/docs/contract/middleware.md` gives the grammar; `charliebot_core::logline` writes and
+reads it). Event names and fields follow the Python server's. Every HTTP response logs one `http_request` line
 with `method`, `path`, `status`, `duration_ms` and `client`. A failed request adds `error`.
 
 ## Test
@@ -227,9 +228,10 @@ listed here:
   preview of a manager session with one of those origins differs from the Python server until they do.
 - Transport gzip uses zlib at level 1, and the Python server uses ISA-L at level 1. The headers and the
   decoded bytes match; the compressed bytes and their `content-length` differ.
-- Logs are JSON lines; the Python server renders structlog's console format. Event names and fields
-  match. The Rust server adds `websocket_route_not_ported`, `graceful_shutdown_timeout_exceeded` and
-  `server_failed`.
+- Logs use the `logline` grammar, with UTC time. The Python server renders structlog's console format, with
+  local time. Event names and fields match. The Rust server adds `websocket_route_not_ported`,
+  `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
+  `crates/app/server/src/main.rs`.
 - YAML loads as YAML 1.2 (serde_yaml), and the Python server loads YAML 1.1 (PyYAML). Unquoted `yes`,
   `no`, `on` and `off` are strings here and booleans there.
 - Startup also loads `credentials.yaml` and the `voice:` keys the page reads, and it fails on an

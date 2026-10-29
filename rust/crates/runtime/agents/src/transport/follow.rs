@@ -269,7 +269,7 @@ fn remove_id(value: Option<&Value>, pending: &mut HashSet<String>) {
 }
 
 fn clamp_event_timestamp(event: &mut Value, mtime: Option<SystemTime>) {
-  if event.get("timestamp").is_some_and(is_truthy) {
+  if event.get("timestamp").is_some_and(charliebot_core::pyfmt::python_truthy) {
     return;
   }
   let now = OffsetDateTime::now_utc();
@@ -280,17 +280,6 @@ fn clamp_event_timestamp(event: &mut Value, mtime: Option<SystemTime>) {
     .as_object_mut()
     .expect("translated backend event is an object")
     .insert("timestamp".to_string(), Value::String(value));
-}
-
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_none_or(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
 }
 
 fn python_isoformat(value: OffsetDateTime) -> String {

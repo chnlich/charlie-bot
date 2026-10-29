@@ -559,8 +559,8 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
   };
   let text = event
     .get("content")
-    .filter(|value| python_truthy(Some(value)))
-    .or_else(|| event.get("summary").filter(|value| python_truthy(Some(value))))
+    .filter(|value| pyfmt::python_truthy(value))
+    .or_else(|| event.get("summary").filter(|value| pyfmt::python_truthy(value)))
     .map_or_else(String::new, python_string);
   Ok(json!({
     "id": event.get("id").map_or_else(|| "None".to_string(), python_string),
@@ -729,17 +729,6 @@ fn request_wants_gzip(request: &Request<Body>) -> bool {
 
 fn to_index(value: i64) -> usize {
   usize::try_from(value).unwrap_or(0)
-}
-
-fn python_truthy(value: Option<&Value>) -> bool {
-  match value {
-    None | Some(Value::Null) => false,
-    Some(Value::Bool(value)) => *value,
-    Some(Value::Number(value)) => value.as_f64().is_some_and(|number| number != 0.0),
-    Some(Value::String(value)) => !value.is_empty(),
-    Some(Value::Array(value)) => !value.is_empty(),
-    Some(Value::Object(value)) => !value.is_empty(),
-  }
 }
 
 fn python_string(value: &Value) -> String {

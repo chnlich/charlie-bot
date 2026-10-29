@@ -85,7 +85,7 @@ impl SlackClient {
     let body = json!({"channel": channel, "name": name, "timestamp": ts});
     let response = self.json_request("reactions.remove", &self.bot_token, body)?.send().await?;
     let payload = response_json(response).await?;
-    if !payload.get("ok").is_some_and(python_truthy)
+    if !payload.get("ok").is_some_and(pyfmt::python_truthy)
       && payload.get("error").and_then(Value::as_str) != Some("no_reaction")
     {
       bail!("reactions.remove failed: {}", pyfmt::python_str(&payload));
@@ -161,7 +161,7 @@ impl SlackClient {
     url.query_pairs_mut().append_pair("channel", channel_id);
     let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
     let payload = response_json(response).await?;
-    if !payload.get("ok").is_some_and(python_truthy) {
+    if !payload.get("ok").is_some_and(pyfmt::python_truthy) {
       tracing::warn!(
         event = "slack_channel_name_unresolved",
         channel = channel_id,
@@ -197,7 +197,7 @@ impl SlackClient {
 
 async fn checked_payload(response: Response, method: &str) -> Result<Value> {
   let payload = response_json(response).await?;
-  if !payload.get("ok").is_some_and(python_truthy) {
+  if !payload.get("ok").is_some_and(pyfmt::python_truthy) {
     bail!("{method} failed: {}", pyfmt::python_str(&payload));
   }
   Ok(payload)
@@ -207,15 +207,4 @@ async fn response_json(response: Response) -> Result<Value> {
   let response = response.error_for_status()?;
   let bytes = response.bytes().await?;
   serde_json::from_slice(&bytes).context("Slack Web API response is not JSON")
-}
-
-fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
 }

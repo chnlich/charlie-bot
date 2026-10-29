@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use charliebot_core::{fsutil, pystr};
+use charliebot_core::{fsutil, pyfmt, pystr};
 use memchr::{memchr_iter, memchr2, memchr2_iter};
 use memmap2::Mmap;
 use serde_json::Value;
@@ -1454,7 +1454,7 @@ fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number:
     return Err(StoreError::new(format!("{}:{line_number}: chat event is not a JSON object", live_path.display())));
   };
   let timestamp = match event.get("timestamp") {
-    Some(timestamp) if python_truthy(timestamp) => timestamp,
+    Some(timestamp) if pyfmt::python_truthy(timestamp) => timestamp,
     _ => return Ok(false),
   };
   let Value::String(timestamp) = timestamp else {
@@ -1468,18 +1468,6 @@ fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number:
     return Ok(false);
   };
   Ok(parsed < cutoff)
-}
-
-/// Python's truth value for a parsed JSON value: `None`, `False`, zero, and empty strings, lists and objects are false.
-fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64() != Some(0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(fields) => !fields.is_empty(),
-  }
 }
 
 #[cfg(test)]

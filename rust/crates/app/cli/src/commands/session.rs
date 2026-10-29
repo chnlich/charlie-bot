@@ -268,18 +268,6 @@ fn parse_json(flag_name: &str, text: &str) -> Result<Value, CliExit> {
   serde_json::from_str(text).map_err(|error| CliExit::error(format!("{flag_name}: {error}")))
 }
 
-/// Python truthiness of a `json.loads` value, for the `or`-fallbacks the verbs port.
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_none_or(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
-}
-
 /// A response field the verb reads directly; a missing one is a broken server contract.
 fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, CliExit> {
   value.get(key).ok_or_else(|| CliExit::error(format!("the response lacks {key}")))
@@ -368,7 +356,9 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
   let request_id = args
     .request_id
     .clone()
-    .or_else(|| body.get("request_id").filter(|value| is_truthy(value)).and_then(Value::as_str).map(str::to_string))
+    .or_else(|| {
+      body.get("request_id").filter(|value| pyfmt::python_truthy(value)).and_then(Value::as_str).map(str::to_string)
+    })
     .unwrap_or_else(control_events::new_request_id);
   body.insert("request_id".to_string(), json!(request_id));
 
@@ -549,7 +539,7 @@ fn scan_task_close(events_path: &Path, task_id: &str, request_id: &str) -> Optio
     {
       let outcome = object
         .get("outcome")
-        .filter(|outcome| is_truthy(outcome))
+        .filter(|outcome| pyfmt::python_truthy(outcome))
         .map(pyfmt::python_str)
         .unwrap_or_else(|| "completed".to_string());
       return Some(LocalClose::Closed(json!({
@@ -615,7 +605,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   ];
   let mut pages: Vec<Vec<Value>> = vec![field(&boot, "messages")?.as_array().cloned().unwrap_or_default()];
   let mut cursor = page_starts[0];
-  let mut has_more = is_truthy(field(&boot, "has_more")?);
+  let mut has_more = pyfmt::python_truthy(field(&boot, "has_more")?);
   let mut separators = count_separators(&pages[0]);
   // --turns stops once the fetched pages hold one separator more than the requested turn count —
   // everything after the (N+1)-th last separator is then the last N complete turns plus the turn
@@ -633,7 +623,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
       field(&page, "next_before")?.as_i64().ok_or_else(|| CliExit::error("next_before must be an integer"))?;
     page_starts.push(next_before);
     cursor = next_before;
-    has_more = is_truthy(field(&page, "has_more")?);
+    has_more = pyfmt::python_truthy(field(&page, "has_more")?);
   }
 
   let mut cut = 0usize;
@@ -719,8 +709,11 @@ fn format_message_block(message: &Value) -> Option<String> {
     return None;
   }
   let role = pyfmt::python_str(message.get("role").unwrap_or(&Value::Null));
-  let timestamp =
-    message.get("timestamp").filter(|timestamp| is_truthy(timestamp)).map(pyfmt::python_str).unwrap_or_default();
+  let timestamp = message
+    .get("timestamp")
+    .filter(|timestamp| pyfmt::python_truthy(timestamp))
+    .map(pyfmt::python_str)
+    .unwrap_or_default();
   let event_index = pyfmt::python_str(message.get("event_index").unwrap_or(&Value::Null));
   let mut lines = vec![format!("## {role} · {timestamp} · event {event_index}")];
   if !body.is_empty() {

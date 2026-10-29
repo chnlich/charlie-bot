@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
+use charliebot_core::pyfmt::python_truthy;
 use charliebot_registry::FeatureContext;
 use flate2::{Compression, GzBuilder};
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
@@ -566,17 +567,6 @@ fn gpu_index(label: &str) -> Option<u64> {
     }
   }
   None
-}
-
-fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
 }
 
 fn attribute_failure(value: &Value, attribute: &str) -> BuildFailure {

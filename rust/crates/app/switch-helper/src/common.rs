@@ -29,18 +29,6 @@ pub(crate) fn failed(error: impl std::fmt::Display) -> CliExit {
   CliExit::error(error.to_string())
 }
 
-/// Python truthiness of a value `serde_json` parsed: `None`, `False`, `0`, `""` and empty containers are false.
-pub(crate) fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
-}
-
 /// Python's `repr(value)` for a value `json` parsed: strings are quoted, `None` prints bare.
 pub(crate) fn python_repr(value: &Value) -> String {
   match value {

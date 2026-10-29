@@ -307,7 +307,7 @@ fn remaining_done(item: &Value) -> Result<bool, CliExit> {
 fn item_line(item: &Value) -> Result<String, CliExit> {
   let text = pyfmt::python_str(field(item, "text")?);
   let link = field(item, "link")?;
-  Ok(if is_truthy(link) { format!("- {text} ({})", pyfmt::python_str(link)) } else { format!("- {text}") })
+  Ok(if pyfmt::python_truthy(link) { format!("- {text} ({})", pyfmt::python_str(link)) } else { format!("- {text}") })
 }
 
 fn short_session_id(row: &Value) -> Result<String, CliExit> {
@@ -315,7 +315,7 @@ fn short_session_id(row: &Value) -> Result<String, CliExit> {
 }
 
 fn or_not_set(value: &Value) -> String {
-  if is_truthy(value) { pyfmt::python_str(value) } else { "(not set)".to_string() }
+  if pyfmt::python_truthy(value) { pyfmt::python_str(value) } else { "(not set)".to_string() }
 }
 
 /// A response field the verb reads; a missing one is a broken server contract.
@@ -325,18 +325,6 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, CliExit> {
 
 fn list(value: &Value) -> Result<&Vec<Value>, CliExit> {
   value.as_array().ok_or_else(|| CliExit::error("the response carries a field that is not a list"))
-}
-
-/// Python truthiness of a `json.loads` value, for the `or` and `if` tests the rendering makes.
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_none_or(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
 }
 
 /// `str.splitlines()`: the line breaks Python recognizes, none kept, and no empty line after a final break.

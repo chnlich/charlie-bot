@@ -165,7 +165,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
     return false;
   }
   // `if not raw_updated` drops the falsy values before `str()` reads the rest.
-  let Some(raw_updated) = meta.get("updated_at").filter(|value| is_truthy(value)) else {
+  let Some(raw_updated) = meta.get("updated_at").filter(|value| pyfmt::python_truthy(value)) else {
     return false;
   };
   let Some(updated_at) = utc_datetime::parse(&pyfmt::python_str(raw_updated)) else {
@@ -176,19 +176,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
 
 /// `storage_cool._optional_str`: the Python `str()` text of a truthy value, and none for a falsy one.
 fn optional_text(value: Option<&Value>) -> Option<String> {
-  value.filter(|value| is_truthy(value)).map(pyfmt::python_str)
-}
-
-/// Python's truth value of a JSON value: null, false, zero, and the empty string, array and object are false.
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_some_and(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
+  value.filter(|value| pyfmt::python_truthy(value)).map(pyfmt::python_str)
 }
 
 /// Backend session ids that metadata references, each with the sessions that reference it (`_scan_references`).

@@ -17,8 +17,11 @@ The script sends nothing on a hit, so the posted text is always text that passed
 
 ## Step 1: set the clone
 
-Work in the direction's own clone, `~/improve/<direction>/charlie-bot`.
-The round writes only there, in the evidence directory, and in the scratch directories under `/tmp/improve-<direction>/`.
+The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.
+Every command of the round runs there, so this host's profile home and runtime clone stay out of reach.
+The write boundary allows writes in that clone, in the evidence directory and in two scratch directories.
+The scratch directories are `/tmp/improve-<direction>/` and `/tmp/improve-<direction>-tmp/`.
+Two rounds of one direction never run together: the runner's scope name, `improve-<direction>.scope`, refuses the second round.
 
 Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
 
@@ -26,7 +29,8 @@ At round start, delete what a killed round left under `/tmp/improve-<direction>/
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
 A killed round's scratch holds large copies, so the next round removes it before it starts.
 
-End the round with a report when the clone is absent or lacks `core.hooksPath tools/git-hooks`:
+The runner checks the clone before claude starts, and a missing or foreign clone ends that launch with exit 4.
+End the round with a report when the clone lacks `core.hooksPath tools/git-hooks`:
 
     git -C ~/improve/<direction>/charlie-bot config core.hooksPath
 
@@ -62,8 +66,13 @@ Go to Step 3 only when no such pull request is open, because an adopted pull req
 
 ## Step 3: avoid in-flight files and abandoned topics
 
-Run `tools/improve/inflight-files.sh improve/<direction>/`.
-Pick a topic whose files the output does not list.
+Read the in-flight files list in this round's launch directory.
+The runner names that directory in `IMPROVE_LAUNCH_DIR`:
+
+    "$IMPROVE_LAUNCH_DIR/inflight-files.txt"
+
+The launcher runs `tools/improve/inflight-files.sh improve/<direction>/` on this host, because the other lines' worktrees exist only there.
+Pick a topic whose files the list does not name.
 A file that another branch changes would force that branch to resolve our conflict.
 
 List the closed pull requests of this direction and read each `improve-abandoned:` comment:
@@ -84,14 +93,15 @@ The round lands a whole topic, not a fragment.
 For a fresh topic, create the branch with `git switch -c improve/<direction>/<topic slug> origin/main`.
 The branch name records the topic for the abandoned-topic check.
 
-When the topic touches `rust/`, run the local checks in the `rust/` directory:
+When the topic touches `rust/`, run the checks on the remote host, in the `rust/` directory:
 
-    CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo check
-    CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo test -p <crate>
+    CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo check
+    CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo test -p <crate>
 
 Add `-p <crate>` for every crate that the change touches.
-Run no other test locally, because CI runs the full suite.
-The pinned target directory and `nice -n 19` keep the live server's CPU free.
+Run no other test, because CI runs the full suite.
+Four build jobs at nice level 19 leave the host's CPU to the other owners' builds.
+The pinned target directory stays inside the write boundary.
 
 ## Step 5: write the evidence and open the pull request
 
@@ -99,6 +109,13 @@ The pull request's evidence carries numbers, commands and conclusions only.
 Keep every screenshot, measurement log and other evidence file in the round's evidence directory, `~/improve/<direction>/evidence/<UTC round start, YYYYMMDDTHHMMZ>/`, one directory per round.
 Hourly rounds once overwrote each other's files under a per-day path, so the timestamp separates the rounds.
 The clone holds code only.
+
+Before a `trial.sh --serve` run, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round directory and export it:
+
+    export CHARLIEBOT_RELEASE_RUN_DIR=~/improve/<direction>/evidence/<UTC round start>
+
+The trial writes its own evidence under that directory.
+Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
 
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
 Links to the evidence files go only into the final message (Step 9), which stays on this host.
@@ -125,7 +142,9 @@ Use the model, API base and context window of the `claude-code-kimi-k3.1-pro` en
       --session-dir ~/improve/<direction>/clc-sessions \
       --task-file <task-file>
 
-The write boundary denies `~/.charliebot`, so the review's sessions go to the direction's own folder.
+The round runs on the remote host.
+The write boundary there denies every write outside the round's own directories.
+The review's sessions therefore go to the direction's own folder.
 The scratch directory keeps the reviewer's own git checkouts away from the clone's HEAD.
 The review is the independent check that the topic is complete and correct.
 
@@ -281,11 +300,14 @@ Delete each directory that this round's `mktemp` made, through the exact path th
 Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
 The evidence directory stays: it holds the round's screenshots and measurement logs.
 A killed round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1).
+The runner empties `/tmp/improve-<direction>-tmp/` when the next round's scope starts, so a killed round's TMPDIR does not grow.
 
 ## Step 9: report once at the end
 
 Write one message at the end of the round.
 It names the topic, the pull-request link, and the evidence summary with the file-server links of the evidence files.
+The links name the copy on this host, under `~/improve/<direction>/evidence/`, which the launcher copies back after the round.
+A reader who opens a link reads that copy, because the evidence files themselves stay on the remote host.
 When the round opened no pull request, it gives the reason.
 The message wakes the task session, which replies to the user.
 It stays on this host; the evidence-file links appear nowhere on GitHub.

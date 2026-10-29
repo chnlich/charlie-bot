@@ -2,7 +2,7 @@
 # Run the release trial on a server binary with its paired CLI in the same directory.
 #
 #   scripts/release/trial.sh <full main commit> <server binary>
-#   scripts/release/trial.sh --serve <commit> <server binary> -- <command> [args...]
+#   scripts/release/trial.sh --serve [--tree-root <dir>] [--seed-home <dir>] [--in-caller-scope] <commit> <server binary> -- <command> [args...]
 #
 # The commit is extracted from this repository into a trial tree with its own home, private tmux server and a port in
 # 18650-18669. The trial starts the binary, then checks the startup, the manager turn, the session stream, the
@@ -21,6 +21,13 @@
 # whose diff against its merge base with origin/main touches the cgroup code
 # (rust/crates/runtime/agents/src/transport/cgroup.rs, rust/crates/infra/core/src/cgroup.rs or
 # rust/crates/runtime/agents/src/agent_environment.rs): --serve runs only binaries whose cgroup code equals main's.
+# A serve server runs with session cgroups off (session_memory_max_mb 0) and starts no agent, so it needs no writable
+# agents slice; its tmux socket must keep its path under 108 bytes, the sun_path size with the final NUL.
+#
+# --serve options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two
+# commits under one root share no tree; --seed-home <dir> copies each session directory of <dir> into the trial home
+# before the server starts, and the trial keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the
+# server in the caller's cgroup, which must already cap memory, and skips the scope probe and the scope start and stop.
 # Every check reads the release under test through the charliebot beside <server binary>: its
 # `charliebot release-helper` verbs parse the responses, the logs and the sessions this script gathers.
 #
@@ -47,6 +54,11 @@ readonly PORT_MAX=18669
 # every live `charliebot delegate --repo` failed with `git worktree add timed out after 0.3s`. 1 s exceeds that defect and stays
 # below every production timeout, so a sub-second binary fails here on any disk speed.
 readonly SLOW_GIT_DELAY_SECONDS=1
+# start_server polls the server's auth status at 0.25 s intervals this many times before it fails the trial. A release
+# server answers within 30 s. A serve server walks every session of its home at boot before it binds: on the 7,160-session
+# mock home that took about a minute, so a serve trial waits 10 minutes.
+readonly RELEASE_READY_POLLS=120
+readonly SERVE_READY_POLLS=2400
 
 preflight_fail() {
   printf 'preflight failed: %s\n' "$1" >&2
@@ -98,32 +110,60 @@ unquote_yaml_scalar() {
 }
 
 SERVE_MODE=0
+IN_CALLER_SCOPE=0
+TREE_ROOT=
+SEED_HOME=
 BINARY=
 COMMAND=()
 if [[ ${1:-} == --serve ]]; then
-  if (( $# < 5 )); then
-    preflight_fail 'arguments must be --serve <commit> <server binary> -- <command> [args...]'
+  SERVE_MODE=1
+  shift
+  while (( $# > 0 )); do
+    case $1 in
+      --tree-root)
+        (( $# >= 2 )) || preflight_fail '--tree-root takes a directory'
+        TREE_ROOT=$2
+        shift 2
+        ;;
+      --seed-home)
+        (( $# >= 2 )) || preflight_fail '--seed-home takes a directory'
+        SEED_HOME=$2
+        shift 2
+        ;;
+      --in-caller-scope)
+        IN_CALLER_SCOPE=1
+        shift
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  if (( $# < 4 )); then
+    preflight_fail 'arguments must be --serve [--tree-root <dir>] [--seed-home <dir>] [--in-caller-scope] <commit> <server binary> -- <command> [args...]'
   fi
-  if [[ ! $2 =~ ^[[:xdigit:]]{40}$ ]]; then
+  if [[ ! $1 =~ ^[[:xdigit:]]{40}$ ]]; then
     preflight_fail 'the --serve commit must be a full 40-character hexadecimal sha'
   fi
-  if [[ -z $3 ]]; then
+  if [[ -z $2 ]]; then
     preflight_fail 'the --serve server binary path must be non-empty'
   fi
-  if [[ $4 != -- ]]; then
-    preflight_fail 'arguments must be --serve <commit> <server binary> -- <command> [args...]: the command follows a --'
+  if [[ $3 != -- ]]; then
+    preflight_fail 'arguments must be --serve [options] <commit> <server binary> -- <command> [args...]: the command follows a --'
   fi
-  SERVE_MODE=1
-  COMMIT=${2,,}
-  BINARY=$3
-  COMMAND=("${@:5}")
+  COMMIT=${1,,}
+  BINARY=$2
+  COMMAND=("${@:4}")
 elif [[ $# -eq 2 && $1 =~ ^[[:xdigit:]]{40}$ && -n $2 ]]; then
   COMMIT=${1,,}
   BINARY=$2
 else
-  preflight_fail 'arguments must be a full 40-character hexadecimal sha followed by the server binary to run, or --serve <commit> <server binary> -- <command> [args...]'
+  preflight_fail 'arguments must be a full 40-character hexadecimal sha followed by the server binary to run, or --serve [options] <commit> <server binary> -- <command> [args...]'
 fi
 readonly SERVE_MODE
+readonly IN_CALLER_SCOPE
+readonly TREE_ROOT
+readonly SEED_HOME
 readonly COMMIT
 readonly BINARY
 readonly COMMAND
@@ -139,6 +179,13 @@ if [[ ! -x $TRIAL_CLI ]] || ! "$TRIAL_CLI" release-helper --help > /dev/null 2>&
 fi
 git -C "$SOURCE_REPO" cat-file -e "$COMMIT^{commit}" 2>/dev/null \
   || preflight_fail "the trial sha $COMMIT is not in $SOURCE_REPO; fetch it first"
+
+if [[ -n $TREE_ROOT && ( $TREE_ROOT != /* || ! -d $TREE_ROOT ) ]]; then
+  preflight_fail "--tree-root is an existing directory given as an absolute path: $TREE_ROOT"
+fi
+if [[ -n $SEED_HOME && ! -d $SEED_HOME ]]; then
+  preflight_fail "--seed-home is an existing directory: $SEED_HOME"
+fi
 
 if (( SERVE_MODE == 1 )); then
   # --serve runs a measurement beside the live server, and this host gives an unprivileged process no read-only view
@@ -157,16 +204,18 @@ if (( SERVE_MODE == 1 )); then
     preflight_fail "the trial sha $COMMIT changes cgroup code against its origin/main merge base: $(tr '\n' ' ' <<<"$SERVE_CGROUP_CHANGES")"
   fi
 
-  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  if [[ ! -d $XDG_RUNTIME_DIR ]]; then
-    preflight_fail "the user runtime directory exists for the serve scope: $XDG_RUNTIME_DIR"
-  fi
-  if ! command -v systemd-run >/dev/null 2>&1; then
-    preflight_fail 'systemd-run resolves on PATH for the serve scope'
-  fi
-  if ! systemd-run --user --scope -p MemoryMax=2G \
-    --unit="charliebot-release-trial-serve-probe-$$" true >/dev/null 2>&1; then
-    preflight_fail 'systemd-run starts a MemoryMax=2G user scope for the serve server'
+  if (( IN_CALLER_SCOPE == 0 )); then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [[ ! -d $XDG_RUNTIME_DIR ]]; then
+      preflight_fail "the user runtime directory exists for the serve scope: $XDG_RUNTIME_DIR"
+    fi
+    if ! command -v systemd-run >/dev/null 2>&1; then
+      preflight_fail 'systemd-run resolves on PATH for the serve scope'
+    fi
+    if ! systemd-run --user --scope -p MemoryMax=2G \
+      --unit="charliebot-release-trial-serve-probe-$$" true >/dev/null 2>&1; then
+      preflight_fail 'systemd-run starts a MemoryMax=2G user scope for the serve server'
+    fi
   fi
 fi
 
@@ -202,7 +251,8 @@ if ! BACKEND_KEY=$("$TRIAL_CLI" release-helper credential-key "$LIVE_HOME/creden
 fi
 readonly TRIAL_API_BASE TRIAL_CREDENTIAL
 
-if [[ ! -d $CGROUP_BASE || ! -w $CGROUP_BASE ]]; then
+# A serve run starts no agent, so its server needs no writable agents slice.
+if (( SERVE_MODE == 0 )) && [[ ! -d $CGROUP_BASE || ! -w $CGROUP_BASE ]]; then
   preflight_fail "the agents' slice cgroup directory is writable: $CGROUP_BASE"
 fi
 
@@ -211,15 +261,32 @@ if ! CHOSEN_PORT=$("$TRIAL_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX"
 fi
 readonly CHOSEN_PORT
 
-readonly TREE="/tmp/charliebot-release-trial-$COMMIT"
+if [[ -n $TREE_ROOT ]]; then
+  readonly TREE="${TREE_ROOT%/}/trial-${COMMIT:0:12}"
+else
+  readonly TREE="/tmp/charliebot-release-trial-$COMMIT"
+fi
+readonly TMUX_ROOT="$TREE/tmux"
 if [[ -e $TREE ]]; then
   preflight_fail "trial tree does not already exist: $TREE"
 fi
+if (( SERVE_MODE == 1 )); then
+  # tmux keeps each server's socket in $TMUX_TMPDIR/tmux-<uid>/, and sun_path holds 108 bytes with the final NUL.
+  TMUX_SOCKET_PATH="$TMUX_ROOT/tmux-$(id -u)/charliebot"
+  if (( ${#TMUX_SOCKET_PATH} >= 108 )); then
+    preflight_fail "the tmux socket path stays under 108 bytes, the sun_path size with its final NUL: $TMUX_SOCKET_PATH (${#TMUX_SOCKET_PATH} bytes)"
+  fi
+fi
+
+# The trial tree is the one this run creates: the default tree or the tree under --tree-root. Removal accepts only these.
+is_trial_tree() {
+  [[ $1 == "/tmp/charliebot-release-trial-$COMMIT" || ( -n $TREE_ROOT && $1 == "${TREE_ROOT%/}/trial-${COMMIT:0:12}" ) ]]
+}
 
 setup_cleanup_on_exit() {
   local exit_status=$?
   trap - EXIT INT TERM
-  if [[ -d $TREE && $TREE == "/tmp/charliebot-release-trial-$COMMIT" ]]; then
+  if [[ -d $TREE ]] && is_trial_tree "$TREE"; then
     if ! rm -rf -- "$TREE"; then
       exit_status=1
     fi
@@ -256,7 +323,6 @@ readonly ORIGIN_REPO="$TREE/origin/trial-repo.git"
 readonly SLOW_GIT_BIN="$TREE/slow-git-bin"
 readonly WORKTREE_ROOT="$TREE/worktrees"
 readonly TMP_ROOT="$TREE/tmp"
-readonly TMUX_ROOT="$TREE/tmux"
 readonly HTTP_ROOT="$TREE/http"
 SERVER_LOG=
 SERVER_LOGS=()
@@ -284,12 +350,18 @@ chmod 600 "$CREDENTIALS"
 printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_KEY" >"$AUTH_CONFIG"
 chmod 600 "$AUTH_CONFIG"
 
+# A session memory limit of 0 turns session cgroups off. A serve server starts no agent, so it runs with them off.
+if (( SERVE_MODE == 1 )); then
+  SESSION_MEMORY_MAX_MB=0
+else
+  SESSION_MEMORY_MAX_MB=1024
+fi
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
 server:
   host: 127.0.0.1
   port: $CHOSEN_PORT
   subprocess_buffer_limit_mb: 1024
-  session_memory_max_mb: 1024
+  session_memory_max_mb: $SESSION_MEMORY_MAX_MB
   session_swap_max_mb: 0
   session_tasks_max: 256
   min_free_disk_gib: 0
@@ -471,7 +543,8 @@ capture_evidence() {
     index=$((index + 1))
     copy_redacted_file "$server_log" "$EVIDENCE_ROOT/server-$index.log" || return 1
   done
-  if [[ -d $SESSIONS_DIR ]]; then
+  # A serve run copies no session data: its sessions are the seed, which its seed directory already holds.
+  if (( SERVE_MODE == 0 )) && [[ -d $SESSIONS_DIR ]]; then
     for session_dir in "$SESSIONS_DIR"/*; do
       [[ -d $session_dir ]] || continue
       local session_id=${session_dir##*/}
@@ -622,25 +695,34 @@ stop_current_server() {
 }
 
 cleanup_trial_tmux_servers() {
-  local socket
+  local socket server_pid state
   local failed=0
-  for socket in "$TMUX_ROOT"/*; do
+  # tmux keeps each server's socket one level down, in $TMUX_ROOT/tmux-<uid>/. A server that has exited can leave its
+  # socket file behind, so a socket that no server answers has no process to stop. The check waits for the server's
+  # process to end, not for the file to go.
+  for socket in "$TMUX_ROOT"/tmux-*/*; do
     [[ -S $socket ]] || continue
     if ! command -v tmux >/dev/null 2>&1; then
       printf 'trial tmux socket exists but tmux is unavailable: %s\n' "$socket" >&2
       failed=1
       continue
     fi
+    if ! server_pid=$(tmux -S "$socket" display-message -p '#{pid}' 2>/dev/null); then
+      continue
+    fi
     if ! tmux -S "$socket" kill-server; then
       printf 'trial tmux server shutdown failed: %s\n' "$socket" >&2
       failed=1
+      continue
     fi
     for _ in $(seq 1 30); do
-      [[ ! -S $socket ]] && break
+      state=$(process_state "$server_pid")
+      [[ -z $state || $state == *Z* ]] && break
       sleep 0.1
     done
-    if [[ -S $socket ]]; then
-      printf 'trial tmux socket remains after shutdown: %s\n' "$socket" >&2
+    state=$(process_state "$server_pid")
+    if [[ -n $state && $state != *Z* ]]; then
+      printf 'trial tmux server remains after shutdown: pid %s on %s\n' "$server_pid" "$socket" >&2
       failed=1
     fi
   done
@@ -741,7 +823,7 @@ cleanup_owned_cgroups() {
 
 remove_trial_tree() {
   if [[ -d $TREE ]]; then
-    if [[ $TREE != "/tmp/charliebot-release-trial-$COMMIT" ]]; then
+    if ! is_trial_tree "$TREE"; then
       printf 'refusing to remove unexpected trial path %s\n' "$TREE" >&2
       return 1
     fi
@@ -827,6 +909,17 @@ http_post() {
   printf '%s' "$status"
 }
 
+# copy_seed_sessions copies each session directory of SEED_HOME into the trial home. A copy, not a link: the server
+# appends to the event logs it serves, and the seed must stay as generated for the next run.
+copy_seed_sessions() {
+  local entry
+  mkdir -m 700 -p "$SESSIONS_DIR" || return 1
+  for entry in "$SEED_HOME"/*/; do
+    [[ -d $entry ]] || continue
+    cp -a -- "${entry%/}" "$SESSIONS_DIR/" || return 1
+  done
+}
+
 start_server() {
   local server_number=$(( ${#SERVER_PIDS[@]} + 1 ))
   SERVER_LOG="$TREE/server-$server_number.log"
@@ -834,6 +927,9 @@ start_server() {
   if (( SERVE_MODE == 0 )); then
     # The trial's git-timeout check needs the slow-git wrapper first on the server's PATH.
     PATH="$SLOW_GIT_BIN:$PATH" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+  elif (( IN_CALLER_SCOPE == 1 )); then
+    # The serve server stays in the caller's cgroup, whose memory limit the caller's scope already sets.
+    "$BINARY" >>"$SERVER_LOG" 2>&1 &
   else
     # The serve server runs inside a scope whose MemoryMax keeps a measurement beside the live server, and without the
     # slow-git wrapper, whose per-call delay would distort the measurement's timings.
@@ -841,7 +937,11 @@ start_server() {
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
-  for _ in $(seq 1 120); do
+  local ready_polls=$RELEASE_READY_POLLS
+  if (( SERVE_MODE == 1 )); then
+    ready_polls=$SERVE_READY_POLLS
+  fi
+  for _ in $(seq 1 "$ready_polls"); do
     local status
     status=$(http_get /api/auth/status "$AUTH_STATUS_FILE")
     [[ $status == 200 ]] && return 0
@@ -947,12 +1047,23 @@ run_serve_mode() {
   local cmd_rc=0 sweep_failed=0 cleanup_failed=0
   local wait_started server_pid state stray_pids
   SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  if [[ -n $SEED_HOME ]]; then
+    if ! copy_seed_sessions; then
+      printf 'FAIL serve Seed: the sessions of %s did not copy into %s\n' "$SEED_HOME" "$SESSIONS_DIR"
+      return 1
+    fi
+    printf 'SERVE seed from=%s into=%s\n' "$SEED_HOME" "$SESSIONS_DIR"
+  fi
   if ! start_server; then
     printf 'FAIL serve Startup: the server did not become ready on 127.0.0.1:%s\n' "$CHOSEN_PORT"
     printf 'CAUSE serve: the trial server exited or did not bind the selected port\n'
     return 1
   fi
-  printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s unit=%s memory_max=2147483648\n' "$CHOSEN_PORT" "$SERVER_PID" "$SERVE_UNIT"
+  if (( IN_CALLER_SCOPE == 1 )); then
+    printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s scope=caller\n' "$CHOSEN_PORT" "$SERVER_PID"
+  else
+    printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s unit=%s memory_max=2147483648\n' "$CHOSEN_PORT" "$SERVER_PID" "$SERVE_UNIT"
+  fi
   check_sweep_names 'start 1' || sweep_failed=1
 
   export CHARLIEBOT_SERVE_URL="http://127.0.0.1:$CHOSEN_PORT"
@@ -980,7 +1091,7 @@ run_serve_mode() {
   if ! stop_current_server 6; then
     cleanup_failed=1
   fi
-  if ! stop_serve_scope "$SERVE_UNIT"; then
+  if (( IN_CALLER_SCOPE == 0 )) && ! stop_serve_scope "$SERVE_UNIT"; then
     cleanup_failed=1
   fi
   if ! cleanup_owned_cgroups; then

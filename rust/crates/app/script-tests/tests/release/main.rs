@@ -8,10 +8,12 @@
 mod world;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::io::Write;
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use charliebot_shell_harness::{self as harness, Sandbox};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use serde_json::json;
 use world::World;
 
@@ -310,4 +312,211 @@ fn test_rehearsal_usage_refuses_a_missing_argument() {
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("usage: switch-rehearsal.sh <new commit> <new release dir>"), "{}", run.describe());
+}
+
+// ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
+
+/// The serve trials run one at a time: each one picks a free port of the trial's range, so two starts could pick the
+/// same port.
+static SERVE_TRIALS: Mutex<()> = Mutex::new(());
+
+/// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
+/// each other, a live home with one backend option, and a stub charlie-code. The trial's tree and evidence stay under
+/// the sandbox.
+struct ServeWorld {
+  sandbox: Sandbox,
+  repo: PathBuf,
+  release: PathBuf,
+  commit: String,
+  env: Env,
+}
+
+impl ServeWorld {
+  fn new() -> Self {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.dir("repo");
+    fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
+    harness::copy_file(&harness::repo_root().join("scripts/release/trial.sh"), &repo.join("scripts/release/trial.sh"));
+    fs::write(repo.join("README.md"), "serve trial\n").expect("the README");
+
+    let mut env = sandbox.env();
+    // The server refuses a repository root without web/templates, and the trial's archive is this repository's commit.
+    let mut copy = harness::command("cp", &env);
+    copy.arg("-r").arg(harness::repo_root().join("web")).arg(&repo);
+    let copied = harness::run(&mut copy);
+    assert_eq!(copied.code, 0, "{}", copied.describe());
+    for (name, value) in [
+      ("GIT_AUTHOR_NAME", "serve-test"),
+      ("GIT_AUTHOR_EMAIL", "serve-test@example.invalid"),
+      ("GIT_COMMITTER_NAME", "serve-test"),
+      ("GIT_COMMITTER_EMAIL", "serve-test@example.invalid"),
+      ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ] {
+      env.insert(name.to_string(), value.to_string());
+    }
+    git(&env, &repo, &["init", "-q", "-b", "main"]);
+    git(&env, &repo, &["add", "."]);
+    git(&env, &repo, &["commit", "-q", "-m", "the serve commit"]);
+    let commit = git(&env, &repo, &["rev-parse", "HEAD"]);
+    git(&env, &repo, &["update-ref", "refs/remotes/origin/main", &commit]);
+
+    let release = sandbox.dir("release");
+    symlink(harness::built_binary("charliebot-server"), release.join("charliebot-server")).expect("the server link");
+    symlink(harness::built_binary("charliebot"), release.join("charliebot")).expect("the CLI link");
+    let live_home = sandbox.dir("live-home");
+    fs::write(
+      live_home.join("config.yaml"),
+      "backends:\n  options:\n    - id: charlie-code-serve-test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+    )
+    .expect("the live config");
+    fs::write(live_home.join("credentials.yaml"), "serve-test:\n  api_key: not-a-real-key\n").expect("the credentials");
+    sandbox.stub("charlie-code", "exit 0\n");
+
+    env.insert("CHARLIEBOT_HOME".to_string(), live_home.display().to_string());
+    env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
+    Self { sandbox, repo, release, commit, env }
+  }
+
+  /// Writes a synthetic home of `sessions` sessions with mock-home.py generate, under the sandbox, and returns it.
+  fn seed_home(&self, name: &str, sessions: &str) -> PathBuf {
+    let seed = self.sandbox.dir(name);
+    let mut command = harness::command("python3", &self.env);
+    command.arg("-I").arg(mock_home()).arg("generate").arg(&seed).args(["--sessions", sessions, "--seed", "3"]);
+    let run = harness::run(&mut command);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    seed
+  }
+
+  /// Runs one serve trial: the tree root and `seed` as --tree-root and --seed-home, then `command` once the server
+  /// answers. The command reads the seed path from MOCK_HOME_SEED.
+  fn serve(&self, tree_root: &Path, seed: &Path, command: &[&str]) -> Run {
+    let _serial = SERVE_TRIALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut trial = harness::command("bash", &self.env);
+    trial
+      .env("MOCK_HOME_SEED", seed)
+      .env("MOCK_HOME_TOOL", mock_home())
+      .arg(self.repo.join("scripts/release/trial.sh"))
+      .args(["--serve", "--tree-root"])
+      .arg(tree_root)
+      .args(["--seed-home"])
+      .arg(seed)
+      .arg("--in-caller-scope")
+      .arg(&self.commit)
+      .arg(self.release.join("charliebot-server"))
+      .arg("--")
+      .args(command);
+    harness::run(&mut trial)
+  }
+}
+
+fn mock_home() -> PathBuf {
+  harness::repo_root().join("tools/improve/mock-home.py")
+}
+
+/// The command that reads a seeded home back: mock-home.py check against the server that the trial started.
+const CHECK_SERVED_HOME: &[&str] =
+  &["sh", "-c", "python3 -I \"$MOCK_HOME_TOOL\" check \"$MOCK_HOME_SEED\" \"$CHARLIEBOT_SERVE_URL\""];
+
+#[test]
+fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "30");
+  let tree_root = world.sandbox.dir("tree-root");
+
+  let run = world.serve(&tree_root, &seed, CHECK_SERVED_HOME);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("check passed: 30 sessions"), "{}", run.describe());
+  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+#[test]
+fn test_trial_serve_check_exits_1_and_names_a_session_whose_event_log_is_corrupted() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "30");
+  let manifest: serde_json::Value =
+    serde_json::from_slice(&fs::read(seed.join("manifest.json")).expect("the manifest")).expect("the manifest JSON");
+  // The check always reads the largest session, so the corruption goes there.
+  let largest = manifest["sessions"]
+    .as_array()
+    .expect("the manifest sessions")
+    .iter()
+    .max_by_key(|entry| entry["event_log_bytes"].as_u64().expect("a size"))
+    .expect("a session");
+  let session_id = largest["id"].as_str().expect("a session id").to_string();
+  // A newest event that the manifest does not name: the served newest message then differs from the manifest.
+  let log = seed.join(&session_id).join("data/chat_events.jsonl");
+  let mut file = fs::OpenOptions::new().append(true).open(&log).expect("the event log");
+  let foreign =
+    json!({"type": "user", "content": "tampered after the manifest was written", "timestamp": "2026-10-01T00:00:00Z"});
+  writeln!(file, "{foreign}").expect("the appended event");
+  let tree_root = world.sandbox.dir("tree-root");
+
+  let run = world.serve(&tree_root, &seed, CHECK_SERVED_HOME);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains(&format!("MISMATCH session {session_id}:")), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("Checkpoint {session_id}:")), "the manifest value: {}", run.describe());
+  assert!(run.stderr.contains("tampered after the manifest was written"), "the served value: {}", run.describe());
+  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+#[test]
+fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.sandbox.dir("tree-root");
+  let pid_file = world.sandbox.root().join("tmux.pid");
+  // The command inherits TMUX_TMPDIR from the trial, so this tmux server listens on the trial's own socket.
+  let script = format!(
+    "tmux -L charliebot new-session -d -s probe cat && tmux -L charliebot display-message -p '#{{pid}}' > '{}'",
+    pid_file.display()
+  );
+
+  let run = world.serve(&tree_root, &seed, &["sh", "-c", script.as_str()]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let tmux_pid: i32 =
+    fs::read_to_string(&pid_file).expect("the tmux server pid").trim().parse().expect("a numeric tmux server pid");
+  assert!(!process_is_running(tmux_pid), "the trial left tmux server {tmux_pid} running: {}", run.describe());
+  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// Whether process `pid` runs, as /proc reports it: a zombie has ended.
+fn process_is_running(pid: i32) -> bool {
+  let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+    return false;
+  };
+  let state = stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next()).unwrap_or("");
+  state != "Z"
+}
+
+#[test]
+fn test_trial_serve_refuses_a_tmux_socket_path_of_108_bytes_or_more() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.sandbox.dir(&format!("tree-root-{}", "long-directory-name-".repeat(3)));
+  let uid = fs::metadata(&tree_root).expect("the tree root").uid();
+  let socket = format!("{}/trial-{}/tmux/tmux-{uid}/charliebot", tree_root.display(), &world.commit[..12]);
+  assert!(socket.len() >= 108, "the fixture socket path is too short: {socket}");
+
+  let run = world.serve(&tree_root, &seed, &["true"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(&socket), "{}", run.describe());
+  assert_eq!(
+    fs::read_dir(&tree_root).expect("the tree root").count(),
+    0,
+    "the refusal made a tree: {}",
+    run.describe()
+  );
+}
+
+/// A git command in `cwd` with the fixture's identity. A failing command fails the test.
+fn git(env: &Env, cwd: &Path, args: &[&str]) -> String {
+  let mut command = harness::command("git", env);
+  command.arg("-C").arg(cwd).args(args);
+  let run = harness::run(&mut command);
+  assert_eq!(run.code, 0, "git {args:?} in {}: {}", cwd.display(), run.describe());
+  run.stdout.trim().to_string()
 }

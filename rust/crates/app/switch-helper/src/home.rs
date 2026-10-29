@@ -17,7 +17,7 @@ use charliebot_store::layout;
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use serde_json::Value;
 
-use crate::common::{USAGE, exact, failed, metadata_read_failure, python_truthy, read_config};
+use crate::common::{USAGE, exact, failed, metadata_read_failure, read_config};
 use crate::{process, scan};
 
 /// How long the outcome read waits for a manager turn's finish callback to persist its fact.
@@ -159,7 +159,7 @@ impl Outcome {
   /// `print(outcome or "")`: a falsy outcome reads as no outcome.
   fn text(&self) -> String {
     match &self.value {
-      Some(value) if python_truthy(value) => pyfmt::python_str(value),
+      Some(value) if pyfmt::python_truthy(value) => pyfmt::python_str(value),
       _ => String::new(),
     }
   }

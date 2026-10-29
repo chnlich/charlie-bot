@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use charliebot_core::event_types;
+use charliebot_core::pyfmt::python_truthy;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
@@ -18,7 +19,7 @@ use charliebot_store::{
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
-use crate::python_values::{python_string, python_truthy, truthy_string};
+use crate::python_values::{python_string, truthy_string};
 
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
@@ -767,7 +768,7 @@ impl Dispatcher {
     for close in close_events {
       let close_value = close.to_value();
       let recipient = close_value.get("report_to");
-      if !python_truthy(recipient) {
+      if !recipient.is_some_and(python_truthy) {
         continue;
       }
       let recipient = python_string(recipient);

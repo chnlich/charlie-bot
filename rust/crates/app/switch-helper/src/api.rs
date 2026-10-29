@@ -14,7 +14,7 @@ use charliebot_store::layout;
 use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
 use serde_json::{Value, json};
 
-use crate::common::{USAGE, exact, exit_with, failed, python_truthy, read_json};
+use crate::common::{USAGE, exact, exit_with, failed, read_json};
 
 /// `json.dumps(value)` with every option at its default: one line, `", "` and `": "` separators, ASCII escapes.
 const PYTHON_JSON: JsonStyle =
@@ -47,7 +47,7 @@ pub fn newest_run_fields(args: &[OsString]) -> Result<(), CliExit> {
 /// The newest run's named fields: empty per field while the page holds no run, and for a null field.
 fn newest_run_values(page: &Value, fields: &[String]) -> Result<Vec<String>, CliExit> {
   let items: Option<&Vec<Value>> = match page.get("items") {
-    Some(value) if python_truthy(value) => {
+    Some(value) if pyfmt::python_truthy(value) => {
       Some(value.as_array().ok_or_else(|| CliExit::error("the runs page's items is not a list"))?)
     }
     _ => None,
@@ -128,7 +128,7 @@ fn assistant_count(bootstrap: &Value) -> Result<usize, CliExit> {
     Ok::<_, CliExit>(count + usize::from(role == "assistant"))
   })?;
   let draft = bootstrap.get("pending_draft").cloned().unwrap_or(Value::Null);
-  let draft_counts = if python_truthy(&draft) {
+  let draft_counts = if pyfmt::python_truthy(&draft) {
     let role = draft.get("role").and_then(Value::as_str).ok_or_else(|| CliExit::error("the draft has no role"))?;
     usize::from(role == "assistant")
   } else {

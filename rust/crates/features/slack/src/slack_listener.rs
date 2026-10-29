@@ -10,6 +10,7 @@ use charliebot_chat_threads::thread_entry::{
 };
 use charliebot_compat::ws_client::{self, Message, Options, Receiver, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::pyfmt::python_truthy;
 use charliebot_registry::FeatureContext;
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
@@ -334,17 +335,6 @@ fn required_text<'a>(event: &'a Value, field: &str) -> Result<&'a str, ThreadRep
 
 fn truthy_text(value: Option<&Value>) -> Option<&str> {
   value.and_then(Value::as_str).filter(|text| !text.is_empty())
-}
-
-fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
 }
 
 /// The Slack implementation of the shared thread adapter.

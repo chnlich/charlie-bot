@@ -22,7 +22,7 @@ use charliebot_cli_common::json_out;
 use charliebot_core::config;
 use charliebot_core::home;
 use charliebot_core::paths;
-use charliebot_core::pyfmt::str_repr;
+use charliebot_core::pyfmt::{python_truthy, str_repr};
 use charliebot_core::pyregex::compile_python_regex;
 use charliebot_core::repo_root;
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
@@ -221,19 +221,8 @@ fn named_path(directory: &str) -> String {
 /// Python `left or right` over two optional JSON values.
 fn python_or<'a>(left: Option<&'a Value>, right: Option<&'a Value>) -> Option<&'a Value> {
   match left {
-    Some(value) if is_truthy(value) => Some(value),
+    Some(value) if python_truthy(value) => Some(value),
     _ => right,
-  }
-}
-
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_none_or(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
   }
 }
 

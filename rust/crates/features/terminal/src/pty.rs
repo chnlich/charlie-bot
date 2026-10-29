@@ -10,6 +10,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use charliebot_core::pyfmt::python_truthy;
 use charliebot_core::run_token::SESSION_ID_ENV;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -507,21 +508,6 @@ fn decode_input(value: Option<&Value>) -> Result<Vec<u8>, String> {
     .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
     .collect::<Vec<_>>();
   STANDARD.decode(filtered).map_err(|error| error.to_string())
-}
-
-fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => {
-      value.as_i64().is_some_and(|number| number != 0)
-        || value.as_u64().is_some_and(|number| number != 0)
-        || value.as_f64().is_some_and(|number| number != 0.0)
-    }
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
 }
 
 fn parse_resize(value: Option<&Value>, default: i128) -> Result<i128, String> {

@@ -612,29 +612,19 @@ fn run_cursor(run: &RunRecord, order: RunOrder) -> String {
   run_token::b64url_encode(serde_json::to_string(&value).expect("a run cursor serializes").as_bytes())
 }
 
-fn python_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
-}
-
 /// Decode a cursor into its boundary and the order it was minted under. The error text is Python's `ValueError`,
 /// which does not carry the decoding cause.
 fn decode_run_cursor(cursor: &str) -> StoreResult<((UtcDateTime, String), RunOrder)> {
   let malformed = || StoreError::new(format!("malformed run page cursor: {}", pyfmt::str_repr(cursor)));
   let decoded = run_token::b64url_decode(cursor).map_err(|_| malformed())?;
   let value: RunCursor = serde_json::from_slice(&decoded).map_err(|_| malformed())?;
-  let started_at = if python_truthy(&value.s) {
+  let started_at = if pyfmt::python_truthy(&value.s) {
     UtcDateTime::parse(value.s.as_str().ok_or_else(malformed)?).map_err(|_| malformed())?
   } else {
     UtcDateTime::parse("0001-01-01T00:00:00Z").expect("the minimum datetime is valid")
   };
-  let order = if value.d.as_ref().is_some_and(python_truthy) { RunOrder::Descending } else { RunOrder::Ascending };
+  let order =
+    if value.d.as_ref().is_some_and(pyfmt::python_truthy) { RunOrder::Descending } else { RunOrder::Ascending };
   Ok(((started_at, value.i), order))
 }
 

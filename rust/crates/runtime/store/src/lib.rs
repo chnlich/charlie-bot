@@ -26,6 +26,7 @@ pub mod sidebar_state;
 mod store;
 pub mod streaming;
 pub mod task_child;
+pub mod task_node_absence;
 mod task_reparent;
 mod task_tree;
 mod task_tree_state;

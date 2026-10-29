@@ -246,9 +246,7 @@ impl Dispatcher {
     let facts = self.store.node_state(session_id)?;
     let task = facts.task()?;
     if task.boundary_index.is_none() && task.imported_pending_ids.is_empty() {
-      return Err(StoreError::invalid(format!(
-        "task {session_id} has no creation or import boundary; it is not a task-tree node"
-      )));
+      return Err(charliebot_store::task_node_absence::not_a_task_tree_node(session_id));
     }
     // Claimed inputs only remove candidates, so with none the run listing can matter only through an unknown outcome.
     if task.input_candidates.is_empty() && !facts.runs.has_unknown_outcome() {

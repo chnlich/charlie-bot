@@ -3171,6 +3171,41 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
 }
 
 #[tokio::test]
+async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() -> anyhow::Result<()> {
+  // No Python test case: the boot pass's cheap rule-out of a session whose history holds no task boundary.
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("chat-owner", None, TaskProfile::Manager, None).await?;
+  let mut template: Value = serde_json::from_slice(&std::fs::read(stack.store().metadata_path(&manager.id))?)?;
+  let session_id = "imported-chat";
+  template["id"] = json!(session_id);
+  let session_dir = stack.store().session_dir(session_id);
+  std::fs::create_dir_all(charliebot_store::layout::data_dir(&session_dir))?;
+  std::fs::write(
+    charliebot_store::layout::metadata_path(&session_dir),
+    serde_json::to_vec(&template)?,
+  )?;
+  std::fs::write(
+    charliebot_store::layout::chat_events_path(&session_dir),
+    "{\"id\": \"e1\", \"type\": \"user\", \"content\": \"hello from an imported chat\"}\n",
+  )?;
+
+  let counters = stack.boot().await?;
+  assert_eq!(counters.nodes, 2, "the walk counts the imported chat as a node");
+  assert_eq!(counters.full, 2, "both sessions reach a full check");
+  let text = log.text();
+  assert!(text.contains("task_recovery_node_failed"), "the imported chat fails its node pass: {text}");
+  assert!(text.contains(session_id), "the failure names the imported chat: {text}");
+  assert!(
+    text.contains("has no creation or import boundary; it is not a task-tree node"),
+    "the failure keeps the node-absence error: {text}"
+  );
+  assert!(!boot_marker_path(&stack).exists(), "a failed node keeps the boot marker away: {text}");
+  Ok(())
+}
+
+#[tokio::test]
 async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
   // No Python test case: the display warm-up of src/runtime/task_recovery.py:166-168.
   let stack = Stack::start("exit 0").await?;

@@ -521,9 +521,7 @@ fn pending_input_events(
   session_id: &str,
 ) -> StoreResult<Vec<Value>> {
   if facts.boundary_index.is_none() && facts.imported_pending_ids.is_empty() {
-    return Err(StoreError::invalid(format!(
-      "task {session_id} has no creation or import boundary; it is not a task-tree node"
-    )));
+    return Err(charliebot_store::task_node_absence::not_a_task_tree_node(session_id));
   }
   let mut claimed = HashSet::new();
   for run in runs {

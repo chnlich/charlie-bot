@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
@@ -269,9 +269,9 @@ async fn session_events(
         Some(body) => body,
         None => {
           let (messages, next_before, has_more) = projection.slice_before(to_index(before), limit);
-          let body = charliebot_compat::json::fast_json_bytes(
+          let body = Bytes::from(charliebot_compat::json::fast_json_bytes(
             &json!({"messages": messages, "has_more": has_more, "next_before": next_before}),
-          );
+          ));
           projection.store_page_body(to_index(before), limit, body.clone());
           body
         }
@@ -280,7 +280,7 @@ async fn session_events(
         let compressed = match projection.cached_page_body_gzip(to_index(before), limit) {
           Some(compressed) => compressed,
           None => {
-            let compressed = gzip_level_one(&body);
+            let compressed = Bytes::from(gzip_level_one(&body));
             projection.store_page_body_gzip(to_index(before), limit, compressed.clone());
             compressed
           }
@@ -658,7 +658,7 @@ fn events_file_not_found() -> Response {
 
 fn gzip_json_body(request: &Request<Body>, body: Vec<u8>) -> Response {
   if !request_wants_gzip(request) {
-    return json_bytes_response(body, None);
+    return json_bytes_response(Bytes::from(body), None);
   }
   let compressed = {
     let mut memo = BOOTSTRAP_GZIP_MEMO.lock().expect("bootstrap gzip memo mutex is not poisoned");
@@ -671,7 +671,7 @@ fn gzip_json_body(request: &Request<Body>, body: Vec<u8>) -> Response {
       }
     }
   };
-  json_bytes_response(compressed, Some("gzip"))
+  json_bytes_response(Bytes::from(compressed), Some("gzip"))
 }
 
 fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Vec<u8>> {
@@ -695,7 +695,7 @@ fn gzip_level_one(body: &[u8]) -> Vec<u8> {
   charliebot_compat::compression::gzip_level_one(body)
 }
 
-fn json_bytes_response(body: Vec<u8>, encoding: Option<&'static str>) -> Response {
+fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/json")

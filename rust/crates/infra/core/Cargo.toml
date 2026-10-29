@@ -35,3 +35,7 @@ test-support = []
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[bench]]
+name = "json_escape"
+harness = false

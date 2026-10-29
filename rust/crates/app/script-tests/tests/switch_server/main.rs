@@ -4,12 +4,14 @@
 //! output lines and the exit code of its original: the main module holds the preflight, readback, escalation and pane
 //! tests, `probe` the probe-turn tests, and `delegation` the delegation-check tests and the restore they drive.
 
+mod cleanup;
 mod delegation;
 mod probe;
 mod world;
 
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::mpsc;
@@ -638,21 +640,22 @@ fn logged_with(output: &str, signal_name: &str, pid: u32) -> bool {
 }
 
 /// A pane's shell, whose one child is a stand-in server in `mode`. Dropping it kills what is left.
-struct Pane {
+pub(crate) struct Pane {
   shell: Child,
   env: Env,
 }
 
 impl Pane {
-  fn start(sandbox: &Sandbox, releases: &Path, mode: &str) -> Self {
+  pub(crate) fn start(sandbox: &Sandbox, releases: &Path, mode: &str) -> Self {
     let directory = releases.join("pane");
     fs::create_dir_all(&directory).expect("the pane's release directory");
     let server = directory.join("charliebot-server");
     harness::copy_file(&fake_pane_server(), &server);
     let env = sandbox.env();
+    require_setpriv(&env);
     let mut command = harness::command("bash", &env);
     command
-      .args(["-c", "\"$1\" \"$2\"; true", "bash"])
+      .args(["-c", "setpriv --pdeathsig KILL \"$1\" \"$2\"; true", "bash"])
       .arg(&server)
       .arg(mode)
       .stdin(Stdio::null())
@@ -662,12 +665,12 @@ impl Pane {
     Self { shell, env }
   }
 
-  fn pid(&self) -> u32 {
+  pub(crate) fn pid(&self) -> u32 {
     self.shell.id()
   }
 
   /// The stand-in server forked under the pane shell, once exec has run and its argv names charliebot-server.
-  fn server_under(&self) -> u32 {
+  pub(crate) fn server_under(&self) -> u32 {
     wait_until(
       || children_of(&self.env, self.pid()).iter().any(|child| cmdline_contains(*child, "charliebot-server")),
       Duration::from_secs(10),
@@ -695,6 +698,23 @@ impl Drop for Pane {
     }
     stop(&mut self.shell);
   }
+}
+
+/// Fails, naming the command, when the pane shell cannot set its server's parent-death signal: without setpriv the
+/// server would outlive the test, which is the leak these checks close.
+fn require_setpriv(env: &Env) {
+  let on_path = env
+    .get("PATH")
+    .expect("the test environment sets PATH")
+    .split(':')
+    .map(|dir| Path::new(dir).join("setpriv"))
+    .any(|candidate| candidate.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0));
+  assert!(on_path, "the missing command is setpriv: the pane's shell starts its server through it");
+  let mut command = harness::command("setpriv", env);
+  command.arg("--help");
+  let run = harness::run(&mut command);
+  assert_eq!(run.code, 0, "setpriv --help failed: {}", run.describe());
+  assert!(run.stdout.contains("--pdeathsig"), "setpriv has no --pdeathsig option: {}", run.describe());
 }
 
 /// The pids of the processes whose parent is `pid`, from pgrep. pgrep exits 1 when none matches, which is no child.

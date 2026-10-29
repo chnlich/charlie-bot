@@ -293,6 +293,13 @@ switch_forward
   /// Starts one stand-in release server on the port over the home, with `behavior` on top of the defaults, and waits
   /// until it answers the version route. Its binary is a copy in the server directory, where its calls.log lands.
   pub fn start_fake_server(&self, behavior: &[(&str, Value)]) -> FakeServer {
+    self.start_fake_server_when(behavior, |world| world.answers_version())
+  }
+
+  /// Starts one stand-in release server like [`World::start_fake_server`], and waits until `ready` holds, for up to
+  /// 10 seconds. The `FakeServer` guard exists from the moment the process starts, so a panic in the wait stops the
+  /// process on unwind.
+  pub fn start_fake_server_when(&self, behavior: &[(&str, Value)], ready: impl Fn(&Self) -> bool) -> FakeServer {
     let dir = self.root().join("server");
     fs::create_dir_all(&dir).expect("the server directory");
     let binary = dir.join("charliebot-server");
@@ -300,9 +307,9 @@ switch_forward
     write_behavior(&dir, behavior);
     let mut command = harness::command(&binary, &self.env);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    let child = harness::spawn(&mut command);
-    wait_until(|| self.answers_version(), Duration::from_secs(10));
-    FakeServer { child, dir }
+    let server = FakeServer { child: harness::spawn(&mut command), dir };
+    wait_until(|| ready(self), Duration::from_secs(10));
+    server
   }
 
   /// Whether the version route answers 200 over the port with the access key. A port nobody listens on reads as no.
@@ -608,6 +615,11 @@ pub struct FakeServer {
 }
 
 impl FakeServer {
+  /// The process's pid, for a check that the process ends with its test.
+  pub fn pid(&self) -> u32 {
+    self.child.id()
+  }
+
   /// The requests the server served past the version probe, as "METHOD PATH" lines, oldest first.
   pub fn calls(&self) -> Vec<String> {
     let path = self.dir.join("calls.log");

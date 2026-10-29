@@ -1287,8 +1287,11 @@ mod tests {
     let harness_path = features.store.run_dir(&leaf.id, &run.id).join("harness_instructions.md");
     let harness = tokio::time::timeout(std::time::Duration::from_secs(15), async {
       loop {
-        if harness_path.exists() {
-          break std::fs::read_to_string(&harness_path).unwrap();
+        // The runner creates the file before it writes the text, so wait for the contract line and not for the file.
+        if let Ok(text) = std::fs::read_to_string(&harness_path)
+          && text.contains("No reviewer run follows this run.")
+        {
+          break text;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
       }

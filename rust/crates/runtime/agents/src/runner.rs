@@ -24,7 +24,7 @@ use crate::agent_environment::AgentBaseEnvironment;
 use crate::launch_loop::{self, ChildEnvPolicy};
 use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
 use crate::transport::final_stdout;
-use crate::transport::follow::{self, FollowSummary};
+use crate::transport::follow;
 use crate::transport::identity::{self, ProcessIdentity};
 use crate::transport::kill::{self, python_exit_code};
 use crate::transport::rotation::rotate_stale_transport;
@@ -112,29 +112,19 @@ impl RunRequest {
   }
 }
 
-/// Process status and artifacts recorded after the run finishes. `identity` and `follow` are `None` when the run
-/// ended before its process started.
+/// Process status and artifacts recorded after the run finishes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunOutcome {
   pub exit_code: Option<i32>,
   pub stderr_text: String,
   pub cgroup_exit_report: Option<String>,
   pub hang_diagnostics: Option<Value>,
-  pub identity: Option<ProcessIdentity>,
-  pub follow: Option<FollowSummary>,
 }
 
 impl RunOutcome {
   /// The outcome of a run that ended before any process started: no exit code, as `AgentRunner` never spawned.
   fn without_process() -> Self {
-    Self {
-      exit_code: None,
-      stderr_text: String::new(),
-      cgroup_exit_report: None,
-      hang_diagnostics: None,
-      identity: None,
-      follow: None,
-    }
+    Self { exit_code: None, stderr_text: String::new(), cgroup_exit_report: None, hang_diagnostics: None }
   }
 }
 
@@ -323,7 +313,7 @@ impl AgentRunner {
     let is_alive = move || !follow_active.detached.load(Ordering::Acquire) && exit_receiver.borrow().is_none();
     let handler = request.on_event.clone();
     let hook_backend = &self.backend;
-    let follow = follow::tail_follow_events(
+    follow::tail_follow_events(
       &raw_path,
       translate,
       move |event| {
@@ -357,8 +347,6 @@ impl AgentRunner {
         stderr_text: String::new(),
         cgroup_exit_report: None,
         hang_diagnostics: None,
-        identity: Some(identity),
-        follow: Some(follow),
       });
     }
     let stdin_error = finish_stdin(stdin_task, request.cleanup_timeout, pid).await.err();
@@ -385,14 +373,7 @@ impl AgentRunner {
     if let Some(error) = stdin_error {
       return Err(error);
     }
-    Ok(RunOutcome {
-      exit_code,
-      stderr_text,
-      cgroup_exit_report,
-      hang_diagnostics,
-      identity: Some(identity),
-      follow: Some(follow),
-    })
+    Ok(RunOutcome { exit_code, stderr_text, cgroup_exit_report, hang_diagnostics })
   }
 
   /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
@@ -507,14 +488,7 @@ impl AgentRunner {
     };
     self.clear_active(&active);
     run_result?;
-    Ok(RunOutcome {
-      exit_code: Some(exit_code),
-      stderr_text,
-      cgroup_exit_report,
-      hang_diagnostics: None,
-      identity: Some(identity),
-      follow: None,
-    })
+    Ok(RunOutcome { exit_code: Some(exit_code), stderr_text, cgroup_exit_report, hang_diagnostics: None })
   }
 
   async fn run_final_stdout(
@@ -571,8 +545,6 @@ impl AgentRunner {
         stderr_text: String::new(),
         cgroup_exit_report: None,
         hang_diagnostics: None,
-        identity: Some(identity),
-        follow: None,
       });
     }
     let observed_exit = wait_for_exit(&active, request.cleanup_timeout).await?;
@@ -609,14 +581,7 @@ impl AgentRunner {
     if let Some(guard_error) = outcome.guard_error {
       bail!(guard_error);
     }
-    Ok(RunOutcome {
-      exit_code: Some(outcome.exit_code),
-      stderr_text,
-      cgroup_exit_report,
-      hang_diagnostics: None,
-      identity: Some(identity),
-      follow: None,
-    })
+    Ok(RunOutcome { exit_code: Some(outcome.exit_code), stderr_text, cgroup_exit_report, hang_diagnostics: None })
   }
 
   /// Send SIGTERM to the process group and escalate to SIGKILL after five seconds.

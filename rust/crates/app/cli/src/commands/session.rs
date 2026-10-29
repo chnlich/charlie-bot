@@ -4,7 +4,8 @@
 //! `create` builds session metadata only (no first message); with `--parent` it becomes the v2
 //! task create whose (parent, request_id) binds one stable node. `archive` and `cancel` keep the
 //! sent-but-lost readback: a lost response reads this request's own close fact from the target
-//! session's chat events. `reparent` reads back its own `task_reparented` fact the same way.
+//! session's chat events, and a deferred close answers as the server's archive answer does, from the
+//! session's metadata. `reparent` reads back its own `task_reparented` fact the same way.
 //! `send` relays a message as an `agent_message` event and maps the 422 over-limit refusal to
 //! exit 2. `dialog` prints one session's chat messages as plain text, oldest first, for piping
 //! into `rg`.
@@ -25,8 +26,9 @@ use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
-use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::metadata::{UtcDateTime, read_session_metadata};
 use charliebot_store::{control_events, layout};
+use charliebot_tasks::completion::pending_archive_answer;
 use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
@@ -372,7 +374,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
 
   let home = home_dir()?;
   let task_id = args.session_id.clone();
-  let readback = move || Ok(find_local_task_close(&home, &task_id, &request_id));
+  let readback = move || find_local_task_close(&home, &task_id, &request_id);
   let result = client::post(
     &route::fill(task_routes::SESSION_ARCHIVE_PATH, &[args.session_id.as_str()]),
     Value::Object(body),
@@ -410,7 +412,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
 
   let home = home_dir()?;
   let task_id = args.session_id.clone();
-  let readback = move || Ok(find_local_task_close(&home, &task_id, &request_id));
+  let readback = move || find_local_task_close(&home, &task_id, &request_id);
   let result = client::post(
     &route::fill(task_routes::SESSION_CANCEL_PATH, &[args.session_id.as_str()]),
     payload,
@@ -510,13 +512,35 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
 /// `find_local_task_close`: the close fact THIS request's own identity binds to — the event whose
 /// id derives from (task id, request id) via `stable_close_event_id`. A missing file or an
 /// unreadable line proves nothing (`None`), never a borrowed answer; the closed fact outranks the
-/// deferral.
-fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Option<Value> {
+/// deferral. A deferral answers as the server's archive answer does, which names the approver from
+/// the session's metadata; metadata that does not decode fails loud rather than choosing an approver.
+fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Result<Option<Value>, CliExit> {
   let session_dir = config::sessions_dir_in(home).join(task_id);
-  let events_path = layout::chat_events_path(&session_dir);
+  match scan_task_close(&layout::chat_events_path(&session_dir), task_id, request_id) {
+    Some(LocalClose::Closed(closed)) => Ok(Some(closed)),
+    Some(LocalClose::Requested) => {
+      let metadata_path = layout::metadata_path(&session_dir);
+      let meta = read_session_metadata(&metadata_path).map_err(|error| {
+        CliExit::error(format!("cannot read the task's approver from {}: {error}", metadata_path.display()))
+      })?;
+      Ok(Some(pending_archive_answer(meta.as_ref(), task_id, request_id)))
+    }
+    None => Ok(None),
+  }
+}
+
+/// What a session's chat events record for one request: its closed fact, or only its deferral.
+enum LocalClose {
+  Closed(Value),
+  Requested,
+}
+
+/// Scan the events in file order. A closed fact returns at once, so it outranks a deferral written
+/// before or after it.
+fn scan_task_close(events_path: &Path, task_id: &str, request_id: &str) -> Option<LocalClose> {
   let closed_id = control_events::stable_close_event_id(task_id, request_id);
-  let mut deferred: Option<Value> = None;
-  for line in chat_events::read_lines(&events_path, LineRule::Lines).ok()? {
+  let mut requested = false;
+  for line in chat_events::read_lines(events_path, LineRule::Lines).ok()? {
     let event = line.ok()?.decode().ok()?;
     let object = event.as_object()?;
     let event_type = object.get("type").and_then(Value::as_str);
@@ -528,15 +552,19 @@ fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Option
         .filter(|outcome| is_truthy(outcome))
         .map(pyfmt::python_str)
         .unwrap_or_else(|| "completed".to_string());
-      return Some(json!({ "session_id": task_id, "task_state": outcome, "closed_event_id": closed_id }));
+      return Some(LocalClose::Closed(json!({
+        "session_id": task_id,
+        "task_state": outcome,
+        "closed_event_id": closed_id,
+      })));
     }
     if event_type == Some(event_types::TASK_CLOSE_REQUESTED)
       && object.get("request_id").and_then(Value::as_str) == Some(request_id)
     {
-      deferred = Some(json!({ "session_id": task_id, "request_id": request_id, "status": "pending_run_finish" }));
+      requested = true;
     }
   }
-  deferred
+  requested.then_some(LocalClose::Requested)
 }
 
 /// The `task_reparented` fact THIS request wrote: the same caller session (`None` for an operator
@@ -722,5 +750,88 @@ fn tool_input_first_line(tool: &Value) -> String {
   match rendered.split_once('\n') {
     Some((first, _)) => first.to_string(),
     None => rendered,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fs;
+
+  use charliebot_tasks::completion::PENDING_UNTIL_USER_VIEW;
+  use tempfile::TempDir;
+
+  use super::*;
+
+  const TASK_ID: &str = "4f1c2a0e-7b1d-5c3e-9a2f-1d2e3f4a5b6c";
+  const REQUEST_ID: &str = "archive-request-1";
+
+  /// A CHARLIEBOT_HOME whose one session holds the given metadata document and chat events.
+  fn home_with_session(metadata: &Value, events: &[Value]) -> TempDir {
+    let home = tempfile::tempdir().expect("a temp home");
+    let session_dir = config::sessions_dir_in(home.path()).join(TASK_ID);
+    fs::create_dir_all(layout::data_dir(&session_dir)).expect("the session's data directory is created");
+    fs::write(layout::metadata_path(&session_dir), metadata.to_string()).expect("the metadata is written");
+    let lines: Vec<String> = events.iter().map(Value::to_string).collect();
+    fs::write(layout::chat_events_path(&session_dir), lines.join("\n") + "\n").expect("the events are written");
+    home
+  }
+
+  /// A session metadata document whose task record names `approver` and whose last reply is unread.
+  fn metadata(approver: &str) -> Value {
+    json!({
+      "id": TASK_ID,
+      "name": "manager",
+      "profile": "manager",
+      "has_unread": true,
+      "task": {"approver": approver},
+    })
+  }
+
+  fn close_requested() -> Value {
+    json!({"type": event_types::TASK_CLOSE_REQUESTED, "id": "close-request-1", "request_id": REQUEST_ID})
+  }
+
+  #[test]
+  fn a_lost_archive_of_a_user_approved_task_reads_the_user_view_pending_answer() {
+    let home = home_with_session(&metadata("user"), &[close_requested()]);
+
+    let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
+
+    assert_eq!(readback, Ok(Some(json!({"archived": [], "pending": PENDING_UNTIL_USER_VIEW}))));
+  }
+
+  #[test]
+  fn a_lost_archive_of_a_parent_approved_task_keeps_pending_run_finish() {
+    let home = home_with_session(&metadata("parent"), &[close_requested()]);
+
+    let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
+
+    assert_eq!(
+      readback,
+      Ok(Some(json!({"session_id": TASK_ID, "request_id": REQUEST_ID, "status": "pending_run_finish"})))
+    );
+  }
+
+  #[test]
+  fn a_closed_fact_outranks_the_deferral_written_before_it() {
+    let closed_id = control_events::stable_close_event_id(TASK_ID, REQUEST_ID);
+    let closed = json!({"type": event_types::TASK_CLOSED, "id": closed_id});
+    let home = home_with_session(&metadata("user"), &[close_requested(), closed]);
+
+    let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
+
+    assert_eq!(
+      readback,
+      Ok(Some(json!({"session_id": TASK_ID, "task_state": "completed", "closed_event_id": closed_id})))
+    );
+  }
+
+  #[test]
+  fn an_approver_the_metadata_cannot_decode_fails_loud() {
+    let home = home_with_session(&metadata("owner"), &[close_requested()]);
+
+    let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
+
+    assert!(readback.is_err(), "an unknown approver must not pick either answer: {readback:?}");
   }
 }

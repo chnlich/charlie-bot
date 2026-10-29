@@ -577,6 +577,8 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
  "wait-timeout",

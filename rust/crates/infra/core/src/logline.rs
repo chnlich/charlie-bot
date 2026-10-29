@@ -93,7 +93,7 @@ fn is_bare(text: &str) -> bool {
 }
 
 /// A JSON value's text: a string as it is, any other value in its JSON spelling.
-fn value_text(value: &Value) -> String {
+pub(crate) fn value_text(value: &Value) -> String {
   match value {
     Value::String(text) => text.clone(),
     other => other.to_string(),

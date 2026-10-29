@@ -1417,6 +1417,39 @@ mod tests {
   }
 
   #[test]
+  fn the_event_verb_finds_an_event_written_through_the_event_field_form() {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::Subscriber;
+    use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+    use tracing_subscriber::{Layer, Registry};
+
+    /// The lines of the events recorded under it, rendered by the logging writer the server's stdout layer uses.
+    struct Rendered(Arc<Mutex<Vec<String>>>);
+
+    impl<S: Subscriber> Layer<S> for Rendered {
+      fn on_event(&self, event: &tracing::Event<'_>, _context: LayerContext<'_, S>) {
+        self.0.lock().unwrap().push(charliebot_core::logging::render_line(event));
+      }
+    }
+
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = Registry::default().with(Rendered(Arc::clone(&lines)));
+    tracing::subscriber::with_default(subscriber, || {
+      tracing::info!(event = "slack_listener_connected", path = "/slack/events");
+    });
+    let directory = temporary();
+    let path = directory.path().join("server.log");
+    let mut text = lines.lock().unwrap().join("\n");
+    text.push('\n');
+    fs::write(&path, text).unwrap();
+
+    let log = path.to_string_lossy().into_owned();
+    assert_eq!(event(&[log.clone(), "slack_listener_connected".to_string()]), Ok(0), "{log}");
+    assert_eq!(event(&[log, "task_recovery_resume".to_string()]), Ok(1));
+  }
+
+  #[test]
   fn the_backend_choice_takes_the_first_option_with_both_values() {
     let directory = temporary();
     let config = directory.path().join("config.yaml");

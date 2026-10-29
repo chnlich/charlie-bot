@@ -1,8 +1,9 @@
 //! Structured logging: one line per event on stdout, in the grammar `logline` writes and reads.
 //!
 //! An event's message is its name, the same name the Python server's structlog call logs
-//! (`tracing::info!(path = ..., "charliebot_home_ready")`). A line reads `<UTC time> [<level>] <event> <key=value>...`,
-//! with the fields in call order.
+//! (`tracing::info!(path = ..., "charliebot_home_ready")`). A field named `event` names the event instead, and does not
+//! repeat after it; with both, the `event` field wins, as the JSON writer this format replaced extended the message's
+//! map with the fields. A line reads `<UTC time> [<level>] <event> <key=value>...`, with the fields in call order.
 
 use std::io::Write;
 
@@ -40,27 +41,29 @@ impl<S: Subscriber> Layer<S> for StdoutLines {
   }
 }
 
-fn render_line(event: &Event<'_>) -> String {
-  let mut fields = FieldMap { event: None, fields: Vec::new() };
+/// The line one event renders to. `on_event` writes it, and the release-helper tests read real lines back through it.
+pub fn render_line(event: &Event<'_>) -> String {
+  let mut fields = FieldMap::default();
   event.record(&mut fields);
   let level = logline::level_word(event.metadata().level());
-  logline::render(&timefmt::log_timestamp(), level, &fields.event.unwrap_or_default(), &fields.fields)
+  let name = fields.event.or(fields.message).unwrap_or_default();
+  logline::render(&timefmt::log_timestamp(), level, &name, &fields.fields)
 }
 
+/// An event's fields: `message` and `event` name the line, the rest keep their call order.
+#[derive(Default)]
 struct FieldMap {
+  message: Option<String>,
   event: Option<String>,
   fields: Vec<(String, Value)>,
 }
 
 impl FieldMap {
   fn put(&mut self, field: &Field, value: Value) {
-    if field.name() == "message" {
-      self.event = Some(match value {
-        Value::String(text) => text,
-        other => other.to_string(),
-      });
-    } else {
-      self.fields.push((field.name().to_string(), value));
+    match field.name() {
+      "message" => self.message = Some(logline::value_text(&value)),
+      "event" => self.event = Some(logline::value_text(&value)),
+      _ => self.fields.push((field.name().to_string(), value)),
     }
   }
 }
@@ -99,7 +102,8 @@ mod tests {
   use tracing_subscriber::layer::{Context, SubscriberExt};
   use tracing_subscriber::{Layer, Registry};
 
-  use super::targets_filter;
+  use super::{render_line, targets_filter};
+  use crate::logline;
 
   struct Capture(Arc<Mutex<Vec<(String, String)>>>);
 
@@ -107,6 +111,22 @@ mod tests {
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
       self.0.lock().unwrap().push((event.metadata().target().to_string(), event.metadata().level().to_string()));
     }
+  }
+
+  struct Rendered(Arc<Mutex<Vec<String>>>);
+
+  impl<S: Subscriber> Layer<S> for Rendered {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+      self.0.lock().unwrap().push(render_line(event));
+    }
+  }
+
+  /// The lines the calls in `recording` render.
+  fn rendered(recording: impl FnOnce()) -> Vec<String> {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = Registry::default().with(Rendered(Arc::clone(&lines)));
+    tracing::subscriber::with_default(subscriber, recording);
+    lines.lock().unwrap().clone()
   }
 
   #[test]
@@ -122,5 +142,43 @@ mod tests {
       *events.lock().unwrap(),
       [("charliebot_tasks".to_string(), "INFO".to_string()), ("third_party".to_string(), "WARN".to_string()),]
     );
+  }
+
+  #[test]
+  fn an_event_field_names_the_line_and_does_not_repeat_as_a_field() {
+    let lines = rendered(|| tracing::info!(event = "slack_listener_connected"));
+    let [line] = lines.as_slice() else { panic!("one call rendered {:?}", lines) };
+    assert!(line.ends_with("slack_listener_connected"), "{line}");
+    assert!(!line.contains("event="), "{line}");
+    let row = logline::parse(line).expect("the line reads back");
+    assert_eq!(row.event, "slack_listener_connected");
+    assert_eq!(row.field("event"), None);
+  }
+
+  #[test]
+  fn an_event_field_keeps_the_other_fields_in_call_order() {
+    let lines = rendered(|| tracing::info!(event = "slack_listener_connected", path = "/slack/events", count = 2));
+    let [line] = lines.as_slice() else { panic!("one call rendered {:?}", lines) };
+    let row = logline::parse(line).expect("the line reads back");
+    assert_eq!(row.event, "slack_listener_connected");
+    assert_eq!(row.fields, [("path".to_string(), "/slack/events".to_string()), ("count".to_string(), "2".to_string())]);
+  }
+
+  #[test]
+  fn an_event_field_wins_over_the_message_as_the_json_writer_did() {
+    let lines = rendered(|| tracing::info!(event = "slack_listener_connected", "listener connected"));
+    let [line] = lines.as_slice() else { panic!("one call rendered {:?}", lines) };
+    let row = logline::parse(line).expect("the line reads back");
+    assert_eq!(row.event, "slack_listener_connected");
+    assert_eq!(row.fields, []);
+  }
+
+  #[test]
+  fn a_message_call_still_names_the_event_from_its_message() {
+    let lines = rendered(|| tracing::info!(path = "/api/internal/version", "charliebot_home_ready"));
+    let [line] = lines.as_slice() else { panic!("one call rendered {:?}", lines) };
+    let row = logline::parse(line).expect("the line reads back");
+    assert_eq!(row.event, "charliebot_home_ready");
+    assert_eq!(row.field("path"), Some("/api/internal/version"));
   }
 }

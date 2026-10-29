@@ -10,7 +10,7 @@ use charliebot_core::event_types;
 use serde_json::{Value, json};
 
 use crate::control_events;
-use crate::task_tree_state::{TreeIndex, ancestor_ids, index_meta};
+use crate::task_tree_state::{TreeIndex, ancestor_ids, index_meta, task_below_caller};
 use crate::{StoreError, StoreResult};
 
 /// The refusal for an agent reparent outside the caller's own subtree.
@@ -34,7 +34,7 @@ pub(crate) fn check_agent_scope(
   let Some(parent_id) = new_parent else {
     return Err(StoreError::forbidden(AGENT_REPARENT_SCOPE_REFUSAL));
   };
-  let task_below = ancestor_ids(index, session_id)?.iter().any(|id| id == caller_task);
+  let task_below = task_below_caller(index, caller_task, session_id)?;
   let parent_within = parent_id == caller_task || ancestor_ids(index, parent_id)?.iter().any(|id| id == caller_task);
   if !(task_below && parent_within) {
     return Err(StoreError::forbidden(AGENT_REPARENT_SCOPE_REFUSAL));

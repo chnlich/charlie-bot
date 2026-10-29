@@ -11,7 +11,6 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
 use charliebot_registry::Registry;
-use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
@@ -22,6 +21,7 @@ use charliebot_store::{
   RunBlocker, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook,
   SequenceBindingMover, SequenceListingFields, StopResult, Store, StoreError, StoreHookFuture, StoreHooks, TaskCaller,
 };
+use charliebot_tasks::completion::ArchiveAuthority;
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
 use nix::sys::signal::{Signal, killpg};
@@ -743,7 +743,7 @@ async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
       "archived by the user",
       &[],
       &[],
-      &CallerIdentity::Operator { session_id: None },
+      &ArchiveAuthority::Operator,
     )
     .await
     .unwrap();

@@ -968,6 +968,7 @@ const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::optional("summary", FieldType::String),
   Field::optional("result_refs", FieldType::StringList),
   Field::optional("run_ids", FieldType::StringList),
+  Field::optional("non_child", FieldType::Boolean),
 ]);
 
 /// The POST /api/sessions/{session_id}/cancel body model (`src/infra/models.py::CancelTaskRequest`).
@@ -1028,7 +1029,8 @@ fn optional_validated_string_list(fields: &Value, name: &str) -> Vec<String> {
 }
 
 /// `POST /api/sessions/{session_id}/archive`: an operator archives the open subtree; an agent's own manager task
-/// archives after its Run succeeds. Both paths reach the one completion owner.
+/// archives after its Run succeeds, and an agent manager archives a task of its subtree, or another task with
+/// `non_child`. All paths reach the one completion owner.
 async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (meta, caller, body) = match body_session_caller(&features, request).await {
     Ok(parts) => parts,
@@ -1048,11 +1050,14 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
     run_ids: optional_validated_string_list(&fields, "run_ids"),
     ..CompletionEvidence::default()
   };
-  let (status, payload) =
-    match completion.archive_task(&meta.id, &validated_string(&fields, "request_id"), &evidence, &caller).await {
-      Ok(result) => result,
-      Err(error) => return task_http_error(error),
-    };
+  let non_child = fields.get("non_child").and_then(Value::as_bool).unwrap_or(false);
+  let (status, payload) = match completion
+    .archive_task(&meta.id, &validated_string(&fields, "request_id"), &evidence, &caller, non_child)
+    .await
+  {
+    Ok(result) => result,
+    Err(error) => return task_http_error(error),
+  };
   // An operator archive names the ids it archived; every other outcome answers the session detail.
   if status == 202 || payload.get("archived").is_some() {
     let status_code = if status == 202 { StatusCode::ACCEPTED } else { StatusCode::OK };

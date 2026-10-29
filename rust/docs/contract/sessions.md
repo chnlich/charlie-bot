@@ -506,16 +506,19 @@ Side effects of a switch:
 - Auth: access key + caller.
 - Handler: `src/runtime/api/sessions.py:1380`.
 - Dependency: `require_session`, then `require_caller`.
-- Body: `{"request_id": string, "summary": string = "", "result_refs": [string], "run_ids": [string]}`. Unknown keys give 422.
+- Body: `{"request_id": string, "summary": string = "", "result_refs": [string], "run_ids": [string], "non_child": bool = false}`. Unknown keys give 422. `non_child` is the caller's confirmation that the target sits outside its own subtree; an operator request ignores it.
 
 | Status | Case | Body |
 |---|---|---|
-| 200 | An operator archives the open subtree | `{"archived": [<ids archived by this call>]}`. An already archived target gives `[]`. |
+| 200 | An operator or an agent manager archives the open subtree | `{"archived": [<ids archived by this call>]}`. An already archived target gives `[]`. The target sits inside the caller's subtree, or the body carries `non_child: true`. |
 | 202 | An agent manager archives its own task through its active run | UNVERIFIED: the pending body. The close waits for the run to finish. |
-| 409 | Blockers | `{"detail":{"message","blockers"}}`. An unfinished run in the subtree gives 409 before any write. |
-| 400, 403, 404 | Task mapping | An agent may archive only its own manager task, through its own active run. |
+| 403 | An agent caller without a subtree claim | A manager without `non_child: true` on a target outside its subtree gets a detail that names `--archive-non-child`, and nothing changes. A worker caller that targets another task gets `only a manager can archive another task`. |
+| 409 | Blockers | `{"detail":{"message","blockers"}}`. An unfinished run in the subtree gives 409 before any write, for an operator and an agent alike. |
+| 400, 404 | Task mapping | |
 
-Side effects: an operator archive writes one `task_closed` event with outcome `archived` for each open node of the subtree. The target's fact names its parent as the report target, so the parent receives a child report. Each descendant's fact names the target in `archived_with`. A repeated `request_id` replays the original outcome. UNVERIFIED: the trigger cancel and the exact per-node fact set come from `TaskCompletionManager.archive_subtree` and were not traced.
+The subtree scope is the same ancestor lookup reparent uses: the target sits strictly below the caller's task. An agent archive skips the run-finish wait of the own-task path: the subtree closes immediately, as an operator archive does.
+
+Side effects: an archive writes one `task_closed` event with outcome `archived` for each open node of the subtree. The target's fact names its parent as the report target, so the parent receives a child report. Each descendant's fact names the target in `archived_with`. An agent archive sets the target's `archived_by` to the caller's task id and its actor to `agent`; an operator archive writes no `archived_by` and keeps the actor `user`. Without a `summary`, an agent archive of another task uses `archived by <caller task id>`, and an operator archive uses `archived by the user`. A repeated `request_id` replays the original outcome.
 
 ### `DELETE /api/sessions/{session_id}/permanent`
 

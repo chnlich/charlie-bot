@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use charliebot_core::event_types;
+use charliebot_core::run_token::RunTokenClaims;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StartupStop, StateError};
 use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
@@ -31,8 +32,14 @@ const REVIEW_REF_PREFIX: &str = "review:";
 const LANDING_REF_PREFIX: &str = "landed:";
 type DeliveryRunOutcomes = (HashMap<String, RunRecord>, HashMap<String, Option<String>>);
 const RESTORE_CHAIN_HOP_LIMIT: usize = 1000;
-/// The operator-scope refusal an archive request without user credentials gets.
-pub const ARCHIVE_OPERATOR_REFUSAL: &str = "archiving a task requires operator credentials";
+
+/// The archive authority that `archive_task` decided: the operator's credentials, or an agent caller with the task
+/// id its run token binds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArchiveAuthority {
+  Operator,
+  Agent { caller_task_id: String },
+}
 
 struct CloseNowRequest<'a> {
   session_id: &'a str,
@@ -55,6 +62,7 @@ struct CloseAppend<'a> {
   actor: &'a str,
   report_to: Option<&'a str>,
   archived_with: Option<&'a str>,
+  archived_by: Option<&'a str>,
   sequence_outcome: Option<&'a str>,
 }
 
@@ -448,13 +456,15 @@ impl TaskCompletion {
   // Archive
   // ------------------------------------------------------------------
 
-  /// Archive one task: an operator closes its subtree; an agent's request waits for its own Run.
+  /// Archive one task: an operator closes its subtree; an agent closes its own task through its active Run, or as a
+  /// manager archives a task of its subtree, or another task with `non_child`.
   pub async fn archive_task(
     &self,
     session_id: &str,
     request_id: &str,
     evidence: &CompletionEvidence,
     caller: &CallerIdentity,
+    non_child: bool,
   ) -> StoreResult<(usize, Value)> {
     if request_id.is_empty() {
       return Err(StoreError::invalid("request_id is required for archive"));
@@ -466,41 +476,100 @@ impl TaskCompletion {
         }
         let summary = if evidence.summary.is_empty() { "archived by the user" } else { &evidence.summary };
         let archived = self
-          .archive_subtree(session_id, Some(request_id), summary, &evidence.result_refs, &evidence.run_ids, caller)
+          .archive_subtree(
+            session_id,
+            Some(request_id),
+            summary,
+            &evidence.result_refs,
+            &evidence.run_ids,
+            &ArchiveAuthority::Operator,
+          )
           .await?;
         Ok((200, json!({"archived": archived})))
       }
+      CallerIdentity::Agent { claims } if claims.session_id == session_id => {
+        self.archive_own_task(session_id, request_id, evidence, &claims.run_id).await
+      }
       CallerIdentity::Agent { claims } => {
-        if claims.session_id != session_id {
-          return Err(StoreError::forbidden("an agent may only archive its own task"));
-        }
-        let meta = self.store().load_task_meta(session_id).await?;
-        if meta.profile != TaskProfile::Manager {
-          return Err(StoreError::forbidden("own-task archive requests come from manager tasks only"));
-        }
-        let run = self
-          .store()
-          .read_run_sync(session_id, &claims.run_id)?
-          .ok_or_else(|| StoreError::invalid(format!("caller run {} not found in task {session_id}", claims.run_id)))?;
-        let events = self.store().load_all_facts(session_id)?;
-        if run_records::terminal_outcome(&events, &run.id)?.is_some()
-          || self.store().run_display_state(session_id, &run.id)? != RunDisplayState::Running
-        {
-          return Err(StoreError::conflict(vec![format!(
-            "caller run {} is not active; it cannot request archive",
-            claims.run_id
-          )]));
-        }
-        if let Some(replay) = self.replay_close_request(session_id, request_id)? {
-          return Ok(replay);
-        }
-        let blockers = self.own_run_close_blockers(session_id, &run, evidence).await?;
-        if !blockers.is_empty() {
-          return Err(StoreError::conflict(sorted_unique(blockers)));
-        }
-        self.save_close_request(session_id, request_id, &claims.run_id, evidence).await
+        self.archive_other_task(session_id, request_id, evidence, claims, non_child).await
       }
     }
+  }
+
+  /// The agent's own-task archive: the close waits for the caller's own active Run to finish.
+  async fn archive_own_task(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    evidence: &CompletionEvidence,
+    caller_run_id: &str,
+  ) -> StoreResult<(usize, Value)> {
+    let meta = self.store().load_task_meta(session_id).await?;
+    if meta.profile != TaskProfile::Manager {
+      return Err(StoreError::forbidden("own-task archive requests come from manager tasks only"));
+    }
+    let run = self
+      .store()
+      .read_run_sync(session_id, caller_run_id)?
+      .ok_or_else(|| StoreError::invalid(format!("caller run {caller_run_id} not found in task {session_id}")))?;
+    let events = self.store().load_all_facts(session_id)?;
+    if run_records::terminal_outcome(&events, &run.id)?.is_some()
+      || self.store().run_display_state(session_id, &run.id)? != RunDisplayState::Running
+    {
+      return Err(StoreError::conflict(vec![format!(
+        "caller run {caller_run_id} is not active; it cannot request archive"
+      )]));
+    }
+    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+      return Ok(replay);
+    }
+    let blockers = self.own_run_close_blockers(session_id, &run, evidence).await?;
+    if !blockers.is_empty() {
+      return Err(StoreError::conflict(sorted_unique(blockers)));
+    }
+    self.save_close_request(session_id, request_id, &run.id, evidence).await
+  }
+
+  /// One agent archive of another task: manager callers only, inside the caller's subtree, or another task with the
+  /// caller's `non_child` confirmation.
+  async fn archive_other_task(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    evidence: &CompletionEvidence,
+    claims: &RunTokenClaims,
+    non_child: bool,
+  ) -> StoreResult<(usize, Value)> {
+    let caller_meta = self.store().load_task_meta(&claims.session_id).await?;
+    if caller_meta.profile != TaskProfile::Manager {
+      return Err(StoreError::forbidden("only a manager can archive another task"));
+    }
+    let inside_subtree = {
+      let _guard = self.store().control_lock().await;
+      self.store().invalidate_tree_index();
+      self.store().task_below_caller(&claims.session_id, session_id)?
+    };
+    if !inside_subtree && !non_child {
+      return Err(StoreError::forbidden(format!(
+        "task {session_id} is outside the caller's subtree; pass --archive-non-child to archive it"
+      )));
+    }
+    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+      return Ok(replay);
+    }
+    let summary =
+      if evidence.summary.is_empty() { format!("archived by {}", claims.session_id) } else { evidence.summary.clone() };
+    let archived = self
+      .archive_subtree(
+        session_id,
+        Some(request_id),
+        &summary,
+        &evidence.result_refs,
+        &evidence.run_ids,
+        &ArchiveAuthority::Agent { caller_task_id: claims.session_id.clone() },
+      )
+      .await?;
+    Ok((200, json!({"archived": archived})))
   }
 
   /// Build an archive close fact with its fixed report recipient and subtree owner.
@@ -512,6 +581,7 @@ impl TaskCompletion {
     summary: &str,
     report_to: Option<&str>,
     archived_with: Option<&str>,
+    archived_by: Option<&str>,
     actor: &str,
     result_refs: &[String],
     run_ids: &[String],
@@ -527,6 +597,9 @@ impl TaskCompletion {
     if let Some(archived_with) = archived_with {
       payload.push(("archived_with".to_string(), json!(archived_with)));
     }
+    if let Some(archived_by) = archived_by {
+      payload.push(("archived_by".to_string(), json!(archived_by)));
+    }
     control_events::build_control_event(
       event_types::TASK_CLOSED,
       actor,
@@ -537,7 +610,8 @@ impl TaskCompletion {
     )
   }
 
-  /// Archive an open task subtree and report the target close to its parent.
+  /// Archive an open task subtree and report the target close to its parent. The authority carries the decision
+  /// `archive_task` made: the operator, or an agent caller with its task id.
   pub async fn archive_subtree(
     &self,
     session_id: &str,
@@ -545,11 +619,12 @@ impl TaskCompletion {
     summary: &str,
     result_refs: &[String],
     run_ids: &[String],
-    caller: &CallerIdentity,
+    authority: &ArchiveAuthority,
   ) -> StoreResult<Vec<String>> {
-    if !caller.is_operator() {
-      return Err(StoreError::forbidden(ARCHIVE_OPERATOR_REFUSAL));
-    }
+    let (actor, archived_by) = match authority {
+      ArchiveAuthority::Operator => (ACTOR_USER, None),
+      ArchiveAuthority::Agent { caller_task_id } => (ACTOR_AGENT, Some(caller_task_id.as_str())),
+    };
     let request_id = match request_id {
       None => format!("archive-{}", Uuid::new_v4()),
       Some("") => return Err(StoreError::invalid("request_id is required for archive")),
@@ -625,9 +700,10 @@ impl TaskCompletion {
               summary: if is_target { summary } else { "" },
               result_refs: if is_target { result_refs } else { &[] },
               run_ids: if is_target { run_ids } else { &[] },
-              actor: ACTOR_USER,
+              actor,
               report_to: if is_target { parent_id.as_deref() } else { None },
               archived_with: if is_target { None } else { Some(session_id) },
+              archived_by: if is_target { archived_by } else { None },
               sequence_outcome: None,
             },
           )
@@ -703,6 +779,7 @@ impl TaskCompletion {
           actor: ACTOR_USER,
           report_to: None,
           archived_with: None,
+          archived_by: None,
           sequence_outcome: None,
         },
       )
@@ -752,6 +829,7 @@ impl TaskCompletion {
             actor: ACTOR_SYSTEM,
             report_to: None,
             archived_with: None,
+            archived_by: None,
             sequence_outcome: None,
           },
         )
@@ -965,6 +1043,7 @@ impl TaskCompletion {
             actor,
             report_to: fresh_meta.task_parent_id.as_deref(),
             archived_with: None,
+            archived_by: None,
             sequence_outcome: None,
           },
         )
@@ -1003,6 +1082,7 @@ impl TaskCompletion {
       actor,
       report_to,
       archived_with,
+      archived_by,
       sequence_outcome,
     } = append;
     let close_event = match outcome {
@@ -1012,6 +1092,7 @@ impl TaskCompletion {
         summary,
         report_to,
         archived_with,
+        archived_by,
         actor,
         result_refs,
         run_ids,
@@ -1126,6 +1207,7 @@ impl TaskCompletion {
             actor,
             report_to: fresh_meta.task_parent_id.as_deref(),
             archived_with: None,
+            archived_by: None,
             sequence_outcome: None,
           },
         )
@@ -1219,6 +1301,7 @@ impl TaskCompletion {
               actor,
               report_to: fresh_meta.task_parent_id.as_deref(),
               archived_with: None,
+              archived_by: None,
               sequence_outcome: None,
             },
           )
@@ -1623,6 +1706,7 @@ impl TaskCompletion {
             actor: ACTOR_SYSTEM,
             report_to: fresh_meta.task_parent_id.as_deref(),
             archived_with: None,
+            archived_by: None,
             sequence_outcome: Some(sequence_outcome),
           },
         )

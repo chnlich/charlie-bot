@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "session",
+    "archive",
+    "--help"
+  ],
+  "expect": {
+    "stdout": "Archive a task or its subtree\n\nUsage: charliebot session archive [OPTIONS] <SESSION_ID>\n\nArguments:\n  <SESSION_ID>  Task id\n\nOptions:\n      --archive-non-child          Confirm the target is outside the caller's subtree; an agent needs it to archive such a task\n      --result-file <RESULT_FILE>  Path to the archive request's JSON body (summary, result_refs, run_ids); required to archive the caller's own task, optional otherwise (the summary then defaults to \"archived by <caller task id>\")\n      --request-id <REQUEST_ID>    Request id binding the archive (defaults to a fresh UUID)\n  -h, --help                       Print help\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

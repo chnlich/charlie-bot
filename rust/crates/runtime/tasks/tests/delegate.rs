@@ -14,11 +14,11 @@ use std::path::Path;
 use axum::http::StatusCode;
 use charliebot_core::event_types;
 use charliebot_core::run_token::{self, RunTokenClaims};
-use charliebot_registry::caller::CallerIdentity;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{CreateTask, TaskCaller};
+use charliebot_tasks::completion::ArchiveAuthority;
 use charliebot_tasks::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
 use charliebot_tasks::routes;
 use process_guard::ProcessGroupGuard;
@@ -877,7 +877,7 @@ async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
       "archived by the user",
       &[],
       &[],
-      &CallerIdentity::Operator { session_id: None },
+      &ArchiveAuthority::Operator,
     )
     .await?;
 

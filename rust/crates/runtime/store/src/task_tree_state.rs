@@ -254,6 +254,11 @@ pub(crate) fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<V
   Ok(chain)
 }
 
+/// Whether the task sits strictly below the caller's task: the agent subtree test that reparent and archive share.
+pub(crate) fn task_below_caller(index: &TreeIndex, caller_task: &str, session_id: &str) -> StoreResult<bool> {
+  Ok(ancestor_ids(index, session_id)?.iter().any(|id| id == caller_task))
+}
+
 pub(crate) struct CachedTreeIndex {
   pub(crate) generation: u64,
   pub(crate) built_at: Instant,

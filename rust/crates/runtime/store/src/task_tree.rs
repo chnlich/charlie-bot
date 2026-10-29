@@ -31,7 +31,7 @@ pub(crate) use crate::task_tree_state::{
   EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
 };
 pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity};
-use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta};
+use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, task_below_caller};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -898,6 +898,12 @@ impl Store {
   pub fn ancestor_ids(&self, session_id: &str) -> StoreResult<Vec<String>> {
     let index = self.tree_index()?;
     ancestor_ids(&index, session_id)
+  }
+
+  /// Whether the task sits strictly below `caller_task`, per the subtree test reparent and archive share.
+  pub fn task_below_caller(&self, caller_task: &str, session_id: &str) -> StoreResult<bool> {
+    let index = self.tree_index()?;
+    task_below_caller(&index, caller_task, session_id)
   }
 
   /// Return one node’s direct task children in creation order.

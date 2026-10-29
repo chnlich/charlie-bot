@@ -22,6 +22,7 @@ use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_US
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, terminal_outcome};
 use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
+use charliebot_tasks::completion::ArchiveAuthority;
 use charliebot_tasks::completion::{CompletionEvidence, LandingEvidence, SequenceCloseOutcome, TaskCompletion};
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use charliebot_tasks::routes;
@@ -240,6 +241,7 @@ async fn three_level_delivery_closes_workers_and_keeps_project_open() {
       "manager-close",
       &evidence("delegation delivered", &["run:manager-run"], &["manager-run"]),
       &CallerIdentity::Operator { session_id: None },
+      false,
     )
     .await
     .unwrap();
@@ -267,6 +269,7 @@ async fn three_level_delivery_closes_workers_and_keeps_project_open() {
       "manager-close",
       &evidence("delegation delivered", &["run:manager-run"], &["manager-run"]),
       &CallerIdentity::Operator { session_id: None },
+      false,
     )
     .await
     .unwrap();
@@ -295,14 +298,7 @@ async fn operator_archive_of_child_delivers_one_report_and_wakes_parent() {
 
   let archived = h
     .completion
-    .archive_subtree(
-      &child.id,
-      Some("archive-child"),
-      "archived by the user",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&child.id, Some("archive-child"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
 
@@ -354,6 +350,7 @@ async fn archived_parent_keeps_child_archive_report_as_history_without_waking() 
     "archived by the user",
     None,
     None,
+    None,
     ACTOR_USER,
     &[],
     &[],
@@ -366,14 +363,7 @@ async fn archived_parent_keeps_child_archive_report_as_history_without_waking() 
   h.dispatcher.set_executor(Some(Arc::new(WakeCountingExecutor(Arc::clone(&wakes)))));
 
   h.completion
-    .archive_subtree(
-      &child.id,
-      Some("archive-child"),
-      "archived by the user",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&child.id, Some("archive-child"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
 
@@ -588,6 +578,7 @@ async fn own_run_request_naming_a_foreign_run_is_refused_and_not_saved() {
       "foreign-evidence",
       &evidence("manager done", &["run:foreign-run"], &["foreign-run"]),
       &agent(&task.id, "owner-run"),
+      false,
     )
     .await;
   assert!(
@@ -610,6 +601,7 @@ async fn own_run_request_with_an_open_child_is_refused_and_not_saved() {
       "open-child",
       &evidence("manager done", &["report:child"], &["owner-run"]),
       &agent(&task.id, "owner-run"),
+      false,
     )
     .await;
   assert!(
@@ -632,6 +624,7 @@ async fn saved_request_blocked_after_its_run_wakes_the_requester_once() {
         "close-after-finish",
         &evidence("manager done", &["run:owner-run"], &["owner-run"]),
         &own,
+        false,
       )
       .await
       .unwrap()
@@ -739,6 +732,133 @@ async fn cancel_by_the_manager_parent_records_close_and_child_report() {
 }
 
 #[tokio::test]
+async fn manager_archive_of_a_subtree_task_archives_it_and_reports_to_its_parent() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
+  let target = h.base.create_task("target", Some(&manager.id), TaskProfile::Manager, "Target").await;
+  let grandchild = h.base.create_task("grandchild", Some(&target.id), TaskProfile::Worker, "Grandchild").await;
+
+  let (status, payload) = h
+    .completion
+    .archive_task(
+      &target.id,
+      "agent-subtree",
+      &evidence("line cleanup", &[], &[]),
+      &agent(&manager.id, "manager-run"),
+      false,
+    )
+    .await
+    .unwrap();
+  assert_eq!(status, 200);
+  assert_eq!(payload, json!({"archived": [target.id.clone(), grandchild.id.clone()]}));
+  assert_eq!(h.base.store.task_state(&target.id).unwrap(), "archived");
+  assert_eq!(h.base.store.task_state(&grandchild.id).unwrap(), "archived");
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open");
+
+  // The target's close fact names the caller in archived_by and reports to the target's parent.
+  let close = h
+    .base
+    .store
+    .load_all_facts(&target.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .unwrap();
+  assert_eq!(close["actor"], ACTOR_AGENT);
+  assert_eq!(close["archived_by"], manager.id);
+  assert_eq!(close["summary"], "line cleanup");
+  assert_eq!(close["report_to"], manager.id);
+  let report = h
+    .base
+    .store
+    .load_all_facts(&manager.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::CHILD_REPORT && event["child_event_id"] == close["id"])
+    .unwrap();
+  assert_eq!(report["outcome"], "archived");
+}
+
+#[tokio::test]
+async fn manager_archive_of_another_task_needs_the_subtree_or_the_non_child_confirmation() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
+  let worker = h.base.create_task("worker", Some(&manager.id), TaskProfile::Worker, "Worker").await;
+  let outside = h.base.create_task("outside", None, TaskProfile::Manager, "Outside").await;
+  let caller = agent(&manager.id, "manager-run");
+
+  // A worker caller may not archive any other task, with or without the confirmation.
+  let worker_refusal = h
+    .completion
+    .archive_task(&root.id, "worker-archive", &evidence("", &[], &[]), &agent(&worker.id, "worker-run"), true)
+    .await;
+  assert!(
+    matches!(worker_refusal, Err(StoreError::Forbidden(message)) if message == "only a manager can archive another task")
+  );
+
+  // A manager refuses a task outside its subtree without the confirmation and changes nothing.
+  let outside_refusal =
+    h.completion.archive_task(&outside.id, "outside-archive", &evidence("", &[], &[]), &caller, false).await;
+  assert!(
+    matches!(outside_refusal, Err(StoreError::Forbidden(ref message)) if message.contains("--archive-non-child")),
+    "{outside_refusal:?}"
+  );
+  assert_eq!(h.base.store.task_state(&outside.id).unwrap(), "open");
+  assert!(
+    !h.base.store.load_all_facts(&outside.id).unwrap().iter().any(|event| event["type"] == event_types::TASK_CLOSED)
+  );
+
+  // With the confirmation the archive lands; the close fact names the caller and defaults the summary to it.
+  let (status, payload) =
+    h.completion.archive_task(&outside.id, "outside-archive", &evidence("", &[], &[]), &caller, true).await.unwrap();
+  assert_eq!(status, 200);
+  assert_eq!(payload, json!({"archived": [outside.id.clone()]}));
+  let close = h
+    .base
+    .store
+    .load_all_facts(&outside.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .unwrap();
+  assert_eq!(close["actor"], ACTOR_AGENT);
+  assert_eq!(close["archived_by"], manager.id);
+  assert_eq!(close["summary"], format!("archived by {}", manager.id));
+}
+
+#[tokio::test]
+async fn agent_archive_of_a_subtree_with_an_unfinished_run_refuses_like_the_operator() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
+  let target = h.base.create_task("target", Some(&manager.id), TaskProfile::Worker, "Target").await;
+  register_run(&h.base, &target.id, "queued-run").await;
+
+  let agent_refusal = h
+    .completion
+    .archive_task(&target.id, "agent-blocked", &evidence("", &[], &[]), &agent(&manager.id, "manager-run"), false)
+    .await;
+  let operator_refusal = h
+    .completion
+    .archive_subtree(
+      &target.id,
+      Some("operator-blocked"),
+      "archived by the user",
+      &[],
+      &[],
+      &ArchiveAuthority::Operator,
+    )
+    .await;
+  let (agent_refusal, operator_refusal) = (agent_refusal.unwrap_err(), operator_refusal.unwrap_err());
+  assert_eq!(agent_refusal.status_code(), Some(409));
+  assert!(!agent_refusal.blockers().unwrap().is_empty());
+  assert_eq!(agent_refusal.blockers(), operator_refusal.blockers());
+  assert_eq!(h.base.store.task_state(&target.id).unwrap(), "open");
+}
+
+#[tokio::test]
 async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
   // Python: tests/test_task_manager_authorization.py::test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor.
   // Its three cases: a task with no earlier run, one whose earlier run succeeded, and one whose earlier run failed.
@@ -755,19 +875,18 @@ async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
     }
     h.register_record(live_run(&child.id, "child-owner-run", RunKind::ManagerTurn)).await;
 
-    // An agent may not archive another task.
-    let wrong_task = h
+    // An agent may not archive a task outside its subtree without the non-child confirmation.
+    let outside_subtree = h
       .completion
       .archive_task(
         &root.id,
         "wrong-task",
         &evidence("coordination complete", &["report:feature-coordinated"], &[]),
         &agent(&child.id, "child-owner-run"),
+        false,
       )
       .await;
-    assert!(
-      matches!(wrong_task, Err(StoreError::Forbidden(message)) if message == "an agent may only archive its own task")
-    );
+    assert!(matches!(outside_subtree, Err(StoreError::Forbidden(message)) if message.contains("--archive-non-child")));
 
     // An open descendant refuses the request before it is saved.
     let blocked = h
@@ -777,6 +896,7 @@ async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
         "blocked-by-child",
         &evidence("manager report", &["report:manager-report"], &[]),
         &agent(&blocked_manager.id, "blocked-owner-run"),
+        false,
       )
       .await;
     assert!(
@@ -801,6 +921,7 @@ async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
         "close-1",
         &evidence("coordination complete", &["report:feature-coordinated"], &[]),
         &agent(&child.id, "child-owner-run"),
+        false,
       )
       .await
       .unwrap();
@@ -1444,14 +1565,7 @@ async fn close_clears_candidates_and_reopen_opens_a_fresh_boundary() {
     .await
     .unwrap();
   h.completion
-    .archive_subtree(
-      &root.id,
-      Some("archive-test"),
-      "archived by the user",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&root.id, Some("archive-test"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
   assert!(h.dispatcher.pending_inputs(&root.id).unwrap().is_empty());
@@ -1478,14 +1592,7 @@ async fn restore_brings_archived_ancestor_chain_and_leaves_siblings() {
   let leaf = h.base.create_task("leaf", Some(&middle.id), TaskProfile::Worker, "Leaf").await;
   let sibling = h.base.create_task("sibling", Some(&middle.id), TaskProfile::Worker, "Sibling").await;
   h.completion
-    .archive_subtree(
-      &root.id,
-      Some("archive-test"),
-      "archived by the user",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&root.id, Some("archive-test"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
   let restored = h
@@ -1540,14 +1647,7 @@ async fn user_message_restores_archived_chain_and_becomes_its_only_pending_input
     .await
     .unwrap();
   h.completion
-    .archive_subtree(
-      &root.id,
-      Some("archive-test"),
-      "archived by the user",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&root.id, Some("archive-test"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
   let nodes = [&root.id, &middle.id, &leaf.id];
@@ -1600,14 +1700,7 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
   let middle = h.base.create_task("middle", Some(&root.id), TaskProfile::Manager, "Middle").await;
   let leaf = h.base.create_task("leaf", Some(&middle.id), TaskProfile::Worker, "Leaf").await;
   h.completion
-    .archive_subtree(
-      &root.id,
-      Some("archive-test"),
-      "archived by the user",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&root.id, Some("archive-test"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
   h.register_record(live_run(&middle.id, "manager-run", RunKind::ManagerTurn)).await;
@@ -1699,12 +1792,12 @@ async fn archive_cancel_reopen_routes_and_scope() {
     }
   };
 
-  // An agent token may not archive a task other than its own.
+  // An agent token may not archive a task outside its subtree without the non-child confirmation.
   let (status, body) =
     call(format!("/api/sessions/{}/archive", root.id), Some(token.clone()), Some(json!({"request_id": "wrong-task"})))
       .await;
   assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-  assert_eq!(body["detail"], "an agent may only archive its own task");
+  assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("--archive-non-child")), "{}", body["detail"]);
 
   // The operator archives the open subtree, descendants included.
   let (status, body) =
@@ -1715,7 +1808,7 @@ async fn archive_cancel_reopen_routes_and_scope() {
   assert_eq!(h.base.store.task_state(&worker.id).unwrap(), "archived");
 
   // Unarchive is operator action too; an agent token cannot mutate.
-  let (status, _) = call(format!("/api/sessions/{}/unarchive", root.id), Some(token), None).await;
+  let (status, _) = call(format!("/api/sessions/{}/unarchive", root.id), Some(token.clone()), None).await;
   assert_eq!(status, StatusCode::FORBIDDEN);
   let (status, body) = call(format!("/api/sessions/{}/unarchive", root.id), None, Some(json!({}))).await;
   assert_eq!(status, StatusCode::OK);
@@ -1736,6 +1829,27 @@ async fn archive_cancel_reopen_routes_and_scope() {
     call(format!("/api/sessions/{}/cancel", root.id), None, Some(json!({"request_id": "route-6", "reason": "again"})))
       .await;
   assert_eq!(status, StatusCode::CONFLICT);
+
+  // With `non_child` in the body the same token archives a task outside its subtree, and the close fact
+  // names the caller.
+  let extra = h.base.create_task("extra", None, TaskProfile::Manager, "Extra").await;
+  let (status, body) = call(
+    format!("/api/sessions/{}/archive", extra.id),
+    Some(token),
+    Some(json!({"request_id": "agent-non-child", "non_child": true})),
+  )
+  .await;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  assert_eq!(body, json!({"archived": [extra.id.clone()]}));
+  let close = h
+    .base
+    .store
+    .load_all_facts(&extra.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .unwrap();
+  assert_eq!(close["archived_by"], other.id);
 }
 
 #[tokio::test]
@@ -1754,7 +1868,7 @@ async fn unarchive_route_restores_the_chain_and_reports_the_ids() {
       "archived by the user",
       &[],
       &[],
-      &CallerIdentity::Operator { session_id: None },
+      &ArchiveAuthority::Operator,
     )
     .await
     .unwrap();
@@ -1787,7 +1901,7 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
       "archived by the user",
       &[],
       &[],
-      &CallerIdentity::Operator { session_id: None },
+      &ArchiveAuthority::Operator,
     )
     .await
     .unwrap();

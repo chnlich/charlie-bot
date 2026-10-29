@@ -1498,7 +1498,6 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
-  use charliebot_registry::caller::CallerIdentity;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::route_claims::RouteClaims;
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
@@ -1507,6 +1506,7 @@ mod tests {
   use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
   use charliebot_store::{ControlGuard, CreateTask, Store, StoreError, StoreResult, TaskCaller};
+  use charliebot_tasks::completion::ArchiveAuthority;
   use charliebot_tasks::completion::TaskCompletion;
   use futures_util::future::BoxFuture;
   use serde_json::Value;
@@ -1596,7 +1596,7 @@ mod tests {
         "archived by the user",
         &[],
         &[],
-        &CallerIdentity::Operator { session_id: None },
+        &ArchiveAuthority::Operator,
       )
       .await
       .expect("archive task subtree");

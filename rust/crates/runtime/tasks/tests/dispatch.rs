@@ -7,13 +7,13 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::event_builders::make_master_done_event;
 use charliebot_core::config::BackendOption;
 use charliebot_core::event_types;
-use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::{ChatEvent, CreateTask, StoreError, StoreResult, TaskCaller};
+use charliebot_tasks::completion::ArchiveAuthority;
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{
   DispatchExecutor, child_report_text, dispatcher, inputs_not_pending_conflict, note_run_liveness,
@@ -665,14 +665,7 @@ async fn user_admission_lifts_only_the_target_node() {
   let archived_child =
     harness.create_task("archived-child", Some(&archived_middle.id), TaskProfile::Manager, "Archived child").await;
   let archived = TaskCompletion::new(Arc::clone(&harness.features))
-    .archive_subtree(
-      &archived_middle.id,
-      Some("archive-amid"),
-      "archived",
-      &[],
-      &[],
-      &CallerIdentity::Operator { session_id: None },
-    )
+    .archive_subtree(&archived_middle.id, Some("archive-amid"), "archived", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
   assert_eq!(archived, [archived_middle.id.clone(), archived_child.id.clone()]);

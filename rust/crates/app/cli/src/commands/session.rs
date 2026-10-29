@@ -132,7 +132,11 @@ struct RetryArgs {
 struct ArchiveArgs {
   /// Task id
   session_id: String,
-  /// Path to the archive request's JSON body (summary, result_refs, run_ids; required for an agent)
+  /// Confirm the target is outside the caller's subtree; an agent needs it to archive such a task
+  #[arg(long)]
+  archive_non_child: bool,
+  /// Path to the archive request's JSON body (summary, result_refs, run_ids); required to archive the
+  /// caller's own task, optional otherwise (the summary then defaults to "archived by <caller task id>")
   #[arg(long)]
   result_file: Option<String>,
   /// Request id binding the archive (defaults to a fresh UUID)
@@ -338,6 +342,9 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
     }
     None => Map::new(),
   };
+  if args.archive_non_child {
+    body.insert("non_child".to_string(), json!(true));
+  }
   let request_id = args
     .request_id
     .clone()

@@ -733,28 +733,6 @@ impl Store {
     Ok(records)
   }
 
-  /// Return every existing v2 run raw log path under the sessions directory.
-  pub fn run_raw_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for session in read_directory(&self.cfg.sessions_dir(), true)? {
-      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
-        continue;
-      }
-      let run_root = session.path().join(DATA_DIR_NAME).join(RUNS_DIR_NAME);
-      for run in read_directory(&run_root, true)? {
-        if !run.file_type().map_err(|error| path_error(&run.path(), error))?.is_dir() {
-          continue;
-        }
-        let path = run.path().join(RAW_LOG_NAME);
-        if path.is_file() {
-          paths.push(path);
-        }
-      }
-    }
-    paths.sort();
-    Ok(paths)
-  }
-
   /// Return every existing legacy master-run raw log path.
   pub fn master_run_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
     self.legacy_log_paths(MASTER_RUNS_DIR_NAME, RAW_LOG_NAME)

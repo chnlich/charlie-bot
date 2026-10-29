@@ -692,25 +692,26 @@ fn check_fork_open_shape(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
   Ok(failures)
 }
 
+/// Whether a `details` that folds at open lies between `element` and its ancestor `up_to`, or among all of its
+/// ancestors when `up_to` is `None`.
+fn folded_ancestor(nodes: &[Element], element: usize, up_to: Option<usize>) -> bool {
+  let mut ancestor = nodes[element].parent;
+  while let Some(index) = ancestor {
+    if Some(index) == up_to {
+      return false;
+    }
+    let node = &nodes[index];
+    if folds_at_open(&node.tag, node.attrs.keys().map(String::as_str)) {
+      return true;
+    }
+    ancestor = node.parent;
+  }
+  false
+}
+
 /// The `li` lines of one fork that no folded `details` holds: the options the page shows at open.
 fn visible_option_lines(nodes: &[Element], fork: usize) -> Vec<usize> {
-  find(nodes, fork, "li", &[])
-    .into_iter()
-    .filter(|&line| {
-      let mut ancestor = nodes[line].parent;
-      while let Some(index) = ancestor {
-        if index == fork {
-          return true;
-        }
-        let node = &nodes[index];
-        if folds_at_open(&node.tag, node.attrs.keys().map(String::as_str)) {
-          return false;
-        }
-        ancestor = node.parent;
-      }
-      true
-    })
-    .collect()
+  find(nodes, fork, "li", &[]).into_iter().filter(|&line| !folded_ancestor(nodes, line, Some(fork))).collect()
 }
 
 /// The name an option line opens with, in 「」, when a non-empty line follows the closing bracket.
@@ -744,6 +745,14 @@ fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutc
   let mut failures = Vec::new();
   for (index, fork) in open_forks(&context.nodes) {
     let section = pyfmt::str_repr(&section_heading(&context.nodes, fork));
+    if folded_ancestor(&context.nodes, fork, None) {
+      failures.push(outcome(
+        FORK_OPTIONS,
+        false,
+        format!("fork #{index} (section {section}) sits inside a closed fold"),
+      ));
+      continue;
+    }
     let lines = visible_option_lines(&context.nodes, fork);
     let mut names = Vec::new();
     for (position, &line) in lines.iter().enumerate() {
@@ -1974,6 +1983,39 @@ mod tests {
   fn an_open_details_shows_its_option_to_the_check() {
     let body = ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS.replacen("<details>", "<details open>", 1);
     let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  /// A plan page whose open fork holds `body` and sits inside a `details` opened with the `details_start` tag.
+  fn fork_page_in_details(details_start: &str, body: &str) -> String {
+    let fork = format!("<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p>{body}</div>");
+    plan_page("Ship the fix.").replacen("<p>Trade-offs</p>", &format!("{details_start}{fork}</details>"), 1)
+  }
+
+  const TWO_OPTIONS_AND_RECOMMENDATION: &str = "<ul><li>「keep」: keep the file.</li>\
+     <li>「delete」: delete the file.</li></ul><p class=\"rec\">Recommendation: 「keep」.</p>";
+
+  #[test]
+  fn an_open_fork_inside_a_closed_details_fails_with_one_line() {
+    let page = fork_page_in_details("<details>", TWO_OPTIONS_AND_RECOMMENDATION);
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert_eq!(outcomes.len(), 1, "{outcomes:#?}");
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.starts_with("fork #1 (section"), "{}", outcomes[0].detail);
+    assert!(outcomes[0].detail.ends_with("sits inside a closed fold"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn the_same_fork_inside_an_open_details_passes() {
+    let page = fork_page_in_details("<details open>", TWO_OPTIONS_AND_RECOMMENDATION);
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn a_resolved_fork_inside_a_closed_details_is_skipped() {
+    let page = fork_page_in_details("<details>", "<p class=\"resolved\">Resolved: keep the file.</p>");
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }

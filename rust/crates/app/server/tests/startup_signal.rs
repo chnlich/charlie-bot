@@ -36,14 +36,16 @@ impl Drop for ServerChild {
   }
 }
 
-fn config_text() -> &'static str {
-  "server:\n  host: 127.0.0.1\n  port: 0\n  session_memory_max_mb: 0\n  session_swap_max_mb: 0\n  session_tasks_max: 0\n  min_free_disk_gib: 0\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n"
+fn config_text(port: u16) -> String {
+  format!(
+    "server:\n  host: 127.0.0.1\n  port: {port}\n  session_memory_max_mb: 0\n  session_swap_max_mb: 0\n  session_tasks_max: 0\n  min_free_disk_gib: 0\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n"
+  )
 }
 
-fn prepare_home(root: &Path) -> PathBuf {
+fn prepare_home(root: &Path, port: u16) -> PathBuf {
   let home = root.join("home");
   std::fs::create_dir_all(&home).expect("the synthetic home is created");
-  std::fs::write(home.join("config.yaml"), config_text()).expect("the synthetic config is written");
+  std::fs::write(home.join("config.yaml"), config_text(port)).expect("the synthetic config is written");
   std::fs::write(home.join("credentials.yaml"), "").expect("the synthetic credentials file is written");
   home
 }
@@ -175,7 +177,7 @@ fn drain_logs(receiver: &Receiver<io::Result<String>>, lines: &mut Vec<String>) 
 #[cfg(debug_assertions)]
 fn assert_boot_signal(signal_to_send: Signal) {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
-  let home = prepare_home(temporary.path());
+  let home = prepare_home(temporary.path(), 0);
   let (mut server, receiver) = start_server(temporary.path(), &home, true);
   let mut lines = wait_for_event(&mut server, &receiver, "task_tree_recovery_test_gate", Duration::from_secs(20));
   assert!(
@@ -231,6 +233,27 @@ fn sigint_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGINT);
 }
 
+/// A port another listener holds: the bind fails after `server_ready`, so the server logs `bind_failed` as an error line
+/// that carries the address, and exits with the config status.
+#[test]
+fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
+  let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
+  let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("a port to occupy");
+  let port = occupied.local_addr().expect("the occupied address").port();
+  let home = prepare_home(temporary.path(), port);
+
+  let (mut server, receiver) = start_server(temporary.path(), &home, false);
+  let mut lines = wait_for_event(&mut server, &receiver, "bind_failed", Duration::from_secs(30));
+  let line = lines.last().expect("the bind failure line");
+  assert!(line.contains("[error    ] bind_failed "), "{line}");
+  assert!(
+    field_of(line, "error").is_some_and(|error| error.contains(&format!("127.0.0.1:{port}"))),
+    "the bind error names the address: {line}"
+  );
+  let (status, _) = wait_for_exit(&mut server, &receiver, &mut lines, BOOT_STOP_TIMEOUT);
+  assert_eq!(status.code(), Some(1), "{status:?}");
+}
+
 /// Task-tree nodes the boot pass walks, and the chat events each node carries. The walk takes at least `WALK_MIN_MS`,
 /// so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type), which lengthens
 /// the walk without a directory per node. A release build walks an event about six times faster than a debug build, so
@@ -274,7 +297,7 @@ fn recovery_elapsed_ms(lines: &[String]) -> u64 {
 #[test]
 fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
-  let home = prepare_home(temporary.path());
+  let home = prepare_home(temporary.path(), 0);
   write_sessions(&home, WALK_SESSIONS);
 
   let (mut server, receiver) = start_server(temporary.path(), &home, false);

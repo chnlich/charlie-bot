@@ -180,7 +180,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let mut stop = match StopSignal::install() {
     Ok(stop) => stop,
     Err(error) => {
-      eprintln!("charliebot-server: installing the signal handlers failed: {error}");
+      tracing::error!(error = %error, "signal_handlers_install_failed");
       return ExitCode::from(EXIT_STARTUP);
     }
   };
@@ -196,7 +196,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let registry = match packages::registry() {
     Ok(registry) => Arc::new(registry),
     Err(error) => {
-      eprintln!("charliebot-server: {error}");
+      tracing::error!(error = %error, "packages_registry_failed");
       return ExitCode::from(EXIT_CONFIG);
     }
   };
@@ -206,7 +206,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let state_parts = match load_inputs(&registry, &repo_root) {
     Ok(parts) => parts,
     Err(message) => {
-      eprintln!("charliebot-server: {message}");
+      tracing::error!(error = %message, "load_inputs_failed");
       return ExitCode::from(EXIT_CONFIG);
     }
   };
@@ -229,7 +229,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
       return ExitCode::from(EXIT_STARTUP);
     }
     Err(error) => {
-      eprintln!("charliebot-server: taking the home writer fence failed: {error}");
+      tracing::error!(error = %error, "home_writer_fence_failed");
       return ExitCode::from(EXIT_STARTUP);
     }
   };
@@ -240,7 +240,11 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let build_info = BuildInfo::capture(repo_root.path());
   if let Err(error) = charliebot_core::home_init::init_charliebot_home(&cfg, repo_root.path()) {
     writer_fence.release();
-    eprintln!("charliebot-server: initializing {} failed: {error}", paths::display(&cfg.charliebot_home));
+    tracing::error!(
+      home = %paths::display(&cfg.charliebot_home),
+      error = %error,
+      "home_init_failed"
+    );
     return ExitCode::from(EXIT_STARTUP);
   }
   if startup_stop.is_cancelled() {
@@ -250,7 +254,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     Ok(store) => store,
     Err(error) => {
       writer_fence.release();
-      eprintln!("charliebot-server: creating session store failed: {error}");
+      tracing::error!(error = %error, "session_store_create_failed");
       return ExitCode::from(EXIT_STARTUP);
     }
   };
@@ -281,7 +285,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     }
     Err(error) => {
       writer_fence.release();
-      eprintln!("charliebot-server: lifespan startup failed: {error:#}");
+      tracing::error!(error = %format!("{error:#}"), "lifespan_startup_failed");
       return ExitCode::from(EXIT_STARTUP);
     }
   };
@@ -305,7 +309,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let listener = match bind(&cfg.server.host, cfg.server.port).await {
     Ok(listener) => listener,
     Err(message) => {
-      eprintln!("charliebot-server: {message}");
+      tracing::error!(error = %message, "bind_failed");
       return finish_stop(&mut lifespan, &mut writer_fence, Instant::now(), StopReason::BindFailure).await;
     }
   };

@@ -124,7 +124,7 @@ with a trailing `\n`. A non-JSON line, or a falsy or unparsable `timestamp`, sta
 | `record_finish_locked(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: RunOutcome) -> StoreResult<RunRecord>` | `src/runtime/runs.py::record_finish_locked` |
 | `request_stop(&self, session_id: &str, run_id: &str, reason: &str) -> StoreResult<StopRequest>` | `src/runtime/runs.py::request_stop` |
 | `reconcile_stop_request(&self, session_id: &str, run_id: &str) -> StoreResult<StopResult>` | `src/runtime/runs.py::reconcile_stop_request` |
-| `claim_input_events(&self, session_id: &str, run_id: &str, event_ids: &[String]) -> StoreResult<RunRecord>` | `src/runtime/session_dispatch.py` run-record `input_event_ids` write |
+| `claim_input_events_locked(&self, guard: &ControlGuard, session_id: &str, run_id: &str, event_ids: &[String]) -> StoreResult<RunRecord>` | `src/runtime/session_dispatch.py` run-record `input_event_ids` write |
 | `read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>>`; `list_run_records_sync(&self, session_id: &str) -> StoreResult<Vec<RunRecord>>` | `src/runtime/runs.py::read_run_sync`, `list_run_records_sync` |
 | `list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize, order: RunOrder) -> StoreResult<RunPage>` | `src/runtime/runs.py::list_runs_page_sync` |
 | `newest_run_record_sync(&self, session_id: &str) -> StoreResult<Option<RunRecord>>`; `last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>>` | `src/runtime/runs.py::newest_run_record_sync`, `last_ended_run_id` |
@@ -136,9 +136,8 @@ with a trailing `\n`. A non-JSON line, or a falsy or unparsable `timestamp`, sta
 Run records use Python's exact field order and reject unknown fields. Their JSON writes are atomic.
 `RunOrder::Descending` reads the `(started_at, id)` order backwards. A page cursor carries its order (`d` is set
 only when descending), and a cursor read under the other order is refused with Python's `ValueError` text.
-`register_run_locked`, retry creation, finish and `claim_input_events_locked` require `ControlGuard`.
-`claim_input_events` acquires the guard for callers that do not hold it. Control facts append through
-`append_control_fact` while the guard is held. A finish fact lands before its record mirror.
+`register_run_locked`, retry creation, finish and `claim_input_events_locked` require `ControlGuard`. Control facts
+append through `append_control_fact` while the guard is held. A finish fact lands before its record mirror.
 
 Registration pins `task_spec` only when it is `Some`: the body lands in `task_spec.md` before the record,
 which then carries `task_spec_ref` and `task_spec_hash`. A `None` spec writes neither field. Retry creation

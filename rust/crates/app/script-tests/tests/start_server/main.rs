@@ -2,9 +2,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+// The hold module serves two test binaries; each uses part of it, so the rest is not dead code there.
+#[path = "../common/hold.rs"]
+#[allow(dead_code)]
+mod hold;
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use nix::errno::Errno;
@@ -18,6 +23,9 @@ const READY_LINE: &str = "fake_server_ready";
 const MARKER_LINE: &str = "fake_server_shutdown_marker";
 const EXIT_LINE: &str = "launcher: server exited rc=0";
 const UNIT_FILES: [&str; 2] = ["charliebot.slice", "charliebot-agents.slice"];
+
+/// How long a held test waits to be killed. The check kills it long before this.
+const HOLD_WAIT: Duration = Duration::from_secs(60);
 
 const FAKE_RELEASE_BINARY: &str = r#"#!/usr/bin/env bash
 if [ "${1:-}" = "--check-config" ]; then
@@ -54,22 +62,7 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
   let releases = sandbox.dir("releases");
   install_release(&releases, SIGINT_RELEASE_BINARY);
   let (env, log_dir) = launcher_environment(&sandbox, &releases);
-  let mut command = harness::command("bash", &env);
-  command
-    .arg(harness::repo_root().join("scripts/start-server.sh"))
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .process_group(0);
-  unsafe {
-    command.pre_exec(|| {
-      if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
-        return Err(std::io::Error::last_os_error());
-      }
-      Ok(())
-    });
-  }
-  let mut child = ProcessGroup(harness::spawn(&mut command));
+  let mut child = start_launcher(&env);
 
   wait_for_log(&mut child, &log_dir, READY_LINE, Duration::from_secs(8));
   child.signal(Signal::SIGINT);
@@ -91,6 +84,80 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
     log_text.find(MARKER_LINE).expect("the shutdown marker") < log_text.find(EXIT_LINE).expect("the exit line"),
     "the exit line must follow the shutdown marker: {log_text:?}"
   );
+  // The launcher's exit leaves the group to the guard's drop: closing the pipe's write end makes the watchdog kill
+  // what is left of the group, itself included, and wait reaps it.
+  let group_id = child.group_id();
+  drop(child);
+  assert!(
+    hold::within(hold::END_WAIT, || hold::group_members(group_id).is_empty()),
+    "the launcher group outlived its test: {:?}",
+    hold::group_members(group_id)
+  );
+  assert!(hold::has_ended(group_id), "the watchdog still runs: {group_id}");
+}
+
+/// The launcher's whole group ends with its test process, which is killed here with SIGKILL: no guard runs, and the
+/// watchdog kills the group when the pipe's write end closes.
+#[test]
+fn the_launcher_group_ends_with_a_killed_test_process() {
+  let mut held_test = hold::HeldTest::start("hold_the_launcher_group_for_the_kill_check");
+  let text = held_test.recorded();
+  let field = |name: &str| {
+    text
+      .lines()
+      .find_map(|line| line.strip_prefix(name))
+      .unwrap_or_else(|| panic!("the marker has no {name} line: {text:?}"))
+      .to_string()
+  };
+  let group_id: u32 = field("group=").parse().expect("a group id in the marker");
+  let server_current = field("server=");
+  let server_release = field("release=");
+  let root = PathBuf::from(field("root="));
+  assert!(!hold::group_members(group_id).is_empty(), "no process in group {group_id} before the kill");
+  assert!(!hold::processes_with_arg(&server_current).is_empty(), "the release server does not run before the kill");
+  held_test.kill_and_reap();
+
+  let server_gone =
+    || hold::processes_with_arg(&server_current).is_empty() && hold::processes_with_arg(&server_release).is_empty();
+  assert!(
+    hold::within(hold::END_WAIT, || hold::group_members(group_id).is_empty() && server_gone()),
+    "group {group_id} outlived the killed test: members {:?}, servers {:?} {:?}",
+    hold::group_members(group_id),
+    hold::processes_with_arg(&server_current),
+    hold::processes_with_arg(&server_release)
+  );
+  assert!(hold::has_ended(group_id), "the watchdog still runs: {group_id}");
+  remove_killed_test_root(&root);
+}
+
+/// Started by `the_launcher_group_ends_with_a_killed_test_process` in a second copy of this binary. Without
+/// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
+#[test]
+fn hold_the_launcher_group_for_the_kill_check() {
+  let Some(marker) = hold::marker() else { return };
+  let sandbox = Sandbox::new();
+  sandbox.install_systemd_stubs();
+  let releases = sandbox.dir("releases");
+  let release = install_release(&releases, SIGINT_RELEASE_BINARY);
+  let (env, log_dir) = launcher_environment(&sandbox, &releases);
+  let mut group = start_launcher(&env);
+  wait_for_log(&mut group, &log_dir, READY_LINE, Duration::from_secs(8));
+  let text = format!(
+    "group={}\nserver={}\nrelease={}\nroot={}\n",
+    group.group_id(),
+    releases.join("current/charliebot-server").display(),
+    release.join("charliebot-server").display(),
+    sandbox.root().display()
+  );
+  hold::write_marker(&marker, &text);
+  thread::sleep(HOLD_WAIT);
+}
+
+/// A test process killed with SIGKILL never drops its sandbox, so its root stays on disk; the check removes it.
+fn remove_killed_test_root(root: &Path) {
+  if let Err(error) = fs::remove_dir_all(root) {
+    eprintln!("cannot remove the killed test's root {}: {error}", root.display());
+  }
 }
 
 #[test]
@@ -446,30 +513,83 @@ fn replace_text(path: &Path, old: &str, new: &str) {
   fs::write(path, contents.replace(old, new)).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
-struct ProcessGroup(Child);
+/// Starts the launcher in a process group of its own, under a watchdog that reads a pipe. The watchdog kills the
+/// group when the pipe's write end closes, which happens when this process ends however it ends, and it is the only
+/// cleanup when this process is killed and no guard runs. The launcher gets SIGINT's default action, because the
+/// test sends SIGINT to the whole group.
+fn start_launcher(env: &Env) -> ProcessGroup {
+  // The watchdog's `$$` is its pid, and as group leader its group id. It ignores the group's SIGINT.
+  const WATCHDOG: &str = "trap '' INT; read _; kill -KILL -- -$$";
+  // Both ends are close-on-exec and the write end is kept here alone, so no child holds it past exec: the read ends
+  // exactly when this process's write end drops.
+  let (reader, writer) = std::io::pipe().expect("the watchdog's pipe");
+  let mut watchdog = Command::new("bash");
+  watchdog
+    .args(["-c", WATCHDOG])
+    .stdin(Stdio::from(reader))
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .process_group(0);
+  // Not harness::spawn: a parent-death signal would end the watchdog with this process, before it kills the group.
+  let watchdog = watchdog.spawn().expect("start the watchdog");
+  let mut command = harness::command("bash", env);
+  command
+    .arg(harness::repo_root().join("scripts/start-server.sh"))
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .process_group(watchdog.id() as i32);
+  unsafe {
+    command.pre_exec(|| {
+      if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
+        return Err(std::io::Error::last_os_error());
+      }
+      Ok(())
+    });
+  }
+  let launcher = harness::spawn(&mut command);
+  ProcessGroup { launcher, watchdog, pipe: Some(writer) }
+}
+
+/// The launcher's process group, whose id is the watchdog's pid.
+struct ProcessGroup {
+  launcher: Child,
+  watchdog: Child,
+  /// The pipe's write end, held only here: dropping it ends the watchdog's read, and with it the group.
+  pipe: Option<std::io::PipeWriter>,
+}
 
 impl ProcessGroup {
   fn signal(&self, signal: Signal) {
-    killpg(Pid::from_raw(self.0.id() as i32), signal).expect("signal the launcher process group");
+    killpg(Pid::from_raw(self.group_id() as i32), signal).expect("signal the launcher process group");
   }
 
   fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-    self.0.try_wait()
+    self.launcher.try_wait()
   }
 
   fn wait(&mut self) -> std::io::Result<ExitStatus> {
-    self.0.wait()
+    self.launcher.wait()
+  }
+
+  /// The group's id, which is the watchdog's pid.
+  fn group_id(&self) -> u32 {
+    self.watchdog.id()
   }
 }
 
 impl Drop for ProcessGroup {
   fn drop(&mut self) {
-    if self.0.try_wait().expect("check the launcher before cleanup").is_none() {
-      match killpg(Pid::from_raw(self.0.id() as i32), Signal::SIGKILL) {
+    // A launcher that still runs is killed directly. One that has exited leaves the group to the watchdog: the
+    // write end closes below, the watchdog reads its end, kills the group, itself included, and is reaped here.
+    if self.launcher.try_wait().expect("check the launcher before cleanup").is_none() {
+      match killpg(Pid::from_raw(self.group_id() as i32), Signal::SIGKILL) {
         Ok(()) | Err(Errno::ESRCH) => {}
         Err(error) => panic!("kill the launcher process group: {error}"),
       }
-      self.0.wait().expect("reap the launcher process");
+      self.launcher.wait().expect("reap the launcher process");
     }
+    self.pipe.take();
+    self.watchdog.wait().expect("reap the watchdog");
   }
 }

@@ -25,6 +25,7 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::Registry;
 
+pub use crate::spawner_prompt::reviewer_run_follows;
 pub use charliebot_registry::turn::{PromptSource, RuleSegment};
 pub use coherent::{
   CoherentSnapshot, assemble_coherent_snapshot, assemble_coherent_snapshot_for_launch, capture_prompt_chain,

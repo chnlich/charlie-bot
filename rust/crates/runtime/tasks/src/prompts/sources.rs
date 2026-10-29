@@ -78,7 +78,7 @@ pub fn build_segments(
       let (system_prompt, _questions) = cold_read::load_texts(repo)?;
       return Ok((vec![segment(system_prompt, vec![base_source("prompts/cold_read.md")])], None));
     }
-    worker_kind_rule_segments(env, meta, kind, task_type)?
+    worker_kind_rule_segments(env, kind, meta.task.as_ref())?
   } else {
     return Err(
       TaskPromptError::new(format!("unknown run kind {}: no managed instruction contract", str_repr(kind))).into(),
@@ -173,12 +173,11 @@ fn manager_rule_segments(env: &PromptEnv<'_>, meta: &SessionMetadata) -> anyhow:
   Ok(segments)
 }
 
-/// The worker contract: the review rules, the verify contract, or the role and the task-type workflow.
+/// The worker contract: the review rules, the verify contract, or the role and the task's workflow.
 fn worker_kind_rule_segments(
   env: &PromptEnv<'_>,
-  meta: &SessionMetadata,
   kind: &str,
-  task_type: TaskType,
+  task: Option<&TaskSpec>,
 ) -> anyhow::Result<Vec<RuleSegment>> {
   let repo = env.checkout.path();
   let base = sections_text(repo, "task_base.md", &WORKER_BASE_SECTIONS)?;
@@ -186,7 +185,7 @@ fn worker_kind_rule_segments(
   if kind == "review" {
     segments
       .push(segment(review_text::review_rules_text(), vec![base_source("src/runtime/review.py:review_rules_text")]));
-  } else if task_type == TaskType::Verify {
+  } else if prompt_task_type(task) == TaskType::Verify {
     let contract = sections_text(repo, "verify.md", &["preamble", "scope"])?;
     let contract = spawner_prompt::substitute_tokens(&contract, &spawner_prompt::verify_contract_tokens(repo)?);
     segments.push(segment(contract, vec![base_source("prompts/verify.md")]));
@@ -194,8 +193,8 @@ fn worker_kind_rule_segments(
     let worker = sections_text(repo, "worker.md", &["role"])?;
     // The repo contract drops the bindings section, which renders per run. A repo-less task selects the repo-less
     // workflow and its source-files rule.
-    let repo_less = !meta.task.as_ref().and_then(|task| task.repo_path.as_deref()).is_some_and(|path| !path.is_empty());
-    let ids = spawner_prompt::workflow_rule_section_ids(task_type, repo_less)?;
+    let repo_less = !task.and_then(|task| task.repo_path.as_deref()).is_some_and(|path| !path.is_empty());
+    let ids = spawner_prompt::workflow_rule_section_ids(task, repo_less)?;
     let workflow = sections_text(repo, "worker.md", &ids)?;
     segments.push(segment(format!("{worker}\n{workflow}"), vec![base_source("prompts/worker.md")]));
   }

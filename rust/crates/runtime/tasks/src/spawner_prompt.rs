@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail};
 use charliebot_core::pyfmt::str_repr;
-use charliebot_store::metadata::TaskType;
+use charliebot_store::metadata::{TaskSpec, TaskType};
 
 use crate::verify_trailer;
 
@@ -117,6 +117,9 @@ fn decode_error(bytes: &[u8], start: usize, end: usize, reason: &str) -> String 
   }
 }
 
+/// The section that states the contract of a task whose record carries no type (`WORKFLOW_NO_REVIEWER_SECTION`).
+pub const WORKFLOW_NO_REVIEWER_SECTION: &str = "workflow_no_reviewer";
+
 /// The persistent workflow sections of a task type, bindings section first (`WORKFLOW_PROMPT_SECTION`). Verify and
 /// cold-read tasks have no workflow section.
 pub fn workflow_prompt_sections(task_type: TaskType) -> Option<&'static [&'static str]> {
@@ -126,6 +129,25 @@ pub fn workflow_prompt_sections(task_type: TaskType) -> Option<&'static [&'stati
     TaskType::ScriptRun => Some(&["workflow_script_run_bindings", "workflow_script_run"]),
     TaskType::Verify | TaskType::ColdRead => None,
   }
+}
+
+/// Whether a reviewer run follows a successful work run (`reviewer_run_follows`). A node without a task record is an
+/// implement node, and a record whose task type is implement gets a reviewer; every other task takes the
+/// non-implement branch (`src/runtime/task_execution.py:2190`). The harness assembly reads the same decision, so a
+/// harness cannot promise a reviewer that the after-run branch will not spawn.
+pub fn reviewer_run_follows(task: Option<&TaskSpec>) -> bool {
+  task.is_none_or(|task| task.task_type == Some(TaskType::Implement))
+}
+
+/// The persistent workflow sections of one task, bindings section first. A task record whose type is unset renders
+/// the implement workflow; when no reviewer run follows it, the implement STOP line gives way to the type-less
+/// contract (`WORKFLOW_NO_REVIEWER_SECTION`).
+pub fn task_workflow_sections(task: Option<&TaskSpec>) -> Option<&'static [&'static str]> {
+  let task_type = task.and_then(|task| task.task_type).unwrap_or(TaskType::Implement);
+  if task_type == TaskType::Implement && !reviewer_run_follows(task) {
+    return Some(&["worktree_bindings", "workflow_steps", WORKFLOW_NO_REVIEWER_SECTION]);
+  }
+  workflow_prompt_sections(task_type)
 }
 
 /// The repo-less workflow sections of a task type (`REPO_LESS_WORKFLOW_SECTION`).
@@ -139,14 +161,14 @@ pub fn repo_less_workflow_sections(task_type: TaskType) -> Option<&'static [&'st
 
 /// The persistent workflow rule sections of one work Run (`workflow_rule_section_ids`). The repo case drops the
 /// bindings section, which renders per run; a repo-less task with no repo-less workflow falls back to the repo case.
-pub fn workflow_rule_section_ids(task_type: TaskType, repo_less: bool) -> anyhow::Result<Vec<&'static str>> {
+pub fn workflow_rule_section_ids(task: Option<&TaskSpec>, repo_less: bool) -> anyhow::Result<Vec<&'static str>> {
+  let task_type = task.and_then(|task| task.task_type).unwrap_or(TaskType::Implement);
   if repo_less && let Some(ids) = repo_less_workflow_sections(task_type) {
     let mut sections = ids.to_vec();
     sections.push(REPO_LESS_SOURCE_FILES_SECTION);
     return Ok(sections);
   }
-  let ids =
-    workflow_prompt_sections(task_type).ok_or_else(|| anyhow!("no workflow sections for task type {task_type:?}"))?;
+  let ids = task_workflow_sections(task).ok_or_else(|| anyhow!("no workflow sections for task type {task_type:?}"))?;
   let mut sections = ids[1..].to_vec();
   sections.push("task_spec_source_files");
   Ok(sections)
@@ -179,6 +201,7 @@ fn required_worker_sections() -> Vec<&'static str> {
   .chain([
     REPO_LESS_SOURCE_FILES_SECTION,
     "task_spec_source_files",
+    WORKFLOW_NO_REVIEWER_SECTION,
     "task",
     "iteration_reports",
     "worktree_persistence",

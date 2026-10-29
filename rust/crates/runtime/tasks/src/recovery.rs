@@ -44,6 +44,7 @@ use crate::execution::{TaskExecutionAdapter, is_out_of_space_error};
 use crate::master_queue::{MasterQueue, SessionCallbacks};
 use crate::master_run;
 use crate::master_state::{MasterResumeRecord, MasterResumeRequest, ResumeLiveness, TaskRunBinding, TaskSpawnCallback};
+use crate::spawner_prompt;
 
 pub use crate::execution::{RUN_END_LANDING_RETRY_INTERVAL, closed_task_stop_request_id};
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -687,7 +688,7 @@ async fn replay_followups_with_records(
       }
       if outcome == RunOutcomeKind::Success {
         completion.after_run_finished(session_id, &run.id).await?;
-        if meta.task.is_some() && task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
+        if meta.task.is_some() && spawner_prompt::reviewer_run_follows(meta.task.as_ref()) && run.repo_path.is_some() {
           if let Some(reason) = completion.pause_reason(session_id)? {
             tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
           } else if review_facts.owes_review(task_facts.task_state == "open", run)

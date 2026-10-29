@@ -37,9 +37,9 @@ function parseLinkUrl(href) {
 }
 
 // A link naming this page's hostname with a different scheme or port is pulled back to the
-// page origin only when its path sits under a file-server prefix: those are routes the page
+// page origin only when its path sits under a file-server prefix. Those are routes the page
 // origin itself serves (the single prefix of FILE_SERVER_MOUNTS in
-// src/runtime/file_urls.py), so a link there whose scheme or port was
+// src/runtime/file_urls.py). A link there whose scheme or port was
 // written from memory is still unambiguous. Any other path names another frontend on this
 // host (the publish lane and each neighboring port serve their own server), and is left
 // exactly as written. Another hostname is another server, and is returned as written.
@@ -60,24 +60,24 @@ function resolveFileServerUrl(href) {
 
 // ---------------------------------------------------------------------------
 // Missing file links — a file link whose target the server has nothing at is
-// marked where it appears, so a wrong path shows up on the render rather than
+// marked where it appears. A wrong path shows up on the render rather than
 // on the click that fails. A 404 marks probed links; retired prefixes are
 // marked by path. Other statuses and network errors leave probed links alone.
 // A link under the file-server prefix resolves to an absolute path. A package that owns a family of file links registers it:
 // core then also probes a same-host link of the family that the prefix does
-// not resolve, and leaves alone a served link whose answer the package's own
+// not resolve. It leaves alone a served link whose answer the package's own
 // fetch brings back.
 // ---------------------------------------------------------------------------
 var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
 var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // Both recognition patterns cut a text run at the same boundaries, so the tail class is one
-// definition shared by both: it ends the run at whitespace, at the closers markdown and prose
-// put after a URL, and at everything outside printable ASCII — a chat URL is a maximal
+// definition shared by both. It ends the run at whitespace, at the closers markdown and prose
+// put after a URL, and at everything outside printable ASCII. A chat URL is a maximal
 // printable-ASCII run [\x21-\x7E]+, so a glued CJK character, full-width mark or emoji is
 // prose, not the tail of the link. \x7F-\uFFFF also covers astral characters, whose UTF-16
 // surrogate code units fall inside that range. markdown-renderer.js's tokenizer.url override
 // cuts bare URLs at the same boundary — two copies of one definition, kept in sync by the
-// comments in both files; the modules load independently, so sharing a constant would couple
+// comments in both files. The modules load independently, so sharing a constant would couple
 // their load order.
 var URL_TAIL_SOURCE = '[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]+';
 // A run naming a path under the prefix, with or without a scheme and host in front.
@@ -86,8 +86,8 @@ var FILE_SERVER_LINK_SOURCE =
 var LINK_TRAILING_PUNCTUATION_RE = /[.,;:!?*，。！？；、：．]+$/;
 
 // A family of file links that a package owns. textSource finds the family's links in message
-// text (a RegExp source that ends in FILE_LINK_TAIL_SOURCE); answersFor(pathname) is true for a
-// served path whose missing target the package's own fetch reports; recognizes(url) is true for
+// text (a RegExp source that ends in FILE_LINK_TAIL_SOURCE). answersFor(pathname) is true for a
+// served path whose missing target the package's own fetch reports. recognizes(url) is true for
 // a same-host URL of the family that the file-server prefix does not resolve.
 var fileLinkFamilies = new Map();
 
@@ -113,11 +113,11 @@ function missingMarkerHtml() {
     + escapeHtml(MISSING_FILE_MARKER_TEXT) + '</span>';
 }
 
-// One occurrence of a file link: the key its probe budget dedupes on — the absolute path for a
-// link under the prefix, the literal URL for a family link outside it —
-// the URL a probe would ask for, and where the marker goes. `end` is the offset just past the
-// link inside a text node, which is where that node has to be split; element carriers take the
-// marker as a sibling instead.
+// One occurrence of a file link: the key its probe budget dedupes on. The key is the absolute
+// path for a link under the prefix, and the literal URL for a family link outside it. The
+// occurrence also carries the URL a probe would ask for, and where the marker goes. `end` is the
+// offset just past the link inside a text node, which is where that node has to be split.
+// Element carriers take the marker as a sibling instead.
 function fileServerOccurrence(href, node, kind, end) {
   var url = resolveFileServerUrl(href);
   if (!url) return null;
@@ -155,7 +155,7 @@ function familyOccurrence(url, node, kind, end) {
 function collectFileServerOccurrences(out, text, node, kind) {
   if (!text) return;
   // One URL run can match several patterns (a scheme-full link under the prefix that a family
-  // pattern also finds); the span key keeps such a run one occurrence, so neither its probe
+  // pattern also finds). The span key keeps such a run one occurrence, so neither its probe
   // budget nor its marker is doubled.
   var claimed = new Set();
   var sources = [FILE_SERVER_LINK_SOURCE, RETIRED_FILE_SERVER_LINK_SOURCE];
@@ -227,7 +227,7 @@ function markOccurrencesMissing(occurrences) {
 }
 
 // The chat can be rebuilt (SPA session switch) while a probe is in flight, which leaves the
-// carrier detached; a marker on a detached node would never be seen, so there is nothing to do.
+// carrier detached. A marker on a detached node would never be seen, so there is nothing to do.
 function insertMissingMarkerAfter(node) {
   var parent = node.parentNode;
   if (!parent) return;

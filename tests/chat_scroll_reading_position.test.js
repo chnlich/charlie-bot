@@ -105,7 +105,14 @@ test('a clamp echo after a shrink does not read as an upward wheel', () => {
   assert.ok(state.root.scrollTop < pinnedTop, 'the clamp moved the reported position up');
   assert.equal(state.engine.pinnedIntent, true, 'the shrink echo kept the pin intent');
 
-  // With the height stable again, the same-sized move is a genuine wheel-up.
+  // The same clamp over a grown viewport: the scroll range shrinks while the
+  // content stands still (the status strip hiding pulls maxScroll down under
+  // a bottom reader). The reported move is the clamp, not the wheel.
+  state.root.clientHeight += 42;
+  state.root.fire('scroll');
+  assert.equal(state.engine.pinnedIntent, true, 'a range clamp over a bottom reader kept the pin');
+
+  // With the range stable again, the same-sized move is a genuine wheel-up.
   state.root.scrollTop -= 100;
   state.root.fire('scroll');
   assert.equal(state.engine.pinnedIntent, false, 'a real upward wheel still unpins');

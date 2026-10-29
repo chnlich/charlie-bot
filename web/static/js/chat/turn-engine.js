@@ -220,10 +220,11 @@
       this.lastRestoreClamp = null;
       this.rafScheduled = false;
       this.rafHandle = null;
-      // scrollHeight at the last write or scroll event; an upward event that
-      // arrives with a shrunk container is the browser's clamp of an
-      // out-of-range position, not the user's wheel.
+      // scrollHeight and scroll range at the last write or scroll event; an
+      // upward event that arrives with a shrunk container or scroll range is
+      // the browser's clamp of an out-of-range position, not the user's wheel.
       this.lastSeenScrollHeight = null;
+      this.lastSeenMaxScrollTop = null;
       this.resizeObserver = null;
       this.resizeRafScheduled = false;
       this.resizeRafHandle = null;
@@ -962,6 +963,7 @@
       this.lastProgrammaticScrollTop = this.container.scrollTop;
       this.lastUserScrollTop = this.lastProgrammaticScrollTop;
       this.lastSeenScrollHeight = this.container.scrollHeight;
+      this.lastSeenMaxScrollTop = this.container.scrollHeight - this.container.clientHeight;
     }
 
     handleScroll() {
@@ -973,6 +975,18 @@
       const height = this.container.scrollHeight;
       const shrank = this.lastSeenScrollHeight != null
         && height < this.lastSeenScrollHeight - 0.5;
+      // The scroll range itself can shrink under a stationary bottom reader:
+      // the viewport growing (the status strip hiding, a window resize) pulls
+      // maxScroll down and the browser clamps the pinned position up to it.
+      // That event reads upward with the content unshrunk — the same clamp,
+      // and not the reader's wheel, when the old position sat at the old range
+      // and the reported one at the new.
+      const max = height - this.container.clientHeight;
+      const rangeShrank = this.lastSeenMaxScrollTop != null
+        && max < this.lastSeenMaxScrollTop - 0.5;
+      const rangeClamp = rangeShrank && prev != null
+        && prev >= this.lastSeenMaxScrollTop - 0.5 && top >= max - 0.5;
+      this.lastSeenMaxScrollTop = max;
       this.lastSeenScrollHeight = height;
       this.lastUserScrollTop = top;
       // A genuine scroll re-declares the reading position by itself; a sticky
@@ -982,14 +996,14 @@
       // clears it. The browser clamping an out-of-range position over shrunk
       // content is not the reader's motion and keeps it — the same ruling the
       // pin intent below applies.
-      if (!(shrank && prev != null && top < prev - 0.5)) this.followNextTurn = false;
+      if (!((shrank || rangeClamp) && prev != null && top < prev - 0.5)) this.followNextTurn = false;
       // Pin intent follows the user's motion, not the 150px geometry band: any
       // upward scroll stops the follow (a 100px wheel-up from the bottom sits
       // inside the band but is still reading), and only a downward scroll that
       // reaches the band re-arms it. An upward event over shrunk content is
       // the browser clamping an out-of-range position after an update — the
       // reported mount-time unpin — and says nothing about the user's wheel.
-      if (prev != null && top < prev - 0.5 && !shrank) {
+      if (prev != null && top < prev - 0.5 && !(shrank || rangeClamp)) {
         this.pinnedIntent = false;
         if (typeof showScrollToBottom === 'function') showScrollToBottom();
       } else if (prev != null && top > prev + 0.5 && this.isPinned()) {

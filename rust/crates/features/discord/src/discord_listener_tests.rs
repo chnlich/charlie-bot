@@ -39,6 +39,9 @@ struct GatewayScript {
   close_after_identify: Option<u16>,
   acknowledge_heartbeats: bool,
   close_after_heartbeats: Option<(usize, u16)>,
+  /// Close with this code at the first heartbeat that carries a sequence number, which the client sends only
+  /// after it has read a sequenced dispatch.
+  close_after_sequenced_heartbeat: Option<u16>,
 }
 
 impl GatewayScript {
@@ -49,6 +52,7 @@ impl GatewayScript {
       close_after_identify: None,
       acknowledge_heartbeats: false,
       close_after_heartbeats: None,
+      close_after_sequenced_heartbeat: None,
     }
   }
 }
@@ -128,6 +132,12 @@ async fn serve_gateway(mut socket: WebSocket, state: Arc<GatewayState>, script: 
             }
             if let Some((target, code)) = script.close_after_heartbeats
               && heartbeats >= target
+            {
+              close_gateway(&mut socket, code).await;
+              return;
+            }
+            if let Some(code) = script.close_after_sequenced_heartbeat
+              && !value["d"].is_null()
             {
               close_gateway(&mut socket, code).await;
               return;
@@ -267,12 +277,14 @@ async fn test_heartbeat_carries_the_last_seq() {
   let mut script = GatewayScript::new(vec![ready(7)]);
   script.interval_ms = 15;
   script.acknowledge_heartbeats = true;
-  script.close_after_heartbeats = Some((1, 4004));
+  // The heartbeat timer starts at HELLO, so an early heartbeat can carry null before READY is read.
+  script.close_after_sequenced_heartbeat = Some(4004);
   let gateway = Gateway::start(vec![script]).await;
   configure_gateway(&home, &gateway, 1 << 18);
-  assert!(matches!(run_one_connection(&home, &gateway).await.unwrap(), ConnectionExit::Stopped { code: 4004 }));
+  let exit = tokio::time::timeout(Duration::from_secs(4), run_one_connection(&home, &gateway)).await.unwrap().unwrap();
+  assert!(matches!(exit, ConnectionExit::Stopped { code: 4004 }));
   let received = gateway.received();
-  let heartbeat = received[0].iter().find(|payload| payload["op"] == 1).unwrap();
+  let heartbeat = received[0].iter().find(|payload| payload["op"] == 1 && !payload["d"].is_null()).unwrap();
   assert_eq!(heartbeat, &json!({"op": 1, "d": 7}));
 }
 

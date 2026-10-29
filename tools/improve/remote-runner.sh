@@ -176,6 +176,30 @@ rewrite_command() {
   REWRITTEN=("${rewritten[@]}")
 }
 
+# The other directions' clones are standalone repositories on this host, so the list that the
+# launcher computed there cannot see their work, and two directions pick topics in rust/. Every
+# file that those clones change against origin/main therefore joins the round's list before the
+# clone check: each branch's committed work past its merge base, plus the uncommitted and
+# untracked paths of the checkout, the way inflight-files.sh reads a worktree. A branch without a
+# merge base is skipped with a note, as inflight-files.sh skips one.
+other_inflight_files() {
+  local clone other branch merge_base
+  for clone in "$HOME_DIR"/improve/*/charlie-bot; do
+    [[ -d $clone ]] || continue
+    other=$(basename -- "$(dirname -- "$clone")")
+    [[ $other == "$direction" ]] && continue
+    while IFS= read -r branch; do
+      if merge_base=$(git -C "$clone" merge-base origin/main "$branch" 2>/dev/null); then
+        git -C "$clone" diff --name-only "$merge_base" "$branch" || :
+      else
+        printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' "$branch" "$clone" >&2
+      fi
+    done < <(git -C "$clone" for-each-ref --format='%(refname:short)' refs/heads/)
+    git -C "$clone" diff --name-only HEAD 2>/dev/null || :
+    git -C "$clone" ls-files --others --exclude-standard 2>/dev/null || :
+  done
+}
+
 # The direction's clone is the round's only checkout inside the boundary. A round whose clone is
 # absent or foreign must not start: on 2026-10-29 a local round found no clone and continued in
 # another checkout although its prompt told it to stop, so the check holds here, before claude.
@@ -269,6 +293,7 @@ trap cleanup_launch_dir EXIT
 read_launch_env
 install_pattern_file
 rewrite_command
+other_inflight_files >>"$LAUNCH_DIR/inflight-files.txt"
 check_clone
 
 # The round works in the direction's root, because `--resume` finds a Claude session by the

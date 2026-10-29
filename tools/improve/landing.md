@@ -72,6 +72,7 @@ The runner names that directory in `IMPROVE_LAUNCH_DIR`:
     "$IMPROVE_LAUNCH_DIR/inflight-files.txt"
 
 The launcher runs `tools/improve/inflight-files.sh improve/<direction>/` on this host, because the other lines' worktrees exist only there.
+The runner also adds the files that the other directions' clones change on the remote host, because those clones are standalone repositories that the launcher cannot see.
 Pick a topic whose files the list does not name.
 A file that another branch changes would force that branch to resolve our conflict.
 

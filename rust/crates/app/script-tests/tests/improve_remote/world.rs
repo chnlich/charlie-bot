@@ -17,6 +17,14 @@ use std::path::{Path, PathBuf};
 
 use charliebot_shell_harness::{self as harness, Env, Sandbox};
 
+/// The committer identity of every fixture commit.
+const IDENTITY: [(&str, &str); 4] = [
+  ("GIT_AUTHOR_NAME", "improve-test"),
+  ("GIT_AUTHOR_EMAIL", "improve-test@example.invalid"),
+  ("GIT_COMMITTER_NAME", "improve-test"),
+  ("GIT_COMMITTER_EMAIL", "improve-test@example.invalid"),
+];
+
 /// The direction of every test round.
 pub const DIRECTION: &str = "perf";
 pub const SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
@@ -58,6 +66,9 @@ exec env -i "HOME=$SSH_REMOTE_HOME" "PATH=$SSH_REMOTE_PATH" "${environment[@]}" 
 const CLAUDE: &str = r#"# Fake claude: record the arguments and environment it receives, then exit as the round asks.
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
 env >"$FAKE_CLAUDE_ENV"
+if [[ -n ${FAKE_CLAUDE_INFLIGHT:-} && -e $IMPROVE_LAUNCH_DIR/inflight-files.txt ]]; then
+  cp -- "$IMPROVE_LAUNCH_DIR/inflight-files.txt" "$FAKE_CLAUDE_INFLIGHT"
+fi
 if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
   for _ in $(seq 1 600); do
     [[ -e $FAKE_CLAUDE_WAIT_FOR ]] && break
@@ -111,6 +122,8 @@ pub struct World {
   /// Where the fake claude writes its arguments and environment, inside the round's boundary.
   pub claude_argv: PathBuf,
   pub claude_env: PathBuf,
+  /// Where the fake claude copies the round's in-flight files list, inside the round's boundary.
+  pub claude_inflight: PathBuf,
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
@@ -129,13 +142,7 @@ impl World {
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
     let profile_home = sandbox.dir("profile");
-    let identity = [
-      ("GIT_AUTHOR_NAME", "improve-test"),
-      ("GIT_AUTHOR_EMAIL", "improve-test@example.invalid"),
-      ("GIT_COMMITTER_NAME", "improve-test"),
-      ("GIT_COMMITTER_EMAIL", "improve-test@example.invalid"),
-    ];
-    let git_env: Env = identity.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
+    let git_env: Env = IDENTITY.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
     git(&sandbox, &git_env, &repo, &["init", "-q", "-b", "main"]);
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
     git(&sandbox, &git_env, &repo, &["commit", "-q", "-m", "synthetic launcher commit"]);
@@ -197,6 +204,7 @@ impl World {
       ssh_args: sandbox.root().join("ssh-arguments.log"),
       claude_argv: evidence.join("claude-argv.txt"),
       claude_env: evidence.join("claude-env.txt"),
+      claude_inflight: evidence.join("claude-inflight.txt"),
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),
@@ -246,6 +254,7 @@ impl World {
     );
     env.insert("FAKE_CLAUDE_ARGV".to_string(), self.claude_argv.display().to_string());
     env.insert("FAKE_CLAUDE_ENV".to_string(), self.claude_env.display().to_string());
+    env.insert("FAKE_CLAUDE_INFLIGHT".to_string(), self.claude_inflight.display().to_string());
     env.insert("FAKE_SYSTEMCTL_LOG".to_string(), self.systemctl_log.display().to_string());
     env.insert("FAKE_SYSTEMD_RUN_LOG".to_string(), self.systemd_run_log.display().to_string());
     env.insert("FAKE_SCOPE_STOPPED".to_string(), self.scope_stopped.display().to_string());
@@ -325,6 +334,12 @@ impl World {
     collect(root, root, &mut found);
     found.sort();
     found
+  }
+
+  /// A git command in `cwd` with the fixture identity, for building remote clones.
+  pub fn git(&self, cwd: &Path, args: &[&str]) -> String {
+    let extra: Env = IDENTITY.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
+    git(&self.sandbox, &extra, cwd, args)
   }
 }
 

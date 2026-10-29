@@ -283,6 +283,41 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
 }
 
 #[test]
+fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
+  let world = World::new();
+  // A standalone clone of another direction, like the host worker's five clones on the remote host.
+  let other_root = world.remote_home.join("improve").join("ux");
+  let clone = other_root.join("charlie-bot");
+  fs::create_dir_all(&other_root).expect("the other direction root");
+  world.git(&other_root, &["init", "-q", "-b", "main", "charlie-bot"]);
+  world.git(&clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
+  fs::write(clone.join("uncommitted.md"), "stale\n").expect("the tracked fixture file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic base"]);
+  let base = world.git(&clone, &["rev-parse", "HEAD"]);
+  world.git(&clone, &["update-ref", "refs/remotes/origin/main", &base]);
+  // The committed change rides a topic branch, as a round's branch does.
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
+  fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic topic"]);
+  // The uncommitted change sits in the checkout; the untracked file has no git entry at all.
+  fs::write(clone.join("uncommitted.md"), "changed\n").expect("the uncommitted change");
+  fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
+
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  for changed in ["committed.md", "uncommitted.md", "untracked.md"] {
+    assert!(
+      list.lines().any(|line| line == changed),
+      "the in-flight list misses the {changed} change of the ux clone:\n{list}"
+    );
+  }
+}
+
+#[test]
 fn the_boundary_denies_a_write_outside_the_allow_list_and_allows_one_inside() {
   let lsm = fs::read_to_string("/sys/kernel/security/lsm").unwrap_or_default();
   if !lsm.split(',').any(|name| name.trim() == "landlock") {

@@ -41,7 +41,7 @@ struct QueueState {
 /// The idle compaction runner: `claude_compaction::run_compaction` in production.
 pub use charliebot_registry::backend::CompactionRunFn;
 
-/// Owns per-session queues, consumers, current work items, and active backend runners.
+/// Owns per-session queues, consumers, current work items, and running turns.
 pub struct MasterQueue {
   state: Mutex<QueueState>,
   backend_pool: Arc<BackendPool>,

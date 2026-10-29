@@ -38,9 +38,9 @@ The live server and its agents read these files from the checkout:
 
 Only a release switch or the rollback in README.md (Quick start) moves the checkout.
 
-Rolling back to a release before the venv removal (`7dc5363f1` and earlier) needs the environment that release
-runs on: at the target commit, run `uv sync --frozen` in the runtime clone, then `export CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"`
-(`REPO_ROOT` is the clone) before the switch. Releases after the venv removal need neither.
+Rolling back to a release before `7dc5363f1` needs the environment that release runs on: at the target commit, run
+`uv sync --frozen` in the runtime clone, then `export CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"` (`REPO_ROOT` is the
+clone) before the switch. `7dc5363f1` and later need neither.
 
 Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
 

@@ -108,8 +108,9 @@ test('collapsed tray shows the next trigger line, target, message and +N more', 
   assert.match(html, /tests finished: confirm the push landed on origin\/main, then deploy/);
   assert.match(html, /\+2 more/);
   // Separator dots ride between the time, the target and the message, as in
-  // the mockup's collapsed frames (one even without a watch target).
-  assert.ok(html.includes('<span class="shrink-0 text-slate-600">·</span>'));
+  // the mockup's collapsed frames (one even without a watch target). They are
+  // sm:-only: below sm: line 1 has no separators and line 2 is the message.
+  assert.ok(html.includes('<span class="shrink-0 text-slate-600 hidden sm:inline">·</span>'));
   // Collapsed: no cancel button anywhere.
   assert.ok(!html.includes('Cancel'));
 });
@@ -124,12 +125,11 @@ test('collapsed tray with one trigger shows no +N more', async () => {
   assert.ok(!tray.innerHTML.includes('more'), tray.innerHTML);
 });
 
-// The narrow-width spellings of the collapsed row: the label noun, the
-// relative time and the whole watch target drop out under sm:, the watch
-// label keeps its full text in title for the widths that show it, the message
-// keeps a reserved width, truncates and titles, and "+N more" reads "+N"
-// below sm: with the full text in its title.
-test('the collapsed row shrinks for a 390 px screen and reads as today on desktop', async () => {
+// Below 640 px (Tailwind's sm:) the collapsed row is two lines. The row is a
+// wrapping flex row and the message is a full-basis, last-ordered item, so it
+// always starts line 2: line 1 holds the bell, label, time and +N, and the
+// message gets the row's whole content width to truncate in.
+test('below sm the collapsed row wraps the message onto its own second line', async () => {
   const {context, tray} = buildTrayContext();
   context.setTriggers([
     trigger('t1', at(3, 52), 'DeepSeek 恢复或帖子新回复', [{kind: 'local_pid', pid: 2626907}]),
@@ -139,20 +139,75 @@ test('the collapsed row shrinks for a 390 px screen and reads as today on deskto
   await tick();
 
   const html = tray.innerHTML;
-  assert.match(html, /<span class="hidden sm:inline text-amber-300 font-medium whitespace-nowrap">Next trigger<\/span>/);
-  assert.match(html, /<span class="sm:hidden text-amber-300 font-medium whitespace-nowrap">Next<\/span>/);
+  // The row container: a flex row that wraps below sm:.
+  const rowClass = 'tray-border rounded-xl bg-slate-800 flex flex-wrap sm:flex-nowrap'
+    + ' items-center gap-x-2 gap-y-1 px-3 py-2 text-sm cursor-pointer';
+  assert.ok(html.includes(`<div class="${rowClass}"`), html);
+  // The message: full flex basis, placed last, so line breaking gives it a
+  // line of its own; it truncates and titles on that line.
+  const messageClass = 'truncate text-slate-400 min-w-[3rem] basis-full order-last sm:order-none sm:flex-1';
+  const msgStart = html.indexOf(`<span class="${messageClass}"`);
+  assert.ok(msgStart > -1, html);
+  assert.ok(html.slice(msgStart).includes('title="DeepSeek 恢复或帖子新回复"'), 'the message keeps its title');
+  // Line 1 carries the bell, the label and the time ahead of the message in
+  // document order; +N and the chevron follow the message in the markup but
+  // carry no order, so the order-modulated line breaking keeps them on line 1.
+  for (const marker of [
+    '<svg class="w-4 h-4 text-amber-400 flex-shrink-0"',
+    '>Next trigger<',
+    '>' + context.clockTimeHM(new context.Date(at(3, 52))) + '<',
+  ]) {
+    const at0 = html.indexOf(marker);
+    assert.ok(at0 > -1 && at0 < msgStart, `${marker} belongs to line 1`);
+  }
+  assert.equal(html.match(/order-last/g).length, 1, 'the message is the row\'s only last-ordered item');
+  assert.match(html, /<span class="text-xs text-slate-500 whitespace-nowrap" title="\+1 more">/,
+    '+N stays on line 1');
+  // No separator rides on line 1: the target dot and the message dot are both
+  // sm:-only, so line 1 ends with +N and the chevron.
+  assert.equal(html.match(/class="shrink-0 text-slate-600 hidden sm:inline"/g).length, 2);
+  // The two-line form is the CSS the classes resolve to: a wrapping row plus a
+  // 100%-basis item ordered after its siblings. Asserting the rules, not only
+  // the names, is what makes the wrap mechanical.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'css', 'tailwind.css'), 'utf8');
+  assert.match(css, /\.flex-wrap\s*{\s*flex-wrap: wrap;\s*}/);
+  assert.match(css, /\.basis-full\s*{\s*flex-basis: 100%;\s*}/);
+  assert.match(css, /\.order-last\s*{\s*order: 9999;\s*}/);
+});
+
+// From 640 px up the row is exactly the single line it has always been: no
+// wrap, the message flex-1 and back in document order, and the watch target,
+// relative time and separators visible.
+test('at sm and wider the collapsed row stays one line', async () => {
+  const {context, tray} = buildTrayContext();
+  context.setTriggers([
+    trigger('t1', at(3, 52), 'DeepSeek 恢复或帖子新回复', [{kind: 'local_pid', pid: 2626907}]),
+    trigger('t2', at(16, 17), 'check the eval sweep results'),
+  ]);
+  await context.renderPendingTriggersTray('session-a');
+  await tick();
+
+  const html = tray.innerHTML;
+  assert.match(html, /class="[^"]*sm:flex-nowrap[^"]*"/, 'the row never wraps from sm: up');
+  // The message: flex-1 again, order restored, so it follows the watch target
+  // and precedes +N as it always has.
+  const messageClass = 'truncate text-slate-400 min-w-[3rem] basis-full order-last sm:order-none sm:flex-1';
+  assert.ok(html.includes(`<span class="${messageClass}" title="DeepSeek 恢复或帖子新回复">`), html);
+  assert.ok(html.indexOf('pid 2626907') < html.indexOf(messageClass),
+      'the watch target precedes the message at sm: and wider');
+  // The desktop-only spans stay in the markup and show at sm:.
+  assert.match(html, /<span class="text-amber-300 font-medium whitespace-nowrap">Next trigger<\/span>/);
   assert.match(html, /<span class="hidden sm:inline text-slate-500 whitespace-nowrap"><span class="tray-reltime"/);
-  // Below sm: the watch target and its dot leave the row; at sm: and wider
-  // the span shows as before with its full text in title.
-  assert.match(html, /<span class="shrink-0 text-slate-600 hidden sm:inline">·<\/span>/);
-  assert.match(html, /<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate hidden sm:inline" title="pid 2626907">pid 2626907<\/span>/);
-  assert.match(html, /<span class="truncate text-slate-400 flex-1 min-w-\[3rem\]" title="DeepSeek 恢复或帖子新回复">/);
-  // "+N more" reads "+N" below sm:; the title keeps the full text.
-  assert.match(html, /<span class="text-xs text-slate-500 whitespace-nowrap" title="\+1 more">\+1<span class="hidden sm:inline"> more<\/span><\/span>/);
-  // Desktop: the same items as before, none of them dropped from the markup.
-  assert.match(html, /Next trigger/);
-  assert.match(html, /\(in 3h 52m\)/);
+  const watchClass = 'tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate hidden sm:inline';
+  assert.ok(html.includes(`<span class="${watchClass}" title="pid 2626907">pid 2626907</span>`), html);
+  // "+N more" reads in full, as before.
   assert.match(html, /\+1<span class="hidden sm:inline"> more<\/span>/);
+  // The sm: overrides exist and restore the one-line layout.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'css', 'tailwind.css'), 'utf8');
+  const smBlock = css.slice(css.lastIndexOf('@media (min-width: 640px)'));
+  assert.match(smBlock, /\.sm\\:flex-nowrap\s*{\s*flex-wrap: nowrap;\s*}/);
+  assert.match(smBlock, /\.sm\\:order-none\s*{\s*order: 0;\s*}/);
+  assert.match(smBlock, /\.sm\\:flex-1\s*{\s*flex: 1 1 0%;\s*}/);
 });
 
 test('a long watch label keeps its full text in title while the span can shrink', async () => {

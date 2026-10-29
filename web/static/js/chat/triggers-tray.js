@@ -49,8 +49,9 @@
       + PENDING_TRIGGER_BELL_SVG_PATH + '</svg>';
   }
 
-  function chevronSvg(up) {
+  function chevronSvg(up, extraClass) {
     return '<svg class="w-4 h-4 text-slate-500 flex-shrink-0' + (up ? ' ml-auto' : '')
+      + (extraClass ? ' ' + extraClass : '')
       + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + (up ? CHEVRON_UP_PATH : CHEVRON_DOWN_PATH) + '</svg>';
   }
 
@@ -117,18 +118,20 @@
       + '</div>';
   }
 
+  // The collapsed row container is a flex row (direction row) that wraps below
+  // sm: and never wraps from sm: up. Below sm: the message takes the full flex
+  // basis and the last order, so it always starts a second line of its own,
+  // whatever other nodes join the first line (bell, label, time, +N, chevron).
+  // The watch target, the relative time and both separators are sm:-only:
+  // line 1 has no room for them, and line 2 belongs to the message.
   function trayCollapsedHtml() {
     const next = trayTriggers[0];
     const targets = next.watch_targets || [];
-    // A 390 px phone row cannot hold every nowrap span beside the message, so
-    // narrow widths drop the label's noun and the relative time, and the watch
-    // label shrinks with its full text in title. From sm: up the row reads as
-    // it always has.
-    let html = '<div class="tray-border rounded-xl bg-slate-800 flex items-center gap-2 px-3 py-2 text-sm cursor-pointer"'
+    let html = '<div class="tray-border rounded-xl bg-slate-800 flex flex-wrap sm:flex-nowrap'
+      + ' items-center gap-x-2 gap-y-1 px-3 py-2 text-sm cursor-pointer"'
       + ' role="button" title="Show all pending triggers" onclick="togglePendingTriggersTray(true)">'
       + bellSvg()
-      + '<span class="hidden sm:inline text-amber-300 font-medium whitespace-nowrap">Next trigger</span>'
-      + '<span class="sm:hidden text-amber-300 font-medium whitespace-nowrap">Next</span>'
+      + '<span class="text-amber-300 font-medium whitespace-nowrap">Next trigger</span>'
       + '<span class="text-slate-200 whitespace-nowrap">' + escapeHtml(clockTimeHM(new Date(next.fire_at))) + '</span>'
       + '<span class="hidden sm:inline text-slate-500 whitespace-nowrap">' + relTimeSpan(next.fire_at) + '</span>';
     if (targets.length) {
@@ -136,9 +139,9 @@
         + '<span class="tray-mono text-amber-300 whitespace-nowrap min-w-0 truncate hidden sm:inline" title="'
         + escapeHtmlAttr(watchTargetsLabel(targets)) + '">' + escapeHtml(watchTargetsLabel(targets)) + '</span>';
     }
-    html += '<span class="shrink-0 text-slate-600">·</span>'
-      + '<span class="truncate text-slate-400 flex-1 min-w-[3rem]" title="' + escapeHtmlAttr(next.message) + '">'
-      + escapeHtml(next.message) + '</span>';
+    html += '<span class="shrink-0 text-slate-600 hidden sm:inline">·</span>'
+      + '<span class="truncate text-slate-400 min-w-[3rem] basis-full order-last sm:order-none sm:flex-1" title="'
+      + escapeHtmlAttr(next.message) + '">' + escapeHtml(next.message) + '</span>';
     if (trayTriggers.length > 1) {
       // A phone row has no room for " more": the count alone shows below sm,
       // and the title keeps the full text.
@@ -146,7 +149,7 @@
         + '+' + (trayTriggers.length - 1) + ' more">+' + (trayTriggers.length - 1)
         + '<span class="hidden sm:inline"> more</span></span>';
     }
-    return html + chevronSvg(false) + '</div>';
+    return html + chevronSvg(false, 'ml-auto sm:ml-0') + '</div>';
   }
 
   function trayExpandedHtml() {

@@ -8,4 +8,4 @@ mod sequence;
 pub use entities::{escape, unescape};
 pub use fold::folds_at_open;
 pub use parser::{Event, EventKind, ParseError, Position, StreamEvent, parse, parse_with};
-pub use sequence::{MatchingBlock, Opcode, OpcodeTag, find_longest_match, matching_blocks, opcodes};
+pub use sequence::{MatchingBlock, Opcode, OpcodeTag, matching_blocks, opcodes};

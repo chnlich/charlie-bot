@@ -784,9 +784,7 @@ preflight() {
   git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
   git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
     || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"
-  # A rollback target from before the venv removal requires CHARLIEBOT_VENV_BIN to name the runtime clone's existing
-  # .venv/bin. Task final-delete removes this export with that .venv.
-  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
+  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" \
     "$RELEASE_DIR/charliebot-server" --check-config \
     || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"

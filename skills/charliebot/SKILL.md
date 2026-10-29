@@ -9,7 +9,7 @@ version: 1.0.0
 # CharlieBot
 
 You are CharlieBot. This skill describes your own features so you can use them correctly.
-Source code: the server is `rust/crates/`; the Python `charliebot` CLI is `src/`.
+Source code: the server and the `charliebot` CLI are `rust/crates/`.
 
 ---
 
@@ -37,6 +37,10 @@ The live server and its agents read these files from the checkout:
 - the `charliebot` CLI of the live release.
 
 Only a release switch or the rollback in README.md (Quick start) moves the checkout.
+
+Rolling back to a release before the venv removal (`7dc5363f1` and earlier) needs the environment that release
+runs on: at the target commit, run `uv sync --frozen` in the runtime clone, then `export CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"`
+(`REPO_ROOT` is the clone) before the switch. Releases after the venv removal need neither.
 
 Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
 
@@ -108,7 +112,7 @@ Validate both red and green states before writing a test or patch into a spec. `
 
 ### Output-capped backends: attach verified code
 
-Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below the advertised `limit.output` (~32k real vs 131072 advertised) and spend that budget on reasoning; splitting into smaller tasks leaves the cap in place. Strongest recipe for implementation delegations: store the verified unified diff as a file; hardcode the spec's first line to direct the worker to skip planning and make its first tool call a shell command; Step 1 = `git apply <patch>`, with verbatim EDIT blocks only as a fallback for apply failure. Delegate mechanical diff/comparison tasks to a master-run script instead — the output cap is absent there. Diagnosis entry: the task Run's `sessions/<id>/data/runs/<run>/events.jsonl` `result` + `usage`. Put the main repo venv's absolute path in the spec (worktrees lack a `.venv`). Cost: the master writes the code and the worker only lands and verifies it — the completion report flags this deviation.
+Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below the advertised `limit.output` (~32k real vs 131072 advertised) and spend that budget on reasoning; splitting into smaller tasks leaves the cap in place. Strongest recipe for implementation delegations: store the verified unified diff as a file; hardcode the spec's first line to direct the worker to skip planning and make its first tool call a shell command; Step 1 = `git apply <patch>`, with verbatim EDIT blocks only as a fallback for apply failure. Delegate mechanical diff/comparison tasks to a master-run script instead — the output cap is absent there. Diagnosis entry: the task Run's `sessions/<id>/data/runs/<run>/events.jsonl` `result` + `usage`. Cost: the master writes the code and the worker only lands and verifies it — the completion report flags this deviation.
 
 ---
 
@@ -424,7 +428,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 
 ## General Principle
 
-**If you don't understand how a feature works, read the source code** — the server in `rust/crates/`, the Python CLI in `src/`. Key server files:
+**If you don't understand how a feature works, read the source code** in `rust/crates/`. Key server files:
 
 | Feature | Source file |
 |---------|------------|

@@ -1,6 +1,6 @@
 //! Cross-implementation checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
-//! `cli_backends_reference.py` runs every Python section in one `uv run python` process over the synthetic inputs built
-//! here. The Rust port runs the same inputs, and the test fails with every section that differs.
+//! The recorded reference (`fixtures/cli_backends_reference.json`, recorded from the deleted Python reference) holds
+//! every Python section's answer over the synthetic inputs built here. The test fails with every section that differs.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases); the translator
 //! streams of gemini and charlie-code (2); and the antigravity finish cases, each run through the `AgentRunner`

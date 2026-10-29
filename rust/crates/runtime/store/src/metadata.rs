@@ -1000,7 +1000,7 @@ mod tests {
     );
     assert!(message.contains("the conversion script was deleted"), "{message}");
     assert!(message.contains("scripts/v1_session_conversion.py"), "{message}");
-    assert!(message.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{message}");
+    assert!(message.contains("git worktree add <dir> e2f27b133"), "{message}");
   }
 
   /// A metadata file holding `text` in a fresh temporary directory.

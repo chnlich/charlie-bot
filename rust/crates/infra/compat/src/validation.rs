@@ -7,7 +7,8 @@
 //! their texts; [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value the
 //! way pydantic's lax mode does and return the entry for a value that it rejects.
 //!
-//! The texts follow pydantic 2.12.5 and FastAPI 0.135.2 (`uv.lock`). `rust/fixtures/python/validation_422.json`
+//! The texts follow pydantic 2.12.5 and FastAPI 0.135.2 as the deleted Python environment pinned them.
+//! `rust/fixtures/python/validation_422.json`
 //! holds the bodies the Python app answers for these inputs, and the fixture test compares them.
 //!
 //! Parsing a JSON body is not here: pydantic reads the body while it validates it, and the JSON decoder's

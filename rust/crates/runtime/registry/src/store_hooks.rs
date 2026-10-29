@@ -67,11 +67,23 @@ struct LifecycleAnchors {
 impl AnchorFieldReconciler for LifecycleAnchors {
   fn reconcile(&self, disk: &SessionMetadata, attempted: &mut SessionMetadata) -> StoreResult<()> {
     if attempted.cc_session_id != disk.cc_session_id {
-      tracing::warn!(session_id = %attempted.id, field = "cc_session_id", "session_anchor_write_corrected");
+      tracing::warn!(
+        session_id = %attempted.id,
+        field = "cc_session_id",
+        on_disk = ?disk.cc_session_id,
+        attempted = ?attempted.cc_session_id,
+        "session_anchor_write_corrected"
+      );
       attempted.cc_session_id.clone_from(&disk.cc_session_id);
     }
     if attempted.native_backend != disk.native_backend {
-      tracing::warn!(session_id = %attempted.id, field = "native_backend", "session_anchor_write_corrected");
+      tracing::warn!(
+        session_id = %attempted.id,
+        field = "native_backend",
+        on_disk = ?disk.native_backend,
+        attempted = ?attempted.native_backend,
+        "session_anchor_write_corrected"
+      );
       attempted.native_backend.clone_from(&disk.native_backend);
     }
     for lifecycle in self.registry.lifecycles() {
@@ -80,6 +92,8 @@ impl AnchorFieldReconciler for LifecycleAnchors {
         tracing::warn!(
           session_id = %attempted.id,
           field = lifecycle.account_source(),
+          on_disk = ?label_on_disk,
+          attempted = ?lifecycle.account_label(attempted),
           "session_anchor_write_corrected"
         );
         lifecycle.record_account_label(attempted, label_on_disk.as_deref());
@@ -295,8 +309,12 @@ mod tests {
   use tracing::{Event, Level};
 
   use super::*;
+  use charliebot_core::config::BackendOption;
   use crate::context::{FeatureContext, features_over};
-  use crate::registry::RegistryError;
+  use crate::registry::{
+    AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, LaunchArgs,
+    RegistryError, ResumeStyle,
+  };
   use crate::turn::TurnContribution;
 
   /// The session ids the recording contribution saw, held in the test context's startup state.
@@ -357,7 +375,7 @@ mod tests {
   }
 
   /// One error event as the tracing layer saw it: its message and the text of each field.
-  #[derive(Default)]
+  #[derive(Debug, Default)]
   struct ErrorEvent {
     message: String,
     fields: Vec<(&'static str, String)>,
@@ -394,6 +412,26 @@ mod tests {
     }
   }
 
+  /// Captures the events of one level logged on this test's thread through the shared test capture. The returned
+  /// guard keeps the capture installed until it drops.
+  fn capture_events_at(level: Level) -> (Arc<Mutex<Vec<ErrorEvent>>>, charliebot_core::test_support::CaptureGuard) {
+    struct AtLevel(Arc<Mutex<Vec<ErrorEvent>>>, Level);
+
+    impl EventSink for AtLevel {
+      fn event(&self, event: &Event<'_>) {
+        if *event.metadata().level() == self.1 {
+          let mut captured = ErrorEvent::default();
+          event.record(&mut captured);
+          self.0.lock().unwrap().push(captured);
+        }
+      }
+    }
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let guard = charliebot_core::test_support::install_events(Arc::new(AtLevel(Arc::clone(&events), level)));
+    (events, guard)
+  }
+
   /// Captures the error events logged on this test's thread through the shared test capture. The returned guard keeps
   /// the capture installed.
   fn capture_errors() -> (Arc<Mutex<Vec<ErrorEvent>>>, charliebot_core::test_support::CaptureGuard) {
@@ -414,6 +452,131 @@ mod tests {
   async fn end_turn(store: &Store) {
     write_session(store, "synthetic");
     store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
+  }
+
+  /// One synthetic lifecycle that keeps a `claude_account` label in the metadata extras.
+  struct SyntheticAccountLifecycle;
+
+  impl BackendLifecycle for SyntheticAccountLifecycle {
+    fn account_source(&self) -> &'static str {
+      "claude_account"
+    }
+
+    fn account_label(&self, meta: &SessionMetadata) -> Option<String> {
+      meta.extra("claude_account").and_then(Value::as_str).map(str::to_string)
+    }
+
+    fn record_account_label(&self, meta: &mut SessionMetadata, label: Option<&str>) -> bool {
+      let value = label.map_or(Value::Null, |label| Value::String(label.to_string()));
+      if meta.extra("claude_account") == Some(&value) {
+        return false;
+      }
+      meta.set_extra("claude_account", value);
+      true
+    }
+  }
+
+  /// Accepts every option mapping; the anchor-guard test builds no backend.
+  fn accept_every_option(_: &serde_yaml::Mapping) -> Result<(), String> {
+    Ok(())
+  }
+
+  struct NeverBuilt;
+
+  impl BackendFactory for NeverBuilt {
+    fn build(
+      &self,
+      _option: Option<&BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn AgentBackend>> {
+      anyhow::bail!("the anchor-guard test builds no backend")
+    }
+  }
+
+  /// A registry whose one backend type carries the synthetic account lifecycle.
+  /// The session the guard reads from disk: one live anchor per protected field.
+  fn anchored_session() -> SessionMetadata {
+    let mut meta = SessionMetadata::new("synthetic", "Synthetic", TaskProfile::Manager);
+    meta.cc_session_id = Some("cc-live".to_string());
+    meta.set_extra("claude_account", json!("pool-b"));
+    meta
+  }
+
+  fn anchor_registry() -> Arc<Registry> {
+    let mut registry = Registry::new();
+    registry
+      .register_package("src.features.synthetic", |registry| {
+        registry.backend_type(BackendTypeRegistration {
+          type_name: "synthetic-lifecycle",
+          traits: BackendTraits {
+            resume: ResumeStyle::NativeId,
+            restart_reattach: true,
+            preassigned_session_id: false,
+            family_prefix: None,
+            manual_compact: false,
+            compact_hint: None,
+          },
+          option_model: accept_every_option,
+          factory: Arc::new(NeverBuilt),
+          lifecycle: Some(Arc::new(SyntheticAccountLifecycle)),
+          translate_fallback: false,
+        })
+      })
+      .unwrap();
+    Arc::new(registry)
+  }
+
+  #[tokio::test]
+  async fn the_anchor_guard_corrects_an_unauthorized_save_back_to_disk() {
+    // Python: tests/test_session_anchor_guard.py::test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk
+    let (warns, _guard) = capture_events_at(Level::WARN);
+    let anchors = LifecycleAnchors { registry: anchor_registry() };
+    let disk = anchored_session();
+    let mut attempted = disk.clone();
+    attempted.cc_session_id = Some("cc-stale".to_string());
+    attempted.native_backend = Some("synthetic-stale".to_string());
+    attempted.set_extra("claude_account", json!("pool-a"));
+
+    anchors.reconcile(&disk, &mut attempted).unwrap();
+
+    assert_eq!(attempted.cc_session_id.as_deref(), Some("cc-live"), "the stale save may not roll the anchor back");
+    assert_eq!(attempted.native_backend, None);
+    assert_eq!(attempted.extra("claude_account"), Some(&json!("pool-b")));
+    let warns = warns.lock().unwrap();
+    let corrections: Vec<&ErrorEvent> =
+      warns.iter().filter(|event| event.message == "session_anchor_write_corrected").collect();
+    assert_eq!(corrections.len(), 3, "{warns:?}");
+    // The visitor Debug-formats each field, so `&'static str` field names keep their quotes.
+    assert_eq!(corrections[0].field("field"), r#""cc_session_id""#);
+    assert_eq!(corrections[0].field("on_disk"), r#"Some("cc-live")"#);
+    assert_eq!(corrections[0].field("attempted"), r#"Some("cc-stale")"#);
+    assert_eq!(corrections[1].field("field"), r#""native_backend""#);
+    assert_eq!(corrections[2].field("field"), r#""claude_account""#);
+    assert_eq!(corrections[2].field("on_disk"), r#"Some("pool-b")"#);
+    assert_eq!(corrections[2].field("attempted"), r#"Some("pool-a")"#);
+  }
+
+  #[tokio::test]
+  async fn the_authorized_channels_still_change_the_anchors() {
+    // Python: tests/test_session_anchor_guard.py::test_authorized_channels_still_change_the_anchors
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), anchor_registry());
+    let store = &features.store;
+    write_session(store, "synthetic");
+
+    let read_back = store.persist_cc_session_id("synthetic", "cc-2", None).await.unwrap();
+    assert_eq!(read_back.as_deref(), Some("cc-2"));
+    let disk = store.read_metadata_fresh("synthetic").unwrap().unwrap();
+    assert_eq!(disk.cc_session_id.as_deref(), Some("cc-2"));
+    assert!(disk.cc_session_started_at.is_some());
+
+    // The switch endpoint's backfill funnel records the producing backend.
+    let read_back = store.persist_native_backend("synthetic", "codex-o3").await.unwrap();
+    assert_eq!(read_back.as_deref(), Some("codex-o3"));
+    let disk = store.read_metadata_fresh("synthetic").unwrap().unwrap();
+    assert_eq!(disk.native_backend.as_deref(), Some("codex-o3"));
+    assert_eq!(disk.cc_session_id.as_deref(), Some("cc-2"));
   }
 
   /// Yields until `done` holds. The store's after-turn tasks run on this test's current-thread runtime meanwhile.

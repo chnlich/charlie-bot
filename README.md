@@ -61,8 +61,8 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Prerequisites
 
-- Python 3.14 (uv installs it; the setup steps, the Python helper scripts and the pytest suite run on it) and git (worker tasks run in git worktrees)
-- Node.js is only needed for frontend development
+- git (worker tasks run in git worktrees) and the Rust toolchain (1.99) to build the server and CLI
+- Node.js runs the frontend JavaScript tests (`node --test`) and the frontend build
 
 ## Quick start
 
@@ -98,20 +98,19 @@ release, and each subcommand keeps the argv, stdout and exit codes of the Python
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
 
-The Python-only `config`, `disk-sweep`, `storage`, `usage-ledger` and `voice-replay-eval`
-subcommands have no Rust port and no caller; the binary answers them with the unknown-subcommand
-error.
+A subcommand name the binary does not carry — the deleted Python-only `disk-sweep`, `storage`,
+`usage-ledger` and `voice-replay-eval` among them — answers with the unknown-subcommand error.
 
 ## Repository layout
 
 - `rust/crates/` — the server that runs: `app/server` is the `charliebot-server` entry point, `app/cli` holds the Rust CLI commands, `runtime/` carries the task tree, agent processes and the session store, `features/` one crate per feature, `infra/` the shared foundations
-- `src/` — the Python modules the remaining Python programs load (setup, config, session conversion, voice transcription, the opencode bench) and the Rust server's static assets and templates
+- `src/` — the Rust server's page templates, static assets and helper scripts, which the server and repo tools read by path
 - `web/` — Jinja2 templates + vanilla JS static assets, served by the Rust server
 - `skills/` — repo-shared agent skills
 - `prompts/` — agent prompt definitions
 - `scripts/` — operator scripts: setup, server launcher, release install and switch, skill sync, charlie-code preflight
 - `tools/` — maintenance tools: style and leak checks, git hooks, browser and live harnesses, CSS build
-- `tests/` — pytest suite; `tests/test_package_structure.py` fails on an import that crosses the `src` packages against their directions
+- `tests/` — the frontend JavaScript test suites (`node --test`, one suite per `tests/*.test.{js,mjs}` file) and their fixture data
 - `configs/` — example config and repo-default cron tasks
 - `docs/` — supplementary documentation and assets
 

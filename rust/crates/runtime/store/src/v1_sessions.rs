@@ -53,7 +53,7 @@ pub fn require_no_v1_sessions(cfg: &CharlieBotConfig) -> Result<(), String> {
   let home = &cfg.charliebot_home;
   let noun = if count == 1 { "session" } else { "sessions" };
   Err(format!(
-    "{} holds {count} v1 {noun}: a v1 session's metadata.json has no profile, and the server lists only sessions with a profile. Stop every writer of the home; {V1_SESSION_CONVERSION_GUIDANCE}\nAfter restoring the script, run:\n  uv run python {CONVERSION_SCRIPT} dry-run --home {}\n  uv run python {CONVERSION_SCRIPT} apply --home {}",
+    "{} holds {count} v1 {noun}: a v1 session's metadata.json has no profile, and the server lists only sessions with a profile. Stop every writer of the home; {V1_SESSION_CONVERSION_GUIDANCE}\nFor this home the two commands are:\n  uv run python {CONVERSION_SCRIPT} dry-run --home {}\n  uv run python {CONVERSION_SCRIPT} apply --home {}",
     home.display(),
     home.display(),
     home.display()
@@ -91,7 +91,8 @@ mod tests {
     assert!(error.contains("holds 1 v1 session"), "{error}");
     assert!(error.contains("the conversion script was deleted"), "{error}");
     assert!(error.contains("scripts/v1_session_conversion.py"), "{error}");
-    assert!(error.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{error}");
+    assert!(error.contains("git worktree add <dir> e2f27b133"), "{error}");
+    assert!(error.contains("uv sync --frozen"), "{error}");
     assert!(error.contains("uv run python scripts/v1_session_conversion.py dry-run"), "{error}");
     assert!(error.contains("uv run python scripts/v1_session_conversion.py apply"), "{error}");
   }

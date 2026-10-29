@@ -1,9 +1,8 @@
 //! Runs the repository's shell scripts for real, against stub commands, for the Rust integration tests.
 //!
-//! A test makes a `Sandbox`: a temporary root whose `bin/` holds its stubs and comes first on PATH, followed by the
-//! repository's `.venv/bin`, so the scripts' interpreter is the environment `uv sync` built. The test adds stubs with
-//! `Sandbox::stub`, builds a command with `command` and runs it with `run`; `spawn` starts a background process.
-//! The README section "Shell-script tests" shows the calls.
+//! A test makes a `Sandbox`: a temporary root whose `bin/` holds its stubs and comes first on PATH. The test adds
+//! stubs with `Sandbox::stub`, builds a command with `command` and runs it with `run`; `spawn` starts a background
+//! process. The README section "Shell-script tests" shows the calls.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -112,14 +111,8 @@ impl Default for Sandbox {
 }
 
 impl Sandbox {
-  /// A new sandbox. It fails when the repository has no `.venv`, because the scripts' interpreter comes from it.
+  /// A new sandbox with an empty stub directory.
   pub fn new() -> Self {
-    let venv = repo_root().join(".venv");
-    assert!(
-      venv.join("pyvenv.cfg").is_file(),
-      "{} is missing: run `uv sync --frozen` at the repository root",
-      venv.display()
-    );
     let root = tempfile::Builder::new().prefix("charliebot-script-").tempdir().expect("a temporary root");
     let bin = root.path().join("bin");
     fs::create_dir(&bin).expect("the stub directory");
@@ -150,12 +143,11 @@ impl Sandbox {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the stub executable");
   }
 
-  /// The environment of the test process, with the stub directory and `.venv/bin` first on PATH.
+  /// The environment of the test process, with the stub directory first on PATH.
   pub fn env(&self) -> Env {
     let mut env: Env = env::vars().collect();
     let inherited = env.get("PATH").cloned().expect("PATH is set");
-    let venv_bin = repo_root().join(".venv/bin");
-    env.insert("PATH".to_string(), format!("{}:{}:{inherited}", self.bin.display(), venv_bin.display()));
+    env.insert("PATH".to_string(), format!("{}:{inherited}", self.bin.display()));
     env
   }
 

@@ -343,15 +343,15 @@ Known divergences from Python:
 
 ## Tests
 
-`tests/prompt_snapshot_golden.rs` runs `tests/python_prompt_snapshot_golden.py` through `uv run python` over an 18-case
-matrix. It compares the snapshot JSON byte for byte, with each `prompt_hash` and `char_count`, and the damaged-snapshot
-error texts. `tests/task_prompts.rs` ports the task-tree and run-context cases of the Python tests over a temporary
-store; the staged-memory case is not ported. Unit tests cover the verify trailer, the worker prompt loader, the review
-steps and the snapshot dedup and hash.
+`tests/prompt_snapshot_golden.rs` compares the recorded 18-case golden matrix (`fixtures/python_prompt_snapshot_golden.json`,
+recorded from the deleted Python reference) byte for byte, with each `prompt_hash` and `char_count`, and the
+damaged-snapshot error texts. `tests/task_prompts.rs` ports the task-tree and run-context cases of the Python tests over
+a temporary store; the staged-memory case is not ported. Unit tests cover the verify trailer, the worker prompt loader,
+the review steps and the snapshot dedup and hash.
 
-`tests/turn_golden.rs` runs `tests/python_turn_golden.py` through `uv run python`, then compares the same twelve
-scripted streams through the Rust queue after normalizing event ids, timestamps, and elapsed timing fields. It starts
-only synthetic `/bin/sh` backends.
+`tests/turn_golden.rs` compares the recorded twelve scripted streams (`fixtures/python_turn_golden.json`) through the
+Rust queue after normalizing event ids, timestamps, and elapsed timing fields. It starts only synthetic `/bin/sh`
+backends.
 
 `recovery.rs` unit tests cover the review-owed rule
 (`a_review_is_owed_only_to_the_newest_unfollowed_work_run_of_an_open_task`), the closed-task stop id, and the

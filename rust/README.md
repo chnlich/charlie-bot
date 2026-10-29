@@ -18,8 +18,7 @@ cargo build --release        # target/release/charliebot-server
 CI (`.github/workflows/ci.yml`) runs two Rust jobs on `ubuntu-24.04`, whose glibc 2.39 matches the live host. `release-build`
 runs `cargo build --release --locked -p charliebot-server` on every pull request and push. On a push to `main` it uploads
 the artifact `charliebot-server-<full commit sha>`, which holds `charliebot-server` and `sha256sums.txt` and is kept for 30
-days. It builds no tests, so the binary is a plain release build. `rust-test` runs `cargo test --locked` with Rust 1.99.0 and
-the repo's `uv sync --locked` environment.
+days. It builds no tests, so the binary is a plain release build. `rust-test` runs `cargo test --locked` with Rust 1.99.0.
 
 ## Run
 
@@ -70,11 +69,10 @@ with `method`, `path`, `status`, `duration_ms` and `client`. A failed request ad
 ## Test
 
 ```sh
-uv sync --locked
 cd rust
 cargo build --release
 cargo test --locked
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --check
 ```
 
@@ -89,8 +87,7 @@ removed on 2026-10-27; `main` has no Python server to compare against.
 ### Shell-script tests
 
 `charliebot-shell-harness` (`crates/infra/shell-harness`) runs a repository shell script for real, against stub
-commands. Run `uv sync --frozen` at the repository root first: the sandbox puts that `.venv/bin` on PATH, so a script's
-`python3` is the environment it built. A test:
+commands. The sandbox puts the stub directory first on `PATH`; a stub never starts an interpreter. A test:
 
 ```rust
 use charliebot_shell_harness::{self as harness, Sandbox};

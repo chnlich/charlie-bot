@@ -19,45 +19,6 @@ jobs:
       - name: Enforce contract
         run: |
           echo "$BODY" | grep -q '## Evidence' || { echo "PR body missing '## Evidence' section"; exit 1; }
-  lint-and-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # The formatter config and pin were deleted twice as "unused" (#394, #396).
-      # `tools/check-google-style.sh` runs yapf over the tree; without .style.yapf,
-      # `yapf --in-place --recursive src/` silently falls back to pep8 defaults
-      # and reformats the tree to 4-space indent.
-      - name: Formatter config present
-        run: |
-          test -f .style.yapf || {
-            echo "::error file=.style.yapf::.style.yapf is missing — yapf runs against src/"
-            echo "and without this file it reformats the tree to 4-space indent."
-            exit 1
-          }
-          grep -q '"yapf' pyproject.toml || {
-            echo "::error file=pyproject.toml::the yapf pin is missing from [project.dependencies]"
-            exit 1
-          }
-          grep -q '^indent_width = 2$' .style.yapf || {
-            echo "::error file=.style.yapf::indent_width must stay 2 (Google style, per project.md 10.1)"
-            exit 1
-          }
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Lint
-        run: uv run ruff check src tests
-
-      - name: Test
-        run: uv run pytest -q -m "not local_only"
-
   frontend-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -141,15 +102,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
-        with:
-          version: 0.13.1
-
-      # The Rust tests run the Python reference helpers through `uv run python` in this environment.
-      - name: Install Python environment
-        run: uv sync --locked
 
       # The terminal tests start tmux, and the release tests' gh stub applies gh's --jq with jq.
       - name: Install system tools

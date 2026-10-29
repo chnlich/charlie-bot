@@ -42,11 +42,7 @@ fn script_environment(sandbox: &Sandbox, releases: &Path, record: &Path, fake_ho
   env.insert("RECORD".to_string(), record.display().to_string());
   env.insert("FAKE_HOME".to_string(), fake_home.display().to_string());
   env.insert("HOME".to_string(), sandbox.dir("sandbox-home").display().to_string());
-  let venv_bin = harness::repo_root().join(".venv/bin");
-  env.insert(
-    "PATH".to_string(),
-    format!("{}:{}:/usr/local/bin:/usr/bin:/bin", sandbox.bin().display(), venv_bin.display()),
-  );
+  env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", sandbox.bin().display()));
   env
 }
 

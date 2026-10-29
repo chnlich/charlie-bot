@@ -1,14 +1,6 @@
-# Python
-__pycache__/
-*.py[cod]
-.Python
-*.egg-info/
-dist/
-build/
+# The runtime checkout keeps a `.venv` until the deletion release passes, and a rollback
+# to a release before the venv removal rebuilds one (`uv sync --frozen` at that commit).
 .venv/
-venv/
-env/
-.python-version
 
 # Frontend
 node_modules/
@@ -24,9 +16,6 @@ node_modules/
 
 # Logs
 *.log
-
-# Built in place by the editable install's build_ext step
-src/runtime/agent_process/_vfkspawn*.so
 
 # OS
 .DS_Store

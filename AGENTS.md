@@ -3,15 +3,8 @@
 ## Coding Standards
 - Google Code Style
 - 2-space indentation, 120-column limit
-- Type annotations on all functions
-- Docstrings for public APIs only
-- Test budget: a unit test under 2 s, a `@pytest.mark.integration` test under 10 s, at most 50 integration tests — `tests/conftest.py` enforces all three
-- `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (style and leak checks, git hooks, browser and live harnesses, builds, eval runners) and the improve cron prompts (the landing protocol, the five direction prompts and `inflight-files.sh`) live in `tools/`.
-
-- Imports name modules (Google Python Style Guide 2.2): `from src.infra import models`, then
-  `models.SessionMetadata`; symbols from `typing`, `typing_extensions` and `collections.abc`
-  import directly. New imports take this form; convert a file's existing imports when a change touches it.
-- `uv run yapf -i <file>` formats each Python file a change touches.
+- `rustfmt` and `clippy` gate the Rust code: `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` from `rust/`
+- `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (leak checks, git hooks, browser and live harnesses, builds, eval runners) and the improve cron prompts (the landing protocol, the five direction prompts and `inflight-files.sh`) live in `tools/`.
 
 ### Module Boundaries
 
@@ -21,21 +14,23 @@
 
 ## Test and Verification
 
-- Run the full suite with `uv run pytest -q` from any checkout.
-- Run `uv sync` in a fresh worktree before testing. In a worktree, `uv run <cmd>` builds its local `.venv`; include
-  `uv run` commands in task specs.
+- Run the Rust suite from `rust/`: `cargo test --workspace --locked`. The frontend JavaScript tests run with
+  `node --test` from the checkout root, as CI does.
+- Run Cargo on the shared test host through `cargo-slot.sh` when the task names it; build the CLI locally with
+  `cargo build --locked -p charliebot-cli --bin charliebot` from `rust/`.
 - Reproduce a load-sensitive failure by forcing interleaving.
-- Remove a `noqa` directive only when `ruff check --extend-select RUF100` reports it unused. `--extend-select` keeps
-  the project's rule selection.
-- Gate YAPF on a single-file exit code or empty diff output.
-- Every pytest run through the project venv self-restricts before collection (CHARLIEBOT_USE_TEST_SANDBOX, default 1): it can signal only processes it started, and its default tmux and `systemctl --user` calls cannot reach the live server.
+- Gate a format check on a single-file exit code or empty diff output.
+
+### Script Tests
+
+- `charliebot-shell-harness` (`rust/crates/infra/shell-harness`) runs a repository shell script for real, against
+  stub commands on `PATH` (`rust/README.md`, "Shell-script tests").
+- A stub never starts an interpreter: stubs are shell scripts or Rust programs.
 
 ### HTTP Clients and Test Isolation
 
-- Build a per-call `httpx.AsyncClient` with a deferred import in each new low-rate HTTP consumer.
-- Patching a consumer module's `httpx.AsyncClient` name changes the shared module attribute.
-- Build one client per call so the fake stays scoped to that call.
-- Starlette `TestClient` serves each request on a fresh event loop.
+- Build a per-call HTTP client in each new low-rate HTTP consumer; patching a shared client name changes the
+  shared module attribute.
 - Take shared tree locks before a test's first request. Use lock-free reads after that request.
 
 ### Live Verification
@@ -58,4 +53,3 @@
 - Commit frequently with descriptive messages
 - Format: `type(scope): description` (feat, fix, refactor, test, docs)
 - Make atomic commits (one logical change per commit)
-

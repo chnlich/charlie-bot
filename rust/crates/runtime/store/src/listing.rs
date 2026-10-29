@@ -759,7 +759,7 @@ mod tests {
     assert!(error.contains(path.to_str().unwrap()), "{error}");
     assert!(error.contains("the conversion script was deleted"), "{error}");
     assert!(error.contains("scripts/v1_session_conversion.py"), "{error}");
-    assert!(error.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{error}");
+    assert!(error.contains("git worktree add <dir> e2f27b133"), "{error}");
   }
 
   /// `test_archived_pagination.py::test_keyset_pages_walk_newest_first`.

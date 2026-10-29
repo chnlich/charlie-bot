@@ -856,9 +856,10 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 #[cfg(test)]
 mod tests {
   use charliebot_registry::context::FeatureContext;
-  use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
+  use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
   use charliebot_store::run_records::{RunKind, RunRecord};
   use charliebot_store::{CreateTask, TaskCaller};
+  use charliebot_store::compact::CompactValue;
   use charliebot_tasks::git::git_worktree_dir_name;
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
@@ -1668,5 +1669,149 @@ mod tests {
     let launch = launch_text(&features, &leaf_id, &run);
     assert!(launch.contains("Synthetic scheduled work"), "{launch}");
     assert!(!launch.contains(&worktree_dir), "{launch}");
+  }
+
+  /// A handler task bound to a fresh manager node, its yaml rewritten with the binding.
+  async fn bound_handler_task(features: &Arc<FeatureContext>, name: &str) -> (std::path::PathBuf, SessionMetadata) {
+    let node = manager(features, &format!("{name}-node")).await.unwrap();
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let path = write_task(
+      &home,
+      name,
+      &json!({"cron": "* * * * *", "handler": "synthetic_handler", "enabled": true, "timezone": "UTC", "session_id": node.id}),
+    );
+    (path, node)
+  }
+
+  fn utc_at(minute: u32, second: u32) -> chrono::DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 6, 1, 0, minute, second).unwrap()
+  }
+
+  /// A live in-flight round for `task_name`, completed by dropping the returned sender.
+  fn insert_pending_handle(scheduler: &CronScheduler, task_name: &str) -> tokio::sync::oneshot::Sender<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+      let _ = rx.await;
+    });
+    scheduler
+      .handles
+      .lock()
+      .expect("cron handle mutex is not poisoned")
+      .insert(task_name.to_string(), handle);
+    tx
+  }
+
+  fn handler_results(features: &FeatureContext, session_id: &str) -> usize {
+    features
+      .store
+      .load_chat_events_sync(session_id)
+      .unwrap()
+      .iter()
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::HANDLER_RESULT))
+      .count()
+  }
+
+  #[tokio::test]
+  async fn a_due_tick_skips_while_the_previous_round_is_in_flight_and_consumes_the_delayed_occurrences() {
+    // Python: tests/test_scheduler_overlap_skip.py::test_at_most_one_round_in_flight
+    // Python: tests/test_scheduler_overlap_skip.py::test_one_skip_consuming_delayed_occurrences
+    // Python: tests/test_scheduler_overlap_skip.py::test_no_fire_on_completion_moment
+    let (_home, features) = feature_context();
+    let (_path, node) = bound_handler_task(&features, "code-health").await;
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
+    assert_eq!(handler_results(&features, &node.id), 1);
+
+    let pending = insert_pending_handle(&scheduler, "code-health");
+
+    // Several due ticks arrived while the first round was still pending: one judgment at 00:04 consumes the
+    // occurrences 00:01-00:04, no second round joins the pending one.
+    scheduler.tick_at(utc_at(4, 0)).await.unwrap();
+    let events = features.store.load_chat_events_sync(&node.id).unwrap();
+    let skips: Vec<&CompactValue> = events
+      .iter()
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::SCHEDULED_RUN_SKIPPED))
+      .collect();
+    assert_eq!(skips.len(), 1, "{events:?}");
+    assert_eq!(skips[0].get("task").and_then(CompactValue::as_str), Some("code-health"));
+    let reason = skips[0].get("reason").and_then(CompactValue::as_str).unwrap();
+    assert!(reason.starts_with("previous round still running"), "{reason}");
+    assert_eq!(handler_results(&features, &node.id), 1, "the pending round was never joined by a second one");
+    let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("skipped"));
+    assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
+
+    // The pending round finishes; a mid-minute tick is not on the cron grid, so nothing fires there and the
+    // anchor stays where the skip left it. The next fire lands on 00:05, the next occurrence from the anchor.
+    drop(pending);
+    tokio::task::yield_now().await;
+    scheduler.tick_at(utc_at(2, 30)).await.unwrap();
+    assert_eq!(handler_results(&features, &node.id), 1, "no fire at the completion moment");
+    let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
+    scheduler.tick_at(utc_at(5, 0)).await.unwrap();
+    assert_eq!(handler_results(&features, &node.id), 2);
+    let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
+    assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:05:00+00:00"));
+  }
+
+  #[tokio::test]
+  async fn the_scheduled_path_ignores_stuck_disk_state_and_a_manual_run_leaves_the_handle() {
+    // Python: tests/test_scheduler_overlap_skip.py::test_fire_ignores_stuck_running_disk_state
+    // Python: tests/test_scheduler_overlap_skip.py::test_manual_run_is_outside_and_leaves_handle_unchanged
+    let (_home, features) = feature_context();
+    let (_path, node) = bound_handler_task(&features, "code-health").await;
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
+
+    // Stuck on-disk signals: a thread record whose status says running with a pid that no longer exists, and
+    // node bookkeeping stuck at running. No handle is in flight, so the due fire proceeds.
+    let thread_path = features.store.thread_metadata_path(&node.id, "stuck-thread");
+    std::fs::create_dir_all(thread_path.parent().unwrap()).unwrap();
+    std::fs::write(
+      &thread_path,
+      charliebot_core::yaml::dump(&json!({
+        "id": "stuck-thread", "session_id": node.id, "description": "stuck round",
+        "status": "running", "pid": 999999,
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+    let guard = features.store.control_lock().await;
+    features
+      .store
+      .update_slot_fields_locked(
+        &guard,
+        &node.id,
+        "cron",
+        Map::from_iter([
+          ("last_scheduled_run".to_string(), json!("2026-06-01T00:00:00+00:00")),
+          ("last_run_status".to_string(), json!("running")),
+        ]),
+      )
+      .await
+      .unwrap();
+    drop(guard);
+    scheduler.tick_at(utc_at(1, 0)).await.unwrap();
+    assert_eq!(handler_results(&features, &node.id), 2, "the due fire proceeds past the running disk state");
+
+    // A manual run executes while a handle is in flight and leaves the recorded handle untouched: manual
+    // rounds neither block nor are blocked.
+    let pending = insert_pending_handle(&scheduler, "code-health");
+    match scheduler.run_now("code-health").await {
+      Ok(_) => {}
+      Err(super::RunError::Failed(message)) => panic!("the manual run failed: {message}"),
+      Err(_) => panic!("the manual run failed"),
+    }
+    assert_eq!(handler_results(&features, &node.id), 3);
+    let unfinished = scheduler
+      .handles
+      .lock()
+      .expect("cron handle mutex is not poisoned")
+      .get("code-health")
+      .map(|handle| !handle.is_finished());
+    assert_eq!(unfinished, Some(true), "the manual run left the handle unchanged");
+    drop(pending);
   }
 }

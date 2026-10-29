@@ -40,17 +40,13 @@ fn config_home(sandbox: &Sandbox, api_base: &str) -> PathBuf {
   home
 }
 
-/// Runs the command against the sandbox: the stub directory and `.venv/bin` lead a system-only PATH and
+/// Runs the command against the sandbox: the stub directory leads a system-only PATH and
 /// `HOME` is the sandbox root, so neither PATH nor `~/.local/bin` holds a stray charlie-code.
 fn run_preflight(sandbox: &Sandbox, home: &Path, backend_id: &str) -> Run {
   let mut env = sandbox.env();
   env.insert(charliebot_core::home::CHARLIEBOT_HOME_ENV.to_string(), home.display().to_string());
   env.insert("HOME".to_string(), sandbox.root().display().to_string());
-  let venv_bin = harness::repo_root().join(".venv/bin");
-  env.insert(
-    "PATH".to_string(),
-    format!("{}:{}:/usr/local/bin:/usr/bin:/bin", sandbox.bin().display(), venv_bin.display()),
-  );
+  env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", sandbox.bin().display()));
   let mut command = harness::command(env!("CARGO_BIN_EXE_charliebot"), &env);
   command.args(["preflight-charlie-code", backend_id]);
   harness::run(&mut command)

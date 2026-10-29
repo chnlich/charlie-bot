@@ -31,13 +31,10 @@ tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
 # The pattern file lives in the profile home, resolved the way
-# tools/leak-patterns.sh resolves it. Missing or unreadable is a refusal, not a
+# tools/leak-patterns.sh resolves it: CHARLIEBOT_HOME when set (blank counts as
+# unset), ~/.charliebot otherwise. Missing or unreadable is a refusal, not a
 # silent pass: nothing goes out unchecked.
-patterns_file=$(PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
-  'from src.infra import home; print(home.charliebot_home_dir() / "skills_leak_patterns.local.txt")') || {
-  printf 'Cannot resolve the profile home for the leak pattern file; nothing was sent.\n' >&2
-  exit 2
-}
+patterns_file="${CHARLIEBOT_HOME:-$HOME/.charliebot}/skills_leak_patterns.local.txt"
 if [[ ! -r "$patterns_file" ]]; then
   printf 'Leak pattern file is absent or unreadable: %s\n' "$patterns_file" >&2
   exit 2

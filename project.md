@@ -1,17 +1,17 @@
 # CharlieBot Project Specification
 
 ## 1. Project Overview & Objectives
-**CharlieBot** is a system designed to coordinate and manage multiple **Claude Code** instances (Workers) to complete complex tasks. The primary interface is a responsive Web UI for desktop and mobile access. The server is the Rust release under `rust/crates/`; the `charliebot` CLI is still Python (`src/`) and ports to Rust command by command.
+**CharlieBot** is a system designed to coordinate and manage multiple **Claude Code** instances (Workers) to complete complex tasks. The primary interface is a responsive Web UI for desktop and mobile access. The server and the `charliebot` CLI are the Rust release under `rust/crates/`.
 
 ### 1.1 Objectives
 - **Agent Orchestration**: A **Master Agent** (running as a Claude Code session) manages and coordinates Worker instances via a CLI delegation workflow.
 - **Task Delegation**: Master delegates coding tasks to Workers that run in isolated git worktrees; a separate Review Agent automatically verifies and merges the work.
-- **Rust server, Python CLI**: the server is Rust (`rust/crates/`); the `charliebot` CLI is Python (`src/`) for now, which keeps the CLI easy to extend and integrate with AI toolsets while its commands port.
+- **Rust server and CLI**: both run from `rust/crates/`, the server as `charliebot-server` and the CLI as the `charliebot` binary built beside it.
 
 ---
 
 ## 2. Technical Stack
-- **Language**: Rust for the server (`rust/crates/`, axum and tokio); Python 3.14 for the `charliebot` CLI (`src/`)
+- **Language**: Rust (`rust/crates/`, axum and tokio) for the server and the CLI
 - **Master Agent**: Claude Code session (pluggable backends)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
 - **Backend**: the Rust server (`charliebot-server`, entry point `rust/crates/app/server/src/main.rs`), WebSockets for real-time streaming, tokio for concurrency
@@ -28,8 +28,7 @@ All instance-specific data (configs, sessions, memory) is stored here.
 `CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
 or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
 profiles run side by side on one host, each with its own port in its own `config.yaml`. The
-home path is resolved once per side, `charliebot_home_dir()` in `rust/crates/infra/core/src/home.rs`
-for the server and the same-named function in `src/infra/home.py` for the Python CLI;
+home path is resolved once per side, `charliebot_home_dir()` in `rust/crates/infra/core/src/home.rs`;
 every other path derives from `CharlieBotConfig.charliebot_home`. One raw read of the variable
 sits outside them: the web terminal's profile check (`rust/crates/features/terminal/src/terminal.rs`). A tmux
 pane inherits the tmux server's environment rather than the server process's, so the terminal
@@ -74,7 +73,7 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 ```text
 charlie-bot/
 ├── rust/crates/        # The Rust server and CLI crates; the server's entry point is app/server
-├── src/                # Python `charliebot` CLI; also the modules the Rust test oracles still import
+├── src/                # The server's page templates, static assets and helper scripts, read by path
 ├── web/                # Web UI (templates/ + static/)
 ├── configs/            # Default templates and examples
 └── project.md          # This specification
@@ -235,23 +234,10 @@ A raw log that stops growing while the process is still alive is what the server
 ## 10. Development Guidelines
 
 ### 10.1 Code Style
-- **Standard**: Google Code Style (2-space indent, 120 column limit)
-- **Python**: formatted by YAPF (`.style.yapf`), lint-enforced by ruff
-  (`[tool.ruff.lint]` in `pyproject.toml`, CI runs `uv run ruff check src tests`):
-  ```ini
-  [style]
-  based_on_style = google
-  indent_width = 2
-  split_before_first_argument = true
-  column_limit = 120
-  ```
-  `tools/check-google-style.sh` runs YAPF and the module-import check over the tree.
-  Without `.style.yapf`, a yapf run falls back to pep8 defaults and reformats the
-  tree to 4-space indent, which is why the CI "Formatter config present" step keeps
-  the config and the pin in place.
-- **Imports**: modules only (Google Python Style Guide 2.2), checked by
-  `tools/check-google-style.sh` through the pylint-google-style plugin
-  (`[tool.pylint]` in `pyproject.toml`).
+- **Standard**: Google Code Style (2-space indent, 120 column limit), applied to the Rust code by rustfmt
+  (`rust/rustfmt.toml`)
+- **Rust**: CI (`.github/workflows/ci.yml`) runs `cargo clippy --all-targets --locked -- -D warnings` and
+  `cargo fmt --check` from `rust/` on every pull request and push
 
 ### 10.2 Worker Instructions
 Each worker and reviewer launch writes its managed instructions to `harness_instructions.md` in its Run directory

@@ -534,35 +534,33 @@ mod tests {
     let anchors = LifecycleAnchors { registry: anchor_registry() };
     let disk = anchored_session();
     let mut attempted = disk.clone();
-    attempted.cc_session_id = Some("cc-stale".to_string());
-    attempted.native_backend = Some("synthetic-stale".to_string());
-    attempted.set_extra("claude_account", json!("pool-a"));
+    attempted.set_extra("claude_account", json!("pool-a")); // the enqueue-time value the caller still holds
 
     anchors.reconcile(&disk, &mut attempted).unwrap();
 
-    assert_eq!(attempted.cc_session_id.as_deref(), Some("cc-live"), "the stale save may not roll the anchor back");
-    assert_eq!(attempted.native_backend, None);
-    assert_eq!(attempted.extra("claude_account"), Some(&json!("pool-b")));
+    assert_eq!(
+      attempted.extra("claude_account"),
+      Some(&json!("pool-b")),
+      "the stale whole-object write may not roll the label back"
+    );
     let warns = warns.lock().unwrap();
     let corrections: Vec<&ErrorEvent> =
       warns.iter().filter(|event| event.message == "session_anchor_write_corrected").collect();
-    assert_eq!(corrections.len(), 3, "{warns:?}");
+    assert_eq!(corrections.len(), 1, "{warns:?}");
     // The visitor Debug-formats each field, so `&'static str` field names keep their quotes.
-    assert_eq!(corrections[0].field("field"), r#""cc_session_id""#);
-    assert_eq!(corrections[0].field("on_disk"), r#"Some("cc-live")"#);
-    assert_eq!(corrections[0].field("attempted"), r#"Some("cc-stale")"#);
-    assert_eq!(corrections[1].field("field"), r#""native_backend""#);
-    assert_eq!(corrections[2].field("field"), r#""claude_account""#);
-    assert_eq!(corrections[2].field("on_disk"), r#"Some("pool-b")"#);
-    assert_eq!(corrections[2].field("attempted"), r#"Some("pool-a")"#);
+    assert_eq!(corrections[0].field("field"), r#""claude_account""#);
+    assert_eq!(corrections[0].field("on_disk"), r#"Some("pool-b")"#);
+    assert_eq!(corrections[0].field("attempted"), r#"Some("pool-a")"#);
   }
 
   #[tokio::test]
   async fn the_authorized_channels_still_change_the_anchors() {
     // Python: tests/test_session_anchor_guard.py::test_authorized_channels_still_change_the_anchors
     let home = tempfile::tempdir().unwrap();
-    let features = features_over(home.path(), anchor_registry());
+    let registry = anchor_registry();
+    let features = features_over(home.path(), Arc::clone(&registry));
     let store = &features.store;
+    let guard = LifecycleAnchors { registry };
     write_session(store, "synthetic");
 
     let read_back = store.persist_cc_session_id("synthetic", "cc-2", None).await.unwrap();
@@ -571,12 +569,53 @@ mod tests {
     assert_eq!(disk.cc_session_id.as_deref(), Some("cc-2"));
     assert!(disk.cc_session_started_at.is_some());
 
+    let read_back = store.persist_account_label("synthetic", "pool-c").await.unwrap();
+    assert_eq!(read_back.as_deref(), Some("pool-c"));
+    let disk = store.read_metadata_fresh("synthetic").unwrap().unwrap();
+    assert_eq!(disk.extra("claude_account"), Some(&json!("pool-c")));
+    assert_eq!(disk.cc_session_id.as_deref(), Some("cc-2"));
+
     // The switch endpoint's backfill funnel records the producing backend.
     let read_back = store.persist_native_backend("synthetic", "codex-o3").await.unwrap();
     assert_eq!(read_back.as_deref(), Some("codex-o3"));
     let disk = store.read_metadata_fresh("synthetic").unwrap().unwrap();
     assert_eq!(disk.native_backend.as_deref(), Some("codex-o3"));
     assert_eq!(disk.cc_session_id.as_deref(), Some("cc-2"));
+
+    // The v2 launch's spawn-time channel writes the provenance triple in one authorized save.
+    store.record_native_anchor("synthetic", "hash-3", "opus", Some("opus-model")).await.unwrap();
+    let disk = store.read_metadata_fresh("synthetic").unwrap().unwrap();
+    assert_eq!(disk.native_prompt_hash.as_deref(), Some("hash-3"));
+    assert_eq!(disk.native_backend.as_deref(), Some("opus"));
+    assert_eq!(disk.native_model.as_deref(), Some("opus-model"));
+
+    // A whole-object save after the funnels cannot roll either anchor back: the save runs this reconcile first.
+    let mut stale = disk.clone();
+    stale.native_backend = Some("claude-opus-5".to_string());
+    guard.reconcile(&disk, &mut stale).unwrap();
+    assert_eq!(stale.native_backend.as_deref(), Some("opus"));
+
+    // The clear channel clears the resume anchor only.
+    store.clear_cc_session_anchor("synthetic").await.unwrap();
+    let disk = store.read_metadata_fresh("synthetic").unwrap().unwrap();
+    assert_eq!(disk.cc_session_id, None);
+    assert!(disk.cc_session_started_at.is_none());
+    assert_eq!(
+      disk.extra("claude_account"),
+      Some(&json!("pool-c")),
+      "the clear channel clears the resume anchor, not the label"
+    );
+    assert_eq!(
+      disk.native_backend.as_deref(),
+      Some("opus"),
+      "the clear channel clears the resume anchor, not the provenance"
+    );
+
+    // A whole-object save after the clear cannot resurrect the cleared anchor.
+    let mut stale = disk.clone();
+    stale.cc_session_id = Some("cc-2".to_string());
+    guard.reconcile(&disk, &mut stale).unwrap();
+    assert_eq!(stale.cc_session_id, None);
   }
 
   /// Yields until `done` holds. The store's after-turn tasks run on this test's current-thread runtime meanwhile.

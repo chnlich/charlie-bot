@@ -1,5 +1,6 @@
 //! Session listing projections shared by sidebar routes.
 
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -104,24 +105,96 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
   Ok(PageRows { rows, derived })
 }
 
-/// Render the chat page's sidebar rows.
-pub fn active_page_values(store: &Store, registry: &Registry, page: &PageRows) -> StoreResult<Vec<Value>> {
-  let projection = SidebarProjection {
-    include_running: true,
-    include_trigger: true,
-    include_plan: false,
-    display_backend: true,
-    include_run_backend: true,
-  };
-  row_inputs(store, registry, &page.rows, &page.derived, projection)?
-    .into_iter()
-    .map(|row| {
-      let mut value = store.session_metadata_value(&row.meta);
-      apply_sidebar_fields(&mut value, &row, projection);
-      apply_listing_fields(&mut value, row.listing.expect("every sidebar row has sequence listing fields"));
-      Ok(value)
-    })
-    .collect()
+/// The chat page's row projection: running and trigger state, the run backend, and no plan badge.
+const PAGE_PROJECTION: SidebarProjection = SidebarProjection {
+  include_running: true,
+  include_trigger: true,
+  include_plan: false,
+  display_backend: true,
+  include_run_backend: true,
+};
+
+/// One row's rendered JSON text and the inputs it renders from.
+struct PageRowText {
+  inputs: RowInputs,
+  text: String,
+}
+
+/// The chat page's rendered row texts, one per session id.
+///
+/// Every page request renders the same rows from the same inputs, so a row serves its previous text until one of the
+/// inputs [`render_row_text`] reads moves. The memo holds the page's whole sidebar text, about as much memory as one
+/// response body.
+#[derive(Default)]
+pub struct PageRowsMemo {
+  rows: Mutex<HashMap<String, PageRowText>>,
+  #[cfg(test)]
+  renders: std::sync::atomic::AtomicUsize,
+}
+
+impl PageRowsMemo {
+  #[cfg(test)]
+  fn render_calls(&self) -> usize {
+    self.renders.load(std::sync::atomic::Ordering::Relaxed)
+  }
+}
+
+/// Render the chat page's sidebar rows as the Jinja `tojson` text of their array.
+///
+/// `clear_unread` names the active session: its row renders with `has_unread` false and is left out of the memo, so a
+/// later request that names another active session does not serve the marked row.
+pub fn active_page_json_text(
+  store: &Store,
+  registry: &Registry,
+  page: &PageRows,
+  clear_unread: Option<&str>,
+  memo: &PageRowsMemo,
+) -> StoreResult<String> {
+  let inputs = row_inputs(store, registry, &page.rows, &page.derived, PAGE_PROJECTION)?;
+  let mut state = memo.rows.lock().expect("the page row memo mutex is not poisoned");
+  let current: HashSet<&str> = inputs.iter().map(|row| row.meta.id.as_str()).collect();
+  state.retain(|session_id, _| current.contains(session_id.as_str()));
+  let cached_bytes: usize = state.values().map(|entry| entry.text.len()).sum();
+  let mut text = String::with_capacity(2 + cached_bytes + 256 * inputs.len());
+  text.push('[');
+  for (index, row) in inputs.into_iter().enumerate() {
+    if index > 0 {
+      text.push_str(", ");
+    }
+    let clear = clear_unread == Some(row.meta.id.as_str());
+    if !clear
+      && let Some(entry) = state.get(row.meta.id.as_str())
+      && entry.inputs == row
+    {
+      text.push_str(&entry.text);
+      continue;
+    }
+    #[cfg(test)]
+    memo.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let row_text = render_row_text(store, &row, clear)?;
+    text.push_str(&row_text);
+    if !clear {
+      state.insert(row.meta.id.clone(), PageRowText { inputs: row, text: row_text });
+    }
+  }
+  text.push(']');
+  Ok(text)
+}
+
+/// One row as the page's JSON text, with its `has_unread` cleared for the active session.
+///
+/// Unlike [`render_row`], the page's rows keep `task.goal` (see `docs/contract/shapes.md`, "Listing rows").
+fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
+  let mut value = store.session_metadata_value(&row.meta);
+  apply_sidebar_fields(&mut value, row, PAGE_PROJECTION);
+  apply_listing_fields(&mut value, row.listing.clone().expect("every sidebar row has sequence listing fields"));
+  if clear_unread {
+    value
+      .as_object_mut()
+      .expect("a session metadata value is an object")
+      .insert("has_unread".to_string(), Value::Bool(false));
+  }
+  Ok(charliebot_compat::jinja::tojson_text(&value))
 }
 
 /// Render sidebar rows with sequence fields and route-local body and gzip memos.
@@ -356,6 +429,48 @@ mod tests {
     rows[0] = Arc::new(SessionMetadata { name: "renamed".to_string(), ..renamed });
     assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["name"], "renamed");
     assert_eq!(memos.state.lock().unwrap().render_calls, 3);
+  }
+
+  /// The page's text is the Jinja `tojson` text of the row array, and a row keeps that text until an input moves.
+  #[tokio::test]
+  async fn page_text_matches_the_array_json_and_reuses_unchanged_rows() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "page-text-a", None, TaskProfile::Manager).await;
+    crate::test_support::create_node(&features.store, "page-text-b", None, TaskProfile::Manager).await;
+    let memo = PageRowsMemo::default();
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let text = active_page_json_text(&features.store, &features.registry, &page, None, &memo).unwrap();
+    assert_eq!(text, page_array_text(&features.store, &features.registry, &page, None));
+    let rendered = memo.render_calls();
+    assert_eq!(rendered, page.rows.len());
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    assert_eq!(active_page_json_text(&features.store, &features.registry, &page, None, &memo).unwrap(), text);
+    assert_eq!(memo.render_calls(), rendered);
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let active = active_page_json_text(&features.store, &features.registry, &page, Some(&first.id), &memo).unwrap();
+    assert_eq!(active, page_array_text(&features.store, &features.registry, &page, Some(&first.id)));
+    assert_eq!(memo.render_calls(), rendered + 1);
+  }
+
+  /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared.
+  fn page_array_text(store: &Store, registry: &Registry, page: &PageRows, clear_unread: Option<&str>) -> String {
+    let inputs = row_inputs(store, registry, &page.rows, &page.derived, PAGE_PROJECTION).unwrap();
+    let values: Vec<Value> = inputs
+      .iter()
+      .map(|row| {
+        let mut value = store.session_metadata_value(&row.meta);
+        apply_sidebar_fields(&mut value, row, PAGE_PROJECTION);
+        apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
+        if clear_unread == Some(row.meta.id.as_str()) {
+          value.as_object_mut().unwrap().insert("has_unread".to_string(), Value::Bool(false));
+        }
+        value
+      })
+      .collect();
+    charliebot_compat::jinja::tojson_text(&Value::Array(values))
   }
 
   #[tokio::test]

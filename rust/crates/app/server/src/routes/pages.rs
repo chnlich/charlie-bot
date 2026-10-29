@@ -1,7 +1,7 @@
 //! The chat page, home page and per-session events viewer (`src/app/pages.py`).
 
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use axum::Router;
@@ -43,11 +43,14 @@ fn is_page_path(path: &str) -> bool {
   !session_id.is_empty() && page == "events"
 }
 
-/// The chat page's sidebar outcome: the redirect of a page opened without a session, or the rendered rows.
+/// The chat page's sidebar outcome: the redirect of a page opened without a session, or the rendered rows as text.
 enum PageListing {
   Redirect(String),
-  Rows(Vec<Value>),
+  Text(String),
 }
+
+/// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
+static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
 
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let cfg = match state.config() {
@@ -59,33 +62,12 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     Err(error) => return responses::internal_error("ValueError", error.to_string()),
   };
   let session = session_query(&request);
-  let features = Arc::clone(&state.features);
-  let redirect_to_first = session.is_none();
-  let listing_result = tokio::task::spawn_blocking(move || -> StoreResult<PageListing> {
-    let page = listing::active_page_rows(&features.store, &features.registry)?;
-    // As Python's index: a page opened without a session redirects to the first row before any row renders.
-    if redirect_to_first && let Some(first) = page.first_id() {
-      return Ok(PageListing::Redirect(first.to_string()));
-    }
-    listing::active_page_values(&features.store, &features.registry, &page).map(PageListing::Rows)
-  })
-  .await
-  .expect("the chat page listing task does not panic");
   let mut load_errors = Vec::new();
-  let mut initial_sessions = match listing_result {
-    Ok(PageListing::Redirect(session_id)) => return responses::redirect(&format!("/?session={session_id}")),
-    Ok(PageListing::Rows(rows)) => rows,
-    Err(error) => {
-      tracing::error!(error = %error, "list_sessions_failed");
-      load_errors.push("Failed to load sessions. Check server logs for details.".to_string());
-      Vec::new()
-    }
-  };
-
   let mut active_session = Value::Null;
   let mut pending_draft = Value::Null;
   let mut event_count = Value::from(0);
   let mut session_bootstrap = Value::Null;
+  let mut clear_unread = None;
   if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
     match state.features.store.get_session(session_id).await {
       Ok(Some(meta)) => {
@@ -112,13 +94,9 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
             pending_draft = bootstrap.get("pending_draft").expect("a bootstrap payload has a pending draft").clone();
             event_count = bootstrap.get("event_count").expect("a bootstrap payload has an event count").clone();
             session_bootstrap = bootstrap;
-            for row in &mut initial_sessions {
-              if row.get("id").and_then(Value::as_str) == Some(session_id)
-                && let Some(object) = row.as_object_mut()
-              {
-                object.insert("has_unread".to_string(), Value::Bool(false));
-              }
-            }
+            // As Python's index: the active row is marked read only when its bootstrap loaded; a failed load keeps
+            // the unread mark.
+            clear_unread = Some(session_id.to_string());
           }
           Err(error) => {
             tracing::error!(session_id, error = %error, "load_session_data_failed");
@@ -131,6 +109,29 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     }
   }
 
+  let features = Arc::clone(&state.features);
+  let redirect_to_first = session.is_none();
+  let listing_result = tokio::task::spawn_blocking(move || -> StoreResult<PageListing> {
+    let page = listing::active_page_rows(&features.store, &features.registry)?;
+    // As Python's index: a page opened without a session redirects to the first row before any row renders.
+    if redirect_to_first && let Some(first) = page.first_id() {
+      return Ok(PageListing::Redirect(first.to_string()));
+    }
+    listing::active_page_json_text(&features.store, &features.registry, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
+      .map(PageListing::Text)
+  })
+  .await
+  .expect("the chat page listing task does not panic");
+  let initial_sessions_json = match listing_result {
+    Ok(PageListing::Redirect(session_id)) => return responses::redirect(&format!("/?session={session_id}")),
+    Ok(PageListing::Text(text)) => text,
+    Err(error) => {
+      tracing::error!(error = %error, "list_sessions_failed");
+      load_errors.push("Failed to load sessions. Check server logs for details.".to_string());
+      "[]".to_string()
+    }
+  };
+
   let default_backend_id = cfg.backends.options.first().map_or("claude", |option| option.id.as_str());
   let active_backend = active_session
     .get("run_backend")
@@ -139,7 +140,6 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     .or_else(|| active_session.get("backend").and_then(Value::as_str).filter(|backend| !backend.is_empty()))
     .unwrap_or(default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
-  let initial_sessions_json = charliebot_compat::jinja::tojson_text(&Value::Array(initial_sessions));
   let context = json!({
     "initial_sessions_json": initial_sessions_json,
     "active_session": active_session,

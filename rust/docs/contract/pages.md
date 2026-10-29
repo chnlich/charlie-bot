@@ -101,7 +101,7 @@ The route does not write to disk. Rendering the page does not mark the session a
 
 | Variable | Type | Value |
 |---|---|---|
-| `initial_sessions_json` | string | The sidebar rows as Jinja `tojson` text: the listing rows (each the full session JSON, `task.goal` included, with the six model `schedule_*` fields replaced by the listing fields; see [shapes.md](shapes.md#listing-rows)) with sorted keys and the `< > & '` escapes. The handler renders the text, so the page does not walk every row through the template engine. |
+| `initial_sessions_json` | string | The sidebar rows as Jinja `tojson` text: the listing rows (each the full session JSON, `task.goal` included, with the six model `schedule_*` fields replaced by the listing fields; see [shapes.md](shapes.md#listing-rows)) with sorted keys and the `< > & '` escapes. The handler renders the text, so the page does not walk every row through the template engine. A row keeps its text on later requests until one of the inputs it renders from moves (its metadata, sidebar overlay, busy interval, run backend or listing fields). |
 | `active_session` | session or null | The active session model. |
 | `pending_draft` | object or null | The bootstrap `pending_draft`. |
 | `event_count` | int | The bootstrap total event count. 0 with no active session. |

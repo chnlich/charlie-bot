@@ -76,6 +76,7 @@
     <form method="post" action="/api/host-auth/probe"><button class="btn" type="submit">Probe now</button></form>
   </div>
 
+  {% if hosts %}
   <table>
     <thead>
       <tr>
@@ -133,7 +134,7 @@
       {% endfor %}
     </tbody>
   </table>
-  {% if not hosts %}
+  {% else %}
   <p class="cap">No host is listed yet: the first probe round has not completed, or the ssh config names none.</p>
   {% endif %}
 

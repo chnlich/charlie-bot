@@ -16,7 +16,17 @@ pub const EXT_USAGE_ROUND_GAP: Duration = Duration::from_secs(60);
 
 /// The panel the poller writes and `GET /api/ext-usage` reads. Process-wide, as the module globals `_cached_usage` and
 /// `_accounts` are in Python.
-pub static PANEL: LazyLock<Arc<Panel>> = LazyLock::new(Arc::default);
+static PANEL: LazyLock<Arc<Panel>> = LazyLock::new(Arc::default);
+
+/// The process-wide panel as a handle that a spawned task can own.
+pub fn panel_handle() -> Arc<Panel> {
+  Arc::clone(&PANEL)
+}
+
+/// The process-wide panel that the routes read.
+pub fn panel() -> &'static Panel {
+  &PANEL
+}
 
 /// What one round reads from outside the loop: the accounts the live config derives, the clock that judges expiry, and
 /// the sidebar broadcast.

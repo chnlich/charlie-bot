@@ -510,7 +510,7 @@ fn session_target_matches(target: &str, full_id: &str) -> bool {
 }
 
 fn is_url_or_path(text: &str, span: &Range<usize>, links: &[MarkdownLink]) -> bool {
-  if file_urls::URL_RE.find_iter(text).any(|url| url.start() <= span.start && span.end <= url.end())
+  if file_urls::url_regex().find_iter(text).any(|url| url.start() <= span.start && span.end <= url.end())
     || links.iter().any(|link| link.target.start <= span.start && span.end <= link.target.end)
   {
     return true;

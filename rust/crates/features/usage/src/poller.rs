@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use crate::ext_usage::{PANEL, PollHost, poll_loop};
+use crate::ext_usage::{PollHost, panel_handle, poll_loop};
 
 /// The service's one loop task. Starting creates it, and stopping cancels and drains it.
 #[derive(Default)]
@@ -34,7 +34,7 @@ impl Service for ExtUsagePoller {
     Box::pin(async move {
       let host: Arc<dyn PollHost> = Arc::new(ServerHost(ctx.features));
       *self.task.lock().expect("the poller task lock is never poisoned") =
-        Some(tokio::spawn(poll_loop(Arc::clone(&PANEL), host)));
+        Some(tokio::spawn(poll_loop(panel_handle(), host)));
       tracing::info!("ext_usage_poller_started");
       Ok(())
     })

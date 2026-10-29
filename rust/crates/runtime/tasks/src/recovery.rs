@@ -1671,11 +1671,11 @@ mod tests {
   fn the_marker_write_syncs_the_temporary_file_once_before_the_rename() {
     let home = tempfile::tempdir().expect("temporary directory exists");
     let pass_started_at = UtcDateTime::parse("2026-10-21T03:00:00.123456+00:00").expect("the synthetic time parses");
-    charliebot_core::fsutil::SYNCED_WRITE_STEPS.with(|steps| steps.borrow_mut().clear());
+    charliebot_core::fsutil::clear_synced_write_steps();
 
     write_boot_recovery_marker(home.path(), pass_started_at).expect("the marker writes");
 
-    let steps = charliebot_core::fsutil::SYNCED_WRITE_STEPS.with(|steps| steps.borrow().clone());
+    let steps = charliebot_core::fsutil::synced_write_steps();
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
     let marker_path = home.path().join("state").join("boot_recovery.json");
     let marker: Value =

@@ -1703,7 +1703,7 @@ pub fn assert_no_file_server_links(
 /// (`application_route_links`).
 pub fn application_route_links(text: &str, port: u16) -> Vec<String> {
   let mut routes: Vec<String> = Vec::new();
-  for captures in file_urls::URL_RE.captures_iter(text) {
+  for captures in file_urls::url_regex().captures_iter(text) {
     let Some(named_port) = captures.name("port") else {
       continue;
     };

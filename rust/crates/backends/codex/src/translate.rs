@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::pricing;
-use super::text::{EMPTY_OBJECT, count_or_zero, py_len, py_slice_from, truthy};
+use super::text::{count_or_zero, empty_object, py_len, py_slice_from, truthy};
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
@@ -79,7 +79,7 @@ impl CodexTranslator {
 
   fn turn_completed(&self, event: &Map<String, Value>) -> anyhow::Result<Vec<Value>> {
     let usage = match event.get("usage") {
-      None => &*EMPTY_OBJECT,
+      None => empty_object(),
       Some(Value::Object(usage)) => usage,
       Some(other) => bail!("codex turn.completed usage must be a JSON object, got {other}"),
     };
@@ -262,7 +262,7 @@ fn item_key(item: &Map<String, Value>) -> anyhow::Result<ItemKey> {
 
 fn item_of(event: &Map<String, Value>) -> anyhow::Result<&Map<String, Value>> {
   match event.get("item") {
-    None => Ok(&*EMPTY_OBJECT),
+    None => Ok(empty_object()),
     Some(Value::Object(item)) => Ok(item),
     Some(other) => bail!("codex item must be a JSON object, got {other}"),
   }

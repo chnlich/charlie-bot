@@ -24,7 +24,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
 use super::rollout::{self, mtime_ns, mtime_secs, token_count_payload, walk_files};
-use super::text::{EMPTY_OBJECT, object_or_empty, py_splitlines, truthy};
+use super::text::{empty_object, object_or_empty, py_splitlines, truthy};
 use charliebot_agents::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
@@ -630,8 +630,8 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
     other => bail!("expected a JSON object, got {other}"),
   };
   let payload = match event.get("payload") {
-    None => &*EMPTY_OBJECT,
-    Some(value) if !truthy(value) => &*EMPTY_OBJECT,
+    None => empty_object(),
+    Some(value) if !truthy(value) => empty_object(),
     Some(Value::Object(payload)) => payload,
     Some(other) => bail!("payload must be an object, got {other}"),
   };
@@ -645,8 +645,8 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
     return Ok(None);
   }
   let info = match payload.get("info") {
-    None => &*EMPTY_OBJECT,
-    Some(value) if !truthy(value) => &*EMPTY_OBJECT,
+    None => empty_object(),
+    Some(value) if !truthy(value) => empty_object(),
     Some(Value::Object(info)) => info,
     Some(other) => bail!("info must be an object, got {other}"),
   };

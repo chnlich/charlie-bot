@@ -10,7 +10,7 @@ use charliebot_store::metadata::UtcDateTime;
 use http::StatusCode;
 use serde_json::{Value, json};
 
-use crate::ext_usage::{PANEL, Panel};
+use crate::ext_usage::{Panel, panel};
 
 /// The router of the `/api` prefix. The panel is process-wide, so the feature context is not needed.
 pub fn routes(_features: &Arc<FeatureContext>) -> Router {
@@ -27,7 +27,7 @@ fn router() -> Router {
 }
 
 async fn get_ext_usage() -> Response {
-  responses::json(StatusCode::OK, &snapshot(&PANEL, UtcDateTime::now()))
+  responses::json(StatusCode::OK, &snapshot(panel(), UtcDateTime::now()))
 }
 
 /// The body `get_ext_usage` answers with: the error text while the panel holds no entry, else the annotated providers.

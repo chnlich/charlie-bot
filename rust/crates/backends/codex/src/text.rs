@@ -7,7 +7,12 @@ use serde_json::{Map, Value};
 pub use charliebot_agents::cli_base::truthy;
 
 /// The empty object a missing `x.get(key, {})` falls back to.
-pub static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
+static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
+
+/// The empty object a missing `x.get(key, {})` falls back to.
+pub fn empty_object() -> &'static Map<String, Value> {
+  &EMPTY_OBJECT
+}
 
 /// Python's `str.splitlines()`: the lines of `text` without their terminators. The terminators are wider than `\n`.
 pub fn py_splitlines(text: &str) -> Vec<&str> {

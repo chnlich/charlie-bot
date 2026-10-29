@@ -26,12 +26,17 @@ const PY_SPACE: &str =
   concat!(r"\t\n\x0B\x0C\r\x1C-\x1F \x85\x{A0}\x{1680}\x{2000}-\x{200A}", r"\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}",);
 
 /// Any URL reply text can carry: scheme, authority, optional port, path, query string and fragment (`_URL_RE`).
-pub static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(&format!(
     r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?:\[[^\]{PY_SPACE}]+\]|[^/:(){PY_SPACE}]+)(?::(?P<port>\d+))?(?P<path>/[^?#(){PY_SPACE}]*)?(?:\?[^#{PY_SPACE}]*)?(?:#[^{PY_SPACE}]*)?"
   ))
   .expect("valid pattern")
 });
+
+/// The regex of any URL that reply text can carry.
+pub fn url_regex() -> &'static Regex {
+  &URL_RE
+}
 
 /// A Markdown inline link's target, `<...>` or bare (`_MARKDOWN_INLINE_TARGET_RE`).
 static MARKDOWN_INLINE_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {

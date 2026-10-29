@@ -55,7 +55,19 @@ fn write_sibling_then_rename(path: &Path, text: &str, sync: bool) -> std::io::Re
 thread_local! {
   /// The steps of this thread's synced writes, in order: `sync` for the sibling's fsync, `rename` for the swap. A test
   /// reads it to check that the fsync comes before the swap.
-  pub static SYNCED_WRITE_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+  static SYNCED_WRITE_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Clear this thread's recorded synced-write steps.
+#[cfg(feature = "test-support")]
+pub fn clear_synced_write_steps() {
+  SYNCED_WRITE_STEPS.with(|steps| steps.borrow_mut().clear());
+}
+
+/// This thread's recorded synced-write steps, in order.
+#[cfg(feature = "test-support")]
+pub fn synced_write_steps() -> Vec<&'static str> {
+  SYNCED_WRITE_STEPS.with(|steps| steps.borrow().clone())
 }
 
 #[cfg(feature = "test-support")]

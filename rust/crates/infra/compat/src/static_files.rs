@@ -1,10 +1,10 @@
 //! Starlette's `StaticFiles` and `FileResponse`, as the Python app serves a directory of files.
 //!
 //! A served file carries the content type `mimetypes` guesses, `accept-ranges`, `content-length`,
-//! `last-modified` and an `etag` of `md5("<st_mtime>-<st_size>")`; a matching `If-None-Match` or a newer
-//! `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked
-//! per request until the check first passes, so a directory that appears later serves without a restart,
-//! and a missing one answers 500 as the Python mount's `RuntimeError` does.
+//! `last-modified` and an `etag` of `md5("<st_mtime>-<st_size>")`. A matching `If-None-Match` or a newer
+//! `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked per
+//! request until the check first passes, so a directory that appears later serves without a restart. A missing one
+//! answers 500 as the Python mount's `RuntimeError` does.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
@@ -268,8 +268,8 @@ fn is_not_modified(file_headers: &FileHeaders, request: &HeaderMap) -> bool {
 }
 
 /// `email.utils.parsedate` for the forms HTTP clients send (`Sun, 18 Oct 2026 07:15:40 GMT`, with or
-/// without the weekday), as the `(year, month, day, hour, minute, second)` tuple CPython compares; the
-/// zone is ignored as `parsedate` ignores it.
+/// without the weekday). It returns the `(year, month, day, hour, minute, second)` tuple CPython compares.
+/// The zone is ignored as `parsedate` ignores it.
 fn parse_http_date(text: &str) -> Option<(i64, i64, i64, i64, i64, i64)> {
   const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
   let mut words: Vec<&str> = text.split_whitespace().collect();

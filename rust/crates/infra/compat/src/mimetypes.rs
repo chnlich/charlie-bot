@@ -1,7 +1,7 @@
 //! Content-type guessing as CPython's `mimetypes.guess_type(path)[0]` answers it on this host.
 //!
 //! The database is CPython's built-in table ([`mimetypes_table`]) overlaid by the system `mime.types`
-//! files CPython reads at `mimetypes.init()`, in its order; a later entry for an extension replaces an
+//! files CPython reads at `mimetypes.init()`, in its order. A later entry for an extension replaces an
 //! earlier one. A guess applies the suffix map (`.tgz` -> `.tar.gz`), drops one case-sensitive encoding
 //! suffix (`.gz`), then looks the remaining extension up lowercased.
 

@@ -53,8 +53,8 @@ where
 /// A path that serves several methods, through `method_router`. Each method the router does not serve answers 405
 /// with `allow`, and so does HEAD: this helper sets the HEAD handler, so `method_router` must not name one.
 ///
-/// `allow` follows Starlette's rule: it lists the methods of the first route that Python registers on the path (the
-/// first partial match for the request), which can differ from the methods this router serves.
+/// `allow` follows Starlette's rule: it lists the methods of the first route that Python registers on the path, the
+/// first partial match for the request. Those methods can differ from the methods this router serves.
 pub fn refuse_other_methods<S>(method_router: MethodRouter<S>, allow: &'static str) -> MethodRouter<S>
 where
   S: Clone + Send + Sync + 'static,

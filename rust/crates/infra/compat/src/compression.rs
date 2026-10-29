@@ -1,8 +1,8 @@
 //! The request path's one-shot level-1 gzip deflator (`src/infra/compression.py`).
 //!
 //! Every gzip memo on the request path deflates through here, so the deflated byte count is one
-//! counter: a body's first response pays the deflate once and its memo serves the repeats, which is
-//! the count the latency tests pin.
+//! counter. A body's first response pays the deflate once and its memo serves the repeats; that
+//! count is the one the latency tests pin.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,8 +1,8 @@
 //! FastAPI's form body parsing and `File`/`Form` validation.
 //!
 //! `read` runs before route dependencies. A multipart body is parsed by a port of python-multipart's state machine, so
-//! that every truncated or malformed body reaches the same error as Starlette does, and file parts stream into
-//! temporary files. A urlencoded body is parsed the way Starlette's `FormParser` does. `FormBody::validate` runs after
+//! that every truncated or malformed body reaches the same error as Starlette does. File parts stream into temporary
+//! files. A urlencoded body is parsed the way Starlette's `FormParser` does. `FormBody::validate` runs after
 //! dependencies and reports required or mistyped fields at `body.<field>`, like `fastapi_body::RequestBody`.
 
 use crate::responses;
@@ -350,7 +350,7 @@ fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
   decoded.unwrap_or_else(|| latin1(bytes))
 }
 
-/// Normalize a codec name the way Python's `encodings.normalize_encoding` does before its alias lookup: letters and
+/// Normalize a codec name the way Python's `encodings.normalize_encoding` does before its alias lookup. Letters and
 /// digits and dots are kept in lower case, and each run of other characters becomes one underscore between names.
 fn normalize_codec_name(name: &str) -> String {
   let mut normalized = String::new();
@@ -428,8 +428,8 @@ fn split_parameters(value: &str) -> Vec<&str> {
   segments
 }
 
-/// Unquote a header value the way `email.utils.unquote` does: a quoted value loses its quotes, with `\\` read as `\`
-/// before `\"` is read as `"`, and an angle-bracketed value loses its brackets.
+/// Unquote a header value the way `email.utils.unquote` does. A quoted value loses its quotes, with `\\` read as `\`
+/// before `\"` is read as `"`. An angle-bracketed value loses its brackets.
 fn unquote_header_value(value: &str) -> String {
   if value.len() > 1 && value.starts_with('"') && value.ends_with('"') {
     return value[1..value.len() - 1].replace("\\\\", "\\").replace("\\\"", "\"");
@@ -675,7 +675,7 @@ impl MultipartMachine {
     }
   }
 
-  /// Match part data against the boundary, byte for byte, the way python-multipart does: a byte that starts a
+  /// Match part data against the boundary, byte for byte, the way python-multipart does. A byte that starts a
   /// potential boundary is withheld in `match_len` until the match fails or a part boundary confirms.
   fn part_data_byte(&mut self, byte: u8) -> Result<(), Box<Response>> {
     if self.match_len == 0 {

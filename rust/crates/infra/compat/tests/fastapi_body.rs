@@ -404,7 +404,8 @@ fn corpus() -> Vec<Case> {
 }
 
 /// The bounded model's corpus, sent to `/bounds`: each bound at, below and above its limit, null on each optional
-/// field, two extra keys, and the error order of a missing field, a wrong type and an extra key together.
+/// field, and two extra keys. One case holds a missing field, a wrong type and an extra key together, to check their
+/// error order.
 fn bounded_corpus() -> Vec<Case> {
   vec![
     json_ok_case("the valid body", bounded_value()),
@@ -456,7 +457,7 @@ fn bounded_with(changes: &[(&str, Value)]) -> Value {
 }
 
 /// The message model's corpus, sent to `/messages`: the valid body, each non-list value and each kind of bad item for
-/// `uploaded_files`, a wrong `content` with a bad item, and two bad items with two errors each.
+/// `uploaded_files`. Two more cases carry a wrong `content` with a bad item, and two bad items with two errors each.
 fn message_corpus() -> Vec<Case> {
   vec![
     json_ok_case("the valid message", message_value()),
@@ -510,9 +511,9 @@ fn message_with(changes: &[(&str, Value)]) -> Value {
   with_changes(message_value(), changes)
 }
 
-/// The list model's corpus, sent to `/attachments`: the length bounds at, below and above their limits, a null or
-/// absent list, each non-list value and each kind of bad item, extra keys in an item, and the error order of items
-/// with a length error.
+/// The list model's corpus, sent to `/attachments`: the length bounds at, below and above their limits, and a null or
+/// absent list. It also carries each non-list value, each kind of bad item, extra keys in an item, and the error order
+/// of items with a length error.
 fn attachment_corpus() -> Vec<Case> {
   vec![
     json_ok_case("the valid attachments", attachments_value()),
@@ -590,8 +591,8 @@ fn attachments_with(changes: &[(&str, Value)]) -> Value {
 }
 
 /// The trigger model's corpus, sent to `/triggers`: one valid item of each variant, null and empty lists, each non-list
-/// value and each kind of bad item, the tag errors (missing, unknown, not a string), a member's own field errors, and
-/// the errors of a wrong message or a second bad item beside another error.
+/// value and each kind of bad item. It also carries the tag errors (missing, unknown, not a string) and a member's own
+/// field errors. The last cases hold a wrong message, and a second bad item beside another error.
 fn trigger_corpus() -> Vec<Case> {
   let long_message = "x".repeat(201);
   vec![

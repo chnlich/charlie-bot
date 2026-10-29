@@ -21,6 +21,8 @@ const STYLE_VERBATIM: &str = "style-verbatim";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
 const FOOT_PRESENT: &str = "foot-present";
 const EXPLAIN_TRIAD: &str = "explain-triad";
+const EXPLAIN_FIGURES: &str = "explain-figures";
+const EXPLAIN_EXAMPLES: &str = "explain-examples";
 const FORK_OPEN_SHAPE: &str = "fork-open-shape";
 const FORK_EXPLAINER: &str = "fork-explainer";
 const FACT_ANCHORED: &str = "fact-anchored";
@@ -40,6 +42,10 @@ const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
 
 const GOAL_WEIGHTED_BUDGET: usize = 240;
+/// The shape and text elements that `explain-figures` counts in an svg figure. A `div.flow` box strip is not a figure.
+const FIGURE_ELEMENT_TAGS: &[&str] = &["rect", "circle", "ellipse", "line", "polyline", "polygon", "path", "text"];
+/// The fewest shape or text elements one svg figure holds.
+const FIGURE_MIN_ELEMENTS: usize = 3;
 const PAGE_HEIGHT_TARGET: i32 = 2000;
 const PAGE_PROBE_WIDTH_PX: usize = 1280;
 const CODE_START: char = '\u{0001}';
@@ -188,6 +194,8 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       RENDER_PATH,
       SECTIONS_NUMBERED,
       EXPLAIN_TRIAD,
+      EXPLAIN_FIGURES,
+      EXPLAIN_EXAMPLES,
       FORK_OPEN_SHAPE,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -337,6 +345,8 @@ fn run_assertions_sync_with_user_text(
       SECTIONS_NUMBERED => check_sections_numbered,
       FOOT_PRESENT => check_foot_present,
       EXPLAIN_TRIAD => check_explain_triad,
+      EXPLAIN_FIGURES => check_explain_figures,
+      EXPLAIN_EXAMPLES => check_explain_examples,
       FORK_OPEN_SHAPE => check_fork_open_shape,
       FORK_EXPLAINER => check_fork_explainer,
       FACT_ANCHORED => check_fact_anchored,
@@ -453,14 +463,19 @@ fn section_heading(nodes: &[Element], element: usize) -> String {
   let mut ancestor = nodes[element].parent;
   while let Some(index) = ancestor {
     if nodes[index].tag == "section" {
-      return find(nodes, index, "h2", &[])
-        .first()
-        .map(|&heading| pystr::collapse_whitespace(&element_text(nodes, heading)))
-        .unwrap_or_else(|| "<unnamed section>".to_owned());
+      return named_section(nodes, index);
     }
     ancestor = nodes[index].parent;
   }
   "<no section>".to_owned()
+}
+
+/// The collapsed text of a section's first h2, or `<unnamed section>` when the section has none.
+fn named_section(nodes: &[Element], section: usize) -> String {
+  find(nodes, section, "h2", &[])
+    .first()
+    .map(|&heading| pystr::collapse_whitespace(&element_text(nodes, heading)))
+    .unwrap_or_else(|| "<unnamed section>".to_owned())
 }
 
 fn outcome(name: &str, passed: bool, detail: impl Into<String>) -> AssertionOutcome {
@@ -1033,6 +1048,98 @@ fn check_explain_triad(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
   } else {
     Ok(vec![outcome(EXPLAIN_TRIAD, true, "")])
   }
+}
+
+/// `explain-figures`: each `div.step` holds an svg of at least `FIGURE_MIN_ELEMENTS` shape or text elements, or an img
+/// with a src. In a section that holds steps, every p sits in a step, apart from one opening p before the first step.
+fn check_explain_figures(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let steps = find(&context.nodes, 0, "div", &["step"]);
+  if steps.is_empty() {
+    return Ok(vec![outcome(EXPLAIN_FIGURES, false, "no div.step on the page")]);
+  }
+  let mut failures = Vec::new();
+  for (index, &step) in steps.iter().enumerate() {
+    let index = index + 1;
+    let heading = pyfmt::str_repr(&section_heading(&context.nodes, step));
+    let svgs = find(&context.nodes, step, "svg", &[]);
+    let imgs = find(&context.nodes, step, "img", &[]);
+    if svgs.is_empty() && imgs.is_empty() {
+      failures.push(outcome(
+        EXPLAIN_FIGURES,
+        false,
+        format!("step #{index} (section {heading}) has no svg or img figure"),
+      ));
+    }
+    for &svg in &svgs {
+      let elements = descendants(&context.nodes, svg)
+        .into_iter()
+        .filter(|&element| FIGURE_ELEMENT_TAGS.contains(&context.nodes[element].tag.as_str()))
+        .count();
+      if elements < FIGURE_MIN_ELEMENTS {
+        failures.push(outcome(
+          EXPLAIN_FIGURES,
+          false,
+          format!(
+            "step #{index} (section {heading}) has an svg with fewer than {FIGURE_MIN_ELEMENTS} shape or text elements"
+          ),
+        ));
+      }
+    }
+    for &img in &imgs {
+      let has_src =
+        context.nodes[img].attrs.get("src").and_then(Option::as_deref).is_some_and(|src| !src.trim().is_empty());
+      if !has_src {
+        failures.push(outcome(
+          EXPLAIN_FIGURES,
+          false,
+          format!("step #{index} (section {heading}) has an img without src"),
+        ));
+      }
+    }
+  }
+  for section in find(&context.nodes, 0, "section", &[]) {
+    let section_steps = find(&context.nodes, section, "div", &["step"]);
+    let Some(&first_step) = section_steps.first() else {
+      continue;
+    };
+    let inside_steps = section_steps.iter().flat_map(|&step| descendants(&context.nodes, step)).collect::<HashSet<_>>();
+    let outside = find(&context.nodes, section, "p", &[])
+      .into_iter()
+      .filter(|paragraph| !inside_steps.contains(paragraph))
+      .collect::<Vec<_>>();
+    // The one p before the first step is the opening paragraph; every other p outside the steps is a failure.
+    let opening = outside.first().is_some_and(|&paragraph| paragraph < first_step);
+    let extra = outside.len() - usize::from(opening);
+    if extra > 0 {
+      let heading = pyfmt::str_repr(&named_section(&context.nodes, section));
+      let after_opening = if opening { " after its opening p" } else { "" };
+      failures.push(outcome(
+        EXPLAIN_FIGURES,
+        false,
+        format!("section {heading} has {extra} p blocks outside div.step{after_opening}"),
+      ));
+    }
+  }
+  if failures.is_empty() { Ok(vec![outcome(EXPLAIN_FIGURES, true, "")]) } else { Ok(failures) }
+}
+
+/// `explain-examples`: the page holds a `div.example.e2e` and a `div.example.contrast`, and each `div.example` names its
+/// source in a `span.src`.
+fn check_explain_examples(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let mut failures = Vec::new();
+  for (kind, label) in [("e2e", "div.example.e2e"), ("contrast", "div.example.contrast")] {
+    if find(&context.nodes, 0, "div", &["example", kind]).is_empty() {
+      failures.push(outcome(EXPLAIN_EXAMPLES, false, format!("no {label} on the page")));
+    }
+  }
+  for (index, example) in find(&context.nodes, 0, "div", &["example"]).into_iter().enumerate() {
+    if find(&context.nodes, example, "span", &["src"]).is_empty() {
+      let index = index + 1;
+      let heading = pyfmt::str_repr(&section_heading(&context.nodes, example));
+      failures.push(outcome(EXPLAIN_EXAMPLES, false, format!("example #{index} (section {heading}) has no span.src")));
+    }
+  }
+  if failures.is_empty() { Ok(vec![outcome(EXPLAIN_EXAMPLES, true, "")]) } else { Ok(failures) }
 }
 
 /// `_check_fact_anchored`: every `span.tag.fact` label sits in a block that also carries a `span.src`.
@@ -1902,5 +2009,187 @@ mod tests {
     assert_eq!(stated.len(), 1, "{outcomes:#?}");
     assert!(stated[0].passed, "{:?}", stated[0].detail);
     assert_eq!(stated[0].detail, "no numeric table cell");
+  }
+
+  /// The explain template with `body` as its `<main>` content. The head, the render path and the style block stay the
+  /// template's.
+  fn explain_doc(body: &str) -> String {
+    let template = fs::read_to_string(repo_root().join("prompts/explain_template.html")).unwrap();
+    let start = template.find("<main>").unwrap() + "<main>".len();
+    let end = template.find("</main>").unwrap();
+    format!("{}{body}{}", &template[..start], &template[end..])
+  }
+
+  fn explain_section(number: usize, title: &str, content: &str) -> String {
+    format!(r#"<section class="plan-section"><h2><span class="n">{number}</span> {title}</h2>{content}</section>"#)
+  }
+
+  /// An explain body that passes every explain assertion, with `mechanism` as section 2 and `examples` as section 3.
+  fn explain_body(mechanism: &str, examples: &str) -> String {
+    [
+      concat!(
+        r#"<section class="plan-section"><div class="triad">"#,
+        r#"<div class="row"><span class="k">You know</span><div>Sixteen bins cap the variants.</div></div>"#,
+        r#"<div class="row"><span class="k">You observe</span><div>The ramp took 47 minutes.</div></div>"#,
+        r#"<div class="row"><span class="k">Missing link</span><div>The frame guard keys on raw values.</div></div>"#,
+        r#"</div></section>"#,
+      )
+      .to_owned(),
+      explain_section(1, "Where the model is right", "<p>Binning caps the shader cache.</p>"),
+      explain_section(2, "The mechanism", mechanism),
+      explain_section(3, "Worked example", examples),
+      explain_section(4, "Reconciling the count", "<p>Recount.</p>"),
+      explain_section(5, "What stays open", "<p>Nothing.</p>"),
+      r#"<div class="foot"><p>Closing.</p></div>"#.to_owned(),
+    ]
+    .concat()
+  }
+
+  /// An svg that passes `explain-figures`: three shape or text elements.
+  const FIGURE: &str = concat!(
+    r#"<svg viewBox="0 0 100 40"><rect x="0" y="0" width="30" height="30"/>"#,
+    r#"<line x1="30" y1="15" x2="60" y2="15"/><text x="62" y="20">guard</text></svg>"#,
+  );
+  /// The one paragraph that may sit before the first step.
+  const OPENING: &str = "<p>The frame cache keys on raw values.</p>";
+  const E2E: &str = concat!(
+    r#"<div class="example e2e"><h3>Frame 41 to 42</h3><p>Frame 42 recompiles.</p>"#,
+    r#"<p><span class="src">ramp log</span></p></div>"#,
+  );
+  const CONTRAST: &str = concat!(
+    r#"<div class="example contrast"><h3>Same bin, no recompile</h3><p>Frame 42 holds.</p>"#,
+    r#"<p><span class="src">ramp log</span></p></div>"#,
+  );
+
+  /// A `div.step` with an h3, `figure` and one paragraph.
+  fn step(figure: &str) -> String {
+    format!(
+      r#"<div class="step"><h3>The guard records a raw value</h3>{figure}<p>The next call re-checks it.</p></div>"#
+    )
+  }
+
+  fn run_explain(body: &str) -> Vec<AssertionOutcome> {
+    let directory = tempfile::tempdir().unwrap();
+    let page = write_page(directory.path(), "explain.html", &explain_doc(body));
+    run_assertions_sync("explain", &page, "", &repo_root()).unwrap()
+  }
+
+  /// The failed outcomes of one assertion.
+  fn failed<'a>(outcomes: &'a [AssertionOutcome], name: &str) -> Vec<&'a AssertionOutcome> {
+    by_name(outcomes, name).into_iter().filter(|outcome| !outcome.passed).collect()
+  }
+
+  #[test]
+  fn test_shipped_explain_template_passes_its_explain_set() {
+    let template = repo_root().join("prompts/explain_template.html");
+    let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
+    assert_eq!(outcomes.len(), 12, "{outcomes:#?}");
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
+  }
+
+  #[test]
+  fn test_explain_page_with_figured_steps_and_both_examples_passes_every_assertion() {
+    let mechanism = format!("{OPENING}{}{}", step(FIGURE), step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
+  }
+
+  #[test]
+  fn test_explain_figures_fails_a_page_with_no_step() {
+    let outcomes = run_explain(&explain_body(OPENING, &format!("{E2E}{CONTRAST}")));
+    let failures = failed(&outcomes, EXPLAIN_FIGURES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "no div.step on the page");
+  }
+
+  #[test]
+  fn test_explain_figures_fails_a_step_with_only_a_flow_strip() {
+    let flow_only = concat!(
+      r#"<div class="step"><h3>Flow only</h3>"#,
+      r#"<div class="flow"><span class="b">packer</span><span class="ar">→</span><span class="b">frame</span></div>"#,
+      r#"<p>Text.</p></div>"#,
+    );
+    let mechanism = format!("{OPENING}{flow_only}{}", step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
+    let failures = failed(&outcomes, EXPLAIN_FIGURES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "step #1 (section '2 The mechanism') has no svg or img figure");
+  }
+
+  #[test]
+  fn test_explain_figures_fails_an_svg_with_fewer_than_three_elements() {
+    let flow = r#"<div class="flow"><span class="b">a</span><span class="b">b</span><span class="b">c</span></div>"#;
+    let sparse_svgs = [
+      r#"<svg viewBox="0 0 10 10"></svg>"#,
+      r#"<svg viewBox="0 0 10 10"><rect x="0" y="0" width="5" height="5"/><text x="6" y="6">a</text></svg>"#,
+    ];
+    for svg in sparse_svgs {
+      let sparse_step = format!(r#"<div class="step"><h3>Sparse</h3>{flow}{svg}<p>Text.</p></div>"#);
+      let mechanism = format!("{OPENING}{sparse_step}{}", step(FIGURE));
+      let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
+      let failures = failed(&outcomes, EXPLAIN_FIGURES);
+      assert_eq!(failures.len(), 1, "{svg}: {outcomes:#?}");
+      assert_eq!(
+        failures[0].detail,
+        "step #1 (section '2 The mechanism') has an svg with fewer than 3 shape or text elements"
+      );
+    }
+  }
+
+  #[test]
+  fn test_explain_figures_fails_an_img_without_src() {
+    for img in [r#"<img alt="frame"/>"#, r#"<img src="" alt="frame"/>"#] {
+      let mechanism = format!("{OPENING}{}", step(img));
+      let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
+      let failures = failed(&outcomes, EXPLAIN_FIGURES);
+      assert_eq!(failures.len(), 1, "{img}: {outcomes:#?}");
+      assert_eq!(failures[0].detail, "step #1 (section '2 The mechanism') has an img without src");
+    }
+  }
+
+  #[test]
+  fn test_explain_figures_fails_a_paragraph_after_the_steps() {
+    let mechanism = format!("{OPENING}{}<p>A stray paragraph.</p>", step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
+    let failures = failed(&outcomes, EXPLAIN_FIGURES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "section '2 The mechanism' has 1 p blocks outside div.step after its opening p");
+  }
+
+  #[test]
+  fn test_explain_figures_fails_a_second_paragraph_before_the_first_step() {
+    let mechanism = format!("{OPENING}<p>A second opening.</p>{}", step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
+    let failures = failed(&outcomes, EXPLAIN_FIGURES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "section '2 The mechanism' has 1 p blocks outside div.step after its opening p");
+  }
+
+  #[test]
+  fn test_explain_examples_fails_a_page_with_no_e2e_example() {
+    let mechanism = format!("{OPENING}{}", step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, CONTRAST));
+    let failures = failed(&outcomes, EXPLAIN_EXAMPLES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "no div.example.e2e on the page");
+  }
+
+  #[test]
+  fn test_explain_examples_fails_a_page_with_no_contrast_example() {
+    let mechanism = format!("{OPENING}{}", step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, E2E));
+    let failures = failed(&outcomes, EXPLAIN_EXAMPLES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "no div.example.contrast on the page");
+  }
+
+  #[test]
+  fn test_explain_examples_fails_an_example_without_a_source() {
+    let unsourced = r#"<div class="example e2e"><h3>Frame 41 to 42</h3><p>Frame 42 recompiles.</p></div>"#;
+    let mechanism = format!("{OPENING}{}", step(FIGURE));
+    let outcomes = run_explain(&explain_body(&mechanism, &format!("{unsourced}{CONTRAST}")));
+    let failures = failed(&outcomes, EXPLAIN_EXAMPLES);
+    assert_eq!(failures.len(), 1, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "example #1 (section '3 Worked example') has no span.src");
   }
 }

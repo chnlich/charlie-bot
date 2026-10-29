@@ -19,7 +19,7 @@ use charliebot_core::{event_types, pyfmt};
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
   TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller,
@@ -34,9 +34,11 @@ use crate::route_support::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
 const PROFILE_CHOICES: &[&str] = &["manager", "worker"];
+const APPROVER_CHOICES: &[&str] = &["user", "parent"];
 const TASK_TYPE_CHOICES: &[&str] = &["implement", "quick-edit", "script-run", "verify", "cold-read"];
 const PROFILE_REQUIRED: &str = "profile must be 'manager' or 'worker'";
 const RENAME_REQUIRES_NAME: &str = "rename requires a non-empty name";
+const APPROVER_NEEDS_TASK: &str = "approver is a field of the task record: send it with a task object";
 
 /// `models.ColdReadSpec`.
 const COLD_READ_SPEC_FIELDS: &[Field] = &[
@@ -69,6 +71,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("profile", FieldType::NullableLiteral(PROFILE_CHOICES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
+  Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
 ];
 const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 
@@ -80,6 +83,7 @@ const PATCH_FIELDS: &[Field] = &[
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),
   Field::optional("node_prompt", FieldType::NullableString),
+  Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
 ];
 const PATCH_SESSION: BodyModel = BodyModel::required(PATCH_FIELDS).forbid_extra();
 
@@ -105,6 +109,8 @@ struct CreateFields {
   task: Option<TaskSpec>,
   #[serde(default)]
   group: Option<String>,
+  #[serde(default)]
+  approver: Option<TaskApprover>,
 }
 
 /// The validated PATCH body. An absent key is `None`, an explicit null is `Some(None)`, and a value is `Some(Some(_))`.
@@ -122,6 +128,8 @@ struct PatchFields {
   subtree_prompt: Option<Option<String>>,
   #[serde(default, deserialize_with = "present")]
   node_prompt: Option<Option<String>>,
+  #[serde(default)]
+  approver: Option<TaskApprover>,
 }
 
 #[derive(Deserialize)]
@@ -217,8 +225,11 @@ async fn create(
 ) -> Result<SessionMetadata, Response> {
   let (fields, slot_values) = create_fields(features, body)?;
   let cfg = config(features)?;
-  let v2 =
-    fields.request_id.is_some() || fields.task_parent_id.is_some() || fields.profile.is_some() || fields.task.is_some();
+  let v2 = fields.request_id.is_some()
+    || fields.task_parent_id.is_some()
+    || fields.profile.is_some()
+    || fields.task.is_some()
+    || fields.approver.is_some();
   if v2 {
     // The task-tree owner binds (parent, request_id) to one node; request_id is required there.
     let Some(request_id) = fields.request_id else {
@@ -233,12 +244,17 @@ async fn create(
       None if request_id.is_empty() => return Err(store_error(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED))),
       None => return Err(store_error(StoreError::invalid(PROFILE_REQUIRED))),
     };
+    let task = match (fields.task, fields.approver) {
+      (task, None) => task,
+      (Some(task), Some(approver)) => Some(TaskSpec { approver, ..task }),
+      (None, Some(_)) => return Err(store_error(StoreError::invalid(APPROVER_NEEDS_TASK))),
+    };
     let task_parent_id = fields.task_parent_id.clone();
     let request = CreateTask {
       request_id,
       task_parent_id: task_parent_id.clone(),
       profile,
-      task: fields.task,
+      task,
       name: fields.name,
       backend: fields.backend,
       group: fields.group,
@@ -417,6 +433,7 @@ async fn patch(
     task: fields.task,
     subtree_prompt: fields.subtree_prompt,
     node_prompt: fields.node_prompt,
+    approver: fields.approver,
   };
   let guards =
     dispatch::dispatcher(features).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
@@ -1025,6 +1042,101 @@ mod tests {
     let (status, detail) = answer(response).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(detail["name"], "Renamed");
+  }
+
+  #[tokio::test]
+  async fn a_run_token_sets_the_approver_only_inside_its_own_subtree() {
+    let (home, features) = feature_context();
+    install_dispatcher(&features);
+    let access_key = "synthetic-access-key";
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {access_key}\n"))
+      .expect("credentials file");
+    let manager = create_node(&features.store, "manager", None, TaskProfile::Manager).await;
+    let child = create_node(&features.store, "child", Some(&manager.id), TaskProfile::Manager).await;
+    let grandchild = create_node(&features.store, "grandchild", Some(&child.id), TaskProfile::Manager).await;
+    let outside = create_node(&features.store, "outside", None, TaskProfile::Manager).await;
+    let run_path = features.store.run_metadata_path(&manager.id, "manager-run");
+    std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run =
+      json!({"id": "manager-run", "session_id": manager.id, "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+    std::fs::write(&run_path, run.to_string()).expect("launched run record");
+    let claims = RunTokenClaims {
+      session_id: manager.id.clone(),
+      run_id: "manager-run".to_string(),
+      agent: "synthetic".to_string(),
+    };
+    let bearer = format!("Bearer {}", run_token::sign_run_token(&claims, access_key).expect("run token"));
+    let agent_request = |payload: Value| {
+      let (mut headers, body) = json_request(payload);
+      headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer).expect("bearer header"));
+      (headers, body)
+    };
+    let approver_of = |session_id: &str| {
+      features
+        .store
+        .read_metadata_fresh(session_id)
+        .expect("task metadata reads")
+        .expect("task exists")
+        .task
+        .map_or(TaskApprover::User, |task| task.approver)
+    };
+
+    let (headers, body) = agent_request(json!({"approver": "parent"}));
+    let response = patch_session(State(features.clone()), AxumPath(grandchild.id.clone()), headers, body).await;
+    assert_eq!(answer(response).await.0, StatusCode::OK);
+    assert_eq!(approver_of(&grandchild.id), TaskApprover::Parent);
+
+    let (headers, body) = agent_request(json!({"approver": "user"}));
+    let response = patch_session(State(features.clone()), AxumPath(child.id.clone()), headers, body).await;
+    assert_eq!(answer(response).await.0, StatusCode::OK);
+    assert_eq!(approver_of(&child.id), TaskApprover::User);
+
+    for target in [&manager.id, &outside.id] {
+      let (headers, body) = agent_request(json!({"approver": "parent"}));
+      let response = patch_session(State(features.clone()), AxumPath(target.clone()), headers, body).await;
+      assert_eq!(answer(response).await, (StatusCode::FORBIDDEN, json!({"detail": AGENT_REPARENT_SCOPE_REFUSAL})));
+    }
+    assert_eq!(approver_of(&manager.id), TaskApprover::User);
+
+    let (headers, body) = agent_request(json!({"approver": "parent", "name": "Renamed"}));
+    let response = patch_session(State(features.clone()), AxumPath(grandchild.id.clone()), headers, body).await;
+    assert_eq!(answer(response).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(approver_of(&grandchild.id), TaskApprover::Parent);
+  }
+
+  #[tokio::test]
+  async fn create_writes_the_approver_into_the_task_record() {
+    let (_home, features) = feature_context();
+    install_dispatcher(&features);
+    let manager = create_node(&features.store, "manager", None, TaskProfile::Manager).await;
+    let (headers, body) = json_request(json!({
+      "request_id": "parent-approved-child",
+      "task_parent_id": manager.id,
+      "profile": "manager",
+      "task": {"goal": "deliver the page"},
+      "approver": "parent",
+    }));
+    let response = create_session(State(features.clone()), headers, body).await;
+    let (status, created) = answer(response).await;
+    assert_eq!(status, StatusCode::OK);
+    let approver = features
+      .store
+      .read_metadata_fresh(created["id"].as_str().expect("created id"))
+      .expect("created task reads")
+      .expect("created task exists")
+      .task
+      .expect("created task record exists")
+      .approver;
+    assert_eq!(approver, TaskApprover::Parent);
+
+    let (headers, body) = json_request(json!({
+      "request_id": "approver-without-task",
+      "task_parent_id": manager.id,
+      "profile": "manager",
+      "approver": "parent",
+    }));
+    let (status, _) = answer(create_session(State(features.clone()), headers, body).await).await;
+    assert!(status.is_client_error(), "an approver needs a task record: {status}");
   }
 
   #[tokio::test]

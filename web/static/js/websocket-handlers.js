@@ -21,10 +21,10 @@ function _commitMessage(msg) {
   }
   if (engine && engine.hasMessage(msg)) return;
   // A committed bubble supersedes the streaming preview: the draft it carries is
-  // the same text the preview holds. The message arrived over the wire — the
-  // local tab did not produce it — so it never forces the follow; a reader
-  // pinned at the bottom follows through their pin intent, one reading
-  // history keeps their place.
+  // the same text the preview holds. The local tab did not produce the message;
+  // it arrived over the wire, so it never forces the follow. A reader pinned at
+  // the bottom follows through their pin intent, and one reading history keeps
+  // their place.
   hideStreaming();
   appendMessageObject(msg, SESSION_ID, false);
   // While the Status view covers the list, a message the returning view will
@@ -76,9 +76,9 @@ registerWsMessageHandler('unread_changed', (ev) => {
   refreshSessionIndicator(ev.session_id);
 }, {advancesCursor: false});
 
-// Sidebar activity update. The same state mapping the status poll and the
-// list paint apply: a task-tree row's work_state verdict rides the event
-// when the broadcaster knows it, and the 3 s poll corrects any drift.
+// Sidebar activity update. The status poll and the list paint apply the same
+// state mapping. A task-tree row's work_state verdict rides the event when
+// the broadcaster knows it. The 3 s poll corrects any drift.
 // status.js's applyRunningChanged owns the repaint decision: a worker row
 // going idle defers to the poll started below, everything else repaints at
 // once.
@@ -95,12 +95,12 @@ registerWsMessageHandler('running_changed', (ev) => {
 }, {advancesCursor: false});
 
 // A backend switch on the active session: the header badge/dropdown must
-// reflect the new value immediately (the initiating tab already did this via
-// its own fetch; other tabs reach this through the shared session/sidebar
-// channels). `to` is the audit shape (session channel, always this session);
-// `backend`+`session_id` is the sidebar broadcast shape, which every open
-// tab receives regardless of which session it's viewing — only apply it
-// when it names this tab's own session.
+// reflect the new value immediately. The initiating tab already did this
+// through its own fetch; other tabs reach it through the shared
+// session/sidebar channels. `to` is the audit shape (session channel, always
+// this session). `backend`+`session_id` is the sidebar broadcast shape, which
+// every open tab receives regardless of which session it's viewing. Only
+// apply it when it names this tab's own session.
 registerWsMessageHandler('backend_switched', (ev) => {
   const sid = ev.session_id || SESSION_ID;
   const newBackend = ev.to || ev.backend;

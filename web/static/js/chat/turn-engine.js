@@ -1229,6 +1229,10 @@
       if (this.restoreReadingAnchor(anchor)) {
         this.readingAnchor = anchor;
         this.pendingAnchor = null;
+        // A restore that lands at the bottom arms the deferred follow; the
+        // reader's place was a history place, so the next message must not
+        // pull them down to it.
+        this.followNextTurn = false;
       } else {
         this.pendingAnchor = anchor;
       }

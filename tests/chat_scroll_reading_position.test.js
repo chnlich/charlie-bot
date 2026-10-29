@@ -747,6 +747,12 @@ test('a row lost below the list clamps the return to the reachable bottom, pin i
   const heldY = anchorY(rig.root, anchorId);
   assert.ok(heldY >= 0 && heldY < rig.root.clientHeight, 'the anchored message stays in the viewport');
   assert.notEqual(rig.root.scrollTop, rig.openTop, 'the reachable bottom sits below the open-time position');
+
+  // The next message does not pull the reader down: the return left no deferred follow.
+  rig.engine.appendMessage(eMsg('assistant', 'sw_next', 'a reply after the return'), false);
+  settle(rig.timers);
+  assert.equal(rig.engine.pinnedIntent, false, 'the arrival does not re-arm the pin');
+  assert.ok(distanceFromBottom(rig.root) > 0, 'the arrival lands below the reader, which does not follow');
 });
 
 test('the lost row returning before the switch restores the exact open-time position', () => {

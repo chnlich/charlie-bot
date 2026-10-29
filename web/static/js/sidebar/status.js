@@ -10,7 +10,7 @@
 const STATUS_QUERY_MAX_BYTES = 8192;
 
 // Status of every rendered sidebar row, keyed by session id. The status
-// poll skips archived rows through it: their server probe is the constant-False
+// poll skips archived rows through it. Their server probe is the constant-False
 // shortcut (src/runtime/session_sidebar.py populate_sidebar_state), so per-cycle request
 // volume tracks the active rows on screen, not the archived list length.
 const renderedSessionStatuses = {};
@@ -19,18 +19,18 @@ const renderedSessionStatuses = {};
 // state paints as the spinner rather than the delegated-work gear.
 const renderedWorkerRows = new Set();
 // Rows painted as task-tree nodes (profile not null): their own running state
-// is a live Run of their own and paints as the spinner too — the gear is
+// is a live Run of their own and paints as the spinner too. The gear is
 // exclusively a parent row's stand-in for a running descendant or a paused
 // worker.
 const renderedTaskTreeRows = new Set();
 
 // The paused-worker fact per row: a worker whose Run ended with its wake-up
-// trigger (a charliebot schedule-trigger registration) still pending has no
-// live Run and no running turn, so its own state reads idle — yet it
-// delivers nothing until the trigger fires, and the gear stands in for it
-// on every ancestor row for the whole pause. The list paint records the
-// fact from the row's own profile and has_pending_trigger; the status
-// poll's reply carries no profile, so the poll path takes the worker
+// trigger still pending has no live Run and no running turn. Its own state
+// then reads idle, yet it delivers nothing until the trigger fires. The
+// wake-up trigger is a charliebot schedule-trigger registration. The gear
+// stands in for it on every ancestor row for the whole pause. The list paint
+// records the fact from the row's own profile and has_pending_trigger. The
+// status poll's reply carries no profile, so the poll path takes the worker
 // identity from renderedWorkerRows.
 const pausedWorkerRows = new Set();
 
@@ -113,9 +113,9 @@ async function fetchScopedStatus(path, ids) {
   return merged;
 }
 
-// The compact button's facts come from the server, by backend type (BACKEND_COMPACT):
-// a type that runs manual compaction enables the button; any other type, a type
-// the configuration no longer lists included, shows its hint or the generic title.
+// The compact button's facts come from the server, by backend type (BACKEND_COMPACT).
+// A type that runs manual compaction enables the button. Any other type shows
+// its hint or the generic title, including a type the configuration no longer lists.
 function compactButtonTitle(compact) {
   if (compact && compact.manual) return '';
   return (compact && compact.hint) || 'Manual compaction is not supported on this backend';
@@ -152,13 +152,14 @@ function getSessionIndicatorState(status) {
 // Unread facts — one application seam with response-ordering protection
 // ---------------------------------------------------------------------------
 // sessionUnread holds the client's unread truth per session. Server facts land
-// through three channels — unread_changed broadcasts, the scoped status poll,
-// and the task tree's row fetches — and a reply can carry a snapshot older
-// than a fact this client already applied (a poll issued before the flip, a
-// tree page read from a pre-flip projection). Every applied fact is stamped
-// with a per-session sequence; a reply captured before the newest stamp is
-// refused, so a stale reply can neither erase a newer unread nor resurrect a
-// cleared one. Broadcasts are ordered by the socket and always apply.
+// through three channels: unread_changed broadcasts, the scoped status poll,
+// and the task tree's row fetches. A reply can carry a snapshot older than a
+// fact this client already applied. Examples are a poll issued before the
+// flip and a tree page read from a pre-flip projection. Every applied fact is
+// stamped with a per-session sequence. A reply captured before the newest
+// stamp is refused, so a stale reply can neither erase a newer unread nor
+// resurrect a cleared one. Broadcasts are ordered by the socket and always
+// apply.
 let unreadFactSeq = 0;
 const unreadFactSeqBySession = {};
 
@@ -176,8 +177,9 @@ function unreadReplyIsCurrent(sessionId, requestSeq) {
 }
 
 // The unread state a row renders: the map when this client knows the session
-// (a broadcast, a polled fact, or a fetched row), otherwise the row's own
-// server fact (a search hit that has not been through a level fetch yet).
+// (a broadcast, a polled fact, or a fetched row). Otherwise it is the row's
+// own server fact, such as a search hit that has not been through a level
+// fetch yet.
 function rowUnreadState(sessionId, serverValue) {
   return typeof sessionUnread[sessionId] === 'boolean' ? sessionUnread[sessionId] : !!serverValue;
 }
@@ -186,7 +188,7 @@ function rowUnreadState(sessionId, serverValue) {
 // Activity indicators — one owner, one visual language
 // ---------------------------------------------------------------------------
 // The thinking spinner and the delegated-work gear are this module's SVGs and
-// this module's element ids (spinner-<id>, worker-indicator-<id>): every row
+// this module's element ids (spinner-<id>, worker-indicator-<id>). Every row
 // that renders them is patchable by setSessionIndicator, whatever view built
 // it.
 const SPINNER_SVG_INNER =
@@ -200,11 +202,11 @@ const GEAR_CENTER_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
 const SPINNER_TITLE = 'Task is running';
 const GEAR_TITLE = 'Delegated work running or waiting in subtasks';
-// The waiting clock completes the visual language: one activity icon per row
-// — the activity family, beside which the unread marks ride independently —
-// chosen by the priority table in paintSessionIndicator (own state first,
-// then a parent's gear for a running descendant or a paused worker — the
-// clock always describes the row itself, never its subtree).
+// The waiting clock completes the visual language: one activity icon per row,
+// chosen by the priority table in paintSessionIndicator. The activity family
+// sits beside the unread marks, which ride independently. The order is own
+// state first, then a parent's gear for a running descendant or a paused
+// worker. The clock always describes the row itself, never its subtree.
 const CLOCK_TITLE = 'Task waiting to run';
 const CLOCK_SVG_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
@@ -281,23 +283,20 @@ function updateSidebarHighlight(newSessionId) {
   }
 }
 
-// Indicator priority over the nested sidebar. Two independent families, each
-// picking at most one element per row in a fixed order that reads no
-// expansion state. The activity family: the row's own state first — own
-// thinking or running paints the spinner through the display mapping, a
-// legacy row's own delegated work keeps the gear, own waiting (queued, not
-// launched) the muted clock; a parent row whose own state is idle then stands
-// in for its subtree with one icon only: a running descendant at any depth
-// shows the gear, so does a paused worker (a worker row whose latest fact is
-// idle with a pending wake-up trigger), and the clock never stands in for a
-// subtree. The unread family reads the unread facts alone, gated by no
-// activity state: the row's own unread paints the filled dot, otherwise an
-// unread reply anywhere below paints the subtree's hollow mark. The facts
-// are the latest applied state per row (list paint, status poll,
-// task_tree_changed / running_changed broadcasts), the paused-worker fact
-// the list paint and the status poll record, and the shared unread map; the
-// tree shape comes from the last grouped paint, which groups.js records
-// here.
+// Indicator priority over the nested sidebar. Two independent families each pick at most one
+// element per row, in a fixed order that reads no expansion state. The activity family starts
+// with the row's own state. The row's own thinking or running paints the spinner through the
+// display mapping. A legacy row's own delegated work keeps the gear, and own waiting (queued,
+// not launched) takes the muted clock. A parent row whose own state is idle then stands in for
+// its subtree with one icon only. A running descendant at any depth shows the gear, and so
+// does a paused worker (a worker row whose latest fact is idle with a pending wake-up
+// trigger). The clock never stands in for a subtree. The unread family reads the unread facts
+// alone, gated by no activity state. The row's own unread paints the filled dot, otherwise an
+// unread reply anywhere below paints the subtree's hollow mark. The facts are the latest
+// applied state per row, from the list paint, the status poll, and the task_tree_changed /
+// running_changed broadcasts. They also include the paused-worker fact that the list paint and
+// the status poll record, and the shared unread map. The tree shape comes from the last grouped
+// paint, which groups.js records here.
 const ownIndicatorState = {};
 let lastTreeChildrenOf = new Map();
 let lastTreeParentOf = new Map();
@@ -332,12 +331,12 @@ function subtreeHasPausedWorker(sid) {
   return treeChildIds(sid).some(child => pausedWorkerRows.has(child) || subtreeHasPausedWorker(child));
 }
 
-// The subtree stand-in, in the same priority position as the row's own state:
-// a running descendant at any depth — one whose own state is worker_only or
-// thinking, a manager's turn or a worker's live Run, whose header timer
-// (thinking_since) paints its own row's spinner — shows the gear, and so
-// does a paused worker at any depth. The clock never stands in for a
-// subtree: a queued Run marks its own row only.
+// The subtree stand-in sits in the same priority position as the row's own
+// state. A running descendant at any depth shows the gear, and so does a
+// paused worker at any depth. A running descendant is one whose own state is
+// worker_only or thinking: a manager's turn or a worker's live Run, whose
+// header timer (thinking_since) paints its own row's spinner. The clock never
+// stands in for a subtree: a queued Run marks its own row only.
 function subtreeStandInState(sid) {
   if (subtreeHasState(sid, 'worker_only') || subtreeHasState(sid, 'thinking')
       || subtreeHasPausedWorker(sid)) return 'worker_only';
@@ -358,8 +357,8 @@ function ownUnread(sid) {
 
 function paintSessionIndicator(sid) {
   // The display mapping (a row's own running Run reads as the spinner) applies
-  // only to the row's own state; the subtree stand-in keeps its own icon —
-  // the gear for a running descendant or a paused worker.
+  // only to the row's own state. The subtree stand-in keeps its own icon: the
+  // gear for a running descendant or a paused worker.
   const own = ownIndicatorState[sid] || 'idle';
   const state = own !== 'idle' ? displayIndicatorState(sid, own) : subtreeStandInState(sid);
   const spinner = document.getElementById('spinner-' + sid);
@@ -455,15 +454,15 @@ function applySessionStatus(sid, status, requestSeq) {
   paintDelegateCardState(sid, status);
 }
 
-// The running_changed seam. A worker row's Run ending usually means a pause:
-// the worker registers its wake-up trigger just before its turn ends, so the
-// event reaches the browser before any poll could carry the new trigger
-// fact. Repainting the row idle on the event would blink the row's spinner
-// and the ancestors' gear off until the next poll, so that repaint is left
-// to the status poll the handler starts right after — it applies the new
-// state and the trigger fact in one write. A really finished worker pays
-// one status round trip of stale spinner and gear for this. Every other
-// event — a busy start, any non-worker row — repaints at once.
+// The running_changed seam. A worker row's Run ending usually means a pause.
+// The worker registers its wake-up trigger just before its turn ends, so the
+// event reaches the browser before any poll could carry the new trigger fact.
+// Repainting the row idle on the event would blink the row's spinner and the
+// ancestors' gear off until the next poll. That repaint is left to the status
+// poll the handler starts right after, which applies the new state and the
+// trigger fact in one write. A really finished worker pays one status round
+// trip of stale spinner and gear for this. Every other event — a busy start,
+// any non-worker row — repaints at once.
 function applyRunningChanged(ev) {
   const runEnded = !ev.thinking_since && !ev.has_running_tasks;
   if (runEnded && renderedWorkerRows.has(ev.session_id)) return;
@@ -474,11 +473,11 @@ function applyRunningChanged(ev) {
   }));
 }
 
-// The Delegated cards' live line: "running · <model>" while the delegation
-// works; once it stops running, a task-tree child's work verdict (the same
-// work_state its sidebar row paints from) reads "queued" while its Run waits,
-// and anything else "idle". A card tracks either its child session
-// (new-style) or the owning session (legacy), keyed by data attribute.
+// The Delegated cards' live line reads "running · <model>" while the
+// delegation works. Once it stops running, a task-tree child's work verdict
+// (the same work_state its sidebar row paints from) reads "queued" while its
+// Run waits. Anything else reads "idle". A card tracks either its child
+// session (new-style) or the owning session (legacy), keyed by data attribute.
 const DELEGATE_CARD_VERDICTS = {waiting: 'queued'};
 
 function paintDelegateCardState(sid, status) {

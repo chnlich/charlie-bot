@@ -28,19 +28,6 @@ pub enum OpcodeTag {
   Equal,
 }
 
-/// Find the earliest longest equal block within the supplied half-open ranges.
-pub fn find_longest_match<T: Eq + Hash>(
-  a: &[T],
-  b: &[T],
-  a_start: usize,
-  a_end: usize,
-  b_start: usize,
-  b_end: usize,
-) -> MatchingBlock {
-  let b_positions = build_b_positions(b);
-  find_longest_match_with_positions(a, b, a_start, a_end, b_start, b_end, &b_positions)
-}
-
 fn find_longest_match_with_positions<T: Eq + Hash>(
   a: &[T],
   b: &[T],

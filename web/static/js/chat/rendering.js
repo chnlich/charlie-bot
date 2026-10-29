@@ -104,8 +104,8 @@ function isStableRenderedMessage(el) {
 // Every finished turn (one stimulus-to-answer round, ending in a separator)
 // lives in one `.turn-wrap`: that span's own nodes in their original order,
 // plus one `.turn-row`. Folded shows the row and hides the span; open does the
-// reverse. Nothing is ever unwrapped, and the only nodes that ever move after
-// wrapping are a span's carried inputs (queued for the next round) — so a
+// reverse. Nothing is ever unwrapped. After wrapping, the only nodes that ever
+// move are a span's carried inputs, queued for the next round. So a
 // reader-expanded `N steps` bar, an open separator panel and embedded package
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
@@ -122,9 +122,9 @@ function isTurnSpanNode(el) {
 // One pass over the container's flat runs, wrapping each finished turn as
 // its separator lands. An existing wrapper is a settled turn: its span can
 // no longer change, so it only ends the run before it. Wrapping in run order
-// — not after collecting every span — is what lets one span's carried inputs
-// join the next span inside this same derive: wrapTurn moves them to just
-// after the new wrapper, and the run continues from there.
+// — not after collecting every span — lets one span's carried inputs join
+// the next span inside this same derive. wrapTurn moves them to just after
+// the new wrapper, and the run continues from there.
 function collectTurns(root) {
   let nodes = [];
 
@@ -250,8 +250,8 @@ function renderedNodeText(node) {
   return Array.from(node.childNodes).map(renderedNodeText).join('\n');
 }
 
-// `.prose-msg[data-raw]` carries the message's own unrendered markdown; a plain
-// bubble keeps its text in `.whitespace-pre-wrap`, which is also what leaves the
+// `.prose-msg[data-raw]` carries the message's own unrendered markdown. A plain
+// bubble keeps its text in `.whitespace-pre-wrap`, which also leaves the
 // input-mode badge and the time div out of the first line.
 function messageSourceText(el) {
   const prose = el.querySelector('.prose-msg');
@@ -381,9 +381,9 @@ function wrapTurn(root, turn) {
   turn.nodes.forEach(node => wrap.appendChild(node));
   installTurnFoldFromTurn(wrap, turn);
   installTurnCollapseControl(turn.separator);
-  // The span's carried inputs were queued for a later round: move their nodes
-  // to just after this wrapper — the same moment the fold nodes move into
-  // the band — so the next span opens with them.
+  // Move the span's carried inputs, queued for a later round, to just after
+  // this wrapper. That is the same moment the fold nodes move into the band,
+  // so the next span opens with them.
   if (turn.carried.length) {
     const afterWrap = wrap.nextSibling;
     turn.carried.forEach(node => root.insertBefore(node, afterWrap));
@@ -561,20 +561,20 @@ function deliveryLinksHtml(msg, sessionId) {
 }
 
 // A passage folds behind a button when it runs past three lines, or past a
-// weight of 360 where each wide (CJK) code point counts 2: the child report
-// card's rule, which the worker summary card's closing passages share.
+// weight of 360 where each wide (CJK) code point counts 2. That is the child
+// report card's rule, and the worker summary card's closing passages share it.
 function isLongPassage(text) {
   let weight = 0;
   for (const ch of String(text)) weight += wc2chIsWide(ch.codePointAt(0)) ? 2 : 1;
   return String(text).split('\n').length > 3 || weight > 360;
 }
 
-// A worker transcript's per-Run header (a system line of kind run_header):
-// kind · backend · state, with the state dot in the colors the retired leaf
-// card used — a queued Run amber, a failed one red — and beneath it a failed
-// Run's own error text in full, a launch-failed Run's no-output-log note, and
-// the task spec / launch prompt link row (gray placeholders when a ref is
-// missing).
+// A worker transcript's per-Run header (a system line of kind run_header)
+// shows kind · backend · state. The state dot keeps the colors the retired
+// leaf card used: a queued Run amber, a failed one red. Beneath the line sit
+// a failed Run's own error text in full, a launch-failed Run's no-output-log
+// note, and the task spec / launch prompt link row. Missing refs show gray
+// placeholders there.
 const RUN_HEADER_DOT_COLORS = {
   running: 'bg-blue-500', success: 'bg-green-500', completed: 'bg-green-500',
   queued: 'bg-amber-400', withheld: 'bg-amber-400',
@@ -587,9 +587,9 @@ function runHeaderNoteHtml(msg, runId) {
     + 'Worker never started, so this Run has no output log.</div>';
 }
 
-// A run's error text renders its first line; the remaining lines fold behind
-// one "N more lines" button that swaps the hidden block in — a dead process's
-// hundred-line stderr stays one line until the reader opens it.
+// A run's error text renders its first line. The remaining lines fold behind
+// one "N more lines" button, and that button swaps the hidden block in. A
+// dead process's hundred-line stderr stays one line until the reader opens it.
 function errorLinesToggleHtml(text) {
   var full = String(text || '');
   if (!full.includes('\n')) return wrapWideChars(escapeHtml(full));
@@ -745,7 +745,7 @@ function renderDelegateMetadata(msg, sessionId) {
 
 // Every rendered message wrapper carries messageIdentityAttrs: the turn fold,
 // scroll anchoring, and the render harnesses address rows through the
-// data-message-* hooks, so a role branch must not hand-build the open tag.
+// data-message-* hooks. A role branch must not hand-build the open tag.
 function openMessageWrapper(layoutClass, msg) {
   return "<div class=\"" + layoutClass + "\"" + messageIdentityAttrs(msg) + ">";
 }
@@ -937,8 +937,8 @@ function renderMessage(msg, sessionId) {
   return "";
 }
 
-// A live message appends to the engine's store when the container is hosted;
-// the engine renders it synchronously (like the legacy path), materializes
+// A live message appends to the engine's store when the container is hosted.
+// The engine renders it synchronously, like the legacy path, then materializes
 // the projection and pins the bottom when the reader is there.
 function ingestLiveMessage(msg, sessionId, forceScroll) {
   var container = document.getElementById("messages");
@@ -968,8 +968,8 @@ function _appendRenderedMessage(html, forceScroll) {
 function appendMessageObject(msg, sessionId, forceScroll) {
   // Default: a user message follows (the local send path). Callers that
   // deliver messages the reader did not produce — a WS arrival from another
-  // client, a catch-up page — pass false and leave the follow decision to the
-  // engine's pin intent.
+  // client, a catch-up page — pass false. The engine's pin intent then makes
+  // the follow decision.
   const follow = forceScroll !== undefined ? forceScroll : msg.role === "user";
   if (ingestLiveMessage(msg, sessionId, follow)) return;
   _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), follow);

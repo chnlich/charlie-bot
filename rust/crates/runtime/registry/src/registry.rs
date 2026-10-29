@@ -859,11 +859,6 @@ pub trait BackendLifecycle: Send + Sync {
     ""
   }
 
-  /// The same name as a noun phrase in a message.
-  fn account_subject(&self) -> &'static str {
-    ""
-  }
-
   /// The login whose transcript store holds the session's conversation; `None` when unrecorded.
   fn account_label(&self, _meta: &SessionMetadata) -> Option<String> {
     None

@@ -1,7 +1,7 @@
 //! Sidebar contributions (`src/runtime/hooks/sidebar_contributions.py`): what a feature adds to sidebar rows and to
-//! session housekeeping. The session store names no feature; it asks the registered contributions at four moments:
-//! the sidebar probe reads `row_flags` and watches `watched_files`, a fork or an elone calls `copy_on_fork`, a
-//! dropped session calls `drop_runtime_state`, and the sidebar listings call `view_member`.
+//! session housekeeping. The session store names no feature; it asks the registered contributions at three moments:
+//! the sidebar probe reads `row_flags` and watches `watched_files`, a fork or an elone calls `copy_on_fork`, and the
+//! sidebar listings call `view_member`.
 
 use std::path::Path;
 
@@ -24,9 +24,6 @@ pub trait SidebarContribution: Send + Sync {
   fn copy_on_fork(&self, _parent_dir: &Path, _child_dir: &Path) -> anyhow::Result<()> {
     Ok(())
   }
-
-  /// Drop this feature's in-memory state for one session.
-  fn drop_runtime_state(&self, _session_id: &str) {}
 
   /// The key of the sidebar view whose root `meta` is, or `None`. A view lists its roots and every row below them.
   fn view_member(&self, _meta: &SessionMetadata) -> Option<&'static str> {

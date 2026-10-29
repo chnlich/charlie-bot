@@ -257,6 +257,16 @@ async fn page_lists_seeded_models_with_output_totals() {
 }
 
 #[tokio::test]
+async fn an_empty_ledger_renders_an_empty_state_without_the_charts() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  let body = page_body(&features, &read_page_ledger(&features)).await;
+  assert!(body.contains("id=\"usage-empty\""), "the page marks its empty state");
+  assert!(!body.contains("id=\"c_total\"") && !body.contains("id=\"tbl\""), "no chart or table renders");
+  assert!(data_rows(&body).is_empty(), "the payload carries no rows");
+}
+
+#[tokio::test]
 async fn counted_fallback_row_carries_a_lower_bound_and_native_rows_do_not() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());

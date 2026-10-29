@@ -42,43 +42,48 @@
 </head>
 <body class="dark bg-slate-900 text-slate-100 min-h-screen">
 
-  <!-- Top bar -->
-  <header class="sticky top-0 z-10 bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
-    <a href="/?session={{ session_id }}"
-       class="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors text-sm">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-      </svg>
-      Back
-    </a>
-    <div class="h-4 w-px bg-slate-700"></div>
-    <h1 class="text-sm font-semibold text-slate-200 truncate flex-1">
-      <span class="text-slate-500 mr-1">Events:</span>{{ session.name }}
-    </h1>
-    <a href="{{ events_url }}" download aria-label="Download JSONL"
-       class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-      </svg>
-      <span class="events-download-label">Download JSONL</span>
-    </a>
-    <span id="event-count" class="text-xs text-slate-500"></span>
-  </header>
+  <!-- The top bar and the filter bar are one sticky block with an opaque background. A sticky
+       offset on the filter bar alone leaves a gap under the header. A translucent layer lets
+       the event rows scrolling underneath show through the filter's own controls. -->
+  <div class="sticky top-0 z-10 bg-slate-900">
+    <!-- Top bar -->
+    <header class="bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
+      <a href="/?session={{ session_id }}"
+         class="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors text-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Back
+      </a>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <h1 class="text-sm font-semibold text-slate-200 truncate flex-1">
+        <span class="text-slate-500 mr-1">Events:</span>{{ session.name }}
+      </h1>
+      <a href="{{ events_url }}" download aria-label="Download JSONL"
+         class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        <span class="events-download-label">Download JSONL</span>
+      </a>
+      <span id="event-count" class="text-xs text-slate-500"></span>
+    </header>
 
-  <!-- Filter bar -->
-  <div class="events-filter border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900/80 sticky top-14 z-10">
-    <label class="text-xs text-slate-500">Filter by type:</label>
-    <input id="type-filter"
-           type="text"
-           placeholder="e.g. user, assistant, result …"
-           class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 text-slate-300 placeholder-slate-600 w-48">
-    <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
-      <input id="expand-all" type="checkbox" class="accent-blue-500">
-      Expand all
-    </label>
-    <button onclick="clearFilter()"
-            class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+    <!-- Filter bar -->
+    <div class="events-filter border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900">
+      <label class="text-xs text-slate-500">Filter by type:</label>
+      <input id="type-filter"
+             type="text"
+             placeholder="e.g. user, assistant, result …"
+             class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 text-slate-300 placeholder-slate-600 w-48">
+      <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+        <input id="expand-all" type="checkbox" class="accent-blue-500">
+        Expand all
+      </label>
+      <button onclick="clearFilter()"
+              class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+    </div>
   </div>
 
   <!-- Event list -->

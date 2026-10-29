@@ -1363,7 +1363,6 @@ name = "charliebot-usage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-claude-code",
  "charliebot-codex",

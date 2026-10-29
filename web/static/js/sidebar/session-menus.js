@@ -28,8 +28,9 @@ function desktopSessionMenuItems(attrs, sessionId) {
 }
 
 // The touch menu's star item reads the row's starred state off the star
-// button at open time -- filters.js's toggleSessionStar repaints it in place
-// (the text-yellow-400 flip), so the class never goes stale between renders.
+// button at open time. filters.js's toggleSessionStar repaints that button
+// in place (the text-yellow-400 flip), so the class never goes stale
+// between renders.
 function touchStarItem(sessionId) {
   const star = document.getElementById('star-' + sessionId);
   const starred = !!star && star.classList.contains('text-yellow-400');
@@ -47,8 +48,8 @@ function openSessionRowMenu(anchor, sessionId) {
   }
   const items = [];
   if (window.matchMedia('(hover: none)').matches) {
-    // Touch: the direct buttons are hidden behind the gear, so the menu
-    // leads with the star toggle and the child creation and trails with the
+    // Touch: the direct buttons are hidden behind the gear. So the menu
+    // leads with the star toggle and the child creation, and trails with the
     // archive -- the three actions with no desktop direct button left.
     items.push(touchStarItem(sessionId));
     items.push({label: 'New child session', onSelect: () => createChildSession(sessionId)});
@@ -62,7 +63,7 @@ function openSessionRowMenu(anchor, sessionId) {
 }
 
 // The archived row's Settings menu: each item keeps its old direct button's
-// condition -- a task-tree child moves with its parent (no group move) -- and
+// condition. A task-tree child moves with its parent (no group move), and
 // the delete keeps its red danger styling. Touch leads with the star toggle
 // and Unarchive (the direct buttons a touch row hides); a child's menu keeps
 // the separator around the group move's absence.
@@ -79,8 +80,8 @@ function openArchivedRowMenu(anchor, sessionId) {
       onSelect: () => showGroupSelector(sessionId, attrs.currentGroup || null)});
   }
   // The delete rides a separator wherever the menu has an item above it: on
-  // touch always, on desktop only when the group move is present (a desktop
-  // child's menu is the delete alone).
+  // touch always, and on desktop only when the group move is present. A
+  // desktop child's menu is the delete alone.
   if (!attrs.taskParent || touch) {
     items.push({separator: true});
   }
@@ -90,7 +91,7 @@ function openArchivedRowMenu(anchor, sessionId) {
 }
 
 // The named group header's Settings menu: the gear reads the group name off
-// its own data attribute at click time (no module-level state), and each item
+// its own data attribute at click time (no module-level state). Each item
 // keeps its old direct button's call. The registered items lead the menu
 // (registerGroupMenuItem).
 function openGroupHeaderMenu(anchor) {

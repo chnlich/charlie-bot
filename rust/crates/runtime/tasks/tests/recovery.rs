@@ -3182,10 +3182,7 @@ async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() ->
   template["id"] = json!(session_id);
   let session_dir = stack.store().session_dir(session_id);
   std::fs::create_dir_all(charliebot_store::layout::data_dir(&session_dir))?;
-  std::fs::write(
-    charliebot_store::layout::metadata_path(&session_dir),
-    serde_json::to_vec(&template)?,
-  )?;
+  std::fs::write(charliebot_store::layout::metadata_path(&session_dir), serde_json::to_vec(&template)?)?;
   std::fs::write(
     charliebot_store::layout::chat_events_path(&session_dir),
     "{\"id\": \"e1\", \"type\": \"user\", \"content\": \"hello from an imported chat\"}\n",

@@ -13,13 +13,13 @@ use crate::layout;
 use crate::metadata::SessionMetadata;
 use crate::{Store, StoreError, StoreResult};
 
-/// The event types that set a task-tree boundary. Each one starts with [`BOUNDARY_EVENT_PREFIX`], so one search for
-/// that prefix finds every candidate and the exact match rules a false one out.
-const BOUNDARY_EVENT_TYPES: [&[u8]; 4] = [b"task_created", b"task_imported", b"task_closed", b"task_reopened"];
-/// The prefix every boundary event type starts with.
-const BOUNDARY_EVENT_PREFIX: &[u8] = b"task_";
-/// The event type of a prompt change: the boot pass compares the newest one against the metadata's prompt ref.
-const PROMPT_CHANGED_EVENT_TYPE: &[u8] = b"prompt_changed";
+/// The event types that set a task-tree boundary or a prompt fact: a history holding any of them still has a node
+/// for the boot pass to reconcile.
+const TASK_EVENT_TYPES: [&str; 5] = ["task_created", "task_imported", "task_closed", "task_reopened", "prompt_changed"];
+/// The JSON key whose string value is an event's type.
+const TYPE_KEY: &[u8] = b"\"type\"";
+/// The longest task event name, an upper bound on the bytes a `"type"` value needs to hold.
+const MAX_EVENT_TYPE_LEN: usize = 16;
 
 /// The error a task read returns for a session whose history holds no creation or import boundary.
 pub fn not_a_task_tree_node(session_id: &str) -> StoreError {
@@ -83,17 +83,74 @@ fn file_holds_task_event(path: &Path) -> StoreResult<bool> {
   Ok(holds_task_event(&map))
 }
 
-/// Whether the bytes name a task boundary or prompt-change event anywhere. A boundary event type appears as its own
-/// word in the JSON, so a plain substring search finds every one and reads the event types before a parse would.
+/// Whether any `"type"` value names a task boundary or prompt-change event. The value is read as a JSON string, so an
+/// escaped spelling (`task_created`) counts, as it does for the fold that parses the event.
 fn holds_task_event(bytes: &[u8]) -> bool {
-  // The boundary search goes first: a node's creation fact stands at its head, so a node answers without reading
-  // the rest. A prompt change can stand anywhere, so its search runs only once no boundary turned up.
-  if memmem::find_iter(bytes, BOUNDARY_EVENT_PREFIX)
-    .any(|at| BOUNDARY_EVENT_TYPES.iter().any(|event_type| bytes[at..].starts_with(event_type)))
-  {
-    return true;
+  let mut value = [0u8; MAX_EVENT_TYPE_LEN];
+  memmem::find_iter(bytes, TYPE_KEY).any(|at| {
+    let Some(len) = type_value(&bytes[at + TYPE_KEY.len()..], &mut value) else {
+      return false;
+    };
+    TASK_EVENT_TYPES.iter().any(|event_type| value[..len] == event_type.as_bytes()[..])
+  })
+}
+
+/// The string value that follows a `"type"` key: the colon, then a JSON string decoded into `value`, whose length is
+/// returned. A value longer than `value`, unterminated, or not a string is absent.
+fn type_value(rest: &[u8], value: &mut [u8; MAX_EVENT_TYPE_LEN]) -> Option<usize> {
+  let rest = trim_space(rest).strip_prefix(b":")?;
+  let rest = trim_space(rest).strip_prefix(b"\"")?;
+  let mut len = 0;
+  let mut index = 0;
+  while index < rest.len() {
+    let byte = match rest[index] {
+      b'"' => return Some(len),
+      b'\\' => {
+        index += 1;
+        match rest.get(index)? {
+          b'"' => b'"',
+          b'\\' => b'\\',
+          b'/' => b'/',
+          b'b' => 0x08,
+          b'f' => 0x0c,
+          b'n' => b'\n',
+          b'r' => b'\r',
+          b't' => b'\t',
+          b'u' => {
+            let code = hex4(rest.get(index + 1..index + 5)?)?;
+            index += 4;
+            // Only an ASCII escape can spell a type name; any other code unit is written as a byte no name holds.
+            u8::try_from(code).unwrap_or(0xff)
+          }
+          _ => return None,
+        }
+      }
+      byte => byte,
+    };
+    *value.get_mut(len)? = byte;
+    len += 1;
+    index += 1;
   }
-  memmem::find(bytes, PROMPT_CHANGED_EVENT_TYPE).is_some()
+  None
+}
+
+/// The value of four hex digits, or `None` when one of them is not a hex digit.
+fn hex4(digits: &[u8]) -> Option<u32> {
+  digits.iter().try_fold(0, |value, digit| {
+    let digit = (*digit as char).to_digit(16)?;
+    Some(value * 16 + digit)
+  })
+}
+
+/// The bytes before the first byte that is not JSON structural whitespace.
+fn trim_space(mut bytes: &[u8]) -> &[u8] {
+  while let Some((first, rest)) = bytes.split_first() {
+    if !matches!(first, b' ' | b'\t' | b'\r' | b'\n') {
+      break;
+    }
+    bytes = rest;
+  }
+  bytes
 }
 
 #[cfg(test)]
@@ -112,24 +169,28 @@ mod tests {
   }
 
   #[test]
-  fn a_boundary_or_prompt_word_is_found_wherever_it_stands() {
+  fn a_type_value_names_a_task_event_however_it_is_spelled() {
     assert!(holds_task_event(br#"{"id": "e1", "type": "task_created", "actor": "user"}"#));
     assert!(holds_task_event(br#"{"type":"task_closed"}"#));
     assert!(holds_task_event(br#"{"type": "prompt_changed", "scope": "node"}"#));
+    assert!(holds_task_event(br#"{"type" : "task_reopened"}"#));
+    assert!(holds_task_event(br#"{"type": "task_imported"}"#));
+    // An escaped spelling parses to the same type, so the scan reads the value rather than the raw bytes.
+    assert!(holds_task_event("{\"type\": \"task\\u005fcreated\"}".as_bytes()));
+    assert!(holds_task_event("{\"type\": \"user\"}\n{\"type\": \"task_closed\"}".as_bytes()));
     assert!(!holds_task_event(br#"{"id": "e1", "type": "user", "content": "task list"}"#));
     assert!(!holds_task_event(br#"{"type": "assistant", "content": "the task_runner is slow"}"#));
     assert!(!holds_task_event(br#"{"type": "task_closer"}"#));
+    assert!(!holds_task_event(br#"{"type_hint": "task_created"}"#));
+    assert!(!holds_task_event(br#"{"type": "task_created"#));
   }
 
   #[test]
   fn an_imported_chat_log_holds_no_task_node() {
     let home = tempfile::tempdir().unwrap();
     let store = crate::task_tree::tests::make_store(home.path());
-    let meta = write_imported_chat(
-      &store,
-      "imported-chat",
-      "{\"id\": \"e1\", \"type\": \"user\", \"content\": \"hello\"}\n",
-    );
+    let meta =
+      write_imported_chat(&store, "imported-chat", "{\"id\": \"e1\", \"type\": \"user\", \"content\": \"hello\"}\n");
     assert!(store.has_no_task_node(&meta).unwrap());
   }
 
@@ -149,7 +210,8 @@ mod tests {
   fn a_boundary_event_in_an_archive_keeps_the_node() {
     let home = tempfile::tempdir().unwrap();
     let store = crate::task_tree::tests::make_store(home.path());
-    let meta = write_imported_chat(&store, "archived-task", "{\"id\": \"e2\", \"type\": \"user\", \"content\": \"hi\"}\n");
+    let meta =
+      write_imported_chat(&store, "archived-task", "{\"id\": \"e2\", \"type\": \"user\", \"content\": \"hi\"}\n");
     let archives = layout::archives_dir(&store.session_dir(&meta.id));
     fs::create_dir_all(&archives).unwrap();
     fs::write(archives.join("chat_events.1.jsonl"), "{\"id\": \"e1\", \"type\": \"task_closed\"}\n").unwrap();

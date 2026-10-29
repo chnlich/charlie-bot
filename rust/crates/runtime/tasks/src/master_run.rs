@@ -557,7 +557,6 @@ impl RunProcess for TurnProcess<'_> {
           })
         })
       });
-      self.tracking.set_active_runner(&session_id, Arc::clone(&runner));
       let run_future = runner.run(request);
       tokio::pin!(run_future);
       let mut watch = watch;
@@ -568,7 +567,6 @@ impl RunProcess for TurnProcess<'_> {
               Ok(outcome) => break outcome,
               Err(error) => {
                 let _ = runner.terminate().await;
-                self.tracking.clear_active_runner(&session_id);
                 return Err(error);
               }
             }
@@ -611,7 +609,6 @@ impl RunProcess for TurnProcess<'_> {
             let _ = stream_event.acknowledged.send(ack_result);
             if let Err(error) = result {
               runner.terminate().await?;
-              self.tracking.clear_active_runner(&session_id);
               return Err(error);
             }
           }
@@ -630,14 +627,12 @@ impl RunProcess for TurnProcess<'_> {
               } else {
                 runner.terminate().await?;
               }
-              self.tracking.clear_active_runner(&session_id);
               *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(covered);
               return Err(TurnCancelled.into());
             }
           }
         }
       };
-      self.tracking.clear_active_runner(&session_id);
       if let Some(covered) = *self.cancelled.lock().expect("cancel state mutex is not poisoned") {
         let _ = covered;
         return Err(TurnCancelled.into());

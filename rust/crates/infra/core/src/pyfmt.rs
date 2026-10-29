@@ -688,6 +688,28 @@ mod tests {
   }
 
   #[test]
+  fn ascii_json_str_matches_the_pre_change_escaper_on_every_input_class() {
+    // `reference_ascii_json_str` is the pre-change escaper, `format!` and all. One input per class the
+    // escaper discriminates: characters that pass raw, the control set, the two structural characters,
+    // and text at every code-point width.
+    let inputs = [
+      "",
+      "plain ascii 09 AZ az ~",
+      "\u{0}\u{1}\u{7}\u{8}\t\n\u{b}\u{c}\r\u{1f}\u{7f}",
+      "\"\\'/<>&=",
+      "caf\u{e9} \u{2014} \u{4e2d}\u{6587} \u{1f600} \u{10348}",
+      "\u{0}a\"b\\c\t\u{e9}\u{4e2d}\u{1f600}~",
+    ];
+    for text in inputs {
+      let mut new = String::new();
+      write_ascii_json_str(&mut new, text);
+      let mut old = String::new();
+      reference_ascii_json_str(&mut old, text);
+      assert_eq!(new, old, "{text:?}");
+    }
+  }
+
+  #[test]
   fn ascii_json_str_escapes_everything_above_the_tilde() {
     let mut escaped = String::new();
     write_ascii_json_str(&mut escaped, "quote\" back\\ nl\newline\r tab\t del\u{7f} \u{e9} \u{2014} \u{1f600}");

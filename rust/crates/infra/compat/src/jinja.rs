@@ -320,6 +320,25 @@ mod tests {
   }
 
   #[test]
+  fn html_safe_json_matches_the_four_replace_passes_on_every_input_class() {
+    // One input per class the escaping discriminates: no match, each match, and matches beside ASCII,
+    // control characters, quotes, backslashes and non-ASCII text.
+    let inputs = [
+      "",
+      "plain ascii",
+      "<script>alert('&')</script>",
+      "\u{0}\u{1}\t\n\u{8}\r\u{1f}\"\\",
+      "caf\u{e9} \u{2014} \u{4e2d}\u{6587} \u{1f600}",
+      "<>&'<>&'",
+      "\u{4e2d}<a href=\"x\">&'\u{1f600}\\",
+    ];
+    for text in inputs {
+      let old = text.replace('<', "\\u003c").replace('>', "\\u003e").replace('&', "\\u0026").replace('\'', "\\u0027");
+      assert_eq!(html_safe_json(text.to_string()), old, "{text:?}");
+    }
+  }
+
+  #[test]
   fn urlencode_keeps_slashes_for_a_scalar_and_joins_pairs_for_a_mapping() {
     assert_eq!(render_str("{{ v|urlencode }}", json!({"v": "a b/\u{b7}~"})), "a%20b/%C2%B7~");
     assert_eq!(urlencode(Value::from_serialize(json!([["a", 1], ["b c", "x/y"]]))).unwrap(), "a=1&b+c=x%2Fy");

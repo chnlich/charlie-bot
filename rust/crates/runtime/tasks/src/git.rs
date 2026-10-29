@@ -59,6 +59,28 @@ pub fn clear_git_program_override() {
   *GIT_PROGRAM_OVERRIDE.lock().expect("git program override is not poisoned") = None;
 }
 
+/// The write-class limit a test set in place of the hook value; `None` keeps the hook value.
+#[cfg(feature = "test-hooks")]
+static GIT_WRITE_TIMEOUT_OVERRIDE: Mutex<Option<Duration>> = Mutex::new(None);
+
+/// Holds a write-limit override; dropping it restores the hook value, even when the test panics.
+#[cfg(feature = "test-hooks")]
+pub struct GitWriteTimeoutOverride;
+
+#[cfg(feature = "test-hooks")]
+impl Drop for GitWriteTimeoutOverride {
+  fn drop(&mut self) {
+    *GIT_WRITE_TIMEOUT_OVERRIDE.lock().expect("git write timeout override is not poisoned") = None;
+  }
+}
+
+/// Replaces the write-class limit until the returned guard drops.
+#[cfg(feature = "test-hooks")]
+pub fn override_git_write_timeout(limit: Duration) -> GitWriteTimeoutOverride {
+  *GIT_WRITE_TIMEOUT_OVERRIDE.lock().expect("git write timeout override is not poisoned") = Some(limit);
+  GitWriteTimeoutOverride
+}
+
 #[cfg(feature = "test-hooks")]
 fn git_program() -> (String, Vec<String>) {
   GIT_PROGRAM_OVERRIDE
@@ -79,10 +101,12 @@ fn test_hook_git_timeout() -> Duration {
   Duration::from_millis(300)
 }
 
-/// The worktree-add write limit; the hook value keeps the hung-worktree-add test under a second.
+/// The worktree-add write limit: the hook value keeps the hung-worktree-add test under a second,
+/// unless a test replaced it with [`override_git_write_timeout`].
 #[cfg(feature = "test-hooks")]
 pub fn subprocess_git_write_timeout() -> Duration {
-  test_hook_git_timeout()
+  let limit = *GIT_WRITE_TIMEOUT_OVERRIDE.lock().expect("git write timeout override is not poisoned");
+  limit.unwrap_or_else(test_hook_git_timeout)
 }
 
 /// The per-attempt remote limit; the hook value keeps the hung-remote tests under a second.

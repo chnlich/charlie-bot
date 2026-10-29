@@ -103,8 +103,9 @@ The gate has two parts: the genre's mechanical assertions and one cold read.
 
 A waiting page (`prompts/web_reply.md`, Form) has the genre `waiting`.
 
-- Before the status set that links the page, run `charliebot artifact check <page-file> --genre waiting --assertions-only`.
+- When you want a page's failures before the status set, run `charliebot artifact check <page-file> --genre <genre> --assertions-only`.
   A broken page then stops before the user opens it.
+- The status set that links a page runs the fork assertions of its genre and refuses a broken page.
 - The cold read of `charliebot web status set` reads the item together with its page.
 - Count that cold read as the page's cold read, and start no second cold read for the page.
   Each Waiting on you item then takes one cold read.
@@ -163,6 +164,7 @@ Each item below is a signal to revise the page:
 - Answer 7 lists one or more terms.
 - Answer 8 is NOT STATED, in whole or in part, on a page that reports a run.
 - On a plan or understanding page, answer 3 omits a decision that the page asks for.
+- Answer 3 contains FOLDED, or omits an option that a visible option line shows.
 - A re-read point in answer 5 names a decision fork (a div.fork block) in section 1, or a jump between a fork and another section.
 - A re-read point in answer 5 names the run, its variables, or the difference between the compared legs.
 

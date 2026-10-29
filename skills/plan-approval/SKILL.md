@@ -47,8 +47,9 @@ An understanding page lists the divergences of a request that admits several rea
   deliverable through two or three concrete examples; acceptance criteria, each a trigger
   condition plus an observable behavior (EARS phrasing, "WHEN <condition> THE SYSTEM
   SHALL <behavior>", is an example shape, not a requirement); non-goals; numbered
-  divergences rendered as `div.fork` blocks, each carrying the fork grammar's
-  folded explainer (block kit section 5, `prompts/plan_template.html`); Linear.
+  divergences rendered as `div.fork` blocks, each carrying its option lines outside folds
+  and the fork grammar's folded explainer (block kit section 5, `prompts/plan_template.html`);
+  Linear.
 - The Linear block carries the whitelist gate, the two-path recall, the candidate or
   draft choice, the take off gate, and the identifier readback. It appears only for
   repos marked Linear-tracked on the memory entry `charliebot/workspace-repos`, read
@@ -99,7 +100,7 @@ An understanding page lists the divergences of a request that admits several rea
   section 1 states the goal in its own words.
 - The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in
   `prompts/plan_template.html`); the always-visible minimum here is the goal sentence and
-  each divergence's question, recommendation, and trade lines.
+  each divergence's question, option lines, recommendation, and trade lines.
 
 ## Plan
 

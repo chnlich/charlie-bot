@@ -78,7 +78,9 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Write the decision or the action in the item's `text`, in one sentence.
 - Write in `context` what the line does now and why the decision comes now, in one or two sentences.
   The panel then shows why the item waits, before the user opens the page.
-- Write on one HTML page the options, the consequence of each, your recommendation and the evidence links.
+- When a decision needs a page, write each option on its own visible line with its name, action and consequence.
+- When a decision needs a page, also write your recommendation and the evidence links on it.
+  The user then reads every option, and the evidence for it, on one page.
 - Set the item's `link` to that page.
   The user then reads the options with their layout, and comments on the page reach this session.
 - When the item decides on a plan page or an understanding page, use that page.
@@ -86,10 +88,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - For any other item, write the page body to a fragment file.
 - Then run `charliebot artifact wrap --genre waiting --output artifacts/waiting_<slug>.html <fragment>`.
   The command adds the head and style of the decision-page template.
-- On that page, show the options as one `div.fork` block.
+- On that page, show the options as one `div.fork` block whose option lines sit outside every folded block.
   The user then reads every decision in one layout.
-- Before the status set, pass the page through the gate for waiting pages (`file-server` skill, Cold-Read Gate).
-  The page then reaches the user checked, with one cold read for its item.
+- When you want the failures before the status set, pass the page through the gate (`file-server` skill, Cold-Read Gate).
+  The status set then refuses a failing page before any cold read starts.
 - When the user acts on another page, such as a login page, link that page from the item's page.
   The item's page then holds the context, and the user reaches the action from it.
 - The user answers your Waiting on you items in your own session.
@@ -138,11 +140,17 @@ Remaining lists the milestones between the session and its Goal, so the user rea
 - The command gives each remaining Waiting on you item to a cold reader, unless the reader has already read it as it
   stands.
 - The cold reader reads the item, and the page at its link when this host serves that page. It has no other context.
+- When an item's linked page fails a fork assertion of its genre, fix the page, then run the set again.
+  The reader then sees only pages that pass those fork assertions.
+  The command takes the genre from the page's file-name prefix: plan, understanding, sitrep, debug, explain or waiting.
+  A linked page whose name has no such prefix is not checked.
+  When an assertion fails, the command prints each FAIL line and stores nothing.
 - The reader restates the decision, the line's state, the options with your recommendation, and the evidence links.
   It also names the kind of step.
 - When the command prints these restatements, it stored nothing.
 - Compare each restatement with your intent:
-  - When a part reads NOT STATED or differs from your intent, revise the item.
+  - When a part reads NOT STATED, reads FOLDED, or differs from your intent, revise the item.
+    The user then reads each option where the page shows it.
   - When the reader names an undoable step, check that the item holds no decision that only the user makes.
     Then remove the item, and carry out the step on your recommendation.
     The list then holds only what the next milestone needs from the user.

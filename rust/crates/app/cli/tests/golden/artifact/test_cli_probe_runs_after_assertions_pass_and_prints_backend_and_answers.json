@@ -25,7 +25,7 @@
   },
   "responses": [],
   "expect": {
-    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-options\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\ncold read of {root}/page.html\npage sha256 418107106ce33dd7ee54bbc959255734682eac141458e098c9375532c38b6250\nbackend alpha\n(1) answered.\n",
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-options\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\ncold read of {root}/page.html\npage sha256 0d6d95fc03968a7ef42af03285e87e10858b1cbe3491dcc1a6a3aa52834c17a5\nbackend alpha\n(1) answered.\n",
     "stderr": "",
     "exit": 0,
     "requests": []

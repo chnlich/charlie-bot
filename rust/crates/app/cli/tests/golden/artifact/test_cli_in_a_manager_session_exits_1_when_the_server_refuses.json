@@ -56,7 +56,7 @@
             "genre": "sitrep",
             "trigger": "where are we?"
           },
-          "request_id": "cold-read:sess-manager-2:418107106ce3:{timestamp}"
+          "request_id": "cold-read:sess-manager-2:0d6d95fc0396:{timestamp}"
         }
       },
       {

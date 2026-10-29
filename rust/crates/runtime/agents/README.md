@@ -55,7 +55,7 @@ This crate owns the process transport below the agent backends and the launch ma
 | `python_json::{loads, loads_text, LoadError, MAX_DEPTH}` (`charliebot_compat::python_json`, re-exported here) | `json.loads` on the stored prompt snapshot in `src/runtime/api/sessions.py:1589-1688`; CPython's `_json.c` scanner and `detect_encoding` |
 | `cli_base::{LOCAL_NO_PROXY_ENTRIES, SKIP_PERMISSIONS_FLAG, IMAGE_MIME_BY_EXT, CliHost, resolve_binary, prepend_path_dir, merge_local_no_proxy, apply_proxy_env, strip_google_api_keys, framed_prompt, truthy, str_field, required_str, int_field}` | `src/runtime/agent_process/base.py:33` (`SKIP_PERMISSIONS_FLAG`), `:125-218` (`USER_LOCAL_BIN`, `IMAGE_MIME_BY_EXT`, the helpers), `:705-714` (`_effective_prompt`, `_frame_system_prompt`); Python truthiness and `str.strip`, `str.split` |
 | `one_shot_text` (the dispatcher) | `src/runtime/agent_process/base.py:1156-1190` (the polymorphic `one_shot_text`; the tool-capable fallback is `agent_one_shot_text`) |
-| `RunRequest.uploaded_files`, `RunOutcome` identity and follow as `Option`, and `RunOutcome` for a run with no process | `src/runtime/agent_process/base.py:653-708`; `src/runtime/master_cc_run.py:575` (the manager turn passes the item's uploads); `charlie_code.py:87-117` (the upload gate) |
+| `RunRequest.uploaded_files` and `RunOutcome` for a run with no process | `src/runtime/agent_process/base.py:653-708`; `src/runtime/master_cc_run.py:575` (the manager turn passes the item's uploads); `charlie_code.py:87-117` (the upload gate) |
 | `runner::AgentRunner::exit_code` and the final-stdout run (`TransportKind::FinalStdout`) | `src/backends/antigravity/antigravity_cli.py:69-165` (stdout tee, the cleanup and the exit); `src/runtime/agent_process/base.py:936-1050` |
 
 ## Tests

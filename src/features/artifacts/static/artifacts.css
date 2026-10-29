@@ -141,3 +141,16 @@
   border: 0;
   background: white;
 }
+/* The plan toolbar's controls keep a minimum width: the version select, the
+   "Compare with previous" label and both buttons never shrink, and a native
+   select shrinks to its arrow. Their sum exceeds a phone's viewport, so below
+   640 px the plan selector takes the first line and the rest wrap beneath it. */
+@media (max-width: 639px) {
+  #plan-toolbar {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+  #plan-selector {
+    flex-basis: 100%;
+  }
+}

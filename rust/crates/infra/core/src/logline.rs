@@ -258,7 +258,10 @@ mod tests {
     ];
     assert_eq!(
       render(TIME, "info", "http_request", &fields),
-      "2026-10-29 07:11:32.244Z [info     ] http_request                   method=GET path=/api/internal/version status=200 duration_ms=5 client=127.0.0.1"
+      concat!(
+        "2026-10-29 07:11:32.244Z [info     ] http_request                   ",
+        "method=GET path=/api/internal/version status=200 duration_ms=5 client=127.0.0.1"
+      )
     );
   }
 
@@ -277,8 +280,14 @@ mod tests {
 
   #[test]
   fn a_json_line_and_its_text_line_read_to_the_same_row() {
-    let json = r#"{"event":"http_request","method":"GET","flag":true,"status":200,"nothing":null,"level":"info","timestamp":"2026-10-29T07:11:32.244911Z"}"#;
-    let text = "2026-10-29 07:11:32.244Z [info     ] http_request                   method=GET flag=true status=200 nothing=null";
+    let json = concat!(
+      r#"{"event":"http_request","method":"GET","flag":true,"status":200,"nothing":null,"#,
+      r#""level":"info","timestamp":"2026-10-29T07:11:32.244911Z"}"#
+    );
+    let text = concat!(
+      "2026-10-29 07:11:32.244Z [info     ] http_request                   ",
+      "method=GET flag=true status=200 nothing=null"
+    );
     let expected = || Row {
       event: "http_request".to_string(),
       fields: vec![

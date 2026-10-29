@@ -42,8 +42,10 @@ Follow these steps exactly:
 STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.
 <!-- section: workflow_no_reviewer -->
 No reviewer run follows this run.
-Finish the landing steps that the task spec names. The landing steps deliver your work without a reviewer.
+Without a reviewer run, finish the landing steps that the task spec names.
+The landing steps deliver your work to the base branch.
 If the task spec names no landing steps, stop after your commit and report the commit and its branch.
+The reported branch keeps the commit after the worktree is removed.
 <!-- section: workflow_quick_edit -->
 STOP here. Do NOT rebase, push, or remove the worktree. No reviewer will run; the orchestrator will handle merge/push.
 <!-- section: workflow_script_run_bindings -->

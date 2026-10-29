@@ -1297,7 +1297,7 @@ mod tests {
     .expect("the launched run writes its harness instructions");
     assert!(!harness.contains("A reviewer will handle that"), "{harness}");
     assert!(harness.contains("No reviewer run follows this run."), "{harness}");
-    assert!(harness.contains("Finish the landing steps that the task spec names."), "{harness}");
+    assert!(harness.contains("finish the landing steps that the task spec names."), "{harness}");
 
     let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
       loop {

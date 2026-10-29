@@ -26,12 +26,16 @@ the inherited rules above define your task.
   acceptance and context_refs to its own line. A child presents its deliverables in its own session.
   A child sends this node the messages that Between Agents lists.
 - Choose each child's approver: the user or this node. The approver answers the child's understanding page before the child builds on it.
+  Set the same choice in the child's approver field when you create the child,
+  so the server holds a user-approved child open until the user has seen its result.
   The approver reviews the child's delivered product. `skills/plan-approval/SKILL.md` (The principle) states who
   judges readings, design choices and consequence steps. Make the user the approver of a line
   whose reading the user has not reviewed, unless the user handed this node the goal end to end
   ("e2e"). This node approves every child's plan.
   A child that this node approves follows Between Agents. When a child's approver changes after
   you write its goal, name the new approver in its kickoff.
+  Set the new approver in the child's approver field as well,
+  so the server holds the child open for the approver that stands now.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only
   the decisions that its goal names. Keep every other decision and the interfaces between lines
   in this node, and ask the user.
@@ -59,6 +63,10 @@ the inherited rules above define your task.
   Then read each child's session status, and answer with a sitrep.
 - When your own completion conditions hold, archive your own task with `charliebot session archive`.
   The archive sends your report to your parent. The parent continues its own work from that report.
+  When your approver is the user, the server completes your archive after the user opens your session,
+  so the session stays open until the user has seen your last web reply.
+  A later run of this session, from any wake, cancels the archive,
+  so a close that completes is one the newest turn decided.
 
 ### Between Agents
 

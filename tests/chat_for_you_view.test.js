@@ -451,7 +451,8 @@ test('selecting Status leaves #messages laid out and keeps its scroll position t
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
-test('a reader scrolled into history keeps their message in place when an older page lands', () => {  const rig = forYouRig(fixture(), {clientHeight: 60});
+test('a reader scrolled into history keeps their message in place when an older page lands', () => {
+  const rig = forYouRig(fixture(), {clientHeight: 60});
   installScrollTopClamp(rig.root);
   scrollTo(rig.timers, rig.root, 0);
   assert.equal(rig.engine.pinnedIntent, false, 'an upward scroll unpins the reader');

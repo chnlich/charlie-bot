@@ -193,8 +193,9 @@ pub fn active_page_json_text(
       text.push_str(", ");
     }
     let clear = clear_unread == Some(row.meta.id.as_str());
+    let inputs_moved = previous.get(row.meta.id.as_str()) != Some(row);
     if !clear
-      && previous.get(row.meta.id.as_str()) == Some(row)
+      && !inputs_moved
       && let Some(row_text) = state.rows.get(row.meta.id.as_str())
     {
       text.push_str(row_text);
@@ -204,7 +205,13 @@ pub fn active_page_json_text(
     memo.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let row_text = render_row_text(store, row, clear)?;
     text.push_str(&row_text);
-    if !clear {
+    if clear {
+      // The active row renders without its unread mark, so its text cannot answer an ordinary request. A row whose
+      // inputs moved drops its older text here, which keeps that text from serving the next request with them.
+      if inputs_moved {
+        state.rows.remove(row.meta.id.as_str());
+      }
+    } else {
       state.rows.insert(row.meta.id.clone(), row_text);
     }
   }
@@ -489,6 +496,34 @@ mod tests {
     let active = active_page_json_text(&features.store, &page, Some(&first.id), &memo).unwrap();
     assert_eq!(active.as_str(), page_array_text(&features.store, &page, Some(&first.id)));
     assert_eq!(memo.render_calls(), rendered + 1);
+  }
+
+  /// The page corpus over given rows, with the controller fields that a listing supplies for each row.
+  fn page_rows_over(rows: Vec<Arc<SessionMetadata>>) -> PageRows {
+    let sequence_fields = rows.iter().map(|row| (row.id.clone(), Map::new())).collect();
+    PageRows { rows, derived: DerivedSidebarMap::new(), sequence_fields }
+  }
+
+  /// A row whose inputs move while it is the active session does not serve its older text to a later request.
+  #[tokio::test]
+  async fn a_moved_active_row_does_not_serve_its_older_text() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "moved-active-row", None, TaskProfile::Manager).await;
+    let memo = PageRowsMemo::default();
+
+    let page = page_rows_over(vec![Arc::new(meta.clone())]);
+    active_page_json_text(&features.store, &page, None, &memo).unwrap();
+
+    let renamed = SessionMetadata { name: "renamed while active".to_string(), ..meta.clone() };
+    let changed = page_rows_over(vec![Arc::new(renamed)]);
+    let active_text = active_page_json_text(&features.store, &changed, Some(&meta.id), &memo).unwrap();
+    let active: Vec<Value> = serde_json::from_str(active_text.as_str()).unwrap();
+    assert_eq!(active[0]["name"], "renamed while active");
+    assert_eq!(active[0]["has_unread"], false);
+
+    let ordinary_text = active_page_json_text(&features.store, &changed, None, &memo).unwrap();
+    let ordinary: Vec<Value> = serde_json::from_str(ordinary_text.as_str()).unwrap();
+    assert_eq!(ordinary[0]["name"], "renamed while active");
   }
 
   /// A page opened without a session redirects to the row that the rendered page puts first.

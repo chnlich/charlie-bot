@@ -990,15 +990,24 @@ async function loadOlderIfNeeded(container, isContinuation) {
 function renderUsageFromData(usage) {
   const indicator = document.getElementById('usage-indicator');
   if (!usage) { if (indicator) indicator.classList.add('hidden'); return; }
-  if (indicator) indicator.classList.remove('hidden');
 
   const contextTokens = usage.context_tokens;
   const contextFull = usage.context_full;
   const contextCompactAt = usage.context_compact_at;
   const hasContext = contextTokens != null && contextFull != null;
+  const hasCost = usage.total_cost_usd != null;
+
+  // The header shows readings only. A record with no reading at all keeps the
+  // indicator hidden, and a missing reading hides its own cell instead of an
+  // empty meter or "unknown".
+  if (indicator) indicator.classList.toggle('hidden', !hasContext && !hasCost);
 
   const bar = document.getElementById('usage-bar');
   const compactLine = document.getElementById('usage-compact-line');
+  // The meter track is the bar's parent element, so hiding that parent hides
+  // the track and its fill together.
+  const meter = bar ? bar.parentElement : null;
+  if (meter) meter.classList.toggle('hidden', !hasContext);
   if (bar) {
     if (hasContext) {
       const pct = contextFull > 0 ? (contextTokens / contextFull * 100) : 0;
@@ -1035,12 +1044,17 @@ function renderUsageFromData(usage) {
   }
   const text = document.getElementById('usage-text');
   if (text) {
+    // A hidden cell still holds the reading the compaction confirmation names.
+    text.classList.toggle('hidden', !hasContext);
     text.textContent = hasContext
       ? formatTokens(contextTokens) + ' / ' + formatTokens(contextFull)
       : 'unknown';
   }
   const cost = document.getElementById('usage-cost');
-  if (cost) cost.textContent = formatUsageCostValue(usage.total_cost_usd);
+  if (cost) {
+    cost.classList.toggle('hidden', !hasCost);
+    cost.textContent = formatUsageCostValue(usage.total_cost_usd);
+  }
 }
 
 // ---------------------------------------------------------------------------

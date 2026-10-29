@@ -41,6 +41,11 @@ function createElement(overrides = {}) {
     children: [],
     options: [],
     parentNode: null,
+    // The DOM's element-only view of the parent link: a node whose parent is
+    // not an element (the document) has no parentElement.
+    get parentElement() {
+      return this.parentNode && this.parentNode.tagName ? this.parentNode : null;
+    },
     classList: createClassList(overrides.className || ''),
     appendChild(child) {
       if (child && child.parentNode) child.parentNode.removeChild(child);

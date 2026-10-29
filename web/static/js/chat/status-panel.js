@@ -466,13 +466,17 @@
 
   // The Status view's show and hide, through the toggle's control. Showing it
   // hides the strip and the floating scroll-to-bottom button, which would
-  // otherwise hover over the status text.
+  // otherwise hover over the status text; hiding it puts the button back as it was.
+  let scrollButtonWasShown = false;
   function setStatusViewShown(shown) {
-    statusViewShown = Boolean(shown);
-    if (statusViewShown) {
-      const btn = document.getElementById(SCROLL_BUTTON_ID);
-      if (btn && !btn.classList.contains('hidden')) btn.classList.add('hidden');
+    const btn = document.getElementById(SCROLL_BUTTON_ID);
+    if (shown && !statusViewShown && btn) {
+      scrollButtonWasShown = !btn.classList.contains('hidden');
+      btn.classList.add('hidden');
+    } else if (!shown && statusViewShown && btn) {
+      btn.classList.toggle('hidden', !scrollButtonWasShown);
     }
+    statusViewShown = Boolean(shown);
     renderPanel();
   }
 
@@ -523,7 +527,7 @@
     panelStatus = session.web_status || null;
     panelDescendants = [];
     panelChildren = [];
-    statusViewShown = Chat.ForYou.viewFor(session) === STATUS_VIEW;
+    setStatusViewShown(Chat.ForYou.viewFor(session) === STATUS_VIEW);
     absorbWebStatusMessages(messages);
     renderPanel();
     fetchDescendants(session.id);
@@ -534,8 +538,7 @@
     panelStatus = null;
     panelDescendants = [];
     panelChildren = [];
-    statusViewShown = false;
-    renderPanel();
+    setStatusViewShown(false);
   }
 
   // A live or catch-up message of this session: the panel redraws only when a

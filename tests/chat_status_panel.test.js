@@ -79,8 +79,10 @@ function panelRig() {
   root.appendChild(stream);
   const panel = new FakeElement('DIV', {id: 'chat-status-panel', className: 'hidden'});
   const view = new FakeElement('DIV', {id: 'chat-status-view', className: 'hidden'});
+  const scrollButton = new FakeElement('BUTTON', {id: 'scroll-to-bottom', className: 'hidden'});
   const elements = new Map([
     ['messages', root], ['streaming-msg', stream], ['chat-status-panel', panel], ['chat-status-view', view],
+    ['scroll-to-bottom', scrollButton],
   ]);
   const page = {web_status: null, descendants: [], children: []};
   const statusGets = [];
@@ -120,7 +122,7 @@ function panelRig() {
   // The message list is the other suites' subject: a live message lands there
   // through the stub, and the status panel reads the message it is handed.
   context.appendMessageObject = () => {};
-  return {context, panel, view, page, statusGets, layout, FakeWebSocket: context.WebSocket};
+  return {context, panel, view, scrollButton, page, statusGets, layout, FakeWebSocket: context.WebSocket};
 }
 
 // A layout switch as platform.js makes it: the mode changes, then each callback runs with the new and old mode.
@@ -564,6 +566,21 @@ test('the strip hides while the Status view shows and returns after the switch b
   rig.context.setChatView('foryou');
   assert.equal(rig.panel.classList.contains('hidden'), false, 'For you shows the strip again');
   assert.equal(rig.view.classList.contains('hidden'), true);
+});
+
+test('the scroll-to-bottom button hides under the Status view and returns as it was', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  rig.scrollButton.classList.remove('hidden');
+  rig.context.setChatView('status');
+  assert.equal(rig.scrollButton.classList.contains('hidden'), true, 'Status hides the button');
+  rig.context.setChatView('foryou');
+  assert.equal(rig.scrollButton.classList.contains('hidden'), false, 'the return shows it again');
+
+  rig.scrollButton.classList.add('hidden');
+  rig.context.setChatView('status');
+  rig.context.setChatView('foryou');
+  assert.equal(rig.scrollButton.classList.contains('hidden'), true, 'a hidden button stays hidden');
 });
 
 test('a live web_status message redraws the strip and the shown Status view', async () => {

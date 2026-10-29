@@ -213,11 +213,13 @@
             <span class="text-xs font-mono text-slate-600 w-8 flex-shrink-0 text-right">${idx + 1}</span>
             <span class="text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
             ${time ? `<span class="text-xs text-slate-600 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
-            ${summary ? `<span class="text-xs text-slate-400 truncate">${escapeHtml(summary)}</span>` : ''}
+            <span class="event-preview text-xs text-slate-400 truncate"></span>
           </div>
           <div class="json-body ${expandAll ? '' : 'hidden'} mt-2 ml-10">
             <pre class="text-xs bg-slate-800 rounded p-3 overflow-x-auto leading-5">${syntaxHighlight(ev)}</pre>
           </div>`;
+        // A preview is a tool's input or output, so it enters the row as text and never as markup.
+        row.querySelector('.event-preview').textContent = summary;
 
         row.addEventListener('click', () => {
           const body = row.querySelector('.json-body');

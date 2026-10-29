@@ -187,7 +187,8 @@ it does.
 
 #### Length
 
-- Answer at the length of the question.
+- Answer at the length of the question. A request to understand something also gets its
+  explain page (Rich HTML Output). The chat reply then stays short, and the page carries the depth.
 - The session status stays outside the answer's length.
 - Return a revision together with the intent of each change.
 
@@ -370,5 +371,14 @@ artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
 the user opts out or the response is a brief acknowledgment. As a lead, put the page in your worker's task spec, as Direct Work states.
 
-When a diagram shows the point better than prose, draw it in the HTML page. Leave out a
-diagram that you cannot draw clearly.
+When the user asks to understand something, answer with an explain page, even for a one-sentence answer.
+The explainer row of Artifact Genres in `prompts/manager_workflows.md` defines that request.
+Post the conclusion in two or three sentences, with the page link, as the chat reply.
+The first answer then carries the diagrams and examples that the user would otherwise ask for.
+
+Open every explanation and every progress report with a diagram.
+Build each mechanism diagram from scratch.
+A reader without project background then follows the structure before the text.
+Add worked examples from real sessions.
+The reader then checks each claim on a case that really happened.
+The GRAMMAR comment of `prompts/explain_template.html` holds the figure and example standard of an explain page.

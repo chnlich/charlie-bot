@@ -444,10 +444,6 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     "claude_account"
   }
 
-  fn account_subject(&self) -> &'static str {
-    "Claude account"
-  }
-
   fn account_label(&self, meta: &SessionMetadata) -> Option<String> {
     claude_metadata::account_of(meta)
   }

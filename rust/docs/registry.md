@@ -196,7 +196,7 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 - Python: `src/runtime/hooks/sidebar_contributions.py:54` `register_sidebar_contribution`
 - Rust: `sidebar_contribution(name: &'static str, contribution: Arc<dyn SidebarContribution>)`. The trait has
-  `watched_files`, `row_flags`, `copy_on_fork`, `drop_runtime_state` and `view_member`, each defaulted.
+  `watched_files`, `row_flags`, `copy_on_fork` and `view_member`, each defaulted.
 - Example: `registry.sidebar_contribution("trace", Arc::new(TraceSidebar))?;`
 
 ### Backend types

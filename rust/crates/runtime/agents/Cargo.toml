@@ -17,7 +17,6 @@ libc.workspace = true
 memchr = "2"
 mime-db.workspace = true
 nix.workspace = true
-procfs.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 serde.workspace = true

@@ -34,6 +34,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   })?;
   registry.sidebar_contribution("artifacts", Arc::new(sidebar::ArtifactsSidebar))?;
   registry.plan_registry(plans::read_session_plans)?;
+  registry.recovery_step("headless_renderer_orphans", sweep_headless_renderer_orphans_at_startup)?;
   registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
 }
 
@@ -47,6 +48,16 @@ fn close_headless_renderer_at_shutdown(
 ) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     tokio::task::spawn_blocking(close_renderer).await??;
+    Ok(())
+  })
+}
+
+/// End the renderer browsers that an ended server or CLI left behind, on the blocking pool.
+fn sweep_headless_renderer_orphans_at_startup(
+  _features: Arc<charliebot_registry::FeatureContext>,
+) -> BoxFuture<'static, anyhow::Result<()>> {
+  Box::pin(async move {
+    tokio::task::spawn_blocking(headless_render::end_orphaned_renderers).await?;
     Ok(())
   })
 }

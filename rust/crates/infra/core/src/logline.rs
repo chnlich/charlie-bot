@@ -266,6 +266,16 @@ mod tests {
   }
 
   #[test]
+  fn an_event_with_spaces_is_quoted_and_reads_back_as_one_event() {
+    let fields = [("error".to_string(), json!("TypeError"))];
+    let line = render("2026-10-29 07:12:05.118Z", "error", "Exception in ASGI application", &fields);
+    assert_eq!(line, "2026-10-29 07:12:05.118Z [error    ] 'Exception in ASGI application' error=TypeError");
+    let row = parse(&line).expect("the line is read");
+    assert_eq!(row.event, "Exception in ASGI application");
+    assert_eq!(row.field("error"), Some("TypeError"));
+  }
+
+  #[test]
   fn every_generated_value_and_event_reads_back_unchanged_on_one_line() {
     for text in generated() {
       let fields = [("key".to_string(), Value::String(text.clone()))];

@@ -1397,6 +1397,26 @@ mod tests {
   }
 
   #[test]
+  fn the_event_verb_finds_an_event_in_a_text_log_or_a_json_log() {
+    let directory = temporary();
+    let text = directory.path().join("text.log");
+    let json = directory.path().join("json.log");
+    let ready = logline::render(STAMP, "info", "server_ready", &[("ready_in_ms".to_string(), json!(1))]);
+    fs::write(&text, format!("{ready}\n")).unwrap();
+    fs::write(
+      &json,
+      "{\"event\": \"server_ready\", \"ready_in_ms\": 1, \"level\": \"info\", \"timestamp\": \"2026-10-21T10:00:02.000000Z\"}\n",
+    )
+    .unwrap();
+
+    for log in [&text, &json] {
+      let log = log.to_string_lossy().into_owned();
+      assert_eq!(event(&[log.clone(), "server_ready".to_string()]), Ok(0), "{log}");
+      assert_eq!(event(&[log, "task_recovery_resume".to_string()]), Ok(1));
+    }
+  }
+
+  #[test]
   fn the_backend_choice_takes_the_first_option_with_both_values() {
     let directory = temporary();
     let config = directory.path().join("config.yaml");

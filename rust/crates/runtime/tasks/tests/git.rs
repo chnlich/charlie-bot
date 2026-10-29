@@ -378,6 +378,9 @@ async fn worktree_add_retries_a_transient_config_lock() {
 async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
   // Python: tests/test_git_worktree_base.py::test_concurrent_worktree_adds_in_one_repo_never_overlap.
   let _guard = GIT_TEST_LOCK.lock().await;
+  // Each timed add runs the probe's 0.1 s sleep before a real git call, which leaves the 300 ms hook value about
+  // 200 ms for git. This test alone raises the write limit so that a loaded host does not time out an add.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let overlap_dir = repo.tmp().join("overlap");
   fs::create_dir(&overlap_dir).expect("overlap directory is created");

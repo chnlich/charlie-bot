@@ -40,11 +40,6 @@ impl Field {
     Self { name, field_type: FieldType::File, required: true }
   }
 
-  /// Declare an optional `File` field.
-  pub const fn optional_file(name: &'static str) -> Self {
-    Self { name, field_type: FieldType::File, required: false }
-  }
-
   /// Declare a required string `Form` field.
   pub const fn form(name: &'static str) -> Self {
     Self { name, field_type: FieldType::Form, required: true }

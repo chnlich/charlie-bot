@@ -1,14 +1,17 @@
 //! The chat page, home page and per-session events viewer (`src/app/pages.py`).
 
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{StatusCode, Uri, request::Parts};
+use axum::http::{HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
+use bytes::Bytes;
 use charliebot_cli_common::route;
+use charliebot_compat::compression::gzip_level_one;
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
@@ -23,6 +26,7 @@ use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 
 use super::family::Family;
+use crate::gzip::{self, Responder};
 use crate::state::AppState;
 
 pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path) };
@@ -58,6 +62,47 @@ const INITIAL_SESSIONS_PLACEHOLDER: &str = "\u{1}charliebot-initial-sessions\u{1
 
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
+
+/// How many finished page bodies the gzip memo keeps.
+///
+/// One page body is about as large as the sidebar it carries, so the limit bounds the memo to a few times one page.
+const PAGE_GZIP_MEMO_LIMIT: usize = 2;
+
+/// The body size from which keeping the compressed form is worth the memory.
+///
+/// The chat page is about 9 MB and pays for its compression on every request. The home page and the events viewer
+/// are a few kilobytes, so compressing them again costs less than holding their bodies would.
+const PAGE_GZIP_MEMO_MINIMUM_BYTES: usize = 1024 * 1024;
+
+/// The compressed form of the page bodies this server served recently.
+///
+/// The chat page is about 9 MB and the transport gzip compresses each response on its own request, so a repeat
+/// request pays the whole compression again for a page that did not change. The key is the finished body itself: a
+/// page that changed never matches, so the memo needs no invalidation and a template, page part or template
+/// directory edited on disk still takes effect at the next request.
+#[derive(Default)]
+struct PageGzipMemo {
+  entries: Vec<(Bytes, Bytes)>,
+}
+
+impl PageGzipMemo {
+  /// The gzip form of `body`, compressing it when no entry matches and remembering the bodies large enough to keep.
+  fn gzip_body(&mut self, body: &Bytes) -> Bytes {
+    if let Some((_, compressed)) = self.entries.iter().find(|(cached, _)| cached == body) {
+      return compressed.clone();
+    }
+    let compressed = Bytes::from(gzip_level_one(body));
+    if body.len() >= PAGE_GZIP_MEMO_MINIMUM_BYTES {
+      self.entries.push((body.clone(), compressed.clone()));
+      if self.entries.len() > PAGE_GZIP_MEMO_LIMIT {
+        self.entries.remove(0);
+      }
+    }
+    compressed
+  }
+}
+
+static PAGE_GZIP_MEMO: LazyLock<Mutex<PageGzipMemo>> = LazyLock::new(|| Mutex::new(PageGzipMemo::default()));
 
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let cfg = match state.config() {
@@ -261,6 +306,7 @@ async fn render_page(
   mut context: Value,
   runtime: PageRuntime,
 ) -> Response {
+  let accepts_gzip = Responder::for_request(&request.headers) == Responder::Gzip;
   let rendered = tokio::task::spawn_blocking(move || {
     let templating =
       state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
@@ -282,15 +328,45 @@ async fn render_page(
       }
     }
     templating
-      .render_page_with_substitutions(&state.features, name, &context, &request, &runtime.substitutions())
+      .render_page_html(&state.features, name, &context, &request, &runtime.substitutions())
       .map_err(|error| failure(error.kind(), error))
   })
   .await
   .expect("rendering a page does not panic");
   match rendered {
-    Ok(response) => response,
+    Ok(html) => page_response(html, accepts_gzip),
     Err(error) => responses::internal_error(&error.kind, error.detail),
   }
+}
+
+/// Wrap finished page HTML in the response, answering a gzip client from the memoized compressed body.
+///
+/// For a body at or above the transport's minimum size, the compressed form travels with its own headers here
+/// instead of under the transport gzip; the transport passes a response that already sets `Content-Encoding`
+/// through untouched.
+fn page_response(html: String, accepts_gzip: bool) -> Response {
+  let body = Bytes::from(html);
+  let compressed = (accepts_gzip && body.len() >= gzip::MINIMUM_SIZE)
+    .then(|| PAGE_GZIP_MEMO.lock().expect("the page gzip memo mutex is not poisoned").gzip_body(&body));
+  let mut builder = Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
+  let served = match compressed {
+    Some(compressed) => {
+      builder = builder
+        .header(header::CONTENT_LENGTH, compressed.len())
+        .header(header::CONTENT_ENCODING, "gzip")
+        .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      compressed
+    }
+    None => {
+      builder = builder.header(header::CONTENT_LENGTH, body.len());
+      body
+    }
+  };
+  let mut response = builder.body(Body::from(served)).expect("a page response builds");
+  // `no-store` sends every back navigation and tab restore to the server, so the page never runs JavaScript from
+  // a cached copy that references an older static asset version.
+  response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+  response
 }
 
 fn home_service_value(service: &HomeService, up: bool) -> Value {
@@ -351,4 +427,71 @@ fn compact_facts(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Map<Stri
     facts.insert(option.backend_type.clone(), json!({"manual": traits.manual_compact, "hint": traits.compact_hint}));
   }
   Ok(facts)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use flate2::read::GzDecoder;
+  use http_body_util::BodyExt;
+  use std::io::Read;
+
+  fn gunzip(body: &[u8]) -> String {
+    let mut decoded = String::new();
+    GzDecoder::new(body).read_to_string(&mut decoded).expect("a gzip page body decodes");
+    decoded
+  }
+
+  /// A page body that grew pages past the transport's minimum size.
+  fn page_html() -> String {
+    "a chat page body ".repeat(200)
+  }
+
+  #[test]
+  fn a_repeat_page_body_keeps_its_own_compressed_bytes() {
+    let mut memo = PageGzipMemo::default();
+    let first = Bytes::from("a".repeat(PAGE_GZIP_MEMO_MINIMUM_BYTES));
+    let second = Bytes::from("b".repeat(PAGE_GZIP_MEMO_MINIMUM_BYTES));
+    let compressed = memo.gzip_body(&first);
+    assert_eq!(memo.gzip_body(&first), compressed);
+    assert_eq!(gunzip(&compressed), String::from_utf8(first.to_vec()).expect("the body is text"));
+    let other = memo.gzip_body(&second);
+    assert_ne!(other, compressed);
+    assert_eq!(gunzip(&other), String::from_utf8(second.to_vec()).expect("the body is text"));
+  }
+
+  #[test]
+  fn a_small_page_is_compressed_but_not_kept() {
+    let mut memo = PageGzipMemo::default();
+    let small = Bytes::from("the events viewer of one session");
+    assert_eq!(gunzip(&memo.gzip_body(&small)), "the events viewer of one session");
+    assert!(memo.entries.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_gzip_client_gets_the_compressed_page_with_the_transport_headers() {
+    let html = page_html();
+    let (parts, body) = page_response(html.clone(), true).into_parts();
+    let headers = parts.headers;
+    assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(headers[header::VARY], "Accept-Encoding");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    let compressed = body.collect().await.expect("a page body collects").to_bytes();
+    assert_eq!(
+      headers[header::CONTENT_LENGTH].to_str().expect("a length header is text"),
+      compressed.len().to_string()
+    );
+    assert_eq!(gunzip(&compressed), html);
+  }
+
+  #[tokio::test]
+  async fn an_identity_client_gets_the_page_uncompressed() {
+    let html = page_html();
+    let (parts, body) = page_response(html.clone(), false).into_parts();
+    let headers = parts.headers;
+    assert!(headers.get(header::CONTENT_ENCODING).is_none());
+    let served = body.collect().await.expect("a page body collects").to_bytes();
+    assert_eq!(headers[header::CONTENT_LENGTH].to_str().expect("a length header is text"), served.len().to_string());
+    assert_eq!(served, Bytes::from(html));
+  }
 }

@@ -158,6 +158,25 @@ impl Templating {
     request: &Parts,
     substitutions: &[(&str, &str)],
   ) -> Result<Response, RenderError> {
+    let html = self.render_page_html(features, name, context, request, substitutions)?;
+    // `no-store` sends every back navigation and tab restore to the server, so the page never runs
+    // JavaScript from a cached copy that references an older static asset version.
+    let mut response = responses::html(html);
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+  }
+
+  /// Render a page and each `(placeholder, text)` substitution as the finished HTML.
+  ///
+  /// A caller that builds its own response reads the page this way, so the response headers have one owner.
+  pub fn render_page_html(
+    &self,
+    features: &FeatureContext,
+    name: &str,
+    context: &serde_json::Value,
+    request: &Parts,
+    substitutions: &[(&str, &str)],
+  ) -> Result<String, RenderError> {
     let globals = features
       .registry
       .template_globals()
@@ -176,11 +195,7 @@ impl Templating {
       }
       html = html.replace(placeholder, text);
     }
-    // `no-store` sends every back navigation and tab restore to the server, so the page never runs
-    // JavaScript from a cached copy that references an older static asset version.
-    let mut response = responses::html(html);
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
+    Ok(html)
   }
 
   /// Render template `name` with `context` and the zero-argument `globals`.

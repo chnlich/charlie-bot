@@ -5,9 +5,9 @@
 // File links in chat messages: same-origin file links are checked, while
 // cross-origin links stay as written and unprobed.
 // ---------------------------------------------------------------------------
-// The prefix the file server answers on (the single element of FILE_SERVER_MOUNTS in
-// src/runtime/file_urls.py, the core module that owns the prefix): "/absolute_filepath/", the
-// form written into chat text. Retired "/files/" and "/file/" links are marked without probing.
+// The prefix the file server answers on: "/absolute_filepath/", the form written into chat text.
+// src/runtime/file_urls.py's FILE_SERVER_MOUNTS holds that single element; the core module there
+// owns the prefix. Retired "/files/" and "/file/" links are marked without probing.
 var FILE_SERVER_PREFIXES = ['/absolute_filepath'];
 var FILE_SERVER_PREFIX = FILE_SERVER_PREFIXES[0];
 var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';

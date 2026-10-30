@@ -6,8 +6,8 @@
     names.forEach((name) => { global[name] = Chat[name]; });
   }
 
-  // Two disjoint lists: Object.assign puts both on Chat, and only globals'
-  // keys become bare globals for the onclick strings and the cross-module
+  // Two disjoint lists: Object.assign puts both on Chat. Only globals' keys
+  // become bare globals, for the onclick strings and for the cross-module
   // handlers that resolve bare names through window. Adding a member to
   // globals is enough for both; chatOnly stays reachable through Chat. A
   // module whose every member is bare-global passes one list only.

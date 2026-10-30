@@ -475,8 +475,8 @@ function roundButtonsHtml(sessionId, msg) {
 
 // One round's button group: the five round buttons plus the round marker — the
 // end event's index and the round id. The Everything separator (renderMessage)
-// and the For-you bubble (turn-engine.js) host the same group, and Explain and
-// the tests find the round's one group on the page through the marker.
+// and the For-you bubble (turn-engine.js) host the same group. Explain and the
+// tests find the round's one group on the page through the marker.
 const ROUND_GROUP_CLASS = 'round-buttons flex items-center gap-3';
 
 function roundButtonGroupHtml(sessionId, msg) {
@@ -953,8 +953,8 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "web_reply") {
     // The agent's message to the user: an agent-side bubble with the markdown
     // body. The bubble's time row is the flex line the For-you projection
-    // hangs the round's button group on (time left, buttons right), so it
-    // renders even when the reply carries no timestamp.
+    // hangs the round's button group on (time left, buttons right). It renders
+    // even when the reply carries no timestamp.
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + "<div class=\"text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">Reply</div>"
       + mdDiv(msg.content) + webReplyTimeRow() + "</div></div>";

@@ -88,7 +88,7 @@
   // The placement rule for the round buttons: the view placing a node decides
   // whether it carries its round's group. Everything strips the group a
   // For-you placement hung on the shared reply node, so a round keeps the one
-  // group its separator hosts; the separator's own group sits on the
+  // group its separator hosts. The separator's own group sits on the
   // separator node, never inside a reply's bubble, and is never stripped.
   function stripBubbleRoundButtons(entry) {
     if (entry.msg.role !== 'web_reply' || !entry.node) return;
@@ -1326,8 +1326,8 @@
 
     // Hangs the round's button group on the reply bubble's time row. The
     // attach recomputes from the reply and the round-end event on every
-    // projection — the group is built fresh from the current rating and
-    // Explain state, and a group left by an earlier mapping goes.
+    // projection. The group is built fresh from the current rating and Explain
+    // state, and a group left by an earlier mapping goes.
     attachRoundButtons(entry, roundEnd) {
       if (!entry.node) return;
       const timeRow = entry.node.querySelector('.bubble-time-row');
@@ -1352,8 +1352,8 @@
     // The panel slot of one round: the block container after the round's last
     // reply that holds an open separator panel below the bubble, at the list's
     // full column width. The cache keeps the slot (panel included) while the
-    // panel is open, so a view switch — which wipes the container — and the
-    // projections that follow find it again; closing the panel drops it.
+    // panel is open. A view switch wipes the container, and the projections
+    // that follow find the slot again. Closing the panel drops the slot.
     forYouPanelSlot(replyNode, roundId) {
       const key = String(roundId);
       let slot = this.forYouPanelSlots.get(key);

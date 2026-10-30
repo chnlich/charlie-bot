@@ -12,11 +12,11 @@
 // session and never moves it.
 //
 // The module also holds the composer actions pressed while their session was
-// still loading. bindComposerAction runs an action at once when its session
-// is the loaded one and holds it otherwise; the switch's landing runs it
-// through runHeldComposerActions, and a switch that will never land resolves
-// it through abandonHeldComposerActions — a held message posts to the session
-// it bound, a held Stop or attachment is dropped with a note.
+// still loading. bindComposerAction runs an action at once when its session is
+// the loaded one, and holds it otherwise. The switch's landing runs a held
+// action through runHeldComposerActions. A switch that will never land
+// resolves it through abandonHeldComposerActions. A held message posts to the
+// session it bound, while a held Stop or attachment is dropped with a note.
 
 const DISPLAYED_WELCOME_TITLE = 'CharlieBot@' + PAGE_HOSTNAME;
 
@@ -65,11 +65,11 @@ function composerTargetSession() {
   return {id: displayedSessionId, name: displayedSessionName};
 }
 
-// Runs a composer action at once when its session is the loaded one —
-// returning the action's promise, as the composer paths always did — and
-// holds it for the switch's landing otherwise. kind is 'message' for an
-// action that posts a message (a send, /compact) and 'interrupt' for one that
-// needs the session loaded (Stop, attach).
+// Runs a composer action at once when its session is the loaded one,
+// returning the action's promise, and holds it for the switch's landing
+// otherwise. kind is 'message' for an action that posts a message (a send,
+// /compact) and 'interrupt' for one that needs the session loaded (Stop,
+// attach).
 function bindComposerAction(sessionId, kind, run, drop) {
   if (sessionId === SESSION_ID) {
     return run();

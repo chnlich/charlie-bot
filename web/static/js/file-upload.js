@@ -5,10 +5,10 @@ let uploadedFiles = []; // Array of {id, filename, path, size, status, error}
 let uploadsInFlight = 0;
 let nextUploadId = 1;
 
-// The send button's lock is a count, not a flag: attachment uploads count in
-// uploadsInFlight, and a package that fills the input asynchronously opens an
+// The send button's lock is a count, not a flag. Attachment uploads count in
+// uploadsInFlight. A package that fills the input asynchronously opens an
 // input-work window through inputWorkStarted and closes it through
-// inputWorkSettled, both with the message the gate shows while the window is
+// inputWorkSettled. Both carry the message the gate shows while the window is
 // open. refreshSendLock below is the button's only disabled writer.
 const inputWorkInFlight = new Map(); // waiting message -> open windows
 
@@ -27,8 +27,8 @@ function inputWorkSettled(message) {
 }
 
 // The chat-input and /compact send paths both refuse submission through this
-// gate while an attachment upload or an input-work window is open; one
-// definition keeps the refusal behavior from drifting.
+// gate. The gate refuses while an attachment upload or an input-work window is
+// open. One definition keeps the refusal behavior from drifting.
 function blockIfUploadsInFlight() {
   if (uploadsInFlight <= 0 && !inputWorkInFlight.size) return false;
   showToast(uploadsInFlight > 0 ? UPLOAD_IN_FLIGHT_MESSAGE : inputWorkInFlight.keys().next().value, true);
@@ -92,9 +92,9 @@ async function uploadFile(file) {
   uploadedFiles.push(item);
   renderFileChips();
   setUploadingState(true);
-  // The attachment belongs to the session the page displays at press: a
-  // switch that has not landed holds the upload, and a click that moves on
-  // drops it with its chip and a note.
+  // The attachment belongs to the session the page displays at press. A
+  // switch that has not landed holds the upload. A click that moves on drops
+  // it with its chip and a note.
   return bindComposerAction(target.id, 'interrupt',
       () => uploadFileToSession(target.id, file, item),
       () => {

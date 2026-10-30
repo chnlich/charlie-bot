@@ -9,8 +9,9 @@ The config and session data live at `$CHARLIEBOT_HOME`; workspace paths come fro
 You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger`
 firings, (3) delegation and child-report summaries, (4) improve-loop completion summaries.
 For every wait, follow the "Waiting releases the process" rule in Coding Principles above.
-A task that carries its own completion wake (`charliebot delegate`, `charliebot improve`) is the turn's last action;
-its summary arrives in a new turn.
+Tasks that carry their own completion wakes (`charliebot delegate`, `charliebot improve`) are the turn's last
+actions, so one turn dispatches every ready task.
+Each summary arrives in a new turn.
 After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes,
 PRs, external sends) before continuing: the resume keeps the turn's input and drops the turn's partial output, so the
 resumed model reports having run none of it.

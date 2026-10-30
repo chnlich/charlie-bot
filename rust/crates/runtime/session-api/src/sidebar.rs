@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use charliebot_registry::Registry;
 use charliebot_store::layout;
@@ -17,6 +18,18 @@ use serde_json::{Map, Value, json};
 pub use charliebot_store::sidebar_state::DerivedSidebarMap;
 
 static SIDEBAR_SWEEP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// How long after one self-heal sweep starts the next one may start.
+///
+/// The sweep is triggered by every tenth sidebar poll, and a poller faster than ten polls per sweep would start a new
+/// sweep the moment the previous one ended, so the sweep thread ran back to back for as long as the poller kept up. One
+/// sweep rechecks the files of every active session, so an interval keeps the self-heal inside a fixed CPU budget.
+/// Changes the server makes itself reach the sidebar through their dirty marks, which the poll consumes without a
+/// sweep, so the interval only bounds how late an edit from outside the server can show.
+const SIDEBAR_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The start time of the last self-heal sweep this process ran.
+static SIDEBAR_SWEEP_LAST_START: Mutex<Option<Instant>> = Mutex::new(None);
 
 struct SidebarSweepFlight;
 
@@ -154,6 +167,14 @@ fn should_probe_synchronously(force_full: bool, force: bool, dirty: bool, has_sn
   if force_full && !force { dirty || !has_snapshot } else { force || dirty || !has_snapshot }
 }
 
+/// Whether one poll may start a self-heal sweep now: none runs, and the last one started at least `interval` ago.
+fn should_start_sweep(running: bool, last_started: Option<Instant>, now: Instant, interval: Duration) -> bool {
+  if running {
+    return false;
+  }
+  last_started.is_none_or(|started| now.duration_since(started) >= interval)
+}
+
 /// Recheck every clean active session off the request path on the periodic poll, as Python's
 /// `schedule_sidebar_sweep` does. Dirty rows stay with the synchronous poll that consumes their mark.
 fn schedule_sidebar_sweep(
@@ -161,6 +182,19 @@ fn schedule_sidebar_sweep(
   registry: Arc<Registry>,
   sessions: Vec<Arc<SessionMetadata>>,
 ) -> StoreResult<()> {
+  let now = Instant::now();
+  {
+    let mut last_start = SIDEBAR_SWEEP_LAST_START.lock().expect("the sweep start time mutex is not poisoned");
+    if !should_start_sweep(
+      SIDEBAR_SWEEP_RUNNING.load(Ordering::Acquire),
+      *last_start,
+      now,
+      SIDEBAR_SWEEP_MIN_INTERVAL,
+    ) {
+      return Ok(());
+    }
+    *last_start = Some(now);
+  }
   if SIDEBAR_SWEEP_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
     return Ok(());
   }
@@ -284,6 +318,23 @@ fn stat_signature(path: &Path) -> Option<Value> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_fast_poller_starts_one_self_heal_sweep_per_interval() {
+    let interval = Duration::from_secs(10);
+    let started = Instant::now();
+    assert!(should_start_sweep(false, None, started, interval), "the first poll starts a sweep");
+    assert!(
+      !should_start_sweep(false, Some(started), started + Duration::from_millis(1), interval),
+      "a poll right after a sweep's start waits"
+    );
+    assert!(
+      !should_start_sweep(false, Some(started), started + interval - Duration::from_millis(1), interval),
+      "a poll just before the interval waits"
+    );
+    assert!(should_start_sweep(false, Some(started), started + interval, interval), "the interval's end starts one");
+    assert!(!should_start_sweep(true, None, started, interval), "a running sweep takes the poll's trigger");
+  }
 
   #[test]
   fn periodic_self_heal_leaves_clean_probes_off_the_request_path() {

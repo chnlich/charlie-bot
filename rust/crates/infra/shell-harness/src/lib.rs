@@ -227,11 +227,11 @@ pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
 }
 
 /// Starts `command` and returns the child. A file that another test thread is still writing can refuse to run with
-/// ETXTBSY until that thread's fork has exec'd, so the start retries that error for a moment.
+/// ETXTBSY until that thread's fork has exec'd. The start therefore retries that error for a moment.
 ///
 /// The child dies with the thread that starts it: `PR_SET_PDEATHSIG` makes the kernel send it SIGKILL when that
-/// thread exits, so a test thread that panics or is cancelled while its process still runs leaves nothing behind.
-/// Spawn from the test's own thread, not a helper thread that ends early.
+/// thread exits. A test thread that panics or is cancelled while its process still runs therefore leaves nothing
+/// behind. Spawn from the test's own thread, not a helper thread that ends early.
 pub fn spawn(command: &mut Command) -> Child {
   let parent = std::process::id() as libc::pid_t;
   // SAFETY: prctl, getppid and _exit are async-signal-safe, which is all a hook between fork and exec may call.
@@ -296,7 +296,7 @@ mod tests {
   use std::sync::mpsc;
   use std::time::Instant;
 
-  /// libtest runs each test on a thread named for it, and `spawn`'s parent-death signal relies on that: the kernel
+  /// libtest runs each test on a thread named for it, and `spawn`'s parent-death signal relies on that. The kernel
   /// signals a process when the thread that started it exits.
   #[test]
   fn a_test_runs_on_a_thread_named_for_it() {

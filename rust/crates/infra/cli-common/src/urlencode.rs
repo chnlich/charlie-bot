@@ -6,8 +6,8 @@ pub fn urlencode(params: &[(String, String)]) -> String {
   params.iter().map(|(key, value)| format!("{}={}", quote_plus(key), quote_plus(value))).collect::<Vec<_>>().join("&")
 }
 
-/// `urllib.parse.quote_plus` with the default `safe=''`: a space becomes `+`, and every byte
-/// outside ASCII letters, digits and `_.-~` becomes one uppercase `%XX` pair of its UTF-8 form.
+/// `urllib.parse.quote_plus` with the default `safe=''` turns a space into `+`. Every byte outside
+/// ASCII letters, digits and `_.-~` becomes one uppercase `%XX` pair of its UTF-8 form.
 fn quote_plus(text: &str) -> String {
   let mut out = String::with_capacity(text.len());
   for byte in text.bytes() {

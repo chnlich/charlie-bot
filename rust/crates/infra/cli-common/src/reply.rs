@@ -1,5 +1,5 @@
-//! The reply verbs' shared body (`src/runtime/cli/common.py::post_reply`): resolve the session, read the reply's
-//! `--file` text, POST it to the platform's endpoint and print the readback as one JSON line.
+//! The reply verbs' shared body (`src/runtime/cli/common.py::post_reply`). The body resolves the session,
+//! reads the reply's `--file` text, POSTs it to the platform's endpoint and prints the readback as one JSON line.
 
 use serde_json::{Map, Value, json};
 

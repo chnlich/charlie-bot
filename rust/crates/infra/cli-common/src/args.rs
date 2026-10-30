@@ -35,8 +35,8 @@ pub fn validate_repo_path(command: &mut Command, repo: &str) {
 /// `infer_long_args(true)` over the command and every nested subcommand.
 ///
 /// argparse accepts a unique prefix of a long option (`--task-spec` names `--task-spec-file`), and
-/// nothing in the Python tree turns that off, so agents may pass one; clap needs the setting on
-/// each command that owns long options.
+/// nothing in the Python tree turns that off, so agents may pass one. The `clap` parser needs the
+/// setting on each command that owns long options.
 pub fn with_infer_long_args(command: Command) -> Command {
   let mut command = command.infer_long_args(true);
   for subcommand in command.get_subcommands_mut() {

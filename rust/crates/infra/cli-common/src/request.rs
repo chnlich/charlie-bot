@@ -1,8 +1,8 @@
 //! The `<service> request` verb: one HTTP request whose credential is minted inside the CLI process.
 //!
 //! `charliebot google request`, `charliebot feishu request` and `charliebot slack request` all share
-//! this module: argument parsing for the method, URL, body and headers, the send, the response
-//! printing, the exit codes and the redaction. A 2xx response prints its body on stdout and exits 0.
+//! this module. The module owns argument parsing for the method, URL, body and headers, the send, the
+//! response printing, the exit codes and the redaction. A 2xx response prints its body on stdout and exits 0.
 //! Another status or a transport failure exits 1 with a JSON object on stderr; a usage error exits 2.
 //! The service's credential failure keeps its own code (the Linear table's 3).
 
@@ -130,8 +130,8 @@ pub fn send(request: &Request, redactions: &[&str]) -> Result<Response, CliExit>
     .map_err(|error| transport_failure(&error.to_string(), redactions))?;
   runtime.block_on(async {
     let client = reqwest::Client::builder()
-      // curl without `-L` does not follow a redirect, and the command replaced curl in the skills:
-      // an unexpected redirect then surfaces as its status instead of silently changing the target.
+      // curl without `-L` does not follow a redirect, and the command replaced curl in the skills.
+      // An unexpected redirect then surfaces as its status instead of silently changing the target.
       .redirect(reqwest::redirect::Policy::none())
       .timeout(TIMEOUT)
       .build()

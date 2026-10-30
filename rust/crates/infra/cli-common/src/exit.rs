@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 /// One CLI failure: the JSON object for stderr and the process exit code.
 ///
 /// A verb returns this instead of exiting, so library tests can assert on the object and code the
-/// way the Python tests catch `SystemExit`; the binary's `main` prints the body one-line and exits.
+/// way the Python tests catch `SystemExit`. The binary's `main` prints the body one-line and exits.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CliExit {
   pub code: i32,

@@ -12,13 +12,13 @@ pub const CALLER_SESSION_HEADER: &str = "X-CharlieBot-Caller-Session";
 /// The `Authorization` and caller-session headers for one internal-API call.
 ///
 /// A run token in the environment (`CHARLIEBOT_RUN_TOKEN`) always wins and is the only credential
-/// sent: a supported CLI request running under a Run never falls back to the operator access key,
-/// so a rejected run token surfaces as the server's 401 instead of silently upgrading to operator
-/// identity. Without a run token the operator access key is used — `credentials.yaml` under
-/// `charliebot.access_key`; with neither, no header is sent (the middleware is a no-op for an
-/// empty key). When `CHARLIEBOT_SESSION_ID` is non-empty the returned headers also carry
-/// `X-CharlieBot-Caller-Session` with that value, which the server records on operator caller
-/// identities only (an agent's session comes from its verified token, never the header).
+/// sent. A supported CLI request running under a Run never falls back to the operator access key.
+/// A rejected run token therefore surfaces as the server's 401 instead of silently upgrading to
+/// operator identity. Without a run token the operator access key is used: `credentials.yaml`
+/// under `charliebot.access_key`. With neither, no header is sent, because the middleware is a
+/// no-op for an empty key. When `CHARLIEBOT_SESSION_ID` is non-empty the returned headers also
+/// carry `X-CharlieBot-Caller-Session` with that value. The server records that header on operator
+/// caller identities only: an agent's session comes from its verified token, never the header.
 pub fn internal_api_auth_headers() -> Result<Vec<(String, String)>, CliExit> {
   let token = std::env::var(RUN_TOKEN_ENV).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
   let bearer = match token {

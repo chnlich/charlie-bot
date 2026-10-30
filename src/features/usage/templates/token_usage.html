@@ -179,9 +179,11 @@
       {%- endfor -%}
     </li>
     {%- endif %}
+    {%- if cache_share is not none %}
     <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"|format(cache_share) }}% of tokens were cache reads,
       because a long session re-reads its whole context every turn. Ranking by output tokens reflects real production,
       and the two rankings do not agree.</li>
+    {%- endif %}
     <li><b>Self-hosted endpoints may not report cache hits:</b> their input is counted entirely as fresh input,
       while Claude Code almost always reads input from cache, so cross-platform totals are only loosely comparable.</li>
   </ul>

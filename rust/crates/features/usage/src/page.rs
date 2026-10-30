@@ -153,7 +153,8 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
     "ctx": ctx,
     "payload": text_repr::json_dumps(&json!({"rows": rows, "week": week_rows}), &PAYLOAD_JSON),
     "window": [window_first, window_last],
-    "cache_share": percent(tot.cache_read, tot.total),
+    // Null for a ledger with no tokens, so the summary states the cache-read share only when there is one.
+    "cache_share": (tot.total.as_f64() != 0.0).then(|| percent(tot.cache_read, tot.total)),
     "generated": pacific::stamp(read.now)?,
     "as_of": as_of(read.last_capture)?,
     "zone": pacific::zone_label(read.now)?,

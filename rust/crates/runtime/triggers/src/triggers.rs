@@ -46,6 +46,35 @@ const REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS: u64 = 900;
 const DORMANCY_CHECK_SECONDS: u64 = 60;
 const SSH_OVERALL_TIMEOUT_SECONDS: u64 = 60;
 const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
+
+/// The answer one remote `kill -0` probe gives about a watched pid.
+///
+/// The probe script echoes [`PROBE_ALIVE_WORD`] or [`PROBE_DEAD_WORD`]. A probe that could not start, or whose output
+/// names neither word, answers `Error`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeStatus {
+  Alive,
+  Dead,
+  Error,
+}
+
+/// The word the remote `kill -0` script echoes while the pid lives.
+const PROBE_ALIVE_WORD: &str = "ALIVE";
+/// The word the remote `kill -0` script echoes once the pid is gone.
+const PROBE_DEAD_WORD: &str = "DEAD";
+/// The report word for a probe that gave no answer.
+const PROBE_ERROR_WORD: &str = "ERROR";
+
+impl std::fmt::Display for ProbeStatus {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(match self {
+      Self::Alive => PROBE_ALIVE_WORD,
+      Self::Dead => PROBE_DEAD_WORD,
+      Self::Error => PROBE_ERROR_WORD,
+    })
+  }
+}
+
 static PROGRAM_AVAILABILITY: OnceLock<StdMutex<HashMap<String, bool>>> = OnceLock::new();
 #[cfg(test)]
 static PROGRAM_SEARCHES: AtomicUsize = AtomicUsize::new(0);
@@ -293,7 +322,7 @@ impl TriggerManager {
     let results = join_all(probes).await;
     let mut bad = Vec::new();
     for (target, (status, raw)) in targets.iter().zip(results) {
-      if status != "ALIVE" {
+      if status != ProbeStatus::Alive {
         bad.push(format!("{}:{} -> {} ({})", target.host, target.pid, status, pyfmt::str_repr(raw.trim())));
       }
     }
@@ -490,24 +519,24 @@ impl TriggerManager {
       .expect("trigger publish task completes")
   }
 
-  async fn ssh_probe_pid(&self, target: &RemotePid) -> (String, String) {
-    let remote = format!("kill -0 {} 2>&1 && echo ALIVE || echo DEAD", target.pid);
+  async fn ssh_probe_pid(&self, target: &RemotePid) -> (ProbeStatus, String) {
+    let remote = format!("kill -0 {} 2>&1 && echo {PROBE_ALIVE_WORD} || echo {PROBE_DEAD_WORD}", target.pid);
     let command = match self.ssh_argv(&target.host, &remote) {
       Ok(command) => command,
-      Err(error) => return ("ERROR".to_string(), format!("spawn failed: {error}")),
+      Err(error) => return (ProbeStatus::Error, format!("spawn failed: {error}")),
     };
     let result = run_probe_command(command, Some(Duration::from_secs(SSH_OVERALL_TIMEOUT_SECONDS)), "ssh").await;
     let output = match result {
       Ok(output) => output,
-      Err(error) => return ("ERROR".to_string(), error),
+      Err(error) => return (ProbeStatus::Error, error),
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{stdout}{stderr}");
     let last_line = stdout.trim().lines().last().unwrap_or_default().trim();
     match last_line {
-      "ALIVE" => ("ALIVE".to_string(), raw),
-      "DEAD" => ("DEAD".to_string(), raw),
+      PROBE_ALIVE_WORD => (ProbeStatus::Alive, raw),
+      PROBE_DEAD_WORD => (ProbeStatus::Dead, raw),
       _ => {
         let combined = raw.trim();
         let error = if combined.is_empty() {
@@ -515,7 +544,7 @@ impl TriggerManager {
         } else {
           combined.to_string()
         };
-        ("ERROR".to_string(), error)
+        (ProbeStatus::Error, error)
       }
     }
   }
@@ -892,10 +921,10 @@ impl TriggerManager {
       let results = join_all(probes).await;
       let mut keep = Vec::new();
       for ((host, pid, target), (status, raw)) in remaining.into_iter().zip(results) {
-        if status == "DEAD" {
+        if status == ProbeStatus::Dead {
           finished.push(self.remote_finished_label(&target).await);
         } else {
-          if status != "ALIVE" {
+          if status != ProbeStatus::Alive {
             tracing::debug!(
               target: "charliebot_triggers",
               trigger_id = %trigger.id,

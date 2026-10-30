@@ -35,7 +35,7 @@ This crate owns the process transport below the agent backends and the launch ma
 | `spawn::spawn_raw_log`, `spawn_piped`, `spawn_one_shot` | `src/runtime/agent_process/base.py:785`, `:812`, `:936`; `src/backends/opencode/opencode.py:505`; `src/backends/codex/codex.py:127`. Parent-death children use a process-lifetime spawner thread; children without that signal use Tokio's blocking pool. |
 | `spawn::pin_identity_and_on_spawn` | `src/runtime/agent_process/base.py:919` |
 | `spawn::iter_ndjson_events` | `src/runtime/agent_process/base.py:347` |
-| `spawn::STDERR_TAIL_BYTES`, `tee_stream`, and `stream_stderr` | `src/runtime/agent_process/base.py:37`, `:60`, `:1064` |
+| `spawn::STDERR_TAIL_BYTES` | `src/runtime/agent_process/base.py:37` |
 | `AgentBaseEnvironment` and its `values` field | `src/runtime/agent_environment.py:28-36`, `server.py:582` |
 | `agent_environment`, `from_process_environment`, and the root `build_backend` export | `src/runtime/agent_environment.py:53`, `server.py:582`, `src/runtime/hooks/backend_types.py:33-60` |
 | `backend_pool::{QUOTA_ERROR_PATTERNS, DEFAULT_COOLDOWN, is_quota_error, BackendPool}` | `src/runtime/backend_pool.py` |

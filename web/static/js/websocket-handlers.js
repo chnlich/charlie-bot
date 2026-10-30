@@ -42,10 +42,7 @@ registerWsMessageHandler('session_renamed', (ev) => {
     const link = document.getElementById('session-' + sid);
     if (link) link.querySelector('.session-name').textContent = ev.name;
   }
-  if (sid === SESSION_ID) {
-    const header = document.getElementById('header-session-name');
-    if (header) header.textContent = ev.name;
-  }
+  refreshDisplayedSessionName(sid, ev.name);
 }, {advancesCursor: false});
 
 // A changed task node re-fetches the list the same way a group change does.

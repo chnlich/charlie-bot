@@ -106,30 +106,38 @@ async function sendMessage() {
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
   const uploadedFilesForPayload = getUploadedFilesForPayload();
-  if ((!content && !uploadedFilesForPayload.length) || !SESSION_ID) return;
+  if ((!content && !uploadedFilesForPayload.length)) return;
+  const target = composerTargetSession();
+  if (!target.id) return;
   const payloadFiles = toPayloadFiles(uploadedFilesForPayload);
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
   const inputMode = composerInputMode;
-  const sessionId = SESSION_ID;
   const requestId = crypto.randomUUID();
 
-  // Optimistic UI: append the user message. The sidebar row moves only when the refetched list repaints.
-  pendingUserRequestIds.add(requestId);
-  const optimisticMessage = appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles, requestId);
+  // The send belongs to the session the page displays at press: the composer
+  // and its draft are taken now, so later typing is the next message.
   input.value = '';
   input.style.height = 'auto';
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
   clearInputModeAndNote();
 
-  // Start thinking indicator; keepSendEnabled leaves the button to the
-  // in-flight lock, so a master run never locks typing.
-  startThinking({keepSendEnabled: true});
+  const finish = async () => {
+    // Optimistic UI: append the user message. The sidebar row moves only when the refetched list repaints.
+    pendingUserRequestIds.add(requestId);
+    const optimisticMessage = appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles, requestId);
+    // Start thinking indicator; keepSendEnabled leaves the button to the
+    // in-flight lock, so a master run never locks typing.
+    startThinking({keepSendEnabled: true});
 
-  const accepted = await submitUserMessage(
-      sessionId, content, {uploaded_files: payloadFiles, input_mode: inputMode}, requestId, optimisticMessage);
-  // Only a send that started the thinking round above ends it on refusal; /compact never starts one.
-  if (!accepted) stopThinking();
+    const accepted = await submitUserMessage(
+        target.id, content, {uploaded_files: payloadFiles, input_mode: inputMode}, requestId, optimisticMessage);
+    // Only a send that started the thinking round above ends it on refusal; /compact never starts one.
+    if (!accepted) stopThinking();
+  };
+  // A send pressed while its session is still loading waits for that switch
+  // to land; a click that moves on posts it to the session it bound.
+  return bindComposerAction(target.id, 'message', finish);
 }
 
 // ---------------------------------------------------------------------------
@@ -145,11 +153,17 @@ async function compactContext() {
   );
   if (!confirmed) return;
 
-  const sessionId = SESSION_ID;
+  const target = composerTargetSession();
+  if (!target.id) return;
   const requestId = crypto.randomUUID();
-  pendingUserRequestIds.add(requestId);
-  const optimisticMessage = appendMessage('user', '/compact', null, new Date().toISOString(), null, requestId);
-  await submitUserMessage(sessionId, '/compact', {}, requestId, optimisticMessage);
+  const finish = async () => {
+    pendingUserRequestIds.add(requestId);
+    const optimisticMessage = appendMessage('user', '/compact', null, new Date().toISOString(), null, requestId);
+    await submitUserMessage(target.id, '/compact', {}, requestId, optimisticMessage);
+  };
+  // A /compact pressed while its session is still loading waits for that
+  // switch to land; a click that moves on posts it to the session it bound.
+  return bindComposerAction(target.id, 'message', finish);
 }
 
 const GLOBALS = {

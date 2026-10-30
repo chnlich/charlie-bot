@@ -23,6 +23,8 @@ function baseSessionContext(overrides = {}) {
     // The page global index.html renders next to the ?v= script URLs; websocket.js
     // sends it as the handshake's asset_version.
     STATIC_ASSET_VERSION: 'stub-asset-version',
+    // index.html's host fact; the displayed-session module restates it in the tab title.
+    PAGE_HOSTNAME: 'localhost:8000',
     // The server-embedded initial render payload (index.html); the sidebar's
     // restore path reads it to detect a v2 task-node deep link.
     SESSION_BOOTSTRAP: overrides.SESSION_BOOTSTRAP !== undefined ? overrides.SESSION_BOOTSTRAP : null,

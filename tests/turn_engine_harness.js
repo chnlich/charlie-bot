@@ -360,6 +360,8 @@ function loadChatContext(document) {
   const context = {
     CSS: {escape: (value) => String(value)},
     SESSION_ID: 'session-a',
+    // index.html's host fact; the displayed-session module restates it in the tab title.
+    PAGE_HOSTNAME: 'localhost:8000',
     document: {
       addEventListener() {},
       createElement(tag) {

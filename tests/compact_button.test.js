@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const { readStatic } = require('./read_static');
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
+const DISPLAYED_SESSION_JS = readStatic('chat/displayed-session.js');
 const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
 const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
@@ -63,6 +64,8 @@ function loadChatContext(elements) {
     crypto: {randomUUID: () => `request-${++requestSequence}`},
     // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
     wsUrlWithToken: (path) => path,
+    // index.html's host fact; the displayed-session module restates it in the tab title.
+    PAGE_HOSTNAME: 'localhost:8000',
     // No stubs above run config.js: stand in for its shared header literal.
     JSON_HEADERS: {'Content-Type': 'application/json'},
   };
@@ -72,6 +75,7 @@ function loadChatContext(elements) {
   vm.runInContext(FILE_UPLOAD_JS, context, { filename: 'file-upload.js' });
   loadChatRenderingModules(context);
   vm.runInContext(readStatic('websocket.js'), context, { filename: 'websocket.js' });
+  vm.runInContext(DISPLAYED_SESSION_JS, context, { filename: 'chat/displayed-session.js' });
   vm.runInContext(readStatic('websocket-handlers.js'), context, { filename: 'websocket-handlers.js' });
   vm.runInContext(readStatic('chat/input.js'), context, { filename: 'chat/input.js' });
   return context;

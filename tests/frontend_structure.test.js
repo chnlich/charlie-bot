@@ -22,7 +22,8 @@
 //
 // web/templates/index.html loads core in five layers, lowest first:
 //
-//     base        platform.js to chat/shared.js: the helpers, config.js and the Chat and Sidebar namespaces
+//     base        platform.js to chat/shared.js: the helpers, config.js and the Chat and Sidebar namespaces,
+//                 then chat/displayed-session.js (the displayed session and the composer action queue)
 //     connection  websocket.js and tabs.js
 //     chat view   chat/ratings.js to file-upload.js
 //     sidebar     sidebar/row-menu.js to sidebar/session-menus.js

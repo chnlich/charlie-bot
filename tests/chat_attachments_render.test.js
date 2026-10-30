@@ -10,6 +10,7 @@ const { escapeHtml } = require('./escape_html_stub');
 const { makeAnchor, makeProseRoot } = require('./chat_prose_stub');
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
+const DISPLAYED_SESSION_JS = readStatic('chat/displayed-session.js');
 
 class FakeElement {
   constructor() {
@@ -35,6 +36,8 @@ class FakeElement {
 function loadChatScript() {
   const context = {
     SESSION_ID: 'test-session',
+    // index.html's host fact; the displayed-session module restates it in the tab title.
+    PAGE_HOSTNAME: 'localhost:8000',
     platform: {isMobile: false, onChange() {}},
     console: {error: () => {}},
     fetch: async () => ({
@@ -109,6 +112,8 @@ function loadFileUploadScript(fetchImpl) {
   const sendButton = new FakeElement();
   const context = {
     SESSION_ID: 'session-a',
+    // index.html's host fact; the displayed-session module restates it in the tab title.
+    PAGE_HOSTNAME: 'localhost:8000',
     console: {error: () => {}},
     FormData: class {
       constructor() {
@@ -132,6 +137,9 @@ function loadFileUploadScript(fetchImpl) {
   };
 
   vm.createContext(context);
+  // The displayed-session module rides the page ahead of file-upload.js; its
+  // bind answers the upload's composer target.
+  vm.runInContext(DISPLAYED_SESSION_JS, context, {filename: 'chat/displayed-session.js'});
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   return {context, fileChips, sendButton};
 }

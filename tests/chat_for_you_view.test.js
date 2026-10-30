@@ -108,6 +108,8 @@ function forYouRig(
   const context = {
     CSS: {escape: (value) => String(value)},
     SESSION_ID: 'sess-fy',
+    // index.html's host fact; the displayed-session module restates it in the tab title.
+    PAGE_HOSTNAME: 'localhost:8000',
     masterThinking: false,
     console: {error() {}, log() {}},
     marked: {Renderer: function Renderer() {}, use() {}},

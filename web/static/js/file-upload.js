@@ -79,7 +79,8 @@ async function handleFiles(input) {
 }
 
 async function uploadFile(file) {
-  if (!SESSION_ID) return;
+  const target = composerTargetSession();
+  if (!target.id) return;
   const item = {
     id: nextUploadId++,
     filename: file.name,
@@ -90,20 +91,32 @@ async function uploadFile(file) {
   };
   uploadedFiles.push(item);
   renderFileChips();
+  setUploadingState(true);
+  // The attachment belongs to the session the page displays at press: a
+  // switch that has not landed holds the upload, and a click that moves on
+  // drops it with its chip and a note.
+  return bindComposerAction(target.id, 'interrupt',
+      () => uploadFileToSession(target.id, file, item),
+      () => {
+        uploadedFiles = uploadedFiles.filter((chip) => chip.id !== item.id);
+        renderFileChips();
+        setUploadingState(false);
+        showToast('Attachment dropped: the view moved on before the session loaded', true);
+      });
+}
 
-  const uploadSessionId = SESSION_ID;
+async function uploadFileToSession(sessionId, file, item) {
   const form = new FormData();
   form.append('file', file);
-  setUploadingState(true);
   try {
-    const res = await fetch(`/api/chat/${uploadSessionId}/upload`, {method: 'POST', body: form});
+    const res = await fetch(`/api/chat/${sessionId}/upload`, {method: 'POST', body: form});
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const errorText = String(err.detail || res.status);
-      const target = getUploadedFileById(item.id);
-      if (target && uploadSessionId === SESSION_ID) {
-        target.status = 'failed';
-        target.error = errorText;
+      const chip = getUploadedFileById(item.id);
+      if (chip && sessionId === SESSION_ID) {
+        chip.status = 'failed';
+        chip.error = errorText;
         renderFileChips();
       }
       showToast('Upload failed: ' + errorText, true);
@@ -111,20 +124,20 @@ async function uploadFile(file) {
     }
 
     const data = await res.json();
-    const target = getUploadedFileById(item.id);
-    if (!target || uploadSessionId !== SESSION_ID) return;
-    target.filename = data.filename;
-    target.path = data.path;
-    target.size = data.size;
-    target.status = 'uploaded';
-    target.error = '';
+    const chip = getUploadedFileById(item.id);
+    if (!chip || sessionId !== SESSION_ID) return;
+    chip.filename = data.filename;
+    chip.path = data.path;
+    chip.size = data.size;
+    chip.status = 'uploaded';
+    chip.error = '';
     renderFileChips();
   } catch (err) {
     console.error('Upload failed:', err);
-    const target = getUploadedFileById(item.id);
-    if (target && uploadSessionId === SESSION_ID) {
-      target.status = 'failed';
-      target.error = err.message;
+    const chip = getUploadedFileById(item.id);
+    if (chip && sessionId === SESSION_ID) {
+      chip.status = 'failed';
+      chip.error = err.message;
       renderFileChips();
     }
     showToast('Upload failed: ' + err.message, true);

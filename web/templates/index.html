@@ -1,5 +1,5 @@
 {% include 'partials/prologue.html' %}
-  <title>CharlieBot@{{ hostname }}</title>
+  <title>{% if active_session %}{{ active_session.name }} · CharlieBot@{{ hostname }}{% else %}CharlieBot@{{ hostname }}{% endif %}</title>
   <script>window.SESSIONS_ROOT = {{ sessions_root|tojson }};</script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,6 +24,8 @@
     // The same value the ?v= script URLs below carry: the session WebSocket handshake sends it as
     // asset_version, and a stale value gets the 4409 close that reloads the page (websocket.js).
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
+    // The host the displayed-session module restates in the tab title.
+    const PAGE_HOSTNAME = {{ hostname|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
     const INITIAL_SESSIONS = {{ initial_sessions_json|safe }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};
@@ -244,6 +246,9 @@
           <!-- Composer note line: a package writes where the inserted text came
                from through Chat.setInputNote; the input mode's clears hide it. -->
           <div id="input-note" class="hidden text-xs text-amber-400 mb-2"></div>
+          <!-- The composer target: the displayed-session module owns its text
+               and visibility (chat/displayed-session.js). -->
+          <div id="composer-target-badge" class="text-xs text-slate-400 mb-2">To: {{ active_session.name }}</div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
           <div class="flex gap-2 items-end input-row">
             <span
@@ -338,6 +343,7 @@
   <script src="/static/js/chat/namespace.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/namespace.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/shared.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat/displayed-session.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/tabs.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/ratings.js?v={{ static_asset_version|urlencode }}"></script>

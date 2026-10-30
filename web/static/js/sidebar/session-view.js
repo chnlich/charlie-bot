@@ -417,14 +417,9 @@ function updateThinkingTime() {
   document.getElementById('thinking-time').textContent = secs + 's';
 }
 
-async function cancelMaster() {
-  // A worker node's stop button signals the active Run through its own
-  // cancel route (session-view.js), not the chat cancel.
-  if (typeof transcriptTarget === 'function' && transcriptTarget()) {
-    return cancelTranscriptTarget();
-  }
+async function postChatCancel(sessionId) {
   try {
-    const res = await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
+    const res = await fetch(`/api/chat/${sessionId}/cancel`, { method: 'POST' });
     if (res.ok) return;
 
     let detail = '';
@@ -447,6 +442,21 @@ async function cancelMaster() {
     showToast('Cancel failed: network error. Please try again.', true);
     console.error('Cancel master failed:', err);
   }
+}
+
+async function cancelMaster() {
+  // A worker node's stop button signals the active Run through its own
+  // cancel route (session-view.js), not the chat cancel.
+  if (typeof transcriptTarget === 'function' && transcriptTarget()) {
+    return cancelTranscriptTarget();
+  }
+  const target = composerTargetSession();
+  if (!target.id) return;
+  // Stop acts on the session the page displays at press; a switch that has
+  // not landed holds it, and a click that moves on drops it with a note.
+  return bindComposerAction(target.id, 'interrupt',
+      () => postChatCancel(target.id),
+      () => showToast('Stop dropped: the view moved on before the session loaded', true));
 }
 
 function buildEmptySessionBootstrap(session) {
@@ -515,10 +525,10 @@ function switchTargetName(sessionId) {
 }
 
 // Click-time immediate feedback: the placeholder row (thinking pulse-dot style)
-// replaces the stale session DOM and the header name moves before any network
-// wait; renderSessionView repaints both with authoritative data later. The
-// streaming element survives the wipe — hideStreaming/showStreaming resolve it
-// by id after the render.
+// replaces the stale session DOM before any network wait; the displayed-session
+// module paints the header at the click and renderSessionView repaints both
+// with authoritative data later. The streaming element survives the wipe —
+// hideStreaming/showStreaming resolve it by id after the render.
 function showSwitchPlaceholder(sessionId) {
   const container = document.getElementById('messages');
   if (!container) return;
@@ -535,8 +545,6 @@ function showSwitchPlaceholder(sessionId) {
   row.appendChild(dot);
   row.appendChild(label);
   container.appendChild(row);
-  const headerName = document.getElementById('header-session-name');
-  if (headerName) headerName.textContent = switchTargetName(sessionId);
 }
 
 async function switchSession(sessionId) {
@@ -553,6 +561,22 @@ async function switchSession(sessionId) {
   const switchStartedAt = Date.now();
 
   saveDraftNow();
+
+  // Click-time feedback: the displayed session moves now — header name, tab
+  // title and composer badge — and the sidebar highlight follows below. Every
+  // click gets them, even one later superseded; only the latest generation
+  // renders session content. The move first resolves the composer actions the
+  // previous click held, so a held message posts before this click swaps the
+  // composer.
+  setDisplayedSession(sessionId, switchTargetName(sessionId));
+
+  // The composer moves to the target's draft at once: typing during the
+  // switch window stores into the target's draft, and the landing leaves the
+  // composer as the user left it.
+  DRAFT_KEY = 'charliebot-draft-' + sessionId;
+  const targetDraft = localStorage.getItem(DRAFT_KEY);
+  const draftInput = document.getElementById('msg-input');
+  if (draftInput) { draftInput.value = targetDraft || ''; autoResize(draftInput); }
 
   if (masterThinking) stopThinking();
   teardownActiveSessionView();
@@ -586,6 +610,10 @@ async function switchSession(sessionId) {
         error: String(err?.message || err),
         elapsed_ms: Date.now() - switchStartedAt,
       });
+      // The page navigates to a full load of the target: a composer action
+      // held by this switch resolves first — a held message posts to the
+      // session it bound before the navigation drops the page.
+      abandonHeldComposerActions(sessionId);
       switching = false;
       location.href = '/?session=' + sessionId;
       return;
@@ -606,7 +634,6 @@ async function switchSession(sessionId) {
   // Update globals
   SESSION_ID = sessionId;
   document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
-  DRAFT_KEY = 'charliebot-draft-' + sessionId;
   THINKING_SINCE = data.session.thinking_since || null;
   eventCursor = data.event_count;
 
@@ -641,10 +668,9 @@ async function switchSession(sessionId) {
     elapsed_ms: Date.now() - switchStartedAt,
   });
 
-  // Restore draft for new session
-  const draft = localStorage.getItem(DRAFT_KEY);
-  const inp = document.getElementById('msg-input');
-  if (inp) { inp.value = draft || ''; autoResize(inp); }
+  // The switch landed: composer actions pressed inside the window run now,
+  // against the freshly rendered view.
+  runHeldComposerActions(sessionId);
 
   resumeThinkingIfMidThought();
 
@@ -696,11 +722,9 @@ function renderSessionView(data) {
   sessionLoadingMore = false;
   suppressScrollLoad = false;
 
-  // Update header
-  const headerName = document.getElementById('header-session-name');
-  if (headerName) {
-    headerName.textContent = session.name;
-  }
+  // Update header — the displayed-session module owns the header name, the
+  // tab title and the composer badge; a render refreshes the name only.
+  refreshDisplayedSessionName(session.id, session.name);
 
   // Update backend badge
   updateActiveBackendBadges();
@@ -1128,6 +1152,13 @@ async function createTaskNode(taskParentId, group) {
     switching = true;
     ++switchGeneration;
     saveDraftNow();
+    // The new session becomes the displayed one at creation time, and the
+    // composer moves to its (empty) draft now, so the landing leaves the
+    // composer as the user left it.
+    setDisplayedSession(data.id, data.name);
+    DRAFT_KEY = 'charliebot-draft-' + data.id;
+    const draftInput = document.getElementById('msg-input');
+    if (draftInput) { draftInput.value = ''; autoResize(draftInput); }
     if (masterThinking) stopThinking();
     teardownActiveSessionView();
     disconnectWS();
@@ -1137,7 +1168,6 @@ async function createTaskNode(taskParentId, group) {
     const bootstrap = buildEmptySessionBootstrap(data);
     SESSION_ID = data.id;
     document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
-    DRAFT_KEY = 'charliebot-draft-' + data.id;
     THINKING_SINCE = data.thinking_since || null;
     eventCursor = bootstrap.event_count;
     history.pushState({session: data.id}, '', '/?session=' + data.id);
@@ -1147,11 +1177,7 @@ async function createTaskNode(taskParentId, group) {
     switching = false;
 
     const input = document.getElementById('msg-input');
-    if (input) {
-      input.value = '';
-      autoResize(input);
-      input.focus();
-    }
+    if (input) input.focus();
     setSidebarFilterPill('all');
     updateSidebarHighlight(data.id);
     setTimeout(() => switchSidebarFilter('all'), 0);
@@ -1175,6 +1201,9 @@ function renderNoActiveSessionView() {
   globalThis.renderPendingTriggersTray(null);
   globalThis.clearSessionStatusPanel();
   document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
+  // Back to the welcome page: the module restores the original tab title and
+  // hides the composer badge.
+  setDisplayedSession(null, null);
   DRAFT_KEY = null;
   THINKING_SINCE = null;
   eventCursor = 0;

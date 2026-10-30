@@ -44,10 +44,11 @@ async function commitRename() {
       headers: JSON_HEADERS,
       body: JSON.stringify({ name: newName }),
     });
-    // Update DOM — sidebar and header
+    // Update DOM — the sidebar row, and through the displayed-session module
+    // the header, tab title and composer badge when this is the displayed
+    // session. A rename never changes which session is displayed.
     updateSidebarSessionName(renameSessionId, newName);
-    const header = document.getElementById('header-session-name');
-    if (header && renameSessionId === SESSION_ID) header.textContent = newName;
+    refreshDisplayedSessionName(renameSessionId, newName);
   } catch (err) {
     console.error('Rename failed:', err);
   }

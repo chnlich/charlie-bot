@@ -187,7 +187,7 @@ fn archived_page_body(
       listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String),
     );
     if !context_only {
-      apply_derived_fields(&mut value, &row, status.get(&row.id), &features.store, true, true, false);
+      apply_derived_fields(&mut value, &row, status.get(&row.id).map(Arc::as_ref), &features.store, true, true, false);
     }
     listing::apply_listing_fields(&mut value, listing_fields.get(&row.id).cloned().unwrap_or_default());
     if context_only {
@@ -379,7 +379,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
       Ok(value) => value,
       Err(error) => return store_error(error),
     };
-    apply_derived_fields(&mut value, row, derived.get(&row.id), &features.store, true, true, false);
+    apply_derived_fields(&mut value, row, derived.get(&row.id).map(Arc::as_ref), &features.store, true, true, false);
     values.push(value);
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));

@@ -178,8 +178,10 @@ An understanding page lists the divergences of a request that admits several rea
   Verify an undeclared scope as full.
 - Run at most two verify rounds on a revision of a plan for the user: round 1 as declared, then round 2 as delta over
   the round-1 fold only, quoting those changes from `charliebot plan diff`. A cold read started with verify counts in
-  that round. When round 1 findings change nothing, finalize after round 1; after round 2, fold its findings and
-  finalize, with no third round.
+  that round. When round 1 findings change nothing, finalize after round 1. When the round 1 revision only applies
+  the specific items that round 1 verify and the cold read named, keeps the plan's structure, and adds no causal
+  claim and no derived number, finalize after that revision and run no round 2. Otherwise run round 2, fold its
+  findings, and finalize, with no third round.
 - Every round measures with the same ruler: the spec's Goal quotes the registered version's section 1 by path, and
   cites fidelity and adequacy as defined here. A round that wants a wider question puts that question to the user.
 - Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the goal — weigh it and revise the

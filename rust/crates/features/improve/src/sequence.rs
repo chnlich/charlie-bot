@@ -125,7 +125,7 @@ pub async fn create_improve_child(
 /// The iteration report contract, rendered from the worker prompt's `iteration_reports` section.
 pub fn render_iteration_reports(repo_root: &RepoRoot, loop_dir: &str, iteration: i64) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
-    &repo_root.path().join("prompts/worker.md"),
+    &repo_root.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &["iteration_reports"],
     "worker-prompt",
   )?;

@@ -19,6 +19,9 @@ use crate::verify_trailer;
 const SECTION_MARKER_PREFIX: &str = "<!-- section: ";
 const SECTION_MARKER_SUFFIX: &str = " -->";
 
+/// The worker contract under the checkout's `prompts/`: the file every worker-template reader loads.
+pub const WORKER_PROMPT_PATH: &str = "prompts/worker.md";
+
 /// The `{{name}}` tokens of one template, each replaced in order (`str.replace`, never `str.format`).
 pub type Tokens = Vec<(&'static str, String)>;
 
@@ -271,7 +274,7 @@ fn marker_id(line: &str) -> &str {
 /// The worker prompt's sections: `prompts/task_base.md` read first, then `prompts/worker.md`. A section id that both
 /// files define is a template error, never a silent override (`load_worker_prompt_sections`).
 pub fn load_worker_prompt_sections(repo: &Path) -> anyhow::Result<HashMap<String, String>> {
-  let worker = load_marker_sections(&repo.join("prompts/worker.md"), &[], "worker-prompt")?;
+  let worker = load_marker_sections(&repo.join(WORKER_PROMPT_PATH), &[], "worker-prompt")?;
   let base = load_marker_sections(&repo.join("prompts/task_base.md"), &[], "task-base-prompt")?;
   let mut duplicate: Vec<&String> = base.keys().filter(|id| worker.contains_key(*id)).collect();
   if !duplicate.is_empty() {

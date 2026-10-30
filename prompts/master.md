@@ -354,9 +354,5 @@ The explainer row of Artifact Genres in `prompts/manager_workflows.md` defines t
 Post the conclusion in two or three sentences, with the page link, as the chat reply.
 The first answer then carries the diagrams and examples that the user would otherwise ask for.
 
-Open every explanation and every progress report with a diagram.
-Build each mechanism diagram from scratch.
-A reader without project background then follows the structure before the text.
-Add worked examples from real sessions.
-The reader then checks each claim on a case that really happened.
+Include a diagram and worked examples from real sessions when a diagram shows the structure or mechanism better than prose; build each mechanism diagram from scratch so a reader without project background follows the structure and checks each claim on a case that really happened.
 The GRAMMAR comment of `prompts/explain_template.html` holds the figure and example standard of an explain page.

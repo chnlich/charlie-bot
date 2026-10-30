@@ -975,7 +975,6 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "futures-util",
- "http 1.5.0",
  "memchr",
  "regex",
  "reqwest 0.13.5",

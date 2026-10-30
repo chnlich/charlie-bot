@@ -15,12 +15,10 @@ charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 futures-util.workspace = true
-http.workspace = true
 memchr.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
-tower.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }
@@ -29,3 +27,4 @@ reqwest = { workspace = true, features = ["json", "query", "stream"] }
 charliebot-store.workspace = true
 regex.workspace = true
 tempfile.workspace = true
+tower.workspace = true

@@ -495,6 +495,9 @@ fn load_inputs(registry: &Arc<Registry>, repo_root: &RepoRoot) -> Result<StatePa
   };
   let cfg = parts.config.get().map_err(|error| error.to_string())?;
   config::require_backends(&cfg).map_err(|error| error.to_string())?;
+  // The approval policy table is required host configuration; an absent or invalid table refuses the start. The
+  // check records nothing: `--check-config` is read-only, and the first server-side use records the change.
+  charliebot_core::approval_policy::load(&home).map_err(|error| error.to_string())?;
   v1_sessions::require_no_v1_sessions(&cfg)?;
   for (_, check) in registry.startup_checks() {
     check(registry, &cfg)?;

@@ -49,6 +49,22 @@ fn run_server(home: &Path, args: &[&str], include_repo_root: bool, server_bin_di
   server_command(home, args, include_repo_root, server_bin_dir).output().expect("the server process starts")
 }
 
+/// A valid approval policy table: the check-config home carries one, and the check writes nothing into the home.
+fn approval_policy_table() -> String {
+  "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies: []
+enable_ask_tier_refusal: false
+"
+  .to_string()
+}
+
 fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
   fn visit(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) -> std::io::Result<()> {
     for entry in fs::read_dir(directory)? {
@@ -76,6 +92,8 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   let home = temporary.path().join("home");
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), false);
   fs::create_dir_all(home.join("state")).unwrap();
+  fs::create_dir_all(home.join("config.d")).unwrap();
+  fs::write(home.join("config.d/approval_policy.yaml"), approval_policy_table()).unwrap();
   fs::write(
     home.join("config.yaml"),
     "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",

@@ -47,7 +47,25 @@ fn prepare_home(root: &Path, port: u16) -> PathBuf {
   std::fs::create_dir_all(&home).expect("the synthetic home is created");
   std::fs::write(home.join("config.yaml"), config_text(port)).expect("the synthetic config is written");
   std::fs::write(home.join("credentials.yaml"), "").expect("the synthetic credentials file is written");
+  std::fs::create_dir_all(home.join("config.d")).expect("the synthetic config.d is created");
+  std::fs::write(home.join("config.d/approval_policy.yaml"), approval_policy_table())
+    .expect("the synthetic approval policy table is written");
   home
+}
+
+/// A valid approval policy table: the server start refuses a home without one.
+fn approval_policy_table() -> &'static str {
+  "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies: []
+enable_ask_tier_refusal: false
+"
 }
 
 fn test_server_binary(root: &Path) -> PathBuf {

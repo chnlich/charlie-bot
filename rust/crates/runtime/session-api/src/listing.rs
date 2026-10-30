@@ -33,20 +33,11 @@ pub(crate) struct SidebarProjection {
   pub(crate) include_run_backend: bool,
 }
 
+#[derive(Default)]
 struct SessionsListMemoState {
   whole_body: Option<WholeListingBody>,
   #[cfg(test)]
   render_calls: usize,
-}
-
-impl Default for SessionsListMemoState {
-  fn default() -> Self {
-    Self {
-      whole_body: None,
-      #[cfg(test)]
-      render_calls: 0,
-    }
-  }
 }
 
 /// One rendered listing body, its inputs, and the gzip form a request asked for.
@@ -61,7 +52,6 @@ struct WholeListingBody {
 
 /// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
 /// and the controller's listing fields. Rows with equal inputs render equal values.
-#[derive(PartialEq)]
 pub(crate) struct RowInputs {
   meta: Arc<SessionMetadata>,
   derived: Option<Arc<Map<String, Value>>>,
@@ -69,6 +59,25 @@ pub(crate) struct RowInputs {
   run_backend: Option<String>,
   display_backend: Option<String>,
   listing: Option<Map<String, Value>>,
+}
+
+impl PartialEq for RowInputs {
+  /// Equal when every input still names the same value.
+  ///
+  /// The metadata compares by identity: the store hands out one shared, immutable row for as long as its content
+  /// holds, so another pointer means other content while the same pointer means an equal row. Reading it by content
+  /// instead compares every field of every row's metadata on each request of a listing or a page.
+  ///
+  /// The derived overlay compares by content, because a rebuilt overlay hands out new maps for rows whose derived
+  /// state did not move, and the memo should then still serve the row it rendered before.
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.meta, &other.meta)
+      && self.derived == other.derived
+      && self.thinking_since == other.thinking_since
+      && self.run_backend == other.run_backend
+      && self.display_backend == other.display_backend
+      && self.listing == other.listing
+  }
 }
 
 /// The render and gzip memos owned by one sidebar listing route.
@@ -276,11 +285,10 @@ pub fn sessions_list_response(
     {
       state.render_calls += inputs.len();
     }
-    let values =
-      match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>() {
-        Ok(values) => values,
-        Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
-      };
+    let values = match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>() {
+      Ok(values) => values,
+      Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+    };
     let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
     state.whole_body = Some(WholeListingBody { inputs, body, gzip: None });
   }

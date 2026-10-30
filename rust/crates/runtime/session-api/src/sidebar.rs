@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use charliebot_registry::Registry;
@@ -185,12 +185,8 @@ fn schedule_sidebar_sweep(
   let now = Instant::now();
   {
     let mut last_start = SIDEBAR_SWEEP_LAST_START.lock().expect("the sweep start time mutex is not poisoned");
-    if !should_start_sweep(
-      SIDEBAR_SWEEP_RUNNING.load(Ordering::Acquire),
-      *last_start,
-      now,
-      SIDEBAR_SWEEP_MIN_INTERVAL,
-    ) {
+    if !should_start_sweep(SIDEBAR_SWEEP_RUNNING.load(Ordering::Acquire), *last_start, now, SIDEBAR_SWEEP_MIN_INTERVAL)
+    {
       return Ok(());
     }
     *last_start = Some(now);

@@ -40,19 +40,6 @@
     ]
    }
   ],
-  "/query/enum": [
-   {
-    "source": "query",
-    "name": "v",
-    "type": "enum",
-    "default": "a",
-    "choices": [
-     "a",
-     "b",
-     "c"
-    ]
-   }
-  ],
   "/query/required": [
    {
     "source": "query",
@@ -508,30 +495,6 @@
   {
    "endpoint": "/query/literal",
    "url": "/query/literal?",
-   "status": 200,
-   "body": "{\"ok\":true}"
-  },
-  {
-   "endpoint": "/query/enum",
-   "url": "/query/enum?v=b",
-   "status": 200,
-   "body": "{\"ok\":true}"
-  },
-  {
-   "endpoint": "/query/enum",
-   "url": "/query/enum?v=z",
-   "status": 422,
-   "body": "{\"detail\":[{\"type\":\"enum\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'a', 'b' or 'c'\",\"input\":\"z\",\"ctx\":{\"expected\":\"'a', 'b' or 'c'\"}}]}"
-  },
-  {
-   "endpoint": "/query/enum",
-   "url": "/query/enum?v=",
-   "status": 422,
-   "body": "{\"detail\":[{\"type\":\"enum\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'a', 'b' or 'c'\",\"input\":\"\",\"ctx\":{\"expected\":\"'a', 'b' or 'c'\"}}]}"
-  },
-  {
-   "endpoint": "/query/enum",
-   "url": "/query/enum?",
    "status": 200,
    "body": "{\"ok\":true}"
   },

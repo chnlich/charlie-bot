@@ -121,12 +121,16 @@ function toggleForYouExplainPanel(btn, sessionId, eventIndex) {
     Chat.dropForYouPanelSlot(group.dataset.roundId);
     return;
   }
-  slot.appendChild(buildExplainPanel(sessionId, eventIndex));
+  slot.appendChild(buildExplainPanel(sessionId, eventIndex, 'my-1'));
 }
 
-function buildExplainPanel(sessionId, eventIndex) {
+// The panel body. The Everything panel insets itself to the separator line's
+// padding (mx-4); the For-you panel spans the list column, where the bubbles
+// carry no inset.
+function buildExplainPanel(sessionId, eventIndex, inset) {
   const panel = document.createElement('div');
-  panel.className = 'explain-panel mx-4 my-1 px-3 py-2 bg-slate-800/70 border border-slate-700/60 rounded-lg';
+  panel.className = 'explain-panel ' + (inset || 'mx-4 my-1')
+    + ' px-3 py-2 bg-slate-800/70 border border-slate-700/60 rounded-lg';
   panel.dataset.sessionId = sessionId;
   panel.dataset.eventIndex = eventIndex;
   panel.innerHTML = '<div class="explain-body text-slate-500 text-xs">Loading explanation…</div>';

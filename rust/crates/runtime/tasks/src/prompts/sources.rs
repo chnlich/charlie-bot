@@ -202,7 +202,7 @@ fn worker_kind_rule_segments(
     let repo_less = !task.and_then(|task| task.repo_path.as_deref()).is_some_and(|path| !path.is_empty());
     let ids = spawner_prompt::workflow_rule_section_ids(task, repo_less)?;
     let workflow = sections_text(repo, "worker.md", &ids)?;
-    segments.push(segment(format!("{worker}\n{workflow}"), vec![base_source("prompts/worker.md")]));
+    segments.push(segment(format!("{worker}\n{workflow}"), vec![base_source(spawner_prompt::WORKER_PROMPT_PATH)]));
   }
   Ok(segments)
 }

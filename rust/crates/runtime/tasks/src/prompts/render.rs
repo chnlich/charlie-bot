@@ -14,7 +14,7 @@ use crate::spawner_prompt::{self, Tokens};
 /// The session-info line with the session's name filled in.
 pub fn render_session_info(checkout: &RepoRoot, session_name: &str) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
-    &checkout.path().join("prompts/worker.md"),
+    &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &["session_info"],
     "worker-prompt",
   )?;
@@ -42,8 +42,11 @@ pub fn render_worktree_bindings(
   // Element 0 of the task type's section list is its bindings section.
   let section = spawner_prompt::workflow_prompt_sections(task_type)
     .ok_or_else(|| anyhow!("no workflow sections for task type {task_type:?}"))?[0];
-  let sections =
-    spawner_prompt::load_marker_sections(&checkout.path().join("prompts/worker.md"), &[section], "worker-prompt")?;
+  let sections = spawner_prompt::load_marker_sections(
+    &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
+    &[section],
+    "worker-prompt",
+  )?;
   let tokens: Tokens =
     spawner_prompt::worktree_binding_tokens(intro_line, branch_name, base_branch_origin, wt_path, repo_path);
   Ok(spawner_prompt::substitute_tokens(&sections[section], &tokens))
@@ -51,8 +54,11 @@ pub fn render_worktree_bindings(
 
 /// The task section with the description filled in (`render_task_body`).
 pub fn render_task_body(checkout: &RepoRoot, description: &str) -> anyhow::Result<String> {
-  let sections =
-    spawner_prompt::load_marker_sections(&checkout.path().join("prompts/worker.md"), &["task"], "worker-prompt")?;
+  let sections = spawner_prompt::load_marker_sections(
+    &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
+    &["task"],
+    "worker-prompt",
+  )?;
   let tokens: Tokens = vec![("{{description}}", description.to_string())];
   Ok(spawner_prompt::substitute_tokens(&sections["task"], &tokens))
 }
@@ -60,7 +66,7 @@ pub fn render_task_body(checkout: &RepoRoot, description: &str) -> anyhow::Resul
 /// The worktree persistence section, as the template states it (`render_worktree_persistence`).
 pub fn render_worktree_persistence(checkout: &RepoRoot) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
-    &checkout.path().join("prompts/worker.md"),
+    &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &["worktree_persistence"],
     "worker-prompt",
   )?;

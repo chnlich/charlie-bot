@@ -1343,7 +1343,6 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
- "http 1.5.0",
  "libc",
  "memchr",
  "percent-encoding",

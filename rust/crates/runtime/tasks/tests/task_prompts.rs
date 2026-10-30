@@ -178,12 +178,12 @@ impl Harness {
     Self { _home: home, cfg, registry, store, checkout, repo_root }
   }
 
-  /// Opens a store over the same home. Its metadata cache starts empty, so it reads the files this harness wrote.
   /// The temporary home path, for tests that edit a home file between two assemblies.
   fn home_path(&self) -> &Path {
     self._home.path()
   }
 
+  /// Opens a store over the same home. Its metadata cache starts empty, so it reads the files this harness wrote.
   fn reopen_store(&mut self) {
     let hooks = StoreHooks {
       account_labels: Some(Arc::new(NoHooks)),

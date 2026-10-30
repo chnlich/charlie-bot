@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 26] = [
+const COMMANDS: [&str; 27] = [
   "artifact",
   "compaction-context",
   "config",
@@ -32,6 +32,7 @@ const COMMANDS: [&str; 26] = [
   "linear",
   "memory",
   "plan",
+  "policy",
   "preflight-charlie-code",
   "publish",
   "release-helper",
@@ -114,6 +115,7 @@ fn run_subcommand(
     "linear" => commands::linear::main(args),
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
+    "policy" => commands::policy::main(args),
     "preflight-charlie-code" => commands::preflight_charlie_code::main(args),
     "publish" => charliebot_artifacts::cli::publish::main(args, host),
     "release-helper" => commands::release_helper::main(args),

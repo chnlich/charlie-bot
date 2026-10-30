@@ -8,6 +8,7 @@ pub mod files;
 pub mod gc_trash;
 pub mod google;
 pub mod linear;
+pub mod policy;
 pub mod preflight_charlie_code;
 pub mod release_helper;
 pub mod router;

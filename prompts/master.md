@@ -351,7 +351,7 @@ artifact — it defines the HTML requirements and the page quality bar; write
 the user opts out or the response is a brief acknowledgment. As a lead, put the page in your worker's task spec, as Direct Work states.
 
 When the user asks to understand something, answer with an explain page, even for a one-sentence answer.
-The explainer row of Artifact Genres in `prompts/manager_workflows.md` defines that request.
+The explain row of Artifact Genres in `prompts/manager_workflows.md` defines that request.
 Post the conclusion in two or three sentences, with the page link, as the chat reply.
 The first answer then carries the diagrams and examples that the user would otherwise ask for.
 

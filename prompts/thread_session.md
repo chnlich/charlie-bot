@@ -11,7 +11,7 @@ The thread reply contract in this session's instructions states how to read the 
 
 This instruction file omits `prompts/manager_workflows.md`.
 That file holds the rules for these kinds of work:
-- pages for the user: understanding, plan, sitrep, debugging, and explainer pages;
+- pages for the user: understanding, plan, sitrep, debugging, and explain pages;
 - delegation to workers;
 - improve loops;
 - executable recipes;

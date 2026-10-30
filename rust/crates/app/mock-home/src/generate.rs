@@ -17,8 +17,8 @@ use crate::manifest::{MANIFEST_NAME, Manifest, ManifestSession, SessionMetadata}
 use crate::rng::Rng;
 use crate::text::{self, SyntheticText};
 
-/// The event-log size at each quantile, as (quantile, bytes). The knots are production numbers: a median of 1.7 KB, a
-/// p90 of 1.4 MB, a p99 of 17 MB, and 144 MB for the largest of 7,160 sessions.
+/// The event-log size at each quantile, as (quantile, bytes). Each knot is a production measurement: 1.7 KB at the
+/// median, 1.4 MB at p90, 17 MB at p99 and 144 MB at the maximum. The maximum is the largest of 7,160 sessions.
 const SIZE_KNOTS: [(f64, f64); 5] = [(0.0, 150.0), (0.5, 1.7e3), (0.9, 1.4e6), (0.99, 1.7e7), (1.0, 1.44e8)];
 /// The exponent of each segment's position curve. An upper segment's exponent sets how its sizes bunch toward the lower
 /// knot. These exponents give a total of about 5.8 GB at 7,160 sessions.

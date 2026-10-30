@@ -22,12 +22,12 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // ---------------------------------------------------------------------------
 // Archive, unarchive and permanent delete
 // ---------------------------------------------------------------------------
-// Inline removal shared by archive / unarchive / delete: the list never
-// refetches — grouped views repaint in place from the last-rendered list
-// minus the session (preview backfill, counts and Show-all toggle resync),
-// the archived tab and the search overlay fall back to removing just the row
-// node, and when it was the session being viewed the view moves to the first
-// remaining rendered session.
+// Inline removal shared by archive / unarchive / delete. The list never
+// refetches. Grouped views repaint in place from the last-rendered list minus
+// the session, with preview backfill, counts and Show-all toggle resync. The
+// archived tab and the search overlay fall back to removing just the row node.
+// When it was the session being viewed, the view moves to the first remaining
+// rendered session.
 async function removeSessionRowInline(sessionId) {
   delete sessionUnread[sessionId];
   const repainted = Sidebar.removeSessionFromRenderedList(sessionId);
@@ -67,9 +67,9 @@ async function archiveSession(id) {
   }
 }
 
-// The server's refusal sentence for the row's user: a 409 archive refusal
+// The server's refusal sentence for the row's user. A 409 archive refusal
 // carries its blockers (the nodes holding an unfinished run) beside the
-// message; any other refusal body keeps whatever detail it carries.
+// message. Any other refusal body keeps whatever detail it carries.
 async function archiveRefusalDetail(res) {
   let detail = `Archive failed: ${res.status}`;
   try {

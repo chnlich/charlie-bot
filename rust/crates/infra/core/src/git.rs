@@ -1,4 +1,5 @@
-//! The two git reads the server makes in the repository root: the short HEAD sha and its commit date.
+//! Git facts the server shares: the reads it makes in the repository root, and the name of the quarantine
+//! directory beside the worktrees.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -10,6 +11,10 @@ use wait_timeout::ChildExt;
 pub const SHA_TIMEOUT: Duration = Duration::from_secs(2);
 /// The page version's git timeout (`timeouts.SUBPROCESS_GIT_VERSION_TIMEOUT`).
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The quarantine directory name under `paths.worktree_dir`. The live-worktree list skips it, and
+/// `charliebot gc-trash` purges it.
+pub const TRASH_DIR_NAME: &str = ".trash";
 
 /// The stripped stdout of `git <args>` run in `repo_root`, or `None` when git is missing, exits
 /// non-zero, prints nothing, or outlives `timeout`. Each caller picks its own sentinel for `None`.

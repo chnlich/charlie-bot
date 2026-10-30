@@ -112,11 +112,10 @@ impl From<Value> for CompactValue {
 
 /// Deserializes straight from the parser's bytes: one pass, no `serde_json::Value` intermediate.
 ///
-/// The cold event-log read used to parse each line into a `Value` and re-walk it through
-/// [`CompactValue::from_value`], allocating the whole tree twice; the visitor below builds the compact
-/// form as the parser scans, interning each object key once and sizing every container from the
-/// parser's hint. The accepted grammar and the resulting values are serde_json's own, so a document
-/// this impl accepts is exactly one `from_value(serde_json::from_str(..))` would have produced.
+/// The visitor below builds the compact form as the parser scans, interning each object key once and
+/// sizing every container from the parser's hint. The accepted grammar and the resulting values are
+/// serde_json's own, so a document this impl accepts is exactly one
+/// `from_value(serde_json::from_str(..))` would have produced.
 impl<'de> serde::Deserialize<'de> for CompactValue {
   fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
     struct CompactVisitor;

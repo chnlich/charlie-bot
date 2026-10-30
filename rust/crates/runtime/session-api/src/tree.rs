@@ -43,26 +43,34 @@ pub(crate) fn tree_page(
     index.meta(parent_id)?;
   }
   let revision = index.revision().to_string();
-  let mut rows = Vec::new();
-  for row in store.task_tree_rows(&index, parent_id, include_archived)? {
-    let meta = index.meta(&row.session_id)?;
-    rows.push((meta.created_at, meta.id.clone(), session_row(meta, row)));
-  }
-
-  if let Some(cursor) = cursor {
-    let (cursor_revision, cursor_time, cursor_id) = decode_cursor(cursor)?;
-    if cursor_revision != revision {
-      return Err(StoreError::conflict(vec!["task tree changed during pagination; refresh and re-paginate".into()]));
+  let after = match cursor {
+    Some(cursor) => {
+      let (cursor_revision, cursor_time, cursor_id) = decode_cursor(cursor)?;
+      if cursor_revision != revision {
+        return Err(StoreError::conflict(vec!["task tree changed during pagination; refresh and re-paginate".into()]));
+      }
+      Some((cursor_time, cursor_id))
     }
-    rows.retain(|(created_at, id, _)| (*created_at, id.as_str()) > (cursor_time, cursor_id.as_str()));
+    None => None,
+  };
+  let page = store.task_tree_page(
+    &index,
+    parent_id,
+    include_archived,
+    after.as_ref().map(|(time, id)| (*time, id.as_str())),
+    limit,
+  )?;
+  let mut last = None;
+  let mut items = Vec::with_capacity(page.rows.len());
+  for row in page.rows {
+    let meta = index.meta(&row.session_id)?;
+    last = Some((meta.created_at, meta.id.clone()));
+    items.push(session_row(meta, row));
   }
-
-  let has_more = rows.len() > limit;
-  rows.truncate(limit);
   let next_cursor =
-    if has_more { rows.last().map(|(created_at, id, _)| encode_cursor(&revision, *created_at, id)) } else { None };
+    if page.has_more { last.map(|(created_at, id)| encode_cursor(&revision, created_at, &id)) } else { None };
   Ok(json!({
-    "items": rows.into_iter().map(|(_, _, row)| row).collect::<Vec<_>>(),
+    "items": items,
     "next_cursor": next_cursor,
     "tree_revision": revision,
   }))
@@ -128,6 +136,42 @@ mod tests {
     tree_page(&features.store, Some(&root.id), true, 20, None).unwrap();
     assert_eq!(features.store.task_tree_index_build_count(), after_first_page);
     assert_eq!(features.store.task_state_tail_read_count(), after_first_tail_reads);
+  }
+
+  #[tokio::test]
+  async fn a_tree_page_computes_only_the_rows_it_returns() {
+    let (_home, features) = feature_context();
+    let root = create_node(&features.store, "tree-root", None, TaskProfile::Manager).await;
+    for index in 0..5 {
+      create_node(&features.store, &format!("tree-child-{index}"), Some(&root.id), TaskProfile::Manager).await;
+    }
+    features.store.invalidate_tree_index();
+
+    let all = tree_page(&features.store, Some(&root.id), true, 100, None).unwrap();
+    let expected = page_ids(&all);
+
+    let activity_calls_before = features.store.task_tree_activity_call_count();
+    let first = tree_page(&features.store, Some(&root.id), true, 2, None).unwrap();
+    assert_eq!(
+      features.store.task_tree_activity_call_count() - activity_calls_before,
+      3,
+      "a two-row page computes its rows and the one row that proves another follows, not every child"
+    );
+    assert_eq!(page_ids(&first), expected[..2]);
+    let cursor = first["next_cursor"].as_str().expect("a further row follows the page").to_string();
+
+    let second = tree_page(&features.store, Some(&root.id), true, 100, Some(&cursor)).unwrap();
+    assert_eq!(page_ids(&second), expected[2..]);
+    assert!(second["next_cursor"].is_null());
+  }
+
+  fn page_ids(page: &Value) -> Vec<String> {
+    page["items"]
+      .as_array()
+      .expect("a page carries items")
+      .iter()
+      .map(|row| row["id"].as_str().expect("a row carries its id").to_string())
+      .collect()
   }
 
   #[tokio::test]

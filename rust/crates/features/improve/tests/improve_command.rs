@@ -79,7 +79,8 @@ fn an_allowed_rate_limit_event_is_no_blocker() {
   let events =
     [json!({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}})];
 
-  let (blocker, _) = judgment::failed_iteration_judgments(&events, 1, "failed").expect("the judgments read");
+  let (blocker, _) =
+    judgment::failed_iteration_judgments_from_events(events.iter().cloned(), 1, "failed").expect("the judgments read");
 
   assert_eq!(blocker, None);
 }
@@ -96,7 +97,8 @@ fn the_newest_quota_match_names_the_blocker() {
     }),
   ];
 
-  let (blocker, _) = judgment::failed_iteration_judgments(&events, 1, "failed").expect("the judgments read");
+  let (blocker, _) =
+    judgment::failed_iteration_judgments_from_events(events.iter().cloned(), 1, "failed").expect("the judgments read");
 
   assert_eq!(blocker.as_deref(), Some("provider quota/token/rate-limit rejection (insufficient quota)"));
 }
@@ -141,7 +143,8 @@ fn the_newest_summary_wins_whichever_kind_carries_it() {
   // Newest first: the assistant text is newer than the result, so its words are the summary.
   let events = [assistant_text("newest words"), json!({"type": "result", "result": "older result text"})];
 
-  let summary = judgment::extract_iteration_summary(&events, 3, "failed");
+  let summary =
+    judgment::extract_iteration_summary_from_events(events.iter().cloned(), 3, "failed").expect("the summary reads");
 
   assert_eq!(summary, "newest words");
 }
@@ -169,10 +172,11 @@ fn the_candidate_prefilter_keeps_the_judgments_inputs() {
   ];
   std::fs::write(&path, lines.join("\n") + "\n").expect("the event log");
 
-  let events = judgment::newest_first_events(&path).expect("the events read");
+  let events: Vec<Value> = judgment::newest_first_event_iter(&path).expect("the events read").collect();
 
   assert_eq!(events, vec![assistant.clone(), rate_limit.clone(), adopt_signal]);
-  let (blocker, summary) = judgment::failed_iteration_judgments(&events, 1, "failed").expect("the judgments read");
+  let (blocker, summary) =
+    judgment::failed_iteration_judgments_from_events(events.iter().cloned(), 1, "failed").expect("the judgments read");
   assert!(blocker.is_some(), "the rejected rate limit is the blocker");
   assert_eq!(summary, "iter words");
 }

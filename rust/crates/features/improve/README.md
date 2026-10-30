@@ -33,10 +33,10 @@ failure and selects again on the next iteration.
 | `judgment::iter_report_validity` | `src/features/improve/improve_command.py:266` |
 | `judgment::invalid_iteration_summary` | `src/features/improve/improve_command.py:289` |
 | `judgment::summary_text` | `src/features/improve/improve_command.py:333` |
-| `judgment::extract_iteration_summary` | `src/features/improve/improve_command.py:347` |
+| `judgment::extract_iteration_summary_from_events` | `src/features/improve/improve_command.py:347` |
 | `judgment::quota_blocker_match` | `src/features/improve/improve_command.py:512` |
-| `judgment::failed_iteration_judgments` | `src/features/improve/improve_command.py:544` |
-| `judgment::newest_first_events` | `src/features/improve/improve_command.py:570` |
+| `judgment::failed_iteration_judgments_from_events` | `src/features/improve/improve_command.py:544` |
+| `judgment::newest_first_event_iter` | `src/features/improve/improve_command.py:570` |
 | `landing::commit_delta` | `src/features/improve/improve_command.py:303` |
 | `landing::land_work_branch_after_loop` and `Landing` | `src/features/improve/improve_command.py:370` |
 | `landing::blocked_loop_summary` | `src/features/improve/improve_command.py:423` |

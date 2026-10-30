@@ -16,7 +16,6 @@ charliebot-triggers.workspace = true
 charliebot-store.workspace = true
 charliebot-usage.workspace = true
 charliebot-tasks.workspace = true
-flate2.workspace = true
 form_urlencoded.workspace = true
 futures-util.workspace = true
 http.workspace = true

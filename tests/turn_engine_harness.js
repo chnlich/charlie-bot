@@ -325,13 +325,14 @@ class FakeElement {
   }
 
   closest(selector) {
-    if (!selector.startsWith('.')) {
+    if (!selector.startsWith('.') && !selector.startsWith('[')) {
       throw new Error(`Unsupported selector: ${selector}`);
     }
-    const className = selector.slice(1);
     let current = this;
     while (current) {
-      if (current.classList.contains(className)) {
+      if (selector.startsWith('.')
+          ? current.classList.contains(selector.slice(1))
+          : fakeElementMatches(current, selector)) {
         return current;
       }
       current = current.parentElement;
@@ -429,7 +430,6 @@ function buildElement(item) {
 
   if (item.role === 'separator') {
     el.className = 'separator-line group/sep';
-    if (item.secs != null) el.dataset.thinkingSeconds = String(item.secs);
     const line = new FakeElement('DIV', {className: 'flex-1 border-t'});
     el.appendChild(line);
     return el;
@@ -532,7 +532,6 @@ function fakeEngineNode(msg) {
   if (msg.timestamp) el.dataset.messageTs = msg.timestamp;
   if (msg.role === 'separator') {
     el.className = 'separator-line group/sep';
-    if (msg.thinking_seconds != null) el.dataset.thinkingSeconds = String(msg.thinking_seconds);
     el.__baseHeight = 30;
     el.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t'}));
     return el;
@@ -542,6 +541,15 @@ function fakeEngineNode(msg) {
   });
   if (PROSE_ROLES.includes(msg.role)) bubble.dataset.raw = msg.content;
   else bubble.textContent = msg.content;
+  if (msg.role === 'web_reply') {
+    // renderMessage always gives a web reply the flex time row the For-you
+    // round buttons hang on (rendering.js webReplyTimeRow).
+    const timeRow = new FakeElement('DIV', {
+      className: 'text-[10px] mt-1 flex items-center justify-between bubble-time-row',
+    });
+    if (msg.timestamp) timeRow.textContent = BUBBLE_TIME_TEXT;
+    bubble.appendChild(timeRow);
+  }
   const inner = new FakeElement('DIV', {className: 'max-w-[90%]'});
   inner.appendChild(bubble);
   el.appendChild(inner);

@@ -85,6 +85,18 @@
     return msg.id != null && msg.id !== '' && Boolean(msg.role);
   }
 
+  // The placement rule for the round buttons: the view placing a node decides
+  // whether it carries its round's group. Everything strips the group a
+  // For-you placement hung on the shared reply node, so a round keeps the one
+  // group its separator hosts; the separator's own group sits on the
+  // separator node, never inside a reply's bubble, and is never stripped.
+  function stripBubbleRoundButtons(entry) {
+    if (entry.msg.role !== 'web_reply' || !entry.node) return;
+    const timeRow = entry.node.querySelector('.bubble-time-row');
+    const group = timeRow && timeRow.querySelector('.round-buttons');
+    if (group) group.remove();
+  }
+
   function contentChars(entry) {
     return String(entry.msg.content || '').length;
   }
@@ -126,9 +138,6 @@
       headText: String(turn.head.msg.content || ''),
       headTs: turn.head.msg.timestamp || null,
       conclusionText: turn.conclusion ? String(turn.conclusion.msg.content || '') : null,
-      thinkingSeconds: turn.separator.msg.thinking_seconds != null
-        ? turn.separator.msg.thinking_seconds
-        : null,
       foldCount: turn.fold.length,
     };
   }
@@ -167,7 +176,11 @@
       // streaming output off the list.
       this.forYouEmpty = null;
       this.forYouHolder = null;
-      this.forYouRoundButtonRows = new Map();
+      // The For-you panel slots (one block container per round, holding an
+      // open separator panel below the round's last reply), keyed by the
+      // round id. A slot exists while its panel is open; the cache is what
+      // keeps the panel across a view switch.
+      this.forYouPanelSlots = new Map();
       // A worker page's pagination sentinel (holdWorkerSentinel), or null.
       this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
@@ -484,7 +497,10 @@
       wrap.appendChild(Chat.buildTurnRowFromSpec(seg.rowSpec));
       if (!open) return wrap;
 
-      seg.entries.forEach((entry) => wrap.appendChild(entry.node));
+      seg.entries.forEach((entry) => {
+        stripBubbleRoundButtons(entry);
+        wrap.appendChild(entry.node);
+      });
       Chat.installTurnFold(wrap, seg.foldEntries.map((entry) => entry.node), seg.key);
       Chat.installTurnCollapseControl(seg.separatorEntry.node);
       if (seg.rowSpec.foldCount > 0 && this.effectiveNStepsExpanded(seg)) {
@@ -523,7 +539,10 @@
     buildFlatNode(seg) {
       const frag = document.createElement('div');
       frag.className = 'turn-flat';
-      seg.entries.forEach((entry) => frag.appendChild(entry.node));
+      seg.entries.forEach((entry) => {
+        stripBubbleRoundButtons(entry);
+        frag.appendChild(entry.node);
+      });
       return frag;
     }
 
@@ -1160,7 +1179,7 @@
       this.resizeRafHandle = null;
       this.resizeRafScheduled = false;
       this.entries = [];
-      this.forYouRoundButtonRows.clear();
+      this.forYouPanelSlots.clear();
       this.messageRecords.clear();
       this.segments = [];
       this.readingAnchor = null;
@@ -1281,6 +1300,8 @@
     // the empty-state row, and the stream holder (hidden: the streaming output
     // sits in it, off the list). A worker session's For you holds its one
     // summary card instead of the empty-state row — item rows never show there.
+    // A finished round's last reply carries the round's button group in its
+    // bubble's time row, and an open panel's slot follows the reply.
     syncForYouChildren() {
       const children = [];
       const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
@@ -1290,34 +1311,32 @@
         if (forYouRules.isWorker()) children.push(forYouRules.summaryCard());
         else children.push(this.forYouEmptyNode());
       }
-      const roundButtonRows = forYouRules.roundButtonRows(this.entries);
+      const roundEnds = forYouRules.roundButtonRows(this.entries);
       for (const entry of shown) {
         children.push(this.forYouEntryNode(entry));
-        const separator = roundButtonRows.get(entry);
-        if (separator) {
-          const row = this.forYouRoundButtonRowNode(separator);
-          if (row.parentNode !== this.container) Chat.repaintRoundButtons(row);
-          children.push(row);
-        }
+        const roundEnd = roundEnds.get(entry);
+        if (!roundEnd) continue;
+        this.attachRoundButtons(entry, roundEnd);
+        const slot = this.forYouPanelSlots.get(String(roundEnd.id));
+        if (slot) children.push(slot);
       }
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);
     }
 
-    forYouRoundButtonRowNode(msg) {
-      const key = String(msg.id);
-      let wrapper = this.forYouRoundButtonRows.get(key);
-      if (!wrapper) {
-        wrapper = document.createElement('div');
-        const row = document.createElement('div');
-        row.className = Chat.SEPARATOR_ROW_CLASS;
-        row.dataset.eventIndex = String(msg.event_index);
-        if (msg.thinking_seconds != null) row.dataset.thinkingSeconds = String(msg.thinking_seconds);
-        row.innerHTML = Chat.separatorRowInnerHtml(this.sessionId, msg);
-        wrapper.appendChild(row);
-        this.forYouRoundButtonRows.set(key, wrapper);
-      }
-      return wrapper;
+    // Hangs the round's button group on the reply bubble's time row. The
+    // attach recomputes from the reply and the round-end event on every
+    // projection — the group is built fresh from the current rating and
+    // Explain state, and a group left by an earlier mapping goes.
+    attachRoundButtons(entry, roundEnd) {
+      if (!entry.node) return;
+      const timeRow = entry.node.querySelector('.bubble-time-row');
+      if (!timeRow) return;
+      const stale = timeRow.querySelector('.round-buttons');
+      if (stale) stale.remove();
+      const group = Chat.buildRoundButtonGroup(this.sessionId, roundEnd);
+      timeRow.appendChild(group);
+      Chat.repaintRoundButtons(group);
     }
 
     forYouEntryNode(entry) {
@@ -1328,6 +1347,34 @@
     forYouEmptyNode() {
       if (!this.forYouEmpty) this.forYouEmpty = forYouRules.buildEmptyLine();
       return this.forYouEmpty;
+    }
+
+    // The panel slot of one round: the block container after the round's last
+    // reply that holds an open separator panel below the bubble, at the list's
+    // full column width. The cache keeps the slot (panel included) while the
+    // panel is open, so a view switch — which wipes the container — and the
+    // projections that follow find it again; closing the panel drops it.
+    forYouPanelSlot(replyNode, roundId) {
+      const key = String(roundId);
+      let slot = this.forYouPanelSlots.get(key);
+      if (!slot) {
+        slot = document.createElement('div');
+        slot.className = 'for-you-panel-slot';
+        slot.dataset.roundId = key;
+        this.forYouPanelSlots.set(key, slot);
+      }
+      if (slot.previousElementSibling !== replyNode) {
+        replyNode.parentNode.insertBefore(slot, replyNode.nextSibling);
+      }
+      return slot;
+    }
+
+    dropForYouPanelSlot(roundId) {
+      const key = String(roundId);
+      const slot = this.forYouPanelSlots.get(key);
+      if (!slot) return;
+      slot.remove();
+      this.forYouPanelSlots.delete(key);
     }
 
     forYouHolderNode() {
@@ -1726,6 +1773,18 @@
     };
   }
   Chat.registerSeparatorPanel = registerSeparatorPanel;
+
+  // The For-you panel slot (TurnEngine.forYouPanelSlot): a package's panel
+  // toggle reaches the active engine's slot cache through these two calls. No
+  // mounted engine means no list to place a slot in, so the slot is null.
+  Chat.forYouPanelSlot = function(replyNode, roundId) {
+    const engine = activeEngines().get(document.getElementById('messages'));
+    return engine ? engine.forYouPanelSlot(replyNode, roundId) : null;
+  };
+  Chat.dropForYouPanelSlot = function(roundId) {
+    const engine = activeEngines().get(document.getElementById('messages'));
+    if (engine) engine.dropForYouPanelSlot(roundId);
+  };
 
   // The For-you rules (chat/for-you.js) register once when that script loads.
   // The projection reads them from here, so this file names no later file.

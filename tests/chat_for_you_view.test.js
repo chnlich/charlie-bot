@@ -63,7 +63,9 @@ function installButtonHtmlParser(context) {
       get() { return html; },
       set(value) {
         html = String(value);
-        if (element.classList.contains('separator-line')) appendButtonMarkup(element, html, context);
+        if (element.classList.contains('separator-line') || element.classList.contains('round-buttons')) {
+          appendButtonMarkup(element, html, context);
+        }
       },
     });
     return element;
@@ -140,8 +142,15 @@ function forYouRig(
     const node = fakeEngineNode(msg);
     if (msg.role === 'separator') {
       if (msg.event_index != null) node.dataset.eventIndex = String(msg.event_index);
-      appendButtonMarkup(node, context.Chat.roundButtonsHtml(sessionId, msg), context);
-      node.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t'}));
+      // The Everything separator's inner markup (rendering.js
+      // separatorRowInnerHtml): a hairline, the round's button group when the
+      // round carries buttons, a second hairline — no label.
+      node.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t border-slate-600/40 separator-hairline'}));
+      if (msg.kind !== 'run_end') {
+        const group = context.Chat.buildRoundButtonGroup(sessionId, msg);
+        if (group.children.length) node.appendChild(group);
+      }
+      node.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t border-slate-600/40 separator-hairline'}));
     }
     return node;
   };
@@ -179,7 +188,6 @@ function rowsOf(root) {
     if (el.classList.contains('for-you-empty')) return 'empty';
     if (el.classList.contains('hidden')) return 'holder';
     if (el.id === 'load-more-sentinel') return 'sentinel';
-    if (!el.dataset.messageRole && el.querySelector('.separator-line')) return 'round-buttons';
     return el.dataset.messageRole;
   });
 }
@@ -205,7 +213,7 @@ function fixture() {
 }
 
 // The shown rows of the fixture: the user's messages, the reply, the notice and the error row.
-const FIXTURE_ROWS = ['user', 'web_reply', 'round-buttons', 'web_reply_notice', 'user', 'system', 'holder'];
+const FIXTURE_ROWS = ['user', 'web_reply', 'web_reply_notice', 'user', 'system', 'holder'];
 
 test('For you shows only the user, web reply, notice and error rows, in order', () => {
   const rig = forYouRig(fixture());
@@ -223,22 +231,36 @@ function replyRound() {
   ];
 }
 
-function forYouButtonRow(root) {
-  return root.children.find((el) => !el.dataset.messageRole && el.querySelector('.separator-line')) || null;
+// The one round-button group of a round, by the round marker: For you hosts it
+// in the last reply's bubble time row, Everything on the round's separator.
+function roundGroupFor(root, eventIndex) {
+  return root.querySelectorAll('.round-buttons')
+    .find((el) => el.dataset.roundEventIndex === String(eventIndex)) || null;
+}
+
+// The reply bubble a For-you group hangs in: the group's message ancestor.
+function replyOfGroup(group) {
+  for (let node = group; node; node = node.parentElement) {
+    if (node.dataset && node.dataset.messageId) return node;
+  }
+  return null;
 }
 
 function separatorLineFor(root, eventIndex) {
   return root.querySelectorAll('.separator-line').find((el) => el.dataset.eventIndex === String(eventIndex)) || null;
 }
 
-function buttonsOf(line) {
-  return line.children.filter((el) => el.tagName === 'BUTTON');
+// The buttons a group or a row that hosts one carries.
+function buttonsOf(host) {
+  const group = host.classList.contains('round-buttons') ? host : host.querySelector('.round-buttons');
+  return (group || host).children.filter((el) => el.tagName === 'BUTTON');
 }
 
-function buttonInventory(line) {
+function buttonInventory(group) {
   return {
-    eventIndex: line.dataset.eventIndex,
-    buttons: buttonsOf(line).filter((button) => !button.classList.contains('turn-collapse')).map((button) => ({
+    roundEventIndex: group.dataset.roundEventIndex,
+    roundId: group.dataset.roundId,
+    buttons: buttonsOf(group).filter((button) => !button.classList.contains('turn-collapse')).map((button) => ({
       title: button.getAttribute('title'),
       className: button.className,
       onclick: button.getAttribute('onclick'),
@@ -249,76 +271,87 @@ function buttonInventory(line) {
   };
 }
 
-test('one finished round puts one button row under its last web reply', () => {
-  const rig = forYouRig(replyRound());
-  assert.deepEqual(rowsOf(rig.root), ['user', 'web_reply', 'web_reply', 'round-buttons', 'holder']);
-
-  const wrapper = forYouButtonRow(rig.root);
-  const row = wrapper.querySelector('.separator-line');
-  assert.equal(rig.root.children[rig.root.children.indexOf(wrapper) - 1].dataset.messageId, 'round-r2');
-  assert.equal(row.dataset.eventIndex, '701');
-  assert.equal(wrapper.dataset.messageId, undefined);
-  assert.equal(row.dataset.messageId, undefined);
-  assert.equal(wrapper.querySelectorAll('[data-message-id]').length, 0);
+test('For you renders no separator line', () => {
+  const rig = forYouRig(fixture());
+  assert.equal(rig.root.querySelectorAll('.separator-line').length, 0);
 });
 
-test('a live separator adds the button row after the last reply when the round closes', () => {
+test('one finished round puts its button group in the last reply bubble of that round', () => {
+  const rig = forYouRig(replyRound());
+  assert.deepEqual(rowsOf(rig.root), ['user', 'web_reply', 'web_reply', 'holder']);
+
+  const group = roundGroupFor(rig.root, 701);
+  assert.ok(group, 'the finished round carries its button group');
+  assert.equal(group.dataset.roundId, 'round-s');
+  assert.equal(replyOfGroup(group).dataset.messageId, 'round-r2', 'the group rides the last reply');
+  assert.ok(group.parentElement.classList.contains('bubble-time-row'), 'the group sits in the time row');
+  assert.equal(buttonsOf(group).length, 5);
+
+  // The first reply of the round carries no group: one round, one group, on the last reply.
+  const firstReply = rig.root.querySelector('[data-message-id="round-r1"]');
+  assert.equal(firstReply.querySelectorAll('.round-buttons').length, 0);
+  assert.equal(rig.root.querySelectorAll('.round-buttons').length, 1, 'one group per round');
+});
+
+test('a live separator adds the button group to the last reply bubble when the round closes', () => {
   const messages = replyRound().slice(0, -1);
   const rig = forYouRig(messages);
-  assert.equal(forYouButtonRow(rig.root), null, 'the running round has no button row');
+  assert.equal(roundGroupFor(rig.root, 701), null, 'the running round has no button group');
 
   rig.engine.appendMessage(replyRound().at(-1), false);
   settle(rig.timers);
 
-  assert.equal(rig.root.children[rig.root.children.indexOf(forYouButtonRow(rig.root)) - 1].dataset.messageId, 'round-r2');
+  const group = roundGroupFor(rig.root, 701);
+  assert.ok(group, 'the closed round carries its button group');
+  assert.equal(replyOfGroup(group).dataset.messageId, 'round-r2');
 });
 
-test('rounds without a reply and run_end separators add no row, and worker For you stays a summary', () => {
+test('rounds without a reply and run_end rounds add no group, and worker For you stays a summary', () => {
   const noReply = forYouRig([
     eMsg('user', 'no-reply-u', 'question'),
     eMsg('assistant', 'no-reply-a', 'working'),
     eMsg('separator', 'no-reply-s', '', {event_index: 702}),
   ]);
-  assert.equal(forYouButtonRow(noReply.root), null);
+  assert.equal(roundGroupFor(noReply.root, 702), null);
 
   const runEnd = forYouRig([
     eMsg('web_reply', 'run-end-r', 'reply'),
     eMsg('separator', 'run-end-s', '', {kind: 'run_end', event_index: 703}),
   ]);
-  assert.equal(forYouButtonRow(runEnd.root), null);
+  assert.equal(runEnd.root.querySelectorAll('.round-buttons').length, 0);
 
   const worker = forYouRig(replyRound(), {
     profile: 'worker',
     workerSummary: {task_state: 'open', runs: [], closing: {work: null, review: null}, links: {}},
   });
-  assert.equal(rowsOf(worker.root).filter((row) => row === 'round-buttons').length, 0);
+  assert.equal(worker.root.querySelectorAll('.round-buttons').length, 0);
   assert.equal(worker.root.children.filter((child) => child.classList.contains('worker-summary')).length, 1);
 });
 
 test('For-you and Everything use the same round buttons and action boundaries', async () => {
   const messages = replyRound();
   const forYou = forYouRig(messages);
-  const forYouWrapper = forYouButtonRow(forYou.root);
-  const forYouLine = forYouWrapper.querySelector('.separator-line');
+  const forYouGroup = roundGroupFor(forYou.root, 701);
   const separatorMessage = messages[messages.length - 1];
 
   forYou.engine.setView('everything');
   settle(forYou.timers);
   const separatorLine = separatorLineFor(forYou.root, separatorMessage.event_index);
-  assert.deepEqual(buttonInventory(forYouLine), buttonInventory(separatorLine));
-  assert.equal(forYouLine.innerHTML, forYou.context.Chat.separatorRowInnerHtml('sess-fy', separatorMessage));
-  assert.equal(buttonsOf(forYouLine).length, 5);
-  assert.deepEqual(buttonsOf(forYouLine).slice(-2).map((button) => button.dataset.roundRatingEvent), [
+  const separatorGroup = separatorLine.querySelector('.round-buttons');
+  assert.ok(separatorGroup, 'the Everything separator hosts the round group');
+  assert.deepEqual(buttonInventory(forYouGroup), buttonInventory(separatorGroup));
+  assert.equal(buttonsOf(separatorGroup).length, 5);
+  assert.deepEqual(buttonsOf(separatorGroup).slice(-2).map((button) => button.dataset.roundRatingEvent), [
     'round-s', 'round-s',
   ]);
 
   async function actionRequest(view, title) {
     const rig = forYouRig(messages, {view});
     settle(rig.timers);
-    const line = view === 'foryou'
-      ? forYouButtonRow(rig.root).querySelector('.separator-line')
-      : separatorLineFor(rig.root, separatorMessage.event_index);
-    const button = buttonsOf(line).find((candidate) => candidate.getAttribute('title') === title);
+    const group = view === 'foryou'
+      ? roundGroupFor(rig.root, 701)
+      : separatorLineFor(rig.root, separatorMessage.event_index).querySelector('.round-buttons');
+    const button = buttonsOf(group).find((candidate) => candidate.getAttribute('title') === title);
     assert.ok(button, `${title} exists in ${view}`);
     button.onclick();
     assert.equal(rig.modalElements.get('session-action-modal-overlay').classList.contains('flex'), true);
@@ -337,7 +370,7 @@ test('For-you and Everything use the same round buttons and action boundaries', 
   }
 });
 
-test('Everything separator HTML matches the output before button extraction', () => {
+test('Everything separator HTML carries the round group and no label', () => {
   const rig = forYouRig([]);
   const html = rig.context.renderMessage(eMsg('separator', 'round-s', '', {
     thinking_seconds: 4,
@@ -345,39 +378,46 @@ test('Everything separator HTML matches the output before button extraction', ()
   }), 'sess-fy');
   const hash = crypto.createHash('sha256').update(html).digest('hex');
 
-  assert.equal(hash, 'b3b5d700bd9a4c066c2201175dde400ab370db4fb3e96551dbbc1e8ef013d06e');
+  assert.equal(hash, '75f108294ebb8b0cf5165209aaa00534ae1ca9e299694c7aacf8a56d43445425');
+  assert.doesNotMatch(html, /response complete/);
+  assert.doesNotMatch(html, /separator-label/);
+  assert.equal((html.match(/\bseparator-hairline\b/g) || []).length, 2, 'both hairlines stay');
+  assert.match(html, /data-round-event-index="701"/);
+  assert.match(html, /data-round-id="round-s"/);
 });
 
-// The For-you row as its element serializes: its class, its data attributes in the
-// order the engine sets them, and its inner markup.
-function serializedRow(el) {
+// An element as it serializes: its class, its data attributes in the order the
+// builder sets them, and its inner markup.
+function serializedGroup(el) {
   const attrs = Object.entries(el.dataset)
       .map(([key, value]) => ` data-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}="${value}"`);
   return `<div class="${el.className}"${attrs.join('')}>${el.innerHTML}</div>`;
 }
 
-test('a For-you round row is the Everything separator row without its data-message attributes', () => {
+test('a For-you bubble group is the Everything separator group', () => {
   const messages = replyRound();
   const rig = forYouRig(messages);
-  const row = forYouButtonRow(rig.root).querySelector('.separator-line');
-  const everything = rig.context.renderMessage(messages[messages.length - 1], 'sess-fy');
+  const group = roundGroupFor(rig.root, 701);
+  const separatorGroup = rig.context.Chat.buildRoundButtonGroup('sess-fy', messages[messages.length - 1]);
 
-  assert.equal(serializedRow(row), everything.replace(/ data-message-[a-z-]+="[^"]*"/g, ''));
-  assert.equal(row.innerHTML.split('separator-hairline').length - 1, 2, 'the row has both hairlines');
-  assert.ok(row.innerHTML.includes('response complete'), 'the row has the response complete label');
+  assert.equal(serializedGroup(group), serializedGroup(separatorGroup));
 });
 
-// The Everything separator markup for the shapes the shared row must leave unchanged: a Run's
-// end, a round without an event index and a round without thinking seconds.
-test('Everything separator HTML for run_end, no event index and no thinking seconds is unchanged', () => {
+// The Everything separator markup for the shapes the run-end row must leave unchanged: a Run's
+// end keeps its exact markup; a round without an event index and a round without thinking
+// seconds lose the label with the text.
+test('run_end separator HTML is unchanged; ordinary shapes drop only the label', () => {
   const rig = forYouRig([]);
   const shapes = [
+    // The run-end row's visible markup is byte-identical to the shape before the
+    // change; the hash moves only because the plan deletes the row's unread
+    // data-thinking-seconds attribute with its readers.
     [eMsg('separator', 'end-s', '', {kind: 'run_end', thinking_seconds: 65, event_index: 703}),
-      'b48ec3e1a9da713f77bc0f6757e89231f10ba6395902a9797a60f1fe93fbf7d4'],
+      '1244e816f399c551fc1dfc1b81668b21fb409b146f66c32bb3c7dfbdb2f712dc'],
     [eMsg('separator', 'noidx-s', '', {thinking_seconds: 4}),
-      '8c80c1309e30bbd6b78e3e7b2075bdbe2135018b8f7e28165084759082cc043d'],
+      'b501e36f77276952d6337603a8254aac98bb97a442536dd35f9a34389be47839'],
     [eMsg('separator', 'nosec-s', '', {event_index: 705}),
-      'f6cc9dc995a5bfeeac99160fd39c9d72b8359e9777b49c9073b6c0203dc3805c'],
+      '5033edd5c06a30c6afacb6c32e589edd4e16399be886895cc3d2b5f2c2e00dc1'],
   ];
   for (const [msg, expected] of shapes) {
     const html = rig.context.renderMessage(msg, 'sess-fy');
@@ -460,7 +500,7 @@ test('an older page lands above the shown rows', () => {
   ]);
   settle(rig.timers);
   assert.deepEqual(rowsOf(rig.root), [
-    'user', 'user', 'web_reply', 'round-buttons', 'web_reply_notice', 'user', 'system', 'holder',
+    'user', 'user', 'web_reply', 'web_reply_notice', 'user', 'system', 'holder',
   ]);
 });
 
@@ -538,14 +578,14 @@ test('no Working row shows while a turn runs, and the stream output stays in the
 test('a reprojection with nothing to move keeps every row element', () => {
   const rig = forYouRig(fixture());
   const before = rig.root.children.slice();
-  assert.ok(forYouButtonRow(rig.root), 'the list contains its cached round button row');
+  assert.ok(roundGroupFor(rig.root, 101), 'the finished reply carries its cached round group');
   rig.engine.reproject('resize');
   const after = rig.root.children;
   assert.equal(after.length, before.length);
   after.forEach((el, i) => assert.equal(el, before[i], `row ${i} is the same element`));
 });
 
-test('rating and Explain state repaint on the cached separator after a folded turn is reopened', async () => {
+test('rating and Explain state repaint the round group each view places', async () => {
   const messages = replyRound();
   const rig = forYouRig(messages, {view: 'everything'});
   settle(rig.timers);
@@ -558,8 +598,7 @@ test('rating and Explain state repaint on the cached separator after a folded tu
   assert.equal(separatorLineFor(rig.root, 701), null, 'the folded turn hides its separator');
   rig.engine.setView('foryou');
   settle(rig.timers);
-  const rowWrapper = forYouButtonRow(rig.root);
-  const row = rowWrapper.querySelector('.separator-line');
+  const group = roundGroupFor(rig.root, 701);
 
   let ratings = {};
   rig.context.fetch = async (url, options = {}) => {
@@ -569,10 +608,10 @@ test('rating and Explain state repaint on the cached separator after a folded tu
     return {ok: true, status: 200, json: async () => ({round_ratings: ratings})};
   };
   await rig.context.rateRound('sess-fy', 'round-s', 'thumbs_down');
-  assert.equal(buttonsOf(row).find((button) => button.dataset.roundRating === 'thumbs_down')
+  assert.equal(buttonsOf(group).find((button) => button.dataset.roundRating === 'thumbs_down')
       .classList.contains('text-red-400'), true);
   rig.wsHandlers.get('explain_status')({upto: 701, state: 'ready', backend: 'test'});
-  assert.equal(buttonsOf(row).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'ready');
+  assert.equal(buttonsOf(group).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'ready');
 
   rig.engine.setView('everything');
   settle(rig.timers);
@@ -591,30 +630,84 @@ test('rating and Explain state repaint on the cached separator after a folded tu
 
   rig.engine.setView('foryou');
   settle(rig.timers);
-  assert.equal(forYouButtonRow(rig.root), rowWrapper, 'For-you reuses its row node');
-  assert.equal(buttonsOf(row).find((button) => button.dataset.roundRating === 'thumbs_up')
+  const regrouped = roundGroupFor(rig.root, 701);
+  assert.notEqual(regrouped, group, 'For you rebuilds the group it places');
+  assert.equal(buttonsOf(regrouped).find((button) => button.dataset.roundRating === 'thumbs_up')
       .classList.contains('text-green-400'), true);
-  assert.equal(buttonsOf(row).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'pending');
+  assert.equal(buttonsOf(regrouped).find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'pending');
 });
 
-test('an Explain panel stays inside its For-you row after a live message reprojects the list', async () => {
+test('an Explain click in For you opens the panel below the bubble and marks the bubble button pending', async () => {
   const rig = forYouRig(replyRound());
-  const wrapper = forYouButtonRow(rig.root);
-  const row = wrapper.querySelector('.separator-line');
-  assert.equal(wrapper.classList.contains('flex'), false, 'the wrapper is a block, so the panel stacks below the row');
-  const explain = buttonsOf(row).find((button) => button.classList.contains('explain-toggle'));
+  const group = roundGroupFor(rig.root, 701);
+  const replyNode = replyOfGroup(group);
+  const explain = buttonsOf(group).find((button) => button.classList.contains('explain-toggle'));
   explain.onclick();
   await rig.context.submitSessionActionModal();
-  const panel = row.nextElementSibling;
-  assert.ok(panel && panel.classList.contains('explain-panel'));
-  assert.equal(panel.parentElement, wrapper);
+  rig.wsHandlers.get('explain_status')({upto: 701, state: 'pending', backend: 'test'});
 
-  rig.engine.appendMessage(eMsg('web_reply_notice', 'notice-after-round', 'A later notice.'), false);
+  const slot = replyNode.nextElementSibling;
+  assert.ok(slot && slot.classList.contains('for-you-panel-slot'), 'the panel slot follows the reply');
+  assert.equal(slot.previousElementSibling, replyNode, 'the panel lays out below the bubble');
+  const panel = slot.querySelector('.explain-panel');
+  assert.ok(panel, 'the slot holds the open panel');
+  assert.equal(buttonsOf(group).find((button) => button.classList.contains('explain-toggle')).dataset.explainState,
+      'pending', 'the pending state paints on the bubble button');
+});
+
+test('a For-you panel survives the Everything round trip, and closing it drops the slot', async () => {
+  const rig = forYouRig(replyRound());
+  const group = roundGroupFor(rig.root, 701);
+  const replyNode = replyOfGroup(group);
+  buttonsOf(group).find((button) => button.classList.contains('explain-toggle')).onclick();
+  await rig.context.submitSessionActionModal();
+  const slot = replyNode.nextElementSibling;
+  assert.ok(slot && slot.classList.contains('for-you-panel-slot'));
+
+  rig.engine.setView('everything');
   settle(rig.timers);
+  assert.equal(rig.root.querySelectorAll('.for-you-panel-slot').length, 0,
+      'Everything shows no For-you panel slot');
+  assert.ok(separatorLineFor(rig.root, 701).querySelector('.round-buttons'),
+      'the separator keeps its own group');
+  assert.equal(rig.root.querySelectorAll('.round-buttons').length, 1,
+      'the round keeps one group in Everything, and the bubble carries none');
 
-  assert.equal(forYouButtonRow(rig.root), wrapper);
-  assert.equal(row.nextElementSibling, panel);
-  assert.equal(panel.parentElement, wrapper);
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  const slotBack = replyNode.nextElementSibling;
+  assert.equal(slotBack, slot, 'the cached slot returns with the reply');
+  assert.ok(slotBack.querySelector('.explain-panel'), 'the panel is still open');
+
+  // A second confirm on the open panel re-fetches in place; the slot holds one
+  // panel and no empty slot takes a row gap.
+  buttonsOf(roundGroupFor(rig.root, 701)).find((button) => button.classList.contains('explain-toggle')).onclick();
+  await rig.context.submitSessionActionModal();
+  assert.equal(replyNode.nextElementSibling.querySelectorAll('.explain-panel').length, 1);
+
+  // Dropping the slot (the panel-close path) removes it from the list and the
+  // cache, so later projections place no gap.
+  rig.engine.dropForYouPanelSlot('round-s');
+  assert.ok(replyNode.nextElementSibling.classList.contains('hidden'),
+      'the dropped slot leaves the list, the hidden holder following the reply');
+  rig.engine.reproject('resize');
+  settle(rig.timers);
+  assert.equal(rig.root.querySelectorAll('.for-you-panel-slot').length, 0, 'the dropped slot stays dropped');
+});
+
+test('a generation that completes while Everything is shown reads ready on the bubble button', () => {
+  const rig = forYouRig(replyRound());
+  rig.engine.setView('everything');
+  settle(rig.timers);
+  rig.wsHandlers.get('explain_status')({upto: 701, state: 'ready', backend: 'test'});
+  assert.equal(buttonsOf(separatorLineFor(rig.root, 701).querySelector('.round-buttons'))
+      .find((button) => button.classList.contains('explain-toggle')).dataset.explainState, 'ready');
+
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  const group = roundGroupFor(rig.root, 701);
+  assert.equal(buttonsOf(group).find((button) => button.classList.contains('explain-toggle')).dataset.explainState,
+      'ready', 'the group For you places reads the current Explain state');
 });
 
 test('an older page can supply the reply for a separator already loaded', () => {
@@ -622,7 +715,7 @@ test('an older page can supply the reply for a separator already loaded', () => 
     eMsg('assistant', 'loaded-a', 'working'),
     eMsg('separator', 'loaded-s', '', {event_index: 704}),
   ]);
-  assert.equal(forYouButtonRow(rig.root), null);
+  assert.equal(roundGroupFor(rig.root, 704), null);
 
   rig.engine.prependMessages([
     eMsg('user', 'older-u', 'question'),
@@ -632,9 +725,9 @@ test('an older page can supply the reply for a separator already loaded', () => 
   ]);
   settle(rig.timers);
 
-  const wrapper = forYouButtonRow(rig.root);
-  assert.equal(rig.root.children[rig.root.children.indexOf(wrapper) - 1].dataset.messageId, 'older-r2');
-  assert.equal(wrapper.querySelector('.separator-line').dataset.eventIndex, '704');
+  const group = roundGroupFor(rig.root, 704);
+  assert.ok(group, 'the prepended reply carries the group');
+  assert.equal(replyOfGroup(group).dataset.messageId, 'older-r2');
 });
 
 test('Everything is unchanged after a For you round trip', () => {

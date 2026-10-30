@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Explain (btw-style): per-divider async explanation with a chosen backend
+// Explain (btw-style): per-round async explanation with a chosen backend
 // ---------------------------------------------------------------------------
 (function() {
   const Chat = globalThis.Chat;
@@ -57,42 +57,85 @@ function renderExplainButton(sessionId, eventIndex) {
     + '</button>';
 }
 
-// Paint every rendered divider's button from the active status map. Separators
+// Paint every rendered round group's button from the active status map. Groups
 // the turn engine materializes later read the map at render time; this covers
 // the ones already in the DOM when a status load or WS frame lands.
 function applyExplainStatusesToDom(root) {
   root.querySelectorAll('.explain-toggle[data-explain-state]').forEach((btn) => {
-    const sep = btn.closest('.separator-line');
-    const eventIndex = sep && sep.dataset.eventIndex;
+    const group = btn.closest('.round-buttons');
+    const eventIndex = group && group.dataset.roundEventIndex;
     if (eventIndex != null) applyExplainButtonVisual(btn, explainButtonState(eventIndex));
   });
 }
 
+// The round's one button group on the page: Everything hosts it on the round's
+// separator line, For you in the last reply bubble's time row.
+function roundGroupFor(eventIndex) {
+  return document.querySelector('.round-buttons[data-round-event-index="' + eventIndex + '"]');
+}
+
+// The open panel of one round, or null. Everything's panel follows the
+// separator line; For you's lives in the round's panel slot after the reply.
 function explainPanelFor(eventIndex) {
-  const sep = document.querySelector('.separator-line[data-event-index="' + eventIndex + '"]');
-  const next = sep && sep.nextElementSibling;
-  return next && next.classList.contains('explain-panel') ? next : null;
+  const group = roundGroupFor(eventIndex);
+  if (!group) return null;
+  const sep = group.closest('.separator-line');
+  if (sep) {
+    const next = sep.nextElementSibling;
+    return next && next.classList.contains('explain-panel') ? next : null;
+  }
+  const replyNode = group.closest('[data-message-id]');
+  const slot = replyNode && replyNode.nextElementSibling;
+  return slot && slot.classList.contains('for-you-panel-slot')
+    ? slot.querySelector('.explain-panel')
+    : null;
 }
 
 function toggleExplainPanel(btn, sessionId, eventIndex) {
   const sep = btn.closest('.separator-line');
-  if (!sep) return;
-  const next = sep.nextElementSibling;
-  if (next && next.classList.contains('explain-panel')) {
-    next.remove();
+  if (sep) {
+    const next = sep.nextElementSibling;
+    if (next && next.classList.contains('explain-panel')) {
+      next.remove();
+      return;
+    }
+    openExplainPanelOn(sep, sessionId, eventIndex);
     return;
   }
-  openExplainPanelOn(sep, sessionId, eventIndex);
+  toggleForYouExplainPanel(btn, sessionId, eventIndex);
 }
 
-function openExplainPanelOn(sep, sessionId, eventIndex) {
+// For you: the panel opens in the round's panel slot after the reply bubble.
+// The slot comes from the active engine's cache, so it — panel included —
+// survives a view switch; closing the panel drops the slot, so an empty slot
+// never takes a row gap in the list.
+function toggleForYouExplainPanel(btn, sessionId, eventIndex) {
+  const group = btn.closest('.round-buttons');
+  const replyNode = group && group.closest('[data-message-id]');
+  if (!replyNode || group.dataset.roundId == null) return;
+  const slot = Chat.forYouPanelSlot(replyNode, group.dataset.roundId);
+  if (!slot) return;
+  const panel = slot.querySelector('.explain-panel');
+  if (panel) {
+    panel.remove();
+    Chat.dropForYouPanelSlot(group.dataset.roundId);
+    return;
+  }
+  slot.appendChild(buildExplainPanel(sessionId, eventIndex));
+}
+
+function buildExplainPanel(sessionId, eventIndex) {
   const panel = document.createElement('div');
   panel.className = 'explain-panel mx-4 my-1 px-3 py-2 bg-slate-800/70 border border-slate-700/60 rounded-lg';
   panel.dataset.sessionId = sessionId;
   panel.dataset.eventIndex = eventIndex;
   panel.innerHTML = '<div class="explain-body text-slate-500 text-xs">Loading explanation…</div>';
-  sep.parentNode.insertBefore(panel, sep.nextSibling);
   loadExplainPanel(sessionId, eventIndex, panel);
+  return panel;
+}
+
+function openExplainPanelOn(sep, sessionId, eventIndex) {
+  sep.parentNode.insertBefore(buildExplainPanel(sessionId, eventIndex), sep.nextSibling);
 }
 
 // The one opener for the panel outside a button click: the modal confirm path.
@@ -100,8 +143,8 @@ function openExplainPanelOn(sep, sessionId, eventIndex) {
 // returned at registration, so the engine records the open state and restores
 // the panel on re-materialization; an already-open panel just re-fetches in place.
 function openExplainPanel(sessionId, eventIndex) {
-  const sep = document.querySelector('.separator-line[data-event-index="' + eventIndex + '"]');
-  const btn = sep && sep.querySelector('.explain-toggle');
+  const group = roundGroupFor(eventIndex);
+  const btn = group && group.querySelector('.explain-toggle');
   if (!btn) return;
   if (explainPanelFor(eventIndex)) loadExplainPanel(sessionId, eventIndex, explainPanelFor(eventIndex));
   else toggleExplainPanelTracked(btn, sessionId, eventIndex);
@@ -145,17 +188,15 @@ function renderExplainEntry(body, entry) {
   body.querySelectorAll('[data-explain-ts]').forEach((el) => { el.textContent = formatBubbleTime(el.dataset.explainTs); });
 }
 
-// The explain_status WS frame: repaint the divider's button from the frame, and
-// refresh the panel content only when that divider's panel is open (the frame
+// The explain_status WS frame: repaint the round group's button from the frame,
+// and refresh the panel content only when that round's panel is open (the frame
 // carries no body; the single-entry GET is what the panel renders from).
 function updateExplainStatus(sessionId, upto, state, backend) {
   const status = getExplainStatus(upto) || {};
   activeExplainStatuses[String(upto)] = {state, backend, generated_at: status.generated_at || null};
-  const sep = document.querySelector('.separator-line[data-event-index="' + upto + '"]');
-  if (sep) {
-    const btn = sep.querySelector('.explain-toggle');
-    if (btn) applyExplainButtonVisual(btn, state);
-  }
+  const group = roundGroupFor(upto);
+  const btn = group && group.querySelector('.explain-toggle');
+  if (btn) applyExplainButtonVisual(btn, state);
   const panel = explainPanelFor(upto);
   if (panel) loadExplainPanel(sessionId, upto, panel);
 }
@@ -163,8 +204,8 @@ function updateExplainStatus(sessionId, upto, state, backend) {
 // The modal confirm path: mark the button pending and open the panel skeleton.
 function markExplainPending(sessionId, eventIndex, backend) {
   activeExplainStatuses[String(eventIndex)] = {state: 'pending', backend, generated_at: null};
-  const sep = document.querySelector('.separator-line[data-event-index="' + eventIndex + '"]');
-  const btn = sep && sep.querySelector('.explain-toggle');
+  const group = roundGroupFor(eventIndex);
+  const btn = group && group.querySelector('.explain-toggle');
   if (btn) applyExplainButtonVisual(btn, 'pending');
   openExplainPanel(sessionId, eventIndex);
 }
@@ -179,7 +220,7 @@ function explainSession(sessionId, eventIndex) {
     confirmLabel: 'Explain',
     failureLabel: 'Explain',
     // Explain stays on this session: POST registers the async generation, the
-    // button goes pending, and the panel skeleton opens under the divider.
+    // button goes pending, and the panel skeleton opens under the round's group.
     onConfirm: async (backend) => {
       const res = await fetch('/api/sessions/' + sessionId + '/explain', {
         method: 'POST',
@@ -193,9 +234,9 @@ function explainSession(sessionId, eventIndex) {
   });
 }
 
-// One explain/status GET per session load/switch paints every divider's
-// explain button from persisted truth; turns the engine materializes later
-// read the map at render time, so no per-divider request is ever needed. Only
+// One explain/status GET per session load/switch paints every round group's
+// explain button from persisted truth; groups the engine materializes later
+// read the map at render time, so no per-round request is ever needed. Only
 // the session and switch generation that own the view when the response lands
 // may install the map (detail.isCurrent).
 async function loadExplainStatuses({sessionId, isCurrent}) {
@@ -211,14 +252,15 @@ async function loadExplainStatuses({sessionId, isCurrent}) {
   }
 }
 
-// The explain button sits on every separator line, and its panel opens under it.
+// The explain button sits in every round's button group, and its panel opens
+// under the group's host: the Everything separator line, or the For-you reply bubble.
 Chat.registerSeparatorButton(renderExplainButton, applyExplainStatusesToDom);
 const toggleExplainPanelTracked = Chat.registerSeparatorPanel({
   panelClass: 'explain-panel',
   toggleSelector: '.explain-toggle',
   toggle: toggleExplainPanel,
 });
-// Explain (btw-style) state change for one divider: repaint the button from the
+// Explain (btw-style) state change for one round: repaint the button from the
 // frame; a frame carries no body, so an open panel re-fetches the single entry.
 registerWsMessageHandler('explain_status', (ev) => updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend));
 document.addEventListener('charliebot:session-data-load', (event) => loadExplainStatuses(event.detail));

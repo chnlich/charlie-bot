@@ -262,24 +262,27 @@ test('a Run header reads its own state: queued in amber, failed in red with its 
   assert.match(header('stopped'), /id="run-dot-run-stopped" class="[^"]*bg-slate-500/);
 });
 
-test('a run_end separator omits buttons while an ordinary separator keeps its duration and button', () => {
+test('a run_end separator keeps its label while an ordinary separator keeps its button group and no text', () => {
   const context = loadChatRendering();
   context.Chat.registerSeparatorButton((_sessionId, _eventIndex) => '<button class="separator-action">Action</button>');
 
   const managerSeparator = context.renderMessage({
     role: 'separator', id: 'manager-end', event_index: 12, thinking_seconds: 45,
   }, 'sess-1');
-  assert.match(managerSeparator, /response complete &middot; 45s/);
+  assert.doesNotMatch(managerSeparator, /response complete/);
   assert.match(managerSeparator, /class="separator-action"/);
-  // The phone rule in styles.css finds this row, its label and its two hairlines by these
-  // class names; without them the row's controls clip off a phone's right edge again.
-  assert.match(managerSeparator, /<span class="[^"]*\bseparator-label\b/);
+  assert.match(managerSeparator, /data-round-event-index="12"/);
+  assert.match(managerSeparator, /data-round-id="manager-end"/);
+  // The ordinary row carries no label, so the phone rule in styles.css leaves its two
+  // hairlines on the row; the run-end row below is the one labelled row.
+  assert.doesNotMatch(managerSeparator, /\bseparator-label\b/);
   assert.equal((managerSeparator.match(/\bseparator-hairline\b/g) || []).length, 2);
 
   const runEnd = context.renderMessage({
     role: 'separator', kind: 'run_end', id: 'run-end', event_index: 13, thinking_seconds: 68,
   }, 'sess-1');
   assert.match(runEnd, /run ended &middot; 1m08s/);
+  assert.match(runEnd, /<span class="[^"]*\bseparator-label\b/);
   assert.doesNotMatch(runEnd, /<button\b/);
 });
 

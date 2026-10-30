@@ -170,6 +170,7 @@ const CHAT_MESSAGES = [
   { role: 'plan', id: 'p1', timestamp: '2026-07-30T12:00:10Z', content: 'Step 1. Step 2.' },
   { role: 'clone_start', id: 'c1', content: 'parent session', parent_session_id: 'parent-1' },
   { role: 'scheduled_trigger', id: 'st1', timestamp: '2026-07-30T12:00:11Z', content: 'Trigger fired' },
+  { role: 'web_reply', id: 'wr1', timestamp: '2026-07-30T12:00:12Z', content: 'Found the cause.' },
   { role: 'separator', id: 'sep1', thinking_seconds: 12, event_index: 3 },
 ];
 

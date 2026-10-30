@@ -79,7 +79,10 @@ function items(entries) {
   return entries.filter((entry) => showsInForYou(entry.msg));
 }
 
-// The row each completed reply receives in the For-you projection, keyed by its store entry.
+// The round-end message whose button group each completed round's last reply
+// carries in its bubble, keyed by the reply's store entry. A round still
+// running has no end event, so its reply carries no group; a run-end round is
+// nobody's to rate or explain, so its reply carries none either.
 function roundButtonRows(entries) {
   const rows = new Map();
   if (isWorker()) return rows;

@@ -66,12 +66,6 @@ function expectedSteps(count) {
   return `${count} step${count === 1 ? '' : 's'}`;
 }
 
-function expectedDuration(secs) {
-  if (secs == null) return '';
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, '0')}s`;
-}
-
 function expectedTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -152,7 +146,6 @@ function expectedRow(turn) {
     title,
     conclusion: turn.conclusion ? expectedFirstLine(turn.conclusion.text) : '',
     steps: expectedSteps(turn.steps.length),
-    duration: expectedDuration(turn.tail.secs),
     time: expectedTime(head.ts),
   };
 }
@@ -237,8 +230,10 @@ function assertStateAndRows(root, turns, label) {
     assert.equal(rowField(row, 'turn-row-conclusion'), want.conclusion,
         `${label}: wrapper ${i} conclusion line`);
     assert.equal(rowField(row, 'turn-row-steps'), want.steps, `${label}: wrapper ${i} steps`);
-    assert.equal(rowField(row, 'turn-row-duration'), want.duration, `${label}: wrapper ${i} duration`);
     assert.equal(rowField(row, 'turn-row-time'), want.time, `${label}: wrapper ${i} time`);
+    // The folded row carries no duration: the round seconds left the row with
+    // the response-complete label.
+    assert.equal(row.querySelector('.turn-row-duration'), null, `${label}: wrapper ${i} duration`);
   });
 }
 
@@ -425,7 +420,7 @@ function generateCases() {
     items: [...finishedTurn('d1', {}), separator('d-bare'), ...finishedTurn('d2', {})],
   });
   cases.push({
-    name: 'head without a timestamp and separator without a duration',
+    name: 'head without a timestamp',
     items: [
       ...finishedTurn('e1', {}),
       ...finishedTurn('e2', {ts: null, secs: null}),
@@ -702,7 +697,7 @@ test('load-more under turn-aligned paging leaves no message outside a turn wrapp
 });
 
 // --- the row's two value sources -------------------------------------------
-test('renderMessage emits data-message-ts and data-thinking-seconds, and omits both when absent', () => {
+test('renderMessage emits data-message-ts and omits it when absent', () => {
   const {context} = loadChatContext({
     getElementById() {
       return null;
@@ -712,17 +707,15 @@ test('renderMessage emits data-message-ts and data-thinking-seconds, and omits b
 
   const separatorHtml = context.renderMessage(
       {role: 'separator', id: 'sep1', thinking_seconds: 68, event_index: 3, timestamp: ts}, 'sess-1');
-  assert.ok(separatorHtml.includes('data-thinking-seconds="68"'), separatorHtml);
   assert.ok(separatorHtml.includes(`data-message-ts="${ts}"`), separatorHtml);
 
   const userHtml = context.renderMessage({role: 'user', id: 'u1', content: 'hi', timestamp: ts}, 'sess-1');
   assert.ok(userHtml.includes(`data-message-ts="${ts}"`), userHtml);
 
-  // No timestamp and no thinking time: no attribute at all, so the row's own
-  // fields stay empty rather than showing a placeholder.
+  // No timestamp: no attribute at all, so the row's own fields stay empty
+  // rather than showing a placeholder.
   const bare = context.renderMessage({role: 'separator', id: 'sep2', event_index: 4}, 'sess-1');
   assert.ok(!bare.includes('data-message-ts='), bare);
-  assert.ok(!bare.includes('data-thinking-seconds='), bare);
 });
 
 // --- retained `N steps` bar behaviour --------------------------------------

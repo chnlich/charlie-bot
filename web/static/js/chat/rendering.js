@@ -334,8 +334,6 @@ function buildTurnRowFromSpec(spec) {
   meta.className = 'turn-row-meta';
   meta.appendChild(turnRowField('turn-row-steps',
       spec.foldCount ? turnFoldLabel(spec.foldCount) : ''));
-  meta.appendChild(turnRowField('turn-row-duration',
-      formatTurnDuration(spec.thinkingSeconds)));
   const ts = spec.headTs;
   const time = turnRowField('turn-row-time', formatTurnTime(ts));
   if (ts) time.setAttribute('title', formatBubbleTime(ts));
@@ -352,7 +350,6 @@ function buildTurnRow(turn) {
     headText: messageSourceText(turn.head),
     headTs: turn.head.dataset.messageTs || null,
     conclusionText: turn.conclusion ? messageSourceText(turn.conclusion) : null,
-    thinkingSeconds: turn.separator.dataset.thinkingSeconds,
     foldCount: turn.foldRange.length,
   });
 }
@@ -476,24 +473,51 @@ function roundButtonsHtml(sessionId, msg) {
   return buttons;
 }
 
-// The round separator's row class, shared by the Everything separator (renderMessage) and
-// the For-you round row (turn-engine.js), so both draw the same line.
+// One round's button group: the five round buttons plus the round marker — the
+// end event's index and the round id. The Everything separator (renderMessage)
+// and the For-you bubble (turn-engine.js) host the same group, and Explain and
+// the tests find the round's one group on the page through the marker.
+const ROUND_GROUP_CLASS = 'round-buttons flex items-center gap-1';
+
+function roundButtonGroupHtml(sessionId, msg) {
+  const buttons = roundButtonsHtml(sessionId, msg);
+  if (!buttons) return '';
+  const eventIndexAttr = msg.event_index != null
+    ? " data-round-event-index=\"" + escapeHtmlAttr(msg.event_index) + "\"" : "";
+  const roundIdAttr = msg.id != null ? " data-round-id=\"" + escapeHtmlAttr(msg.id) + "\"" : "";
+  return "<div class=\"" + ROUND_GROUP_CLASS + "\"" + eventIndexAttr + roundIdAttr + ">" + buttons + "</div>";
+}
+
+// The group as an element, for the views that place nodes (turn-engine.js): the
+// For-you projection appends a fresh group to the round's last reply bubble.
+function buildRoundButtonGroup(sessionId, msg) {
+  const group = document.createElement('div');
+  group.className = ROUND_GROUP_CLASS;
+  if (msg.event_index != null) group.dataset.roundEventIndex = String(msg.event_index);
+  if (msg.id != null) group.dataset.roundId = String(msg.id);
+  group.innerHTML = roundButtonsHtml(sessionId, msg);
+  return group;
+}
+
+// The round separator's row class.
 const SEPARATOR_ROW_CLASS = 'flex items-center gap-3 py-2 px-4 separator-line group/sep';
 
-// The row's inner markup: a hairline, the label, the round's buttons and a second hairline.
-// separator-hairline and separator-label are the phone layout's hooks (styles.css):
-// a phone hides the hairlines and stacks the label above the controls.
+// The row's inner markup. A run-end row keeps its label between the hairlines;
+// an ordinary round separator carries the round's button group and no text.
+// separator-hairline and separator-label are the phone layout's hooks
+// (styles.css): a phone hides a labelled row's hairlines and stacks its label
+// above the controls.
 function separatorRowInnerHtml(sessionId, msg) {
-  let sepLabel = "response complete" + (msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "");
+  const hairline = "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>";
   if (msg.kind === "run_end") {
     // The end of one Run: its duration, no rating and no clone buttons.
-    sepLabel = "run ended" + (msg.thinking_seconds != null
+    const sepLabel = "run ended" + (msg.thinking_seconds != null
       ? " &middot; " + formatRunDuration(msg.thinking_seconds) : "");
+    return hairline
+      + "<span class=\"text-xs text-slate-500 whitespace-nowrap separator-label\">" + sepLabel + "</span>"
+      + hairline;
   }
-  return "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>"
-    + "<span class=\"text-xs text-slate-500 whitespace-nowrap separator-label\">" + sepLabel + "</span>"
-    + roundButtonsHtml(sessionId, msg)
-    + "<div class=\"flex-1 border-t border-slate-600/40 separator-hairline\"></div>";
+  return hairline + roundButtonGroupHtml(sessionId, msg) + hairline;
 }
 
 function repaintRoundButtons(root) {
@@ -764,6 +788,16 @@ function renderMessage(msg, sessionId) {
     return "<div class=\"text-[10px] " + cls + " mt-1\">" + formatBubbleTime(msg.timestamp) + "</div>";
   }
 
+  // The web-reply bubble's time row: time on the left, the round's button
+  // group on the right once the For-you projection hangs it there. The
+  // bubble-time-row class is the projection's hook into the row.
+  function webReplyTimeRow() {
+    var time = msg.timestamp
+      ? "<span>" + formatBubbleTime(msg.timestamp) + "</span>" : "";
+    return "<div class=\"text-[10px] text-slate-400/60 mt-1 flex items-center justify-between bubble-time-row\">"
+      + time + "</div>";
+  }
+
   if (msg.role === "user") {
     return openMessageWrapper("flex justify-end", msg)
       + renderUserMessageBubble(
@@ -917,21 +951,22 @@ function renderMessage(msg, sessionId) {
       + timeDiv() + "</div></div>";
   }
   if (msg.role === "web_reply") {
-    // The agent's message to the user: an agent-side bubble with the markdown body.
+    // The agent's message to the user: an agent-side bubble with the markdown
+    // body. The bubble's time row is the flex line the For-you projection
+    // hangs the round's button group on (time left, buttons right), so it
+    // renders even when the reply carries no timestamp.
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + "<div class=\"text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">Reply</div>"
-      + mdDiv(msg.content) + timeDiv() + "</div></div>";
+      + mdDiv(msg.content) + webReplyTimeRow() + "</div></div>";
   }
   if (msg.role === "web_reply_notice") {
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden\">"
       + escapeHtml(msg.content) + "</div></div>";
   }
   if (msg.role === "separator") {
-    var secondsAttr = msg.thinking_seconds != null
-      ? " data-thinking-seconds=\"" + escapeHtmlAttr(msg.thinking_seconds) + "\"" : "";
     var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"" + SEPARATOR_ROW_CLASS + "\""
-      + messageIdentityAttrs(msg) + eventIndexAttr + secondsAttr + ">"
+      + messageIdentityAttrs(msg) + eventIndexAttr + ">"
       + separatorRowInnerHtml(sessionId, msg) + "</div>";
   }
   return "";
@@ -1018,9 +1053,7 @@ const GLOBALS = {
 const CHAT_ONLY = {
   registerMessagePostProcessor,
   registerSeparatorButton,
-  roundButtonsHtml,
-  SEPARATOR_ROW_CLASS,
-  separatorRowInnerHtml,
+  buildRoundButtonGroup,
   repaintRoundButtons,
   registerDeliveryLink,
   CLONE_SVG,

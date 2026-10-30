@@ -17,6 +17,10 @@
     --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#9d7ff0; --series-5:#c9962e;
   }
   [hidden] { display:none !important }
+  /* The window label rides beside the section title while both fit on one row, and takes its own row on a phone
+     width, so neither the title nor the date range breaks mid-phrase. */
+  h2 { flex-wrap:wrap }
+  h2 .win { white-space:nowrap }
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
   .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 22px }
   .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);

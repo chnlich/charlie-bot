@@ -316,8 +316,7 @@ pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTi
   let rule = match rule {
     "none" => None,
     rule if rule.starts_with("out-of-scope:") => {
-      let policy_id = rule.trim_start_matches("out-of-scope:");
-      require_policy(table, policy_id)?;
+      require_policy(table, &rule["out-of-scope:".len()..])?;
       Some(rule.to_string())
     }
     rule if CONSEQUENCE_TEST_IDS.contains(&rule) => Some(rule.to_string()),
@@ -640,7 +639,12 @@ enable_ask_tier_refusal: false
   #[test]
   fn an_unknown_tier_or_rule_is_refused() {
     let table = table_with_refusal(false);
-    for answer in ["tier: t3 rule: none", "tier: t0 rule: chaos", "tier: t1 rule: out-of-scope:chaos"] {
+    for answer in [
+      "tier: t3 rule: none",
+      "tier: t0 rule: chaos",
+      "tier: t1 rule: out-of-scope:chaos",
+      "tier: t0 rule: out-of-scope:out-of-scope:shared-repo-landing",
+    ] {
       let error = parse_ask_tier(answer, &table).expect_err("the line is refused");
       assert!(error.to_string().contains("unknown"), "{answer:?}: {error}");
     }

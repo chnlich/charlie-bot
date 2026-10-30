@@ -10,19 +10,20 @@ const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_su
 // The turn-input rule, stated once.
 //
 // A chat round renders as one turn: every input the session received while
-// that round ran (a user message, a relayed agent_message, a scheduled
-// trigger, a child report, a worker summary) shows in the turn that handled
-// it, outside the folded steps. Both turn-layout consumers — turn-engine.js
-// over message entries and rendering.js over rendered elements — call this
-// one pure function; neither keeps a second copy of the rule.
+// that round ran shows in the turn that handled it, outside the folded steps.
+// The inputs are a user message, a relayed agent_message, a scheduled trigger,
+// a child report and a worker summary. Both turn-layout consumers —
+// turn-engine.js over message entries and rendering.js over rendered
+// elements — call this one pure function; neither keeps a second copy of the
+// rule.
 //
 // `items` is one separator-terminated span's messages in arrival order (the
 // separator itself excluded); `roleOf(item)` reads the message's role, which
 // is what lets the two consumers share the function. Inputs a round queued
 // while an earlier round was still running arrive after that round's first
-// assistant message: they are carried out of this span and the caller moves
-// them ahead of the next span, in arrival order, where they become that
-// span's own inputs (they sit at its front, before its first assistant).
+// assistant message. They are carried out of this span, and the caller moves
+// them ahead of the next span in arrival order. There they become that span's
+// own inputs, at its front before its first assistant.
 function splitTurnSpan(items, roleOf) {
   let conclusion = null;
   for (let i = items.length - 1; i >= 0; i--) {
@@ -44,10 +45,10 @@ function splitTurnSpan(items, roleOf) {
   // body[0]. The fold holds the span's work and never a carried stimulus: a
   // carried stimulus has left this span for the next one, in every branch.
   // With own inputs it runs from the first assistant message to the
-  // conclusion, so notices between the last input and the first assistant
-  // message (a model switch, say) stay outside the fold next to the inputs;
-  // without own inputs it starts after body[0] —
-  // again minus the carried stimuli.
+  // conclusion. Notices between the last input and the first assistant
+  // message (a model switch, say) stay outside the fold, next to the inputs.
+  // Without own inputs it starts after body[0], again minus the carried
+  // stimuli.
   let head = null;
   for (let i = ownInputs.length - 1; i >= 0; i--) {
     if (roleOf(ownInputs[i]) === 'user') { head = ownInputs[i]; break; }

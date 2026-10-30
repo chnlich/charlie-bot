@@ -7,16 +7,19 @@
 //
 // For you shows the user's messages, the agent's web replies (web_reply), the
 // web reply notices (web_reply_notice) and error rows, and nothing else. It
-// reads the store's server order, never the segment order Everything shows:
-// the shared span rule (shared.js splitTurnSpan) carries an input that arrives
-// after a turn's first assistant message into the next turn, so the segment
-// order would put that input below the web replies that followed it. When none
-// of them is in the store, one row offers Everything. Everything
-// shows the whole record, as the page always has. A web session (a manager
-// session that is not a Slack or Discord thread), root or child, and a worker
-// session open in For you; a thread session opens in Everything. A worker's For
-// you holds its one summary card (chat/worker-summary.js) — nothing else. A
-// manual switch holds for that session until the page reloads.
+// reads the store's server order, never the segment order that Everything
+// shows.
+// The shared span rule (shared.js splitTurnSpan) carries an input that arrives
+// after a turn's first assistant message into the next turn. The segment order
+// would put that input below the web replies that followed it. When none of
+// them is in the store, one row offers Everything, which shows the whole
+// record as the page always has.
+//
+// A web session (a manager session that is not a Slack or Discord thread)
+// opens in For you, root or child; so does a worker session. A thread session
+// opens in Everything. A worker's For you holds its one summary card
+// (chat/worker-summary.js) — nothing else. A manual switch holds for that
+// session until the page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
 // (what shows, the web-session test and the default view), the empty-state row

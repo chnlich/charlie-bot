@@ -9,16 +9,16 @@
 // ``summary`` on every transcript poll. This file paints that one object into
 // the card, side by side with the incremental messages — the card never
 // blocks the transcript's own append path. A poll that brings the summary the
-// card shows writes only the elapsed-time text; a changed summary repaints
-// the card and keeps each closing passage's fold as the reader left it.
+// card shows writes only the elapsed-time text. A changed summary repaints the
+// card, and each closing passage's fold stays as the reader left it.
 // session-view.js feeds the bootstrap value (mountWorkerSummary) and each
 // poll's (applyWorkerSummary); turn-engine.js asks for the card node when it
 // builds the For-you list.
 //
-// Card states: a delivered task shows its result, close time, landed commit and
-// diff link, one row per run and both roles' closing words; a running one
+// Card states: a delivered task shows its result, close time, landed commit,
+// diff link, one row per run and both roles' closing words. A running one
 // updates elapsed time, tool counts, the last text and the last tool call in
-// place; a stopped or failed one names the cause sentence and the newest stop
+// place. A stopped or failed one names the cause sentence and the newest stop
 // request with its time and origin (read from the request id's prefix).
 // ---------------------------------------------------------------------------
 
@@ -126,9 +126,9 @@ function textHtml(text, foldKey) {
     + '<span class="worker-summary-more">Show all ▾</span><span class="worker-summary-less">Show less ▴</span></button></div>';
 }
 
-// A stop request's origin reads from the request id's generated prefixes; the
+// A stop request's origin reads from the request id's generated prefixes. The
 // reverse query declined a new field, so the ones the runtime writes name
-// their source and any other id renders as a bare request reference.
+// their source. Any other id renders as a bare request reference.
 function stopOrigin(requestId) {
   const id = String(requestId || '');
   if (id.indexOf('closed-task:') === 0) return 'system, on task close';

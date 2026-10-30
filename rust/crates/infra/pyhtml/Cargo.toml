@@ -9,10 +9,6 @@ publish.workspace = true
 name = "charliebot_pyhtml"
 path = "src/lib.rs"
 
-[[bin]]
-name = "pyhtml-dump"
-path = "src/bin/pyhtml-dump.rs"
-
 [dependencies]
 charliebot-core.workspace = true
 fancy-regex = "0.16"

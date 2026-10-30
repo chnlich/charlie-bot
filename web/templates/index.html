@@ -28,7 +28,7 @@
     const SESSION_NAME = {{ active_session.name|tojson if active_session else 'null' }};
     // The host the displayed-session module restates in the tab title.
     const PAGE_HOSTNAME = {{ hostname|tojson }};
-    const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
+    const SESSION_BOOTSTRAP = {{ session_bootstrap_json|safe }};
     const INITIAL_SESSIONS = {{ initial_sessions_json|safe }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};
     const BACKEND_OPTIONS = {

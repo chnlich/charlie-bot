@@ -60,8 +60,20 @@ enum PageListing {
 /// so the sidebar text itself never carries this placeholder.
 const INITIAL_SESSIONS_PLACEHOLDER: &str = "\u{1}charliebot-initial-sessions\u{1}";
 
+/// Stands in for the page's session bootstrap JSON, as [`INITIAL_SESSIONS_PLACEHOLDER`] does for the sidebar text.
+///
+/// The bootstrap is the page's other large value, and the page writes it as JSON text; the finished page substitutes
+/// the text once. JSON escapes control characters, so the bootstrap text never carries this placeholder.
+const SESSION_BOOTSTRAP_PLACEHOLDER: &str = "\u{2}charliebot-session-bootstrap\u{2}";
+
+/// The text a page without a session bootstrap carries: JSON's `null`.
+const NO_SESSION_BOOTSTRAP: &str = "null";
+
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
+
+/// The session bootstrap one page request built last, reused while every payload input is unchanged.
+static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(detail::PageBootstrapMemo::default);
 
 /// How many finished page bodies the gzip memo keeps.
 ///
@@ -118,7 +130,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let mut active_session = Value::Null;
   let mut pending_draft = Value::Null;
   let mut event_count = Value::from(0);
-  let mut session_bootstrap = Value::Null;
+  let mut bootstrap_text = None;
   let mut clear_unread = None;
   if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
     match state.features.store.get_session(session_id).await {
@@ -128,24 +140,23 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
         let registry = Arc::clone(&state.features.registry);
         let bootstrap_cfg = Arc::clone(&cfg);
         let bootstrap = tokio::task::spawn_blocking(move || {
-          detail::build_bootstrap_payload(&store, &registry, &bootstrap_cfg, &meta)
+          detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &store, &registry, &bootstrap_cfg, &meta)
         })
         .await
         .map_err(|error| charliebot_store::StoreError::new(error.to_string()))
         .and_then(|result| result);
         match bootstrap {
           Ok(bootstrap) => {
-            let bootstrap_session = bootstrap.get("session").expect("a bootstrap payload has a session");
-            let bootstrap_session = bootstrap_session.as_object().expect("a bootstrap session is an object");
+            let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
             let active = active_session.as_object_mut().expect("session metadata serializes to an object");
             for name in ["run_backend", "thinking_since"] {
               if let Some(value) = bootstrap_session.get(name) {
                 active.insert(name.to_string(), value.clone());
               }
             }
-            pending_draft = bootstrap.get("pending_draft").expect("a bootstrap payload has a pending draft").clone();
-            event_count = bootstrap.get("event_count").expect("a bootstrap payload has an event count").clone();
-            session_bootstrap = bootstrap;
+            pending_draft = bootstrap.pending_draft;
+            event_count = bootstrap.event_count;
+            bootstrap_text = Some(bootstrap.text);
             // As Python's index: the active row is marked read only when its bootstrap loaded; a failed load keeps
             // the unread mark.
             clear_unread = Some(session_id.to_string());
@@ -194,10 +205,10 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let active_option = cfg.get_backend_option(active_backend);
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
+    "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
     "active_session": active_session,
     "pending_draft": pending_draft,
     "event_count": event_count,
-    "session_bootstrap": session_bootstrap,
     "backend_options": cfg.backends.options
       .iter()
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
@@ -217,7 +228,12 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     request,
     "index.html",
     context,
-    PageRuntime::Index { cfg, auth_enabled: credentials.access_key().is_some(), sidebar_text: initial_sessions_json },
+    PageRuntime::Index {
+      cfg,
+      auth_enabled: credentials.access_key().is_some(),
+      sidebar_text: initial_sessions_json,
+      bootstrap_text,
+    },
   )
   .await
 }
@@ -284,7 +300,13 @@ async fn events_viewer(
 }
 
 enum PageRuntime {
-  Index { cfg: Arc<CharlieBotConfig>, auth_enabled: bool, sidebar_text: Arc<String> },
+  Index {
+    cfg: Arc<CharlieBotConfig>,
+    auth_enabled: bool,
+    sidebar_text: Arc<String>,
+    /// The session bootstrap JSON text, or `None` for a page without one.
+    bootstrap_text: Option<Arc<String>>,
+  },
   Home,
   Events,
 }
@@ -293,7 +315,10 @@ impl PageRuntime {
   /// The values the page carries as placeholders, as `(placeholder, text)` pairs for the finished page.
   fn substitutions(&self) -> Vec<(&'static str, &str)> {
     match self {
-      Self::Index { sidebar_text, .. } => vec![(INITIAL_SESSIONS_PLACEHOLDER, sidebar_text.as_str())],
+      Self::Index { sidebar_text, bootstrap_text, .. } => vec![
+        (INITIAL_SESSIONS_PLACEHOLDER, sidebar_text.as_str()),
+        (SESSION_BOOTSTRAP_PLACEHOLDER, bootstrap_text.as_deref().map_or(NO_SESSION_BOOTSTRAP, String::as_str)),
+      ],
       Self::Home | Self::Events => Vec::new(),
     }
   }

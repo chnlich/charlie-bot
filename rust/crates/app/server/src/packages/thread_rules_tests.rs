@@ -79,6 +79,9 @@ fn manager_turn_text(meta: &SessionMetadata) -> String {
   let registry = registry().expect("the listed packages register");
   let checkout = RepoRoot::new(Some(checkout_root().into_os_string())).expect("the checkout path is valid");
   let home = tempfile::tempdir().expect("temp home");
+  let table = home.path().join("config.d").join("approval_policy.yaml");
+  std::fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
+  std::fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
   let cfg = config(home.path());
   let env = PromptEnv { cfg: &cfg, registry: &registry, checkout: &checkout };
   let inputs = RuleInputs { overlay: None, chain: &[], node_ref: None };
@@ -86,6 +89,19 @@ fn manager_turn_text(meta: &SessionMetadata) -> String {
     build_segments(&env, meta, "manager_turn", &inputs).expect("the manager turn assembles from the checkout");
   segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<&str>>().join("\n")
 }
+
+/// The approval policy table the synthetic home starts with; the test reads the thread rules, not the table.
+const APPROVAL_POLICY_TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies: []
+enable_ask_tier_refusal: false
+";
 
 fn assert_thread_rules(platform: &str, meta: &SessionMetadata) {
   let text = manager_turn_text(meta);

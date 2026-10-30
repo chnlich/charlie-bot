@@ -36,9 +36,4 @@ You are reading one request to a user cold. The piped input holds the request te
 (3) What are the options, what is the consequence of each, and which option does the request recommend? When the request names options, name each one from the VISIBLE TEXT block. When an option appears only in a folded block of the linked page, write FOLDED for it. When the options differ in what the reader sees and an option shows neither a drawn demo nor a stated reason, write NO DEMO for it on the linked page.
 The request then gets each option from what the page shows at open.
 (4) Which links carry the evidence?
-(5) Which kind of step does the request ask about? Choose one:
-- an undoable step: branch code, a page, a draft, a local file, a plan, or a design choice that needs no explicit user approval;
-- a consequence step: deleting data without a backup, a message in the user's name or a publication, a merge into a shared main branch, a service restart, a job on a shared cluster, or spending money;
-- an explicit user approval that a rule requires, where the request names the rule;
-- a fact or an action that only the user has;
-- the review of a delivered product.
+(5) Tier this request against the Approval policy table section: a step one of the table's consequence tests names is t0 and the rule is that test's id; a step of a standing policy's kind that falls outside that policy's scope or over its cap is t0 and the rule is out-of-scope:<policy id>; a step inside a standing policy's scope is t1 and the rule is that policy's id; a reversible step in the user's own space that no standing policy covers, a design choice, or a reading below the table's reading threshold is t2 and the rule is none; a fact or an action that only the user has is user-act and the rule is none; the review of a delivered product is review and the rule is none. End the answer with one last line of exactly the form "tier: <tier> rule: <rule>", where <tier> is t0, t1, t2, user-act or review and <rule> is a consequence test id, out-of-scope:<policy id>, a standing policy id, or none.

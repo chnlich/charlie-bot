@@ -344,16 +344,29 @@ pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
   ))
 }
 
+/// The ask probe's policy section: the titled approval policy table the ask questions tier against, read fresh from
+/// the host home (`ask_policy_section`).
+pub fn ask_policy_section(home: &Path) -> anyhow::Result<String> {
+  let loaded = charliebot_core::approval_policy::load(home)?;
+  Ok(charliebot_core::approval_policy::prompt_section(&loaded.table))
+}
+
 /// The ask probe's whole input: the item JSON, the host-served page text with every `data:` URI replaced by a size
-/// placeholder and its VISIBLE TEXT block when there is a page, then the questions (`ask_probe_input`), joined by
-/// blank lines.
-pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str) -> anyhow::Result<String> {
+/// placeholder and its VISIBLE TEXT block when there is a page, the approval policy table section, then the questions
+/// (`ask_probe_input`), joined by blank lines.
+pub fn ask_probe_input(
+  item: &Value,
+  linked_page: Option<&str>,
+  policy_section: &str,
+  questions: &str,
+) -> anyhow::Result<String> {
   let mut pieces = vec![text_repr::json_dumps(item, &ITEM_JSON)];
   if let Some(page) = linked_page {
     let source = omit_data_uris(page);
     pieces.push(source.to_string());
     pieces.push(format!("{VISIBLE_TEXT_HEADER}\n{}", visible_text(&source)?));
   }
+  pieces.push(policy_section.to_string());
   pieces.push(questions.to_string());
   Ok(pieces.join("\n\n"))
 }
@@ -421,6 +434,7 @@ pub fn format_report(
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
   use std::path::PathBuf;
   use std::sync::Arc;
   use std::time::Duration;
@@ -614,14 +628,62 @@ mod tests {
   }
 
   #[test]
-  fn ask_probe_input_carries_the_linked_pages_visible_text_block() {
+  fn ask_probe_input_carries_the_linked_pages_visible_text_block_and_the_policy_section() {
     let item = serde_json::json!({"text": "Choose."});
-    let input = ask_probe_input(&item, Some(FOLDED_PAGE), "questions").unwrap();
+    let input = ask_probe_input(&item, Some(FOLDED_PAGE), "policy section", "questions").unwrap();
     let (source, rest) = input.split_once(VISIBLE_TEXT_HEADER).expect("the ask probe carries the visible text block");
     assert!(source.contains("Folded body."), "{source}");
     assert!(!rest.contains("Folded body."), "{rest}");
-    let without_page = ask_probe_input(&item, None, "questions").unwrap();
+    let without_page = ask_probe_input(&item, None, "policy section", "questions").unwrap();
     assert!(!without_page.contains(VISIBLE_TEXT_HEADER), "{without_page}");
+    // The policy section sits between the page and the questions.
+    let (before_questions, questions) = without_page.split_once("\n\nquestions").expect("the questions come last");
+    assert!(before_questions.ends_with("policy section"), "{before_questions}");
+    assert_eq!(questions, "");
+  }
+
+  #[test]
+  fn an_edited_table_reaches_the_next_ask_probe_without_a_prompt_file_change() {
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
+    let home = tempfile::tempdir().unwrap();
+    let table = home.path().join("config.d").join("approval_policy.yaml");
+    fs::create_dir_all(table.parent().unwrap()).unwrap();
+    const TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies: []
+enable_ask_tier_refusal: false
+";
+    fs::write(&table, TABLE).unwrap();
+    let prompt_file = repo.join("prompts").join(PROMPT_FILENAME);
+    let prompt_bytes_before = fs::read(&prompt_file).unwrap();
+
+    let item = serde_json::json!({"text": "Choose."});
+    let (_system_prompt, questions) = load_ask_texts(&repo).unwrap();
+    let before = ask_probe_input(&item, None, &ask_policy_section(home.path()).unwrap(), &questions).unwrap();
+    fs::write(
+      &table,
+      TABLE.replace(
+        "standing_policies: []",
+        "standing_policies:\n  - {id: release-restart, scope: \"s\", cap_per_pt_day: null, expires: 2099-01-01}",
+      ),
+    )
+    .unwrap();
+    let after = ask_probe_input(&item, None, &ask_policy_section(home.path()).unwrap(), &questions).unwrap();
+
+    assert!(before.contains("## Approval policy table"), "{before}");
+    assert!(!before.contains("release-restart"), "{before}");
+    assert!(after.contains("- id: release-restart"), "{after}");
+    // The same questions and system prompt join both probes; only the table section moved.
+    let (before_section, _) = before.rsplit_once("## Approval policy table").unwrap();
+    let (after_section, _) = after.rsplit_once("## Approval policy table").unwrap();
+    assert_eq!(before_section, after_section);
+    assert_eq!(fs::read(&prompt_file).unwrap(), prompt_bytes_before, "no prompt file changed");
   }
 
   /// A self-contained page whose one image is a base64 PNG payload of `payload_bytes` characters.
@@ -653,7 +715,7 @@ mod tests {
   fn ask_probe_input_omits_an_inline_image_in_the_linked_page() {
     let page = page_with_inline_png(2 * 1024 * 1024);
     let item = serde_json::json!({"text": "Choose."});
-    let input = ask_probe_input(&item, Some(&page), "questions").unwrap();
+    let input = ask_probe_input(&item, Some(&page), "policy section", "questions").unwrap();
     assert!(input.len() < 50 * 1024, "the ask probe input is {} bytes", input.len());
     assert!(input.contains("The monitor line chart"), "{input}");
     assert!(input.contains(INLINE_PNG_PLACEHOLDER), "{input}");

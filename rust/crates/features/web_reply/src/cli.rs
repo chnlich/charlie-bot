@@ -144,13 +144,15 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   let host = lazy_host.get().map_err(anyhow_exit)?;
   gate_fork_assertions(host, unread)?;
   let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
+  let policy_section = cold_read::ask_policy_section(&host.cfg.charliebot_home).map_err(anyhow_exit)?;
   for item in unread {
     let link = item.get("link").and_then(Value::as_str);
     let linked_page = match file_urls::host_file(link).map_err(CliExit::error)? {
       None => None,
       Some(path) => Some(files::read_text_mode(&path)?),
     };
-    let probe_prompt = cold_read::ask_probe_input(item, linked_page.as_deref(), &questions).map_err(anyhow_exit)?;
+    let probe_prompt =
+      cold_read::ask_probe_input(item, linked_page.as_deref(), &policy_section, &questions).map_err(anyhow_exit)?;
     let probe = block_on(cold_read::run_light_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     let Some(backend) = probe.backend_id else {
       for (backend, error) in &probe.attempts {

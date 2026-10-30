@@ -15,6 +15,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::Context;
+
+/// The approval policy table every stack home starts with; a manager turn's prompt assembly requires one.
+const APPROVAL_POLICY_TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies: []
+enable_ask_tier_refusal: false
+";
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
@@ -575,6 +588,8 @@ impl Stack {
   }
 
   async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
+    std::fs::create_dir_all(home.path().join("config.d"))?;
+    std::fs::write(home.path().join("config.d/approval_policy.yaml"), APPROVAL_POLICY_TABLE)?;
     let cfg = Arc::new(cfg);
     let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks);

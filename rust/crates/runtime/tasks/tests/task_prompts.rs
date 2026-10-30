@@ -142,9 +142,26 @@ struct Tree {
   worker1: String,
 }
 
+/// The approval policy table every harness home starts with; a test that changes it rewrites the file.
+const APPROVAL_POLICY_TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies:
+  - {id: release-restart, scope: \"Release and restart the CharlieBot checkout.\", cap_per_pt_day: null, expires: 2099-01-01}
+enable_ask_tier_refusal: false
+";
+
 impl Harness {
   fn new() -> Self {
     let home = tempfile::tempdir().expect("temp home");
+    let table = home.path().join("config.d").join("approval_policy.yaml");
+    fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
+    fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
     let cfg = config(home.path());
     let registry = Registry::new();
     let hooks = StoreHooks {
@@ -162,6 +179,11 @@ impl Harness {
   }
 
   /// Opens a store over the same home. Its metadata cache starts empty, so it reads the files this harness wrote.
+  /// The temporary home path, for tests that edit a home file between two assemblies.
+  fn home_path(&self) -> &Path {
+    self._home.path()
+  }
+
   fn reopen_store(&mut self) {
     let hooks = StoreHooks {
       account_labels: Some(Arc::new(NoHooks)),
@@ -620,4 +642,47 @@ async fn unknown_run_is_a_404_with_the_task_text() {
   let error = read_run_context(&harness.store, &tree.worker1, "no-such-run").expect_err("the run is missing");
   assert_eq!(error.status, 404);
   assert_eq!(error.detail, format!("run no-such-run not found in task {}", tree.worker1));
+}
+
+#[tokio::test]
+async fn a_manager_prompt_carries_the_approval_policy_table_and_an_edit_reaches_the_next_prompt() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+
+  let first = harness.snapshot_for(&tree.root, "manager_turn").await;
+  let table_index = first
+    .blocks
+    .iter()
+    .position(|block| block.text.starts_with("## Approval policy table\n"))
+    .expect("the manager prompt carries the approval policy table");
+  assert!(first.blocks[table_index].text.contains("- id: release-restart"), "{}", first.blocks[table_index].text);
+  assert_eq!(
+    first.blocks[table_index].sources[0].source_ref, "config.d/approval_policy.yaml",
+    "the table block names the table file"
+  );
+  let before_blocks = &first.blocks[..table_index];
+
+  // Editing only the table file changes the next prompt; every prompt file stays as it was.
+  let table = harness.home_path().join("config.d").join("approval_policy.yaml");
+  fs::write(&table, APPROVAL_POLICY_TABLE.replace("cap_per_pt_day: null", "cap_per_pt_day: 4"))
+    .expect("the table edit writes");
+
+  let second = harness.snapshot_for(&tree.root, "manager_turn").await;
+  assert!(second.blocks[table_index].text.contains("cap_per_pt_day: 4"), "{}", second.blocks[table_index].text);
+  let before_texts: Vec<&str> = before_blocks.iter().map(|block| block.text.as_str()).collect();
+  let after_texts: Vec<&str> = second.blocks[..table_index].iter().map(|block| block.text.as_str()).collect();
+  assert_eq!(before_texts, after_texts, "no prompt file changed");
+}
+
+#[tokio::test]
+async fn a_worker_prompt_carries_no_approval_policy_table() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+
+  let snapshot = harness.snapshot_for(&tree.worker1, "work").await;
+
+  assert!(
+    snapshot.blocks.iter().all(|block| !block.text.contains("Approval policy table")),
+    "the worker prompt carries no approval policy table"
+  );
 }

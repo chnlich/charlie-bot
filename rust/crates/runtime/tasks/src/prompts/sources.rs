@@ -160,11 +160,17 @@ fn manager_rule_segments(env: &PromptEnv<'_>, meta: &SessionMetadata) -> anyhow:
     .replace("{{session_id}}", &meta.id);
   let contract = sections_text(repo, "task_manager.md", &["manager_role", "manager_boundaries"])?
     .replace("{{agent_message_limit}}", &MAX_AGENT_MESSAGE_WEIGHTED_CHARS.to_string());
+  // The approval policy table is host configuration read fresh each assembly, so an edit reaches the next prompt.
+  let approval = charliebot_core::approval_policy::load_and_record(&env.cfg.charliebot_home)?;
   let mut segments = vec![
     segment(base, vec![base_source("prompts/task_base.md")]),
     segment(shared, vec![base_source("prompts/master.md")]),
     segment(workflows, vec![base_source(&format!("prompts/{workflows_file}"))]),
     segment(contract, vec![base_source("prompts/task_manager.md")]),
+    segment(
+      charliebot_core::approval_policy::prompt_section(&approval.table),
+      vec![base_source(charliebot_core::approval_policy::TABLE_RELATIVE_PATH)],
+    ),
   ];
   if let Some(host) = host_supplement(env, meta)? {
     let path = host_supplement_path(env);

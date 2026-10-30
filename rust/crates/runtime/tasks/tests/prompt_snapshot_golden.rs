@@ -345,11 +345,28 @@ struct Prepared {
   home: TempDir,
 }
 
+/// The approval policy table every case home starts with; a manager case's snapshot carries its section.
+const APPROVAL_POLICY_TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies:
+  - {id: release-restart, scope: \"Release and restart the CharlieBot checkout.\", cap_per_pt_day: null, expires: 2099-01-01}
+enable_ask_tier_refusal: false
+";
+
 fn prepare(case: &Case) -> Prepared {
   let home = tempfile::tempdir().expect("temp home");
   if let Some(host) = case.host {
     fs::write(home.path().join("MASTER_AGENT_PROMPT.md"), host).expect("host supplement");
   }
+  let table = home.path().join("config.d").join("approval_policy.yaml");
+  fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
+  fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
   let bodies_dir = home.path().join("prompt_bodies");
   fs::create_dir_all(&bodies_dir).expect("prompt_bodies");
   for (_name, text) in case.bodies {

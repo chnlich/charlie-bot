@@ -118,7 +118,8 @@ impl SequenceListingFields for RegisteredSequences {
     session_ids: &[String],
     now: UtcDateTime,
   ) -> StoreResult<HashMap<String, Map<String, Value>>> {
-    Ok(self.registry.sequence_listing_fields(session_ids, now))
+    let ids = crate::sequence::listing_session_ids(self.registry.sequence_controllers(), session_ids);
+    Ok(self.registry.sequence_listing_fields(&ids, now))
   }
 
   fn sequence_subtree_roots(&self, metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {

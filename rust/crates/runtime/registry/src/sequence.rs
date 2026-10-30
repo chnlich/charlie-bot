@@ -5,6 +5,7 @@
 //! The run lifecycle methods of the Python controller (`redrive`, `launch_context`, `after_run`, `recover_run`,
 //! `reconcile_interrupted`) run over the store's run records and task tree through `SequenceTree`.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -85,10 +86,36 @@ pub trait SequenceController: Send + Sync {
   /// entry repeats those defaults.
   fn listing_fields(&self, session_ids: &[String], now: UtcDateTime) -> HashMap<String, Map<String, Value>>;
 
+  /// The sessions [`listing_fields`](Self::listing_fields) can give an entry for, or `None` when it cannot name them.
+  ///
+  /// A listing asks the controllers about their bound sessions instead of every row, so a home of thousands of
+  /// sessions costs one lookup per bound session. A controller that cannot name its sessions keeps every id.
+  fn bound_session_ids(&self) -> Option<Vec<String>> {
+    None
+  }
+
   /// Moves every binding of `source` onto `new`, the node that replaced it. `true` when a binding moved.
   fn move_bindings<'a>(&'a self, _source: &'a str, _new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async { Ok(false) })
   }
+}
+
+/// The ids one listing passes to the controllers, narrowed to their bound sessions when every controller names them.
+///
+/// The controllers report the same ids that [`SequenceController::listing_fields`] would answer for; a controller that
+/// cannot name them keeps the whole `session_ids` list.
+pub fn listing_session_ids<'a>(
+  controllers: impl Iterator<Item = &'a Arc<dyn SequenceController>>,
+  session_ids: &'a [String],
+) -> Cow<'a, [String]> {
+  let mut bound = Vec::new();
+  for controller in controllers {
+    match controller.bound_session_ids() {
+      Some(ids) => bound.extend(ids),
+      None => return Cow::Borrowed(session_ids),
+    }
+  }
+  Cow::Owned(bound)
 }
 
 /// The shared adapter's settled launch/wait verdict.
@@ -613,6 +640,8 @@ mod tests {
   struct TestController {
     session_id: String,
     calls: Arc<Mutex<Vec<&'static str>>>,
+    /// The ids the controller names for a listing; `None` keeps every id.
+    bound: Option<Vec<String>>,
   }
 
   impl SequenceController for TestController {
@@ -690,6 +719,10 @@ mod tests {
     fn listing_fields(&self, _session_ids: &[String], _now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
       HashMap::new()
     }
+
+    fn bound_session_ids(&self) -> Option<Vec<String>> {
+      self.bound.clone()
+    }
   }
 
   fn controller_calls() -> Arc<Mutex<Vec<&'static str>>> {
@@ -697,11 +730,35 @@ mod tests {
     Arc::clone(CALLS.get_or_init(|| Arc::new(Mutex::new(Vec::new()))))
   }
 
+  fn naming_controller(bound: Option<Vec<String>>) -> Arc<dyn SequenceController> {
+    Arc::new(TestController { session_id: "sequence-node".to_string(), calls: controller_calls(), bound })
+  }
+
+  #[test]
+  fn a_listing_asks_only_about_the_sessions_every_controller_names() {
+    let controller = naming_controller(Some(vec!["sequence-node".to_string()]));
+    let ids = ["sequence-node".to_string(), "plain-session".to_string()];
+
+    let narrowed = listing_session_ids([&controller].into_iter(), &ids);
+
+    assert_eq!(narrowed.as_ref(), ["sequence-node".to_string()]);
+  }
+
+  #[test]
+  fn a_controller_that_cannot_name_its_sessions_keeps_every_id() {
+    let controller = naming_controller(None);
+    let ids = ["sequence-node".to_string(), "plain-session".to_string()];
+
+    let narrowed = listing_session_ids([&controller].into_iter(), &ids);
+
+    assert_eq!(narrowed.as_ref(), ids.as_slice());
+  }
+
   #[tokio::test]
   async fn controller_drives_every_run_method_over_store_sequence_tree() {
     controller_calls().lock().unwrap().clear();
     let controller: Arc<dyn SequenceController> =
-      Arc::new(TestController { session_id: "sequence-node".to_string(), calls: controller_calls() });
+      Arc::new(TestController { session_id: "sequence-node".to_string(), calls: controller_calls(), bound: None });
 
     let home = tempfile::tempdir().unwrap();
     let cfg =

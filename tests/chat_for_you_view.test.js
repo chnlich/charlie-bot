@@ -110,6 +110,7 @@ function forYouRig(
     SESSION_ID: 'sess-fy',
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
+    SESSION_NAME: 'Session sess-fy',
     masterThinking: false,
     console: {error() {}, log() {}},
     marked: {Renderer: function Renderer() {}, use() {}},

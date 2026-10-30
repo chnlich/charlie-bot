@@ -25,6 +25,8 @@ function baseSessionContext(overrides = {}) {
     STATIC_ASSET_VERSION: 'stub-asset-version',
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
+    // index.html's active-session name; the displayed-session module starts from it.
+    SESSION_NAME: 'Session session-a',
     // The server-embedded initial render payload (index.html); the sidebar's
     // restore path reads it to detect a v2 task-node deep link.
     SESSION_BOOTSTRAP: overrides.SESSION_BOOTSTRAP !== undefined ? overrides.SESSION_BOOTSTRAP : null,

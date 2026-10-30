@@ -66,6 +66,7 @@ function loadChatContext(elements) {
     wsUrlWithToken: (path) => path,
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
+    SESSION_NAME: 'Session session-a',
     // No stubs above run config.js: stand in for its shared header literal.
     JSON_HEADERS: {'Content-Type': 'application/json'},
   };

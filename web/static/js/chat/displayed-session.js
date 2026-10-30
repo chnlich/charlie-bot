@@ -21,7 +21,7 @@
 const DISPLAYED_WELCOME_TITLE = 'CharlieBot@' + PAGE_HOSTNAME;
 
 let displayedSessionId = SESSION_ID;
-let displayedSessionName = null;
+let displayedSessionName = SESSION_NAME;
 
 // The composer actions waiting for their session's switch to land. Each
 // carries the session it binds; kind says how a switch that never lands

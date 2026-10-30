@@ -605,6 +605,13 @@ test('clicking back to the loaded session inside a pending switch lands on one s
       'the send target is the rendered session');
 });
 
+test('page load starts the displayed session from the template name, with no bootstrap payload', () => {
+  const h = buildSwitchHarness();
+  assert.equal(h.context.SESSION_BOOTSTRAP, null);
+  assert.equal(vm.runInContext('displayedSessionId', h.context), 'session-a');
+  assert.equal(vm.runInContext('displayedSessionName', h.context), 'Session session-a');
+});
+
 test('a second click on the pending target keeps its held composer actions for the landing', async () => {
   const h = buildSwitchHarness();
   h.context.renderSessionView(h.payloadFor('session-a'));

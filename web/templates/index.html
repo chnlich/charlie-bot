@@ -24,6 +24,8 @@
     // The same value the ?v= script URLs below carry: the session WebSocket handshake sends it as
     // asset_version, and a stale value gets the 4409 close that reloads the page (websocket.js).
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
+    // The name the header and tab title show at page load; the displayed-session module starts from it.
+    const SESSION_NAME = {{ active_session.name|tojson if active_session else 'null' }};
     // The host the displayed-session module restates in the tab title.
     const PAGE_HOSTNAME = {{ hostname|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};

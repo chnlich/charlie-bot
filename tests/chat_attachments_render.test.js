@@ -38,6 +38,7 @@ function loadChatScript() {
     SESSION_ID: 'test-session',
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
+    SESSION_NAME: 'Session test-session',
     platform: {isMobile: false, onChange() {}},
     console: {error: () => {}},
     fetch: async () => ({
@@ -114,6 +115,7 @@ function loadFileUploadScript(fetchImpl) {
     SESSION_ID: 'session-a',
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
+    SESSION_NAME: 'Session session-a',
     console: {error: () => {}},
     FormData: class {
       constructor() {

@@ -146,6 +146,7 @@ function buildSidebarContext() {
     SESSION_ID: 'session-a',
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
+    SESSION_NAME: 'Session session-a',
     platform: {isMobile: false, onChange() {}},
     THINKING_SINCE: null,
     masterThinking: false,

@@ -71,7 +71,7 @@ pub const NUDGE_SENDER_NAME: &str = "Web reply";
 /// (`reply.REPLY_BUDGET_CHARS`).
 pub const REPLY_BUDGET_CHARS: usize = 500;
 
-/// The language check holds a reply when the newest user message has at least this many Han characters.
+/// The language check holds a reply when the answered user message has at least this many Han characters.
 const LANGUAGE_CHECK_MIN_USER_HAN: usize = 5;
 /// The language check holds a reply whose Han share, Han / (Han + Latin letters), is below this.
 const LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE: f64 = 0.05;
@@ -347,8 +347,8 @@ fn count_matches(pattern: &Regex, text: &str) -> usize {
   pattern.find_iter(text).count()
 }
 
-/// Whether the language check holds `reply` after the user message `user_text`, where None means no user message
-/// (`language_check_holds`). A reply with no Han and no Latin letters is not held.
+/// Whether the language check holds `reply` after the answered user messages' text `user_text`, where None means no
+/// answered user message (`language_check_holds`). A reply with no Han and no Latin letters is not held.
 fn language_check_holds(user_text: Option<&str>, reply: &str) -> anyhow::Result<bool> {
   let Some(user_text) = user_text else {
     return Ok(false);
@@ -895,6 +895,21 @@ mod tests {
     );
     assert_eq!(home.events(&sid).len(), events_before);
     assert!(!home.meta(&sid).await.has_unread);
+  }
+
+  #[tokio::test]
+  async fn one_candidate_binds_the_tag_that_names_it() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let only = home.append(&sid, user_event_with_id("11111111-a", "the question")).await;
+    home.set_running(&[id_of(&only)]);
+
+    let tags = ["11111111".to_string()];
+    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
+      .await
+      .expect("the reply posts");
+
+    assert_eq!(readback["answers"], json!([id_of(&only)]));
   }
 
   #[tokio::test]

@@ -5,6 +5,7 @@
 //! and the cold-read child session both build from here, so the foreground output and the completion report carry the
 //! same lines.
 
+use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -191,12 +192,112 @@ pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
   Ok(lines.join("\n"))
 }
 
-/// The cold-read run's whole input: the page text, the VISIBLE TEXT block, then the questions with the trigger
-/// filled in.
+/// The scheme a data URI starts with.
+const DATA_SCHEME: &[u8] = b"data:";
+
+/// The bytes that end a data URI's payload: the quote of its attribute or `url("...")`, the `)` of `url(...)`, the
+/// `>` of an unquoted attribute or tag, and the whitespace before a `srcset` descriptor. A base64 payload holds none
+/// of them, and a percent-encoded payload writes them as `%XX`.
+const DATA_PAYLOAD_END: &[u8] = b"\"')<> \t\r\n\x0c";
+
+/// Whether `byte` can continue the name a scheme follows, so that `metadata:` is not read as `data:`.
+fn continues_name(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'+')
+}
+
+/// The byte offset of the comma that ends a data URI's header, when `bytes` at `start` holds a header. A header is an
+/// empty media type or a `type/subtype`, followed by `;name=value` parameters (RFC 2397).
+fn data_header_end(bytes: &[u8], start: usize) -> Option<usize> {
+  let mut index = start;
+  while index < bytes.len() {
+    match bytes[index] {
+      b',' => {
+        let header = &bytes[start..index];
+        let media = header.split(|&byte| byte == b';').next().unwrap_or(header);
+        let plausible = media.is_empty() || media.contains(&b'/');
+        return plausible.then_some(index);
+      }
+      b if DATA_PAYLOAD_END.contains(&b) => return None,
+      _ => index += 1,
+    }
+  }
+  None
+}
+
+/// Whether a data URI header (the bytes between `data:` and the comma) carries the `;base64` parameter, whose
+/// alphabet excludes the comma a `srcset` uses between candidates.
+fn is_base64_header(header: &[u8]) -> bool {
+  header.rsplit(|&byte| byte == b';').next().is_some_and(|part| part.eq_ignore_ascii_case(b"base64"))
+}
+
+/// The byte offset where the payload starting at `start` ends.
+fn data_payload_end(bytes: &[u8], start: usize, base64: bool) -> usize {
+  let mut index = start;
+  while index < bytes.len() && !DATA_PAYLOAD_END.contains(&bytes[index]) && !(base64 && bytes[index] == b',') {
+    index += 1;
+  }
+  index
+}
+
+/// The omitted payload's size as the placeholder states it: `512 B`, `1.4 KB`, `2.0 MB`.
+fn omitted_size(bytes: usize) -> String {
+  const KB: f64 = 1024.0;
+  const MB: f64 = 1024.0 * 1024.0;
+  let size = bytes as f64;
+  if size >= MB {
+    format!("{:.1} MB", size / MB)
+  } else if size >= KB {
+    format!("{:.1} KB", size / KB)
+  } else {
+    format!("{bytes} B")
+  }
+}
+
+/// The page source a cold read sends: every `data:` URI replaced by `data:<header>,[<size> omitted]`. The header and
+/// everything else in the source stay byte for byte. Inline screenshots make a self-contained page megabytes wide,
+/// while a linked file keeps it at text size; the placeholder keeps the prompt at text size without touching the file.
+fn omit_data_uris(page_text: &str) -> Cow<'_, str> {
+  let bytes = page_text.as_bytes();
+  let mut replaced: Option<String> = None;
+  let mut copied = 0;
+  let mut index = 0;
+  while index + DATA_SCHEME.len() <= bytes.len() {
+    let scheme = &bytes[index..index + DATA_SCHEME.len()];
+    if !scheme.eq_ignore_ascii_case(DATA_SCHEME) || (index > 0 && continues_name(bytes[index - 1])) {
+      index += 1;
+      continue;
+    }
+    let header_start = index + DATA_SCHEME.len();
+    let Some(comma) = data_header_end(bytes, header_start) else {
+      index += 1;
+      continue;
+    };
+    let payload_start = comma + 1;
+    let payload_end = data_payload_end(bytes, payload_start, is_base64_header(&bytes[header_start..comma]));
+    let out = replaced.get_or_insert_with(|| String::with_capacity(page_text.len()));
+    out.push_str(&page_text[copied..payload_start]);
+    out.push_str(&format!("[{} omitted]", omitted_size(payload_end - payload_start)));
+    copied = payload_end;
+    index = payload_end;
+  }
+  match replaced {
+    None => Cow::Borrowed(page_text),
+    Some(mut out) => {
+      out.push_str(&page_text[copied..]);
+      Cow::Owned(out)
+    }
+  }
+}
+
+/// The cold-read run's whole input: the page text with every `data:` URI replaced by a size placeholder, the VISIBLE
+/// TEXT block of the page as it opens, then the questions with the trigger filled in. The visible text is read from
+/// the prepared source, so a page-wide attribute value never reaches the HTML parser; a data URI sits in an attribute
+/// value or CSS, which visible text does not carry, and a page without one is parsed as it came.
 pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> anyhow::Result<String> {
+  let source = omit_data_uris(page_text);
   Ok(format!(
-    "{page_text}\n\n{VISIBLE_TEXT_HEADER}\n{}\n\n{}",
-    visible_text(page_text)?,
+    "{source}\n\n{VISIBLE_TEXT_HEADER}\n{}\n\n{}",
+    visible_text(&source)?,
     questions.replace(TRIGGER_PLACEHOLDER, trigger)
   ))
 }
@@ -215,13 +316,15 @@ pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
   ))
 }
 
-/// The ask probe's whole input: the item JSON, the host-served page text and its VISIBLE TEXT block when there is a
-/// page, then the questions (`ask_probe_input`), joined by blank lines.
+/// The ask probe's whole input: the item JSON, the host-served page text with every `data:` URI replaced by a size
+/// placeholder and its VISIBLE TEXT block when there is a page, then the questions (`ask_probe_input`), joined by
+/// blank lines.
 pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str) -> anyhow::Result<String> {
   let mut pieces = vec![pyfmt::json_dumps(item, &ITEM_JSON)];
   if let Some(page) = linked_page {
-    pieces.push(page.to_string());
-    pieces.push(format!("{VISIBLE_TEXT_HEADER}\n{}", visible_text(page)?));
+    let source = omit_data_uris(page);
+    pieces.push(source.to_string());
+    pieces.push(format!("{VISIBLE_TEXT_HEADER}\n{}", visible_text(&source)?));
   }
   pieces.push(questions.to_string());
   Ok(pieces.join("\n\n"))
@@ -491,6 +594,71 @@ mod tests {
     assert!(!rest.contains("Folded body."), "{rest}");
     let without_page = ask_probe_input(&item, None, "questions").unwrap();
     assert!(!without_page.contains(VISIBLE_TEXT_HEADER), "{without_page}");
+  }
+
+  /// A self-contained page whose one image is a base64 PNG payload of `payload_bytes` characters.
+  fn page_with_inline_png(payload_bytes: usize) -> String {
+    format!(
+      r#"<html><body><p>Before the chart.</p><img alt="The monitor line chart" src="data:image/png;base64,{}"><p>After the chart.</p></body></html>"#,
+      "A".repeat(payload_bytes)
+    )
+  }
+
+  const INLINE_PNG_PLACEHOLDER: &str = "data:image/png;base64,[2.0 MB omitted]";
+
+  #[test]
+  fn probe_input_omits_an_inline_image_and_keeps_the_alt_text() {
+    let page = page_with_inline_png(2 * 1024 * 1024);
+    let input = probe_input(&page, "questions", "the trigger").unwrap();
+    assert!(input.len() < 50 * 1024, "the probe input is {} bytes", input.len());
+    assert!(input.contains("The monitor line chart"), "the alt text stays in the source");
+    assert!(input.contains(INLINE_PNG_PLACEHOLDER), "the placeholder states the media type and the omitted size");
+    assert!(!input.contains("AAAA"), "no payload byte reaches the prompt");
+    assert!(input.contains("Before the chart.") && input.contains("After the chart."), "{input}");
+  }
+
+  #[test]
+  fn ask_probe_input_omits_an_inline_image_in_the_linked_page() {
+    let page = page_with_inline_png(2 * 1024 * 1024);
+    let item = serde_json::json!({"text": "Choose."});
+    let input = ask_probe_input(&item, Some(&page), "questions").unwrap();
+    assert!(input.len() < 50 * 1024, "the ask probe input is {} bytes", input.len());
+    assert!(input.contains("The monitor line chart"), "{input}");
+    assert!(input.contains(INLINE_PNG_PLACEHOLDER), "{input}");
+  }
+
+  #[test]
+  fn every_data_uri_position_is_replaced_and_the_rest_stays_byte_for_byte() {
+    let page = concat!(
+      r#"<a href="data:text/plain;charset=utf-8,hello%20world">link</a>"#,
+      r#"<img srcset="data:image/png;base64,AAAA 1x, pic.png 2x" alt="chart">"#,
+      r#"<div style="background: url(data:image/svg+xml;charset=utf-8,%3Csvg%3E)">x</div>"#,
+      r#"<img src="data:image/jpeg;base64,BBBB" alt="kept alt">"#,
+    );
+    let expected = concat!(
+      r#"<a href="data:text/plain;charset=utf-8,[13 B omitted]">link</a>"#,
+      r#"<img srcset="data:image/png;base64,[4 B omitted] 1x, pic.png 2x" alt="chart">"#,
+      r#"<div style="background: url(data:image/svg+xml;charset=utf-8,[9 B omitted])">x</div>"#,
+      r#"<img src="data:image/jpeg;base64,[4 B omitted]" alt="kept alt">"#,
+    );
+    let input = probe_input(page, "questions", "the trigger").unwrap();
+    let (source, _) = input.split_once(VISIBLE_TEXT_HEADER).expect("the probe carries the visible text block");
+    assert_eq!(source, format!("{expected}\n\n"));
+  }
+
+  #[test]
+  fn a_page_without_a_data_uri_yields_the_same_probe_input() {
+    let input = probe_input(FOLDED_PAGE, "questions", "the trigger").unwrap();
+    assert_eq!(
+      input,
+      format!("{FOLDED_PAGE}\n\n{VISIBLE_TEXT_HEADER}\n{}\n\nquestions", visible_text(FOLDED_PAGE).unwrap())
+    );
+  }
+
+  #[test]
+  fn a_data_word_in_the_page_text_is_not_replaced() {
+    let page = "<p>metadata: a/b, and the data: schema, and data:foo, stay as prose.</p>";
+    assert_eq!(omit_data_uris(page).as_ref(), page);
   }
 
   #[tokio::test]

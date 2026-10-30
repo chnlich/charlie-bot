@@ -10,7 +10,6 @@ name = "charliebot-server"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
 charliebot-compat.workspace = true
@@ -38,6 +37,9 @@ tower-http.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The shutdown test's SlowStop service implements the registry's Service trait, whose start and stop return
+# anyhow::Result; no server module outside `#[cfg(test)]` names anyhow.
+anyhow.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
 # The thread-rule test assembles a turn through the prompt builder; no server module outside `#[cfg(test)]` names a
 # task type, so this crate's own code does not use the tasks runtime.

@@ -4,10 +4,10 @@
 // One recording = one run object owning its mic stream, capture graph, local PCM
 // buffer, and at most one in-flight upload request. A single module-level slot
 // (`activeVoiceRun`) is claimed synchronously inside the click handler, so two
-// pipelines can never coexist: every asynchronous continuation of a run first
+// pipelines can never coexist. Every asynchronous continuation of a run first
 // checks that the slot still belongs to it and silently exits otherwise.
 //
-// The recording itself never touches the persistence path: the worklet's 16 kHz
+// The recording itself never touches the persistence path. The worklet's 16 kHz
 // PCM chunks append to a local buffer, and the level bar plus elapsed timer are
 // computed from those chunks client-side. On release the whole buffer assembles
 // into a WAV and uploads once; the server persists it and returns the full text.
@@ -16,21 +16,22 @@
 //
 // The backend comes from the caret menu beside the microphone (the choices ride
 // the page as VOICE_BACKENDS). With a backend whose livePartials is true the
-// same chunks also stream to the server's preview relay (/ws/voice/{session}),
-// which forwards the backend's partials while speaking and keeps the audio; on
-// stop the run waits for the relay's final inside a budget that grows with the
-// recording (2 s plus 20 ms per recorded second, because the backend needs
-// longer to finalize longer recordings). Receiving the final means the relay
-// has already archived the recording: the words go in and the run ends with no
-// upload. A live recording that ends with no final never uploads on its own:
-// the run enters the stop state, where the buffer stays, the hint names the
-// backend and the reason, and one click on the voice button starts the upload
-// whose transcript owns the text. The budget expiry itself is not a failure:
+// same chunks also stream to the server's preview relay (/ws/voice/{session}).
+// That relay forwards the backend's partials while speaking and keeps the
+// audio. On stop the run waits for the relay's final inside a budget that grows
+// with the recording. The budget is 2 s plus 20 ms per recorded second, because
+// the backend needs longer to finalize longer recordings. Receiving the final
+// means the relay has already archived the recording: the words go in and the
+// run ends with no upload. A live recording that ends with no final never uploads
+// on its own. The run enters the stop state, where the buffer stays, and the hint
+// names the backend and the reason. One click on the voice button starts the
+// upload whose transcript owns the text. The budget expiry itself is not a
+// failure:
 // the relay stays open, so a final arriving before that click still wins and
 // ends the run with no upload. A relay failure (an error frame, a lost socket,
-// a failed end send) never starts an upload either: during recording the
-// reason lands in the hint at once and the recording continues; at stop the
-// run enters the stop state. On a non-live backend the whole buffer assembles
+// a failed end send) never starts an upload either. During recording the reason
+// lands in the hint at once and the recording continues; at stop the run enters
+// the stop state. On a non-live backend the whole buffer assembles
 // into a WAV and uploads once, right after stop; the server then archives the
 // recording and returns the full text. No request goes out mid-recording.
 let activeVoiceRun = null;
@@ -47,7 +48,7 @@ const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcript
 const VOICE_INPUT_MODE = 'voice';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so
-// the budget grows with the run; a fixed wait is either too short for long
+// the budget grows with the run. A fixed wait is either too short for long
 // recordings or too long for short ones.
 const VOICE_RELAY_FINAL_BUDGET_BASE_MS = 2 * 1000;
 const VOICE_RELAY_FINAL_BUDGET_PER_SECOND_MS = 20;
@@ -271,7 +272,7 @@ function openVoiceBackendMenu() {
 function positionVoiceBackendMenu() {
   // The menu is right-aligned to the mic group. Where the group's right edge
   // leaves too little room for the menu, a negative right offset moves the
-  // menu's right edge past the group until its left edge sits at the margin.
+  // menu's right edge past the group. Its left edge then sits at the margin.
   const margin = 8;
   voiceMenu.style.left = '';
   voiceMenu.style.right = '';
@@ -303,10 +304,10 @@ async function toggleVoice() {
     await startRecording();
     return;
   }
-  // Clicks during arming or finalizing are ignored, not queued; a recording
+  // Clicks during arming or finalizing are ignored, not queued. A recording
   // converts a click into stop, an in-flight upload into a cancel, a failed
-  // upload into a retry, and a stopped live recording into the upload (stop is
-  // idempotent: the recording flag clears before the first await).
+  // upload into a retry, and a stopped live recording into the upload. A stop
+  // is idempotent: the recording flag clears before the first await.
   if (run.recording) await stopRecording(run);
   else if (run.phase === 'uploading' || run.phase === 'decoding') cancelVoiceUpload(run);
   else if (run.phase === 'retry') startUpload(run);
@@ -368,7 +369,7 @@ async function startRecording() {
   const run = newVoiceRun(SESSION_ID, selectedVoiceBackend());
   activeVoiceRun = run;
   // Amber from the click on: the mic is not delivering sound yet, so the
-  // user must not speak — red is the speak cue and lights at the first
+  // user must not speak. Red is the speak cue and lights at the first
   // chunk with a non-zero sample.
   setVoiceButtonState('starting');
   updateVoiceCaret();
@@ -434,7 +435,7 @@ async function startRecording() {
     updateVoiceIndicator(run);
   } catch (err) {
     // Both branches settle before the release, so the slower branch's
-    // resources are already on the run: the one release path closes the
+    // resources are already on the run. The one release path closes the
     // AudioContext and stops every opened track in either order of success
     // and failure.
     await Promise.allSettled([micBranch, graphBranch]);
@@ -449,10 +450,10 @@ async function startRecording() {
 }
 
 // --- Recording devices ------------------------------------------------------
-// One devices object per recording, collected when the mic opens: which
-// microphone captured it, the audio processing the track actually ran with,
-// and the output devices outside sound could have bled in from. Exactly five
-// keys — the server's voice_transcribed log schema.
+// One devices object per recording, collected when the mic opens. It lists
+// which microphone captured it, the audio processing the track actually ran
+// with, and the output devices outside sound could have bled in from. Exactly
+// five keys — the server's voice_transcribed log schema.
 async function collectVoiceDevices(run) {
   const track = run.stream.getAudioTracks()[0];
   const devices = {
@@ -556,7 +557,7 @@ async function stopRecording(run) {
   updateVoiceLeaveGuard();
   try {
     // The worklet drains its buffered tail into the local buffer — and, live,
-    // out to the relay — so the recording is whole before it ends; the upload
+    // out to the relay — so the recording is whole before it ends. The upload
     // (after a stop-state click, or right away on a non-live backend)
     // assembles its WAV from the same buffer.
     await flushVoiceWorklet(run);
@@ -569,8 +570,8 @@ async function stopRecording(run) {
     run.stopping = false;
     showVoicePartial(run, '');
     if (finalText !== null) {
-      // The relay's final means the recording is already archived server-side:
-      // the words go in through the one insertion path and the run ends with
+      // The relay's final means the recording is already archived server-side.
+      // The words go in through the one insertion path and the run ends with
       // no upload, so the send lock never engages.
       finishWithRelayFinal(run, finalText);
       return;
@@ -590,10 +591,10 @@ async function stopRecording(run) {
   }
 }
 
-// The relay's final, inside the budget or after it through the stop state's
-// still-open relay: the recording is already archived, so the words go in and
-// the run ends with nothing uploaded. An empty final means the recording held
-// no speech.
+// The relay's final arrives inside the budget, or after it through the stop
+// state's still-open relay. The recording is already archived, so the words go
+// in and the run ends with nothing uploaded. An empty final means the recording
+// held no speech.
 function finishWithRelayFinal(run, finalText) {
   releaseVoiceRun(run);
   const words = finalText.trim();
@@ -709,7 +710,7 @@ function insertVoiceText(text) {
 }
 
 // --- WAV assembly -----------------------------------------------------------
-// The buffer is a list of int16-LE ArrayBuffers in capture order; the WAV is
+// The buffer is a list of int16-LE ArrayBuffers in capture order. The WAV is
 // built once at upload from the first sampleCount samples (the auto-stop trim).
 
 function assembleVoiceWav(chunks, sampleCount) {
@@ -778,7 +779,7 @@ function sendVoiceXhr(path, body, {onSent, onXhr}) {
 }
 
 // The upload's transport: a multipart form with the audio plus the
-// backend the browser selected and the recording's device object as JSON — the
+// backend the browser selected and the recording's device object as JSON. The
 // server persists the recording, transcribes it, and returns the text.
 // A null backendId or devices leaves that form field out.
 function postVoiceRecording(path, wavBuffer, {backendId, devices, ...opts}) {
@@ -801,8 +802,8 @@ function clearVoiceUploadTimer(run) {
 // partial/final/error frames in. Receiving the final means the relay archived
 // the recording it already received, so the run ends and nothing uploads. A
 // relay failure, an error frame, a lost socket, or a failed end send, never
-// starts an upload: during recording the reason lands on the run and in the
-// hint at once while the recording continues; at stop the run enters the stop
+// starts an upload. During recording the reason lands on the run and in the
+// hint at once while the recording continues. At stop the run enters the stop
 // state, where a failure only rewrites the hint reason.
 
 function openVoiceRelay(run) {
@@ -846,11 +847,11 @@ function handleVoiceRelayMessage(run, event) {
     return;
   }
   if (message.type === 'final') {
-    // The final ends the run wherever it can still matter: inside the budget
-    // through the wait's resolve, in the stop state (the budget expired, the
-    // relay stayed open) through the one insertion path. With neither, after
-    // the click that started the upload or after the release, the socket is
-    // already down and the late final is discarded.
+    // The final ends the run wherever it can still matter. Inside the budget it
+    // arrives through the wait's resolve; in the stop state (the budget expired,
+    // the relay stayed open) it arrives through the one insertion path. With
+    // neither, after the click that started the upload or after the release,
+    // the socket is already down and the late final is discarded.
     if (run.relayFinalResolve) {
       settleVoiceRelayWait(run, message.text);
       return;
@@ -895,7 +896,7 @@ function voiceReadyHint(run) {
 
 async function collectVoiceRelayFinal(run) {
   // Seal the relay's recording and wait out the final for the budget the
-  // recording's length earns; null means the budget expired with the relay
+  // recording's length earns. Null means the budget expired with the relay
   // still open, and the stop state keeps waiting for it. The end frame carries
   // the devices object collected at recording start.
   const devices = await run.devicesPromise;
@@ -932,10 +933,10 @@ function settleVoiceRelayWait(run, text) {
   if (resolve) resolve(text);
 }
 
-// A relay failure, an error frame, a lost socket, or a failed end send: the
-// reason lands on the run and in the hint at once and the socket goes down. No
-// upload starts here; during recording the recording just continues, and at
-// stop the run is on its way into (or already sits in) the stop state, where
+// A relay failure, an error frame, a lost socket, or a failed end send. The
+// reason lands on the run and in the hint at once, and the socket goes down.
+// No upload starts here. During recording the recording just continues, and at
+// stop the run is on its way into (or already sits in) the stop state. There
 // the failure only rewrites the hint reason.
 function failVoiceRelay(run, reason) {
   showVoicePartial(run, '');
@@ -1036,9 +1037,9 @@ function updateVoiceLevel(run, samples) {
 
 // --- Page-leave guard -------------------------------------------------------
 // Engaged while recording (including the stop flush), while a request is in
-// flight, or while a stopped live recording sits in the stop state, where the
-// buffer exists only in this browser until its click. Disengaged when idle.
-// The popstate SPA branch in app.js is untouched: this is the generic
+// flight, or while a stopped live recording sits in the stop state. In the stop
+// state the buffer exists only in this browser until its click. Disengaged when
+// idle. The popstate SPA branch in app.js is untouched: this is the generic
 // page-leave path, so a reload cannot silently drop a recording.
 let voiceLeaveGuardInstalled = false;
 
@@ -1106,7 +1107,7 @@ function abortVoiceUpload(run) {
   run.xhr = null;
   if (!xhr) return;
   xhr.abort();
-  // An xhr still held here means its startUpload window never settled: the
+  // An xhr still held here means its startUpload window never settled. The
   // abort's own callbacks die on the ownership guard, so the cancel and the
   // session-switch teardown settle the count at this one spot.
   inputWorkSettled(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);

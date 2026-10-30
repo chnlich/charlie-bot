@@ -127,6 +127,12 @@ pub fn display(path: &Path) -> String {
   path.to_string_lossy().into_owned()
 }
 
+/// `pathlib.PurePosixPath(path).name`: the last component, after empty and `.` components are dropped. A `..`
+/// component is kept, as Python keeps it.
+pub fn name(path: &str) -> &str {
+  path.rsplit('/').find(|part| !part.is_empty() && *part != ".").unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -148,5 +154,18 @@ mod tests {
     let home = std::env::var("HOME").unwrap();
     assert_eq!(expanduser("~/x"), format!("{}/x", home.trim_end_matches('/')));
     assert_eq!(expanduser("/abs"), "/abs");
+  }
+
+  #[test]
+  fn name_reads_the_last_component_as_pure_posix_path_does() {
+    assert_eq!(name("/synthetic/uploads/error-shot.PNG"), "error-shot.PNG");
+    assert_eq!(name("error-shot.PNG"), "error-shot.PNG");
+    assert_eq!(name("/synthetic/uploads/error-shot.PNG/"), "error-shot.PNG");
+    assert_eq!(name("/models/a//b"), "b");
+    assert_eq!(name("repo/./"), "repo");
+    assert_eq!(name("/synthetic/uploads/.."), "..");
+    assert_eq!(name("."), "");
+    assert_eq!(name("/"), "");
+    assert_eq!(name(""), "");
   }
 }

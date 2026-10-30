@@ -8,11 +8,12 @@
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::paths;
 use charliebot_core::pyfmt::python_str;
 use charliebot_registry::usage::{RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl};
 use regex::Regex;
@@ -153,7 +154,7 @@ fn record(message_id: &str, session_id: &str, data: &str) -> anyhow::Result<Opti
   let provider = field(model_blob, "providerID");
   let mut model = text_or(field(model_blob, "id"), "unknown")?;
   if model.starts_with('/') {
-    model = format!("{} ({})", path_name(&model), provider.map_or_else(|| "None".to_string(), python_str));
+    model = format!("{} ({})", paths::name(&model), provider.map_or_else(|| "None".to_string(), python_str));
   }
   let account = text_or(provider, "unknown")?;
 
@@ -203,20 +204,6 @@ fn count(value: Option<&Value>) -> anyhow::Result<i64> {
   }
 }
 
-/// The final component of a POSIX path as `pathlib.PurePosixPath(path).name` reads it: empty parts and `.` are not
-/// components, and a trailing `..` is a component.
-fn path_name(path: &str) -> &str {
-  let path = Path::new(path);
-  if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-    return name;
-  }
-  match path.components().next_back() {
-    // `file_name` drops a trailing `..`, which PurePath keeps.
-    Some(Component::ParentDir) => "..",
-    _ => "",
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use std::collections::BTreeSet;
@@ -250,17 +237,6 @@ mod tests {
 
   fn touch_path(db: &Path, step: u64) {
     touch(db, 1_900_000_000 + step);
-  }
-
-  #[test]
-  fn model_path_names_follow_pure_posix_path_semantics() {
-    assert_eq!(path_name("/models/claude-opus-5-5"), "claude-opus-5-5");
-    assert_eq!(path_name("/models/anthropic/"), "anthropic");
-    assert_eq!(path_name("/models/a//b"), "b");
-    assert_eq!(path_name("/models/.."), "..");
-    assert_eq!(path_name("/"), "");
-    assert_eq!(path_name("."), "");
-    assert_eq!(path_name(""), "");
   }
 
   #[test]

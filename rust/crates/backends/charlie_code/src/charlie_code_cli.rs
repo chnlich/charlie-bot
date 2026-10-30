@@ -2,9 +2,10 @@
 //! text reaches the child through `task.md` in the transport directory, passed by `--task-file`, and never rides argv.
 
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_core::paths;
 use charliebot_core::pyfmt::float_repr;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 use serde_json::Value;
@@ -145,7 +146,7 @@ impl CharlieCodeBackend {
     if !image_refs.is_empty() && !self.image_input {
       let names = image_refs
         .iter()
-        .map(|reference| ref_text(reference, "filename").map(path_name))
+        .map(|reference| ref_text(reference, "filename").map(paths::name))
         .collect::<anyhow::Result<Vec<_>>>()?
         .join(", ");
       bail!(
@@ -208,19 +209,6 @@ fn is_image_ref(reference: &Value) -> anyhow::Result<bool> {
   let filename = ref_text(reference, "filename")?;
   let extension = filename.rsplit_once('.').map_or(filename, |(_, extension)| extension);
   Ok(image_mime(extension).is_some())
-}
-
-/// `pathlib.PurePath(name).name`: the last component of a path, empty when it has none.
-fn path_name(path: &str) -> &str {
-  let path = Path::new(path);
-  if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-    return name;
-  }
-  match path.components().next_back() {
-    // `file_name` drops a trailing `..`, which PurePath keeps.
-    Some(Component::ParentDir) => "..",
-    _ => "",
-  }
 }
 
 fn path_text(path: &Path) -> anyhow::Result<String> {
@@ -297,16 +285,6 @@ mod tests {
       CliHost { path: root.path().join("empty").to_string_lossy().into_owned(), home: root.path().to_path_buf() };
     let error = CharlieCodeBackend::from_launch(&host, "m", option("{}\n"), None, LaunchArgs::default()).err().unwrap();
     assert!(format!("{error:#}").contains("requires api_base"));
-  }
-
-  #[test]
-  fn the_refusal_names_the_basename_of_an_image_path() {
-    assert_eq!(path_name("/synthetic/uploads/error-shot.PNG"), "error-shot.PNG");
-    assert_eq!(path_name("error-shot.PNG"), "error-shot.PNG");
-    assert_eq!(path_name("/synthetic/uploads/error-shot.PNG/"), "error-shot.PNG");
-    assert_eq!(path_name("/synthetic/uploads/.."), "..");
-    assert_eq!(path_name("/"), "");
-    assert_eq!(path_name(""), "");
   }
 
   #[test]

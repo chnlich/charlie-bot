@@ -43,9 +43,10 @@ function paintDisplayedSession() {
 
 // The one writer of the displayed session. A click that moves on resolves the
 // composer actions the previous click held first, so a held message posts
-// before this click swaps the composer to the new draft.
+// before this click swaps the composer to the new draft. A click on the
+// session already pending keeps its held actions for that switch's landing.
 function setDisplayedSession(sessionId, sessionName) {
-  abandonHeldComposerActions(displayedSessionId);
+  if (sessionId !== displayedSessionId) abandonHeldComposerActions(displayedSessionId);
   displayedSessionId = sessionId;
   displayedSessionName = sessionName;
   paintDisplayedSession();

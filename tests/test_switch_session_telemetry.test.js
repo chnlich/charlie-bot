@@ -604,3 +604,25 @@ test('clicking back to the loaded session inside a pending switch lands on one s
   assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-b'],
       'the send target is the rendered session');
 });
+
+test('a second click on the pending target keeps its held composer actions for the landing', async () => {
+  const h = buildSwitchHarness();
+  h.context.renderSessionView(h.payloadFor('session-a'));
+
+  const firstClick = h.context.switchSession('session-b');
+  h.elements.get('msg-input').value = 'held words';
+  await h.context.sendMessage();
+  await h.context.cancelMaster();
+  const secondClick = h.context.switchSession('session-b');  // a double click on the same row
+  await flush();
+  assert.deepEqual(h.chatPosts, [], 'the re-click leaves the held send waiting for the landing');
+  assert.deepEqual(h.cancelPosts, [], 'the re-click leaves the held Stop waiting for the landing');
+
+  h.resolveLastSwitch();
+  await secondClick;
+  await flush();
+  h.pendingSwitches[0].resolve();  // the first click's superseded bootstrap
+  await firstClick;
+  assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-b']);
+  assert.deepEqual(h.cancelPosts, ['session-b']);
+});

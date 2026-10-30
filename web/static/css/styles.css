@@ -240,16 +240,18 @@ body.resizing { cursor: col-resize; user-select: none; }
    reach the row's right edge and no width is reserved for actions. On hover
    they stack over the text end on an opaque cover matching the hovered row,
    so revealing them reflows nothing. Buttons forced visible via !opacity-100
-   — the current session's actions and a starred row's solid star — stay in
-   flow, so the name truncates before them; the same class flips are all the
-   star toggle and the highlight move paint with (no list repaint).
+   — the current session's actions and a starred row's solid star — keep
+   their place at rest, so the name truncates before them; the same class
+   flips are all the star toggle and the highlight move paint with (no list
+   repaint).
    Geometry: a button's icon slot is 22px (p-1 around its 14px glyph), the
    row's flex gap is 8px and its horizontal padding 12px, so one stack pitch
-   is 30px; each out-of-flow box stretches over the row's full height and its
-   flex centering keeps that slot vertically centered in it. The offsets run
-   from the row's padding edge right-to-left in reverse DOM order;
-   nth-last-of-type keeps non-button trailing spans (the archived tree's
-   active tag) out of the count. */
+   is 30px; a hover-revealed box stretches over the row's full height and its
+   flex centering keeps that slot vertically centered in it, while a pinned
+   box of the current row sits on the name line. The offsets run from the
+   row's padding edge right-to-left in reverse DOM order; nth-last-of-type
+   keeps non-button trailing spans (the archived tree's active tag) out of
+   the count. */
 .session-row { position: relative; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Each out-of-flow button stretches over the row's full height (top to
@@ -273,9 +275,39 @@ body.resizing { cursor: col-resize; user-select: none; }
 .session-row > .star-btn.\!opacity-100 ~ button { right: 42px; }
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(2) { right: 72px; }
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(3) { right: 102px; }
-/* The current session's buttons and the starred star keep their flow slot
-   and stay clickable at rest. */
+/* The current session's buttons and the starred star stay clickable at rest;
+   a starred star keeps its flow slot. */
 .session-row > button.\!opacity-100 { position: static; pointer-events: auto; }
+/* The current session pins every action it draws, and two adjacent pinned
+   buttons tell its row from a starred row's lone pinned star. Those actions
+   leave the flow with the plain stack from the row's right edge, so the text
+   column spans the row: the name reserves the stack and the row's gap while
+   the time line keeps the full width, which leaves a short row's backend
+   label whole. An archived row draws three actions and reserves one pitch
+   less. A hover guard keeps a touch row off this padding, because there the
+   one gear stays in the flow. */
+@media (hover: hover) {
+  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100 {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+  }
+  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100:nth-last-of-type(2) {
+    right: 42px;
+  }
+  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100:nth-last-of-type(3) {
+    right: 72px;
+  }
+  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100:nth-last-of-type(4) {
+    right: 102px;
+  }
+  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) .session-name {
+    padding-right: 120px;
+  }
+  .session-row:has(> button.\!opacity-100 + button.\!opacity-100):has(> [title="Unarchive"]) .session-name {
+    padding-right: 90px;
+  }
+}
 /* Scope the reveal to the hovered row: the buttons' Tailwind group-hover
    class rides every ancestor carrying the `group` class, and each group
    section wrapper (groups.js's <div class="session-group group">) carries

@@ -4,6 +4,7 @@
 use anyhow::Result;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::paths;
 use charliebot_registry::turn::{PromptSource, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 
@@ -50,15 +51,9 @@ fn memory_selection_for(meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConf
 /// The basename of the task's repo, or `""` for a task with no repo: a repo-less worker matches no repo topic.
 fn repo_basename(meta: &SessionMetadata) -> &str {
   match meta.task.as_ref().and_then(|task| task.repo_path.as_deref()) {
-    Some(repo_path) if !repo_path.is_empty() => last_component(repo_path),
+    Some(repo_path) if !repo_path.is_empty() => paths::name(repo_path),
     _ => "",
   }
-}
-
-/// `pathlib.PurePosixPath(path).name`: the last component, after empty and `.` components are dropped. A `..` component
-/// is kept, as Python keeps it.
-fn last_component(path: &str) -> &str {
-  path.split('/').rfind(|part| !part.is_empty() && *part != ".").unwrap_or("")
 }
 
 /// The selection's segments as ordered rule segments, each source with scope `memory`
@@ -194,13 +189,5 @@ mod tests {
     let segments = MemoryTurn.instruction_segments(&worker_meta(None), "review", &cfg, &checkout()).unwrap();
     assert!(segments.iter().all(|segment| segment.delivery != "full"));
     assert!(segments.iter().any(|segment| segment.delivery == "index"));
-  }
-
-  #[test]
-  fn the_repo_basename_follows_pathlib_name() {
-    assert_eq!(last_component("/home/synthetic/repo/"), "repo");
-    assert_eq!(last_component("repo/./"), "repo");
-    assert_eq!(last_component("/"), "");
-    assert_eq!(last_component("repo/.."), "..");
   }
 }

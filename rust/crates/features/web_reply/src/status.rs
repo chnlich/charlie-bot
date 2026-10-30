@@ -302,16 +302,18 @@ fn assign_since(
 
 /// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches
 /// (`status._assign_tiers`). An item whose check predates the tier keeps neither field.
-fn assign_tiers(items: Vec<WaitingItem>, ask_tiers: &HashMap<String, (String, Option<String>)>) -> Vec<WaitingItem> {
+fn assign_tiers(
+  items: Vec<WaitingItem>,
+  ask_tiers: &HashMap<String, (String, Option<String>)>,
+) -> Result<Vec<WaitingItem>, WebReplyError> {
   items
     .into_iter()
     .map(|item| {
-      // The unread check computed every patch item's digest before the set got here.
-      let digest = item_sha256(&item).expect("the item digest the unread check already computed");
-      match ask_tiers.get(&digest) {
+      let digest = item_sha256(&item)?;
+      Ok(match ask_tiers.get(&digest) {
         Some((tier, rule)) => WaitingItem { tier: Some(tier.clone()), rule: rule.clone(), ..item },
         None => item,
-      }
+      })
     })
     .collect()
 }
@@ -684,7 +686,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   }
   let now = UtcDateTime::now();
   let waiting = match patch.waiting.as_deref() {
-    Some(items) => assign_tiers(assign_since(items, &stored_waiting, &mut links, now)?, &ask_tiers),
+    Some(items) => assign_tiers(assign_since(items, &stored_waiting, &mut links, now)?, &ask_tiers)?,
     None => stored_waiting,
   };
   let mut status = base;

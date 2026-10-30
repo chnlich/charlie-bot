@@ -1,7 +1,7 @@
 //! The seeded pseudo-random generator of the synthetic data.
 //!
 //! SplitMix64 expands the seed into the state of xoshiro256**. The generator is part of the data's definition: any change
-//! to it changes every byte, so it lives here instead of in a crate whose output could change under a dependency update.
+//! to it changes every byte. It lives here so a dependency update cannot change its output.
 
 /// A xoshiro256** generator. Its output depends only on the seed and this file.
 pub struct Rng {

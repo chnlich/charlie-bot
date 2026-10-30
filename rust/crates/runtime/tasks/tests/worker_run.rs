@@ -684,6 +684,38 @@ async fn a_worker_launch_failure_writes_no_turn_launch_error() -> anyhow::Result
   Ok(())
 }
 
+/// A worker run whose error result names a rejection and whose stderr carries only a model warning: the run's failure
+/// row carries the result text, not the warning.
+#[tokio::test]
+async fn a_failed_run_reports_its_error_result_instead_of_the_stderr_tail() -> anyhow::Result<()> {
+  let result = json!({
+    "type": event_types::RESULT,
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 402,
+    "result": "API Error: 402 the upstream rejected the request",
+  });
+  let warning = "[synthetic:model_warning] {\"model\":\"synthetic-model\"}";
+  let script = script_lines(&[result], &format!("printf '%s\\n' '{warning}' >&2; exit 1"));
+  let scripts = Scripts::new(vec![script, result_script("report consumed")]);
+  let stack = scripted_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(spec("do the work", None))).await?;
+  register_run(&stack, work_run(&worker.id, "run-work", None), "do the work").await?;
+  stack.adapter.launch(&worker.id, "run-work")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Failed);
+  let log = run_log(&stack, &worker.id, "run-work")?;
+  let failure_rows: Vec<&str> = log
+    .iter()
+    .filter(|event| event["type"] == event_types::ERROR)
+    .filter_map(|event| event["content"].as_str())
+    .collect();
+  assert_eq!(failure_rows, ["API Error: 402 the upstream rejected the request"], "one failure row carries the result");
+  settle_node(&stack, &manager.id).await?;
+  Ok(())
+}
+
 /// The first `run_id` of a dispatch decision that launched.
 fn launched_run_id(decision: &Value) -> anyhow::Result<String> {
   Ok(decision["run_id"].as_str().ok_or_else(|| anyhow::anyhow!("the dispatch names no run: {decision}"))?.to_string())

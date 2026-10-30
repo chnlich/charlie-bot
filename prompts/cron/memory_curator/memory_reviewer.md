@@ -29,10 +29,9 @@ a. Align admission to canonical homes:
    external home (`git -C <worktree> checkout -- <file>`, or delete it when the PR created it).
 
 b. Distill to category-level conclusions:
-   Condense drafts into concise category-level conclusions, bounded to one to three lines per
-   bullet. Retain the essential mechanism while pruning background narratives, incident
-   timelines, and intermediate deductions. When an entry that you edit has more than 12 body
-   lines, trim the whole entry.
+   Condense drafts into concise category-level conclusions within the entry brevity bar in
+   `skills/llm-context-guideline/SKILL.md`. Retain the essential mechanism while pruning
+   background narratives, incident timelines, and intermediate deductions.
 
 c. Check each sentence that the PR adds or rewrites against the "Text a model reads" subsection.
    Apply its bullets one at a time. Rewrite each sentence that falls short.

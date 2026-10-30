@@ -30,9 +30,8 @@ Read every file in `$CHARLIEBOT_HOME/memory/staging/`, and read the PR's coverag
 candidate, first test it against the admission whitelist and home routing in the
 llm-context-guideline skill (retaining durable mechanisms and routing execution artifacts,
 procedures, or discoverable facts to their canonical homes), and write the proof lines it
-requires. Draft each bullet at the category level, in one to three lines. Write every sentence
-by the "Text a model reads" subsection. When an entry that you edit has more than 12 body lines,
-trim the whole entry.
+requires. Draft each bullet at the category level within the entry brevity bar in the
+llm-context-guideline skill, and write every sentence by the "Text a model reads" subsection.
 For each passing candidate, decide and finalize its `topic`, `scope`, `audience`, and `title`;
 the default action is a merge:
 - **revise (merge)**: fold the candidate into the existing entry whose theme covers it,

@@ -535,6 +535,39 @@ fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credent
   assert!(!run.stderr.contains("the live credentials file holds api_key"), "{}", run.describe());
 }
 
+#[test]
+fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
+  let sandbox = Sandbox::new();
+  let home = live_home(&sandbox, true);
+  let new_release = sandbox.dir("new-release");
+  write_release(&new_release);
+  let cli = new_release.join("charliebot");
+  let body =
+    fs::read_to_string(&cli).unwrap().replace("if [ \"$1 $2\" = \"release-helper free-port\" ]; then exit 1; fi\n", "");
+  fs::write(&cli, body).unwrap();
+  let mut checksums = String::new();
+  for name in ["charliebot", "charliebot-server"] {
+    checksums.push_str(&format!("{:x}  {name}\n", sha2::Sha256::digest(fs::read(new_release.join(name)).unwrap())));
+  }
+  fs::write(new_release.join("sha256sums.txt"), checksums).unwrap();
+  sandbox.stub(
+    "git",
+    "tree=${4%/origin.git}\nprintf 'key not-a-real-key\n' > \"$tree/logs/server_test.log\"\n\
+     ln -s server_test.log \"$tree/logs/server-latest.log\"\n\
+     mkdir -p \"$tree/home/.charliebot/sessions/test/data\"\n\
+     printf 'key not-a-real-key\n' > \"$tree/home/.charliebot/sessions/test/data/chat_events.jsonl\"\nexit 1\n",
+  );
+
+  let run = rehearsal_preflight(&sandbox, &home, &new_release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  let logs = sandbox.root().join("logs");
+  let evidence = fs::read_dir(logs).unwrap().next().unwrap().unwrap().path();
+  for path in ["logs/server_test.log", "rehearsal-home/sessions/test/data/chat_events.jsonl"] {
+    assert_eq!(fs::read_to_string(evidence.join(path)).unwrap(), "key [redacted]\n");
+  }
+}
+
 // ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
 
 /// The serve trials run one at a time: each one picks a free port of the trial's range, so two starts could pick the

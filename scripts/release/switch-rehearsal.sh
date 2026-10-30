@@ -61,7 +61,19 @@ preflight_fail() {
   exit 2
 }
 
-log() { echo "$(date -u +%H:%M:%S) $*" | tee -a "$REPORT" >&2; }
+sanitize_log_text() {
+  TRIAL_REDACT_ACCESS_KEY="${ACCESS_KEY:-}" TRIAL_REDACT_BACKEND_KEY="${BACKEND_KEY:-}" \
+    "$NEW_CLI" release-helper redact-stdin
+}
+
+copy_redacted_file() {
+  local source=$1 destination=$2
+  mkdir -m 700 -p "$(dirname "$destination")" || return 1
+  sanitize_log_text < "$source" > "$destination" || return 1
+  chmod 600 "$destination"
+}
+
+log() { echo "$(date -u +%H:%M:%S) $*" | sanitize_log_text | tee -a "$REPORT" >&2; }
 
 [ $# -eq 2 ] || usage
 NEW_COMMIT=${1,,}
@@ -150,7 +162,7 @@ stop_pid() {
 }
 
 cleanup() {
-  local rc=$? pid dir id8 leftovers log_file evidence_copy_ok=1
+  local rc=$? pid dir id8 leftovers log_file source evidence_copy_ok=1
   trap - EXIT INT TERM
   stop_pid "$PORT_PID"
   pid="$(helper listener-pid "$PORT" "$TREE")"
@@ -179,7 +191,7 @@ cleanup() {
     if mkdir -p "$EVIDENCE/logs"; then
       shopt -s nullglob
       for log_file in "$LOGS"/switch_*.log "$LOGS"/switch_*.runs "$LOGS"/server_*.log "$LOGS"/server-latest.log; do
-        if ! cp -p "$log_file" "$EVIDENCE/logs/"; then
+        if ! copy_redacted_file "$log_file" "$EVIDENCE/logs/${log_file##*/}"; then
           log "CLEANUP could not copy $log_file to $EVIDENCE/logs"
           evidence_copy_ok=0
           rc=1
@@ -192,14 +204,20 @@ cleanup() {
       rc=1
     fi
     if [ -d "$CB_HOME/sessions" ]; then
-      mkdir -p "$EVIDENCE/rehearsal-home"
-      (cd "$CB_HOME" && find sessions \( -path '*/data/runs/*/metadata.json' -o -name chat_events.jsonl \) -print0 \
-        | xargs -0 -r cp --parents -t "$EVIDENCE/rehearsal-home") \
-        || {
-          log "CLEANUP run records of the rehearsal home could not be copied"
-          evidence_copy_ok=0
-          rc=1
-        }
+      if ! find "$CB_HOME/sessions" \( -path '*/data/runs/*/metadata.json' -o -name chat_events.jsonl \) -print0 \
+        > "$TREE/evidence-files"; then
+        log "CLEANUP run records of the rehearsal home could not be listed"
+        evidence_copy_ok=0
+        rc=1
+      else
+        while IFS= read -r -d '' source; do
+          copy_redacted_file "$source" "$EVIDENCE/rehearsal-home/${source#"$CB_HOME/"}" || {
+            log "CLEANUP run records of the rehearsal home could not be copied"
+            evidence_copy_ok=0
+            rc=1
+          }
+        done < "$TREE/evidence-files"
+      fi
     fi
   fi
   if [[ $TREE == /tmp/charliebot-release-rehearsal-* ]]; then
@@ -423,10 +441,11 @@ run_switch() {
   local label=$1 rc start_ms end_ms switch_log
   shift
   start_ms=$(date +%s%3N)
-  "$SWITCH_SCRIPT" "$@" > "$EVIDENCE/$label.out" 2>&1
+  "$SWITCH_SCRIPT" "$@" > "$TREE/$label.out" 2>&1
   rc=$?
+  copy_redacted_file "$TREE/$label.out" "$EVIDENCE/$label.out" || return 1
   end_ms=$(date +%s%3N)
-  switch_log=$(sed -n 's/^switch log: //p' "$EVIDENCE/$label.out" | head -1)
+  switch_log=$(sed -n 's/^switch log: //p' "$TREE/$label.out" | head -1)
   log "SWITCH $label: switch-server.sh $* exit $rc; wall $((end_ms - start_ms)) ms; log $switch_log"
   grep -F 'switch: delegation: ' "$switch_log" | while IFS= read -r line; do
     log "DELEGATION $label: ${line#*switch: }"

@@ -168,6 +168,33 @@ pub fn collapse_whitespace(text: &str) -> String {
   split_whitespace(text).join(" ")
 }
 
+/// Python's `str.splitlines()`: every line of `text` without its terminator. CPython breaks on `\r`, `\n`, a
+/// `\r\n` pair, `\v`, `\f`, `\x1c`-`\x1e`, `\x85`, `\u{2028}` and `\u{2029}`; `str::lines` breaks on fewer.
+/// A final terminator adds no empty line after it.
+pub fn splitlines(text: &str) -> Vec<&str> {
+  let mut lines = Vec::new();
+  let mut start = 0;
+  let mut chars = text.char_indices().peekable();
+  while let Some((index, character)) = chars.next() {
+    let break_end = match character {
+      '\r' if matches!(chars.peek(), Some((_, '\n'))) => {
+        chars.next();
+        index + 2
+      }
+      '\r' | '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
+        index + character.len_utf8()
+      }
+      _ => continue,
+    };
+    lines.push(&text[start..index]);
+    start = break_end;
+  }
+  if start < text.len() {
+    lines.push(&text[start..]);
+  }
+  lines
+}
+
 /// Python's `s[:count]`: the first `count` characters of `text`.
 pub fn take_chars(text: &str, count: usize) -> String {
   text.chars().take(count).collect()
@@ -205,6 +232,16 @@ mod tests {
   fn strip_trims_both_ends_and_keeps_zero_width_space() {
     assert_eq!(strip("\u{001c}\u{0085}\u{3000}pad\u{3000}\u{0085}\u{001c}"), "pad");
     assert_eq!(strip("\u{200b}pad\u{200b}"), "\u{200b}pad\u{200b}");
+  }
+
+  #[test]
+  fn splitlines_breaks_where_python_does() {
+    assert_eq!(splitlines("a\nb\r\nc\rd"), ["a", "b", "c", "d"]);
+    assert_eq!(splitlines("a\u{b}b\u{c}c\u{1c}d\u{1d}e\u{1e}f"), ["a", "b", "c", "d", "e", "f"]);
+    assert_eq!(splitlines("x\u{2028}y\u{85}z\n"), ["x", "y", "z"]);
+    assert_eq!(splitlines("a\n\nb"), ["a", "", "b"]);
+    assert_eq!(splitlines("\n"), [""]);
+    assert!(splitlines("").is_empty());
   }
 
   #[test]

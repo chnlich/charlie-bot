@@ -33,15 +33,18 @@
 
     /* A phone cannot fit these two rows at their desktop width. The header gives
        the title a row of its own so a whole session name shows, and keeps the
-       icon-only download action and the count on its first row. The filter bar
-       keeps its label and input on the first row and moves "Expand all" and
-       "Clear" to a second row rather than squeezing that row. */
+       icon-only download action and the count on its first row. The divider that
+       separates Back from the title leaves with the title, so no bare separator
+       hangs after Back. The filter bar keeps its label and input on the first row
+       and moves "Expand all" and "Clear" to a second row rather than squeezing
+       that row. */
     @media (max-width: 768px) {
       .events-download-label { display: none; }
       .events-filter { flex-wrap: wrap; }
       .events-topbar { flex-wrap: wrap; }
       .events-topbar h1 { flex: 1 1 100%; order: 1; }
       .events-topbar .events-download { margin-left: auto; }
+      .events-topbar .events-back-sep { display: none; }
     }
   </style>
 </head>
@@ -60,7 +63,7 @@
         </svg>
         Back
       </a>
-      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="events-back-sep h-4 w-px bg-slate-700"></div>
       <h1 class="text-sm font-semibold text-slate-200 truncate flex-1">
         <span class="text-slate-500 mr-1">Events:</span>{{ session.name }}
       </h1>

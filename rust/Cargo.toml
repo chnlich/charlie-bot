@@ -15,7 +15,7 @@ members = [
     "crates/infra/compat",
     "crates/infra/cli-common",
     "crates/infra/improve-sandbox",
-    "crates/infra/mock-home",
+    "crates/app/mock-home",
     "crates/app/cli",
     "crates/app/packages",
     "crates/app/server",

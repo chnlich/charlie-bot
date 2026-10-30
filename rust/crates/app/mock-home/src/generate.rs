@@ -8,6 +8,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use charliebot_store::layout;
 use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -249,11 +250,12 @@ fn write_home(home: &Path, sessions: usize, seed: u64) -> Result<u64> {
   for size in sizes {
     let id = session_id(&mut rng);
     let session_dir = home.join(&id);
-    fs::create_dir_all(session_dir.join("data")).with_context(|| format!("cannot create {}", session_dir.display()))?;
+    fs::create_dir_all(layout::data_dir(&session_dir))
+      .with_context(|| format!("cannot create {}", session_dir.display()))?;
     let offset = rng.range(0, SESSION_START_SPREAD_SECONDS);
     let started_at = first_session_time() + TimeDelta::seconds(offset as i64);
     let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng));
-    let log_path = session_dir.join("data").join("chat_events.jsonl");
+    let log_path = layout::chat_events_path(&session_dir);
     let (log_bytes, event_count) = write_event_log(&log_path, size, &mut rng, &text, started_at, &final_text)?;
     let metadata = SessionMetadata {
       id: id.clone(),
@@ -267,7 +269,7 @@ fn write_home(home: &Path, sessions: usize, seed: u64) -> Result<u64> {
       has_unread: false,
       starred: false,
     };
-    write_json(&session_dir.join("metadata.json"), &metadata, b"  ")?;
+    write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
     total += log_bytes;
   }

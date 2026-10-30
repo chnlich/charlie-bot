@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use charliebot_cli_common::http::ensure_crypto_provider;
+use charliebot_cli_common::route;
+use charliebot_session_api::api as session_routes;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
@@ -74,14 +76,15 @@ async fn read_back(
     reqwest::Client::builder().no_proxy().timeout(HTTP_TIMEOUT).build().context("cannot build the HTTP client")?;
   let mut failures = Vec::new();
 
-  let listing = get_json(&client, &format!("{base}/api/sessions/"), headers).await?;
+  let listing = get_json(&client, &format!("{base}{}", session_routes::SESSIONS_PATH), headers).await?;
   let listed = listing.as_array().context("the session list is not a JSON array")?.len();
   if listed != manifest.session_count {
     failures.push(format!("session count: manifest {}, server {listed}", manifest.session_count));
   }
 
   for session in checked {
-    let url = format!("{base}/api/sessions/{}/events?before={NEWEST_PAGE_BEFORE}", session.id);
+    let events_path = route::fill(session_routes::SESSION_EVENTS_PATH, &[session.id.as_str()]);
+    let url = format!("{base}{events_path}?before={NEWEST_PAGE_BEFORE}");
     let page = match get_json(&client, &url, headers).await {
       Ok(page) => page,
       Err(error) => {

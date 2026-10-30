@@ -159,7 +159,7 @@ enable_ask_tier_refusal: false
 impl Harness {
   fn new() -> Self {
     let home = tempfile::tempdir().expect("temp home");
-    let table = home.path().join("config.d").join("approval_policy.yaml");
+    let table = home.path().join("config.d").join("approval.d").join("policy.yaml");
     fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
     fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
     let cfg = config(home.path());
@@ -657,13 +657,13 @@ async fn a_manager_prompt_carries_the_approval_policy_table_and_an_edit_reaches_
     .expect("the manager prompt carries the approval policy table");
   assert!(first.blocks[table_index].text.contains("- id: release-restart"), "{}", first.blocks[table_index].text);
   assert_eq!(
-    first.blocks[table_index].sources[0].source_ref, "config.d/approval_policy.yaml",
+    first.blocks[table_index].sources[0].source_ref, "config.d/approval.d/policy.yaml",
     "the table block names the table file"
   );
   let before_blocks = &first.blocks[..table_index];
 
   // Editing only the table file changes the next prompt; every prompt file stays as it was.
-  let table = harness.home_path().join("config.d").join("approval_policy.yaml");
+  let table = harness.home_path().join("config.d").join("approval.d").join("policy.yaml");
   fs::write(&table, APPROVAL_POLICY_TABLE.replace("cap_per_pt_day: null", "cap_per_pt_day: 4"))
     .expect("the table edit writes");
 

@@ -1,4 +1,4 @@
-//! The approval policy table (`$CHARLIEBOT_HOME/config.d/approval_policy.yaml`, plan 4 v2 task W2): the consequence
+//! The approval policy table (`$CHARLIEBOT_HOME/config.d/approval.d/policy.yaml`, plan 4 v2 task W2): the consequence
 //! tests that make a step T0, the standing policies that keep a step at T1, and the ask-tier refusal switch.
 //!
 //! The table is required host configuration: an absent or invalid table is an error that names the path and the
@@ -22,11 +22,9 @@ use crate::paths;
 use crate::text_repr::{JsonStyle, json_dumps};
 use crate::timefmt;
 
-/// The table's file name under `config.d/`.
-pub const TABLE_RELATIVE_FILENAME: &str = "approval_policy.yaml";
-
-/// The table's path under the CharlieBot home (`approval_policy.TABLE_PATH`).
-pub const TABLE_RELATIVE_PATH: &str = "config.d/approval_policy.yaml";
+/// The table's path under the CharlieBot home (`approval_policy.TABLE_PATH`). It sits in a `config.d/` subdirectory,
+/// because the config loader refuses any `.yaml` file directly in `config.d/`.
+pub const TABLE_RELATIVE_PATH: &str = "config.d/approval.d/policy.yaml";
 
 /// The title the manager prompts and the ask probe carry the table under (`approval_policy.SECTION_TITLE`).
 pub const SECTION_TITLE: &str = "Approval policy table";

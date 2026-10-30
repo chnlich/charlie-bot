@@ -47,8 +47,8 @@ fn prepare_home(root: &Path, port: u16) -> PathBuf {
   std::fs::create_dir_all(&home).expect("the synthetic home is created");
   std::fs::write(home.join("config.yaml"), config_text(port)).expect("the synthetic config is written");
   std::fs::write(home.join("credentials.yaml"), "").expect("the synthetic credentials file is written");
-  std::fs::create_dir_all(home.join("config.d")).expect("the synthetic config.d is created");
-  std::fs::write(home.join("config.d/approval_policy.yaml"), approval_policy_table())
+  std::fs::create_dir_all(home.join("config.d/approval.d")).expect("the synthetic config.d/approval.d is created");
+  std::fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table())
     .expect("the synthetic approval policy table is written");
   home
 }

@@ -92,8 +92,8 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   let home = temporary.path().join("home");
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), false);
   fs::create_dir_all(home.join("state")).unwrap();
-  fs::create_dir_all(home.join("config.d")).unwrap();
-  fs::write(home.join("config.d/approval_policy.yaml"), approval_policy_table()).unwrap();
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(
     home.join("config.yaml"),
     "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",

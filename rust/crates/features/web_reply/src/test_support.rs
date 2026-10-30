@@ -41,7 +41,7 @@ enable_ask_tier_refusal: false
 
 /// Writes `text` as the home's approval policy table.
 pub fn write_approval_policy_table(home: &Path, text: &str) {
-  let path = home.join("config.d").join("approval_policy.yaml");
+  let path = home.join("config.d").join("approval.d").join("policy.yaml");
   fs::create_dir_all(path.parent().expect("the table path has a parent")).expect("config.d");
   fs::write(path, text).expect("the approval policy table writes");
 }

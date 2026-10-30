@@ -74,7 +74,7 @@ enable_ask_tier_refusal: false
 ";
 
   fn write_table(home: &std::path::Path, text: &str) {
-    let table = home.join("config.d").join("approval_policy.yaml");
+    let table = home.join("config.d").join("approval.d").join("policy.yaml");
     fs::create_dir_all(table.parent().unwrap()).unwrap();
     fs::write(table, text).unwrap();
   }
@@ -85,7 +85,7 @@ enable_ask_tier_refusal: false
 
     let error = show_in_home(home.path()).expect_err("the absent table is an error");
 
-    assert!(error.body.to_string().contains("config.d/approval_policy.yaml: missing"), "{}", error.body);
+    assert!(error.body.to_string().contains("config.d/approval.d/policy.yaml: missing"), "{}", error.body);
 
     write_table(home.path(), "consequence_tests: []\nstanding_policies: []\nenable_ask_tier_refusal: false\n");
     let error = show_in_home(home.path()).expect_err("an invalid table is an error");

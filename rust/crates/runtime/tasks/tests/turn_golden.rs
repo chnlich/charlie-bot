@@ -344,8 +344,8 @@ fn config_with_features_from_config_and_agent_path(
   agent_path: String,
 ) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
   std::fs::create_dir_all(&cfg.charliebot_home)?;
-  std::fs::create_dir_all(cfg.charliebot_home.join("config.d"))?;
-  std::fs::write(cfg.charliebot_home.join("config.d/approval_policy.yaml"), APPROVAL_POLICY_TABLE)?;
+  std::fs::create_dir_all(cfg.charliebot_home.join("config.d/approval.d"))?;
+  std::fs::write(cfg.charliebot_home.join("config.d/approval.d/policy.yaml"), APPROVAL_POLICY_TABLE)?;
   let config_value = Arc::clone(&cfg);
   let config_file = cfg.config_file();
   let config_reload =

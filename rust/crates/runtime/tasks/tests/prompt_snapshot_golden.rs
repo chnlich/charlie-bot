@@ -364,7 +364,7 @@ fn prepare(case: &Case) -> Prepared {
   if let Some(host) = case.host {
     fs::write(home.path().join("MASTER_AGENT_PROMPT.md"), host).expect("host supplement");
   }
-  let table = home.path().join("config.d").join("approval_policy.yaml");
+  let table = home.path().join("config.d").join("approval.d").join("policy.yaml");
   fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
   fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
   let bodies_dir = home.path().join("prompt_bodies");

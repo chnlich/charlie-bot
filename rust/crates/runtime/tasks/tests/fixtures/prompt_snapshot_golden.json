@@ -60,7 +60,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "config.d/approval_policy.yaml",
+                  "source_ref": "config.d/approval.d/policy.yaml",
                   "source_session_id": null
                 }
               ],
@@ -131,7 +131,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "config.d/approval_policy.yaml",
+                  "source_ref": "config.d/approval.d/policy.yaml",
                   "source_session_id": null
                 }
               ],
@@ -214,7 +214,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "config.d/approval_policy.yaml",
+                  "source_ref": "config.d/approval.d/policy.yaml",
                   "source_session_id": null
                 }
               ],
@@ -285,7 +285,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "config.d/approval_policy.yaml",
+                  "source_ref": "config.d/approval.d/policy.yaml",
                   "source_session_id": null
                 }
               ],
@@ -380,7 +380,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "config.d/approval_policy.yaml",
+                  "source_ref": "config.d/approval.d/policy.yaml",
                   "source_session_id": null
                 }
               ],
@@ -912,7 +912,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "config.d/approval_policy.yaml",
+                  "source_ref": "config.d/approval.d/policy.yaml",
                   "source_session_id": null
                 }
               ],

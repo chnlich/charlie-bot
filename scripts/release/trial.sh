@@ -395,8 +395,8 @@ fi
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 
 # The approval policy table is required host configuration; the trial's synthetic home carries a stand-in table.
-mkdir -p "$TRIAL_CB_HOME/config.d"
-cat >"$TRIAL_CB_HOME/config.d/approval_policy.yaml" <<'EOF'
+mkdir -p "$TRIAL_CB_HOME/config.d/approval.d"
+cat >"$TRIAL_CB_HOME/config.d/approval.d/policy.yaml" <<'EOF'
 consequence_tests:
   - {id: irreversible, rank: 1, text: "Deletes data with no backup, or sends what cannot be recalled."}
   - {id: chao-name, rank: 2, text: "A message or publication in Chao's name reaches other people."}

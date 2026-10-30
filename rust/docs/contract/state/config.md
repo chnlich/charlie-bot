@@ -12,6 +12,7 @@ equivalent errors. **UNVERIFIED** marks a statement not confirmed from source, w
 | `<home>/config.yaml` | structure only, one sectioned YAML mapping | `src/infra/config.py` |
 | `<home>/credentials.yaml` | secrets, `section -> key -> scalar` | `src/infra/credentials.py` |
 | `<home>/config.d/cron.d/<name>.yaml` | one scheduled task per file | `src/features/cron/loader.py` |
+| `<home>/config.d/approval.d/policy.yaml` | the approval policy table: consequence tests, standing policies, the ask-tier refusal switch; required, so an absent or invalid table refuses the start | `rust/crates/infra/core/src/approval_policy.rs` |
 
 YAML is parsed with libyaml's safe loader (`yaml.CSafeLoader`, `src/infra/yaml_utils.py`). A missing or empty
 file loads as the default (`{}` for both main files). Writers use `save_yaml` (see `files.md`, discipline YAML).

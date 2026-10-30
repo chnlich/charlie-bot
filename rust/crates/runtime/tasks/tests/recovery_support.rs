@@ -588,8 +588,8 @@ impl Stack {
   }
 
   async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
-    std::fs::create_dir_all(home.path().join("config.d"))?;
-    std::fs::write(home.path().join("config.d/approval_policy.yaml"), APPROVAL_POLICY_TABLE)?;
+    std::fs::create_dir_all(home.path().join("config.d/approval.d"))?;
+    std::fs::write(home.path().join("config.d/approval.d/policy.yaml"), APPROVAL_POLICY_TABLE)?;
     let cfg = Arc::new(cfg);
     let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks);

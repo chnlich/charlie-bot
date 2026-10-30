@@ -79,7 +79,7 @@ fn manager_turn_text(meta: &SessionMetadata) -> String {
   let registry = registry().expect("the listed packages register");
   let checkout = RepoRoot::new(Some(checkout_root().into_os_string())).expect("the checkout path is valid");
   let home = tempfile::tempdir().expect("temp home");
-  let table = home.path().join("config.d").join("approval_policy.yaml");
+  let table = home.path().join("config.d").join("approval.d").join("policy.yaml");
   std::fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
   std::fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
   let cfg = config(home.path());

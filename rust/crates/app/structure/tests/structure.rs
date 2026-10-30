@@ -836,6 +836,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "features/artifacts",
     hint: "Read the plan registry through `Registry::plan_registry_reader`, which `features/artifacts` registers.",
   },
+  OwnerRow { name: "config.yaml", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_FILENAME`." },
+  OwnerRow {
+    name: "credentials.yaml",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::config::CREDENTIALS_FILENAME`.",
+  },
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
   OwnerRow {

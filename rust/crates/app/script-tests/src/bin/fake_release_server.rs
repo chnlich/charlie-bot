@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
-use charliebot_core::config::sessions_dir_in;
+use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME, sessions_dir_in};
 use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::logging;
@@ -117,9 +117,9 @@ fn serve() -> io::Result<()> {
   let home = PathBuf::from(
     env::var_os(CHARLIEBOT_HOME_ENV).ok_or_else(|| io::Error::other(format!("{CHARLIEBOT_HOME_ENV} is not set")))?,
   );
-  let config = fs::read_to_string(home.join("config.yaml"))?;
+  let config = fs::read_to_string(home.join(CONFIG_FILENAME))?;
   let port: u16 = capture(r"(?m)^\s*port:\s*(\d+)", &config)?.parse().map_err(io::Error::other)?;
-  let key = capture(r"access_key:\s*(\S+)", &fs::read_to_string(home.join("credentials.yaml"))?)?;
+  let key = capture(r"access_key:\s*(\S+)", &fs::read_to_string(home.join(CREDENTIALS_FILENAME))?)?;
   recovery_logs(&home, behavior.adopt)?;
   let listener = TcpListener::bind(("127.0.0.1", port))?;
   log("server_ready", json!({"ready_in_ms": 1}));

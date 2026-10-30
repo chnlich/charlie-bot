@@ -6,6 +6,7 @@ use charliebot_cli_common::base_url;
 use charliebot_cli_common::exit::{self, CliExit};
 use charliebot_cli_common::headers;
 use charliebot_cli_common::http;
+use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::home;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::json;
@@ -53,7 +54,7 @@ fn probe(link: &str) -> Result<String, CliExit> {
     probe_failure(None, &path, Some(cause))
   })?;
   let auth_headers = headers::internal_api_auth_headers()
-    .map_err(|_| probe_failure(None, &path, Some("$CHARLIEBOT_HOME/credentials.yaml".to_string())))?;
+    .map_err(|_| probe_failure(None, &path, Some(format!("$CHARLIEBOT_HOME/{CREDENTIALS_FILENAME}"))))?;
   let url = format!("http://localhost:{port}{path}");
 
   http::ensure_crypto_provider();

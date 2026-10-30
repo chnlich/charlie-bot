@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use serde_json::json;
+use sha2::Digest as _;
 use world::World;
 
 // ---- preflight refusals: exit 2 and nothing written ----------------------------------------------------------------
@@ -312,6 +313,226 @@ fn test_rehearsal_usage_refuses_a_missing_argument() {
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("usage: switch-rehearsal.sh <new commit> <new release dir>"), "{}", run.describe());
+}
+
+// ---- the trial and rehearsal preflights read the live model endpoint ------------------------------------------------
+
+/// The live endpoint the test's config names: loopback, with no key of its own. No operator host reaches a fixture.
+const LIVE_API_BASE: &str = "http://127.0.0.1:9/v1";
+
+/// The `credentials.yaml` section the live endpoint names when it needs the live key.
+const LIVE_CREDENTIAL: &str = "deploy-endpoint";
+
+/// A live home holding one `backends.options` entry with an `api_base`. With `credential`, the entry names that
+/// section of the live credentials file and the file holds its `api_key`; without it, the credentials file holds no
+/// backend section.
+fn live_home(sandbox: &Sandbox, credential: bool) -> PathBuf {
+  let home = sandbox.dir("live-home");
+  let mut config = format!(
+    "backends:\n  options:\n    - id: deploy-endpoint\n      type: charlie-code\n      model: openai/test-model\n      \
+api_base: {LIVE_API_BASE}\n"
+  );
+  let mut credentials = String::new();
+  if credential {
+    config.push_str(&format!("      credential: {LIVE_CREDENTIAL}\n"));
+    credentials.push_str(&format!("{LIVE_CREDENTIAL}:\n  api_key: not-a-real-key\n"));
+  }
+  credentials.push_str(&format!("charliebot:\n  access_key: {}\n", "0".repeat(64)));
+  fs::write(home.join("config.yaml"), config).expect("the live config");
+  fs::write(home.join("credentials.yaml"), credentials).expect("the live credentials");
+  home
+}
+
+/// A live home whose only backend entry sets no `api_base`.
+fn live_home_without_an_endpoint(sandbox: &Sandbox) -> PathBuf {
+  let home = sandbox.dir("live-home");
+  fs::write(
+    home.join("config.yaml"),
+    "backends:\n  options:\n    - id: subscription\n      type: claude\n      model: claude-example\n",
+  )
+  .expect("the live config");
+  fs::write(home.join("credentials.yaml"), format!("charliebot:\n  access_key: {}\n", "0".repeat(64)))
+    .expect("the live credentials");
+  home
+}
+
+/// The environment both preflights read: a sandboxed home, log root and evidence root.
+fn live_env(sandbox: &Sandbox, home: &Path) -> Env {
+  let mut env = sandbox.env();
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+  env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), sandbox.root().join("logs").display().to_string());
+  env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.root().join("evidence").display().to_string());
+  env
+}
+
+/// Writes the release's `charliebot` as a shim over the built CLI and returns the file it records each call in.
+/// `free-port` fails, so a preflight stops after the endpoint read instead of starting a session server.
+fn write_cli_shim(directory: &Path) -> PathBuf {
+  let real = harness::built_binary("charliebot");
+  let calls = directory.join("cli-calls.log");
+  let body = format!(
+    "#!/usr/bin/env bash\n\
+     # The release's CLI under test: the built CLI answers every verb, and free-port refuses so the preflight stops\n\
+     # after the endpoint read instead of starting a server. Every call is recorded for the test.\n\
+     printf '%s\\n' \"$*\" >> \"{calls}\"\n\
+     if [ \"$1 $2\" = \"release-helper free-port\" ]; then exit 1; fi\n\
+     exec \"{real}\" \"$@\"\n",
+    calls = calls.display(),
+    real = real.display(),
+  );
+  let cli = directory.join("charliebot");
+  fs::write(&cli, body).unwrap_or_else(|error| panic!("write {}: {error}", cli.display()));
+  fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("make the CLI shim executable");
+  calls
+}
+
+/// The calls the shim recorded, one line per invocation; a shim that never ran left no file.
+fn recorded_calls(calls: &Path) -> String {
+  fs::read_to_string(calls).unwrap_or_default()
+}
+
+/// Runs the trial preflight for `home` against `release`.
+fn trial_preflight(sandbox: &Sandbox, home: &Path, release: &Path) -> Run {
+  let env = live_env(sandbox, home);
+  let commit = git(&env, &harness::repo_root(), &["rev-parse", "HEAD"]);
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("scripts/release/trial.sh")).arg(commit).arg(release.join("charliebot-server"));
+  harness::run(&mut command)
+}
+
+/// A release directory holding the CLI shim and a server file, with the checksums the rehearsal verifies.
+fn write_release(directory: &Path) -> PathBuf {
+  let calls = write_cli_shim(directory);
+  fs::write(directory.join("charliebot-server"), "fake server binary\n").expect("the release server");
+  let mut checksums = String::new();
+  for name in ["charliebot", "charliebot-server"] {
+    let bytes = fs::read(directory.join(name)).expect("a release file");
+    checksums.push_str(&format!("{:x}  {name}\n", sha2::Sha256::digest(bytes)));
+  }
+  fs::write(directory.join("sha256sums.txt"), checksums).expect("the release checksums");
+  calls
+}
+
+/// Runs the rehearsal preflight for `home` and `new_release`, with `current` selecting an old release of the same
+/// shape.
+fn rehearsal_preflight(sandbox: &Sandbox, home: &Path, new_release: &Path) -> Run {
+  let releases = sandbox.dir("releases");
+  let old_commit = "1".repeat(40);
+  let old_release = releases.join(&old_commit);
+  fs::create_dir(&old_release).expect("the old release");
+  write_release(&old_release);
+  symlink(&old_commit, releases.join("current")).expect("the current link");
+  let new_commit = "2".repeat(40);
+  let mut env = live_env(sandbox, home);
+  env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("scripts/release/switch-rehearsal.sh")).arg(&new_commit).arg(new_release);
+  harness::run(&mut command)
+}
+
+/// A trial release directory: the CLI shim beside a link to the built server binary, which `ldd` resolves.
+fn write_trial_release(sandbox: &Sandbox) -> (PathBuf, PathBuf) {
+  let release = sandbox.dir("release");
+  let calls = write_cli_shim(&release);
+  symlink(harness::built_binary("charliebot-server"), release.join("charliebot-server")).expect("the server link");
+  (release, calls)
+}
+
+#[test]
+fn test_trial_preflight_accepts_a_live_endpoint_without_a_credential() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("charlie-code", "exit 0\n");
+  let home = live_home(&sandbox, false);
+  let (release, calls) = write_trial_release(&sandbox);
+
+  let run = trial_preflight(&sandbox, &home, &release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  let calls = recorded_calls(&calls);
+  assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live endpoint: {calls}");
+  assert!(!calls.contains("credential-key"), "an endpoint without a credential must not read the live key: {calls}");
+  assert!(!run.stderr.contains("backends.options entry with api_base"), "{}", run.describe());
+  assert!(!run.stderr.contains("api_key"), "{}", run.describe());
+  // The read succeeded: the preflight went on to the checks after it. Session cgroups are unavailable on some hosts,
+  // and the free-port check follows them.
+  assert!(
+    run.stderr.contains("a free 127.0.0.1 port exists in 18650-18669")
+      || run.stderr.contains("agents' slice cgroup directory is writable"),
+    "the preflight stopped before the endpoint read: {}",
+    run.describe()
+  );
+}
+
+#[test]
+fn test_trial_preflight_reads_the_live_key_when_the_endpoint_names_a_credential() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("charlie-code", "exit 0\n");
+  let home = live_home(&sandbox, true);
+  let (release, calls) = write_trial_release(&sandbox);
+
+  let run = trial_preflight(&sandbox, &home, &release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  let calls = recorded_calls(&calls);
+  assert!(
+    calls.contains(&format!("credential-key {}", home.join("credentials.yaml").display())),
+    "the preflight did not read the named credential section: {calls}"
+  );
+  assert!(!run.stderr.contains("backends.options entry with api_base"), "{}", run.describe());
+  assert!(!run.stderr.contains("the live credentials file holds api_key"), "{}", run.describe());
+}
+
+#[test]
+fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("charlie-code", "exit 0\n");
+  let home = live_home_without_an_endpoint(&sandbox);
+  let (release, calls) = write_trial_release(&sandbox);
+
+  let run = trial_preflight(&sandbox, &home, &release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("the live config has a backends.options entry with api_base"), "{}", run.describe());
+  let calls = recorded_calls(&calls);
+  assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live config: {calls}");
+  assert!(!calls.contains("free-port"), "the preflight continued past a config with no endpoint: {calls}");
+}
+
+#[test]
+fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
+  let sandbox = Sandbox::new();
+  let home = live_home(&sandbox, false);
+  let new_release = sandbox.dir("new-release");
+  let calls = write_release(&new_release);
+
+  let run = rehearsal_preflight(&sandbox, &home, &new_release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
+  let calls = recorded_calls(&calls);
+  assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live endpoint: {calls}");
+  assert!(!calls.contains("credential-key"), "an endpoint without a credential must not read the live key: {calls}");
+  assert!(!run.stderr.contains("backends.options entry with api_base"), "{}", run.describe());
+  assert!(!run.stderr.contains("api_key"), "{}", run.describe());
+}
+
+#[test]
+fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credential() {
+  let sandbox = Sandbox::new();
+  let home = live_home(&sandbox, true);
+  let new_release = sandbox.dir("new-release");
+  let calls = write_release(&new_release);
+
+  let run = rehearsal_preflight(&sandbox, &home, &new_release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
+  let calls = recorded_calls(&calls);
+  assert!(
+    calls.contains(&format!("credential-key {}", home.join("credentials.yaml").display())),
+    "the preflight did not read the named credential section: {calls}"
+  );
+  assert!(!run.stderr.contains("the live credentials file holds api_key"), "{}", run.describe());
 }
 
 // ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------

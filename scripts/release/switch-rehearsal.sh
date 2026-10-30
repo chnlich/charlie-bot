@@ -98,14 +98,19 @@ for tool in git tmux ss curl setsid flock sha256sum; do
 done
 [ -x "$SWITCH_SOURCE" ] || preflight_fail "the switch script exists: $SWITCH_SOURCE"
 
-# The rehearsal's backend entry comes from the live config: the first option whose api_base and credential are set,
-# so the rehearsal runs the operator's own model endpoint and the repository names no host and no credential.
+# The rehearsal's backend entry comes from the live config: the first option with an api_base, so the rehearsal runs the
+# operator's own model endpoint and the repository names no host and no credential. The entry's credential is optional;
+# when it names none, the rehearsal home's backend entry has no credential field and its credentials file carries no
+# backend section.
 LIVE_BACKEND="$("$NEW_CLI" release-helper backend-option "$LIVE_HOME/config.yaml")" \
-  || preflight_fail "the live config has a backends.options entry with api_base and credential"
+  || preflight_fail "the live config has a backends.options entry with api_base"
 BACKEND_API_BASE="$(sed -n 1p <<<"$LIVE_BACKEND")"
 BACKEND_CREDENTIAL="$(sed -n 2p <<<"$LIVE_BACKEND")"
-BACKEND_KEY="$("$NEW_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$BACKEND_CREDENTIAL")" \
-  || preflight_fail "the live credentials file holds api_key for $BACKEND_CREDENTIAL"
+BACKEND_KEY=
+if [ -n "$BACKEND_CREDENTIAL" ]; then
+  BACKEND_KEY="$("$NEW_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$BACKEND_CREDENTIAL")" \
+    || preflight_fail "the live credentials file holds api_key for $BACKEND_CREDENTIAL"
+fi
 readonly BACKEND_API_BASE BACKEND_CREDENTIAL
 
 PORT="$("$NEW_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX")" \
@@ -255,8 +260,12 @@ rm -f "$RELEASES/$OLD_COMMIT/PORT_BASELINE" "$RELEASES/$NEW_COMMIT/PORT_BASELINE
 ln -s "$OLD_COMMIT" "$RELEASES/current"
 
 ACCESS_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')"
-printf '%s:\n  api_key: %s\ncharliebot:\n  access_key: %s\n' "$BACKEND_CREDENTIAL" "$BACKEND_KEY" "$ACCESS_KEY" \
-  > "$CB_HOME/credentials.yaml"
+if [ -n "$BACKEND_CREDENTIAL" ]; then
+  printf '%s:\n  api_key: %s\ncharliebot:\n  access_key: %s\n' "$BACKEND_CREDENTIAL" "$BACKEND_KEY" "$ACCESS_KEY" \
+    > "$CB_HOME/credentials.yaml"
+else
+  printf 'charliebot:\n  access_key: %s\n' "$ACCESS_KEY" > "$CB_HOME/credentials.yaml"
+fi
 chmod 600 "$CB_HOME/credentials.yaml"
 printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_KEY" > "$AUTH_CONFIG"
 chmod 600 "$AUTH_CONFIG"
@@ -282,8 +291,10 @@ backends:
       type: charlie-code
       model: openai/glm-5.3-flash
       api_base: $BACKEND_API_BASE
-      credential: $BACKEND_CREDENTIAL
 EOF
+if [ -n "$BACKEND_CREDENTIAL" ]; then
+  printf '      credential: %s\n' "$BACKEND_CREDENTIAL" >> "$CB_HOME/config.yaml"
+fi
 chmod 600 "$CB_HOME/config.yaml"
 
 # The environment every switch and server reads: the tree's home, releases and logs, and a private tmux server.

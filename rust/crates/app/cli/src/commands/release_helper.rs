@@ -963,30 +963,32 @@ fn cgroup_clean(args: &[String]) -> Result<i32, String> {
 
 // ---- the preflight reads --------------------------------------------------------------------------------------------
 
-/// The first `backends.options` entry whose `api_base` and `credential` are both set: the operator's own model
-/// endpoint, which the trial and the rehearsal run against.
-fn backend_choice(config_path: &str) -> Result<Option<(String, String)>, String> {
+/// The first `backends.options` entry whose `api_base` is set: the operator's own model endpoint, which the trial and
+/// the rehearsal run against. The entry's `credential` names the `credentials.yaml` section that holds the endpoint's
+/// key; an endpoint that needs no client-side key has none.
+fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>, String> {
   let document = config::read_yaml_document(Path::new(config_path)).map_err(|error| error.to_string())?;
   let document = config::yaml_to_json(&document).map_err(|error| error.to_string())?;
   let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array);
   let Some(options) = options else { return Ok(None) };
   for option in options {
-    let (Some(api_base), Some(credential)) = (option.get("api_base"), option.get("credential")) else {
+    let Some(api_base) = option.get("api_base").filter(|value| truthy(value)) else {
       continue;
     };
-    if truthy(api_base) && truthy(credential) {
-      return Ok(Some((pyfmt::python_str(api_base), pyfmt::python_str(credential))));
-    }
+    let credential = option.get("credential").filter(|value| truthy(value)).map(pyfmt::python_str);
+    return Ok(Some((pyfmt::python_str(api_base), credential)));
   }
   Ok(None)
 }
 
+/// Prints the chosen entry as two lines, its `api_base` and then its `credential`, the second empty when the entry
+/// names no credential. The trial and the rehearsal read the same two lines.
 fn backend_option(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "backend-option")?;
   match backend_choice(path)? {
     Some((api_base, credential)) => {
       println!("{api_base}");
-      println!("{credential}");
+      println!("{}", credential.unwrap_or_default());
       Ok(0)
     }
     None => Ok(1),
@@ -1075,6 +1077,8 @@ fn write_message(args: &[String]) -> Result<i32, String> {
   Ok(0)
 }
 
+/// Replaces every occurrence of `value`, and of its quoted form, with `[redacted]`. An empty value is not a pattern:
+/// a deployment whose endpoint needs no key has none to redact.
 fn redact_value(text: &mut String, value: &str) {
   if value.is_empty() {
     return;
@@ -1450,7 +1454,7 @@ mod tests {
   }
 
   #[test]
-  fn the_backend_choice_takes_the_first_option_with_both_values() {
+  fn the_backend_choice_skips_entries_without_an_api_base_and_takes_the_first_that_has_one() {
     let directory = temporary();
     let config = directory.path().join("config.yaml");
     fs::write(
@@ -1458,16 +1462,55 @@ mod tests {
       concat!(
         "backends:\n",
         "  options:\n",
-        "    - id: no-credential\n      api_base: http://first.invalid\n",
+        "    - id: subscription\n      type: claude\n",
+        "    - id: blank\n      api_base: \"\"\n",
         "    - id: upstream\n      api_base: http://second.invalid\n      credential: upstream\n",
+        "    - id: later\n      api_base: http://third.invalid\n",
       ),
     )
     .unwrap();
 
     assert_eq!(
       backend_choice(&config.to_string_lossy()).unwrap(),
-      Some(("http://second.invalid".to_string(), "upstream".to_string()))
+      Some(("http://second.invalid".to_string(), Some("upstream".to_string())))
     );
+  }
+
+  #[test]
+  fn the_backend_choice_accepts_an_endpoint_without_a_credential() {
+    let directory = temporary();
+    let config = directory.path().join("config.yaml");
+    fs::write(
+      &config,
+      concat!(
+        "backends:\n",
+        "  options:\n",
+        "    - id: forwarder\n      api_base: http://first.invalid\n",
+        "    - id: upstream\n      api_base: http://second.invalid\n      credential: upstream\n",
+      ),
+    )
+    .unwrap();
+
+    assert_eq!(backend_choice(&config.to_string_lossy()).unwrap(), Some(("http://first.invalid".to_string(), None)));
+  }
+
+  #[test]
+  fn the_backend_option_verb_fails_when_no_option_sets_an_api_base() {
+    let directory = temporary();
+    let config = directory.path().join("config.yaml");
+    fs::write(&config, "backends:\n  options:\n    - id: subscription\n      type: claude\n").unwrap();
+
+    assert_eq!(backend_choice(&config.to_string_lossy()).unwrap(), None);
+    assert_eq!(backend_option(&[config.to_string_lossy().into_owned()]).unwrap(), 1);
+  }
+
+  #[test]
+  fn an_empty_redaction_key_leaves_the_text_unchanged() {
+    let mut text = "the endpoint and the request stayed as they were".to_string();
+
+    redact_value(&mut text, "");
+
+    assert_eq!(text, "the endpoint and the request stayed as they were");
   }
 
   #[test]

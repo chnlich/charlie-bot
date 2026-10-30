@@ -240,14 +240,20 @@ if [[ ! -x /usr/bin/git ]]; then
 fi
 REAL_GIT=/usr/bin/git
 
-# The trial's backend entry comes from the live config: the first option whose api_base and credential are set, so
-# the trial runs the operator's own model endpoint and the repository names no host and no credential.
+# The trial's backend entry comes from the live config: the first option with an api_base, so the trial runs the
+# operator's own model endpoint and the repository names no host and no credential. Its credential is optional. When
+# the entry names one, the trial copies that section's key from the live credentials into the trial home and redacts
+# it from saved logs; when it names none, the endpoint needs no client-side key, so the trial home's backend entry has
+# no credential field and its credentials file carries no backend section.
 LIVE_BACKEND="$("$TRIAL_CLI" release-helper backend-option "$LIVE_HOME/config.yaml")" \
-  || preflight_fail "the live config has a backends.options entry with api_base and credential"
+  || preflight_fail "the live config has a backends.options entry with api_base"
 TRIAL_API_BASE="$(sed -n 1p <<<"$LIVE_BACKEND")"
 TRIAL_CREDENTIAL="$(sed -n 2p <<<"$LIVE_BACKEND")"
-if ! BACKEND_KEY=$("$TRIAL_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$TRIAL_CREDENTIAL"); then
-  preflight_fail "the live credentials file holds api_key for $TRIAL_CREDENTIAL"
+BACKEND_KEY=
+if [[ -n $TRIAL_CREDENTIAL ]]; then
+  if ! BACKEND_KEY=$("$TRIAL_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$TRIAL_CREDENTIAL"); then
+    preflight_fail "the live credentials file holds api_key for $TRIAL_CREDENTIAL"
+  fi
 fi
 readonly TRIAL_API_BASE TRIAL_CREDENTIAL
 
@@ -344,8 +350,12 @@ if [[ ! $ACCESS_KEY =~ ^[0-9a-f]{64}$ ]]; then
   printf 'trial setup failed: generate a random trial access key\n' >&2
   exit 1
 fi
-printf '%s:\n  api_key: %s\ncharliebot:\n  access_key: %s\n' "$TRIAL_CREDENTIAL" "$BACKEND_KEY" "$ACCESS_KEY" \
-  >"$CREDENTIALS"
+if [[ -n $TRIAL_CREDENTIAL ]]; then
+  printf '%s:\n  api_key: %s\ncharliebot:\n  access_key: %s\n' "$TRIAL_CREDENTIAL" "$BACKEND_KEY" "$ACCESS_KEY" \
+    >"$CREDENTIALS"
+else
+  printf 'charliebot:\n  access_key: %s\n' "$ACCESS_KEY" >"$CREDENTIALS"
+fi
 chmod 600 "$CREDENTIALS"
 printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_KEY" >"$AUTH_CONFIG"
 chmod 600 "$AUTH_CONFIG"
@@ -378,8 +388,10 @@ backends:
       type: charlie-code
       model: openai/glm-5.3-flash
       api_base: $TRIAL_API_BASE
-      credential: $TRIAL_CREDENTIAL
 EOF
+if [[ -n $TRIAL_CREDENTIAL ]]; then
+  printf '      credential: %s\n' "$TRIAL_CREDENTIAL" >>"$TRIAL_CB_HOME/config.yaml"
+fi
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 
 if ! git -C "$SOURCE_REPO" archive "$COMMIT" | tar -x -C "$REPO_ROOT"; then

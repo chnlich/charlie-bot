@@ -1,9 +1,9 @@
 //! Text renderings that reproduce CPython's: `repr(float)`, `repr(str)`, `str(...)` of a JSON value, and
 //! `json.dumps` under the option sets the Python server uses.
 //!
-//! The Python server's wire bytes come from these renderings (the Jinja `tojson` filter, the starlette
-//! JSON responses, the fence identity record, the static-file ETag), so each one follows the CPython
-//! 3.14 algorithm it names rather than serde_json's own formatting.
+//! The Python server's wire bytes come from these renderings: the Jinja `tojson` filter, the starlette
+//! JSON responses, the fence identity record, the static-file ETag. Each one follows the CPython 3.14
+//! algorithm it names rather than serde_json's own formatting.
 
 use crate::printable_table::NON_PRINTABLE;
 use serde::Serialize;
@@ -50,7 +50,7 @@ pub const RUN_TOKEN_PAYLOAD_JSON: JsonStyle =
 ///
 /// CPython takes, among the shortest candidates, the one nearest the exact value, and breaks an exact tie
 /// toward the even digit. Rust's shortest form can break that tie the other way (`1743746592103460.25`
-/// prints `...3`), so the digits come from the exact rounding to the same count when that rounding
+/// prints `...3`). So the digits come from the exact rounding to the same count when that rounding
 /// round-trips; Rust's shortest form is the fallback.
 fn shortest_digits(magnitude: f64) -> (String, i32) {
   let shortest = format!("{magnitude:e}");
@@ -144,7 +144,7 @@ fn trim_fraction_zeros(text: &str) -> String {
 }
 
 /// pydantic's `model_dump_json` float form: the shortest round-trip digits in fixed notation when the decimal
-/// exponent is in `-5..16`, and in scientific notation otherwise, whose exponent has neither `+` nor padding
+/// exponent is in `-5..16`. Otherwise it uses scientific notation, whose exponent has neither `+` nor padding
 /// (`1e16`, `1.5e-7`, `0.00001`). Checked against pydantic over random doubles; `repr` differs (`1e+16`).
 /// `x` must be finite: `write_json` renders NaN and the infinities before a float reaches this function.
 pub fn pydantic_float_repr(x: f64) -> String {
@@ -295,9 +295,9 @@ pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
 }
 
 /// `json.dumps` under `style` through serde_json's serializer: the crate's ESCAPE-table string scan
-/// gives every string `json.dumps`'s escape set with non-ASCII passed through, and the container walk
-/// is serde_json's. [`StyleFormatter`] supplies the forms serde_json lacks against Python: the
-/// separators, the indent, and the float text.
+/// gives every string `json.dumps`'s escape set with non-ASCII passed through. The container walk is
+/// serde_json's. [`StyleFormatter`] supplies the forms serde_json lacks against Python: the separators,
+/// the indent, and the float text.
 fn serde_style_dumps(value: &Value, style: &JsonStyle, floats: FloatForm) -> String {
   let mut buffer = Vec::new();
   let serializer = &mut Serializer::with_formatter(
@@ -420,9 +420,9 @@ fn push_unicode_escape(out: &mut String, unit: u16) {
 /// Appends one JSON string literal as `json.dumps(ensure_ascii=True)` writes it: the control set and the
 /// two structural characters escaped, and every character above `~` as CPython's `\uXXXX` pairs.
 ///
-/// This escaper stays hand-written because no crate emits the `\uXXXX` pairs: serde_json's scan passes
-/// non-ASCII through (its ESCAPE table holds only the control set, quote and backslash), which is exactly
-/// the form the styles that do not set `ensure_ascii` take through [`serde_style_dumps`].
+/// This escaper stays hand-written because no crate emits the `\uXXXX` pairs. serde_json's scan passes
+/// non-ASCII through: its ESCAPE table holds only the control set, quote and backslash. That is exactly
+/// the string form the styles without `ensure_ascii` produce through [`serde_style_dumps`].
 pub fn write_ascii_json_str(out: &mut String, text: &str) {
   if text.bytes().all(|byte| (b' '..=b'~').contains(&byte) && byte != b'"' && byte != b'\\') {
     out.push('"');
@@ -455,8 +455,8 @@ pub fn write_ascii_json_str(out: &mut String, text: &str) {
 
 /// The serde_json `Formatter` of [`serde_style_dumps`]: Python's separators and indent between members,
 /// and Python's or pydantic's float text. The `current_indent`/`has_value` pair tracks the nesting the
-/// trait does not pass: the layout is `json.dumps`'s, with an indented style opening each member on its
-/// own line and closing a non-empty container at its own level.
+/// trait does not pass. The layout is `json.dumps`'s: an indented style opens each member on its own
+/// line and closes a non-empty container at its own level.
 struct StyleFormatter {
   style: JsonStyle,
   floats: FloatForm,

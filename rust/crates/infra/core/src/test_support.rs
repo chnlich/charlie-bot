@@ -2,9 +2,9 @@
 //! that reads event fields implements [`EventSink`] and installs it with [`install_events`].
 //!
 //! One global subscriber serves every thread and never changes; a capture is a thread-local sink that the subscriber's
-//! fmt writer or event layer consults. A scoped `set_default` per capture would not do: while tracing-core 0.1.36 has
-//! one registered dispatcher, it computes a new call site's cached interest from the registering thread's default
-//! alone. A call site first reached on a thread with no subscriber then caches `never` for every thread.
+//! fmt writer or event layer consults. A scoped `set_default` per capture would not do: tracing-core 0.1.36 has one
+//! registered dispatcher. That dispatcher computes a new call site's cached interest from the registering thread's
+//! default alone. A call site first reached on a thread with no subscriber then caches `never` for every thread.
 
 use std::cell::RefCell;
 use std::io::{self, Write};

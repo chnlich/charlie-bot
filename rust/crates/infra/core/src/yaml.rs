@@ -110,7 +110,7 @@ fn write_float(output: &mut String, value: f64) {
 }
 
 /// Writes a string in the style that PyYAML's emitter picks: plain when the text reads back as a string, single-quoted
-/// when it allows it, and otherwise double-quoted with PyYAML escapes and folding.
+/// when it allows it. Otherwise it is double-quoted, with PyYAML escapes and folding.
 fn write_string(output: &mut String, value: &str, key: bool, indent: usize) {
   let analysis = analyze_scalar(value);
   if analysis.allow_block_plain && implicit_tag(value).is_none() {

@@ -10,15 +10,15 @@ use std::sync::OnceLock;
 use memmap2::Mmap;
 
 /// Write `text` to `path` through a uniquely named sibling `.<name>.<uuid hex>.tmp` swapped in by
-/// `rename`, so a reader sees the old content or the new, never a partial write. The sibling is
+/// `rename`. A reader then sees the old content or the new, never a partial write. The sibling is
 /// removed when any step before the swap fails.
 pub fn atomic_write_text(path: &Path, text: &str) -> std::io::Result<()> {
   write_sibling_then_rename(path, text, false)
 }
 
 /// [`atomic_write_text`] with an fsync of the sibling before the swap. A rename over a fresh file does not force its
-/// data to disk on ext4 (auto_da_alloc covers only a rename that replaces an existing file), so the file can read back
-/// empty after a power loss unless the sync comes first.
+/// data to disk on ext4 (auto_da_alloc covers only a rename that replaces an existing file). The file can therefore
+/// read back empty after a power loss unless the sync comes first.
 pub fn atomic_write_text_synced(path: &Path, text: &str) -> std::io::Result<()> {
   write_sibling_then_rename(path, text, true)
 }
@@ -104,8 +104,8 @@ pub fn atomic_write_stream<E: From<std::io::Error>>(
   result
 }
 
-/// The OS page size in bytes: the granularity at which Python's mmap walks fault a file in, so a backward walk that
-/// reads page-aligned spans touches the same pages Python does.
+/// The OS page size in bytes: the granularity at which Python's mmap walks fault a file in. A backward walk that
+/// reads page-aligned spans therefore touches the same pages Python does.
 pub fn page_bytes() -> u64 {
   static PAGE_BYTES: OnceLock<NonZeroU64> = OnceLock::new();
   PAGE_BYTES
@@ -125,7 +125,7 @@ pub fn page_bytes() -> u64 {
 /// and gets none of the kernel's readahead. On a cold copy of a large log that is the difference between seconds and
 /// a minute (`python: src/infra/ndjson.py:405-470`).
 ///
-/// The mapping is safe against the writers these readers meet because they only append; a rotated log publishes
+/// The mapping is safe against the writers these readers meet because they only append. A rotated log publishes
 /// through `rename` onto a new inode, and a truncating writer is no more allowed here than under Python's mapping.
 pub fn map_file(path: &Path) -> io::Result<Option<Mmap>> {
   let file = File::open(path)?;

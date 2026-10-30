@@ -2,7 +2,7 @@
 //!
 //! An event's message is its name, the same name the Python server's structlog call logs
 //! (`tracing::info!(path = ..., "charliebot_home_ready")`). A field named `event` names the event instead, and does not
-//! repeat after it; with both, the `event` field wins, as the JSON writer this format replaced extended the message's
+//! repeat after it. With both, the `event` field wins: the JSON writer this format replaced extended the message's
 //! map with the fields. A line reads `<UTC time> [<level>] <location> <event> <key=value>...`, with the fields in call
 //! order and the location the file and line of the tracing call.
 
@@ -59,7 +59,7 @@ pub fn location_text(file: &str, line: u32) -> String {
   format!("{}:{line}", shortened_file(file))
 }
 
-/// A tracing file path as the location column reads it: a workspace path loses its group and `src/`, a cargo registry
+/// A tracing file path as the location column reads it: a workspace path loses its group and `src/`. A cargo registry
 /// path keeps its package and everything after it, and any other path stays as the compiler gave it.
 fn shortened_file(file: &str) -> String {
   if let Some(shortened) = workspace_file(file) {

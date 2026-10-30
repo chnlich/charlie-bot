@@ -43,7 +43,7 @@ fn raw_env_value() -> String {
 /// The state directory this process belongs to.
 ///
 /// `CHARLIEBOT_HOME` unset or blank selects [`default_charliebot_home`]. A set value must be absolute or start
-/// with `~`, and resolves through `expanduser` then `realpath`; a relative value is an error, since
+/// with `~`, and resolves through `expanduser` then `realpath`. A relative value is an error, since
 /// each process would resolve it against its own working directory.
 pub fn charliebot_home_dir() -> Result<PathBuf, HomeError> {
   resolve_home(&raw_env_value())
@@ -57,8 +57,8 @@ pub fn default_charliebot_home() -> PathBuf {
 /// The profile home when `CHARLIEBOT_HOME` is set and not blank, or `None` when it is not.
 ///
 /// This is the second read of the variable that the `charliebot_home_dir` docstring in `src/infra/home.py`
-/// names. The terminal passes the home to each new tmux pane only when a profile is set, because a pane
-/// inherits the tmux server's environment rather than this process's (`src/features/terminal/terminal.py:53-54`).
+/// names. The terminal passes the home to each new tmux pane only when a profile is set. A pane inherits the
+/// tmux server's environment rather than this process's (`src/features/terminal/terminal.py:53-54`).
 /// A set value that names no usable home is an error, as in [`charliebot_home_dir`].
 pub fn explicit_charliebot_home() -> Result<Option<PathBuf>, HomeError> {
   explicit_home(&raw_env_value())

@@ -29,14 +29,17 @@
 
     pre { white-space: pre-wrap; word-break: break-all; }
 
-    /* A phone cannot fit these two rows at their desktop width. The header's
-       title is its only flexible item, so the download label yields its width
-       first and the icon alone keeps the action reachable. The filter bar keeps
-       its label and input on the first row and moves "Expand all" and "Clear"
-       to a second row rather than squeezing that row. */
+    /* A phone cannot fit these two rows at their desktop width. The header gives
+       the title a row of its own so a whole session name shows, and keeps the
+       icon-only download action and the count on its first row. The filter bar
+       keeps its label and input on the first row and moves "Expand all" and
+       "Clear" to a second row rather than squeezing that row. */
     @media (max-width: 768px) {
       .events-download-label { display: none; }
       .events-filter { flex-wrap: wrap; }
+      .events-topbar { flex-wrap: wrap; }
+      .events-topbar h1 { flex: 1 1 100%; order: 1; }
+      .events-topbar .events-download { margin-left: auto; }
     }
   </style>
 </head>
@@ -47,7 +50,7 @@
        the event rows scrolling underneath show through the filter's own controls. -->
   <div class="sticky top-0 z-10 bg-slate-900">
     <!-- Top bar -->
-    <header class="bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
+    <header class="events-topbar bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
       <a href="/?session={{ session_id }}"
          class="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors text-sm">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -60,7 +63,7 @@
         <span class="text-slate-500 mr-1">Events:</span>{{ session.name }}
       </h1>
       <a href="{{ events_url }}" download aria-label="Download JSONL"
-         class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
+         class="events-download flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>

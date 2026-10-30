@@ -32,6 +32,12 @@
 .prose-msg table { border-collapse: collapse; margin: 0.5rem 0; width: 100%; }
 .prose-msg th, .prose-msg td { border: 1px solid #475569; padding: 0.375rem 0.75rem; text-align: left; }
 .prose-msg th { background: #1e293b; font-weight: 600; }
+/* A message table's header keeps its words whole: the inherited word-break:
+   break-word lets a narrow column shrink to one character, which stacks a
+   two-character header. Body cells break at word boundaries and still fall back
+   to break-word for a word wider than the column. */
+.prose-msg th { word-break: keep-all; }
+.prose-msg td { word-break: normal; }
 .turn-fold-bar {
   display: flex; align-items: center; justify-content: center; gap: 0.4rem;
   width: 100%; padding: 0.35rem 0.75rem; border: 1px solid rgba(100, 116, 139, 0.35);

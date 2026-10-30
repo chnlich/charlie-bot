@@ -18,7 +18,6 @@ charliebot-store.workspace = true
 futures-util.workspace = true
 http.workspace = true
 memchr.workspace = true
-regex.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 tempfile.workspace = true
@@ -27,3 +26,6 @@ tower.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }
+
+[dev-dependencies]
+regex.workspace = true

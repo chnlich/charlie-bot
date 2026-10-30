@@ -610,6 +610,9 @@ async function switchSession(sessionId) {
         error: String(err?.message || err),
         elapsed_ms: Date.now() - switchStartedAt,
       });
+      // A newer click owns the view and its held actions: a failure of a
+      // superseded switch navigates nowhere.
+      if (gen !== switchGeneration) return;
       // The page navigates to a full load of the target: a composer action
       // held by this switch resolves first — a held message posts to the
       // session it bound before the navigation drops the page.

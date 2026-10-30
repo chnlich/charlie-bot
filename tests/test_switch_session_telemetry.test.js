@@ -142,7 +142,7 @@ function buildSwitchHarness() {
       return {ok: false, status: 500, json: async () => ({})};
     }
     const entry = {sessionId: match[1]};
-    entry.done = new Promise((resolve) => { entry.resolve = resolve; });
+    entry.done = new Promise((resolve, reject) => { entry.resolve = resolve; entry.reject = reject; });
     pendingSwitches.push(entry);
     return entry.done.then(() => ({
       ok: true,
@@ -632,4 +632,23 @@ test('a second click on the pending target keeps its held composer actions for t
   await firstClick;
   assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-b']);
   assert.deepEqual(h.cancelPosts, ['session-b']);
+});
+
+test('a superseded switch that fails does not navigate the page away from the newer target', async () => {
+  const h = buildSwitchHarness();
+  h.context.renderSessionView(h.payloadFor('session-a'));
+
+  const clickB = h.context.switchSession('session-b');
+  const clickC = h.context.switchSession('session-c');
+  h.elements.get('msg-input').value = 'for c';
+  await h.context.sendMessage();  // held for session-c's switch
+  h.pendingSwitches[0].reject(new Error('bootstrap 500'));  // session-b fails after the click moved on
+  await clickB;
+  assert.equal(h.context.location.href, '', 'the page stays on the view the newer click owns');
+
+  h.resolveLastSwitch();
+  await clickC;
+  await flush();
+  assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-c'],
+      'the send held for session-c still lands in session-c');
 });

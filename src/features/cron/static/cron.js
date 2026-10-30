@@ -23,7 +23,7 @@ const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', '
 // Switch the modal between the broken read-only error view (task.broken) and
 // the normal editable form. Broken: every field read-only, Enabled disabled and
 // rendering the file's raw value (indeterminate when the file was
-// unparseable), the full load error + path in the error box, Save hidden,
+// unparseable). The full load error + path sit in the error box, Save hidden,
 // Delete kept. Normal/add: byte-identical behavior to the pre-broken form.
 function applyCronBrokenView(task) {
   const isBroken = !!(task && task.broken);
@@ -167,9 +167,9 @@ async function deleteCronTask() {
 // Cron error badge
 // ---------------------------------------------------------------------------
 // Global cron load-failure badge, rendered at the top of Workspace from the
-// broken cron entries the filter fetch hands the renderer (name order);
-// clicking opens the cron editor on the first broken task. Empty when nothing
-// is broken.
+// broken cron entries the filter fetch hands the renderer (name order).
+// Clicking it opens the cron editor on the first broken task. Empty when
+// nothing is broken.
 function renderCronErrorBadge(brokenTasks) {
   const broken = brokenTasks || [];
   if (!broken.length) return '';
@@ -202,8 +202,9 @@ function renderScheduledBadge(s) {
 }
 
 // A bound node's schedule lines, in every view: the next run (or Disabled),
-// then the truncated cron · timezone line, then the firing bookkeeping's Last
-// line the legacy cron rows carried. One markup home for every view's row.
+// then the truncated cron · timezone line, then the Last line from the firing
+// bookkeeping. That Last line is the one the legacy cron rows carried. One
+// markup home for every view's row.
 function renderSessionScheduleLine(s) {
   const disabled = s.schedule_enabled === false;
   let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
@@ -212,8 +213,8 @@ function renderSessionScheduleLine(s) {
     const lastClass = s.last_run_status === 'success' ? 'text-green-400'
       : s.last_run_status === 'running' ? 'text-yellow-400'
         : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
-    // The Last line truncates with an ellipsis like the cron line above it
-    // (one line tall on the touch drawer too) and carries its full text in
+    // The Last line truncates with an ellipsis like the cron line above it,
+    // and stays one line tall on the touch drawer too. Its full text sits in
     // the title attribute.
     const lastText = `Last: ${s.last_run_status}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}`;
     html += `<span class="block truncate text-xs ${lastClass}" title="${escapeHtmlAttr(lastText)}">${escapeHtml(lastText)}</span>`;
@@ -222,8 +223,8 @@ function renderSessionScheduleLine(s) {
 }
 
 // The group header's clock button: a scheduled task is born bound. The
-// manager node is created in that group first, then the cron editor opens in
-// create mode with the node prefilled as the binding and the task's project
+// manager node is created in that group first. Then the cron editor opens in
+// create mode, with the node prefilled as the binding and the task's project
 // set to the group.
 async function createScheduledTaskInGroup(group) {
   try {
@@ -241,7 +242,7 @@ async function createScheduledTaskInGroup(group) {
 // The Workspace error badge rides each Workspace fetch.
 registerWorkspaceBadge(() => fetchBrokenCronTasks().then(renderCronErrorBadge));
 // Cron owns the listing marker, so its package exempts bound roots from the
-// group preview limit here: a bound root always shows in place and takes no
+// group preview limit here. A bound root always shows in place and takes no
 // rank against the 5-row cap.
 registerGroupPreviewLimitExemption((s) => !!s.schedule_task);
 // A bound node's row carries the clock badge and the schedule lines, in every

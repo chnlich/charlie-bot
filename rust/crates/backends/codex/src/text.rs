@@ -1,4 +1,4 @@
-//! Python value semantics the codex port reproduces: `str.splitlines`, `str` slicing and truthiness.
+//! Python value semantics the codex port reproduces: `str.splitlines` and truthiness.
 
 use std::sync::LazyLock;
 
@@ -37,16 +37,6 @@ pub fn splitlines(text: &str) -> Vec<&str> {
     lines.push(&text[start..]);
   }
   lines
-}
-
-/// Python's `s[n:]` for a count of code points: the text after its first `n` characters.
-pub fn slice_from(text: &str, skip: usize) -> String {
-  text.chars().skip(skip).collect()
-}
-
-/// Python's `len(s)` for a string: its code point count.
-pub fn code_point_len(text: &str) -> usize {
-  text.chars().count()
 }
 
 /// `value.get(key)` of a Python dict where a missing or falsy value reads as absent: `value.get(key) or {}`.

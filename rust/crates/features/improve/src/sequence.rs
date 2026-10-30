@@ -19,6 +19,7 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType};
@@ -768,10 +769,6 @@ async fn deliver_iteration_report(
     "improve_sequence_iteration_report_delivered"
   );
   Ok(())
-}
-
-fn take_chars(text: &str, limit: usize) -> String {
-  text.chars().take(limit).collect()
 }
 
 /// Close the loop's worker child once the loop has ended. It returns while the loop can still progress, and when a

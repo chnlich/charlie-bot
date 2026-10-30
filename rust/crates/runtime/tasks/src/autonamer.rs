@@ -10,6 +10,7 @@ use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
+use charliebot_core::str_methods::take_chars;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::compact::CompactValue;
@@ -302,10 +303,6 @@ fn extract_text_from_message(event: &CompactValue) -> String {
 
 fn nonempty_string(value: Option<&Value>) -> Option<String> {
   value.and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
-}
-
-fn take_chars(value: &str, limit: usize) -> String {
-  value.chars().take(limit).collect()
 }
 
 fn json_type_name(value: &Value) -> &'static str {

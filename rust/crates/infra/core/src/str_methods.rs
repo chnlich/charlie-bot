@@ -1,5 +1,5 @@
 //! CPython's `str` methods on Unicode text, for the ports to match: `isalnum`, `isdigit`, the decimal value of a decimal
-//! digit, `isspace`, and `split()` with its `" ".join` collapse.
+//! digit, `isspace`, `split()` with its `" ".join` collapse, and the slicing `s[:n]`, `s[n:]` and `len(s)`.
 
 use std::sync::LazyLock;
 
@@ -168,6 +168,21 @@ pub fn collapse_whitespace(text: &str) -> String {
   split_whitespace(text).join(" ")
 }
 
+/// Python's `s[:count]`: the first `count` characters of `text`.
+pub fn take_chars(text: &str, count: usize) -> String {
+  text.chars().take(count).collect()
+}
+
+/// Python's `s[skip:]`: the characters of `text` after its first `skip`.
+pub fn slice_from(text: &str, skip: usize) -> String {
+  text.chars().skip(skip).collect()
+}
+
+/// `len(text)` for a Python string: its code point count.
+pub fn code_point_len(text: &str) -> usize {
+  text.chars().count()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -190,5 +205,12 @@ mod tests {
   fn strip_trims_both_ends_and_keeps_zero_width_space() {
     assert_eq!(strip("\u{001c}\u{0085}\u{3000}pad\u{3000}\u{0085}\u{001c}"), "pad");
     assert_eq!(strip("\u{200b}pad\u{200b}"), "\u{200b}pad\u{200b}");
+  }
+
+  #[test]
+  fn slicing_counts_code_points() {
+    assert_eq!(take_chars("é1x", 2), "é1");
+    assert_eq!(slice_from("é1x", 1), "1x");
+    assert_eq!(code_point_len("é1x"), 3);
   }
 }

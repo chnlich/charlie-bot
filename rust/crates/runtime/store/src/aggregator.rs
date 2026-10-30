@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use charliebot_core::event_types::{self, EventFields, is_truthy};
+use charliebot_core::str_methods::take_chars;
 use serde_json::{Map, Value, json};
 
 use crate::hooks::EventRenderer;
@@ -925,10 +926,6 @@ fn input_read_fields(name: Option<&Value>, input: &Map<String, Value>) -> Vec<St
     Some("Grep") => vec!["pattern".to_string(), "path".to_string()],
     _ => input.keys().next().cloned().into_iter().collect(),
   }
-}
-
-fn take_chars(value: &str, count: usize) -> String {
-  value.chars().take(count).collect()
 }
 
 fn add_message_metadata<E: EventFields>(

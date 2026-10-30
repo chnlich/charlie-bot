@@ -299,14 +299,20 @@ impl Store {
 
   /// Record the newest worker run backend for display.
   pub fn note_run_backend(&self, session_id: &str, backend: &str) {
-    if !backend.is_empty() {
-      self
-        .thinking_state
-        .maps
-        .lock()
-        .expect("thinking state mutex is not poisoned")
-        .run_backends
-        .insert(session_id.to_string(), backend.to_string());
+    if backend.is_empty() {
+      return;
+    }
+    let previous = self
+      .thinking_state
+      .maps
+      .lock()
+      .expect("thinking state mutex is not poisoned")
+      .run_backends
+      .insert(session_id.to_string(), backend.to_string());
+    // A run backend is a sidebar row input, and a sidebar memo proves its inputs hold from the derived generation.
+    // A backend that changes bumps that generation, so a row never serves the text of an older backend.
+    if previous.as_deref() != Some(backend) {
+      self.runtime_hooks.mark_sidebar_dirty(session_id);
     }
   }
 

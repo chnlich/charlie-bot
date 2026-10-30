@@ -6,8 +6,8 @@
 // cross-origin links stay as written and unprobed.
 // ---------------------------------------------------------------------------
 // The prefix the file server answers on: "/absolute_filepath/", the form written into chat text.
-// src/runtime/file_urls.py's FILE_SERVER_MOUNTS holds that single element; the core module there
-// owns the prefix. Retired "/files/" and "/file/" links are marked without probing.
+// rust/crates/infra/compat/src/file_urls.rs's FILE_SERVER_MOUNT owns the prefix. Retired
+// "/files/" and "/file/" links are marked without probing.
 var FILE_SERVER_PREFIXES = ['/absolute_filepath'];
 var FILE_SERVER_PREFIX = FILE_SERVER_PREFIXES[0];
 var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
@@ -38,8 +38,8 @@ function parseLinkUrl(href) {
 
 // A link naming this page's hostname with a different scheme or port is pulled back to the
 // page origin only when its path sits under a file-server prefix. Those are routes the page
-// origin itself serves (the single prefix of FILE_SERVER_MOUNTS in
-// src/runtime/file_urls.py). A link there whose scheme or port was
+// origin itself serves (the single prefix of FILE_SERVER_MOUNT in
+// rust/crates/infra/compat/src/file_urls.rs). A link there whose scheme or port was
 // written from memory is still unambiguous. Any other path names another frontend on this
 // host (the publish lane and each neighboring port serve their own server), and is left
 // exactly as written. Another hostname is another server, and is returned as written.

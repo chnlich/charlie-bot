@@ -17,7 +17,7 @@ use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
 use charliebot_core::paths;
 use charliebot_registry::Registry;
-use charliebot_registry::templating::Templating;
+use charliebot_registry::templating::{self, Templating};
 use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
 use charliebot_store::{StoreError, StoreResult};
@@ -75,46 +75,78 @@ static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::
 /// The session bootstrap one page request built last, reused while every payload input is unchanged.
 static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(detail::PageBootstrapMemo::default);
 
-/// How many finished page bodies the gzip memo keeps.
+/// The finished chat page body one request built last, kept while the template output and both substituted texts
+/// still hold their value.
 ///
-/// One page body is about as large as the sidebar it carries, so the limit bounds the memo to a few times one page.
-const PAGE_GZIP_MEMO_LIMIT: usize = 2;
-
-/// The body size from which keeping the compressed form is worth the memory.
-///
-/// The chat page is about 9 MB and pays for its compression on every request. The home page and the events viewer
-/// are a few kilobytes, so compressing them again costs less than holding their bodies would.
-const PAGE_GZIP_MEMO_MINIMUM_BYTES: usize = 1024 * 1024;
-
-/// The compressed form of the page bodies this server served recently.
-///
-/// The chat page is about 9 MB and the transport gzip compresses each response on its own request, so a repeat
-/// request pays the whole compression again for a page that did not change. The key is the finished body itself: a
-/// page that changed never matches, so the memo needs no invalidation and a template, page part or template
-/// directory edited on disk still takes effect at the next request.
+/// The page carries the sidebar text and, when a session is open, that session's bootstrap: a build copies about
+/// nine megabytes and, for the largest session, about another hundred and seventy. A repeat request would copy and
+/// compare those bytes again, so the memo serves the body it already built. The rendered template is part of the
+/// key: a template, page part or template directory edited on disk renders different bytes and never matches. The
+/// two texts compare by identity, and the entry keeps their `Arc`s alive, so an address the entry holds is never
+/// handed to a different text.
 #[derive(Default)]
-struct PageGzipMemo {
-  entries: Vec<(Bytes, Bytes)>,
+struct PageBodyMemo {
+  entry: Option<PageBodyEntry>,
 }
 
-impl PageGzipMemo {
-  /// The gzip form of `body`, compressing it when no entry matches and remembering the bodies large enough to keep.
-  fn gzip_body(&mut self, body: &Bytes) -> Bytes {
-    if let Some((_, compressed)) = self.entries.iter().find(|(cached, _)| cached == body) {
-      return compressed.clone();
+struct PageBodyEntry {
+  template_html: String,
+  sidebar_text: Arc<String>,
+  bootstrap_text: Option<Arc<String>>,
+  body: Bytes,
+  gzip: Option<Bytes>,
+}
+
+impl PageBodyMemo {
+  /// The finished page body, from the memo when every input still holds its value.
+  fn body(
+    &mut self,
+    name: &str,
+    template_html: &str,
+    substitutions: &[(&str, &str)],
+    sidebar_text: &Arc<String>,
+    bootstrap_text: Option<&Arc<String>>,
+    accepts_gzip: bool,
+  ) -> Result<(Bytes, Option<Bytes>), Failure> {
+    let matches = self.entry.as_ref().is_some_and(|entry| {
+      entry.template_html == template_html
+        && Arc::ptr_eq(&entry.sidebar_text, sidebar_text)
+        && match (entry.bootstrap_text.as_ref(), bootstrap_text) {
+          (Some(entry), Some(current)) => Arc::ptr_eq(entry, current),
+          (None, None) => true,
+          _ => false,
+        }
+    });
+    if !matches {
+      let html = templating::substitute_placeholders(name, template_html.to_string(), substitutions)
+        .map_err(|error| failure(error.kind(), error))?;
+      self.entry = Some(PageBodyEntry {
+        template_html: template_html.to_string(),
+        sidebar_text: Arc::clone(sidebar_text),
+        bootstrap_text: bootstrap_text.cloned(),
+        body: Bytes::from(html),
+        gzip: None,
+      });
     }
-    let compressed = Bytes::from(gzip_level_one(body));
-    if body.len() >= PAGE_GZIP_MEMO_MINIMUM_BYTES {
-      self.entries.push((body.clone(), compressed.clone()));
-      if self.entries.len() > PAGE_GZIP_MEMO_LIMIT {
-        self.entries.remove(0);
-      }
-    }
-    compressed
+    let entry = self.entry.as_mut().expect("the page body entry matched or was built");
+    let body = entry.body.clone();
+    let gzip = if accepts_gzip && body.len() >= gzip::MINIMUM_SIZE {
+      Some(match &entry.gzip {
+        Some(compressed) => compressed.clone(),
+        None => {
+          let compressed = Bytes::from(gzip_level_one(&body));
+          entry.gzip = Some(compressed.clone());
+          compressed
+        }
+      })
+    } else {
+      None
+    };
+    Ok((body, gzip))
   }
 }
 
-static PAGE_GZIP_MEMO: LazyLock<Mutex<PageGzipMemo>> = LazyLock::new(|| Mutex::new(PageGzipMemo::default()));
+static PAGE_BODY_MEMO: LazyLock<Mutex<PageBodyMemo>> = LazyLock::new(|| Mutex::new(PageBodyMemo::default()));
 
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let cfg = match state.config() {
@@ -352,29 +384,52 @@ async fn render_page(
         object.insert("static_asset_version".to_string(), Value::String(asset_version));
       }
     }
-    templating
-      .render_page_html(&state.features, name, &context, &request, &runtime.substitutions())
-      .map_err(|error| failure(error.kind(), error))
+    let template_html = templating
+      .render_page_template(&state.features, name, &context, &request)
+      .map_err(|error| failure(error.kind(), error))?;
+    page_body(name, &template_html, &runtime, accepts_gzip)
   })
   .await
   .expect("rendering a page does not panic");
   match rendered {
-    Ok(html) => page_response(html, accepts_gzip),
+    Ok((body, gzip)) => page_response(body, gzip),
     Err(error) => responses::internal_error(&error.kind, error.detail),
   }
 }
 
-/// Wrap finished page HTML in the response, answering a gzip client from the memoized compressed body.
+/// The finished body of a page, with its compressed form when a gzip client asked for it.
+///
+/// The chat page keeps its finished body between requests. The home page and the events viewer are a few kilobytes,
+/// so compressing them again costs less than holding their bodies would.
+fn page_body(
+  name: &str,
+  template_html: &str,
+  runtime: &PageRuntime,
+  accepts_gzip: bool,
+) -> Result<(Bytes, Option<Bytes>), Failure> {
+  match runtime {
+    PageRuntime::Index { sidebar_text, bootstrap_text, .. } => PAGE_BODY_MEMO
+      .lock()
+      .expect("the page body memo mutex is not poisoned")
+      .body(name, template_html, &runtime.substitutions(), sidebar_text, bootstrap_text.as_ref(), accepts_gzip),
+    PageRuntime::Home | PageRuntime::Events => {
+      let html = templating::substitute_placeholders(name, template_html.to_string(), &runtime.substitutions())
+        .map_err(|error| failure(error.kind(), error))?;
+      let body = Bytes::from(html);
+      let gzip = (accepts_gzip && body.len() >= gzip::MINIMUM_SIZE).then(|| Bytes::from(gzip_level_one(&body)));
+      Ok((body, gzip))
+    }
+  }
+}
+
+/// Wrap a finished page body in the response, with its compressed form when one is given.
 ///
 /// For a body at or above the transport's minimum size, the compressed form travels with its own headers here
 /// instead of under the transport gzip; the transport passes a response that already sets `Content-Encoding`
 /// through untouched.
-fn page_response(html: String, accepts_gzip: bool) -> Response {
-  let body = Bytes::from(html);
-  let compressed = (accepts_gzip && body.len() >= gzip::MINIMUM_SIZE)
-    .then(|| PAGE_GZIP_MEMO.lock().expect("the page gzip memo mutex is not poisoned").gzip_body(&body));
+fn page_response(body: Bytes, gzip: Option<Bytes>) -> Response {
   let mut builder = Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
-  let served = match compressed {
+  let served = match gzip {
     Some(compressed) => {
       builder = builder
         .header(header::CONTENT_LENGTH, compressed.len())
@@ -472,31 +527,81 @@ mod tests {
     "a chat page body ".repeat(200)
   }
 
-  #[test]
-  fn a_repeat_page_body_keeps_its_own_compressed_bytes() {
-    let mut memo = PageGzipMemo::default();
-    let first = Bytes::from("a".repeat(PAGE_GZIP_MEMO_MINIMUM_BYTES));
-    let second = Bytes::from("b".repeat(PAGE_GZIP_MEMO_MINIMUM_BYTES));
-    let compressed = memo.gzip_body(&first);
-    assert_eq!(memo.gzip_body(&first), compressed);
-    assert_eq!(gunzip(&compressed), String::from_utf8(first.to_vec()).expect("the body is text"));
-    let other = memo.gzip_body(&second);
-    assert_ne!(other, compressed);
-    assert_eq!(gunzip(&other), String::from_utf8(second.to_vec()).expect("the body is text"));
+  /// A chat page template carrying both placeholders, so the memo's substitution path runs.
+  fn index_template() -> String {
+    format!(
+      "const INITIAL_SESSIONS = {INITIAL_SESSIONS_PLACEHOLDER}; const SESSION_BOOTSTRAP = {SESSION_BOOTSTRAP_PLACEHOLDER};"
+    )
+  }
+
+  fn substitutions<'a>(sidebar: &'a str, bootstrap: &'a str) -> Vec<(&'static str, &'a str)> {
+    vec![(INITIAL_SESSIONS_PLACEHOLDER, sidebar), (SESSION_BOOTSTRAP_PLACEHOLDER, bootstrap)]
   }
 
   #[test]
-  fn a_small_page_is_compressed_but_not_kept() {
-    let mut memo = PageGzipMemo::default();
-    let small = Bytes::from("the events viewer of one session");
-    assert_eq!(gunzip(&memo.gzip_body(&small)), "the events viewer of one session");
-    assert!(memo.entries.is_empty());
+  fn a_repeat_page_body_is_served_from_the_memo_until_an_input_changes() {
+    let mut memo = PageBodyMemo::default();
+    let sidebar = Arc::new("x".repeat(4096));
+    let bootstrap = Arc::new("{\"messages\":[]}".to_string());
+    let template = index_template();
+    let (first, gzip) = memo
+      .body(
+        "index.html",
+        &template,
+        &substitutions(sidebar.as_str(), bootstrap.as_str()),
+        &sidebar,
+        Some(&bootstrap),
+        true,
+      )
+      .unwrap();
+    let gzip = gzip.expect("a gzip client gets a compressed body");
+    assert_eq!(gunzip(&gzip), String::from_utf8(first.to_vec()).unwrap());
+    let (again, again_gzip) = memo
+      .body(
+        "index.html",
+        &template,
+        &substitutions(sidebar.as_str(), bootstrap.as_str()),
+        &sidebar,
+        Some(&bootstrap),
+        true,
+      )
+      .unwrap();
+    assert_eq!(again.as_ptr(), first.as_ptr(), "a repeat request serves the body the memo kept");
+    assert_eq!(again_gzip.expect("the compressed body was kept"), gzip);
+
+    let new_bootstrap = Arc::new("{\"messages\":[1]}".to_string());
+    let (rebuilt, _) = memo
+      .body(
+        "index.html",
+        &template,
+        &substitutions(sidebar.as_str(), new_bootstrap.as_str()),
+        &sidebar,
+        Some(&new_bootstrap),
+        false,
+      )
+      .unwrap();
+    assert!(rebuilt.ends_with(b"{\"messages\":[1]};"), "a new bootstrap text rebuilds the body");
+  }
+
+  #[test]
+  fn a_changed_template_rebuilds_the_page_body() {
+    let mut memo = PageBodyMemo::default();
+    let sidebar = Arc::new("[]".to_string());
+    let bootstrap = Arc::new("null".to_string());
+    let substitutions = substitutions(sidebar.as_str(), bootstrap.as_str());
+    let (first, _) =
+      memo.body("index.html", &index_template(), &substitutions, &sidebar, Some(&bootstrap), false).unwrap();
+    let edited = format!("{} // edited on disk", index_template());
+    let (second, _) = memo.body("index.html", &edited, &substitutions, &sidebar, Some(&bootstrap), false).unwrap();
+    assert_ne!(first, second, "a template edited on disk never matches the memo");
+    assert!(second.ends_with(b"// edited on disk"));
   }
 
   #[tokio::test]
   async fn a_gzip_client_gets_the_compressed_page_with_the_transport_headers() {
     let html = page_html();
-    let (parts, body) = page_response(html.clone(), true).into_parts();
+    let compressed = Bytes::from(gzip_level_one(html.as_bytes()));
+    let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed)).into_parts();
     let headers = parts.headers;
     assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
     assert_eq!(headers[header::VARY], "Accept-Encoding");
@@ -512,7 +617,7 @@ mod tests {
   #[tokio::test]
   async fn an_identity_client_gets_the_page_uncompressed() {
     let html = page_html();
-    let (parts, body) = page_response(html.clone(), false).into_parts();
+    let (parts, body) = page_response(Bytes::from(html.clone()), None).into_parts();
     let headers = parts.headers;
     assert!(headers.get(header::CONTENT_ENCODING).is_none());
     let served = body.collect().await.expect("a page body collects").to_bytes();

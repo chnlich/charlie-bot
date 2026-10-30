@@ -177,6 +177,19 @@ impl Templating {
     request: &Parts,
     substitutions: &[(&str, &str)],
   ) -> Result<String, RenderError> {
+    let html = self.render_page_template(features, name, context, request)?;
+    substitute_placeholders(name, html, substitutions)
+  }
+
+  /// Render a page with its placeholders still in place, for a caller that keeps the finished page while its
+  /// template output and substituted texts hold their value.
+  pub fn render_page_template(
+    &self,
+    features: &FeatureContext,
+    name: &str,
+    context: &serde_json::Value,
+    request: &Parts,
+  ) -> Result<String, RenderError> {
     let globals = features
       .registry
       .template_globals()
@@ -187,15 +200,7 @@ impl Templating {
       .as_object_mut()
       .expect("a page context is a JSON object")
       .insert("request".to_string(), request_context(request));
-    let mut html = self.render(name, &context, globals)?;
-    for (placeholder, text) in substitutions {
-      if !html.contains(placeholder) {
-        let message = format!("{name}: the rendered page does not carry the placeholder {placeholder:?}");
-        return Err(RenderError::Template(Error::new(ErrorKind::InvalidOperation, message)));
-      }
-      html = html.replace(placeholder, text);
-    }
-    Ok(html)
+    self.render(name, &context, globals)
   }
 
   /// Render template `name` with `context` and the zero-argument `globals`.
@@ -227,6 +232,25 @@ impl Templating {
     }
     environment
   }
+}
+
+/// Write each `(placeholder, text)` pair's text where `html` carries its placeholder.
+///
+/// A placeholder that the rendered page does not carry fails the render, because serving the placeholder would
+/// break the page's script.
+pub fn substitute_placeholders(
+  name: &str,
+  mut html: String,
+  substitutions: &[(&str, &str)],
+) -> Result<String, RenderError> {
+  for (placeholder, text) in substitutions {
+    if !html.contains(placeholder) {
+      let message = format!("{name}: the rendered page does not carry the placeholder {placeholder:?}");
+      return Err(RenderError::Template(Error::new(ErrorKind::InvalidOperation, message)));
+    }
+    html = html.replace(placeholder, text);
+  }
+  Ok(html)
 }
 
 /// Why a render failed.

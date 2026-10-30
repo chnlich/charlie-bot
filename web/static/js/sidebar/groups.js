@@ -677,8 +677,8 @@ function renderSessionItem(s, filter, options = {}) {
   const line = sessionRowLines.reduce((found, render) => found ?? render(s), null)
       ?? renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
   // A context row dims and carries the active tag after the line, as the mock
-  // shows it. The tag sits outside the name span so a long name cannot push
-  // it out.
+  // shows it. The tag is placed outside the name span so a long name cannot
+  // push it out.
   return renderSessionRowShell(s, {
     filter,
     activeClass: activeClass + (isContextRow ? ' opacity-60' : ''),
@@ -705,7 +705,7 @@ function renderSessionList(sessions, filter, options = {}) {
       archived: 'No archived sessions',
       search: 'No matching sessions',
     };
-    // The Workspace badges ride the empty paint too: with zero sessions a badge
+    // The Workspace badges appear on the empty paint too: with zero sessions a badge
     // is still the one thing paging the maintainer.
     nav.innerHTML = (filter === 'all' ? (options.workspaceBadges || '') : '')
       + renderEmptyNote(labels[filter]);

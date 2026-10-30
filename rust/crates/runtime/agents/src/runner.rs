@@ -13,7 +13,6 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   AgentBackend, Env, ExitedProbe, LaunchArgs, ServeTransport, ServeTurnArgs, TransportKind,
 };
-use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -88,17 +87,6 @@ impl RunRequest {
       post_result_timeout: DEFAULT_POST_RESULT_TIMEOUT,
       cleanup_timeout: DEFAULT_CLEANUP_TIMEOUT,
     }
-  }
-
-  /// Construct a request from the environment snapshot inserted during startup.
-  pub fn from_features(
-    prompt: String,
-    cwd: PathBuf,
-    features: &FeatureContext,
-    cgroup_config: SessionCgroupConfig,
-  ) -> anyhow::Result<Self> {
-    let agent_environment = crate::agent_environment::require_agent_base_environment(&features.startup)?;
-    Ok(Self::new(prompt, cwd, agent_environment.as_ref().clone(), cgroup_config, Arc::clone(&features.registry)))
   }
 
   /// Keep the spawned child stopped until `on_spawn` has recorded its process identity.

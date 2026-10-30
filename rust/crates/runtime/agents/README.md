@@ -49,7 +49,7 @@ This crate owns the process transport below the agent backends and the launch ma
 | `runs::clean_control_characters`, `runs::select_error_hint`, and `runs::run_alive_probe` | `src/runtime/runs.py:148`, `:247` |
 | `runner::{DEFAULT_POST_RESULT_TIMEOUT, DEFAULT_CLEANUP_TIMEOUT, OnSpawnFn, EventFn}` | `src/runtime/agent_process/base.py:37`, `:660-661`, `:919`, `:936` |
 | `runner::capture_process_diagnostics` | `src/runtime/agent_process/base.py:98-118` (`_capture_proc_diagnostics`; its commands at `:107-110`) |
-| `RunRequest`, its fields, `RunRequest::new`, `RunRequest::from_features`, and `RunRequest::gate_child_until_on_spawn` | `src/runtime/agent_process/base.py:653-708`, `:919-936`, `:936-1033` |
+| `RunRequest`, its fields, `RunRequest::new`, and `RunRequest::gate_child_until_on_spawn` | `src/runtime/agent_process/base.py:653-708`, `:919-936`, `:936-1033` |
 | `RunOutcome` and its fields, including post-result hang diagnostics | `src/runtime/agent_process/base.py:98-120`, `:703`, `:1000-1050`, `:1110` |
 | `AgentRunner`, `AgentRunner::new`, `run`, `terminate`, and `detach` | `src/runtime/agent_process/base.py:936-1050`, `:1180-1205` |
 | `json_loads::{loads, loads_text, LoadError, MAX_DEPTH}` (`charliebot_compat::json_loads`, re-exported here) | `json.loads` on the stored prompt snapshot in `src/runtime/api/sessions.py:1589-1688`; CPython's `_json.c` scanner and `detect_encoding` |

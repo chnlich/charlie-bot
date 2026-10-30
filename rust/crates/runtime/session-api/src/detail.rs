@@ -22,7 +22,7 @@ use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
-use charliebot_store::{Store, StoreError, StoreResult, TaskFacts};
+use charliebot_store::{MessageProjection, Store, StoreError, StoreResult, TaskFacts};
 use charliebot_triggers::triggers::TriggerManager;
 use http::header::HeaderValue;
 use lru::LruCache;
@@ -99,6 +99,110 @@ pub fn build_bootstrap_payload(
   }
   payload.extend(active_backend_payload(store, &response_meta, cfg, registry)?);
   Ok(Value::Object(payload))
+}
+
+/// A session page's bootstrap payload as the page carries it.
+#[derive(Clone)]
+pub struct PageBootstrap {
+  /// The payload's Jinja `tojson` text, the value the page's `SESSION_BOOTSTRAP` constant carries.
+  pub text: Arc<String>,
+  /// The payload's `session` object.
+  pub session: Value,
+  pub pending_draft: Value,
+  pub event_count: Value,
+}
+
+/// The page bootstrap one session produced last, kept while every payload input still holds its value.
+///
+/// The payload is the page's largest value, and its text is its whole escaped form, so a page request that rebuilds it
+/// serializes the session's message tail from scratch. The memo holds one session's bootstrap, about one page's worth
+/// of memory, and a page for another session replaces it.
+#[derive(Default)]
+pub struct PageBootstrapMemo {
+  entry: Mutex<Option<(PageBootstrapKey, PageBootstrap)>>,
+}
+
+/// The inputs [`build_bootstrap_payload`] reads for a session whose events a live projection holds.
+///
+/// The projection is shared and immutable: an event that lands moves the store to a new projection, so its pointer
+/// names its content. The metadata compares by content, because the store hands a caller its own copy of the row.
+/// Everything else compares by value, except the config, which compares by pointer because a reload builds a new one.
+struct PageBootstrapKey {
+  session_id: String,
+  meta: SessionMetadata,
+  run_backend: Option<String>,
+  thinking_since: Option<UtcDateTime>,
+  backend: Map<String, Value>,
+  config: Arc<CharlieBotConfig>,
+  projection: Arc<MessageProjection>,
+}
+
+impl PartialEq for PageBootstrapKey {
+  fn eq(&self, other: &Self) -> bool {
+    self.session_id == other.session_id
+      && self.meta == other.meta
+      && self.run_backend == other.run_backend
+      && self.thinking_since == other.thinking_since
+      && self.backend == other.backend
+      && Arc::ptr_eq(&self.config, &other.config)
+      && Arc::ptr_eq(&self.projection, &other.projection)
+  }
+}
+
+/// The bootstrap payload of `meta`, with its text taken from `memo` when every payload input still holds its value.
+pub fn page_bootstrap(
+  memo: &PageBootstrapMemo,
+  store: &Store,
+  registry: &Registry,
+  cfg: &Arc<CharlieBotConfig>,
+  meta: &SessionMetadata,
+) -> StoreResult<PageBootstrap> {
+  let key = page_bootstrap_key(store, registry, cfg, meta)?;
+  if let Some(key) = &key
+    && let Some((cached_key, cached)) =
+      memo.entry.lock().expect("the page bootstrap memo mutex is not poisoned").as_ref()
+    && cached_key == key
+  {
+    return Ok(cached.clone());
+  }
+  let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
+  let bootstrap = PageBootstrap {
+    text: Arc::new(charliebot_compat::jinja::tojson_text(&payload)),
+    session: payload["session"].clone(),
+    pending_draft: payload["pending_draft"].clone(),
+    event_count: payload["event_count"].clone(),
+  };
+  if let Some(key) = key {
+    *memo.entry.lock().expect("the page bootstrap memo mutex is not poisoned") = Some((key, bootstrap.clone()));
+  }
+  Ok(bootstrap)
+}
+
+/// The memo key of `meta`'s payload, or `None` when the payload reads state the key cannot name.
+///
+/// A worker session's transcript and an archived session's event file are read fresh for every payload, so neither
+/// session kind is memoized.
+fn page_bootstrap_key(
+  store: &Store,
+  registry: &Registry,
+  cfg: &Arc<CharlieBotConfig>,
+  meta: &SessionMetadata,
+) -> StoreResult<Option<PageBootstrapKey>> {
+  if meta.profile == TaskProfile::Worker || meta.archive_offset != 0 {
+    return Ok(None);
+  }
+  let Some(projection) = store.get_message_projection(&meta.id)? else { return Ok(None) };
+  let response_meta = response_metadata(store, meta)?;
+  let backend = active_backend_payload(store, &response_meta, cfg, registry)?;
+  Ok(Some(PageBootstrapKey {
+    session_id: meta.id.clone(),
+    meta: meta.clone(),
+    run_backend: response_meta.run_backend,
+    thinking_since: response_meta.thinking_since,
+    backend,
+    config: Arc::clone(cfg),
+    projection,
+  }))
 }
 
 pub(crate) async fn session_detail(
@@ -819,6 +923,44 @@ mod tests {
     let second = bootstrap_body(&features, &meta.id, true).await;
     assert_eq!(charliebot_compat::compression::level_one_bytes_deflated() - before, 0);
     assert_eq!(first, second, "the memo serves the stored gzip bytes");
+  }
+
+  /// The page bootstrap memo serves the text it built until an event moves the projection, then rebuilds it.
+  ///
+  /// The text is the payload's Jinja `tojson` bytes, so a page that substitutes it carries the bytes the template's
+  /// `tojson` filter would have written.
+  #[tokio::test]
+  async fn a_page_bootstrap_keeps_its_text_until_an_event_moves_the_projection() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "page-bootstrap", None, TaskProfile::Manager).await;
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": "a question for the page"}))
+      .await
+      .unwrap();
+    let memo = PageBootstrapMemo::default();
+    let cfg = features.config.get().expect("the test config loads");
+    let page_bootstrap_text =
+      |memo: &PageBootstrapMemo| page_bootstrap(memo, &features.store, &features.registry, &cfg, &meta).unwrap();
+
+    let first = page_bootstrap_text(&memo);
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
+    assert_eq!(first.text.as_str(), charliebot_compat::jinja::tojson_text(&payload));
+    assert_eq!(first.session, payload["session"]);
+
+    let repeat = page_bootstrap_text(&memo);
+    assert!(Arc::ptr_eq(&first.text, &repeat.text), "an unchanged payload keeps its text");
+    assert_eq!(repeat.pending_draft, first.pending_draft);
+
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "assistant", "content": "an answer for the page"}))
+      .await
+      .unwrap();
+    let after = page_bootstrap_text(&memo);
+    let payload_after = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
+    assert_eq!(after.text.as_str(), charliebot_compat::jinja::tojson_text(&payload_after));
+    assert_ne!(after.text.as_str(), first.text.as_str(), "a new event rebuilds the text");
   }
 
   #[tokio::test]

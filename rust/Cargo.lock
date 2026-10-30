@@ -1188,7 +1188,6 @@ dependencies = [
  "charliebot-tasks",
  "charliebot-triggers",
  "charliebot-usage",
- "flate2",
  "form_urlencoded",
  "futures-util",
  "http 1.5.0",

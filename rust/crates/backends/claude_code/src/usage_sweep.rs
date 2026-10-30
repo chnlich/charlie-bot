@@ -14,16 +14,13 @@ use std::sync::LazyLock;
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_registry::usage::{CategoryResult, SourceSweep, SweepScope};
 use regex::Regex;
 use walkdir::WalkDir;
 
 use super::claude_config::AccountsConfig;
 use super::login_dirs::ClaudeHost;
-
-/// The on-disk name of the worktree quarantine directory (`src/runtime/worktree_trash.py:18`). The live-worktree list
-/// skips it.
-pub const TRASH_DIR_NAME: &str = ".trash";
 
 const CATEGORY: &str = "claude-transcripts";
 const UNIT: &str = "dirs";

@@ -13,12 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_core::paths;
 use charliebot_core::text_repr::format_f;
 use clap::{CommandFactory, FromArgMatches, Parser};
-
-/// The on-disk trash directory name under the worktree root (`worktree_trash.TRASH_DIR_NAME`).
-const TRASH_DIR_NAME: &str = ".trash";
 
 #[derive(Parser)]
 #[command(name = "gc-trash", about = "List or purge the CharlieBot worktree quarantine trash")]

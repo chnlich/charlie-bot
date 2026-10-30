@@ -109,8 +109,8 @@ fn fixtures() -> (Corpus, Expected) {
   assert_eq!(
     provenance.fixtures,
     vec![
-      "corpus.json.gz".to_string(),
-      "expected.json.gz".to_string(),
+      "corpus_golden.json.gz".to_string(),
+      "expected_golden.json.gz".to_string(),
       "rust/crates/infra/html/src/html5_entities.json".to_string(),
     ]
   );

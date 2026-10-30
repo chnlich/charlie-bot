@@ -1,8 +1,8 @@
 {
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "fixtures": [
-    "corpus.json.gz",
-    "expected.json.gz",
+    "corpus_golden.json.gz",
+    "expected_golden.json.gz",
     "rust/crates/infra/html/src/html5_entities.json"
   ]
 }

@@ -14,7 +14,7 @@ use charliebot_store::run_records::RUN_METADATA_NAME;
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Map, Value, json};
 
-pub type DerivedSidebarMap = HashMap<String, Map<String, Value>>;
+pub use charliebot_store::sidebar_state::DerivedSidebarMap;
 
 static SIDEBAR_SWEEP_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -35,9 +35,9 @@ pub(crate) fn resolve_sidebar_state(
   include_trigger: bool,
   include_plan: bool,
   force: bool,
-) -> StoreResult<DerivedSidebarMap> {
+) -> StoreResult<Arc<DerivedSidebarMap>> {
   if sessions.is_empty() {
-    return Ok(HashMap::new());
+    return Ok(Arc::new(HashMap::new()));
   }
   let flags = vec![include_running, include_trigger, include_plan];
   let ids: Vec<String> = sessions.iter().map(|meta| meta.id.clone()).collect();
@@ -67,7 +67,7 @@ pub(crate) fn resolve_sidebar_state(
       if include_plan {
         entry.insert("has_pending_plan_approval".to_string(), Value::Bool(false));
       }
-      derived.insert(meta.id.clone(), entry);
+      derived.insert(meta.id.clone(), Arc::new(entry));
     } else {
       active.push(Arc::clone(meta));
     }
@@ -143,9 +143,10 @@ pub(crate) fn resolve_sidebar_state(
     if let Some(work_state) = activity.and_then(|value| value.get(1)) {
       entry.insert("work_state".to_string(), work_state.clone());
     }
-    derived.insert(meta.id.clone(), entry);
+    derived.insert(meta.id.clone(), Arc::new(entry));
   }
-  charliebot_store::sidebar_state::store_derived_map(key, derived.clone());
+  let derived = Arc::new(derived);
+  charliebot_store::sidebar_state::store_derived_map(key, Arc::clone(&derived));
   Ok(derived)
 }
 

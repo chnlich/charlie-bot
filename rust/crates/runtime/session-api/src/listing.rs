@@ -59,7 +59,7 @@ impl Default for SessionsListMemoState {
 #[derive(PartialEq)]
 pub(crate) struct RowInputs {
   meta: Arc<SessionMetadata>,
-  derived: Option<Map<String, Value>>,
+  derived: Option<Arc<Map<String, Value>>>,
   thinking_since: Value,
   run_backend: Option<String>,
   display_backend: Option<String>,
@@ -77,7 +77,7 @@ pub struct ListingCorpus {
   /// Active, unscheduled sessions, newest first.
   pub rows: Vec<Arc<SessionMetadata>>,
   /// The derived overlay of each row, keyed by session id.
-  pub derived: DerivedSidebarMap,
+  pub derived: Arc<DerivedSidebarMap>,
   /// The controllers' listing fields of each row, keyed by session id.
   pub sequence_fields: HashMap<String, Map<String, Value>>,
 }
@@ -92,7 +92,7 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
 /// The chat page's sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
 pub struct PageRows {
   rows: Vec<Arc<SessionMetadata>>,
-  derived: DerivedSidebarMap,
+  derived: Arc<DerivedSidebarMap>,
   sequence_fields: HashMap<String, Map<String, Value>>,
 }
 
@@ -454,8 +454,10 @@ mod tests {
     let mut rows = vec![Arc::new(features.store.get_session(&node.id).await.unwrap().unwrap())];
     let memos = SessionsListMemos::default();
     let mut derived = DerivedSidebarMap::new();
-    derived
-      .insert(node.id.clone(), json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone());
+    derived.insert(
+      node.id.clone(),
+      Arc::new(json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone()),
+    );
     let sequence_fields = HashMap::new();
 
     let first = list_body(&features, &rows, &derived, &sequence_fields, &memos).await;
@@ -464,7 +466,7 @@ mod tests {
     assert_eq!(memos.state.lock().unwrap().render_calls, 1);
     assert_eq!(first[0]["work_state"], "idle");
 
-    derived.get_mut(&node.id).unwrap().insert("work_state".to_string(), json!("waiting"));
+    Arc::make_mut(derived.get_mut(&node.id).unwrap()).insert("work_state".to_string(), json!("waiting"));
     assert_eq!(list_body(&features, &rows, &derived, &sequence_fields, &memos).await[0]["work_state"], "waiting");
     assert_eq!(memos.state.lock().unwrap().render_calls, 2);
 
@@ -501,7 +503,7 @@ mod tests {
   /// The page corpus over given rows, with the controller fields that a listing supplies for each row.
   fn page_rows_over(rows: Vec<Arc<SessionMetadata>>) -> PageRows {
     let sequence_fields = rows.iter().map(|row| (row.id.clone(), Map::new())).collect();
-    PageRows { rows, derived: DerivedSidebarMap::new(), sequence_fields }
+    PageRows { rows, derived: Arc::new(DerivedSidebarMap::new()), sequence_fields }
   }
 
   /// A row whose controller owns no fields renders the values the row writer fills for that row.
@@ -510,8 +512,11 @@ mod tests {
     let (_home, features) = crate::test_support::feature_context();
     let meta = crate::test_support::create_node(&features.store, "no-fields-row", None, TaskProfile::Manager).await;
     let memo = PageRowsMemo::default();
-    let page =
-      PageRows { rows: vec![Arc::new(meta)], derived: DerivedSidebarMap::new(), sequence_fields: HashMap::new() };
+    let page = PageRows {
+      rows: vec![Arc::new(meta)],
+      derived: Arc::new(DerivedSidebarMap::new()),
+      sequence_fields: HashMap::new(),
+    };
 
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
     let rows: Vec<Value> = serde_json::from_str(text.as_str()).unwrap();

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lru::LruCache;
 use serde_json::{Map, Value};
@@ -12,7 +12,9 @@ pub const TASK_TREE_ACTIVITY: &str = "task_tree_activity";
 const FORCE_FULL_EVERY: u64 = 10;
 const DERIVED_MAP_MEMO_LIMIT: usize = 4;
 /// A memoized sidebar row per session.
-pub type DerivedSidebarMap = HashMap<String, Map<String, Value>>;
+///
+/// Each row is shared, so a memo hit hands out pointers rather than copying every row's fields.
+pub type DerivedSidebarMap = HashMap<String, Arc<Map<String, Value>>>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct DerivedMapKey {
@@ -27,7 +29,7 @@ struct State {
   probe_signatures: std::collections::HashMap<String, Vec<Value>>,
   poll_count: u64,
   derived_generation: u64,
-  derived_maps: LruCache<DerivedMapKey, DerivedSidebarMap>,
+  derived_maps: LruCache<DerivedMapKey, Arc<DerivedSidebarMap>>,
 }
 
 impl Default for State {
@@ -87,12 +89,12 @@ pub fn derived_generation() -> u64 {
 }
 
 /// Read a memoized derived map and mark it most recently used.
-pub fn peek_derived_map(key: &DerivedMapKey) -> Option<DerivedSidebarMap> {
+pub fn peek_derived_map(key: &DerivedMapKey) -> Option<Arc<DerivedSidebarMap>> {
   state().lock().expect("sidebar state mutex is not poisoned").derived_maps.get(key).cloned()
 }
 
 /// Store one derived map in the four-entry memo.
-pub fn store_derived_map(key: DerivedMapKey, value: DerivedSidebarMap) {
+pub fn store_derived_map(key: DerivedMapKey, value: Arc<DerivedSidebarMap>) {
   state().lock().expect("sidebar state mutex is not poisoned").derived_maps.put(key, value);
 }
 
@@ -163,7 +165,7 @@ mod tests {
     assert_eq!(snapshot_task_activity("session-a"), Some((true, "running".to_string())));
     for generation in 0..5 {
       let key = DerivedMapKey { session_ids: vec![format!("session-{generation}")], flags: Vec::new(), generation };
-      store_derived_map(key, HashMap::new());
+      store_derived_map(key, Arc::new(HashMap::new()));
     }
     let first = DerivedMapKey { session_ids: vec!["session-0".to_string()], flags: Vec::new(), generation: 0 };
     assert_eq!(peek_derived_map(&first), None);

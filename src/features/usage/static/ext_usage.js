@@ -392,8 +392,10 @@ function _summaryReading(providerData) {
 
 // Summary row: the strip's first child on every render with providers, shown
 // only in collapsed state (CSS keys off the strip's .collapsed class). One
-// segment per account — provider pill + account name + worst reading — then a
-// trailing ▸. Clicking anywhere on the row expands the strip.
+// segment per account — provider pill + account name + worst reading. The
+// floating collapse chip carries the strip's one disclosure glyph, so the row
+// ends at its last reading rather than repeating a second arrow beside the
+// chip. Clicking anywhere on the row expands the strip.
 function _buildSummaryRow(providers) {
   const row = _el('div', 'flex items-center gap-1.5');
   row.setAttribute('data-field', 'summary');
@@ -421,10 +423,6 @@ function _buildSummaryRow(providers) {
     seg.appendChild(pctEl);
     row.appendChild(seg);
   }
-  const chevron = _el('span', 'ml-auto text-slate-500');
-  chevron.setAttribute('data-field', 'summary-chevron');
-  chevron.textContent = '▸';
-  row.appendChild(chevron);
   return row;
 }
 

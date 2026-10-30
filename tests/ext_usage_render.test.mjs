@@ -988,10 +988,11 @@ test('summary worst reading is the max live utilization across all reported wind
 
   const summary = strip.children[0];
   assert.equal(summary.getAttribute('data-field'), 'summary', 'summary row leads the strip');
-  assert.equal(summary.children[summary.children.length - 1].getAttribute('data-field'), 'summary-chevron',
-      'summary row ends with its chevron');
-  assert.equal(summary.children[summary.children.length - 1].textContent, '▸',
-      'summary chevron is the collapsed glyph');
+  const lastSegment = summary.children[summary.children.length - 1];
+  assert.equal(lastSegment.getAttribute('data-summary-account'), 'claude:broken',
+      'summary row ends at its last account reading');
+  assert.equal(_field(summary, 'summary-chevron'), null,
+      'summary row draws no second disclosure arrow beside the floating chip');
 
   // The threshold hues are _barColor's business; only the bg→text sibling
   // mapping is restated here. The text classes must come from the committed

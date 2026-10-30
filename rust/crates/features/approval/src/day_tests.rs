@@ -179,9 +179,22 @@ async fn the_login_sheet_holds_the_day_s_user_act_items_only() {
 async fn the_digest_holds_the_day_s_entries_and_the_day_s_table_change() {
   let home = Home::new();
   seed(&home).await;
-  seed_digest(&home);
   let change_time = seed_table_change(&home);
   let change_day = charliebot_core::pacific::day_of_stamp(&change_time).expect("the record's stamp reads").to_string();
+  // A use recorded at the change's own stamp, so the change's day holds both kinds of record whatever the date.
+  charliebot_core::approval_digest::add(
+    &home.root(),
+    charliebot_core::approval_digest::DigestCall {
+      session: "seed-session",
+      policy: "t2",
+      step: "The recorded step.",
+      undo: "Revert the step.",
+      scope_check: None,
+      link: Some("https://example.com/step"),
+      now: &change_time,
+    },
+  )
+  .expect("the digest entry records");
 
   let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={change_day}")).await;
 

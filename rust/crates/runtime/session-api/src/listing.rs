@@ -227,7 +227,7 @@ pub fn active_page_json_text(
 fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
   let mut value = store.session_metadata_value(&row.meta);
   apply_sidebar_fields(&mut value, row, PAGE_PROJECTION);
-  apply_listing_fields(&mut value, row.listing.clone().expect("every sidebar row has sequence listing fields"));
+  apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
   if clear_unread {
     value
       .as_object_mut()
@@ -502,6 +502,20 @@ mod tests {
   fn page_rows_over(rows: Vec<Arc<SessionMetadata>>) -> PageRows {
     let sequence_fields = rows.iter().map(|row| (row.id.clone(), Map::new())).collect();
     PageRows { rows, derived: DerivedSidebarMap::new(), sequence_fields }
+  }
+
+  /// A row whose controller owns no fields renders the values the row writer fills for that row.
+  #[tokio::test]
+  async fn a_page_row_without_controller_fields_renders_the_defaults() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "no-fields-row", None, TaskProfile::Manager).await;
+    let memo = PageRowsMemo::default();
+    let page =
+      PageRows { rows: vec![Arc::new(meta)], derived: DerivedSidebarMap::new(), sequence_fields: HashMap::new() };
+
+    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let rows: Vec<Value> = serde_json::from_str(text.as_str()).unwrap();
+    assert_eq!(rows[0]["schedule_task"], Value::Null);
   }
 
   /// A row whose inputs move while it is the active session does not serve its older text to a later request.

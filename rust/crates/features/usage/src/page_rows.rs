@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::capture::{CHARLIE_BOT_SOURCE, backend_source};
 use crate::count::Count;
-use crate::ledger::LedgerRow;
+use crate::ledger::{LedgerAccount, LedgerRow};
 
 /// One model's usage over every ledger part that names it. `accounts` ranks the (card · account) sub-rows by total,
 /// and `segments` holds one entry per card the model ran on, in card order.
@@ -40,8 +40,7 @@ pub(crate) struct PageAccount {
 pub(crate) struct Segment {
   /// The card's position from 1, in card order.
   pub slot: usize,
-  pub total: Count,
-  pub output: Count,
+  pub tally: Tally,
 }
 
 impl PageRow {
@@ -72,19 +71,47 @@ impl PageAccount {
 
 impl Segment {
   fn to_json(&self) -> Value {
-    json!({"slot": self.slot, "total": count_json(self.total), "output": count_json(self.output)})
+    json!({
+      "slot": self.slot,
+      "calls": self.tally.calls,
+      "in_fresh": count_json(self.tally.in_fresh),
+      "cache_write": count_json(self.tally.cache_write),
+      "cache_read": count_json(self.tally.cache_read),
+      "in_unsplit": count_json(self.tally.in_unsplit),
+      "output": count_json(self.tally.output),
+      "total": count_json(self.tally.total),
+    })
   }
 }
 
+/// The token sums of one account, one card, or one page row's share of either.
 #[derive(Default)]
-struct Tally {
-  calls: i64,
-  output: Count,
-  total: Count,
+pub(crate) struct Tally {
+  pub calls: i64,
+  pub in_fresh: Count,
+  pub cache_write: Count,
+  pub cache_read: Count,
+  pub in_unsplit: Count,
+  pub output: Count,
+  pub total: Count,
 }
 
-/// `_merge_ledger_rows`: the page rows, ranked by total then model. Rows group on the casefolded model leaf, so a
-/// spelling one source gives a model merges with the others; versions stay apart.
+impl Tally {
+  fn add(&mut self, account: &LedgerAccount) -> anyhow::Result<()> {
+    self.calls += account.calls;
+    self.in_fresh = self.in_fresh.add(account.in_fresh, "page tally in-fresh")?;
+    self.cache_write = self.cache_write.add(account.cache_write, "page tally cache-write")?;
+    self.cache_read = self.cache_read.add(account.cache_read, "page tally cache-read")?;
+    self.in_unsplit = self.in_unsplit.add(account.in_unsplit, "page tally in-unsplit")?;
+    self.output = self.output.add(account.output, "page tally output")?;
+    self.total = self.total.add(account.total, "page tally total")?;
+    Ok(())
+  }
+}
+
+/// `_merge_ledger_rows`: the page rows, ranked by output then model. Rows group on the casefolded model leaf, so a
+/// spelling one source gives a model merges with the others; versions stay apart. The output ranking is the one the
+/// page's hero, charts and both tables share.
 pub(crate) fn merge(
   rows: &[LedgerRow],
   config: &CharlieBotConfig,
@@ -97,7 +124,7 @@ pub(crate) fn merge(
   }
   let mut merged =
     groups.values().map(|parts| merge_group(parts, config, registry, cards)).collect::<anyhow::Result<Vec<_>>>()?;
-  merged.sort_by(|left, right| right.total.compare(left.total).then_with(|| left.model.cmp(&right.model)));
+  merged.sort_by(|left, right| right.output.compare(left.output).then_with(|| left.model.cmp(&right.model)));
   Ok(merged)
 }
 
@@ -108,19 +135,12 @@ fn merge_group(
   cards: &[&UsageSource],
 ) -> anyhow::Result<PageRow> {
   let mut accounts: BTreeMap<(String, String, bool), Tally> = BTreeMap::new();
-  let mut seg_totals: BTreeMap<String, Count> = BTreeMap::new();
-  let mut seg_outputs: BTreeMap<String, Count> = BTreeMap::new();
+  let mut card_tallies: BTreeMap<String, Tally> = BTreeMap::new();
   for part in parts {
     for account in &part.accounts {
       let (source, fallback) = account_source(part, &account.name, config, registry)?;
-      let tally = accounts.entry((source.clone(), account.name.clone(), fallback)).or_default();
-      tally.calls += account.calls;
-      tally.output = tally.output.add(account.output, "page account output")?;
-      tally.total = tally.total.add(account.total, "page account total")?;
-      let seg_total = seg_totals.entry(source.clone()).or_default();
-      *seg_total = seg_total.add(account.total, "page segment total")?;
-      let seg_output = seg_outputs.entry(source).or_default();
-      *seg_output = seg_output.add(account.output, "page segment output")?;
+      accounts.entry((source.clone(), account.name.clone(), fallback)).or_default().add(account)?;
+      card_tallies.entry(source).or_default().add(account)?;
     }
   }
   let mut ranked: Vec<((String, String, bool), Tally)> = accounts.into_iter().collect();
@@ -130,13 +150,7 @@ fn merge_group(
   let segments = cards
     .iter()
     .enumerate()
-    .filter_map(|(index, card)| {
-      seg_totals.get(card.name).map(|&total| Segment {
-        slot: index + 1,
-        total,
-        output: seg_outputs.get(card.name).copied().unwrap_or_default(),
-      })
-    })
+    .filter_map(|(index, card)| card_tallies.remove(card.name).map(|tally| Segment { slot: index + 1, tally }))
     .collect();
   let first = parts.iter().map(|part| part.first.as_str()).filter(|stamp| !stamp.is_empty()).min().unwrap_or("");
   let last = parts.iter().map(|part| part.last.as_str()).filter(|stamp| !stamp.is_empty()).max().unwrap_or("");
@@ -161,7 +175,7 @@ fn merge_group(
       })
       .collect(),
     segments,
-    window: format!("{first} → {last}"),
+    window: if first.is_empty() && last.is_empty() { String::new() } else { format!("{first} → {last}") },
   })
 }
 

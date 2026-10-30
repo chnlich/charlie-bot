@@ -29,7 +29,7 @@ fn record(record_id: &str, kind: RecordKind, sessions: &[&str]) -> UsageRecord {
 }
 
 fn table_rows(ledger: &UsageLedger) -> Vec<LedgerRow> {
-  rows_from_accs(ledger.grouped_accs(sql::MODEL_ROWS_SQL).unwrap()).unwrap().0
+  rows_from_accs(ledger.all_time_accs(false).unwrap()).unwrap().0
 }
 
 #[test]
@@ -255,8 +255,8 @@ fn models(rows: &[LedgerRow]) -> Vec<&str> {
 }
 
 fn agg_rows(ledger: &mut UsageLedger) -> Vec<LedgerRow> {
-  let accs = ledger.agg_accs().unwrap().expect("the aggregate has been backfilled and serves");
-  rows_from_accs(accs).unwrap().0
+  assert!(ledger.agg_ready().unwrap(), "the aggregate has been backfilled and serves");
+  rows_from_accs(ledger.all_time_accs(true).unwrap()).unwrap().0
 }
 
 fn assert_served_on_the_table(ledger: &mut UsageLedger) {
@@ -685,7 +685,7 @@ fn backfilled_read_serves_the_aggregate_not_the_table_pass() {
   ledger.model_rows().unwrap(); // the first read runs the backfill
   let expected = table_rows(&ledger);
   // Once backfilled the read takes the aggregate, so the table pass never runs.
-  assert!(ledger.agg_accs().unwrap().is_some());
+  assert!(ledger.agg_ready().unwrap());
   assert_eq!(ledger.model_rows().unwrap(), expected);
 }
 
@@ -780,7 +780,7 @@ fn model_rows_plan_scans_the_cover_index_without_analyze() {
     column_text(&ledger.conn, "SELECT name FROM sqlite_master WHERE name = 'sqlite_stat1'"),
     Vec::<String>::new()
   );
-  let mut statement = ledger.conn.prepare(&format!("EXPLAIN QUERY PLAN {}", sql::MODEL_ROWS_SQL)).unwrap();
+  let mut statement = ledger.conn.prepare(&format!("EXPLAIN QUERY PLAN {}", sql::model_rows_sql())).unwrap();
   let plan =
     statement.query_map([], |row| row.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
   assert!(plan.iter().any(|detail| detail.contains("SCAN") && detail.contains("usage_group_cover")));
@@ -1052,4 +1052,111 @@ fn failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own() {
   assert_eq!(column_text(reopened.connection(), "SELECT record_id FROM usage"), ["rec-good"]);
   let sessions = column_text(reopened.connection(), "SELECT session FROM native_sessions");
   assert!(!sessions.iter().any(|session| session == "sess-bad"));
+}
+
+fn stamped(record_id: &str, model: &str, account: &str, ts: &str, output: i64) -> UsageRecord {
+  UsageRecord {
+    model: model.into(),
+    account: account.into(),
+    ts: ts.into(),
+    output,
+    ..record(record_id, RecordKind::Native, &[])
+  }
+}
+
+/// The counts of each group, sorted by group, so two reads compare group by group.
+fn group_counts(rows: Vec<GroupRow>) -> Vec<(GroupKey, i64, [i64; 5])> {
+  let mut counts: Vec<_> = rows
+    .into_iter()
+    .map(|row| {
+      let counts = [row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output].map(Count::int);
+      (GroupKey::of(&row), row.calls, counts)
+    })
+    .collect();
+  counts.sort();
+  counts
+}
+
+/// The last Pacific week before 2026-11-03 is [2026-10-26T07:00Z, 2026-11-02T08:00Z), 169 hours across the fall change.
+/// The fixture puts stamps on both edges, a counted fallback, and a fallback that a native record retires after the
+/// aggregate is backfilled, so the trigger path is covered as well as the backfill.
+#[test]
+fn aggregate_week_matches_the_direct_window_query_group_by_group() {
+  let dir = tempfile::tempdir().unwrap();
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut retired = record("rec-fb-retired", RecordKind::Fallback, &["sess-x"]);
+  retired.model = "model-fb".into();
+  retired.account = "acct-fb".into();
+  retired.ts = "2026-10-28T10:00:00Z".into();
+  let mut kept = record("rec-fb-kept", RecordKind::Fallback, &["sess-y"]);
+  kept.model = "model-fb".into();
+  kept.account = "acct-fb".into();
+  kept.ts = "2026-10-29T12:00:00Z".into();
+  let rows = [
+    stamped("rec-before", "model-a", "acct-a", "2026-10-26T06:59:59.500Z", 1),
+    stamped("rec-edge-in", "model-a", "acct-a", "2026-10-26T07:00:00Z", 2),
+    stamped("rec-day", "model-a", "acct-a", "2026-10-27T12:00:00+00:00", 4),
+    stamped("rec-fall", "model-a", "acct-a", "2026-11-01T09:00:00Z", 8),
+    stamped("rec-last-in", "model-a", "acct-a", "2026-11-02T07:59:59Z", 16),
+    stamped("rec-after", "model-a", "acct-a", "2026-11-02T08:00:00Z", 32),
+    stamped("rec-other", "model-b", "acct-b", "2026-10-29T10:00:00.000000+00:00", 64),
+    retired,
+    kept,
+  ];
+  ledger.record_file(HOST, "/logs/week.jsonl", "sig-week", &rows).unwrap();
+  ledger.model_rows().unwrap();
+  let native = UsageRecord {
+    model: "model-n".into(),
+    ts: "2026-10-29T10:00:00Z".into(),
+    ..record("rec-native", RecordKind::Native, &["sess-x"])
+  };
+  ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", &[native]).unwrap();
+  assert!(ledger.agg_ready().unwrap(), "the aggregate serves after the backfill");
+
+  let week = Week::last_before("2026-11-03T20:00:00Z".parse().unwrap()).unwrap();
+  let window = [Week::utc_text(week.start), Week::utc_text(week.end)];
+  let direct = ledger.group_rows(&sql::week_rows_sql(), params![window[0], window[1]]).unwrap();
+  let served = ledger.agg_week_rows(week).unwrap();
+  assert_eq!(group_counts(served), group_counts(direct));
+
+  let direct = ledger.group_rows(&sql::week_rows_sql(), params![window[0], window[1]]).unwrap();
+  let outputs: BTreeMap<String, i64> = rows_from_accs(fold_rows(direct).unwrap())
+    .unwrap()
+    .0
+    .into_iter()
+    .map(|row| (row.model, row.output.int()))
+    .collect();
+  // The edge stamps split at the window, the fall change stays inside it, and the retired fallback is not counted.
+  assert_eq!(
+    outputs,
+    BTreeMap::from([
+      ("model-a".to_string(), 2 + 4 + 8 + 16),
+      ("model-b".to_string(), 64),
+      ("model-fb".to_string(), 5),
+      ("model-n".to_string(), 5),
+    ])
+  );
+
+  // The all-time read takes the same two paths, and both agree on every row, stamps included.
+  assert_eq!(
+    rows_from_accs(ledger.all_time_accs(true).unwrap()).unwrap(),
+    rows_from_accs(ledger.all_time_accs(false).unwrap()).unwrap()
+  );
+}
+
+/// A row whose stamp names no date still counts, and it bounds no window, so one malformed capture cannot fail the page
+/// for as long as the ledger keeps the row. The aggregate path agrees with the table.
+#[test]
+fn a_stamp_without_a_date_counts_but_bounds_no_window() {
+  let dir = tempfile::tempdir().unwrap();
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let malformed = stamped("rec-malformed", "model-a", "acct-a", "1", 3);
+  let dated = stamped("rec-dated", "model-a", "acct-a", "2026-10-26T06:30:00Z", 4);
+  ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[malformed, dated]).unwrap();
+  let rows = ledger.model_rows().unwrap();
+  assert_eq!(rows.len(), 1);
+  assert_eq!(rows[0].output.int(), 7);
+  // 06:30Z on 10-26 is the Sunday 10-25 in Los Angeles.
+  assert_eq!((rows[0].first.as_str(), rows[0].last.as_str()), ("2026-10-25", "2026-10-25"));
+  assert_served_on_the_table(&mut ledger);
 }

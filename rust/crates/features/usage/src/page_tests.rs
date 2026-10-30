@@ -2,7 +2,6 @@
 //! synthetic rows with no ledger behind them. The page never captures, so no test reads a real home or log.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::CStr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -135,8 +134,13 @@ fn read_of(
   native_starts: &[(&str, &str)],
   last_capture: Option<OffsetDateTime>,
 ) -> LedgerRead {
+  let now = Timestamp::now();
   LedgerRead {
+    now,
+    week: Week::last_before(now).expect("the week resolves"),
     rows,
+    week_rows: Vec::new(),
+    previous_week_rows: Vec::new(),
     native_starts: native_starts.iter().map(|(source, start)| (source.to_string(), start.to_string())).collect(),
     last_capture,
     elapsed: Duration::ZERO,
@@ -146,8 +150,7 @@ fn read_of(
 
 /// The page context of synthetic rows, with no ledger behind them.
 fn context_of(features: &FeatureContext, rows: Vec<LedgerRow>) -> Value {
-  token_usage_context(&read_of(features, rows, &[], None), &features.registry, OffsetDateTime::now_utc())
-    .expect("the context builds")
+  token_usage_context(&read_of(features, rows, &[], None), &features.registry).expect("the context builds")
 }
 
 /// The serialized rows the page's script would feed its charts and table from.
@@ -186,7 +189,16 @@ fn with_fallback(mut row: LedgerRow, output: i64) -> LedgerRow {
 }
 
 fn account(name: &str, calls: i64, output: i64, total: i64) -> LedgerAccount {
-  LedgerAccount { name: name.to_string(), calls, output: Count::Int(output), total: Count::Int(total) }
+  LedgerAccount {
+    name: name.to_string(),
+    calls,
+    in_fresh: Count::Int(total - output),
+    cache_write: Count::Int(0),
+    cache_read: Count::Int(0),
+    in_unsplit: Count::Int(0),
+    output: Count::Int(output),
+    total: Count::Int(total),
+  }
 }
 
 fn names(row: &Value) -> Vec<&str> {
@@ -262,7 +274,8 @@ async fn an_empty_ledger_renders_an_empty_state_without_the_charts() {
   let features = page_features(home.path(), registry());
   let body = page_body(&features, &read_page_ledger(&features)).await;
   assert!(body.contains("id=\"usage-empty\""), "the page marks its empty state");
-  assert!(!body.contains("id=\"c_total\"") && !body.contains("id=\"tbl\""), "no chart or table renders");
+  assert!(!body.contains("id=\"c_week\""), "no chart renders");
+  assert!(body.contains("id=\"tbl_week\"") && body.contains("id=\"tbl_all\""), "the tables keep their skeletons");
   assert!(data_rows(&body).is_empty(), "the payload carries no rows");
 }
 
@@ -395,12 +408,8 @@ fn charlie_bot_native_accounts_read_as_clc() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
   let rows = vec![row(CB, "glm-z", [0, 0, 0, 100, 40], vec![account("charlie-code-x", 2, 40, 140)])];
-  let context = token_usage_context(
-    &read_of(&features, rows, &[(CB, "2026-01-01")], None),
-    &features.registry,
-    OffsetDateTime::now_utc(),
-  )
-  .expect("the context builds");
+  let context = token_usage_context(&read_of(&features, rows, &[(CB, "2026-01-01")], None), &features.registry)
+    .expect("the context builds");
   let payload = payload_rows(&context);
   assert_eq!(slots_and_totals(&payload[0]), [(5, 140)]);
   assert_eq!(names(&payload[0]), ["CLC · charlie-code-x"]);
@@ -413,12 +422,8 @@ fn charlie_bot_antigravity_accounts_read_as_antigravity() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
   let rows = vec![row(CB, "gem-2-5", [0, 0, 0, 0, 40], vec![account("agy-antigravity", 2, 40, 140)])];
-  let context = token_usage_context(
-    &read_of(&features, rows, &[(CB, "2026-01-01")], None),
-    &features.registry,
-    OffsetDateTime::now_utc(),
-  )
-  .expect("the context builds");
+  let context = token_usage_context(&read_of(&features, rows, &[(CB, "2026-01-01")], None), &features.registry)
+    .expect("the context builds");
   let payload = payload_rows(&context);
   assert_eq!(slots_and_totals(&payload[0]), [(4, 140)]);
   assert_eq!(names(&payload[0]), ["Antigravity · agy-antigravity"]);
@@ -520,7 +525,7 @@ async fn page_says_when_the_ledger_was_last_captured() {
   let features = page_features(captured_home.path(), registry());
   seed_ledger(captured_home.path(), true);
   let body = page_body(&features, &read_page_ledger(&features)).await;
-  let today = &local_stamp(OffsetDateTime::now_utc())[..10];
+  let today = &pacific::stamp(Timestamp::now()).expect("the stamp formats")[..10];
   assert!(body.contains(&format!("as of {today}")), "the page names its capture date");
   assert!(!body.contains("no capture yet"));
 
@@ -532,29 +537,73 @@ async fn page_says_when_the_ledger_was_last_captured() {
   assert!(!body.contains("as of 20"));
 }
 
-#[test]
-fn local_stamp_matches_strftime_in_the_system_zone() {
-  let moment = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("the instant is in range");
-  let unix_seconds = moment.unix_timestamp() as libc::time_t;
-  // SAFETY: `tm` contains integer and pointer fields, and `localtime_r` initializes them for this instant.
-  let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-  // SAFETY: `unix_seconds` and `tm` remain valid for the call.
-  let result = unsafe { libc::localtime_r(&unix_seconds, &mut tm) };
-  assert!(!result.is_null());
-  // SAFETY: a successful `localtime_r` returns a NUL-terminated zone name owned by libc.
-  let zone = unsafe { CStr::from_ptr(tm.tm_zone) }.to_string_lossy();
-  let local =
-    moment.to_offset(time::UtcOffset::from_whole_seconds(tm.tm_gmtoff as i32).expect("the local offset is in range"));
-  let expected = format!(
-    "{:04}-{:02}-{:02} {:02}:{:02} {zone}",
-    local.year(),
-    u8::from(local.month()),
-    local.day(),
-    local.hour(),
-    local.minute()
-  );
+fn at(text: &str) -> Timestamp {
+  text.parse().expect("the instant parses")
+}
 
-  assert_eq!(local_stamp(moment), expected);
+#[test]
+fn stamps_read_in_pacific_time_whatever_the_server_zone() {
+  assert_eq!(pacific::stamp(at("2026-10-26T07:00:00Z")).expect("the stamp formats"), "2026-10-26 00:00 PDT");
+  assert_eq!(pacific::stamp(at("2027-01-15T08:00:00Z")).expect("the stamp formats"), "2027-01-15 00:00 PST");
+}
+
+#[test]
+fn ledger_stamps_name_their_pacific_day_and_the_week_holds_them() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  // 06:30Z on 10-26 is still Sunday 10-25 in Los Angeles, the last day of last week.
+  add_records(
+    home.path(),
+    "/logs/cc.jsonl",
+    "sig-cc",
+    &[record("cc-edge", CC, "claude-sonnet-4", "2026-10-26T06:30:00.123Z", 100, "acct-a")],
+  );
+  let read = read_ledger_at(&features, at("2026-10-30T20:00:00Z")).expect("the ledger reads");
+  assert_eq!((read.rows[0].first.as_str(), read.rows[0].last.as_str()), ("2026-10-25", "2026-10-25"));
+  assert_eq!(read.native_starts[CC], "2026-10-25");
+  assert_eq!(read.week_rows.len(), 1);
+  assert_eq!(read.week_rows[0].output, Count::Int(100));
+}
+
+#[test]
+fn last_week_reads_the_same_rows_on_the_table_and_the_aggregate() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  add_records(
+    home.path(),
+    "/logs/cc.jsonl",
+    "sig-cc",
+    &[
+      record("before", CC, "claude-sonnet-4", "2026-10-19T06:59:59Z", 20, "acct-a"),
+      record("start", CC, "claude-sonnet-4", "2026-10-19T07:00:00Z", 10, "acct-a"),
+      record("end", CC, "claude-sonnet-4", "2026-10-26T07:00:00Z", 40, "acct-a"),
+    ],
+  );
+  let now = at("2026-10-30T20:00:00Z");
+  // The first read backfills the aggregate, so it takes the table pass; the second takes the aggregate.
+  let table = read_ledger_at(&features, now).expect("the ledger reads");
+  let aggregate = read_ledger_at(&features, now).expect("the ledger reads");
+  assert_eq!(table.week_rows[0].output, Count::Int(10), "the window starts at its first instant");
+  assert_eq!(table.previous_week_rows[0].output, Count::Int(20), "the instant before it is the week before");
+  assert_eq!(table.rows[0].output, Count::Int(70), "the all-time rows keep the instant after the window");
+  assert_eq!(table.week_rows, aggregate.week_rows);
+  assert_eq!(table.previous_week_rows, aggregate.previous_week_rows);
+  assert_eq!(table.rows, aggregate.rows);
+}
+
+#[test]
+fn rows_rank_by_output_then_model_not_by_total() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  let rows = vec![
+    row(CC, "claude-big-total", [1_000, 0, 0, 0, 1], vec![]),
+    row(OC, "o-output", [0, 0, 0, 0, 50], vec![]),
+    row(CODEX, "c-tie", [0, 0, 0, 0, 50], vec![]),
+  ];
+  let context = context_of(&features, rows);
+  let payload = payload_rows(&context);
+  let models: Vec<&str> = payload.iter().map(|row| row["model"].as_str().unwrap()).collect();
+  assert_eq!(models, ["c-tie", "o-output", "claude-big-total"]);
 }
 
 #[test]
@@ -562,7 +611,7 @@ fn an_account_no_source_attributes_fails_the_context() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
   let rows = vec![row(CB, "glm-z", [0, 0, 0, 0, 40], vec![account("mystery-7", 1, 40, 40)])];
-  let error = token_usage_context(&read_of(&features, rows, &[], None), &features.registry, OffsetDateTime::now_utc())
+  let error = token_usage_context(&read_of(&features, rows, &[], None), &features.registry)
     .expect_err("no source attributes the account");
   assert!(error.to_string().contains("mystery-7"), "{error}");
 }

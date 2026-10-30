@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
@@ -18,15 +18,20 @@ use charliebot_registry::Registry;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::usage::UsageSource;
 use http::request::Parts;
+use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use crate::capture::{CHARLIE_BOT_SOURCE, host_name};
 use crate::count::Count;
 use crate::ledger::{LedgerRow, UsageLedger, default_ledger_path};
+use crate::pacific::{self, Week};
 use crate::page_rows::{self, PageRow, canonical_model, compact, group_thousands};
 
 const TEMPLATE: &str = "token_usage.html";
+
+/// The template's series colours, `--series-1` to `--series-5`: one per usage source.
+const SERIES_COUNT: usize = 5;
 
 /// `json.dumps({"rows": ...}, ensure_ascii=False)`: the payload the page's script reads its rows from.
 const PAYLOAD_JSON: JsonStyle =
@@ -57,10 +62,15 @@ async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request
   }
 }
 
-/// What `_read_ledger` returns: the ledger's rows, each source's native start, the last capture of this host, the time
-/// the read took, and the config the rows' charlie-bot accounts attribute against.
+/// What `_read_ledger` returns: the all-time rows, the last Pacific week and the week before it, each source's native
+/// start, the last capture of this host, the instant of the read with the week it names, the time the read took, and
+/// the config the rows' charlie-bot accounts attribute against.
 pub(crate) struct LedgerRead {
+  pub now: Timestamp,
+  pub week: Week,
   pub rows: Vec<LedgerRow>,
+  pub week_rows: Vec<LedgerRow>,
+  pub previous_week_rows: Vec<LedgerRow>,
   pub native_starts: BTreeMap<String, String>,
   pub last_capture: Option<OffsetDateTime>,
   pub elapsed: Duration,
@@ -70,19 +80,34 @@ pub(crate) struct LedgerRead {
 /// `_read_ledger`: the rows and the last capture from the ledger alone, so the numbers survive the deletion of the logs
 /// they were parsed from. A read error fails the request instead of rendering rows it could not read.
 fn read_ledger(features: &FeatureContext) -> anyhow::Result<LedgerRead> {
+  read_ledger_at(features, Timestamp::now())
+}
+
+/// `read_ledger` as of `now`: the weeks the page names are the Pacific weeks of that instant.
+fn read_ledger_at(features: &FeatureContext, now: Timestamp) -> anyhow::Result<LedgerRead> {
   let started = Instant::now();
   let config = features.config.get()?;
+  let week = Week::last_before(now)?;
   let mut ledger = UsageLedger::open(default_ledger_path(&config.charliebot_home))?;
-  let (rows, native_starts) = ledger.model_rows_with_native_starts()?;
-  let last_capture = ledger.last_capture_at(&host_name()?)?;
+  let snapshot = ledger.read_page(week, &host_name()?)?;
   ledger.close()?;
-  Ok(LedgerRead { rows, native_starts, last_capture, elapsed: started.elapsed(), config })
+  Ok(LedgerRead {
+    now,
+    week,
+    rows: snapshot.rows,
+    week_rows: snapshot.week_rows,
+    previous_week_rows: snapshot.previous_week_rows,
+    native_starts: snapshot.native_starts,
+    last_capture: snapshot.last_capture,
+    elapsed: started.elapsed(),
+    config,
+  })
 }
 
 /// Render the page from one ledger read through the shared template engine.
 fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, (String, String)> {
-  let context = token_usage_context(read, &features.registry, OffsetDateTime::now_utc())
-    .map_err(|error| ("Exception".to_string(), format!("{error:#}")))?;
+  let context =
+    token_usage_context(read, &features.registry).map_err(|error| ("Exception".to_string(), format!("{error:#}")))?;
   let templating =
     features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
   templating
@@ -101,29 +126,31 @@ pub(crate) fn cards(registry: &Registry) -> Vec<&UsageSource> {
 
 /// `_token_usage_context`: the template context of one ledger read. `payload` is the JSON the page's script reads its
 /// rows from, and the other keys are the figures and stamps the template prints.
-pub(crate) fn token_usage_context(
-  read: &LedgerRead,
-  registry: &Registry,
-  now: OffsetDateTime,
-) -> anyhow::Result<Value> {
+pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> anyhow::Result<Value> {
   let cards = cards(registry);
+  ensure!(cards.len() <= SERIES_COUNT, "the usage page has {SERIES_COUNT} series colours for {} sources", cards.len());
   let tot = Totals::of(&read.rows)?;
+  let week_tot = Totals::of(&read.week_rows)?;
+  let previous = Totals::of(&read.previous_week_rows)?;
   let merged = page_rows::merge(&read.rows, &read.config, registry, &cards)?;
+  let week_merged = page_rows::merge(&read.week_rows, &read.config, registry, &cards)?;
   let rows = Value::Array(merged.iter().map(PageRow::to_json).collect());
+  let week_rows = Value::Array(week_merged.iter().map(PageRow::to_json).collect());
   let (window_first, window_last) = window(&read.rows)?;
   let window_str = if read.rows.is_empty() { String::new() } else { format!("{window_first} → {window_last}") };
-  let top = page_rows::first_max_by(merged.as_slice(), |row| row.total);
-  let top_out = page_rows::first_max_by(merged.as_slice(), |row| row.output);
+  let week_top = page_rows::first_max_by(week_merged.as_slice(), |row| row.output);
   let per_src = per_source(read, registry, &cards, &tot)?;
   let ctx = json!({
     "rows": rows.clone(),
     "tot_compact": compact(tot.total),
+    "tot_exact": group_thousands(tot.total),
     "in_compact": compact(tot
       .in_fresh
       .add(tot.cache_write, "page input tokens")?
       .add(tot.cache_read, "page input tokens")?
       .add(tot.in_unsplit, "page input tokens")?),
     "out_compact": compact(tot.output),
+    "out_exact": group_thousands(tot.output),
     "cr_compact": compact(tot.cache_read),
     "cw_compact": compact(tot.cache_write),
     "fresh_compact": compact(tot.in_fresh),
@@ -132,21 +159,60 @@ pub(crate) fn token_usage_context(
     "per_src": per_src,
     "usage_sources": cards.iter().map(|card| card.name).collect::<Vec<_>>(),
     "tot_calls": group_thousands(Count::Int(tot.calls)),
-    "top_escaped": top.map_or("", |row| row.model.as_str()),
-    "top_compact": top.map_or_else(|| "0".to_string(), |row| compact(row.total)),
-    "top_out_escaped": top_out.map_or("", |row| row.model.as_str()),
-    "top_out_compact": top_out.map_or_else(|| "0".to_string(), |row| compact(row.output)),
+    "week":week_context(read, &week_tot, &previous, &tot, week_merged.len(), week_top)?,
     "elapsed_s": read.elapsed.as_secs_f64(),
   });
   Ok(json!({
     "ctx": ctx,
-    "payload": text_repr::json_dumps(&json!({"rows": rows}), &PAYLOAD_JSON),
+    "payload": text_repr::json_dumps(&json!({"rows": rows, "week": week_rows}), &PAYLOAD_JSON),
     "window": [window_first, window_last],
     "window_str": window_str,
     "cache_share": percent(tot.cache_read, tot.total),
-    "generated": local_stamp(now),
-    "as_of": as_of(read.last_capture),
+    "generated": pacific::stamp(read.now)?,
+    "as_of": as_of(read.last_capture)?,
+    "zone": pacific::zone_label(read.now)?,
   }))
+}
+
+/// The last Pacific week's figures for the hero: its totals in compact and exact form, its share of all time, and its
+/// change from the week before. A change is null when the week before has no tokens to measure against.
+fn week_context(
+  read: &LedgerRead,
+  week_tot: &Totals,
+  previous: &Totals,
+  tot: &Totals,
+  models: usize,
+  top: Option<&PageRow>,
+) -> anyhow::Result<Value> {
+  Ok(json!({
+    "label": read.week.label()?,
+    "models": models,
+    "calls": group_thousands(Count::Int(week_tot.calls)),
+    "total": compact(week_tot.total),
+    "total_exact": group_thousands(week_tot.total),
+    "output": compact(week_tot.output),
+    "output_exact": group_thousands(week_tot.output),
+    "share": percent(week_tot.total, tot.total),
+    "fresh": compact(week_tot.in_fresh),
+    "cache_write": compact(week_tot.cache_write),
+    "cache_read": compact(week_tot.cache_read),
+    "unsplit": compact(week_tot.in_unsplit),
+    "previous_total": compact(previous.total),
+    "previous_output": compact(previous.output),
+    "wow_total": change(week_tot.total, previous.total),
+    "wow_output": change(week_tot.output, previous.output),
+    "top_model": top.map_or("", |row| row.model.as_str()),
+    "top_output": top.map_or_else(|| "0".to_string(), |row| compact(row.output)),
+  }))
+}
+
+/// The percent change from `previous` to `current`, or null when `previous` is zero.
+fn change(current: Count, previous: Count) -> Value {
+  if previous.as_f64() == 0.0 {
+    Value::Null
+  } else {
+    json!((current.as_f64() - previous.as_f64()) / previous.as_f64() * 100.0)
+  }
 }
 
 /// The tiles of `_token_usage_context`: each card's attributed total, output, distinct models and share of the page
@@ -251,22 +317,15 @@ fn ratio(part: Count, whole: Count) -> f64 {
   if whole == 0.0 { 0.0 } else { part.as_f64() / whole }
 }
 
-/// `_as_of`: the last capture's finish in local time, or that none has run.
-fn as_of(last_capture: Option<OffsetDateTime>) -> String {
+/// `_as_of`: the last capture's finish in Pacific time, or that none has run.
+fn as_of(last_capture: Option<OffsetDateTime>) -> anyhow::Result<String> {
   match last_capture {
-    None => "no capture yet".to_string(),
-    Some(moment) => format!("as of {}", local_stamp(moment)),
+    None => Ok("no capture yet".to_string()),
+    Some(moment) => {
+      let instant = Timestamp::from_second(moment.unix_timestamp()).context("the capture time fits the time range")?;
+      Ok(format!("as of {}", pacific::stamp(instant)?))
+    }
   }
-}
-
-/// `strftime('%Y-%m-%d %H:%M %Z')` of an instant in the server's zone (`astimezone()`). The zone abbreviation is
-/// `localtime_r`'s, which `%Z` prints (host_auth's `timestamps.rs` reads the same fields).
-pub(crate) fn local_stamp(moment: OffsetDateTime) -> String {
-  jiff::Timestamp::from_second(moment.unix_timestamp())
-    .expect("the usage timestamp fits Jiff's range")
-    .to_zoned(jiff::tz::TimeZone::system())
-    .strftime("%Y-%m-%d %H:%M %Z")
-    .to_string()
 }
 
 #[cfg(test)]

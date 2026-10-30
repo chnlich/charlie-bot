@@ -723,11 +723,12 @@ fn capture_usage_rows_are_absolutely_correct() {
     claude.total.int(),
     claude.in_fresh.int() + claude.cache_write.int() + claude.cache_read.int() + claude.output.int()
   );
-  assert_eq!((claude.first.as_str(), claude.last.as_str()), ("2024-01-01", "2024-01-02"));
+  // Stamps print their Pacific day: 2024-01-01T00:00Z is still December 31 in Los Angeles.
+  assert_eq!((claude.first.as_str(), claude.last.as_str()), ("2023-12-31", "2024-01-01"));
   assert_eq!(claude.accounts.iter().map(|account| account.total.int()).sum::<i64>(), claude.total.int());
   let codex = row(&rows, "Codex", "codex-some");
   assert_eq!((codex.in_fresh.int(), codex.cache_read.int(), codex.output.int()), (40, 20, 7));
-  assert_eq!((codex.first.as_str(), codex.last.as_str()), ("2024-01-03", "2024-01-03"));
+  assert_eq!((codex.first.as_str(), codex.last.as_str()), ("2024-01-02", "2024-01-02"));
   assert_eq!(codex.total.int(), 40 + 20 + 7);
 }
 
@@ -938,7 +939,7 @@ fn appended_line_is_captured_and_second_dir_replay_counts_once() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 2);
   let after = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
   assert_eq!((after.calls, after.output.int()), (2, 7));
-  assert_eq!((after.first.as_str(), after.last.as_str()), ("2024-01-01", "2024-01-02"));
+  assert_eq!((after.first.as_str(), after.last.as_str()), ("2023-12-31", "2024-01-01"));
 }
 
 #[test]
@@ -1705,7 +1706,7 @@ fn malformed_type_shapes_capture_the_recorded_rows() {
     (native.calls, native.in_fresh.int(), native.cache_read.int(), native.output.int(), native.total.int()),
     (1, 16, 4, 7, 27)
   );
-  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-01", "2026-09-01"));
+  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-08-31", "2026-08-31"));
   let gpt = row(&rows, "charlie-bot", "gpt-run");
   assert_eq!(
     (gpt.calls, gpt.in_fresh.int(), gpt.cache_read.int(), gpt.output.int(), gpt.total.int(), gpt.fallback_calls),
@@ -1883,7 +1884,7 @@ fn malformed_falsy_values_capture_the_recorded_rows() {
   assert_eq!(claude.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["claude-main"]);
   let native = row(&rows, "charlie-bot", "native-model");
   assert_eq!((native.calls, native.in_fresh.int(), native.output.int(), native.total.int()), (1, 5, 2, 7));
-  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-02", "2026-09-02"));
+  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-01", "2026-09-01"));
 }
 
 /// The five count columns of one stored row, in the order `in_fresh, cache_write, cache_read, in_unsplit, output`, as
@@ -2144,7 +2145,7 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
     (native.calls, native.in_fresh, native.cache_read, native.output, native.total),
     (1, Count::Int(16), Count::Int(4), Count::Int(7), Count::Int(27))
   );
-  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-01", "2026-09-01"));
+  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-08-31", "2026-08-31"));
   assert_eq!(native.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["charlie-code-native"]);
   // A non-string model that is the last truthy one when the row is built fails Python's rsplit, so the capture raises.
   let raising: [[&str; 3]; 2] = [

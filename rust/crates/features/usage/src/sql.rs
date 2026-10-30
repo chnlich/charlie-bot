@@ -185,22 +185,74 @@ ON CONFLICT(record_id) DO UPDATE SET
   captured_at = excluded.captured_at
 "#;
 
-pub const MODEL_ROWS_SQL: &str = r#"
+/// The read side of the exclusion: a usage row counts unless it is a fallback whose session a native record holds. Every
+/// read of counted rows (the all-time table, the week reads and the boundary slices) uses this text. The aggregate
+/// triggers keep their own form of the same rule, because changing a trigger's text rebuilds it on the live ledger.
+const COUNTED_ROW: &str = "NOT EXISTS (SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)";
+
+/// A stamp that starts with a date. Only these bound a group's window: a stamp with no date (an empty `ts`, or a malformed
+/// one) still counts its row, but gives the row no window date.
+const DATED_TS: &str = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'";
+
+/// The counted rows grouped per (source, model, account, kind), with the first and last stamp of each group.
+pub fn model_rows_sql() -> String {
+  format!(
+    "SELECT source, model, account, kind, COUNT(*) AS calls, SUM(in_fresh) AS in_fresh, SUM(cache_write) AS cache_write, \
+     SUM(cache_read) AS cache_read, SUM(in_unsplit) AS in_unsplit, SUM(output) AS output, \
+     MIN(CASE WHEN ts GLOB {DATED_TS} THEN ts END) AS first, MAX(CASE WHEN ts GLOB {DATED_TS} THEN ts END) AS last \
+     FROM usage u WHERE {COUNTED_ROW} GROUP BY source, model, account, kind"
+  )
+}
+
+/// The counted rows of the window `?1 <= ts < ?2` (UTC text), grouped as `model_rows_sql` groups them. A week carries
+/// no stamps, so its rows have none.
+pub fn week_rows_sql() -> String {
+  format!(
+    "SELECT source, model, account, kind, COUNT(*) AS calls, SUM(in_fresh) AS in_fresh, SUM(cache_write) AS cache_write, \
+     SUM(cache_read) AS cache_read, SUM(in_unsplit) AS in_unsplit, SUM(output) AS output, \
+     NULL AS first, NULL AS last \
+     FROM usage u WHERE {COUNTED_ROW} AND u.ts >= ?1 AND u.ts < ?2 GROUP BY source, model, account, kind"
+  )
+}
+
+/// One group's counted rows in the window `?5 <= ts < ?6` (UTC text), for the group `?1` kind, `?2` source, `?3` model,
+/// `?4` account. The group's prefix of `usage_group_cover` makes this a range seek, so a boundary slice costs one seek.
+pub fn group_slice_sql() -> String {
+  format!(
+    "SELECT ?2 AS source, ?3 AS model, ?4 AS account, ?1 AS kind, COUNT(*) AS calls, \
+     COALESCE(SUM(in_fresh), 0) AS in_fresh, COALESCE(SUM(cache_write), 0) AS cache_write, \
+     COALESCE(SUM(cache_read), 0) AS cache_read, COALESCE(SUM(in_unsplit), 0) AS in_unsplit, \
+     COALESCE(SUM(output), 0) AS output, NULL AS first, NULL AS last \
+     FROM usage u WHERE u.kind = ?1 AND u.source = ?2 AND u.model = ?3 AND u.account = ?4 \
+     AND u.ts >= ?5 AND u.ts < ?6 AND {COUNTED_ROW}"
+  )
+}
+
+/// The first stamp of a group within its first UTC day and the last stamp within its last day (`?5` and `?6`, as
+/// `day` values), counted rows only. Each subquery seeks the group's prefix of `usage_group_cover` to one day.
+pub fn group_edge_sql() -> String {
+  format!(
+    "SELECT (SELECT MIN(u.ts) FROM usage u WHERE u.kind = ?1 AND u.source = ?2 AND u.model = ?3 AND u.account = ?4 \
+       AND u.ts >= ?5 AND u.ts < date(?5, '+1 day') AND {COUNTED_ROW}), \
+     (SELECT MAX(u.ts) FROM usage u WHERE u.kind = ?1 AND u.source = ?2 AND u.model = ?3 AND u.account = ?4 \
+       AND u.ts >= ?6 AND u.ts < date(?6, '+1 day') AND {COUNTED_ROW})"
+  )
+}
+
+/// The aggregate's rows of the days `?1 <= day < ?2`, summed per group. Whole UTC days only: the week read adds the
+/// boundary slices of its two end days.
+pub const AGG_WEEK_SQL: &str = r#"
 SELECT source, model, account, kind,
-       COUNT(*) AS calls,
+       SUM(calls) AS calls,
        SUM(in_fresh) AS in_fresh,
        SUM(cache_write) AS cache_write,
        SUM(cache_read) AS cache_read,
        SUM(in_unsplit) AS in_unsplit,
        SUM(output) AS output,
-       MIN(NULLIF(SUBSTR(ts, 1, 10), '')) AS first,
-       MAX(NULLIF(SUBSTR(ts, 1, 10), '')) AS last
-FROM usage u
-
-WHERE NOT EXISTS (
-  SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
-  WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)
-
+       NULL AS first,
+       NULL AS last
+FROM usage_agg
+WHERE day >= ?1 AND day < ?2
 GROUP BY source, model, account, kind
 "#;
 
@@ -212,8 +264,8 @@ SELECT source, model, account, kind,
        SUM(cache_read) AS cache_read,
        SUM(in_unsplit) AS in_unsplit,
        SUM(output) AS output,
-       MIN(NULLIF(day, '')) AS first,
-       MAX(NULLIF(day, '')) AS last
+       MIN(CASE WHEN day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN day END) AS first,
+       MAX(CASE WHEN day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN day END) AS last
 FROM usage_agg
 GROUP BY source, model, account, kind
 "#;

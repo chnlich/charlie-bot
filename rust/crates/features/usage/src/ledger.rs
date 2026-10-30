@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::count::Count;
+use crate::pacific::{self, Week};
 use crate::sql;
 
 const LOCK_WAIT_SECONDS: u64 = 30;
@@ -19,8 +20,22 @@ const LOCK_WAIT_SECONDS: u64 = 30;
 pub struct LedgerAccount {
   pub name: String,
   pub calls: i64,
+  pub in_fresh: Count,
+  pub cache_write: Count,
+  pub cache_read: Count,
+  pub in_unsplit: Count,
   pub output: Count,
   pub total: Count,
+}
+
+/// What one render of the usage page reads, every part from one read transaction: the all-time rows and the native
+/// starts, the last Pacific week and the week before it, and the last capture.
+pub struct PageSnapshot {
+  pub rows: Vec<LedgerRow>,
+  pub native_starts: BTreeMap<String, String>,
+  pub week_rows: Vec<LedgerRow>,
+  pub previous_week_rows: Vec<LedgerRow>,
+  pub last_capture: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +146,67 @@ struct GroupRow {
   output: Count,
   first: Option<String>,
   last: Option<String>,
+}
+
+/// The accumulators of every (source, model) the page reads.
+type Accs = BTreeMap<(String, String), ModelSum>;
+
+/// The identity of a group of counted rows: the (source, model, account, kind) the grouped reads key on.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct GroupKey(String, String, String, &'static str);
+
+impl GroupKey {
+  fn of(row: &GroupRow) -> Self {
+    GroupKey(row.source.clone(), row.model.clone(), row.account.clone(), kind_value(row.kind))
+  }
+}
+
+impl GroupRow {
+  /// A row of `group`'s identity with no rows counted.
+  fn zero_of(group: &GroupRow) -> Self {
+    GroupRow {
+      source: group.source.clone(),
+      model: group.model.clone(),
+      account: group.account.clone(),
+      kind: group.kind,
+      calls: 0,
+      in_fresh: Count::Int(0),
+      cache_write: Count::Int(0),
+      cache_read: Count::Int(0),
+      in_unsplit: Count::Int(0),
+      output: Count::Int(0),
+      first: None,
+      last: None,
+    }
+  }
+
+  fn add(&mut self, other: &GroupRow) -> anyhow::Result<()> {
+    self.calls += other.calls;
+    self.in_fresh = self.in_fresh.add(other.in_fresh, "week total")?;
+    self.cache_write = self.cache_write.add(other.cache_write, "week total")?;
+    self.cache_read = self.cache_read.add(other.cache_read, "week total")?;
+    self.in_unsplit = self.in_unsplit.add(other.in_unsplit, "week total")?;
+    self.output = self.output.add(other.output, "week total")?;
+    Ok(())
+  }
+
+  fn subtract(&mut self, other: &GroupRow) -> anyhow::Result<()> {
+    self.calls -= other.calls;
+    self.in_fresh = self.in_fresh.sub(other.in_fresh, "week total")?;
+    self.cache_write = self.cache_write.sub(other.cache_write, "week total")?;
+    self.cache_read = self.cache_read.sub(other.cache_read, "week total")?;
+    self.in_unsplit = self.in_unsplit.sub(other.in_unsplit, "week total")?;
+    self.output = self.output.sub(other.output, "week total")?;
+    Ok(())
+  }
+}
+
+fn fold_rows(groups: Vec<GroupRow>) -> anyhow::Result<Accs> {
+  let mut accs = BTreeMap::new();
+  for group in groups {
+    fold_grouped_row(&mut accs, group)?;
+  }
+  Ok(accs)
 }
 
 pub fn default_ledger_path(charliebot_home: &Path) -> PathBuf {
@@ -271,11 +347,36 @@ impl UsageLedger {
   }
 
   pub fn model_rows_with_native_starts(&mut self) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String, String>)> {
-    let accs = match self.agg_accs()? {
-      Some(accs) => accs,
-      None => self.grouped_accs(sql::MODEL_ROWS_SQL)?,
-    };
-    rows_from_accs(accs)
+    let agg = self.agg_ready()?;
+    rows_from_accs(self.all_time_accs(agg)?)
+  }
+
+  /// Everything one usage page render reads, from one read transaction. The aggregate's readiness decides the path of
+  /// every read in it: the all-time rows and the weeks both take the aggregate when it serves, and the table otherwise.
+  pub fn read_page(&mut self, week: Week, host: &str) -> anyhow::Result<PageSnapshot> {
+    let previous = week.previous()?;
+    // A backfill writes, so it runs before the snapshot opens: a write cannot nest in the read transaction.
+    let agg = self.agg_ready()?;
+    self.conn.execute_batch("BEGIN")?;
+    let outcome = self.read_in_snapshot(agg, week, previous, host);
+    let closed = self.conn.execute_batch(if outcome.is_ok() { "COMMIT" } else { "ROLLBACK" });
+    match (outcome, closed) {
+      (Ok(snapshot), Ok(())) => Ok(snapshot),
+      (Ok(_), Err(error)) => Err(error.into()),
+      (Err(error), Ok(())) => Err(error),
+      (Err(error), Err(closing)) => Err(error.context(format!("closing the read transaction also failed: {closing}"))),
+    }
+  }
+
+  fn read_in_snapshot(&self, agg: bool, week: Week, previous: Week, host: &str) -> anyhow::Result<PageSnapshot> {
+    let (rows, native_starts) = rows_from_accs(self.all_time_accs(agg)?)?;
+    Ok(PageSnapshot {
+      rows,
+      native_starts,
+      week_rows: rows_from_accs(self.week_accs(agg, week)?)?.0,
+      previous_week_rows: rows_from_accs(self.week_accs(agg, previous)?)?.0,
+      last_capture: self.last_capture_at(host)?,
+    })
   }
 
   fn refresh_agg_triggers(&mut self) -> anyhow::Result<()> {
@@ -319,7 +420,9 @@ impl UsageLedger {
     Ok(())
   }
 
-  fn agg_accs(&mut self) -> anyhow::Result<Option<BTreeMap<(String, String), ModelSum>>> {
+  /// Whether the aggregate answers reads now. An aggregate that is not ready is backfilled here, and this read takes the
+  /// table pass, as the first read after a backfill always has.
+  fn agg_ready(&mut self) -> anyhow::Result<bool> {
     let ready = self
       .conn
       .query_row("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'", [], |_| Ok(()))
@@ -328,10 +431,85 @@ impl UsageLedger {
     let agg_empty = self.conn.query_row("SELECT 1 FROM usage_agg LIMIT 1", [], |_| Ok(())).optional()?.is_none();
     let usage_nonempty = self.conn.query_row("SELECT 1 FROM usage LIMIT 1", [], |_| Ok(())).optional()?.is_some();
     if ready && !(agg_empty && usage_nonempty) {
-      return self.grouped_accs(sql::AGG_ROWS_SQL).map(Some);
+      return Ok(true);
     }
     self.backfill_agg()?;
-    Ok(None)
+    Ok(false)
+  }
+
+  /// The all-time accumulators: the aggregate with exact edge stamps when it serves, else the table's grouped pass.
+  fn all_time_accs(&self, agg: bool) -> anyhow::Result<Accs> {
+    if !agg {
+      return fold_rows(self.group_rows(&sql::model_rows_sql(), [])?);
+    }
+    let edge_sql = sql::group_edge_sql();
+    let mut groups = self.group_rows(sql::AGG_ROWS_SQL, [])?;
+    for group in &mut groups {
+      let (Some(first_day), Some(last_day)) = (group.first.clone(), group.last.clone()) else {
+        continue;
+      };
+      let (first, last) = self.conn.query_row(
+        &edge_sql,
+        params![kind_value(group.kind), group.source, group.model, group.account, first_day, last_day],
+        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+      )?;
+      group.first = first;
+      group.last = last;
+    }
+    fold_rows(groups)
+  }
+
+  /// The counted rows of one Pacific week: the table's window scan when the aggregate is not serving, else the
+  /// aggregate's whole days plus the two boundary slices.
+  fn week_accs(&self, agg: bool, week: Week) -> anyhow::Result<Accs> {
+    let lo = Week::utc_text(week.start);
+    let hi = Week::utc_text(week.end);
+    if !agg {
+      return fold_rows(self.group_rows(&sql::week_rows_sql(), params![lo, hi])?);
+    }
+    fold_rows(self.agg_week_rows(week)?)
+  }
+
+  /// A week from the aggregate: the days `[first UTC day, last UTC day)` of the aggregate, minus the slice of the first
+  /// day before the week starts, plus the slice of the last day before the week ends. Every group of the aggregate is
+  /// visited, so a group that only the last day's slice reaches is counted too.
+  fn agg_week_rows(&self, week: Week) -> anyhow::Result<Vec<GroupRow>> {
+    let first_day = Week::utc_day(week.start);
+    let last_day = Week::utc_day(week.end);
+    let mut whole_days: BTreeMap<GroupKey, GroupRow> = self
+      .group_rows(sql::AGG_WEEK_SQL, params![first_day, last_day])?
+      .into_iter()
+      .map(|row| (GroupKey::of(&row), row))
+      .collect();
+    let slice_sql = sql::group_slice_sql();
+    let head = (format!("{first_day}T00:00:00"), Week::utc_text(week.start));
+    let tail = (format!("{last_day}T00:00:00"), Week::utc_text(week.end));
+    let mut rows = Vec::new();
+    for group in self.group_rows(sql::AGG_ROWS_SQL, [])? {
+      let key = GroupKey::of(&group);
+      let mut row = whole_days.remove(&key).unwrap_or_else(|| GroupRow::zero_of(&group));
+      row.subtract(&self.group_slice(&slice_sql, &group, &head)?)?;
+      row.add(&self.group_slice(&slice_sql, &group, &tail)?)?;
+      if row.calls > 0 {
+        rows.push(row);
+      }
+    }
+    Ok(rows)
+  }
+
+  fn group_slice(&self, slice_sql: &str, group: &GroupRow, bounds: &(String, String)) -> anyhow::Result<GroupRow> {
+    Ok(self.conn.query_row(
+      slice_sql,
+      params![kind_value(group.kind), group.source, group.model, group.account, bounds.0, bounds.1],
+      read_group_row,
+    )?)
+  }
+
+  /// Runs one grouped read and returns its rows.
+  fn group_rows(&self, query: &str, params: impl rusqlite::Params) -> anyhow::Result<Vec<GroupRow>> {
+    let mut statement = self.conn.prepare(query)?;
+    let rows = statement.query_map(params, read_group_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
   }
 
   fn backfill_agg(&mut self) -> anyhow::Result<()> {
@@ -357,17 +535,6 @@ impl UsageLedger {
     }
     self.conn.execute_batch("COMMIT")?;
     Ok(())
-  }
-
-  fn grouped_accs(&self, query: &str) -> anyhow::Result<BTreeMap<(String, String), ModelSum>> {
-    let mut statement = self.conn.prepare(query)?;
-    let rows = statement.query_map([], read_group_row)?;
-    let mut accs = BTreeMap::new();
-    for row in rows {
-      let row = row?;
-      fold_grouped_row(&mut accs, row)?;
-    }
-    Ok(accs)
   }
 
   #[cfg(test)]
@@ -449,27 +616,41 @@ fn fold_grouped_row(accs: &mut BTreeMap<(String, String), ModelSum>, row: GroupR
   Ok(())
 }
 
-fn rows_from_accs(
-  accs: BTreeMap<(String, String), ModelSum>,
-) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String, String>)> {
-  let mut starts = BTreeMap::new();
+/// The Pacific day of a stored stamp, or nothing for a group that has none.
+fn pacific_day(ts: &str) -> anyhow::Result<String> {
+  if ts.is_empty() { Ok(String::new()) } else { pacific::day_of_ts(ts) }
+}
+
+fn rows_from_accs(accs: Accs) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String, String>)> {
+  let mut starts: BTreeMap<String, String> = BTreeMap::new();
   let mut rows = Vec::with_capacity(accs.len());
   for ((source, model), acc) in accs {
     if !acc.native_first.is_empty() {
+      let native_day = pacific::day_of_ts(&acc.native_first)?;
       starts
         .entry(source.clone())
         .and_modify(|start: &mut String| {
-          if acc.native_first.as_str() < start.as_str() {
-            *start = acc.native_first.clone();
+          if native_day < *start {
+            *start = native_day.clone();
           }
         })
-        .or_insert_with(|| acc.native_first.clone());
+        .or_insert(native_day);
     }
     let mut accounts = Vec::with_capacity(acc.accounts.len());
     for (name, sums) in acc.accounts {
-      accounts.push(LedgerAccount { name, calls: sums.calls, output: sums.output, total: sums.total()? });
+      accounts.push(LedgerAccount {
+        name,
+        calls: sums.calls,
+        in_fresh: sums.in_fresh,
+        cache_write: sums.cache_write,
+        cache_read: sums.cache_read,
+        in_unsplit: sums.in_unsplit,
+        output: sums.output,
+        total: sums.total()?,
+      });
     }
     accounts.sort_by(|left, right| right.total.compare(left.total).then_with(|| left.name.cmp(&right.name)));
+    let (first, last) = (pacific_day(&acc.first)?, pacific_day(&acc.last)?);
     rows.push(LedgerRow {
       source,
       model,
@@ -480,8 +661,8 @@ fn rows_from_accs(
       output: acc.sums.output,
       calls: acc.sums.calls,
       total: acc.sums.total()?,
-      first: acc.first,
-      last: acc.last,
+      first,
+      last,
       fallback_calls: acc.fallback_calls,
       fallback_output: acc.fallback_output,
       accounts,

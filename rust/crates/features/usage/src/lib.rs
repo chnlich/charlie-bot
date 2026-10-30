@@ -9,6 +9,7 @@ mod count;
 mod ext_usage;
 pub mod ledger;
 mod ndjson;
+mod pacific;
 mod page;
 mod page_rows;
 mod poller;

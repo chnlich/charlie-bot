@@ -112,14 +112,6 @@ fn message_text(message: Option<&Value>) -> String {
     .collect()
 }
 
-/// The newest summary of an iteration's events, or the fixed no-summary sentence. The events arrive newest first.
-pub fn extract_iteration_summary(events_newest_first: &[Value], iteration: i64, status: &str) -> String {
-  events_newest_first
-    .iter()
-    .find_map(summary_text)
-    .unwrap_or_else(|| format!("Iteration {iteration} {status} (no summary available)."))
-}
-
 /// Stream the newest summary from a reverse event walk.
 pub fn extract_iteration_summary_from_events(
   events_newest_first: impl IntoIterator<Item = Value>,
@@ -132,16 +124,6 @@ pub fn extract_iteration_summary_from_events(
     }
   }
   Ok(format!("Iteration {iteration} {status} (no summary available)."))
-}
-
-/// The one pass over the newest-first events that settles both the quota blocker and the summary. The walk stops once
-/// both are known.
-pub fn failed_iteration_judgments(
-  events_newest_first: &[Value],
-  iteration: i64,
-  status: &str,
-) -> anyhow::Result<(Option<String>, String)> {
-  failed_iteration_judgments_from_events(events_newest_first.iter().cloned(), iteration, status)
 }
 
 /// The one pass over a streamed newest-first event walk that settles both the quota blocker and the summary.
@@ -244,11 +226,6 @@ fn event_text(event: &Value) -> String {
     }
   }
   parts.join("\n")
-}
-
-/// The iteration log's candidate events, newest first, as a compatibility collection.
-pub fn newest_first_events(events_path: &Path) -> anyhow::Result<Vec<Value>> {
-  Ok(newest_first_event_iter(events_path)?.collect())
 }
 
 /// The iteration log's candidate events, newest first. Python uses the same bounded head proof before parsing a line

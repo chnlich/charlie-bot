@@ -554,11 +554,6 @@ impl Store {
     Ok(Some(meta.as_ref().clone()))
   }
 
-  /// The generation that changes when the session listing's metadata corpus changes.
-  pub fn listings_revision(&self) -> u64 {
-    self.listings_revision.load(Ordering::Acquire)
-  }
-
   /// Return the directory where the live event log is stored.
   pub fn chat_events_path(&self, session_id: &str) -> PathBuf {
     layout::chat_events_path(&self.session_dir(session_id))

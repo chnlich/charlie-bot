@@ -46,9 +46,5 @@ name = "artifact-plan-diff"
 path = "src/bin/plan_diff_runner.rs"
 
 [[bin]]
-name = "artifact-check-fixture"
-path = "src/bin/artifact_check_fixture.rs"
-
-[[bin]]
 name = "chrome-stub"
 path = "src/bin/chrome_stub.rs"

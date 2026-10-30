@@ -1,6 +1,6 @@
-//! tools/improve/mock-home.py, run for real under `python3 -I`: one seed gives byte-identical output, and the event-log
-//! sizes of a mid-size run follow the production shape. Each test writes its own output into a sandbox it owns.
-//! The served checks of the same generator run in the release tests, against a trial server.
+//! The `mock-home` program's generator, run for real: one seed gives byte-identical output, and the event-log sizes of
+//! a mid-size run follow the production shape. Each test writes its own output into a sandbox it owns. The served checks
+//! of the same generator run in the release tests, against a trial server.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 use charliebot_shell_harness::{self as harness, Sandbox};
 
 fn mock_home() -> PathBuf {
-  harness::repo_root().join("tools/improve/mock-home.py")
+  harness::built_binary("mock-home")
 }
 
-/// Runs mock-home.py generate into `output`, which must be empty. The run must succeed.
+/// Runs `mock-home generate` into `output`, which must be empty. The run must succeed.
 fn generate(sandbox: &Sandbox, output: &Path, sessions: &str, seed: &str) {
-  let mut command = harness::command("python3", &sandbox.env());
-  command.arg("-I").arg(mock_home()).arg("generate").arg(output).args(["--sessions", sessions, "--seed", seed]);
+  let mut command = harness::command(mock_home(), &sandbox.env());
+  command.arg("generate").arg(output).args(["--sessions", sessions, "--seed", seed]);
   let run = harness::run(&mut command);
   assert_eq!(run.code, 0, "{}", run.describe());
 }

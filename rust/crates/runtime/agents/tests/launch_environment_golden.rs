@@ -62,7 +62,7 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
     let rewritten = agent_environment::agent_environment(&case.process_env, &case.server_bin_dir).unwrap();
     let startup = StartupState::default();
     startup.insert(rewritten).unwrap();
-    let base = agent_environment::require_agent_base_environment(&startup).unwrap();
+    let base = startup.require::<agent_environment::AgentBaseEnvironment>().unwrap();
     let backend_option = backend_option(case.backend_type);
     let backend = if case.backend_type == "codex" {
       CodexFactory::new(CodexHost {

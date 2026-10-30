@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
 use charliebot_registry::backend::Env;
-use charliebot_registry::context::{FeatureContext, StartupState, StartupStop};
+use charliebot_registry::context::{FeatureContext, StartupStop};
 use futures_util::future::BoxFuture;
 
 use crate::transport::cgroup;
@@ -74,11 +74,6 @@ pub fn replace_process_environment(server_bin_dir: &Path) -> anyhow::Result<Agen
     unsafe { env::set_var(name, value) };
   }
   Ok(agent)
-}
-
-/// Require the agent environment owned by a startup state.
-pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<Arc<AgentBaseEnvironment>> {
-  Ok(startup.require::<AgentBaseEnvironment>()?)
 }
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative

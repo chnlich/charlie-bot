@@ -19,12 +19,13 @@
 # cron task file under $CHARLIEBOT_HOME/config.d/cron.d. A round worker is a child session whose id
 # names no task file, so no round reaches this host through that branch.
 #
-# The round path reads five inputs on this host and writes one directory:
+# The round path reads six inputs on this host and writes one directory:
 #   - the instructions file that --append-system-prompt-file names;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which tools/improve/inflight-files.sh prints here;
 #   - the worker session's metadata.json, for task_parent_id;
-#   - the cron task file of that parent session, for prompt_file.
+#   - the cron task file of that parent session, for prompt_file;
+#   - the origin URL of this launcher's checkout, which the runner clones from.
 # It writes only ~/improve/<direction>/evidence/.
 #
 # Exit codes: claude's exit code; 1 a local failure, such as a missing input file or no local
@@ -197,7 +198,11 @@ pattern_file="$PROFILE_HOME/skills_leak_patterns.local.txt"
 [[ -r $pattern_file ]] || fail 1 "the leak pattern file is missing: $pattern_file"
 cp -- "$pattern_file" "$payload/skills_leak_patterns.local.txt"
 cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
-cp -- "$SCRIPT_DIR/landlock_exec.py" "$payload/landlock_exec.py"
+# The runner clones its own checkout from this origin, so the round tools are built from the
+# runtime clone's repository and not from the direction clone's configuration.
+runtime_origin=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) || runtime_origin=
+[[ -n $runtime_origin ]] || fail 1 'cannot read the origin of this launcher checkout'
+printf '%s\n' "$runtime_origin" >"$payload/origin"
 
 # The in-flight list comes from this host: the worktrees of other lines exist only here.
 if ! "$SCRIPT_DIR/inflight-files.sh" "improve/$direction/" >"$payload/inflight-files.txt"; then

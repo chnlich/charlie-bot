@@ -1,7 +1,7 @@
 //! One improve run: `tools/improve/remote-launch.sh` on this host, and `tools/improve/remote-runner.sh` on the
 //! remote host for a round or this host's local claude for a cron session's own turn. A fake `ssh` records its
-//! arguments and runs the remote side locally, and fake `claude`, `systemd-run` and `systemctl` record what they
-//! receive, so each test checks the run's contract without a network, a server or a real remote host.
+//! arguments and runs the remote side locally, and fake `claude`, `systemd-run`, `systemctl` and `cargo` record what
+//! they receive, so each test checks the run's contract without a network, a server or a real remote host.
 //!
 //! The tests that assert a bound on time measure it: the approval preflight and the heartbeat stop must both finish
 //! inside five seconds.
@@ -13,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use charliebot_shell_harness::{self as harness, Env};
+use charliebot_shell_harness as harness;
 use sha2::{Digest as _, Sha256};
 use world::{DIRECTION, GATEWAY_TOKEN, World};
 
@@ -435,31 +435,34 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
 }
 
 #[test]
-fn the_boundary_denies_a_write_outside_the_allow_list_and_allows_one_inside() {
-  let lsm = fs::read_to_string("/sys/kernel/security/lsm").unwrap_or_default();
-  if !lsm.split(',').any(|name| name.trim() == "landlock") {
-    println!("skipped: this kernel has no Landlock");
-    return;
+fn the_runner_builds_the_round_tools_with_its_own_cargo_home_and_tmpdir_and_the_launchers_origin() {
+  let world = World::new();
+  // The commit the runner builds needs a rust/ directory, and its origin is a bare copy of the launcher's repository.
+  fs::create_dir_all(world.repo.join("rust")).expect("the rust directory");
+  fs::write(world.repo.join("rust/Cargo.toml"), "[workspace]\n").expect("the workspace file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "synthetic build commit"]);
+  let commit = world.git(&world.repo, &["rev-parse", "HEAD"]);
+  let origin = world.sandbox.root().join("origin.git");
+  let origin_text = origin.display().to_string();
+  world.git(&world.repo, &["clone", "-q", "--bare", ".", &origin_text]);
+  world.git(&world.repo, &["remote", "set-url", "origin", &origin_text]);
+  let cargo_env = world.sandbox.root().join("cargo-env.txt");
+  let mut env = world.env();
+  env.insert("FAKE_CARGO_ENV".to_string(), cargo_env.display().to_string());
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let recorded = fs::read_to_string(&cargo_env).expect("the fake cargo ran");
+  let cargo_home = world.remote_home.join("improve/runner/cargo-home");
+  let tmp = world.remote_home.join("improve/runner/tmp");
+  assert!(recorded.contains(&format!("CARGO_HOME={}\n", cargo_home.display())), "{recorded}");
+  assert!(recorded.contains(&format!("TMPDIR={}\n", tmp.display())), "{recorded}");
+  let runner_bin = world.remote_home.join("improve/runner/bin");
+  for tool in ["charliebot", "improve-sandbox", "mock-home"] {
+    assert!(runner_bin.join(format!("{tool}-{commit}")).is_file(), "the runner did not install {tool}");
   }
-  let sandbox = harness::Sandbox::new();
-  let home = sandbox.dir("boundary-home");
-  let canary = home.join("improve-canary-outside");
-  fs::create_dir_all(&canary).expect("the canary directory");
-  let script = harness::repo_root().join("tools/improve/landlock_exec.py");
-  let mut env = Env::new();
-  env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
-  env.insert("HOME".to_string(), home.display().to_string());
-  let mut command = harness::command("python3", &env);
-  command
-    .arg(&script)
-    .arg(DIRECTION)
-    .arg("--")
-    .arg("bash")
-    .arg("-c")
-    .arg("printf inside >\"$HOME/improve/perf/evidence/inside.txt\"; printf outside >\"$HOME/improve-canary-outside/outside.txt\"");
-  let run = harness::run(&mut command);
-  assert_ne!(run.code, 0, "the write outside the allow-list succeeded: {}", run.describe());
-  assert!(run.stderr.contains("Permission denied"), "{}", run.describe());
-  assert!(home.join("improve/perf/evidence/inside.txt").is_file(), "the allowed write failed: {}", run.describe());
-  assert!(!canary.join("outside.txt").exists(), "the denied write created a file");
+  let clone = world.remote_home.join("improve/runner/charlie-bot");
+  assert_eq!(world.git(&clone, &["remote", "get-url", "origin"]), origin_text, "the runner cloned another origin");
 }

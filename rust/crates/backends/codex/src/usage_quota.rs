@@ -1,6 +1,6 @@
 //! Codex's quota account for the quota panel (`src/backends/codex/usage_quota.py`). The payload is read from the
-//! rollouts under `<codex home>/sessions`: the newest plan-pool `token_count` event gives the rate-limit windows and
-//! credits, and the 24-hour and 7-day spend is priced from every recent rollout's per-request token counts. Nothing is
+//! rollouts under `<codex home>/sessions`. The newest plan-pool `token_count` event gives the rate-limit windows and
+//! credits. The 24-hour and 7-day spend is priced from every recent rollout's per-request token counts. Nothing is
 //! written, and no network call is made.
 
 use std::collections::HashSet;

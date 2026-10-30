@@ -1,10 +1,10 @@
 //! Cross-implementation checks of the codex package against the recorded output of `codex_python_reference.py`. The
 //! Rust port runs the same synthetic inputs, and the test fails with every section that differs.
 //!
-//! Sections: the argv/env/stdin/instructions matrix, built through the registry factory (96 cases); the environment
-//! cases (4); one stream of translated events that reaches every item handler; the usage records of one synthetic
-//! rollout; the resolver over synthetic rollouts and sessions (9 cases); the quota fetch over three synthetic homes
-//! (3); and the cost of a table of usages (45 cases).
+//! Sections: the argv/env/stdin/instructions matrix, built through the registry factory (96 cases), and the
+//! environment cases (4). One stream of translated events reaches every item handler. The usage records come from one
+//! synthetic rollout. The resolver runs over synthetic rollouts and sessions (9 cases), the quota fetch over three
+//! synthetic homes (3), and the cost over a table of usages (45 cases).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -385,8 +385,8 @@ fn rollout_path(codex_home: &Path, thread: &str, started: &str) -> PathBuf {
   codex_home.join("sessions/2026/10/18").join(format!("rollout-{started}-{thread}.jsonl"))
 }
 
-/// The read fixture: a root session, two priced totals, a duplicate, a zero restatement, a null-info event, a blank
-/// line, a marker line that does not parse, and a trailing fragment with no newline.
+/// The read fixture: a root session, two priced totals, a duplicate, a zero restatement and a null-info event. It
+/// also carries a blank line, a marker line that does not parse, and a trailing fragment with no newline.
 fn read_text() -> String {
   let mut text = lines_text(&[
     session_meta("2026-10-18T09:00:00Z", READ_ROOT),
@@ -418,7 +418,7 @@ fn thread_text(root: &str, model: &str, last: [i64; 3], total: [i64; 3]) -> Stri
   ])
 }
 
-/// The spend rows and the plan-pool reading of one rollout. The spend rows span a day, a week and a ten-day gap; a
+/// The spend rows and the plan-pool reading of one rollout. The spend rows span a day, a week and a ten-day gap. A
 /// model-level pool reading and a malformed row sit beside the plan reading the quota fetch must choose.
 fn plan_text(thread: &str, now: OffsetDateTime) -> String {
   let at = |seconds: i64| rfc3339(now + Duration::seconds(seconds));

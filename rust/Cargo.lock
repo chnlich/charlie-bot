@@ -943,6 +943,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-mock-home"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-cli-common",
+ "chrono",
+ "clap",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "charliebot-openai-compatible"
 version = "0.1.0"
 dependencies = [

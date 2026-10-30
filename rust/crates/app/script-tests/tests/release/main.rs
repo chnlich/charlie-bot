@@ -632,11 +632,11 @@ impl ServeWorld {
     Self { sandbox, repo, release, commit, env }
   }
 
-  /// Writes a synthetic home of `sessions` sessions with mock-home.py generate, under the sandbox, and returns it.
+  /// Writes a synthetic home of `sessions` sessions with `mock-home generate`, under the sandbox, and returns it.
   fn seed_home(&self, name: &str, sessions: &str) -> PathBuf {
     let seed = self.sandbox.dir(name);
-    let mut command = harness::command("python3", &self.env);
-    command.arg("-I").arg(mock_home()).arg("generate").arg(&seed).args(["--sessions", sessions, "--seed", "3"]);
+    let mut command = harness::command(mock_home(), &self.env);
+    command.arg("generate").arg(&seed).args(["--sessions", sessions, "--seed", "3"]);
     let run = harness::run(&mut command);
     assert_eq!(run.code, 0, "{}", run.describe());
     seed
@@ -665,12 +665,12 @@ impl ServeWorld {
 }
 
 fn mock_home() -> PathBuf {
-  harness::repo_root().join("tools/improve/mock-home.py")
+  harness::built_binary("mock-home")
 }
 
-/// The command that reads a seeded home back: mock-home.py check against the server that the trial started.
+/// The command that reads a seeded home back: `mock-home check` against the server that the trial started.
 const CHECK_SERVED_HOME: &[&str] =
-  &["sh", "-c", "python3 -I \"$MOCK_HOME_TOOL\" check \"$MOCK_HOME_SEED\" \"$CHARLIEBOT_SERVE_URL\""];
+  &["sh", "-c", "\"$MOCK_HOME_TOOL\" check \"$MOCK_HOME_SEED\" \"$CHARLIEBOT_SERVE_URL\""];
 
 #[test]
 fn test_trial_serve_seeded_home_passes_the_mock_home_check() {

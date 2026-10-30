@@ -151,8 +151,10 @@ fn body_errors(name: &str) -> Vec<FieldError> {
   }
 }
 
+/// The 422 body's bytes, as `validation::response` renders them.
 fn rendered(errors: &[FieldError]) -> String {
-  String::from_utf8(validation::detail_bytes(errors)).expect("the 422 body is UTF-8")
+  String::from_utf8(charliebot_compat::json::starlette_bytes(&validation::detail(errors)))
+    .expect("the 422 body is UTF-8")
 }
 
 #[test]

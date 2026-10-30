@@ -19,7 +19,6 @@ use charliebot_core::pyfmt;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
-use crate::json;
 use crate::responses;
 
 /// One step of an error's `loc`: a field name, or a list index (`["body", "tags", 0]`).
@@ -292,11 +291,6 @@ fn loc_value(loc: &Loc) -> Value {
 /// The 422 body: `{"detail": [...]}` with one entry per error.
 pub fn detail(errors: &[FieldError]) -> Value {
   json!({"detail": errors.iter().map(FieldError::entry).collect::<Vec<Value>>()})
-}
-
-/// The 422 body's bytes: FastAPI answers with a starlette `JSONResponse`.
-pub fn detail_bytes(errors: &[FieldError]) -> Vec<u8> {
-  json::starlette_bytes(&detail(errors))
 }
 
 /// FastAPI's answer to a request with `errors`: status 422 and the `detail` body.

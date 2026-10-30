@@ -948,6 +948,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "charliebot-cli-common",
+ "charliebot-session-api",
+ "charliebot-store",
  "chrono",
  "clap",
  "reqwest 0.13.5",

@@ -25,7 +25,7 @@
   },
   "responses": [],
   "expect": {
-    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-options\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\ncold read of {root}/page.html\npage sha256 0d6d95fc03968a7ef42af03285e87e10858b1cbe3491dcc1a6a3aa52834c17a5\nattempt alpha failed: RuntimeError: Codex one-shot failed (exit 1): synthetic backend failure\nattempt beta failed: RuntimeError: Codex one-shot failed (exit 1): synthetic backend failure\nevery model failed (2 tried)\n",
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-options\nok fork-demos\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\ncold read of {root}/page.html\npage sha256 0d6d95fc03968a7ef42af03285e87e10858b1cbe3491dcc1a6a3aa52834c17a5\nattempt alpha failed: RuntimeError: Codex one-shot failed (exit 1): synthetic backend failure\nattempt beta failed: RuntimeError: Codex one-shot failed (exit 1): synthetic backend failure\nevery model failed (2 tried)\n",
     "stderr": "",
     "exit": 1,
     "requests": []

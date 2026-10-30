@@ -1,0 +1,57 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool:\n    - claude-light\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "artifacts/waiting_monitor.html": "<html><body><section><h2><span class=\"n\">1</span> Waiting</h2>\n<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Where on the page should the monitor live?</p>\n<ul>\n<li>「top banner」: a monitor strip stays pinned at the top of the page.<div class=\"demo\"><p style=\"border:1px solid #888;padding:4px\">monitor · tokens 1,204 · 3 workers</p></div></li>\n<li>「sidebar」: the monitor runs down a column beside the work.<div class=\"demo\"><p style=\"border-left:3px solid #1163c0;padding:4px\">sidebar · tokens 1,204</p></div></li>\n<li>「status bar」: one line at the bottom carries the monitor numbers.<div class=\"demo\"><p style=\"background:#eef1f5;padding:4px\">tokens 1,204 · 3 workers</p></div></li>\n<li>「separate page」: the monitor gets a page of its own, linked from the header.</li>\n</ul>\n<p class=\"rec\">Recommendation: 「top banner」.</p>\n<p class=\"trade\">Tradeoff: the banner takes vertical space; the separate page hides the numbers.</p>\n<details class=\"details-layer\"><summary>Why these four</summary><p>Every spot a monitor has occupied on a page of this kind, with its cost.</p></details>\n</div>\n</section></body></html>",
+    "status.json": "{\"waiting\": [{\"text\": \"Where should the monitor live?\", \"context\": \"The monitor page is ready now. The top banner is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/artifacts/waiting_monitor.html\"}]}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": [
+          {
+            "text": "Where should the monitor live?",
+            "context": "The monitor page is ready now. The top banner is recommended.",
+            "link": "http://localhost:9443/absolute_filepath{root}/artifacts/waiting_monitor.html"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "page {root}/artifacts/waiting_monitor.html fails its fork assertions:\nFAIL fork-demos: fork #1 (section '1 Waiting') option 「separate page」: the demo is missing\nNothing was stored.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Where should the monitor live?\", \"context\": \"The monitor page is ready now. The top banner is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/artifacts/waiting_monitor.html\"}]}"
+        }
+      }
+    ]
+  }
+}

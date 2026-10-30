@@ -15,7 +15,7 @@
   },
   "responses": [],
   "expect": {
-    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok foot-present\nok fork-open-shape\nok fork-options\nok fork-explainer\nok goal-budget 191 weighted chars (budget 240)\nFAIL page-height: headless_chrome_bin is required for plan registration: set it in the host config.yaml to the absolute path of a headless-chromium-compatible binary\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\n",
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok foot-present\nok fork-open-shape\nok fork-options\nok fork-demos\nok fork-explainer\nok goal-budget 191 weighted chars (budget 240)\nFAIL page-height: headless_chrome_bin is required for plan registration: set it in the host config.yaml to the absolute path of a headless-chromium-compatible binary\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\n",
     "stderr": "",
     "exit": 1,
     "requests": []

@@ -25,6 +25,7 @@ const EXPLAIN_FIGURES: &str = "explain-figures";
 const EXPLAIN_EXAMPLES: &str = "explain-examples";
 const FORK_OPEN_SHAPE: &str = "fork-open-shape";
 const FORK_OPTIONS: &str = "fork-options";
+const FORK_DEMOS: &str = "fork-demos";
 const FORK_EXPLAINER: &str = "fork-explainer";
 const FACT_ANCHORED: &str = "fact-anchored";
 const REQ_CHIPS: &str = "req-chips";
@@ -144,6 +145,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
+      FORK_DEMOS,
       FORK_EXPLAINER,
       GOAL_BUDGET,
       PAGE_HEIGHT,
@@ -159,6 +161,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
+      FORK_DEMOS,
       FORK_EXPLAINER,
       PAGE_HEIGHT,
       ORDINAL_NAMED,
@@ -172,6 +175,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       SECTIONS_NUMBERED,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
+      FORK_DEMOS,
       FORK_EXPLAINER,
       FACT_ANCHORED,
       REQ_CHIPS,
@@ -187,6 +191,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       SECTIONS_NUMBERED,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
+      FORK_DEMOS,
       FACT_ANCHORED,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -203,6 +208,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       EXPLAIN_EXAMPLES,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
+      FORK_DEMOS,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
@@ -213,6 +219,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       STYLE_VERBATIM,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
+      FORK_DEMOS,
       FORK_EXPLAINER,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -230,7 +237,7 @@ pub fn genre_from_file_name(file_name: &str) -> Option<&'static str> {
 
 /// The fork assertions a genre's set holds, in set order: the web status set gate runs exactly these.
 pub fn fork_assertions(genre: &str) -> Vec<&'static str> {
-  const FORK: [&str; 3] = [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_EXPLAINER];
+  const FORK: [&str; 4] = [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_DEMOS, FORK_EXPLAINER];
   assertion_set(genre)
     .map(|names| names.iter().copied().filter(|name| FORK.contains(name)).collect())
     .unwrap_or_default()
@@ -406,6 +413,7 @@ fn run_assertions_sync_with_user_text(
       EXPLAIN_EXAMPLES => check_explain_examples,
       FORK_OPEN_SHAPE => check_fork_open_shape,
       FORK_OPTIONS => check_fork_options,
+      FORK_DEMOS => check_fork_demos,
       FORK_EXPLAINER => check_fork_explainer,
       FACT_ANCHORED => check_fact_anchored,
       REQ_CHIPS => check_req_chips,
@@ -709,9 +717,29 @@ fn folded_ancestor(nodes: &[Element], element: usize, up_to: Option<usize>) -> b
   false
 }
 
-/// The `li` lines of one fork that no folded `details` holds: the options the page shows at open.
+/// Whether an element carrying `class` lies between `element` and its ancestor `up_to`, or among all of its
+/// ancestors when `up_to` is `None`.
+fn ancestor_with_class(nodes: &[Element], element: usize, up_to: Option<usize>, class: &str) -> bool {
+  let mut ancestor = nodes[element].parent;
+  while let Some(index) = ancestor {
+    if Some(index) == up_to {
+      return false;
+    }
+    if nodes[index].classes.contains(class) {
+      return true;
+    }
+    ancestor = nodes[index].parent;
+  }
+  false
+}
+
+/// The `li` lines of one fork that no folded `details` holds and no `div.demo` holds: the options the page shows at
+/// open, with the lists and menus a demo draws left out of the option count.
 fn visible_option_lines(nodes: &[Element], fork: usize) -> Vec<usize> {
-  find(nodes, fork, "li", &[]).into_iter().filter(|&line| !folded_ancestor(nodes, line, Some(fork))).collect()
+  find(nodes, fork, "li", &[])
+    .into_iter()
+    .filter(|&line| !folded_ancestor(nodes, line, Some(fork)) && !ancestor_with_class(nodes, line, Some(fork), "demo"))
+    .collect()
 }
 
 /// The name an option line opens with, in 「」, when a non-empty line follows the closing bracket.
@@ -792,6 +820,69 @@ fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutc
   }
   if failures.is_empty() {
     failures.push(outcome(FORK_OPTIONS, true, ""));
+  }
+  Ok(failures)
+}
+
+/// A `.demo` counts when it draws something: an element child or non-whitespace text. An SVG-only demo counts.
+fn demo_has_content(nodes: &[Element], demo: usize) -> bool {
+  nodes[demo].children.iter().any(|child| match child {
+    Child::Element(_) => true,
+    Child::Text(text) => !text.trim().is_empty(),
+  })
+}
+
+/// The `.demo` and `.no-demo` descendants of one option line, in document order.
+fn option_markers(nodes: &[Element], line: usize) -> (Vec<usize>, Vec<usize>) {
+  let mut demos = Vec::new();
+  let mut reasons = Vec::new();
+  for element in descendants(nodes, line) {
+    if nodes[element].classes.contains("demo") {
+      demos.push(element);
+    }
+    if nodes[element].classes.contains("no-demo") {
+      reasons.push(element);
+    }
+  }
+  (demos, reasons)
+}
+
+/// `fork-demos`: every option of a fork whose option lines carry a demo or a reason carries one of the two. A demo
+/// in the fork's folded explainer sits on no option line, so it starts nothing.
+fn check_fork_demos(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let mut failures = Vec::new();
+  for (index, fork) in open_forks(&context.nodes) {
+    let lines = visible_option_lines(&context.nodes, fork);
+    let markers = lines.iter().map(|&line| option_markers(&context.nodes, line)).collect::<Vec<_>>();
+    if !markers.iter().any(|(demos, reasons)| !demos.is_empty() || !reasons.is_empty()) {
+      continue;
+    }
+    let section = pyfmt::str_repr(&section_heading(&context.nodes, fork));
+    for (position, ((demos, reasons), &line)) in markers.iter().zip(&lines).enumerate() {
+      let drawn = demos
+        .iter()
+        .any(|&demo| !folded_ancestor(&context.nodes, demo, Some(line)) && demo_has_content(&context.nodes, demo));
+      let stated =
+        reasons.iter().any(|&reason| !pystr::collapse_whitespace(&element_text(&context.nodes, reason)).is_empty());
+      if drawn || stated {
+        continue;
+      }
+      let gap = if demos.iter().any(|&demo| folded_ancestor(&context.nodes, demo, Some(line))) {
+        "the demo sits in a closed fold"
+      } else if !reasons.is_empty() {
+        "the reason is empty"
+      } else {
+        "the demo is missing"
+      };
+      let name = match option_name(&pystr::collapse_whitespace(&element_text(&context.nodes, line))) {
+        Some(name) => format!("「{name}」"),
+        None => format!("line {}", position + 1),
+      };
+      failures.push(outcome(FORK_DEMOS, false, format!("fork #{index} (section {section}) option {name}: {gap}")));
+    }
+  }
+  if failures.is_empty() {
+    failures.push(outcome(FORK_DEMOS, true, ""));
   }
   Ok(failures)
 }
@@ -1675,9 +1766,13 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates `fork-options`, so that outcome has no recorded Python counterpart to compare with.
-      let actual =
-        outcomes.iter().filter(|outcome| outcome.name != FORK_OPTIONS).map(outcome_value).collect::<Vec<_>>();
+      // The fixture predates the fork assertions, so those outcomes have no recorded Python counterpart to compare
+      // with.
+      let actual = outcomes
+        .iter()
+        .filter(|outcome| outcome.name != FORK_OPTIONS && outcome.name != FORK_DEMOS)
+        .map(outcome_value)
+        .collect::<Vec<_>>();
       let mut expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
       for outcome in &mut expected {
         let detail = outcome["detail"].as_str().expect("each outcome has detail");
@@ -1727,7 +1822,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join("prompts/plan_template.html");
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 13);
+    assert_eq!(outcomes.len(), 14);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
@@ -2073,6 +2168,108 @@ mod tests {
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
+  const DEMO_AND_REASON_OPTIONS: &str = "<ul><li>「keep」: keep the file.\
+     <div class=\"demo\"><p>the file stays on the page</p></div></li>\
+     <li>「delete」: delete the file.\
+     <p class=\"no-demo\">The difference shows in the next page load, which a still picture cannot draw.</p></li></ul>\
+     <p class=\"rec\">Recommendation: 「keep」.</p>";
+
+  #[test]
+  fn an_option_with_a_demo_and_one_with_a_reason_pass() {
+    let page = fork_page("Ship the fix.", DEMO_AND_REASON_OPTIONS);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+    assert_eq!(outcomes[0].detail, "");
+  }
+
+  #[test]
+  fn an_option_without_a_demo_or_a_reason_fails_and_names_the_option() {
+    let body = DEMO_AND_REASON_OPTIONS.replace(
+      "<p class=\"no-demo\">The difference shows in the next page load, which a still picture cannot draw.</p>",
+      "",
+    );
+    let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(!outcomes[0].passed);
+    assert!(
+      outcomes[0].detail.contains("fork #1 (section '5 Trade-offs') option 「delete」: the demo is missing"),
+      "{}",
+      outcomes[0].detail
+    );
+  }
+
+  #[test]
+  fn an_empty_no_demo_fails() {
+    let body = DEMO_AND_REASON_OPTIONS
+      .replace("The difference shows in the next page load, which a still picture cannot draw.", " ");
+    let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("option 「delete」: the reason is empty"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn a_demo_inside_a_closed_fold_fails() {
+    let body = DEMO_AND_REASON_OPTIONS.replace(
+      "<div class=\"demo\"><p>the file stays on the page</p></div>",
+      "<details><summary>Sample</summary><div class=\"demo\"><p>the file stays on the page</p></div></details>",
+    );
+    let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("option 「keep」: the demo sits in a closed fold"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn an_svg_only_demo_passes() {
+    let body = DEMO_AND_REASON_OPTIONS.replace(
+      "<div class=\"demo\"><p>the file stays on the page</p></div>",
+      "<div class=\"demo\"><svg viewBox=\"0 0 10 10\"><rect x=\"0\" y=\"0\" width=\"5\" height=\"5\"/></svg></div>",
+    );
+    let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn a_fork_without_any_marker_on_an_option_line_is_not_checked() {
+    let page = fork_page("Ship the fix.", TWO_OPTIONS_AND_RECOMMENDATION);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn a_demo_in_the_explainer_fold_does_not_start_the_check() {
+    let body = format!(
+      "{TWO_OPTIONS_AND_RECOMMENDATION}\
+       <details class=\"details-layer\"><summary>Why</summary><div class=\"demo\"><p>drawn</p></div></details>"
+    );
+    let page = fork_page("Ship the fix.", &body);
+    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  #[test]
+  fn an_li_inside_a_demo_is_not_an_option_line() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>「keep」: keep the file.\
+       <div class=\"demo\"><ul><li>the file list as it stays</li></ul></div></li>\
+       <li>「delete」: delete the file.</li></ul>\
+       <p class=\"rec\">Recommendation: 「keep」.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
   #[test]
   fn a_file_name_without_a_genre_prefix_has_no_genre() {
     assert_eq!(genre_from_file_name("plan_export_interval_v2.html"), Some("plan"));
@@ -2094,7 +2291,7 @@ mod tests {
     let outcomes = run_fork_assertions(&page, home.path()).unwrap().expect("the plan_ prefix names a genre");
     assert_eq!(
       outcomes.iter().map(|outcome| outcome.name.as_str()).collect::<Vec<_>>(),
-      [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_EXPLAINER]
+      [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_DEMOS, FORK_EXPLAINER]
     );
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
@@ -2115,6 +2312,7 @@ mod tests {
         STYLE_VERBATIM,
         FORK_OPEN_SHAPE,
         FORK_OPTIONS,
+        FORK_DEMOS,
         FORK_EXPLAINER,
         ORDINAL_NAMED,
         TRACKER_ID_NEARBY,
@@ -2446,7 +2644,7 @@ mod tests {
   fn test_shipped_explain_template_passes_its_explain_set() {
     let template = repo_root().join("prompts/explain_template.html");
     let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
-    assert_eq!(outcomes.len(), 13, "{outcomes:#?}");
+    assert_eq!(outcomes.len(), 14, "{outcomes:#?}");
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

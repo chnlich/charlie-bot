@@ -144,7 +144,7 @@ Start the cold read with this command:
 
 - After the Improve round, and after each later `charliebot plan amend`, start the cold read.
 - When verify runs on the plan version, start the cold read in the same turn as the verify delegation.
-- For a page of any other genre: after you share the page, start the cold read.
+- For a page of any other genre, start the cold read before or in the same turn as the share.
 
 In a manager session, the command delegates the cold read to a cold-read child of your session.
 After the command prints its result, end the turn.
@@ -191,4 +191,5 @@ check judges the facts.
 - A page whose every statement reads a current value back from a system (a count, a time, a status) keeps its genre
   checks only.
 - When a separate fact-check worker is wanted, `source_check_spec.md` in this skill's directory is an optional
-  reference template; delegating it never blocks sharing the page.
+  reference template. Start the cold read and that worker in the same turn, and fold both reports into one
+  revision; delegating it never blocks sharing the page.

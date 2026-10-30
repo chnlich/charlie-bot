@@ -21,7 +21,6 @@ regex.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
-tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -37,3 +36,4 @@ charliebot-codex.workspace = true
 charliebot-compat.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-gemini.workspace = true
+tempfile.workspace = true

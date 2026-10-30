@@ -228,6 +228,8 @@ fn schedule_sidebar_sweep(
   });
   if let Err(error) = spawned {
     SIDEBAR_SWEEP_RUNNING.store(false, Ordering::Release);
+    // No sweep ran, so the poll after this one may start one instead of waiting out the interval.
+    *SIDEBAR_SWEEP_LAST_START.lock().expect("the sweep start time mutex is not poisoned") = None;
     return Err(StoreError::new(error.to_string()));
   }
   Ok(())

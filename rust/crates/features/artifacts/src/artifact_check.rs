@@ -855,13 +855,14 @@ fn check_fork_demos(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcom
     if !markers.iter().any(|(demos, reasons)| !demos.is_empty() || !reasons.is_empty()) {
       continue;
     }
-    let section = pyfmt::str_repr(&section_heading(&context.nodes, fork));
+    let section = text_repr::str_repr(&section_heading(&context.nodes, fork));
     for (position, ((demos, reasons), &line)) in markers.iter().zip(&lines).enumerate() {
       let drawn = demos
         .iter()
         .any(|&demo| !folded_ancestor(&context.nodes, demo, Some(line)) && demo_has_content(&context.nodes, demo));
-      let stated =
-        reasons.iter().any(|&reason| !pystr::collapse_whitespace(&element_text(&context.nodes, reason)).is_empty());
+      let stated = reasons
+        .iter()
+        .any(|&reason| !str_methods::collapse_whitespace(&element_text(&context.nodes, reason)).is_empty());
       if drawn || stated {
         continue;
       }
@@ -872,7 +873,7 @@ fn check_fork_demos(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcom
       } else {
         "the demo is missing"
       };
-      let name = match option_name(&pystr::collapse_whitespace(&element_text(&context.nodes, line))) {
+      let name = match option_name(&str_methods::collapse_whitespace(&element_text(&context.nodes, line))) {
         Some(name) => format!("「{name}」"),
         None => format!("line {}", position + 1),
       };

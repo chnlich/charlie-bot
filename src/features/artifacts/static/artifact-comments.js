@@ -19,10 +19,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var TRIGGER_SIZE = 34;
     var POPOVER_WIDTH = 460;
     var GUTTER_THRESHOLD = 900;
-    // The column also needs vertical room. Gated on the window, never on how many
-    // comments are pending: the action bar's own list is capped at 320px, so the bar
-    // has a height ceiling (522px measured), and band = innerHeight - 72 - barHeight
-    // stays positive at 600px even in that worst case; the usual bar leaves 326px.
+    // The column also needs vertical room. The gate reads the window, never how many
+    // comments are pending. The action bar's own list is capped at 320px, so the bar
+    // has a height ceiling (522px measured). At 600px, the worst case still leaves
+    // band = innerHeight - 72 - barHeight positive; the usual bar leaves 326px.
     var GUTTER_MIN_HEIGHT = 600;
     // Properties that can make body or documentElement the containing block for the
     // injected layer's fixed boxes. Declared with the other constants: installBatchTray
@@ -229,10 +229,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // When embedded in the plan panel (framed), prefer the live active session
-    // from the parent window so the tray always targets the session currently
-    // active in the app — not the session baked into the artifact URL when the
-    // iframe was built. Degrades silently to the artifact-URL-derived session id
-    // when not framed or when the parent accessor is unavailable or throws.
+    // from the parent window. The tray then targets the session currently active
+    // in the app, not the session baked into the artifact URL when the iframe was
+    // built. Degrades silently to the artifact-URL-derived session id when not
+    // framed, or when the parent accessor is unavailable or throws.
     function resolveTargetSessionId() {
       if (framed) {
         try {
@@ -297,8 +297,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         // The 404-driven fallback reassignment (sessionId = serverSessionId) is
         // the base case for standalone mode and when the live accessor is
         // unavailable. When framed and the parent supplies a truthy live
-        // session, requestedId is that live id (not the artifact-URL hash
-        // session), so the `requestedId === hashSessionId` guard below keeps
+        // session, requestedId is that live id, not the artifact-URL hash
+        // session. The `requestedId === hashSessionId` guard below then keeps
         // this branch from clobbering the live session.
         if (err.status === 404 && hashSessionId && requestedId === hashSessionId && serverSessionId && serverSessionId !== requestedId) {
           console.warn('Artifact comment target session not found; falling back to server session:', requestedId);
@@ -1140,7 +1140,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }
       cardHeights = heights;
       // The displacement between document space and the column is measured from a live
-      // anchor, not taken from window.scrollY: whichever element actually scrolls the
+      // anchor, not taken from window.scrollY. Whichever element actually scrolls the
       // content -- documentElement, body, or a wrapper the artifact introduced -- this
       // reads the real offset. One rect read per scroll instead of none, which buys
       // correctness under any scroll container.
@@ -1152,10 +1152,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // Pure: shift the document-space stack into the column and cap it from below.
-    // The last card's top is capped at band - its height, each earlier card at its
-    // successor's top minus gap minus its own height; cascading upward keeps every
-    // pair apart and puts the last card wholly inside the column. There is no floor:
-    // an anchor scrolled above the viewport takes its card with it. Pinning
+    // The last card's top is capped at band - its height. Each earlier card is capped
+    // at its successor's top minus gap minus its own height. Cascading upward keeps
+    // every pair apart and puts the last card wholly inside the column. There is no
+    // floor: an anchor scrolled above the viewport takes its card with it. Pinning
     // the top card to 0 instead would push it into its neighbour.
     function fitColumn(docTops, heights, gap, band, scrolled) {
       var tops = [], i;
@@ -1188,10 +1188,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }
       gutter.style.overflowY = 'hidden';
       // Displacement is measured between document space and THE COLUMN, not the viewport:
-      // the reference anchor's offset from the column's own top edge. Whatever moves the
-      // column -- the window scrolling, body scrolling itself, a wrapper the artifact
-      // introduced, or the column riding a transformed containing block -- is accounted
-      // for once and only once. Two rect reads per scroll, independent of card count.
+      // the reference anchor's offset from the column's own top edge. The column can move
+      // by the window scrolling, body scrolling itself, a wrapper the artifact introduced,
+      // or a transformed containing block. Whatever moves it, this accounts for the move
+      // once and only once. Two rect reads per scroll, independent of card count.
       var displaced = window.scrollY || 0;
       if (refEl) {
         displaced = refDocTop - (refEl.getBoundingClientRect().top - gutter.getBoundingClientRect().top);
@@ -1206,7 +1206,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // Right edge of everything the artifact itself renders. Every element we did not
-    // inject is measured, nothing is filtered by position and scrollWidth is never
+    // inject is measured, and nothing is filtered by position. scrollWidth is never
     // read, so out-of-flow panels, tables wider than their container and
     // display:contents subtrees are all covered.
     function measureContentRight() {
@@ -1260,8 +1260,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         return 0;
       }
       // Width only. The bar's height depends on its own content, so its top -- and
-      // therefore this column's bottom -- can only be read after the bar is filled;
-      // that is setColumnBottom(), which the caller runs once routing is done.
+      // therefore this column's bottom -- can only be read after the bar is filled.
+      // setColumnBottom() does that, and the caller runs it once routing is done.
       dock.style.left = columnLeft + 'px';
       dock.style.right = 'auto';
       dock.style.width = w + 'px';
@@ -1279,17 +1279,17 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return w;
     }
 
-    // The column's whole coordinate model -- margin measured against the viewport, cards
-    // placed from the viewport's top edge, the bar's offset read from the viewport's
-    // bottom -- holds only while the viewport is the containing block for the injected
-    // layer's fixed boxes. The walk below follows the layer's real ancestor chain rather
-    // than assuming it is exactly body and documentElement: an artifact can reparent the
-    // layer. The property enumeration is a known set plus an empirical backstop
-    // (resolvesAgainstViewport at placement time), not a complete test -- it can fall
-    // behind browser implementations. Residual: a property the set misses lets the
-    // column open anyway, so cards may stop tracking their paragraphs; non-overlap with
-    // the bar stays structural regardless, because the column clips and the two boxes do
-    // not intersect.
+    // The column's whole coordinate model holds only while the viewport is the
+    // containing block for the injected layer's fixed boxes. That model measures the
+    // margin against the viewport, places cards from the viewport's top edge, and reads
+    // the bar's offset from the viewport's bottom. The walk below follows the layer's
+    // real ancestor chain rather than assuming it is exactly body and documentElement:
+    // an artifact can reparent the layer. The property enumeration is a known set plus
+    // an empirical backstop (resolvesAgainstViewport at placement time), not a complete
+    // test -- it can fall behind browser implementations. Residual: a property the set
+    // misses lets the column open anyway, so cards may stop tracking their paragraphs.
+    // Non-overlap with the bar stays structural regardless, because the column clips
+    // and the two boxes do not intersect.
     function viewportIsContainingBlock() {
       // The chain is walked rather than assumed: if anything ever reparents the layer,
       // the hosts between it and the root are inspected too.
@@ -1329,11 +1329,11 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // The free margin is measured in viewport coordinates (getBoundingClientRect) but
     // written in containing-block coordinates (style.left), and the whole card layout
     // assumes the column's top edge is the viewport's. Those hold only while the layer's
-    // own boxes resolve against the viewport. Rather than guess which artifact CSS breaks
-    // that -- a transform, zoom, filter or contain:paint anywhere up the tree, on any
-    // axis -- write the values and read them back: the column must land where it was put,
-    // and the bar must sit its own offset above the viewport's bottom edge. Whatever
-    // fails this is out of range by section 1 and keeps the corner list unchanged.
+    // own boxes resolve against the viewport. An artifact CSS rule can break that: a
+    // transform, zoom, filter or contain:paint anywhere up the tree, on any axis. So
+    // write the values and read them back. The column must land where it was put, and
+    // the bar must sit its own offset above the viewport's bottom edge. Whatever fails
+    // this is out of range by section 1 and keeps the corner list unchanged.
     //
     // Both readings must be non-degenerate before they can disagree, so an environment
     // that reports no geometry at all (a test double) is not mistaken for a hostile one.
@@ -1352,11 +1352,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // content, so the bar's own list can never grow into the column afterwards.
     //
     // Both boxes are fixed children of body, so they share one containing block, and
-    // `bottom` is measured from the same edge for both. Stating the column's bottom as
-    // "the bar's own bottom offset, plus the bar's height, plus a gap" therefore needs
-    // no viewport constant, and holds whatever that containing block turns out to be --
-    // including an artifact that makes itself one with a transform, filter or
-    // contain:paint on body, where viewport arithmetic would be wrong.
+    // `bottom` is measured from the same edge for both. The column's bottom therefore
+    // needs no viewport constant: it is the bar's own bottom offset, plus the bar's
+    // height, plus a gap. That sum holds whatever the containing block turns out to be.
+    // It still holds when an artifact makes itself the containing block with a
+    // transform, filter or contain:paint on body, where viewport arithmetic would be
+    // wrong.
     function setColumnBottom() {
       if (!gutter || !column) return;
       var barBottom = parseFloat(window.getComputedStyle(dock).bottom) || 0;

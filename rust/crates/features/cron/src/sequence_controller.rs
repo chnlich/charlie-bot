@@ -358,6 +358,11 @@ impl SequenceController for CronSequenceController {
     row_schedule_fields(&mut memo, &tasks.tasks, tasks.fingerprint, session_ids, now)
   }
 
+  fn bound_session_ids(&self) -> Option<Vec<String>> {
+    let tasks = self.snapshot_for_listing();
+    Some(tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect())
+  }
+
   fn move_bindings<'a>(&'a self, source: &'a str, new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async move {
       let home = cron_home();

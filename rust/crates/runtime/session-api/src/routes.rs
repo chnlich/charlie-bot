@@ -166,6 +166,7 @@ fn archived_page_body(
     rows.drain(..).map(|row| (false, row)).chain(context.into_iter().map(|row| (true, row))).collect();
   merged.sort_by(|left, right| right.1.updated_at.cmp(&left.1.updated_at).then_with(|| right.1.id.cmp(&left.1.id)));
   let ids: Vec<String> = merged.iter().map(|(_, row)| row.id.clone()).collect();
+  let ids = charliebot_registry::sequence::listing_session_ids(features.registry.sequence_controllers(), &ids);
   let listing_fields = features.registry.sequence_listing_fields(&ids, UtcDateTime::now());
   let page_rows: Vec<Arc<SessionMetadata>> = merged
     .iter()

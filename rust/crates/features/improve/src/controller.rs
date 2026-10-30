@@ -86,6 +86,10 @@ impl SequenceController for ImproveSequenceController {
   fn listing_fields(&self, _session_ids: &[String], _now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
     HashMap::new()
   }
+
+  fn bound_session_ids(&self) -> Option<Vec<String>> {
+    Some(Vec::new())
+  }
 }
 
 /// Run the owning loop's close step, located through the Run's `owner_ref`: `<sessions>/<session>/loops/<loop id>`.

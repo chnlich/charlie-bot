@@ -365,7 +365,12 @@ fn row_inputs(
         derived: derived.get(&row.id).cloned(),
         thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
         run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
-        display_backend: if projection.display_backend { display_backend(store, row)? } else { None },
+        // Only a worker row renders a display backend; another row keeps the backend its metadata carries.
+        display_backend: if projection.display_backend && row.profile == TaskProfile::Worker {
+          display_backend(store, row)?
+        } else {
+          None
+        },
         listing: sequence_fields.get(&row.id).cloned(),
       })
     })

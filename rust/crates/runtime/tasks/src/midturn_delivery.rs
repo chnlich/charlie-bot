@@ -190,11 +190,21 @@ pub trait ClaimEchoedInputs: Send + Sync {
   ) -> BoxFuture<'a, anyhow::Result<Vec<String>>>;
 }
 
-/// Claim only pending user events whose uuids the successful Run echoed (`claim_finish_inputs`).
+/// The input ids mid-turn delivery handed one Run: the replay record in its raw log that the finish claim reads,
+/// whether or not the Run's durable claim already names them.
 ///
 /// The scan parses every raw line of the Run, so it rides a blocking thread like the round-notice projection of the
 /// same files: on the async runtime's worker threads it would freeze every concurrent request and WebSocket at turn
 /// end (`b03c38579`).
+pub async fn delivered_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
+  let scan_run_id = run_id.to_string();
+  let scan_dir = transport_dir.to_path_buf();
+  tokio::task::spawn_blocking(move || echoed_input_ids(&scan_dir, &scan_run_id))
+    .await
+    .context("the raw-log scan task stopped before it finished")?
+}
+
+/// Claim only pending user events whose uuids the successful Run echoed (`claim_finish_inputs`).
 pub async fn claim_finish_inputs(
   dispatcher: &dyn ClaimEchoedInputs,
   meta: &SessionMetadata,
@@ -205,11 +215,7 @@ pub async fn claim_finish_inputs(
   if !is_gated_turn(meta, true, RunKind::ManagerTurn) || !successful {
     return Ok(Vec::new());
   }
-  let scan_run_id = run_id.to_string();
-  let scan_dir = transport_dir.to_path_buf();
-  let echoed = tokio::task::spawn_blocking(move || echoed_input_ids(&scan_dir, &scan_run_id))
-    .await
-    .context("the echoed raw-log scan task stopped before it finished")??;
+  let echoed = delivered_input_ids(transport_dir, run_id).await?;
   if echoed.is_empty() {
     return Ok(Vec::new());
   }

@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::dispatch::{self, Dispatcher, RunFinishedCompletion};
 use crate::git;
+use crate::midturn_delivery;
 use crate::review_text;
 
 /// Prefix for a run reference in a child report's result_refs.
@@ -871,11 +872,19 @@ impl TaskCompletion {
     run: &RunRecord,
     evidence: &CompletionEvidence,
   ) -> StoreResult<Vec<String>> {
+    // Mid-turn delivery names every input it handed the live Run in the run's raw log, and the finish claim reads the
+    // same record: the request excludes those ids whether or not the run's durable claim carries them yet.
+    let transport_dir = self.store().run_dir(session_id, &run.id);
+    let mut excluded_inputs = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
+    excluded_inputs.extend(
+      midturn_delivery::delivered_input_ids(&transport_dir, &run.id)
+        .await
+        .map_err(|error| StoreError::new(error.to_string()))?,
+    );
     let blockers = {
       let _guard = self.store().control_lock().await;
       let meta = self.store().load_task_meta(session_id).await?;
       let excluded_runs = HashSet::from([run.id.clone()]);
-      let excluded_inputs = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
       let mut blockers = self.completion_blockers(session_id, &excluded_runs, &excluded_inputs)?;
       blockers.extend(self.evidence_blockers_with_success(&meta, evidence, Some(&excluded_runs))?);
       blockers
@@ -2381,5 +2390,168 @@ mod tests {
     assert!(blockers.is_none(), "a stopped blocker scan returns no partial blocker list");
     assert_eq!(checks, 5, "completion checks the stop during task-index directory scanning");
     assert_eq!(features.store.task_tree_index_build_count(), builds_before, "the partial task index is discarded");
+  }
+
+  /// A live manager turn of `session_id`: a registered run record with the test process as its launched child.
+  async fn live_manager_turn(
+    features: &charliebot_registry::context::FeatureContext,
+    session_id: &str,
+    run_id: &str,
+  ) -> RunRecord {
+    let guard = features.store.control_lock().await;
+    let run = test_fixtures::run_record(session_id, run_id, RunKind::ManagerTurn);
+    features.store.register_run_locked(&guard, session_id, run, None).await.unwrap();
+    drop(guard);
+    let pid = std::process::id();
+    let pid_start = charliebot_core::proc_identity::read_pid_stat(pid).unwrap().pid_start;
+    features.store.record_launch(session_id, run_id, pid, &pid_start).await.unwrap();
+    features.store.read_run_sync(session_id, run_id).unwrap().unwrap()
+  }
+
+  async fn append_pending_input(
+    features: &charliebot_registry::context::FeatureContext,
+    session_id: &str,
+    input_id: &str,
+  ) {
+    features
+      .store
+      .append_chat_event(session_id, json!({"id": input_id, "type": "user", "content": "synthetic mid-turn input"}))
+      .await
+      .unwrap();
+  }
+
+  /// The raw-log replay lines of one gated manager turn: the initial prompt's echo and one delivered input's echo.
+  fn write_delivered_echo(
+    features: &charliebot_registry::context::FeatureContext,
+    session_id: &str,
+    run_id: &str,
+    input_id: &str,
+  ) {
+    let raw_log = features.store.run_dir(session_id, run_id).join(charliebot_store::run_records::RAW_LOG_NAME);
+    std::fs::write(
+      raw_log,
+      format!(
+        "{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"{run_id}\"}}\n{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"{input_id}\"}}\n"
+      ),
+    )
+    .unwrap();
+  }
+
+  /// The completion owner with its dispatcher in the fixture's startup state, as the server holds both.
+  fn dispatching_completion(
+    features: &std::sync::Arc<charliebot_registry::context::FeatureContext>,
+  ) -> std::sync::Arc<TaskCompletion> {
+    let completion = std::sync::Arc::new(TaskCompletion::new(std::sync::Arc::clone(features)));
+    let sequence: std::sync::Arc<dyn super::SequenceCompletion> = completion.clone();
+    let run_completion: std::sync::Arc<dyn super::RunFinishedCompletion> = completion.clone();
+    features
+      .startup
+      .insert(crate::dispatch::Dispatcher::new(
+        std::sync::Arc::clone(&features.store),
+        std::sync::Arc::clone(features),
+        sequence,
+        run_completion,
+      ))
+      .unwrap();
+    completion
+  }
+
+  fn self_archive_evidence(run_id: &str) -> super::CompletionEvidence {
+    super::CompletionEvidence {
+      summary: "synthetic self-archive".to_string(),
+      result_refs: vec![format!("{}{run_id}", super::RUN_REF_PREFIX)],
+      run_ids: vec![run_id.to_string()],
+      review_run_ids: Vec::new(),
+      landing: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn self_archive_excludes_the_midturn_input_the_live_run_delivered() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let meta =
+      test_fixtures::manager_session(&features, "self-archive-live", "fable", None, "claude-self-archive").await;
+    let run = live_manager_turn(&features, &meta.id, "self-archive-run").await;
+    append_pending_input(&features, &meta.id, "in-midturn").await;
+    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn");
+
+    let completion = dispatching_completion(&features);
+    let (status, answer) =
+      completion.archive_own_task(&meta.id, "self-archive-1", &self_archive_evidence(&run.id), &run.id).await.unwrap();
+    assert_eq!(status, 202, "the delivered mid-turn input does not block the self-archive");
+    assert_eq!(answer["status"], json!("pending_run_finish"));
+    assert_eq!(features.store.task_state(&meta.id).unwrap(), "open");
+
+    // The run ends with exit 0 and claims the input it echoed; the saved close then completes.
+    let guard = features.store.control_lock().await;
+    features.store.claim_input_events_locked(&guard, &meta.id, &run.id, &["in-midturn".to_string()]).unwrap();
+    let mut outcome =
+      charliebot_store::run_records::RunOutcome::new(charliebot_store::run_records::RunOutcomeKind::Success);
+    outcome.exit_code = Some(0);
+    features.store.record_finish_locked(&guard, &meta.id, &run.id, outcome).await.unwrap();
+    drop(guard);
+    completion.recheck_close_requests(&meta.id, &run.id).await.unwrap();
+    assert_eq!(features.store.task_state(&meta.id).unwrap(), "archived");
+  }
+
+  #[tokio::test]
+  async fn self_archive_waits_when_the_run_ends_without_claiming_its_midturn_input() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let meta =
+      test_fixtures::manager_session(&features, "self-archive-failed", "fable", None, "claude-self-archive").await;
+    let run = live_manager_turn(&features, &meta.id, "self-archive-run").await;
+    append_pending_input(&features, &meta.id, "in-midturn").await;
+    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn");
+
+    let completion = dispatching_completion(&features);
+    let (status, _) =
+      completion.archive_own_task(&meta.id, "self-archive-1", &self_archive_evidence(&run.id), &run.id).await.unwrap();
+    assert_eq!(status, 202);
+
+    // The run ends non-zero and never claims the delivered input: it stays pending and the task stays open.
+    let guard = features.store.control_lock().await;
+    let mut outcome =
+      charliebot_store::run_records::RunOutcome::new(charliebot_store::run_records::RunOutcomeKind::Failed);
+    outcome.exit_code = Some(1);
+    features.store.record_finish_locked(&guard, &meta.id, &run.id, outcome).await.unwrap();
+    drop(guard);
+    completion.recheck_close_requests(&meta.id, &run.id).await.unwrap();
+    assert_eq!(features.store.task_state(&meta.id).unwrap(), "open");
+    let pending = crate::dispatch::dispatcher(&features)
+      .unwrap()
+      .pending_inputs(&meta.id)
+      .unwrap()
+      .iter()
+      .filter_map(|event| event.get("id").and_then(charliebot_store::CompactValue::as_str).map(str::to_string))
+      .collect::<Vec<_>>();
+    assert_eq!(pending, ["in-midturn"], "the unclaimed input stays pending for the next turn");
+  }
+
+  #[tokio::test]
+  async fn self_archive_still_blocks_on_an_input_queued_for_the_next_turn() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let meta =
+      test_fixtures::manager_session(&features, "self-archive-queued", "fable", None, "claude-self-archive").await;
+    let run = live_manager_turn(&features, &meta.id, "self-archive-run").await;
+    append_pending_input(&features, &meta.id, "in-midturn").await;
+    append_pending_input(&features, &meta.id, "in-queued").await;
+    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn");
+
+    let completion = dispatching_completion(&features);
+    let error = completion
+      .archive_own_task(&meta.id, "self-archive-1", &self_archive_evidence(&run.id), &run.id)
+      .await
+      .unwrap_err();
+    match error {
+      charliebot_store::StoreError::Conflict(blockers) => {
+        let joined = blockers.join("\n");
+        assert!(joined.contains("has unprocessed input: in-queued"), "{joined}");
+        assert!(!joined.contains("in-midturn"), "the delivered input is not named as unprocessed: {joined}");
+      }
+      error => panic!("expected a close conflict, got {error:?}"),
+    }
   }
 }

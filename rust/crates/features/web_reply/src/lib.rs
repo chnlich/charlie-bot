@@ -7,10 +7,10 @@ mod api;
 mod audit;
 pub mod cli;
 mod json_input;
-mod metadata;
+pub mod metadata;
 mod plan_links;
 mod reply;
-mod status;
+pub mod status;
 mod turn_contribution;
 
 #[cfg(test)]

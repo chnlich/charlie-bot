@@ -19,16 +19,16 @@ pub struct RemainingItem {
 /// stored before the tier existed carries no tier, and its rule reads as null.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WaitingItem {
-  pub(crate) text: String,
+  pub text: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub(crate) context: Option<String>,
-  pub(crate) link: Option<String>,
+  pub context: Option<String>,
+  pub link: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub(crate) since: Option<UtcDateTime>,
+  pub since: Option<UtcDateTime>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub(crate) since_exact: Option<bool>,
+  pub since_exact: Option<bool>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub(crate) tier: Option<String>,
+  pub tier: Option<String>,
   #[serde(default)]
-  pub(crate) rule: Option<String>,
+  pub rule: Option<String>,
 }

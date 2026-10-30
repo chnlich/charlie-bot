@@ -1,0 +1,125 @@
+{% include 'partials/prologue.html' %}
+<title>Approvals</title>
+<style>
+  {% include 'partials/standalone_base_styles.html' %}
+  .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
+  .meta { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 22px }
+  .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
+    border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
+  .nav { display:flex; gap:10px; align-items:center; margin:0 0 6px }
+  .nav a { color:var(--acc); text-decoration:none; font-size:13px }
+  .nav a:hover { text-decoration:underline }
+  h2 { font-size:15px; margin:26px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--bd) }
+  h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc); color:var(--panel);
+    font-size:12px; font-weight:700; align-items:center; justify-content:center; margin-right:8px }
+  p { margin:8px 0 }
+  ul { list-style:none; margin:8px 0 0; padding:0 }
+  li { margin:6px 0; padding:9px 12px; background:var(--panel); border:1px solid var(--bd); border-radius:9px }
+  li .row1 { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline }
+  li .text { font-size:13.5px; font-weight:600; overflow-wrap:anywhere }
+  li .ctx { color:var(--mut); font-size:12.5px; margin:4px 0 0; overflow-wrap:anywhere }
+  li .undo { color:var(--mut); font-size:12.5px; margin:4px 0 0; font-family:var(--mono); overflow-wrap:anywhere }
+  .tag { display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.4px; font-family:var(--mono);
+    border-radius:5px; padding:1px 7px; vertical-align:middle; white-space:nowrap }
+  .t0 { background:#8b1d1d; color:#fff }
+  .review { background:#6a3fc0; color:#fff }
+  .tier { background:var(--panel2); color:var(--mut); border:1px solid var(--bd); font-weight:600 }
+  .rank { background:var(--panel2); border:1px solid var(--bd); color:var(--tx); font-family:var(--mono) }
+  .sess { font-size:12px; color:var(--mut) }
+  .sess a { color:var(--acc); text-decoration:none }
+  .sess a:hover { text-decoration:underline }
+  .openlink { font-size:12px; margin-left:auto; white-space:nowrap }
+  .openlink a { color:var(--acc); text-decoration:none }
+  .openlink a:hover { text-decoration:underline }
+  .none { color:var(--mut); font-size:13px; margin:0 }
+  pre { background:var(--panel2); border:1px solid var(--bd); border-radius:8px; padding:10px 12px;
+    overflow:auto; font-family:var(--mono); font-size:11.5px; line-height:1.5; margin:6px 0 0; color:var(--tx) }
+  .change { border-color:#9a6700 }
+</style>
+<h1>Approvals</h1>
+<p class="sub">One Pacific day of the tiered approval: the ranked T0 queue, the day's login sheet, and the day's
+  digest. Silence on a digest entry accepts the step.</p>
+<div class="nav">
+  <a href="/approval?date={{ ctx.previous }}">&larr; {{ ctx.previous }}</a>
+  <a href="/approval">Today</a>
+  <a href="/approval?date={{ ctx.next }}">{{ ctx.next }} &rarr;</a>
+</div>
+<div class="meta">
+  <span class="mtag">PT day &middot; {{ ctx.date }}</span>
+  <span class="mtag">T0 queue &middot; {{ ctx.queue|length }}</span>
+  <span class="mtag">Login actions &middot; {{ ctx.login_sheet|length }}</span>
+  <span class="mtag">Digest &middot; {{ ctx.digest|length }}</span>
+</div>
+
+<h2><span class="n">1</span>Queue</h2>
+{% if not ctx.queue %}
+<p class="none">No open Waiting on you items.</p>
+{% else %}
+<ul>
+  {% for item in ctx.queue %}
+  <li>
+    <div class="row1">
+      {% if item.tier == 't0' %}
+      <span class="tag t0">T0</span>
+      {% if item.rank is not none %}<span class="tag rank">rank {{ item.rank }}</span>{% endif %}
+      {% if item.rule %}<span class="tag tier">{{ item.rule }}</span>{% endif %}
+      {% elif item.tier == 'review' %}
+      <span class="tag review">review</span>
+      {% else %}
+      <span class="tag tier">{{ item.tier or 'untiered' }}</span>
+      {% endif %}
+      <span class="text">{{ item.text }}</span>
+      <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
+    </div>
+    {% if item.context %}<p class="ctx">{{ item.context }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2><span class="n">2</span>Login sheet</h2>
+{% if not ctx.login_sheet %}
+<p class="none">No actions that only you can do today.</p>
+{% else %}
+<ul>
+  {% for item in ctx.login_sheet %}
+  <li>
+    <div class="row1">
+      <span class="tag tier">user-act</span>
+      <span class="text">{{ item.text }}</span>
+      <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
+    </div>
+    {% if item.context %}<p class="ctx">{{ item.context }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2><span class="n">3</span>Digest</h2>
+{% if not ctx.digest %}
+<p class="none">No digest entries and no policy table changes today.</p>
+{% else %}
+<ul>
+  {% for item in ctx.digest %}
+  {% if item.type == 'digest_entry' %}
+  <li>
+    <div class="row1">
+      <span class="tag tier">{{ item.policy }}</span>
+      <span class="text">{{ item.step }}</span>
+      <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Evidence</a> &middot; {% endif %}<a href="/?session={{ item.session }}">{{ item.session_short }}</a></span>
+    </div>
+    {% if item.scope_check %}<p class="ctx">Scope: {{ item.scope_check }}</p>{% endif %}
+    <p class="undo">Undo: {{ item.undo }}</p>
+  </li>
+  {% else %}
+  <li class="change">
+    <div class="row1">
+      <span class="tag tier">policy table changed</span>
+      <span class="text">{{ item.time }}</span>
+    </div>
+    <pre>{{ item.diff }}</pre>
+  </li>
+  {% endif %}
+  {% endfor %}
+</ul>
+{% endif %}

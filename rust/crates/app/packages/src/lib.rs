@@ -35,6 +35,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.discord", charliebot_discord::register),
   ("src.features.disk_sweep", charliebot_disk_sweep::register),
   ("src.features.web_reply", charliebot_web_reply::register),
+  ("src.features.approval", charliebot_approval::register),
   ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),
   ("src.features.explain", charliebot_explain::register),

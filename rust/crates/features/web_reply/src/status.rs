@@ -27,7 +27,8 @@ use serde_json::{Map, Value, json};
 use crate::json_input::replace_unrepresentable_numbers;
 use crate::metadata::{RemainingItem, WaitingItem};
 use crate::plan_links::{self, PlanLinks};
-use crate::reply::{self, WebReplyError};
+use crate::reply;
+pub use crate::reply::WebReplyError;
 
 /// The owner the web reply package registers its metadata under (`status.OWNER`).
 pub const OWNER: &str = WEB_REPLY;
@@ -838,6 +839,53 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
 /// The status as `model_dump(mode="json")` renders it.
 fn payload_of(status: &WebStatus) -> Value {
   serde_json::to_value(status).expect("a web status serializes to JSON")
+}
+
+/// One open session's Waiting on you item with the session that holds it (`status.OpenWaitingItem`). The start time
+/// is resolved, as the status read resolves it.
+#[derive(Clone, Debug, Serialize)]
+pub struct OpenWaitingItem {
+  pub session_id: String,
+  pub session_name: String,
+  pub text: String,
+  pub context: Option<String>,
+  pub link: Option<String>,
+  pub tier: Option<String>,
+  pub rule: Option<String>,
+  pub since: UtcDateTime,
+}
+
+/// Every open session's Waiting on you items, in metadata-listing order (`status.open_waiting_items`). The approval
+/// day view reads the whole home through this, where the status read reads one task tree.
+pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
+  let archived = derived_archived_ids(&features.store).await?.into_iter().collect::<HashSet<_>>();
+  let metas = tree_read(&features.store, |store| store.load_session_metas(None)).await?;
+  let mut rows = Vec::new();
+  for meta in metas {
+    let Some(status) = stored_status(&meta)? else { continue };
+    if status.waiting.is_empty() {
+      continue;
+    }
+    if meta.status == SessionStatus::Archived || archived.contains(&meta.id) {
+      continue;
+    }
+    if task_state(&features.store, &meta.id).await? != "open" {
+      continue;
+    }
+    for item in effective_waiting(&status) {
+      rows.push(OpenWaitingItem {
+        session_id: meta.id.clone(),
+        session_name: meta.name.clone(),
+        text: item.text,
+        context: item.context,
+        link: item.link,
+        tier: item.tier,
+        rule: item.rule,
+        since: item.since.expect("effective_waiting fills the start time"),
+      });
+    }
+  }
+  Ok(rows)
 }
 
 /// The task-tree reads run off the runtime's worker threads, as the Python tree reads run in `asyncio.to_thread`.

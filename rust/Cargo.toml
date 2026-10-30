@@ -24,6 +24,7 @@ members = [
     "crates/app/switch-helper",
     "crates/runtime/tasks",
     "crates/infra/html",
+    "crates/features/approval",
     "crates/features/artifacts",
     "crates/features/backup",
     "crates/features/chat_threads",
@@ -185,6 +186,7 @@ charliebot-usage-page = { path = "crates/features/usage" }
 charliebot-user-text-checks = { path = "crates/runtime/user_text_checks" }
 charliebot-voice = { path = "crates/features/voice" }
 charliebot-web-reply = { path = "crates/features/web_reply" }
+charliebot-approval = { path = "crates/features/approval" }
 charliebot-web-search = { path = "crates/features/web_search" }
 
 # Line tables keep backtrace file and line numbers; full debug info bloats each test binary to ~400 MB.

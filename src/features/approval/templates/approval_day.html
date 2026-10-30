@@ -46,7 +46,7 @@
 </div>
 <div class="meta">
   <span class="mtag">PT day &middot; {{ ctx.date }}</span>
-  <span class="mtag">T0 queue &middot; {{ ctx.queue|length }}</span>
+  <span class="mtag">Queue &middot; {{ ctx.queue|length }}</span>
   <span class="mtag">Login actions &middot; {{ ctx.login_sheet|length }}</span>
   <span class="mtag">Digest &middot; {{ ctx.digest|length }}</span>
 </div>
@@ -79,7 +79,7 @@
 
 <h2><span class="n">2</span>Login sheet</h2>
 {% if not ctx.login_sheet %}
-<p class="none">No actions that only you can do today.</p>
+<p class="none">No actions that only you can do on {{ ctx.date }}.</p>
 {% else %}
 <ul>
   {% for item in ctx.login_sheet %}
@@ -97,7 +97,7 @@
 
 <h2><span class="n">3</span>Digest</h2>
 {% if not ctx.digest %}
-<p class="none">No digest entries and no policy table changes today.</p>
+<p class="none">No digest entries and no policy table changes on {{ ctx.date }}.</p>
 {% else %}
 <ul>
   {% for item in ctx.digest %}
@@ -118,6 +118,7 @@
       <span class="text">{{ item.time }}</span>
     </div>
     <pre>{{ item.diff }}</pre>
+    <p class="undo">Undo: remove the lines marked +, and put back the lines marked -.</p>
   </li>
   {% endif %}
   {% endfor %}

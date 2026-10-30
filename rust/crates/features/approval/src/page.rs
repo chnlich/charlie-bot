@@ -38,7 +38,7 @@ async fn approval_page(State(features): State<Arc<FeatureContext>>, request: Par
     Ok(view) => view,
     Err(error) => return refused_answer(error),
   };
-  let rendered = tokio::task::spawn_blocking(move || render(&features, view, date, &request))
+  let rendered = tokio::task::spawn_blocking(move || render(&features, view, &request))
     .await
     .expect("rendering the approval page does not panic");
   match rendered {
@@ -48,12 +48,7 @@ async fn approval_page(State(features): State<Arc<FeatureContext>>, request: Par
 }
 
 /// The rendered page: the view plus the day navigation.
-fn render(
-  features: &FeatureContext,
-  view: Value,
-  date: Option<Date>,
-  request: &Parts,
-) -> Result<Response, (String, String)> {
+fn render(features: &FeatureContext, view: Value, request: &Parts) -> Result<Response, (String, String)> {
   let date_text = view["date"].as_str().unwrap_or_default().to_string();
   let day: Date = date_text.parse().map_err(|error| ("ValueError".to_string(), format!("the view's date: {error}")))?;
   let previous = day.checked_sub(Span::new().days(1)).map_err(|error| ("ValueError".to_string(), error.to_string()))?;
@@ -61,7 +56,6 @@ fn render(
   let context = json!({
     "ctx": {
       "date": date_text,
-      "date_selected": date.is_some(),
       "previous": previous.to_string(),
       "next": next.to_string(),
       "queue": view["queue"],

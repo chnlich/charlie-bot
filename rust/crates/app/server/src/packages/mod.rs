@@ -14,13 +14,19 @@ mod tests {
   use std::env;
   use std::fs;
   use std::path::PathBuf;
+  use std::sync::Arc;
+
+  use charliebot_registry::store_hooks::store_hooks;
 
   use super::registry;
 
   #[test]
   fn the_listed_packages_render_the_five_chat_lines() {
     // Python: tests/test_scheduled_handlers.py::test_the_packages_register_the_built_in_handlers (lines 43-45)
-    let registry = registry().expect("the listed packages register");
+    let registry = Arc::new(registry().expect("the listed packages register"));
+    let hooks = store_hooks(Arc::clone(&registry));
+    let renderers =
+      hooks.runtime_events.expect("the runtime event hooks are built").event_renderers().expect("the renderers read");
     for event_type in [
       "slack_reply",
       "discord_reply",
@@ -30,9 +36,9 @@ mod tests {
       "scheduled_run_skipped",
       "claude_account_login_required",
     ] {
-      assert!(registry.event_renderer(event_type).is_some(), "no renderer for {event_type}");
+      assert!(renderers.iter().any(|(known, _)| known == event_type), "no renderer for {event_type}");
     }
-    assert!(registry.event_renderer("assistant").is_none());
+    assert!(renderers.iter().all(|(known, _)| known != "assistant"));
     assert!(registry.websocket_match("/ws/sessions/synthetic").is_some());
     for name in ["backup", "usage_ledger", "cool_storage", "disk_sweep"] {
       assert!(registry.scheduled_handler_named(name).is_some(), "no scheduled handler for {name}");

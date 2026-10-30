@@ -7,7 +7,7 @@
   const escapeJsSingleQuoted = Chat.escapeJsSingleQuoted;
 
 // The lightbulb icon and the pending spinner: the four button states (none /
-// pending / ready / error) differ in icon and color class only, so the state
+// pending / ready / error) differ in icon and color class only. The state
 // applier swaps the button's inner SVG and never rebuilds the button itself.
 const EXPLAIN_BULB_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
   + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
@@ -107,7 +107,7 @@ function toggleExplainPanel(btn, sessionId, eventIndex) {
 
 // For you: the panel opens in the round's panel slot after the reply bubble.
 // The slot comes from the active engine's cache, so it — panel included —
-// survives a view switch; closing the panel drops the slot, so an empty slot
+// survives a view switch. Closing the panel drops the slot, so an empty slot
 // never takes a row gap in the list.
 function toggleForYouExplainPanel(btn, sessionId, eventIndex) {
   const group = btn.closest('.round-buttons');
@@ -145,7 +145,7 @@ function openExplainPanelOn(sep, sessionId, eventIndex) {
 // The one opener for the panel outside a button click: the modal confirm path.
 // Opening rides toggleExplainPanelTracked, the tracked toggle the turn engine
 // returned at registration, so the engine records the open state and restores
-// the panel on re-materialization; an already-open panel just re-fetches in place.
+// the panel on re-materialization. An already-open panel just re-fetches in place.
 function openExplainPanel(sessionId, eventIndex) {
   const group = roundGroupFor(eventIndex);
   const btn = group && group.querySelector('.explain-toggle');
@@ -193,8 +193,8 @@ function renderExplainEntry(body, entry) {
 }
 
 // The explain_status WS frame: repaint the round group's button from the frame,
-// and refresh the panel content only when that round's panel is open (the frame
-// carries no body; the single-entry GET is what the panel renders from).
+// and refresh the panel content only when that round's panel is open. The frame
+// carries no body, so the panel renders from the single-entry GET.
 function updateExplainStatus(sessionId, upto, state, backend) {
   const status = getExplainStatus(upto) || {};
   activeExplainStatuses[String(upto)] = {state, backend, generated_at: status.generated_at || null};
@@ -239,7 +239,7 @@ function explainSession(sessionId, eventIndex) {
 }
 
 // One explain/status GET per session load/switch paints every round group's
-// explain button from persisted truth; groups the engine materializes later
+// explain button from persisted truth. Groups the engine materializes later
 // read the map at render time, so no per-round request is ever needed. Only
 // the session and switch generation that own the view when the response lands
 // may install the map (detail.isCurrent).

@@ -477,7 +477,7 @@ function roundButtonsHtml(sessionId, msg) {
 // end event's index and the round id. The Everything separator (renderMessage)
 // and the For-you bubble (turn-engine.js) host the same group, and Explain and
 // the tests find the round's one group on the page through the marker.
-const ROUND_GROUP_CLASS = 'round-buttons flex items-center gap-1';
+const ROUND_GROUP_CLASS = 'round-buttons flex items-center gap-3';
 
 function roundButtonGroupHtml(sessionId, msg) {
   const buttons = roundButtonsHtml(sessionId, msg);

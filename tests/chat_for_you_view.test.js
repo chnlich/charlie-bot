@@ -142,9 +142,9 @@ function forYouRig(
     const node = fakeEngineNode(msg);
     if (msg.role === 'separator') {
       if (msg.event_index != null) node.dataset.eventIndex = String(msg.event_index);
-      // The Everything separator's inner markup (rendering.js
-      // separatorRowInnerHtml): a hairline, the round's button group when the
-      // round carries buttons, a second hairline — no label.
+      // The Everything separator's inner markup (rendering.js renderMessage's
+      // separator row): a hairline, the round's button group when the round
+      // carries buttons, a second hairline, and no label.
       node.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t border-slate-600/40 separator-hairline'}));
       if (msg.kind !== 'run_end') {
         const group = context.Chat.buildRoundButtonGroup(sessionId, msg);
@@ -378,7 +378,7 @@ test('Everything separator HTML carries the round group and no label', () => {
   }), 'sess-fy');
   const hash = crypto.createHash('sha256').update(html).digest('hex');
 
-  assert.equal(hash, '75f108294ebb8b0cf5165209aaa00534ae1ca9e299694c7aacf8a56d43445425');
+  assert.equal(hash, '567d2c6d23350203d2bdfdf011fb7301a3f66bea4da786d828127c84a0a6b7a0');
   assert.doesNotMatch(html, /response complete/);
   assert.doesNotMatch(html, /separator-label/);
   assert.equal((html.match(/\bseparator-hairline\b/g) || []).length, 2, 'both hairlines stay');
@@ -415,9 +415,9 @@ test('run_end separator HTML is unchanged; ordinary shapes drop only the label',
     [eMsg('separator', 'end-s', '', {kind: 'run_end', thinking_seconds: 65, event_index: 703}),
       '1244e816f399c551fc1dfc1b81668b21fb409b146f66c32bb3c7dfbdb2f712dc'],
     [eMsg('separator', 'noidx-s', '', {thinking_seconds: 4}),
-      'b501e36f77276952d6337603a8254aac98bb97a442536dd35f9a34389be47839'],
+      'c2edfa567e38cdd5988bbff0d3832c1eb66e38634dde6e594c39a66220cdc7ab'],
     [eMsg('separator', 'nosec-s', '', {event_index: 705}),
-      '5033edd5c06a30c6afacb6c32e589edd4e16399be886895cc3d2b5f2c2e00dc1'],
+      '4c97edc8edd85f7a795d67bcd79050229159191bb318bed5e5fddd9116804975'],
   ];
   for (const [msg, expected] of shapes) {
     const html = rig.context.renderMessage(msg, 'sess-fy');

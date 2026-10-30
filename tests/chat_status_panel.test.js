@@ -446,6 +446,56 @@ test('descendant items group by session with the id cut to eight characters and 
   assert.equal(link[0].href, '/?session=' + CHILD_ID, 'the item links to its child session page');
 });
 
+test('the panel collapses its user-act items, own and descendant, into one login-sheet line', async () => {
+  const rig = panelRig();
+  rig.page.descendants = [{
+    session_id: CHILD_ID,
+    name: 'Child one',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting: [
+      {text: 'Log into the release console', link: null, tier: 'user-act'},
+      {text: 'Decide the size', link: null, tier: 't0', rule: 'money'},
+    ],
+  }, {
+    session_id: OTHER_CHILD_ID,
+    name: 'Child two',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting: [{text: 'Child two item', link: null, tier: 'user-act'}],
+  }];
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [
+      {text: 'Approve the deploy', link: null},
+      {text: 'Log into the admin console', link: null, tier: 'user-act'},
+    ],
+  }});
+  rig.context.setChatView('status');
+  // The one line covers own and descendant items and links to the day's login sheet.
+  const sheet = viewRow(rig.view, 'login-sheet');
+  assert.ok(sheet, 'the login-sheet line shows when user-act items exist');
+  const text = allElements(sheet).find((el) => el.textContent === '3 actions that only you can do today');
+  assert.ok(text, 'the line counts both sessions\' items');
+  const link = allElements(sheet).filter((el) => el.tagName === 'A');
+  assert.deepEqual(link.map((el) => el.href),
+    ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date())]);
+  // The user-act items stay out of the item rows; the child group whose items
+  // all moved shows no header.
+  assert.deepEqual(viewWaitingItems(rig.view).map((el) => el.textContent.includes('Approve the deploy')), [true]);
+  assert.deepEqual(viewChildItems(rig.view).map((el) => el.textContent.includes('Decide the size')), [true]);
+  assert.deepEqual(viewRow(rig.view, 'children').querySelectorAll('[data-child-group]').map((el) => el.textContent),
+    ['Child one · ' + CHILD_ID.slice(0, 8)]);
+  // The badge counts what the panel shows, so the user-act item stays out of it.
+  assert.equal(rig.badge.textContent, '1');
+});
+
+test('without user-act items the Status view shows no login-sheet line', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  rig.context.setChatView('status');
+  assert.equal(viewRow(rig.view, 'login-sheet'), undefined);
+  assert.deepEqual(viewKinds(rig.view), ['goal', 'now', 'waiting']);
+});
+
 test('the child Now rows list each open child with its Now, update time and Open link', async () => {
   const rig = panelRig();
   rig.page.children = NOW_CHILDREN;

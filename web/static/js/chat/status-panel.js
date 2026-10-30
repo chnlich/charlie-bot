@@ -285,10 +285,56 @@
     return el;
   }
 
+  // ---- Login sheet ---------------------------------------------------------
+
+  // A user-act item: an action that only the user's own hands can do. The
+  // cold read writes the tier; items stored before the tier existed carry
+  // none and stay where they are.
+  function isUserAct(item) {
+    return item.tier === 'user-act';
+  }
+
+  // The panel's user-act items: this session's own and every descendant's.
+  function userActItems() {
+    const own = panelStatus ? panelStatus.waiting.filter(isUserAct) : [];
+    const descendant = panelDescendants.flatMap((child) => child.waiting.filter(isUserAct));
+    return own.concat(descendant);
+  }
+
+  // The Pacific-day date the approval page reads by, as its day navigation names it.
+  function pacificToday() {
+    return new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date());
+  }
+
+  // The one login-sheet line (plan 4 v2 task W3): the panel's user-act items,
+  // own and descendant, collapse into it and link to the day's login sheet on
+  // the approval page. No items, no row.
+  function loginSheetRow() {
+    const items = userActItems();
+    if (!items.length) return null;
+    const row = statusRow('login-sheet');
+    row.appendChild(labelSpan('Login sheet'));
+    const value = document.createElement('div');
+    value.className = 'min-w-0 break-words text-amber-200';
+    const line = document.createElement('div');
+    line.className = 'flex gap-2';
+    line.appendChild(textSpan('min-w-0',
+      items.length + ' action' + (items.length === 1 ? '' : 's') + ' that only you can do today'));
+    const a = document.createElement('a');
+    a.className = 'shrink-0 whitespace-nowrap text-blue-400 hover:text-blue-300';
+    a.href = '/approval?date=' + pacificToday();
+    a.textContent = 'Open the login sheet ›';
+    line.appendChild(a);
+    value.appendChild(line);
+    row.appendChild(value);
+    return row;
+  }
+
   // ---- Status view ---------------------------------------------------------
 
   // The descendants' items, grouped by session: one header per session, its
-  // items under it with their contexts folded.
+  // items under it with their contexts folded. A session whose items all
+  // moved to the login sheet shows no group.
   function childrenRow() {
     const row = statusRow('children');
     row.appendChild(labelSpan('In child sessions'));
@@ -300,8 +346,13 @@
       const header = textSpan('text-slate-400', child.name + ' · ' + child.session_id.slice(0, 8));
       header.dataset.childGroup = child.session_id;
       group.appendChild(header);
-      for (const item of child.waiting) group.appendChild(childItem(item, child.session_id));
-      column.appendChild(group);
+      let shown = 0;
+      for (const item of child.waiting) {
+        if (isUserAct(item)) continue;
+        group.appendChild(childItem(item, child.session_id));
+        shown++;
+      }
+      if (shown) column.appendChild(group);
     }
     row.appendChild(column);
     return row;
@@ -348,10 +399,15 @@
         nothing.dataset.waitingEmpty = 'true';
         column.appendChild(nothing);
       }
-      for (const item of panelStatus.waiting) column.appendChild(waitingItem(item, true));
+      for (const item of panelStatus.waiting) {
+        if (isUserAct(item)) continue;
+        column.appendChild(waitingItem(item, true));
+      }
       waiting.appendChild(column);
       el.appendChild(waiting);
     }
+    const sheet = loginSheetRow();
+    if (sheet) el.appendChild(sheet);
     if (panelDescendants.length) el.appendChild(childrenRow());
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
@@ -369,12 +425,13 @@
   }
 
   // The Status tab's waiting count: this session's own Waiting on you items
-  // only — a child session's waiting items show in the Status view's child
-  // rows. Hidden at 0 and when the page shows no web session.
+  // only, less the ones the login-sheet line carries — a child session's
+  // waiting items show in the Status view's child rows. Hidden at 0 and when
+  // the page shows no web session.
   function renderWaitingBadge() {
     const badge = document.getElementById(BADGE_ID);
     if (!badge) return;
-    const count = panelSessionId && panelStatus ? panelStatus.waiting.length : 0;
+    const count = panelSessionId && panelStatus ? panelStatus.waiting.filter((item) => !isUserAct(item)).length : 0;
     badge.textContent = count ? String(count) : '';
     badge.classList.toggle('hidden', !count);
   }

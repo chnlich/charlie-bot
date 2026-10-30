@@ -122,6 +122,26 @@ esac
 exit 0
 "#;
 
+const SANDBOX: &str = r#"# Fake improve-sandbox: no boundary. It runs the command after `--`, as the real program does.
+shift
+[[ ${1-} == -- ]] || exit 1
+shift
+exec "$@"
+"#;
+
+const CARGO: &str = r#"# Fake cargo: record the build environment, then write the release tools where cargo puts them.
+printf 'CARGO_HOME=%s\nTMPDIR=%s\n' "$CARGO_HOME" "$TMPDIR" >"$FAKE_CARGO_ENV"
+mkdir -p "$CARGO_TARGET_DIR/release"
+for tool in charliebot improve-sandbox mock-home; do
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/release/$tool"
+  chmod 755 "$CARGO_TARGET_DIR/release/$tool"
+done
+"#;
+
+/// The origin of the launcher's repository. The direction clone names another origin, so a test can tell which one the
+/// runner cloned from.
+const RUNTIME_ORIGIN: &str = "https://example.invalid/someone/charlie-bot.git";
+
 /// One test's repository, both homes and stub directory.
 pub struct World {
   pub sandbox: Sandbox,
@@ -162,7 +182,7 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/tools/improve");
-    for name in ["remote-launch.sh", "remote-runner.sh", "landlock_exec.py", "inflight-files.sh"] {
+    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh"] {
       harness::copy_file(&harness::repo_root().join("tools/improve").join(name), &scripts.join(name));
     }
     let local_home = sandbox.dir("local");
@@ -175,6 +195,7 @@ impl World {
     git(&sandbox, &git_env, &repo, &["commit", "-q", "-m", "synthetic launcher commit"]);
     let commit = git(&sandbox, &git_env, &repo, &["rev-parse", "HEAD"]);
     git(&sandbox, &git_env, &repo, &["update-ref", "refs/remotes/origin/main", &commit]);
+    git(&sandbox, &git_env, &repo, &["remote", "add", "origin", RUNTIME_ORIGIN]);
 
     sandbox.stub("gh", "exit 0\n");
     sandbox.stub("ssh", SSH);
@@ -217,17 +238,24 @@ impl World {
     fs::create_dir_all(&evidence).expect("the evidence directory");
 
     let remote_bin = sandbox.dir("remote/.local/bin");
-    for (name, body) in
-      [("claude", CLAUDE), ("charlie-code", "exit 0\n"), ("systemd-run", SYSTEMD_RUN), ("systemctl", SYSTEMCTL)]
-    {
+    for (name, body) in [
+      ("claude", CLAUDE),
+      ("charlie-code", "exit 0\n"),
+      ("systemd-run", SYSTEMD_RUN),
+      ("systemctl", SYSTEMCTL),
+      ("cargo", CARGO),
+    ] {
       let path = remote_bin.join(name);
       fs::write(&path, format!("#!/usr/bin/env bash\n{body}")).expect("a remote stub");
       fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the remote stub executable");
     }
+    // The round tools of this commit are already built, so the runner skips its build for them.
     let runner_bin = sandbox.dir("remote/improve/runner/bin");
-    let cli = runner_bin.join(format!("charliebot-{commit}"));
-    fs::write(&cli, "#!/usr/bin/env bash\nexit 0\n").expect("the charliebot CLI");
-    fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("make the CLI executable");
+    for (name, body) in [("charliebot", "exit 0\n"), ("improve-sandbox", SANDBOX), ("mock-home", "exit 0\n")] {
+      let tool = runner_bin.join(format!("{name}-{commit}"));
+      fs::write(&tool, format!("#!/usr/bin/env bash\n{body}")).expect("a round tool");
+      fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("make the round tool executable");
+    }
 
     Self {
       ssh_args: sandbox.root().join("ssh-arguments.log"),

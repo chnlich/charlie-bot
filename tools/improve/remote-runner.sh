@@ -20,9 +20,9 @@
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
 # the second one.
 #
-# The clone check runs before the CLI build because the runner's own checkout takes its origin
-# from that clone. The runner deletes its launch directory when it exits; the round's evidence is
-# a separate directory, which the launcher copies back after this script has ended.
+# The clone check runs before the CLI build, so a refused clone starts no build. The runner deletes
+# its launch directory when it exits; the round's evidence is a separate directory, which the
+# launcher copies back after this script has ended.
 set -euo pipefail
 
 readonly STDERR_PREFIX='improve runner:'
@@ -214,31 +214,44 @@ check_clone() {
     || fail 4 "the direction clone's origin does not point at charlie-bot: ${origin:-no origin}"
 }
 
-# The hooks of a round call `charliebot`. The CLI comes from the commit this host's runtime clone
-# runs, built in a checkout the runner owns: the boundary cannot write that checkout, so a round
-# cannot change the code that runs outside its boundary.
+# The hooks of a round call `charliebot`, and the round's boundary and mock data come from the same
+# commit. The three programs build together from the commit this host's runtime clone runs, in a
+# checkout the runner owns. Their build inputs are the runner's own too: CARGO_HOME, TMPDIR, and the
+# origin that the launcher sent from the runtime clone. No round's write allow-list covers any of
+# them, so a round cannot change the code that runs outside its boundary.
 ensure_cli() {
   local commit=$1
   local bin_dir="$RUNNER_ROOT/bin"
   local checkout="$RUNNER_ROOT/charlie-bot"
+  local release_dir="$RUNNER_ROOT/target/release"
   local cli="$bin_dir/charliebot-$commit"
+  local sandbox="$bin_dir/improve-sandbox-$commit"
+  local mock_home="$bin_dir/mock-home-$commit"
   local origin
-  mkdir -p -- "$bin_dir"
-  if [[ ! -x $cli ]]; then
+  mkdir -p -- "$bin_dir" "$RUNNER_ROOT/cargo-home" "$RUNNER_ROOT/tmp"
+  if [[ ! -x $cli || ! -x $sandbox || ! -x $mock_home ]]; then
     if [[ ! -d $checkout/.git ]]; then
-      origin=$(git -C "$ROUND_ROOT/charlie-bot" remote get-url origin)
+      origin=$(cat -- "$LAUNCH_DIR/origin")
       git clone --quiet -- "$origin" "$checkout" || fail 1 "cannot clone the runner's checkout: $checkout"
     fi
     git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
     git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \
       || fail 1 "cannot check out commit $commit in $checkout"
     ( cd "$checkout/rust" &&
+      CARGO_HOME="$RUNNER_ROOT/cargo-home" TMPDIR="$RUNNER_ROOT/tmp" \
       CARGO_BUILD_JOBS=$BUILD_JOBS CARGO_TARGET_DIR="$RUNNER_ROOT/target" \
-        nice -n 19 cargo build --locked --release -p charliebot-cli --bin charliebot ) \
-      || fail 1 "cannot build the charliebot CLI at commit $commit in $checkout"
-    install -m 755 -- "$RUNNER_ROOT/target/release/charliebot" "$cli"
+        nice -n 19 cargo build --locked --release \
+          -p charliebot-cli --bin charliebot \
+          -p charliebot-improve-sandbox --bin improve-sandbox \
+          -p charliebot-mock-home --bin mock-home ) \
+      || fail 1 "cannot build the round tools at commit $commit in $checkout"
+    install -m 755 -- "$release_dir/charliebot" "$cli"
+    install -m 755 -- "$release_dir/improve-sandbox" "$sandbox"
+    install -m 755 -- "$release_dir/mock-home" "$mock_home"
   fi
   ln -sfn -- "charliebot-$commit" "$bin_dir/charliebot"
+  ln -sfn -- "improve-sandbox-$commit" "$bin_dir/improve-sandbox"
+  ln -sfn -- "mock-home-$commit" "$bin_dir/mock-home"
 }
 
 # Empty TMPDIR. A killed round leaves large copies there, and this round owns the directory: the
@@ -279,7 +292,7 @@ run_in_scope() {
   empty_tmpdir
   export_gateway_token
   local status=0
-  python3 -- "$LAUNCH_DIR/landlock_exec.py" "$direction" -- claude "${REWRITTEN[@]}" || status=$?
+  "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- claude "${REWRITTEN[@]}" || status=$?
   record_memory_peak
   exit "$status"
 }

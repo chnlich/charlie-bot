@@ -3,6 +3,7 @@
 pub mod compaction_context;
 pub mod config;
 pub mod delegate;
+pub mod digest;
 pub mod feishu;
 pub mod files;
 pub mod gc_trash;

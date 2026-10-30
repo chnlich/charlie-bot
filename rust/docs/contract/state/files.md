@@ -392,6 +392,18 @@ The server does not create a speech-model directory. Python removed the local sp
   (`services.md` section 3). Python keeps a node when either durable file has an mtime within one second before the
   marker; this slack covers coarse filesystem timestamps.
 
+### 5.20 Approval digest: `state/digest_entries.jsonl`
+
+- Writer: `charliebot digest add` through Rust `rust/crates/infra/core/src/approval_digest.rs::add`, which loads the
+  approval policy table first (an absent or invalid table refuses the write) and refuses an unknown policy, an
+  expired policy, and a use over the policy's `cap_per_pt_day` in the current Pacific day. One record per call,
+  NDJSON-APPEND (`json.dumps(..., ensure_ascii=False)` with the default separators plus `\n`), `type` first.
+- Format: `{"type": "digest_entry", "time": <UTC isoformat>, "session": <session id>, "policy": <standing policy id
+  or "t2">, "step": <text>, "undo": <text>}` plus `scope_check` and `link` when the caller gave them. Every Pacific
+  day boundary (America/Los_Angeles) resets the cap count.
+- Readers: `approval_digest::read_entries`, and the approval day view (`rust/crates/features/approval/src/day.rs`)
+  through it. A blank line is skipped; any other line that does not hold a digest record refuses the read.
+
 ## 6. Session files
 
 ### 6.1 `sessions/<sid>/metadata.json` (session)

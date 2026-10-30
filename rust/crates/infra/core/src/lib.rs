@@ -1,6 +1,7 @@
 //! The CharlieBot server's foundation: profile home, configuration, credentials, the home writer
 //! fence, run tokens, structured logging, and the CPython text renderings the wire formats need.
 
+pub mod approval_digest;
 pub mod approval_policy;
 pub mod cgroup;
 pub mod config;
@@ -15,6 +16,7 @@ pub mod hot_reload;
 pub mod logging;
 pub mod logline;
 pub mod metadata_slot;
+pub mod pacific;
 pub mod paths;
 mod printable_table;
 pub mod proc_identity;

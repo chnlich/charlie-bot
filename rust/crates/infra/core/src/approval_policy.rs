@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::Date;
 use time::Month;
@@ -104,9 +104,30 @@ pub fn table_path(home: &Path) -> PathBuf {
   home.join(TABLE_RELATIVE_PATH)
 }
 
-/// The changes record store's path under `home`.
-fn changes_path(home: &Path) -> PathBuf {
+/// The changes record store's path under `home` (`approval_policy.changes_path`).
+pub fn changes_path(home: &Path) -> PathBuf {
   home.join(CHANGES_RELATIVE_PATH)
+}
+
+/// The `policy_table_changed` records in the store, in append order (`approval_policy.change_records`). A blank line
+/// is skipped; any other line that does not hold a record refuses the read with the store's path and the line number.
+pub fn change_records(home: &Path) -> Result<Vec<Value>, PolicyError> {
+  let store = changes_path(home);
+  let raw = match fs::read_to_string(&store) {
+    Ok(raw) => raw,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(PolicyError(format!("{}: {error}", paths::display(&store)))),
+  };
+  let mut records = Vec::new();
+  for (index, line) in raw.lines().enumerate() {
+    if line.trim().is_empty() {
+      continue;
+    }
+    let record: Value = serde_json::from_str(line)
+      .map_err(|error| PolicyError(format!("{} line {}: {error}", paths::display(&store), index + 1)))?;
+    records.push(record);
+  }
+  Ok(records)
 }
 
 /// The last recorded content's path under `home`.

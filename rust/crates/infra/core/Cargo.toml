@@ -10,6 +10,7 @@ base64.workspace = true
 fancy-regex.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
+jiff.workspace = true
 libc.workspace = true
 memmap2.workspace = true
 nix.workspace = true

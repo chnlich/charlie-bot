@@ -27,7 +27,9 @@
     .event-row:last-child { border-bottom: none; }
     .event-row:hover { background: #0f172a; }
 
-    pre { white-space: pre-wrap; word-break: break-all; }
+    /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the
+       page; ordinary words keep their shape and the line breaks at the spaces between them. */
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
     /* A phone cannot fit these two rows at their desktop width. The header gives
        the title a row of its own so a whole session name shows, and keeps the

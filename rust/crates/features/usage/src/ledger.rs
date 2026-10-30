@@ -8,7 +8,6 @@ use charliebot_registry::usage::{RecordKind, UsageRecord};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::count::Count;
 use crate::pacific::{self, Week};
@@ -258,7 +257,7 @@ impl UsageLedger {
     sig: &str,
     records: &[StoredRecord],
   ) -> anyhow::Result<usize> {
-    let captured_at = utc_isoformat_text(OffsetDateTime::now_utc())?;
+    let captured_at = charliebot_core::timefmt::isoformat(OffsetDateTime::now_utc());
     self.conn.execute_batch("SAVEPOINT record_file")?;
     let write_result = (|| -> anyhow::Result<()> {
       for record in records {
@@ -322,7 +321,7 @@ impl UsageLedger {
   pub fn mark_capture_finished(&mut self, host: &str) -> anyhow::Result<()> {
     self.conn.execute(
       sql::LEDGER_META_UPSERT_SQL,
-      params![format!("last_capture_at:{host}"), utc_isoformat_text(OffsetDateTime::now_utc())?],
+      params![format!("last_capture_at:{host}"), charliebot_core::timefmt::isoformat(OffsetDateTime::now_utc())],
     )?;
     Ok(())
   }
@@ -676,20 +675,6 @@ fn rows_from_accs(accs: Accs) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String
       .then_with(|| left.model.cmp(&right.model))
   });
   Ok((rows, starts))
-}
-
-fn utc_isoformat_text(now: OffsetDateTime) -> anyhow::Result<String> {
-  let micros = now.nanosecond() / 1_000;
-  let now = now.replace_nanosecond(micros * 1_000)?;
-  let formatted = now.format(&Rfc3339)?;
-  let without_zone = formatted.strip_suffix('Z').expect("UTC RFC3339 ends with Z");
-  Ok(if micros == 0 {
-    format!("{without_zone}+00:00")
-  } else {
-    let (seconds, fraction) =
-      without_zone.rsplit_once('.').expect("RFC3339 has a fractional part when microseconds are nonzero");
-    format!("{seconds}.{fraction:0<6}+00:00")
-  })
 }
 
 #[cfg(test)]

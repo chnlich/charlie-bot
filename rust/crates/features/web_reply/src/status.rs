@@ -1503,6 +1503,7 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     let mut expected = item.clone();
     expected["tier"] = json!("t2");
+    expected["rule"] = Value::Null;
     assert_eq!(without_item_times(&response["waiting"]), json!([expected.clone()]));
     assert_eq!(without_item_times(&stored(&home, &sid).await["waiting"]), json!([expected]));
   }
@@ -1737,7 +1738,9 @@ mod tests {
       .expect("a status file without waiting items lists nothing");
     assert_eq!(without_waiting, json!({"unread": []}));
     let before = unread_waiting(&home.features, &sid, &text).await.expect("the unread query answers");
-    assert_eq!(before, json!({"unread": [item]}));
+    let mut unread_item = item.clone();
+    unread_item["rule"] = Value::Null;
+    assert_eq!(before, json!({"unread": [unread_item]}));
     let digest = record_ask_check(&home.features, &sid, &item, "haiku", "1k is recommended.\ntier: t0 rule: money")
       .await
       .expect("the ask check records");
@@ -1749,7 +1752,7 @@ mod tests {
     fs::write(&page, "second").expect("the status page changes");
     assert_eq!(
       unread_waiting(&home.features, &sid, &text).await.expect("the changed item is unread"),
-      json!({"unread": [item]})
+      json!({"unread": [unread_item]})
     );
     assert_eq!(stored(&home, &sid).await, Value::Null);
     assert!(status_events(&home, &sid).is_empty());

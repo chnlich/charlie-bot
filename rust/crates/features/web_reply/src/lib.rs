@@ -212,7 +212,9 @@ mod tests {
     let unread_body = json!({"session_id": sid, "text": status_text});
 
     let (status, body) = home.send(Method::POST, "/api/internal/web/status/unread", Some(unread_body.clone())).await;
-    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [item.clone()]})));
+    let mut unread_item = item.clone();
+    unread_item["rule"] = json!(null);
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [unread_item]})));
 
     let (status, body) = home
       .send(

@@ -15,8 +15,8 @@ pub struct RemainingItem {
 /// (`metadata.WaitingItem`). An absent context stays absent in stored legacy items. `since` and `since_exact` are
 /// written by the server: `since` is the time the item first appeared or a lower bound on it, and `since_exact` is
 /// false when `since` is that lower bound. `tier` and `rule` are written by the server from the item's ask cold read:
-/// the tier the cold read gave (t0, t1, t2, user-act or review) and the rule that names it, `None` for none. An item
-/// stored before a field existed carries neither.
+/// the tier the cold read gave (t0, t1, t2, user-act or review) and the rule that names it, null for none. An item
+/// stored before the tier existed carries no tier, and its rule reads as null.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WaitingItem {
   pub(crate) text: String,
@@ -29,6 +29,6 @@ pub struct WaitingItem {
   pub(crate) since_exact: Option<bool>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub(crate) tier: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
+  #[serde(default)]
   pub(crate) rule: Option<String>,
 }

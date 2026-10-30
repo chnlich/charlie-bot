@@ -67,7 +67,7 @@ pub fn system_cgroup_base_dir() -> PathBuf {
 /// Return the cgroup directory systemd gives the user slice `unit` under `base_dir`.
 ///
 /// systemd nests a slice inside the slice each dash prefix of its name names (`a-b.slice` lives in
-/// `a.slice/a-b.slice`), so the agents' leaf slice sits inside `charliebot.slice`, not beside it.
+/// `a.slice/a-b.slice`). So the agents' leaf slice sits inside `charliebot.slice`, not beside it.
 pub fn user_slice_dir(base_dir: &Path, unit: &str) -> PathBuf {
   let name = unit.strip_suffix(".slice").unwrap_or(unit);
   let parts: Vec<&str> = name.split('-').collect();

@@ -1,7 +1,8 @@
 //! One server log line: `<time> [<level>] <location> <event> <key>=<value>...`, with the time in UTC to the
 //! millisecond and the location the file and line of the tracing call. `render` writes a line and `parse` reads one
-//! back. `parse` also reads the two forms the server wrote before this one: the text form without a location column,
-//! which a release before this grammar writes after a rollback, and the JSON lines the Python server wrote.
+//! back. `parse` also reads the two forms the server wrote before this one. The first is the text form without a
+//! location column, which a release before this grammar writes after a rollback. The second is the JSON lines the
+//! Python server wrote.
 //!
 //! ```text
 //! line     := stamp SP "[" level "]" SP location SP event [SP field]*
@@ -16,8 +17,8 @@
 //! ```
 //!
 //! Padding is for reading by eye: `parse` splits outside quotes, so padding never reaches a value. `parse` tells the
-//! location column from an old-form line's event by the rule `is_location_column` pins: the location is always written
-//! bare and ends in `:<line>`, and an event always follows it.
+//! location column from an old-form line's event by the rule `is_location_column` pins. The location is always
+//! written bare and ends in `:<line>`, and an event always follows it.
 
 use std::str::CharIndices;
 

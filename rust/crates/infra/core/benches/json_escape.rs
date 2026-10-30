@@ -2,8 +2,8 @@
 //! through `format!`.
 //!
 //! Run with `cargo bench -p charliebot-core --bench json_escape`. Both escapers run on the same input in an
-//! alternating loop inside one process and one profile, and each line prints the nanoseconds per call of
-//! one case and side. Take the median of repeated runs per line.
+//! alternating loop inside one process and one profile. Each line prints the nanoseconds per call of one
+//! case and side. Take the median of repeated runs per line.
 
 use std::hint::black_box;
 use std::time::Instant;

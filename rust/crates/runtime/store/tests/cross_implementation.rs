@@ -2523,8 +2523,8 @@ fn legacy_master_run_and_thread_log_readers_walk_the_python_layouts() {
 /// Every content and metadata shape that Python's aggregator iterates must feed the Rust port too.
 ///
 /// A native transcript event carries `message.content` as a plain string rather than a list of
-/// blocks; Python iterates the characters and ignores them, while the port used to reject the
-/// whole event. The other fields here follow the same `or []` and truthiness rules.
+/// blocks; Python iterates the characters and ignores them, and the port likewise reads the string
+/// as no blocks. The other fields here follow the same `or []` and truthiness rules.
 #[test]
 fn message_aggregator_accepts_every_shape_python_accepts() {
   let events = json!([

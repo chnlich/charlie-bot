@@ -574,8 +574,8 @@ impl RunProcess for TurnProcess<'_> {
           Some(stream_event) = receiver.recv() => {
             let result = async {
               self.tracker.lock().expect("run timing mutex is not poisoned").on_event(&stream_event.event);
-              if stream_event.event.get("type").and_then(Value::as_str) == Some(event_types::ERROR) {
-                self.error_event_messages.push(stream_event.event.get("message").and_then(Value::as_str).unwrap_or_default().to_string());
+              if let Some(message) = charliebot_agents::runs::failure_message(&stream_event.event) {
+                self.error_event_messages.push(message);
               }
               let tracking = Arc::clone(&self.tracking);
               crate::midturn_delivery::record_ack(
@@ -1050,12 +1050,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
       tracing::warn!(target: "charliebot_tasks", session = %metadata.id, stderr, "master_cc_stderr");
     }
     if exit_code != 0 && error_msg.is_none() {
-      let messages = events
-        .iter()
-        .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ERROR))
-        .map(|event| event.get("message").and_then(Value::as_str).unwrap_or_default().to_string())
-        .collect::<Vec<_>>();
-      error_msg = charliebot_agents::runs::select_error_hint(&messages, &stderr);
+      error_msg = charliebot_agents::runs::select_run_error(&events, &stderr);
     }
     if let Some(option) = option.as_ref() {
       emit_round_notices(item, option, &features, &events).await?;

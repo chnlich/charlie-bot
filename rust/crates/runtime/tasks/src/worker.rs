@@ -18,6 +18,7 @@ use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
 use charliebot_agents::runner::{
   AgentRunner, DEFAULT_CLEANUP_TIMEOUT, DEFAULT_POST_RESULT_TIMEOUT, OnSpawnFn, RunRequest, capture_process_diagnostics,
 };
+use charliebot_agents::runs;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::cursor;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
@@ -348,7 +349,11 @@ impl Worker {
       -1
     } else {
       let mut scanned = self.build_backend(None, false)?.backend.translator();
-      let (_, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;
+      let (events, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;
+      // The full log also holds the failure delivered before the re-attach, which the follow does not replay.
+      for event in &events {
+        sink.record_failure(event);
+      }
       exit_code
     };
     // The follow ends with a live process only on the post-result timeout, so a live process here outlived its result.
@@ -663,6 +668,20 @@ impl Worker {
     }
 
     if !stderr_text.is_empty() {
+      tracing::warn!(
+        target: "charliebot_tasks",
+        thread = %self.thread_id,
+        stderr = %stderr_text.chars().take(STDERR_LOG_CHARS).collect::<String>(),
+        "worker_stderr"
+      );
+    }
+    let failure_message = if exit_code == 0 { None } else { runs::last_failure_message(&sink.failure_messages()) };
+    if let Some(message) = failure_message {
+      // The run's own failure text closes the log, so a stderr warning does not mask the cause.
+      let failure_event = json!({"type": ET::ERROR, "content": message, "timestamp": clamp_ts(clamp_to)});
+      sink.append_durable(&failure_event)?;
+      sink.broadcast(failure_event).await?;
+    } else if !stderr_text.is_empty() {
       let mut stderr_event = json!({
         "type": if exit_code == 0 { ET::SYSTEM } else { ET::ERROR },
         "content": stderr_text,
@@ -673,12 +692,6 @@ impl Worker {
       }
       sink.append_durable(&stderr_event)?;
       sink.broadcast(stderr_event).await?;
-      tracing::warn!(
-        target: "charliebot_tasks",
-        thread = %self.thread_id,
-        stderr = %stderr_text.chars().take(STDERR_LOG_CHARS).collect::<String>(),
-        "worker_stderr"
-      );
     }
 
     if let Some(report) = cgroup_report {
@@ -725,6 +738,7 @@ struct RunSink {
   channel: String,
   on_session_event: Option<SessionEventFn>,
   context_tokens: Mutex<Option<i64>>,
+  failure_messages: Mutex<Vec<String>>,
 }
 
 impl RunSink {
@@ -746,7 +760,19 @@ impl RunSink {
       channel,
       on_session_event,
       context_tokens: Mutex::new(None),
+      failure_messages: Mutex::new(Vec::new()),
     })
+  }
+
+  /// Records the structured failure message an event carries, if any.
+  fn record_failure(&self, event: &Value) {
+    if let Some(message) = runs::failure_message(event) {
+      self.failure_messages.lock().expect("failure message mutex is not poisoned").push(message);
+    }
+  }
+
+  fn failure_messages(&self) -> Vec<String> {
+    self.failure_messages.lock().expect("failure message mutex is not poisoned").clone()
   }
 
   /// Appends one event line (`Worker._append_event_line`).
@@ -799,6 +825,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
   account: Option<&str>,
 ) -> anyhow::Result<bool> {
   let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+  sink.record_failure(&event);
   // The run-start adoption signal carries no renderable content, so it is persisted and not broadcast.
   if event_type == ET::SESSION_ATTACHED {
     fill_timestamp(&mut event);

@@ -24,9 +24,8 @@ The mock home has the production number of sessions, so the pages show the layou
 
 ## Mock home
 
-Generate the mock home only when `~/improve/mock-home/<blob>/` is missing.
-The `<blob>` is `git rev-parse <commit>:tools/improve/mock-home.py`, for the branch commit.
-Run `python3 -I tools/improve/mock-home.py generate <blob dir>` on an empty directory to create it.
+The mock home directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.
+When that directory is missing, create it with `mock-home generate`.
 The fixed data keeps the before and after servers on the same bytes, so the two sides compare like with like.
 
 ## Servers
@@ -38,11 +37,11 @@ The server binary then stays equal, so the two trees differ only in the change u
 For any other change, build the before server from an export of `origin/main`, and the after server from the branch.
 Both use the same release profile on one machine, so the change under test is the only difference between them.
 
-Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-ux/ --seed-home <blob dir> --in-caller-scope <commit> <server binary> -- <command>`.
+Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-ux/ --seed-home <mock home directory> --in-caller-scope <commit> <server binary> -- <command>`.
 The tree root keeps the two trees apart, and the seed gives both servers the same data.
 Create the tree root first: the preflight refuses a missing one, so a round never writes outside its own directory.
 
-Run `python3 -I tools/improve/mock-home.py check <blob dir> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
+Run `mock-home check <mock home directory> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
 Stop the round when it exits 1, because that server reads data other than the mock home.
 The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to `<command>`, so the screenshots and the requests name this trial's server and no other.
 

@@ -19,9 +19,8 @@ The mock home has the production number of sessions, so the numbers show the loa
 
 ## Mock home
 
-Generate the mock home only when `~/improve/mock-home/<blob>/` is missing.
-The `<blob>` is `git rev-parse <commit>:tools/improve/mock-home.py`, for the branch commit.
-Run `python3 -I tools/improve/mock-home.py generate <blob dir>` on an empty directory to create it.
+The mock home directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.
+When that directory is missing, create it with `mock-home generate`.
 The fixed data keeps the before and after servers on the same bytes, so the two sides compare like with like.
 
 ## Binaries
@@ -35,12 +34,12 @@ The server binary then stays equal, so the web files are the only difference.
 
 ## Serving
 
-Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-perf/ --seed-home <blob dir> --in-caller-scope <commit> <server binary> -- <command>`.
+Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-perf/ --seed-home <mock home directory> --in-caller-scope <commit> <server binary> -- <command>`.
 The tree root keeps the two trees apart, and the seed gives both servers the same data.
 Create the tree root first: the preflight refuses a missing one, so a round never writes outside its own directory.
 The caller's scope already caps memory on the round's host, so the trial adds no scope of its own.
 
-Run `python3 -I tools/improve/mock-home.py check <blob dir> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
+Run `mock-home check <mock home directory> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
 Stop the round when it exits 1, because that server reads data other than the mock home.
 The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to `<command>`, so every request and every `/proc` read names this trial's server and no other.
 

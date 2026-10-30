@@ -99,7 +99,7 @@
 <div class="wrap">
   <h1>Token usage</h1>
   <p class="sub">Last week is the Pacific calendar week, Monday 00:00 to Monday 00:00; all-time figures are read from the
-  ledger {{ as_of }}.</p>
+  ledger ({{ as_of }}).</p>
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
     <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>
@@ -221,7 +221,7 @@
     <li><b>Cost:</b> this reports tokens only and does not convert to money &mdash; these calls run on subscriptions, not per-token.</li>
   </ul>
 
-  <p class="foot">Read from the ledger in <b>{{ "%.2f"|format(ctx.elapsed_s) }}&thinsp;s</b>; the ledger is {{ as_of }}. A capture refreshes it; this page never captures.</p>
+  <p class="foot">Read from the ledger in <b>{{ "%.2f"|format(ctx.elapsed_s) }}&thinsp;s</b> ({{ as_of }}). A capture refreshes it; this page never captures.</p>
 </div>
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>

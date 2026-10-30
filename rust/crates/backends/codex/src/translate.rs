@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::pricing;
-use super::text::{code_point_len, count_or_zero, empty_object, slice_from, truthy};
+use super::text::{count_or_zero, empty_object, truthy};
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
@@ -120,8 +120,8 @@ impl CodexTranslator {
     if full_text.is_empty() {
       return Ok(Vec::new());
     }
-    let previous_len = self.last_agent_text.get(&item_id).map_or(0, |previous| code_point_len(previous));
-    let delta = slice_from(&full_text, previous_len);
+    let previous_len = self.last_agent_text.get(&item_id).map_or(0, |previous| str_methods::code_point_len(previous));
+    let delta = str_methods::slice_from(&full_text, previous_len);
     self.last_agent_text.insert(item_id, full_text);
     if delta.is_empty() {
       return Ok(Vec::new());
@@ -151,8 +151,9 @@ impl CodexTranslator {
       return Ok(Vec::new());
     }
     let item_id = item_key(item)?;
-    let previous_len = self.last_reasoning_text.get(&item_id).map_or(0, |previous| code_point_len(previous));
-    let delta = slice_from(&text, previous_len);
+    let previous_len =
+      self.last_reasoning_text.get(&item_id).map_or(0, |previous| str_methods::code_point_len(previous));
+    let delta = str_methods::slice_from(&text, previous_len);
     self.last_reasoning_text.insert(item_id, text);
     if delta.is_empty() {
       return Ok(Vec::new());

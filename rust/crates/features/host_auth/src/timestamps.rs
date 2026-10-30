@@ -14,23 +14,7 @@ pub fn utc_now() -> OffsetDateTime {
 }
 
 /// `datetime.isoformat()`: the fraction appears only when the microsecond is not zero.
-pub fn isoformat(moment: OffsetDateTime) -> String {
-  let offset = moment.offset().whole_seconds();
-  let sign = if offset < 0 { '-' } else { '+' };
-  let offset = offset.abs();
-  let fraction = if moment.microsecond() == 0 { String::new() } else { format!(".{:06}", moment.microsecond()) };
-  format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}{sign}{:02}:{:02}",
-    moment.year(),
-    u8::from(moment.month()),
-    moment.day(),
-    moment.hour(),
-    moment.minute(),
-    moment.second(),
-    offset / 3600,
-    offset % 3600 / 60,
-  )
-}
+pub use charliebot_core::timefmt::isoformat;
 
 /// `datetime.fromisoformat()` for a value with an offset. Naive text is refused, since Python cannot subtract a
 /// naive value from the aware clock either.

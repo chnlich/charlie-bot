@@ -157,6 +157,8 @@ pub struct Registry {
   pub(crate) sequence_controllers: Ledger<Arc<dyn SequenceController>>,
   /// The one reader of a session's plan registry, which `features/artifacts` registers.
   pub(crate) plan_registry: Ledger<PlanRegistryFn>,
+  /// The one reader of every open session's Waiting on you items, which `features/web_reply` registers.
+  pub(crate) open_waiting_items: Ledger<OpenWaitingItemsFn>,
   /// The one fork-assertion runner of a page, which `features/artifacts` registers.
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
   /// The lifecycle of a backend type that registered none: one process per run.
@@ -204,6 +206,7 @@ impl Registry {
       usage_resolvers,
       sequence_controllers,
       plan_registry,
+      open_waiting_items,
       fork_assertions,
       default_lifecycle: _,
       default_lifecycle_name,
@@ -257,6 +260,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, usage_resolvers);
     append_ledger_inventory(&mut inventory, sequence_controllers);
     append_ledger_inventory(&mut inventory, plan_registry);
+    append_ledger_inventory(&mut inventory, open_waiting_items);
     append_ledger_inventory(&mut inventory, fork_assertions);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
@@ -473,6 +477,23 @@ pub type ChildEnvFn = fn(&mut Env);
 
 /// Read one session directory's plan registry: the `plans` list of its `plans.json`, or `None` when it has none.
 pub type PlanRegistryFn = fn(&Path) -> anyhow::Result<Option<Vec<Value>>>;
+
+/// One open session's Waiting on you item, as `features/web_reply` reports it to the approval view
+/// (`status.OpenWaitingItem`). The registry carries the row between the two features.
+#[derive(Clone, Debug)]
+pub struct OpenWaitingRow {
+  pub session_id: String,
+  pub session_name: String,
+  pub text: String,
+  pub context: Option<String>,
+  pub link: Option<String>,
+  pub tier: Option<String>,
+  pub rule: Option<String>,
+  pub since: UtcDateTime,
+}
+
+/// Read every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).
+pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
 
 /// Run one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file name
 /// carries no genre prefix, so no assertion set applies to it.
@@ -1281,6 +1302,22 @@ impl Registry {
   /// The registered plan-registry reader; a server with none fails rather than reading plan links without it.
   pub fn plan_registry_reader(&self) -> anyhow::Result<PlanRegistryFn> {
     self.plan_registry.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the plan registry"))
+  }
+
+  /// Register the reader of every open session's Waiting on you items. `approval` reads the day view through it.
+  pub fn open_waiting_items(&mut self, read: OpenWaitingItemsFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.open_waiting_items.insert_single(package, "open_waiting_items", read)
+  }
+
+  /// The registered open Waiting on you reader; a server with none fails rather than listing no user-act items.
+  pub fn open_waiting_items_reader(&self) -> anyhow::Result<OpenWaitingItemsFn> {
+    self
+      .open_waiting_items
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the open Waiting on you reader"))
   }
 
   /// Register the fork-assertion runner. `web_reply`'s status gate runs a linked page through it.

@@ -13,7 +13,7 @@ use charliebot_core::approval_digest;
 use charliebot_core::approval_policy::{self};
 use charliebot_core::pacific::{self, date_text, day_of_stamp};
 use charliebot_registry::FeatureContext;
-use charliebot_web_reply::status::{self, OpenWaitingItem};
+use charliebot_registry::registry::OpenWaitingRow;
 use jiff::civil::Date;
 use serde_json::{Value, json};
 
@@ -46,7 +46,8 @@ pub async fn approval_day(features: &FeatureContext, date: Option<Date>) -> Resu
   let cfg = features.config.get().map_err(|error| DayError::Failed(error.into()))?;
   let home = cfg.charliebot_home.clone();
   let loaded = approval_policy::load_and_record(&home).map_err(|error| DayError::Failed(error.into()))?;
-  let rows = status::open_waiting_items(features).await.map_err(status_refused)?;
+  let reader = features.registry.open_waiting_items_reader().map_err(DayError::Failed)?;
+  let rows = reader(features).await.map_err(DayError::Failed)?;
   let queue = queue_rows(&rows, &loaded.table);
   let login_sheet = login_sheet_rows(&rows, date, today)?;
   let digest = digest_rows(&home, date)?;
@@ -58,17 +59,8 @@ pub async fn approval_day(features: &FeatureContext, date: Option<Date>) -> Resu
   }))
 }
 
-/// The `WebReplyError` shapes the all-sessions read can raise; none of its session checks run here, so a refusal is
-/// a failure (`day._status_refused`).
-fn status_refused(error: charliebot_web_reply::status::WebReplyError) -> DayError {
-  match error {
-    charliebot_web_reply::status::WebReplyError::Refused { status, detail } => DayError::Refused(status, detail),
-    charliebot_web_reply::status::WebReplyError::Failed(error) => DayError::Failed(error),
-  }
-}
-
 /// One open item's row, with the session that holds it.
-fn row_json(row: &OpenWaitingItem) -> Value {
+fn row_json(row: &OpenWaitingRow) -> Value {
   json!({
     "session_id": row.session_id,
     "session_name": row.session_name,
@@ -104,7 +96,7 @@ fn rule_rank(rule: Option<&str>, table: &approval_policy::ApprovalPolicyTable) -
 
 /// The queue: every open item once, T0 ranked, then review, then the rest, arrival order within one rank
 /// (`day._queue_rows`). Each T0 row carries its rule's rank; a rule the table carries no rank of reads as null.
-fn queue_rows(rows: &[OpenWaitingItem], table: &approval_policy::ApprovalPolicyTable) -> Vec<Value> {
+fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTable) -> Vec<Value> {
   let mut keyed: Vec<(u8, i64, charliebot_store::metadata::UtcDateTime, Value)> = rows
     .iter()
     .map(|row| {
@@ -125,7 +117,7 @@ fn queue_rows(rows: &[OpenWaitingItem], table: &approval_policy::ApprovalPolicyT
 
 /// The login sheet (`day._login_sheet_rows`). Today's holds every open user-act item, whatever day judged it, because
 /// the panels list those items only through this sheet. A past day's holds the items whose start time falls in it.
-fn login_sheet_rows(rows: &[OpenWaitingItem], date: Date, today: Date) -> Result<Vec<Value>, DayError> {
+fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date) -> Result<Vec<Value>, DayError> {
   let mut sheet = Vec::new();
   for row in rows {
     if row.tier.as_deref() != Some("user-act") {

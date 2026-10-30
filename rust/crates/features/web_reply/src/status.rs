@@ -888,6 +888,34 @@ pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWai
   Ok(rows)
 }
 
+/// The registry's reader for every open session's Waiting on you items (`registry.OpenWaitingItemsFn`), which the
+/// approval view looks up on the registry instead of importing this feature.
+pub fn open_waiting_rows<'a>(
+  features: &'a FeatureContext,
+) -> futures_util::future::BoxFuture<'a, anyhow::Result<Vec<charliebot_registry::registry::OpenWaitingRow>>> {
+  Box::pin(async move {
+    let rows = open_waiting_items(features).await.map_err(|error| match error {
+      WebReplyError::Failed(error) => error,
+      WebReplyError::Refused { status, detail } => anyhow::anyhow!("{status}: {detail}"),
+    })?;
+    Ok(
+      rows
+        .into_iter()
+        .map(|row| charliebot_registry::registry::OpenWaitingRow {
+          session_id: row.session_id,
+          session_name: row.session_name,
+          text: row.text,
+          context: row.context,
+          link: row.link,
+          tier: row.tier,
+          rule: row.rule,
+          since: row.since,
+        })
+        .collect(),
+    )
+  })
+}
+
 /// The task-tree reads run off the runtime's worker threads, as the Python tree reads run in `asyncio.to_thread`.
 async fn tree_read<T, F>(store: &Arc<Store>, read: F) -> Result<T, WebReplyError>
 where

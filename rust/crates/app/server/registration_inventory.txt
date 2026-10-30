@@ -15,6 +15,7 @@ page_packages	src.features.slack	src.features.slack
 page_packages	src.features.discord	src.features.discord
 page_packages	src.features.disk_sweep	src.features.disk_sweep
 page_packages	src.features.web_reply	src.features.web_reply
+page_packages	src.features.approval	src.features.approval
 page_packages	src.features.host_auth	src.features.host_auth
 page_packages	src.features.diff_view	src.features.diff_view
 page_packages	src.features.explain	src.features.explain
@@ -46,6 +47,8 @@ routers	src.features.diag	src.features.diag
 routers	src.features.slack	src.features.slack
 routers	src.features.discord	src.features.discord
 routers	src.features.web_reply	src.features.web_reply
+routers	src.features.approval	src.features.approval
+routers	src.features.approval	src.features.approval
 routers	src.features.host_auth	src.features.host_auth
 routers	src.features.diff_view	src.features.diff_view
 routers	src.features.diff_view	src.features.diff_view
@@ -163,6 +166,7 @@ usage resolver	src.backends.codex	codex
 sequence controller	src.features.cron	cron
 sequence controller	src.features.improve	improve
 plan registry	src.features.artifacts	plan_registry
+open waiting items reader	src.features.web_reply	open_waiting_items
 fork assertions	src.features.artifacts	fork_assertions
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups

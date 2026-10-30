@@ -32,6 +32,7 @@ use turn_contribution::WebReplyTurnContribution;
 /// web-reply status field of each session.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
+  registry.open_waiting_items(status::open_waiting_rows)?;
   registry.turn_contribution(event_types::WEB_REPLY, Arc::new(WebReplyTurnContribution))?;
   registry.metadata_slot_with_validator(
     MetadataSlot {

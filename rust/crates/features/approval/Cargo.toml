@@ -12,12 +12,12 @@ charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
-charliebot-web-reply.workspace = true
 http.workspace = true
 jiff.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+charliebot-web-reply.workspace = true
 tempfile.workspace = true
 tower.workspace = true

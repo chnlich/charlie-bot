@@ -17,7 +17,6 @@ libc.workspace = true
 md-5.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
-multer.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
 regex.workspace = true

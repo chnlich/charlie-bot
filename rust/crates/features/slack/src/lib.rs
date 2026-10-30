@@ -8,7 +8,7 @@ pub mod metadata;
 mod service;
 mod slack_client;
 pub mod slack_listener;
-mod thread_contract;
+pub mod thread_contract;
 pub mod token;
 mod turn_contribution;
 

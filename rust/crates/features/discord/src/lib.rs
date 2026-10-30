@@ -10,7 +10,7 @@ pub mod discord_listener;
 mod event_types;
 pub mod metadata;
 mod service;
-mod thread_contract;
+pub mod thread_contract;
 mod turn_contribution;
 
 #[cfg(test)]

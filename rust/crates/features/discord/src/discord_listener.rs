@@ -11,7 +11,7 @@ use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadM
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::pystr;
+use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_triggers::triggers::TriggerManager;
@@ -412,7 +412,7 @@ fn mention_ids(message: &Value) -> Vec<&str> {
 /// The thread name made from the mention's content (`_thread_name`).
 fn thread_name(content: &str) -> String {
   let stripped = MENTION_TOKEN_RE.replace_all(content, "");
-  let name: String = pystr::collapse_whitespace(&stripped).chars().take(THREAD_NAME_CHARS).collect();
+  let name: String = str_methods::collapse_whitespace(&stripped).chars().take(THREAD_NAME_CHARS).collect();
   if name.is_empty() { "CharlieBot".to_string() } else { name }
 }
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use charliebot_core::{fsutil, pyfmt, pystr};
+use charliebot_core::{fsutil, text_repr, str_methods};
 use memchr::{memchr_iter, memchr2, memchr2_iter};
 use memmap2::Mmap;
 use serde_json::Value;
@@ -948,7 +948,7 @@ impl Store {
         kept_raw.push(line);
         continue;
       }
-      if pystr::strip(line).is_empty() {
+      if str_methods::strip(line).is_empty() {
         continue;
       }
       if archives_line(line, cutoff, &live_path, index + 1)? {
@@ -1446,7 +1446,7 @@ fn python_event_timestamp(value: UtcDateTime) -> String {
 /// whose `timestamp` is missing, falsy or unparsable, is not archived and starts the kept part. A JSON value that
 /// is not an object, or a truthy `timestamp` that is not a string, fails the archive, as Python raises on it.
 fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number: usize) -> StoreResult<bool> {
-  let Ok(event) = decode_line(pystr::strip(line).as_bytes()) else {
+  let Ok(event) = decode_line(str_methods::strip(line).as_bytes()) else {
     tracing::debug!(path = %live_path.display(), line = line_number, "chat_event_archive_parse_skip");
     return Ok(false);
   };
@@ -1454,7 +1454,7 @@ fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number:
     return Err(StoreError::new(format!("{}:{line_number}: chat event is not a JSON object", live_path.display())));
   };
   let timestamp = match event.get("timestamp") {
-    Some(timestamp) if pyfmt::python_truthy(timestamp) => timestamp,
+    Some(timestamp) if text_repr::python_truthy(timestamp) => timestamp,
     _ => return Ok(false),
   };
   let Value::String(timestamp) = timestamp else {

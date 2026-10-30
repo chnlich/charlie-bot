@@ -1,5 +1,5 @@
 //! The 422 bodies against the bodies FastAPI answers for the same requests
-//! (`rust/fixtures/python/validation_422.json`, written by `rust/scripts/gen_compat_fixtures.py`).
+//! (`rust/fixtures/golden/validation_422_golden.json`, written by `rust/scripts/gen_compat_fixtures.py`).
 //!
 //! A query or path case replays its URL through the parsers, with the parameter declarations the fixture
 //! lists for its endpoint, and compares the body bytes. A body case rebuilds the errors its JSON body
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use charliebot_compat::validation::{self, Bound, FieldError, Kind, Loc, Source};
 use serde_json::{Value, json};
 
-const FIXTURE: &str = include_str!("../../../../fixtures/python/validation_422.json");
+const FIXTURE: &str = include_str!("../../../../fixtures/golden/validation_422_golden.json");
 
 /// `Literal["thumbs_up", "thumbs_down"]` of the body model.
 const THUMBS: &[&str] = &["thumbs_up", "thumbs_down"];

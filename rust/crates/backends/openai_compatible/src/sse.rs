@@ -1,11 +1,11 @@
 //! The byte-level parts of the proxy's stream: the line framing of `src/infra/sse.py` and the frame `_sse_event` writes.
 
 use axum::response::sse::Event;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use memchr::memchr2;
 use serde_json::{Map, Value};
 
-use super::pyvalue::COMPACT_ASCII_JSON;
+use super::value_ops::COMPACT_ASCII_JSON;
 
 /// Splits a byte stream into lines as `sse.iter_sse_lines` frames them. CRLF, LF and CR each end a line. A CR at a
 /// chunk's end waits for the next byte, so a CRLF split across chunks is still one terminator.
@@ -54,7 +54,7 @@ pub fn sse_event(event: &str, data: &Value) -> Event {
   if let Value::Object(data) = data {
     members.extend(data.clone());
   }
-  Event::default().event(event).data(pyfmt::json_dumps(&Value::Object(members), &COMPACT_ASCII_JSON))
+  Event::default().event(event).data(text_repr::json_dumps(&Value::Object(members), &COMPACT_ASCII_JSON))
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use charliebot_core::pyfmt::{JsonStyle, float_repr, json_dumps, str_repr};
+use charliebot_core::text_repr::{JsonStyle, float_repr, json_dumps, str_repr};
 use charliebot_store::control_events::sha256_hex;
 use serde_json::{Map, Value, json};
 

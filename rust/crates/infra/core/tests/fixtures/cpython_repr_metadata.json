@@ -1,6 +1,0 @@
-{
-  "source": "rust/crates/infra/core/src/pyfmt.rs::CPYTHON_REPRS",
-  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
-  "fixture": "cpython_repr.txt",
-  "code_point_count": 1112064
-}

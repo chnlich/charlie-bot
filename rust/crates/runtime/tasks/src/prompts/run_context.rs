@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::Path;
 
-use charliebot_compat::python_json;
+use charliebot_compat::json_loads;
 use charliebot_store::Store;
 use charliebot_store::run_records::run_not_found_in_task_text;
 use serde_json::{Value, json};
@@ -77,7 +77,7 @@ fn stored_snapshot(path: &Path, reference: &str) -> Result<Value, ContextReadErr
       error.python_message(path)
     ))
   })?;
-  let stored = python_json::loads_text(&text).map_err(|error| {
+  let stored = json_loads::loads_text(&text).map_err(|error| {
     ContextReadError::internal(format!("stored prompt snapshot unreadable at {reference}: {error}"))
   })?;
   let snapshot =

@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_core::event_types::{ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT};
-use charliebot_core::pyfmt::{PYTHON_JSON_DEFAULT, python_str};
+use charliebot_core::text_repr::{PYTHON_JSON_DEFAULT, python_str};
 use charliebot_store::run_records::NewestFirstEvents;
 use regex::Regex;
 use serde_json::Value;
@@ -221,7 +221,7 @@ fn event_text(event: &Value) -> String {
       continue;
     }
     match value {
-      Value::Object(_) | Value::Array(_) => parts.push(charliebot_core::pyfmt::json_dumps(value, &PYTHON_JSON_DEFAULT)),
+      Value::Object(_) | Value::Array(_) => parts.push(charliebot_core::text_repr::json_dumps(value, &PYTHON_JSON_DEFAULT)),
       other => parts.push(python_str(other)),
     }
   }

@@ -342,13 +342,13 @@ Known divergences from Python:
 
 ## Tests
 
-`tests/prompt_snapshot_golden.rs` compares the recorded 18-case golden matrix (`fixtures/python_prompt_snapshot_golden.json`,
+`tests/prompt_snapshot_golden.rs` compares the recorded 18-case golden matrix (`fixtures/prompt_snapshot_golden.json`,
 recorded from the deleted Python reference) byte for byte, with each `prompt_hash` and `char_count`, and the
 damaged-snapshot error texts. `tests/task_prompts.rs` ports the task-tree and run-context cases of the Python tests over
 a temporary store; the staged-memory case is not ported. Unit tests cover the verify trailer, the worker prompt loader,
 the review steps and the snapshot dedup and hash.
 
-`tests/turn_golden.rs` compares the recorded twelve scripted streams (`fixtures/python_turn_golden.json`) through the
+`tests/turn_golden.rs` compares the recorded twelve scripted streams (`fixtures/turn_golden.json`) through the
 Rust queue after normalizing event ids, timestamps, and elapsed timing fields. It starts only synthetic `/bin/sh`
 backends.
 

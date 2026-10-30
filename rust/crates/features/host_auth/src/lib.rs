@@ -6,7 +6,7 @@ mod host_auth;
 mod page;
 mod poller;
 mod probe;
-mod pytext;
+mod text_lines;
 mod ssh_config;
 mod timestamps;
 

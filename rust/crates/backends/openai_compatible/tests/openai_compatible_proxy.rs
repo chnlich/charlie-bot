@@ -41,7 +41,7 @@ const PACKAGE: &str = "src.backends.openai_compatible";
 const ACCESS_KEY: &str = "synthetic-access-key";
 const DONE_FRAME: &[u8] = b"data: [DONE]\n\n";
 const MESSAGE_STOP_FRAME: &[u8] = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
-const PYTHON_FIXTURE: &str = include_str!("fixtures/openai_compatible_reference.json");
+const PYTHON_FIXTURE: &str = include_str!("fixtures/openai_compatible_golden.json");
 
 /// One case of the matrix, as the Python reference printed it.
 struct Case {

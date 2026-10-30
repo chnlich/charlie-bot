@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_core::pyfmt::python_str;
+use charliebot_core::text_repr::python_str;
 use charliebot_registry::usage::{RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl};
 use regex::Regex;
 use serde_json::{Map, Value};

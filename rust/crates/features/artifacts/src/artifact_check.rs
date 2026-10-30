@@ -5,10 +5,10 @@ use std::sync::LazyLock;
 
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::pyfmt;
-use charliebot_core::pyregex::compile_python_regex;
-use charliebot_core::pystr;
-use charliebot_pyhtml::{EventKind, folds_at_open, parse_with, unescape};
+use charliebot_core::text_repr;
+use charliebot_core::regex_classes::compile_python_regex;
+use charliebot_core::str_methods;
+use charliebot_html::{EventKind, folds_at_open, parse_with, unescape};
 use charliebot_user_text_checks::{self as user_text_checks, UserTextChecksConfig};
 use fancy_regex::Regex;
 use serde::Serialize;
@@ -370,7 +370,7 @@ fn run_assertions_sync_with_user_text(
     anyhow!(
       "no assertion set registered for genre {}; genres with a set: plan, understanding, sitrep, debug, explain, \
        waiting",
-      pyfmt::str_repr(genre)
+      text_repr::str_repr(genre)
     )
   })?;
   let source =
@@ -454,7 +454,7 @@ fn parse_dom(source: &str) -> anyhow::Result<Vec<Element>> {
         })
         .collect::<HashMap<_, _>>();
       let class_value = attributes.get("class").and_then(Option::as_deref).unwrap_or("");
-      let classes = pystr::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
+      let classes = str_methods::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
       let parent = *stack.last().expect("the root remains on the parser stack");
       let index = nodes.len();
       nodes.push(Element { tag: tag.clone(), classes, attrs: attributes, parent: Some(parent), children: Vec::new() });
@@ -540,7 +540,7 @@ fn section_heading(nodes: &[Element], element: usize) -> String {
 fn named_section(nodes: &[Element], section: usize) -> String {
   find(nodes, section, "h2", &[])
     .first()
-    .map(|&heading| pystr::collapse_whitespace(&element_text(nodes, heading)))
+    .map(|&heading| str_methods::collapse_whitespace(&element_text(nodes, heading)))
     .unwrap_or_else(|| "<unnamed section>".to_owned())
 }
 
@@ -585,8 +585,8 @@ fn check_style_verbatim(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
   if template_styles.len() != 1 {
     bail!("genre template {template_rel} carries {} <style> blocks, expected one", template_styles.len());
   }
-  let page_text = pystr::collapse_whitespace(&element_text(&context.nodes, page_styles[0]));
-  let template_text = pystr::collapse_whitespace(&element_text(&template_nodes, template_styles[0]));
+  let page_text = str_methods::collapse_whitespace(&element_text(&context.nodes, page_styles[0]));
+  let template_text = str_methods::collapse_whitespace(&element_text(&template_nodes, template_styles[0]));
   if page_text == template_text {
     Ok(vec![outcome(STYLE_VERBATIM, true, "")])
   } else {
@@ -599,27 +599,27 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
   for heading in find(&context.nodes, 0, "h2", &[]) {
     let numbers = find(&context.nodes, heading, "span", &["n"]);
     if numbers.len() > 1 {
-      let heading_text = pystr::collapse_whitespace(&element_text(&context.nodes, heading));
+      let heading_text = str_methods::collapse_whitespace(&element_text(&context.nodes, heading));
       return Ok(vec![outcome(
         SECTIONS_NUMBERED,
         false,
-        format!("h2 {} carries {} span.n numbers", pyfmt::str_repr(&heading_text), numbers.len()),
+        format!("h2 {} carries {} span.n numbers", text_repr::str_repr(&heading_text), numbers.len()),
       )]);
     }
     if let Some(&number) = numbers.first() {
       numbered.push((
-        pystr::collapse_whitespace(&element_text(&context.nodes, heading)),
-        pystr::collapse_whitespace(&element_text(&context.nodes, number)),
+        str_methods::collapse_whitespace(&element_text(&context.nodes, heading)),
+        str_methods::collapse_whitespace(&element_text(&context.nodes, number)),
       ));
     }
   }
   let mut values = Vec::new();
   for (heading, number) in numbered {
-    if !pystr::isdigit(&number) {
+    if !str_methods::isdigit(&number) {
       return Ok(vec![outcome(
         SECTIONS_NUMBERED,
         false,
-        format!("h2 {} span.n reads {}, not an integer", pyfmt::str_repr(&heading), pyfmt::str_repr(&number)),
+        format!("h2 {} span.n reads {}, not an integer", text_repr::str_repr(&heading), text_repr::str_repr(&number)),
       )]);
     }
     values.push(python_decimal_integer(&number).map_err(|error| anyhow!("{error}"))?);
@@ -688,7 +688,7 @@ fn check_fork_open_shape(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
         false,
         format!(
           "fork #{index} (section {}) is missing {}",
-          pyfmt::str_repr(&section_heading(&context.nodes, fork)),
+          text_repr::str_repr(&section_heading(&context.nodes, fork)),
           missing.join(", ")
         ),
       ));
@@ -772,7 +772,7 @@ fn quoted_spans(text: &str) -> Vec<&str> {
 fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let mut failures = Vec::new();
   for (index, fork) in open_forks(&context.nodes) {
-    let section = pyfmt::str_repr(&section_heading(&context.nodes, fork));
+    let section = text_repr::str_repr(&section_heading(&context.nodes, fork));
     if folded_ancestor(&context.nodes, fork, None) {
       failures.push(outcome(
         FORK_OPTIONS,
@@ -784,7 +784,7 @@ fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutc
     let lines = visible_option_lines(&context.nodes, fork);
     let mut names = Vec::new();
     for (position, &line) in lines.iter().enumerate() {
-      let text = pystr::collapse_whitespace(&element_text(&context.nodes, line));
+      let text = str_methods::collapse_whitespace(&element_text(&context.nodes, line));
       match option_name(&text) {
         Some(name) => names.push(name.to_owned()),
         None => failures.push(outcome(
@@ -802,7 +802,7 @@ fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutc
       ));
     }
     if let Some(&recommendation) = find(&context.nodes, fork, "p", &["rec"]).first() {
-      let text = pystr::collapse_whitespace(&element_text(&context.nodes, recommendation));
+      let text = str_methods::collapse_whitespace(&element_text(&context.nodes, recommendation));
       let quoted = quoted_spans(&text);
       if !quoted.iter().any(|span| names.iter().any(|name| name == span)) {
         let listed = if quoted.is_empty() {
@@ -897,13 +897,13 @@ fn check_fork_explainer(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
         false,
         format!(
           "fork #{index} (section {}) has no details.details-layer",
-          pyfmt::str_repr(&section_heading(&context.nodes, fork))
+          text_repr::str_repr(&section_heading(&context.nodes, fork))
         ),
       ));
     } else {
       let has_body = descendants(&context.nodes, layers[0]).into_iter().any(|element| {
         EXPLAINER_BODY_TAGS.contains(&context.nodes[element].tag.as_str())
-          && !pystr::split_whitespace(&element_text(&context.nodes, element)).is_empty()
+          && !str_methods::split_whitespace(&element_text(&context.nodes, element)).is_empty()
       });
       if !has_body {
         failures.push(outcome(
@@ -911,7 +911,7 @@ fn check_fork_explainer(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
           false,
           format!(
             "fork #{index} (section {}) explainer has no body",
-            pyfmt::str_repr(&section_heading(&context.nodes, fork))
+            text_repr::str_repr(&section_heading(&context.nodes, fork))
           ),
         ));
       }
@@ -932,7 +932,7 @@ fn check_goal_budget(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
       false,
       format!(
         "artifact {} has no 'Problem / Goal' section",
-        pyfmt::str_repr(&context.artifact.file_name().expect("an artifact path has a name").to_string_lossy())
+        text_repr::str_repr(&context.artifact.file_name().expect("an artifact path has a name").to_string_lossy())
       ),
     )]);
   };
@@ -941,7 +941,7 @@ fn check_goal_budget(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
   let body = revision_mark_regex("span", "revbadge").replace_all(&body, "");
   let body = TAG_RE.replace_all(&body, "");
   let decoded = unescape(&body);
-  let text = pystr::collapse_whitespace(&decoded);
+  let text = str_methods::collapse_whitespace(&decoded);
   let weighted = text.chars().count()
     + text
       .chars()
@@ -1026,8 +1026,8 @@ fn render_probe(chrome_bin: &Path, probe: &Path) -> anyhow::Result<Result<i32, S
 fn python_decimal_integer(text: &str) -> Result<String, String> {
   let mut digits = String::with_capacity(text.len());
   for character in text.chars() {
-    let Some(digit) = pystr::python_decimal_value(character) else {
-      return Err(format!("invalid literal for int() with base 10: {}", pyfmt::str_repr(text)));
+    let Some(digit) = str_methods::python_decimal_value(character) else {
+      return Err(format!("invalid literal for int() with base 10: {}", text_repr::str_repr(text)));
     };
     digits.push(char::from(b'0' + digit));
   }
@@ -1050,8 +1050,8 @@ fn check_ordinal_named(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
         false,
         format!(
           "(section {}) {} names something outside this page and no content name is in reach; name it at first use (path, title, ticket, or a parenthetical): {snippet}",
-          pyfmt::str_repr(&section_heading(&context.nodes, block)),
-          pyfmt::str_repr(&joined)
+          text_repr::str_repr(&section_heading(&context.nodes, block)),
+          text_repr::str_repr(&joined)
         ),
       )
     })
@@ -1063,16 +1063,16 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
   let fork_count = find(&context.nodes, 0, "div", &["fork"]).len();
   let section_numbers = find(&context.nodes, 0, "span", &["sn"])
     .into_iter()
-    .map(|element| pystr::collapse_whitespace(&element_text(&context.nodes, element)))
+    .map(|element| str_methods::collapse_whitespace(&element_text(&context.nodes, element)))
     .collect::<HashSet<_>>();
   let mut named = HashSet::new();
   let mut flagged = Vec::new();
   for block in ordinal_blocks(&context.nodes) {
     let block_text = block_scan_text(&context.nodes, block);
-    let collapsed = pystr::collapse_whitespace(&block_text);
+    let collapsed = str_methods::collapse_whitespace(&block_text);
     let text = unescape(&collapsed);
     for sentence in SENTENCE_SPLIT.split(&text) {
-      let sentence = pystr::strip(sentence?);
+      let sentence = str_methods::strip(sentence?);
       if sentence.is_empty() {
         continue;
       }
@@ -1140,7 +1140,7 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
         let opening = before.rfind(['（', '(']);
         let closing = before.rfind(['）', ')']);
         if opening.is_some_and(|opening| Some(opening) > closing)
-          && pystr::strip(&before[..opening.unwrap()]).chars().count() >= 2
+          && str_methods::strip(&before[..opening.unwrap()]).chars().count() >= 2
         {
           named.insert(ordinal_label(kind));
           continue;
@@ -1248,11 +1248,11 @@ fn split_code_spans(source: &str) -> CodeText {
 }
 
 fn ordinal_label(kind: &str) -> String {
-  pystr::collapse_whitespace(kind)
+  str_methods::collapse_whitespace(kind)
 }
 
 fn ordinal_number(number: &str) -> anyhow::Result<Option<usize>> {
-  if pystr::isdigit(number) {
+  if str_methods::isdigit(number) {
     return Ok(python_decimal_integer(number).ok().and_then(|value| value.parse().ok()));
   }
   if number == "十" {
@@ -1313,7 +1313,7 @@ fn check_explain_figures(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
   let mut failures = Vec::new();
   for (index, &step) in steps.iter().enumerate() {
     let index = index + 1;
-    let heading = pyfmt::str_repr(&section_heading(&context.nodes, step));
+    let heading = text_repr::str_repr(&section_heading(&context.nodes, step));
     let svgs = find(&context.nodes, step, "svg", &[]);
     let imgs = find(&context.nodes, step, "img", &[]);
     if svgs.is_empty() && imgs.is_empty() {
@@ -1364,7 +1364,7 @@ fn check_explain_figures(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
     let opening = outside.first().is_some_and(|&paragraph| paragraph < first_step);
     let extra = outside.len() - usize::from(opening);
     if extra > 0 {
-      let heading = pyfmt::str_repr(&named_section(&context.nodes, section));
+      let heading = text_repr::str_repr(&named_section(&context.nodes, section));
       let after_opening = if opening { " after its opening p" } else { "" };
       failures.push(outcome(
         EXPLAIN_FIGURES,
@@ -1388,7 +1388,7 @@ fn check_explain_examples(context: &Context<'_>) -> anyhow::Result<Vec<Assertion
   for (index, example) in find(&context.nodes, 0, "div", &["example"]).into_iter().enumerate() {
     if find(&context.nodes, example, "span", &["src"]).is_empty() {
       let index = index + 1;
-      let heading = pyfmt::str_repr(&section_heading(&context.nodes, example));
+      let heading = text_repr::str_repr(&section_heading(&context.nodes, example));
       failures.push(outcome(EXPLAIN_EXAMPLES, false, format!("example #{index} (section {heading}) has no span.src")));
     }
   }
@@ -1407,7 +1407,7 @@ fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
       }
       block = context.nodes[current].parent;
     }
-    let heading = pyfmt::str_repr(&section_heading(&context.nodes, fact));
+    let heading = text_repr::str_repr(&section_heading(&context.nodes, fact));
     match block {
       None => failures.push(outcome(
         FACT_ANCHORED,
@@ -1431,7 +1431,7 @@ fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
 
 /// `_has_readable_text`: the text carries a Unicode letter or digit; punctuation alone is not a gloss.
 fn has_readable_text(text: &str) -> bool {
-  text.chars().any(pystr::is_python_alphanumeric)
+  text.chars().any(str_methods::is_python_alphanumeric)
 }
 
 /// `_marked_element_text`: the block's text with the target element fenced by the requirement sentinels, so the text
@@ -1472,8 +1472,8 @@ fn check_req_chips(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome
       }
       block = context.nodes[current].parent;
     }
-    let heading = pyfmt::str_repr(&section_heading(&context.nodes, *chip));
-    let chip_text = pyfmt::str_repr(&pystr::collapse_whitespace(&element_text(&context.nodes, *chip)));
+    let heading = text_repr::str_repr(&section_heading(&context.nodes, *chip));
+    let chip_text = text_repr::str_repr(&str_methods::collapse_whitespace(&element_text(&context.nodes, *chip)));
     let Some(block) = block else {
       failures.push(outcome(
         REQ_CHIPS,

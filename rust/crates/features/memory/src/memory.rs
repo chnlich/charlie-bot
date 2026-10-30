@@ -10,8 +10,8 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use anyhow::{Context, bail};
-use charliebot_core::pyfmt::str_repr;
-use charliebot_core::pystr;
+use charliebot_core::text_repr::str_repr;
+use charliebot_core::str_methods;
 
 const TOPICS_FILENAME: &str = "topics";
 const ENTRIES_DIRNAME: &str = "entries";
@@ -229,7 +229,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
     }
     let value = match key {
       "title" => {
-        let title = pystr::strip(value);
+        let title = str_methods::strip(value);
         if title.is_empty() {
           return Err(MemoryFormatError(format!("{location}: line {line_no}: empty 'title' header value")));
         }
@@ -259,7 +259,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
     topic: header.get("topic").cloned(),
     slug: entry_path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default(),
     scope: header.get("scope").cloned(),
-    audience: header.get("audience").map(|raw| raw.split(',').map(|part| pystr::strip(part).to_string()).collect()),
+    audience: header.get("audience").map(|raw| raw.split(',').map(|part| str_methods::strip(part).to_string()).collect()),
     title: title.clone(),
     body: body_lines.join("\n"),
   })

@@ -416,7 +416,7 @@ dependencies = [
  "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
- "charliebot-pyhtml",
+ "charliebot-html",
  "charliebot-registry",
  "charliebot-store",
  "charliebot-tasks",
@@ -888,6 +888,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-html"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "fancy-regex",
+ "flate2",
+ "html-escape",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "charliebot-improve"
 version = "0.1.0"
 dependencies = [
@@ -1059,18 +1071,6 @@ dependencies = [
  "charliebot-voice",
  "charliebot-web-reply",
  "charliebot-web-search",
-]
-
-[[package]]
-name = "charliebot-pyhtml"
-version = "0.1.0"
-dependencies = [
- "charliebot-core",
- "fancy-regex",
- "flate2",
- "html-escape",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1286,7 +1286,7 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-gemini",
- "charliebot-pyhtml",
+ "charliebot-html",
  "charliebot-registry",
  "charliebot-shell-harness",
  "charliebot-store",
@@ -1434,7 +1434,7 @@ dependencies = [
  "anyhow",
  "charliebot-compat",
  "charliebot-core",
- "charliebot-pyhtml",
+ "charliebot-html",
  "charliebot-registry",
  "fancy-regex",
  "serde",

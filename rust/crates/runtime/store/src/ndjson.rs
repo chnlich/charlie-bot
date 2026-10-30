@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 use charliebot_core::fsutil;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use memchr::memchr_iter;
 use memmap2::Mmap;
 use serde_json::Value;
@@ -104,7 +104,7 @@ fn parse_mapped_lines(bytes: &[u8], should_stop: &mut impl FnMut() -> bool) -> O
 
 /// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.
 pub(crate) fn encode_line(value: &Value) -> String {
-  let mut line = pyfmt::json_dumps(value, &APPEND_JSON);
+  let mut line = text_repr::json_dumps(value, &APPEND_JSON);
   line.push('\n');
   line
 }

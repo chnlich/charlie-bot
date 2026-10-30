@@ -16,7 +16,7 @@ use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
@@ -445,7 +445,7 @@ async fn session_runs(
     other => {
       return responses::json(
         StatusCode::BAD_REQUEST,
-        &json!({"detail": format!("unknown runs order: {} (use 'asc' or 'desc')", pyfmt::str_repr(other))}),
+        &json!({"detail": format!("unknown runs order: {} (use 'asc' or 'desc')", text_repr::str_repr(other))}),
       );
     }
   };
@@ -557,8 +557,8 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
   };
   let text = event
     .get("content")
-    .filter(|value| pyfmt::python_truthy(value))
-    .or_else(|| event.get("summary").filter(|value| pyfmt::python_truthy(value)))
+    .filter(|value| text_repr::python_truthy(value))
+    .or_else(|| event.get("summary").filter(|value| text_repr::python_truthy(value)))
     .map_or_else(String::new, python_string);
   Ok(json!({
     "id": event.get("id").map_or_else(|| "None".to_string(), python_string),

@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-use crate::pyfmt;
+use crate::text_repr;
 use regex::Regex;
 use serde_json::{Map, Value};
 
@@ -99,7 +99,7 @@ fn write_float(output: &mut String, value: f64) {
   } else if value == f64::NEG_INFINITY {
     output.push_str("-.inf");
   } else {
-    let mut repr = pyfmt::float_repr(value).to_lowercase();
+    let mut repr = text_repr::float_repr(value).to_lowercase();
     if !repr.contains('.')
       && let Some(exponent) = repr.find('e')
     {

@@ -3,7 +3,7 @@
 
 use anyhow::bail;
 use charliebot_core::event_types;
-use charliebot_core::pyfmt::python_str;
+use charliebot_core::text_repr::python_str;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 

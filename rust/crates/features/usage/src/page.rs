@@ -12,7 +12,7 @@ use axum::extract::State;
 use axum::response::Response;
 use charliebot_compat::{responses, routing};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::Registry;
 use charliebot_registry::templating::Templating;
@@ -140,7 +140,7 @@ pub(crate) fn token_usage_context(
   });
   Ok(json!({
     "ctx": ctx,
-    "payload": pyfmt::json_dumps(&json!({"rows": rows}), &PAYLOAD_JSON),
+    "payload": text_repr::json_dumps(&json!({"rows": rows}), &PAYLOAD_JSON),
     "window": [window_first, window_last],
     "window_str": window_str,
     "cache_share": percent(tot.cache_read, tot.total),

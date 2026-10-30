@@ -8,7 +8,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use axum::routing::delete;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_registry::FeatureContext;
@@ -205,7 +205,7 @@ async fn delete_session_permanently(
 #[allow(clippy::result_large_err)]
 async fn read_body(request: Request<Body>) -> Result<RequestBody, Response> {
   let (parts, body) = request.into_parts();
-  fastapi_body::read(&parts.headers, body).await.map_err(|response| *response)
+  request_body::read(&parts.headers, body).await.map_err(|response| *response)
 }
 
 #[allow(clippy::result_large_err)]

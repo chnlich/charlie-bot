@@ -7,7 +7,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::{paths, pyfmt};
+use crate::{paths, text_repr};
 
 pub const CHARLIEBOT_HOME_ENV: &str = "CHARLIEBOT_HOME";
 
@@ -24,7 +24,7 @@ pub struct HomeError {
 
 impl fmt::Display for HomeError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    write!(f, "{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {}", pyfmt::str_repr(&self.raw))
+    write!(f, "{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {}", text_repr::str_repr(&self.raw))
   }
 }
 

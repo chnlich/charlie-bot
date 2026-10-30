@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadReplyError};
 use charliebot_core::event_types;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::message_utils::master_done_input_event_ids;
@@ -65,7 +65,7 @@ fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
       continue;
     }
     if let Some(mention) = block.get(DISCORD.mention_key).filter(|mention| !mention.is_null()) {
-      pending.insert(pyfmt::python_str(&mention.to_value()));
+      pending.insert(text_repr::python_str(&mention.to_value()));
     }
   }
   pending

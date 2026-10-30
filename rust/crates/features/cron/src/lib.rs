@@ -13,7 +13,7 @@ mod test_support;
 use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::turn::{EventRenderer, TurnContribution};
 use charliebot_registry::{Registry, RegistryError};
 use serde_json::{Map, Value, json};
@@ -21,7 +21,7 @@ use serde_json::{Map, Value, json};
 struct CronTurnContribution;
 
 fn render_scheduled_run_skipped(event: &Value) -> Value {
-  let field = |name: &str| event.get(name).map(pyfmt::python_str).unwrap_or_default();
+  let field = |name: &str| event.get(name).map(text_repr::python_str).unwrap_or_default();
   json!({"role":"system", "content":format!("Scheduled run of '{}' skipped at {}: {}", field("task"), field("skipped_at"), field("reason"))})
 }
 

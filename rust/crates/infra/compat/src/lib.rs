@@ -4,8 +4,8 @@
 //! the same routes takes them from here rather than writing its own.
 
 pub mod compression;
-pub mod fastapi_body;
-pub mod fastapi_form;
+pub mod request_body;
+pub mod form_body;
 pub mod file_urls;
 pub mod headers;
 pub mod http_client;
@@ -13,7 +13,7 @@ pub mod jinja;
 pub mod json;
 pub mod mimetypes;
 mod mimetypes_table;
-pub mod python_json;
+pub mod json_loads;
 pub mod responses;
 pub mod routing;
 pub mod static_files;

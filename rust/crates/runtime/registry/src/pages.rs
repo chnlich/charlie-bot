@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 
 pub use crate::registry::{HomeCard, TemplateGlobalFn};
 
@@ -29,8 +29,8 @@ pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
 /// `packages` is the registry's [`Registry::page_packages`]. An unknown slot fails.
 pub fn page_parts(repo_root: &Path, packages: &[&str], slot: &str) -> Result<Vec<String>, String> {
   if !PAGE_SLOTS.contains(&slot) {
-    let slots = PAGE_SLOTS.iter().map(|name| pyfmt::str_repr(name)).collect::<Vec<_>>().join(", ");
-    return Err(format!("page slot {} is not one of ({slots})", pyfmt::str_repr(slot)));
+    let slots = PAGE_SLOTS.iter().map(|name| text_repr::str_repr(name)).collect::<Vec<_>>().join(", ");
+    return Err(format!("page slot {} is not one of ({slots})", text_repr::str_repr(slot)));
   }
   Ok(
     packages

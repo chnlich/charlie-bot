@@ -601,8 +601,8 @@ fn replay_case(
     if !value_matches(expected, &actual) {
       return Err(format!(
         "request {index} differs:\nexpected: {}\nactual:   {}",
-        charliebot_core::pyfmt::json_dumps(expected, &indent_two_style()),
-        charliebot_core::pyfmt::json_dumps(&actual, &indent_two_style())
+        charliebot_core::text_repr::json_dumps(expected, &indent_two_style()),
+        charliebot_core::text_repr::json_dumps(&actual, &indent_two_style())
       ));
     }
   }
@@ -618,8 +618,8 @@ fn replay_case(
   Ok(())
 }
 
-fn indent_two_style() -> charliebot_core::pyfmt::JsonStyle {
-  charliebot_core::pyfmt::JsonStyle {
+fn indent_two_style() -> charliebot_core::text_repr::JsonStyle {
+  charliebot_core::text_repr::JsonStyle {
     ensure_ascii: false,
     sort_keys: false,
     item_separator: ",",

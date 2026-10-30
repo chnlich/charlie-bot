@@ -66,7 +66,7 @@ mod tests {
 
   use super::*;
 
-  const FIXTURE: &str = include_str!("../../../../fixtures/python/ssh_argv.json");
+  const FIXTURE: &str = include_str!("../../../../fixtures/golden/ssh_argv_golden.json");
 
   /// The home that the fixture's `{home}` stands for.
   const HOME: &str = "/home/user";

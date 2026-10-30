@@ -23,7 +23,7 @@ use charliebot_core::credentials;
 use charliebot_core::event_types;
 use charliebot_core::logline::{self, Row};
 use charliebot_core::proc_identity;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout;
@@ -178,7 +178,7 @@ fn truthy(value: &Value) -> bool {
 /// `value or ""`, as `str(...)`.
 fn or_default(value: Option<&Value>) -> String {
   match value {
-    Some(value) if truthy(value) => pyfmt::python_str(value),
+    Some(value) if truthy(value) => text_repr::python_str(value),
     _ => String::new(),
   }
 }
@@ -281,7 +281,7 @@ fn json_field(args: &[String]) -> Result<i32, String> {
       println!("{value}");
       Ok(0)
     }
-    _ => Err(format!("JSON field {} is missing or not a non-empty string", pyfmt::str_repr(name))),
+    _ => Err(format!("JSON field {} is missing or not a non-empty string", text_repr::str_repr(name))),
   }
 }
 
@@ -326,7 +326,7 @@ impl RunCounts {
 fn event_object_id(event: &Value) -> String {
   match event.get("id") {
     None | Some(Value::Null) => String::new(),
-    Some(value) => pyfmt::python_str(value),
+    Some(value) => text_repr::python_str(value),
   }
 }
 
@@ -374,7 +374,7 @@ fn run_contract_value(
       && let Some(parent) =
         event.get(event_types::WEB_REPLY).and_then(Value::as_object).and_then(|reply| reply.get(event_types::NUDGE_OF))
     {
-      let parent = pyfmt::python_str(parent);
+      let parent = text_repr::python_str(parent);
       if expected_user_ids.contains(&parent) {
         nudge_by_id.insert(id.clone(), parent);
       }
@@ -389,7 +389,7 @@ fn run_contract_value(
   let mut states = Vec::new();
   for run in items {
     let input_ids: Vec<String> = match run.get(event_types::INPUT_EVENT_IDS) {
-      Some(Value::Array(ids)) => ids.iter().map(pyfmt::python_str).collect(),
+      Some(Value::Array(ids)) => ids.iter().map(text_repr::python_str).collect(),
       _ => Vec::new(),
     };
     let mut run_classes: BTreeSet<&'static str> = BTreeSet::new();
@@ -815,7 +815,7 @@ fn sweep_removed_names(line: &str) -> Result<Option<Vec<String>>, String> {
   // The server logs `names = ?removed`: the Debug text of the list, which a line holds as a quoted JSON array.
   let encoded = row.field("names").ok_or("the sweep line has no names")?;
   match serde_json::from_str::<Value>(encoded).map_err(|error| error.to_string())? {
-    Value::Array(items) => Ok(Some(items.iter().map(pyfmt::python_str).collect())),
+    Value::Array(items) => Ok(Some(items.iter().map(text_repr::python_str).collect())),
     _ => Err("the sweep line's names are not a list".to_string()),
   }
 }
@@ -975,8 +975,8 @@ fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>,
     let Some(api_base) = option.get("api_base").filter(|value| truthy(value)) else {
       continue;
     };
-    let credential = option.get("credential").filter(|value| truthy(value)).map(pyfmt::python_str);
-    return Ok(Some((pyfmt::python_str(api_base), credential)));
+    let credential = option.get("credential").filter(|value| truthy(value)).map(text_repr::python_str);
+    return Ok(Some((text_repr::python_str(api_base), credential)));
   }
   Ok(None)
 }
@@ -1060,7 +1060,7 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
     "ended_at": Value::Null,
   });
   let metadata = run_dir.join(run_records::RUN_METADATA_NAME);
-  run_records::write_run_metadata(&metadata, &record, &pyfmt::PYTHON_JSON_DEFAULT)
+  run_records::write_run_metadata(&metadata, &record, &text_repr::PYTHON_JSON_DEFAULT)
     .map_err(|error| format!("{}: {error}", metadata.display()))?;
   Ok(0)
 }
@@ -1073,7 +1073,7 @@ fn write_message(args: &[String]) -> Result<i32, String> {
   // The message route requires a request_id, which deduplicates a retried send; each trial message is a new send.
   let request_id = format!("trial-{}", uuid::Uuid::new_v4().simple());
   let body = json!({ "content": prompt, "request_id": request_id });
-  fs::write(output_path, pyfmt::json_dumps(&body, &PYTHON_JSON)).map_err(|error| format!("{output_path}: {error}"))?;
+  fs::write(output_path, text_repr::json_dumps(&body, &PYTHON_JSON)).map_err(|error| format!("{output_path}: {error}"))?;
   Ok(0)
 }
 
@@ -1127,7 +1127,7 @@ fn frame_signature(frame: &Map<String, Value>) -> Value {
 fn write_jsonl(path: &str, frames: &[Value]) -> Result<(), String> {
   let mut text = String::new();
   for frame in frames {
-    text.push_str(&pyfmt::json_dumps(frame, &COMPACT_JSON));
+    text.push_str(&text_repr::json_dumps(frame, &COMPACT_JSON));
     text.push('\n');
   }
   fs::write(path, text).map_err(|error| format!("{path}: {error}"))

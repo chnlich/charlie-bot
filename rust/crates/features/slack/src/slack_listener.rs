@@ -10,7 +10,7 @@ use charliebot_chat_threads::thread_entry::{
 };
 use charliebot_compat::ws_client::{self, Message, Options, Receiver, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::pyfmt::python_truthy;
+use charliebot_core::text_repr::python_truthy;
 use charliebot_registry::FeatureContext;
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
@@ -471,7 +471,7 @@ impl ThreadAdapter for SlackThreadAdapter {
           let text = message
             .get("text")
             .filter(|value| python_truthy(value))
-            .map(charliebot_core::pyfmt::python_str)
+            .map(charliebot_core::text_repr::python_str)
             .unwrap_or_default();
           Ok(ThreadMessage {
             id,

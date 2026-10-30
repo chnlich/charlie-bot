@@ -8,7 +8,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use charliebot_core::pyfmt::write_ascii_json_str;
+use charliebot_core::text_repr::write_ascii_json_str;
 
 /// The pre-change escaper, unchanged: every `\uXXXX` escape came from `format!`. It stays out of line so
 /// both sides are plain calls; the library function is not inlined across the crate boundary either.

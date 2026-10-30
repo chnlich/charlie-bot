@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use charliebot_core::pyfmt::str_repr;
+use charliebot_core::text_repr::str_repr;
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType};
 

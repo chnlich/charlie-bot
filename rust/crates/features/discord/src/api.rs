@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::thread_entry::{ThreadDetail, ThreadReplyError};
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
@@ -64,7 +64,7 @@ pub fn matches(path: &str) -> bool {
 /// `POST /api/internal/discord/reply`: checks the thread is fresh, then posts the text to it.
 async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -112,7 +112,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
 /// `POST /api/internal/discord/read`: the session's own thread, or the channel the link names.
 async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -129,7 +129,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
 /// `POST /api/internal/discord/check`: the bot token's setup.
 async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };

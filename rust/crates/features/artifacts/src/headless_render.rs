@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
-use charliebot_core::pyfmt;
-use charliebot_core::pystr;
+use charliebot_core::text_repr;
+use charliebot_core::str_methods;
 use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
@@ -239,7 +239,7 @@ impl WarmRenderer {
       let reply = self.next_message()?;
       if reply.get("id").and_then(Value::as_u64) == Some(id) {
         if let Some(error) = reply.get("error") {
-          return Err(RenderFailure::Other(format!("{method}: {}", pyfmt::python_str(error))));
+          return Err(RenderFailure::Other(format!("{method}: {}", text_repr::python_str(error))));
         }
         return Ok(reply);
       }
@@ -545,15 +545,15 @@ fn python_int_value(value: &Value) -> Result<i32, String> {
     Value::String(text) => python_decimal_integer(text),
     Value::Number(number) => number.to_string().parse::<i32>().map_err(|error| error.to_string()),
     Value::Bool(value) => Ok(i32::from(*value)),
-    _ => Err(format!("invalid literal for int(): {}", pyfmt::python_str(value))),
+    _ => Err(format!("invalid literal for int(): {}", text_repr::python_str(value))),
   }
 }
 
 fn python_decimal_integer(text: &str) -> Result<i32, String> {
   let mut digits = String::with_capacity(text.len());
   for character in text.chars() {
-    let Some(digit) = pystr::python_decimal_value(character) else {
-      return Err(format!("invalid literal for int() with base 10: {}", pyfmt::str_repr(text)));
+    let Some(digit) = str_methods::python_decimal_value(character) else {
+      return Err(format!("invalid literal for int() with base 10: {}", text_repr::str_repr(text)));
     };
     digits.push(char::from(b'0' + digit));
   }
@@ -568,11 +568,11 @@ fn python_os_error(error: &std::io::Error, path: &Path) -> String {
     ErrorKind::InvalidInput => (22, "Invalid argument"),
     _ => return error.to_string(),
   };
-  format!("[Errno {number}] {description}: {}", pyfmt::str_repr(&path.to_string_lossy()))
+  format!("[Errno {number}] {description}: {}", text_repr::str_repr(&path.to_string_lossy()))
 }
 
 fn charliebot_python_whitespace(character: char) -> bool {
-  pystr::is_python_whitespace(character)
+  str_methods::is_python_whitespace(character)
 }
 
 /// SIGKILL to the process group `group` ids. The renderer's launch makes the browser its own group leader; the group

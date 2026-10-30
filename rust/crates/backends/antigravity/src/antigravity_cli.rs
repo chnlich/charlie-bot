@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 
 use anyhow::bail;
 use charliebot_core::event_types;
-use charliebot_core::pyfmt::python_str;
-use charliebot_core::pystr;
+use charliebot_core::text_repr::python_str;
+use charliebot_core::str_methods;
 use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -93,7 +93,7 @@ impl AntigravityBackend {
   /// The tail of `run` (`antigravity_cli.py:109-165`): the events that the exit and the envelope make, and the guard
   /// failure the run ends with, when there is one. A failing guard keeps the exit code the process had.
   fn finish(&self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
-    let stdout_text = pystr::strip(stdout);
+    let stdout_text = str_methods::strip(stdout);
     if exit_code != 0 {
       let message = nonzero_exit_message(stdout_text, exit_code);
       return finished(vec![make_error_event(&message)], exit_code, None);

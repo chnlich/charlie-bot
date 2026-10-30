@@ -1,9 +1,0 @@
-{
-  "source": "rust/crates/infra/pyhtml/tests/fixtures/generate_fixtures.py",
-  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
-  "fixtures": [
-    "corpus.json.gz",
-    "expected.json.gz",
-    "rust/crates/infra/pyhtml/src/html5_entities.json"
-  ]
-}

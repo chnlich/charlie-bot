@@ -5,8 +5,8 @@
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
-use charliebot_core::pyfmt::{PYTHON_JSON_DEFAULT, json_dumps, python_str};
-use charliebot_core::pystr;
+use charliebot_core::text_repr::{PYTHON_JSON_DEFAULT, json_dumps, python_str};
+use charliebot_core::str_methods;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -346,7 +346,7 @@ fn mcp_tool_call(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<V
 fn todo_label(todo: &Map<String, Value>) -> String {
   for key in ["text", "label", "content", "step"] {
     if let Some(value) = text_of(todo, key) {
-      let stripped = pystr::strip(value);
+      let stripped = str_methods::strip(value);
       if !stripped.is_empty() {
         return stripped.to_string();
       }

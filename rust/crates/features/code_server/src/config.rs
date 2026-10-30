@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_core::paths;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
@@ -84,7 +84,7 @@ fn read_document(path: &Path) -> Result<Value, String> {
 
 /// `str(OSError)`: `[Errno 13] Permission denied: '<path>'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
-  let path = pyfmt::str_repr(&paths::display(path));
+  let path = text_repr::str_repr(&paths::display(path));
   match error.raw_os_error() {
     Some(code) => format!("[Errno {code}] {}: {path}", Errno::from_raw(code).desc()),
     None => format!("{error}: {path}"),

@@ -12,7 +12,7 @@
 //! field    := key "=" value, in call order
 //! value    := bare | quoted
 //! bare     := non-empty, with no whitespace, control character, "=", "'" or '"'
-//! quoted   := a quote wrapping the output of `pyfmt::str_repr`; `parse` decodes it as str_repr's inverse
+//! quoted   := a quote wrapping the output of `text_repr::str_repr`; `parse` decodes it as str_repr's inverse
 //! ```
 //!
 //! Padding is for reading by eye: `parse` splits outside quotes, so padding never reaches a value. `parse` tells the
@@ -24,7 +24,7 @@ use std::str::CharIndices;
 use serde_json::{Map, Value};
 use tracing::Level;
 
-use crate::pyfmt;
+use crate::text_repr;
 
 /// The width of the level word inside its brackets, of the location column, and of the event column.
 const LEVEL_WIDTH: usize = 9;
@@ -93,7 +93,7 @@ pub fn parse(line: &str) -> Option<Row> {
 
 /// The text of a value as a line holds it: quoted when `needs_quotes` says so.
 fn written(text: &str) -> String {
-  if needs_quotes(text) { pyfmt::str_repr(text) } else { text.to_string() }
+  if needs_quotes(text) { text_repr::str_repr(text) } else { text.to_string() }
 }
 
 fn is_bare(text: &str) -> bool {
@@ -193,7 +193,7 @@ fn read_value(text: &str) -> Option<(String, &str)> {
   (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((value, rest))
 }
 
-/// The value of the quoted text at the start of `text`, decoded as the inverse of `pyfmt::str_repr`, and the text after
+/// The value of the quoted text at the start of `text`, decoded as the inverse of `text_repr::str_repr`, and the text after
 /// its closing quote.
 fn unquote(text: &str) -> Option<(String, &str)> {
   let mut chars = text.char_indices();

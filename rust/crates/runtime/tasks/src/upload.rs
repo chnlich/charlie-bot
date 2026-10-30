@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::extract::{FromRequestParts, Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use charliebot_compat::fastapi_form::{self, Field, FormModel};
+use charliebot_compat::form_body::{self, Field, FormModel};
 use charliebot_compat::responses;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
@@ -20,7 +20,7 @@ const UPLOAD_FORM: FormModel = FormModel::new(UPLOAD_FIELDS);
 /// Parse the body before session lookup, then validate and save the required file.
 pub async fn upload_file(State(features): State<Arc<FeatureContext>>, request: axum::extract::Request) -> Response {
   let (mut parts, stream) = request.into_parts();
-  let form = match fastapi_form::read(&parts.headers, stream).await {
+  let form = match form_body::read(&parts.headers, stream).await {
     Ok(form) => form,
     Err(response) => return *response,
   };

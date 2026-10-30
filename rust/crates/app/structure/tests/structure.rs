@@ -1193,16 +1193,16 @@ impl FunctionRecord {
 }
 
 /// The codec of a call by its callee path. A serde decoder or encoder is named through `serde_json` or `serde_yaml`,
-/// a Python-style decoder through `python_json`, and a bare name, or a method name, counts as the name alone.
+/// a Python-style decoder through `json_loads`, and a bare name, or a method name, counts as the name alone.
 fn codec_of_call(path: &[String]) -> Option<Codec> {
   let last = path.last()?.as_str();
   let serde = path.iter().any(|segment| segment == "serde_json" || segment == "serde_yaml");
-  let python = path.iter().any(|segment| segment == "python_json");
+  let json_loads = path.iter().any(|segment| segment == "json_loads");
   let bare = path.len() == 1;
   match last {
     "lines" | "split_inclusive" | "split_terminator" | "read_until" => Some(Codec::Decode),
     "from_str" | "from_slice" | "from_reader" if serde || bare => Some(Codec::Decode),
-    "loads" | "loads_text" if python || bare => Some(Codec::Decode),
+    "loads" | "loads_text" if json_loads || bare => Some(Codec::Decode),
     "json_dumps" => Some(Codec::Encode),
     _ if last.starts_with("to_") && serde => Some(Codec::Encode),
     _ => None,

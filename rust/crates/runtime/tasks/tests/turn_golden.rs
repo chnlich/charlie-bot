@@ -50,7 +50,7 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
-const PYTHON_FIXTURE: &str = include_str!("fixtures/python_turn_golden.json");
+const PYTHON_FIXTURE: &str = include_str!("fixtures/turn_golden.json");
 
 mod process_guard;
 use process_guard::ProcessGroupGuard;

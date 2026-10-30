@@ -7,7 +7,7 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_core::paths;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::wiring::FileView;
 use charliebot_registry::{FeatureContext, StateError};
@@ -168,7 +168,7 @@ fn asset_versions(features: &FeatureContext) -> ViewResult<(String, String)> {
 
 fn inject_artifact_ui(html: &str, session_id: &str, comment_version: &str, artifact_version: &str) -> String {
   let mut encoded_session_id = String::with_capacity(session_id.len() + 2);
-  pyfmt::write_ascii_json_str(&mut encoded_session_id, session_id);
+  text_repr::write_ascii_json_str(&mut encoded_session_id, session_id);
   let tags = format!(
     "<script>window.__cbcServerSessionId={};</script>\n<script src=/static/js/comment_post.js?v={comment_version}></script>\n<script src=/static/features/artifacts/artifact-comments.js?v={artifact_version}></script>",
     encoded_session_id

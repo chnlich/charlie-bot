@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::pyfmt;
+use crate::text_repr;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -78,7 +78,7 @@ pub fn sign_run_token(claims: &RunTokenClaims, signing_key: &str) -> Result<Stri
     return Err(RunTokenError("cannot sign a run token without a configured charliebot.access_key"));
   }
   let payload = json!({"session_id": claims.session_id, "run_id": claims.run_id, "agent": claims.agent});
-  let payload_b64 = b64url_encode(pyfmt::json_dumps(&payload, &pyfmt::RUN_TOKEN_PAYLOAD_JSON).as_bytes());
+  let payload_b64 = b64url_encode(text_repr::json_dumps(&payload, &text_repr::RUN_TOKEN_PAYLOAD_JSON).as_bytes());
   let signature = signature_of(&payload_b64, signing_key);
   Ok(format!("{payload_b64}.{}", b64url_encode(&signature)))
 }

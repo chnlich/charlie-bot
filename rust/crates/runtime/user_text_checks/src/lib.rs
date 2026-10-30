@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as AnyhowContext, anyhow};
 use charliebot_compat::file_urls::{self, FileLinkForm, ScanContext};
 use charliebot_core::config::{ConfigSection, SectionValue, sessions_dir_in};
-use charliebot_pyhtml::{EventKind, parse_with};
+use charliebot_html::{EventKind, parse_with};
 use charliebot_registry::{Registry, RegistryError};
 use fancy_regex::Regex;
 use serde::Deserialize;

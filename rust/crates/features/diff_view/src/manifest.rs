@@ -6,7 +6,7 @@ use std::path::Path;
 
 use axum::response::Response;
 use charliebot_compat::responses;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use serde_json::{Value, json};
 
 use crate::git::{self, DIFF_TIMEOUT};
@@ -47,7 +47,7 @@ pub(crate) async fn build(repo: &Path, range: &str) -> Result<Manifest, Response
   let mut manifest = Manifest { rows: Vec::new(), total_additions: 0, total_deletions: 0 };
   for entry in parse_numstat(&numstat)? {
     let Some(status) = statuses.get(&entry.path) else {
-      return Err(responses::internal_error("KeyError", pyfmt::str_repr(&entry.path)));
+      return Err(responses::internal_error("KeyError", text_repr::str_repr(&entry.path)));
     };
     let mut row = json!({
       "path": entry.path,
@@ -124,6 +124,6 @@ fn count(text: &str) -> Result<i64, Response> {
     return Ok(0);
   }
   text.parse::<i64>().map_err(|_| {
-    responses::internal_error("ValueError", format!("invalid literal for int(): {}", pyfmt::str_repr(text)))
+    responses::internal_error("ValueError", format!("invalid literal for int(): {}", text_repr::str_repr(text)))
   })
 }

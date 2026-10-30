@@ -337,15 +337,15 @@ follows Python `src/runtime/api/sessions.py:793-810`: refusal variants use their
 include their message and blockers, and failures use the ordinary unhandled-exception response. Every task-error
 answer from a route uses this function.
 
-`fastapi_body::read(&headers, body).await` reads a route's body before its dependencies. With FastAPI's default strict
-content-type rule, it decodes only `application/json` and `application/*+json` bodies through `python_json`; other
+`request_body::read(&headers, body).await` reads a route's body before its dependencies. With FastAPI's default strict
+content-type rule, it decodes only `application/json` and `application/*+json` bodies through `json_loads`; other
 content types stay raw bytes. After the dependencies succeed, `RequestBody::validate(&model)` checks the pydantic model
 and returns its declared fields. A handler keeps that order:
 
 ```rust
 async fn update(request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -361,14 +361,14 @@ async fn update(request: Request<Body>) -> Response {
 }
 ```
 
-`fastapi_form::read(&headers, body).await` streams multipart file parts to temporary files before route dependencies run.
+`form_body::read(&headers, body).await` streams multipart file parts to temporary files before route dependencies run.
 After the dependencies succeed, `FormBody::validate(&model)` checks required and typed `File` and `Form` fields in
 declaration order. A handler then reads the parsed values:
 
 ```rust
 async fn upload(request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let form = match fastapi_form::read(&parts.headers, stream).await {
+  let form = match form_body::read(&parts.headers, stream).await {
     Ok(form) => form,
     Err(response) => return *response,
   };
@@ -389,7 +389,7 @@ declares its bounds as builders: `ge`, `gt`, `le` and `lt` on an `Integer` or `F
 `Bound::Float` bound, and `min_length` and `max_length` on a `String` or `StringList` field. `validate` reports the
 errors that pydantic 2.12.5 reports for the body, in pydantic's order: the declared fields in declaration order, then
 the forbidden keys in input order. A route takes these errors from `validate` and does not re-derive them. The module
-doc of `charliebot_compat::fastapi_body` gives the order in full.
+doc of `charliebot_compat::request_body` gives the order in full.
 
 ## The typed startup state
 

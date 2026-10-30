@@ -5,7 +5,7 @@ use charliebot_store::trigger_files;
 use charliebot_store::trigger_files::PendingTrigger;
 use serde_json::Value;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip.json");
+const PYTHON_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip_golden.json");
 
 #[test]
 // Python: tests/test_trigger_pid_watch.py::test_trigger_file_without_exit_fields_still_loads

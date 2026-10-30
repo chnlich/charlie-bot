@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
@@ -61,7 +61,7 @@ async fn fork_session(
   headers: HeaderMap,
   body: Body,
 ) -> Response {
-  let body = match fastapi_body::read(&headers, body).await {
+  let body = match request_body::read(&headers, body).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -117,7 +117,7 @@ async fn elone_session(
   headers: HeaderMap,
   body: Body,
 ) -> Response {
-  let body = match fastapi_body::read(&headers, body).await {
+  let body = match request_body::read(&headers, body).await {
     Ok(body) => body,
     Err(response) => return *response,
   };

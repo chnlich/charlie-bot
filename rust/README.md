@@ -78,11 +78,11 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --check
 ```
 
-`cargo test` compares the YAML writer, JSON reader, boot marker, FastAPI body and form handling, and pyhtml tokenizer
+`cargo test` compares the YAML writer, JSON reader, boot marker, FastAPI body and form handling, and html tokenizer
 with recorded Python outputs. Each fixture names its deleted reference and base commit, so these comparisons do not
 start Python or `uv`. Other Python-derived expectations are recorded beside the tests that read them. The CPython
 tables keep their generator and commit in the table headers; the WAV fixtures keep theirs in the fixture README.
-The compatibility and SSH outputs under `rust/fixtures/python/` are recorded data.
+The compatibility and SSH outputs under `rust/fixtures/golden/` are recorded data.
 The parity harness (`rust/parity/`) that compared the Rust server against the Python reference on synthetic homes was
 removed on 2026-10-27; `main` has no Python server to compare against.
 
@@ -161,7 +161,7 @@ rust/
   PORT_BASELINE                   the Python commit the port reproduces
   docs/PORT_STATUS.md             every Python route: method, path, stage, and status (`ported`, `todo` or `not ported`)
   docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
-  fixtures/python/                the expected outputs the compat and ssh tests compare with
+  fixtures/golden/                the expected outputs the compat and ssh tests compare with
   crates/infra/core/src/
     config.rs                     config.yaml: typed sections, legacy and unknown key refusals
     credentials.rs                credentials.yaml
@@ -170,7 +170,7 @@ rust/
     fence.rs, fsutil.rs           the home writer fence and its identity record
     run_token.rs                  signed run tokens
     logging.rs, timefmt.rs        JSON log lines, Python time formats
-    pyfmt.rs                      CPython repr, str and json.dumps renderings
+    text_repr.rs                  CPython repr, str and json.dumps renderings
     printable_table.rs            CPython's non-printable ranges; generator provenance is in its header
     ssh.rs                        the batch-mode ssh argv and its 0700 control directory
   crates/infra/compat/src/   the Python-compatibility pieces the server and later crates share

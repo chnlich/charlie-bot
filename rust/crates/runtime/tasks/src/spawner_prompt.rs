@@ -11,7 +11,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::{anyhow, bail};
-use charliebot_core::pyfmt::str_repr;
+use charliebot_core::text_repr::str_repr;
 use charliebot_store::metadata::{TaskSpec, TaskType};
 
 use crate::verify_trailer;

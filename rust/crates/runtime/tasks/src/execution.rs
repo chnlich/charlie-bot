@@ -19,7 +19,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_core::run_token::{RUN_TOKEN_ENV, RunTokenClaims, sign_run_token};
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
@@ -716,7 +716,7 @@ impl TaskExecutionAdapter {
           SequenceRunWithoutControllerError {
             message: format!(
               "sequence run {run_id} carries owner_ref {} and no registered controller owns its kind",
-              pyfmt::str_repr(&sequence_ref.owner_ref)
+              text_repr::str_repr(&sequence_ref.owner_ref)
             ),
           }
           .into(),
@@ -1186,7 +1186,7 @@ impl TaskExecutionAdapter {
     let page_bytes = fs::read(&cold.page_path).with_context(|| format!("reading cold-read page {}", cold.page_path))?;
     let evidence = json!({ "page_path": cold.page_path, "page_sha256": cold_read::page_sha256(&page_bytes) });
     let evidence_path = self.features.store.run_dir(&meta.id, &run.id).join(cold_read::EVIDENCE_FILENAME);
-    fsutil::atomic_write_text(&evidence_path, &pyfmt::json_dumps(&evidence, &pyfmt::PYTHON_JSON_DEFAULT))?;
+    fsutil::atomic_write_text(&evidence_path, &text_repr::json_dumps(&evidence, &text_repr::PYTHON_JSON_DEFAULT))?;
     let checkout = self.features.startup.require::<charliebot_core::RepoRoot>()?;
     let (_system_prompt, questions) = cold_read::load_texts(checkout.path())?;
     let page_text =
@@ -1341,13 +1341,13 @@ impl TaskExecutionAdapter {
             && event.get("subtype").and_then(Value::as_str) == Some("init")
             && let Some(session_id) = event.get("session_id")
           {
-            return Ok(Some(pyfmt::python_str(session_id)));
+            return Ok(Some(text_repr::python_str(session_id)));
           }
           for translated in translate(event)? {
             if translated.get("type").and_then(Value::as_str) == Some(event_types::SESSION_ATTACHED)
               && let Some(session_id) = translated.get("session_id")
             {
-              return Ok(Some(pyfmt::python_str(session_id)));
+              return Ok(Some(text_repr::python_str(session_id)));
             }
           }
         }
@@ -1594,7 +1594,7 @@ impl TaskExecutionAdapter {
       json!({ "page_path": cold.page_path, "page_sha256": null })
     };
     evidence["error"] = json!(error);
-    fsutil::atomic_write_text(&evidence_path, &pyfmt::json_dumps(&evidence, &pyfmt::PYTHON_JSON_DEFAULT))?;
+    fsutil::atomic_write_text(&evidence_path, &text_repr::json_dumps(&evidence, &text_repr::PYTHON_JSON_DEFAULT))?;
     Ok(())
   }
 

@@ -269,7 +269,7 @@ fn remove_id(value: Option<&Value>, pending: &mut HashSet<String>) {
 }
 
 fn clamp_event_timestamp(event: &mut Value, mtime: Option<SystemTime>) {
-  if event.get("timestamp").is_some_and(charliebot_core::pyfmt::python_truthy) {
+  if event.get("timestamp").is_some_and(charliebot_core::text_repr::python_truthy) {
     return;
   }
   let now = OffsetDateTime::now_utc();

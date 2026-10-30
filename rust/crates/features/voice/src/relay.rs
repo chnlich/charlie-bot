@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::response::Response;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use futures_util::future::BoxFuture;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -39,7 +39,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
       Err(error) => Some(error.clone()),
       Ok(backend) => backend
         .unavailable_reason()
-        .map(|reason| format!("voice backend {} is unavailable: {reason}", pyfmt::str_repr(backend.id()))),
+        .map(|reason| format!("voice backend {} is unavailable: {reason}", text_repr::str_repr(backend.id()))),
     };
     let config = features.config.get();
     request.upgrade.max_message_size(16_777_216).max_frame_size(16_777_216).on_upgrade(move |socket| async move {
@@ -416,12 +416,12 @@ async fn drain_socket(reader: &mut SplitStream<WebSocket>) {
 
 fn preview_end_devices(text: &str) -> Result<Option<Value>, String> {
   let control: Value =
-    serde_json::from_str(text).map_err(|_| format!("malformed preview control frame {}", pyfmt::str_repr(text)))?;
+    serde_json::from_str(text).map_err(|_| format!("malformed preview control frame {}", text_repr::str_repr(text)))?;
   let Some(control) = control.as_object() else {
-    return Err(format!("unsupported preview control frame {}", pyfmt::str_repr(text)));
+    return Err(format!("unsupported preview control frame {}", text_repr::str_repr(text)));
   };
   if control.get("type").and_then(Value::as_str) != Some("end") {
-    return Err(format!("unsupported preview control frame {}", pyfmt::str_repr(text)));
+    return Err(format!("unsupported preview control frame {}", text_repr::str_repr(text)));
   }
   let Some(devices) = control.get("devices") else {
     return Ok(None);

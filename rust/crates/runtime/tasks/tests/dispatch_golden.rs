@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use dispatch_support::{Harness, ScriptedExecutor, register_run};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/python_dispatch_golden.json");
+const PYTHON_FIXTURE: &str = include_str!("fixtures/dispatch_golden.json");
 
 #[tokio::test]
 async fn python_and_rust_write_the_same_dispatch_facts() {

@@ -5,8 +5,8 @@ use std::time::Duration;
 use base64::Engine;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::credentials::Credentials;
-use charliebot_core::pyfmt::{self, PYTHON_JSON_DEFAULT};
-use charliebot_core::pystr;
+use charliebot_core::text_repr::{self, PYTHON_JSON_DEFAULT};
+use charliebot_core::str_methods;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -85,7 +85,7 @@ impl Backend {
         endpoint_url: MUSE_ENDPOINT.to_string(),
         clock: Arc::new(EventLoopClock),
       }),
-      _ => Err(format!("unknown transcription backend {}; known: gemini, muse", pyfmt::str_repr(id))),
+      _ => Err(format!("unknown transcription backend {}; known: gemini, muse", text_repr::str_repr(id))),
     }
   }
 
@@ -583,7 +583,7 @@ async fn send_json(sender: &Sender, value: Value) -> Result<(), String> {
 }
 
 fn python_json(value: &Value) -> String {
-  pyfmt::json_dumps(value, &PYTHON_JSON_DEFAULT)
+  text_repr::json_dumps(value, &PYTHON_JSON_DEFAULT)
 }
 
 fn parse_json(raw: &str) -> Result<Value, String> {
@@ -696,7 +696,7 @@ fn sorted_object_keys(value: &Value) -> String {
   let mut keys: Vec<&str> =
     value.as_object().map(|object| object.keys().map(String::as_str).collect()).unwrap_or_default();
   keys.sort_unstable();
-  format!("[{}]", keys.iter().map(|key| pyfmt::str_repr(key)).collect::<Vec<_>>().join(", "))
+  format!("[{}]", keys.iter().map(|key| text_repr::str_repr(key)).collect::<Vec<_>>().join(", "))
 }
 
 fn python_repr(value: &Value) -> String {
@@ -705,13 +705,13 @@ fn python_repr(value: &Value) -> String {
     Value::Bool(true) => "True".to_string(),
     Value::Bool(false) => "False".to_string(),
     Value::Number(number) => number.to_string(),
-    Value::String(text) => pyfmt::str_repr(text),
+    Value::String(text) => text_repr::str_repr(text),
     Value::Array(values) => format!("[{}]", values.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
     Value::Object(values) => format!(
       "{{{}}}",
       values
         .iter()
-        .map(|(key, value)| format!("{}: {}", pyfmt::str_repr(key), python_repr(value)))
+        .map(|(key, value)| format!("{}: {}", text_repr::str_repr(key), python_repr(value)))
         .collect::<Vec<_>>()
         .join(", ")
     ),
@@ -756,7 +756,7 @@ fn normalize_transcript(text: String) -> String {
       }
       if let Some(mark) = compact.get(index).copied() {
         let closes_clause = is_clause_mark(mark)
-          && compact.get(index + 1).is_none_or(|next| pystr::is_python_whitespace(*next) || !next.is_ascii());
+          && compact.get(index + 1).is_none_or(|next| str_methods::is_python_whitespace(*next) || !next.is_ascii());
         if closes_clause {
           continue;
         }

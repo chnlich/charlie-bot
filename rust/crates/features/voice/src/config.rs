@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use charliebot_core::config::{CharlieBotConfig, ConfigSection, SectionValue};
 use charliebot_core::credentials::Credentials;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use minijinja::Value;
 use serde::{Deserialize, Serialize};
@@ -82,7 +82,7 @@ pub(crate) fn check_default_backend(cfg: &CharlieBotConfig) -> Result<(), String
   }
   Err(format!(
     "voice.default_backend {} is not a transcription backend; known: {}",
-    pyfmt::str_repr(value),
+    text_repr::str_repr(value),
     recording::BACKEND_IDS.join(", ")
   ))
 }

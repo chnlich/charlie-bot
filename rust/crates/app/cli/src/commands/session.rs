@@ -22,7 +22,7 @@ use charliebot_cli_common::resolve;
 use charliebot_cli_common::route;
 use charliebot_core::config;
 use charliebot_core::event_types;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
@@ -357,7 +357,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
     .request_id
     .clone()
     .or_else(|| {
-      body.get("request_id").filter(|value| pyfmt::python_truthy(value)).and_then(Value::as_str).map(str::to_string)
+      body.get("request_id").filter(|value| text_repr::python_truthy(value)).and_then(Value::as_str).map(str::to_string)
     })
     .unwrap_or_else(control_events::new_request_id);
   body.insert("request_id".to_string(), json!(request_id));
@@ -437,13 +437,13 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
     }
     cursor = match field(&page, "next_cursor")? {
       Value::Null => break,
-      value => Some(pyfmt::python_str(value)),
+      value => Some(text_repr::python_str(value)),
     };
   }
   let mut lines = String::new();
   for run_id in &run_ids {
     let row = run_rows.get(*run_id).ok_or_else(|| CliExit::error(format!("the runs listing lacks run {run_id}")))?;
-    let pid = pyfmt::python_str(field(row, "pid")?);
+    let pid = text_repr::python_str(field(row, "pid")?);
     lines.push_str(&format!("run {run_id} pid {pid} did not exit\n"));
   }
   eprint!("{lines}");
@@ -539,8 +539,8 @@ fn scan_task_close(events_path: &Path, task_id: &str, request_id: &str) -> Optio
     {
       let outcome = object
         .get("outcome")
-        .filter(|outcome| pyfmt::python_truthy(outcome))
-        .map(pyfmt::python_str)
+        .filter(|outcome| text_repr::python_truthy(outcome))
+        .map(text_repr::python_str)
         .unwrap_or_else(|| "completed".to_string());
       return Some(LocalClose::Closed(json!({
         "session_id": task_id,
@@ -605,7 +605,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   ];
   let mut pages: Vec<Vec<Value>> = vec![field(&boot, "messages")?.as_array().cloned().unwrap_or_default()];
   let mut cursor = page_starts[0];
-  let mut has_more = pyfmt::python_truthy(field(&boot, "has_more")?);
+  let mut has_more = text_repr::python_truthy(field(&boot, "has_more")?);
   let mut separators = count_separators(&pages[0]);
   // --turns stops once the fetched pages hold one separator more than the requested turn count —
   // everything after the (N+1)-th last separator is then the last N complete turns plus the turn
@@ -623,7 +623,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
       field(&page, "next_before")?.as_i64().ok_or_else(|| CliExit::error("next_before must be an integer"))?;
     page_starts.push(next_before);
     cursor = next_before;
-    has_more = pyfmt::python_truthy(field(&page, "has_more")?);
+    has_more = text_repr::python_truthy(field(&page, "has_more")?);
   }
 
   let mut cut = 0usize;
@@ -671,7 +671,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
       0,
       format!(
         "last {turns} turns · from event {} · {} earlier {unit}",
-        pyfmt::python_str(&event_index),
+        text_repr::python_str(&event_index),
         page_start + position as i64
       ),
     );
@@ -702,25 +702,25 @@ fn format_message_block(message: &Value) -> Option<String> {
   let body = match message.get("content") {
     Some(Value::String(text)) => text.clone(),
     Some(Value::Null) | None => String::new(),
-    Some(other) => pyfmt::json_dumps(other, &JSON_ENSURE_ASCII_FALSE),
+    Some(other) => text_repr::json_dumps(other, &JSON_ENSURE_ASCII_FALSE),
   };
   let tools = message.get("tools").and_then(Value::as_array).cloned().unwrap_or_default();
   if body.is_empty() && tools.is_empty() {
     return None;
   }
-  let role = pyfmt::python_str(message.get("role").unwrap_or(&Value::Null));
+  let role = text_repr::python_str(message.get("role").unwrap_or(&Value::Null));
   let timestamp = message
     .get("timestamp")
-    .filter(|timestamp| pyfmt::python_truthy(timestamp))
-    .map(pyfmt::python_str)
+    .filter(|timestamp| text_repr::python_truthy(timestamp))
+    .map(text_repr::python_str)
     .unwrap_or_default();
-  let event_index = pyfmt::python_str(message.get("event_index").unwrap_or(&Value::Null));
+  let event_index = text_repr::python_str(message.get("event_index").unwrap_or(&Value::Null));
   let mut lines = vec![format!("## {role} · {timestamp} · event {event_index}")];
   if !body.is_empty() {
     lines.push(body);
   }
   lines.extend(tools.iter().map(|tool| {
-    let name = pyfmt::python_str(tool.get("name").unwrap_or(&Value::Null));
+    let name = text_repr::python_str(tool.get("name").unwrap_or(&Value::Null));
     format!("$ {name} {}", tool_input_first_line(tool))
   }));
   Some(lines.join("\n"))
@@ -734,7 +734,7 @@ fn tool_input_first_line(tool: &Value) -> String {
       let is_bash = matches!(tool.get("name").and_then(Value::as_str), Some("Bash") | Some("bash"));
       match (is_bash, input.get("command")) {
         (true, Some(Value::String(command))) => command.clone(),
-        _ => pyfmt::json_dumps(&Value::Object(input.clone()), &JSON_ENSURE_ASCII_FALSE),
+        _ => text_repr::json_dumps(&Value::Object(input.clone()), &JSON_ENSURE_ASCII_FALSE),
       }
     }
     Some(Value::String(text)) => text.clone(),

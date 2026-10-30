@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 use charliebot_core::config::{BackendOption, OptionField, OptionFieldDefault};
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use serde_json::{Map, Value as JsonValue, json};
 use serde_yaml::{Mapping, Value};
 
@@ -127,8 +127,8 @@ fn declare(
       bail!(
         "opencode options '{previous_id}' and '{option_id}' declare conflicting {field} values for {provider}/{model}: \
          {} and {}",
-        pyfmt::python_str(previous_value),
-        pyfmt::python_str(value)
+        text_repr::python_str(previous_value),
+        text_repr::python_str(value)
       );
     }
     Some(_) => {}

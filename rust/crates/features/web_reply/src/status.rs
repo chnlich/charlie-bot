@@ -10,11 +10,11 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
-use charliebot_compat::python_json::{self, LoadError};
+use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
-use charliebot_core::pyfmt::{JsonStyle, json_dumps};
-use charliebot_core::pystr;
+use charliebot_core::text_repr::{JsonStyle, json_dumps};
+use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
@@ -135,7 +135,7 @@ fn json_message(error_text: &str) -> &str {
 
 /// The patch that the JSON `text` holds (`status.parse_patch`). A refusal is a 422 whose detail an agent reads.
 pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
-  let raw = match python_json::loads_text(text) {
+  let raw = match json_loads::loads_text(text) {
     Ok(raw) => raw,
     Err(LoadError::Value(message)) => {
       return Err(WebReplyError::refused(
@@ -415,7 +415,7 @@ pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &
 /// `Text` for a present value: the non-blank string it holds, or a problem for a blank string or any other type.
 fn text_value(value: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<String> {
   match value {
-    Value::String(text) if pystr::strip(text).is_empty() => {
+    Value::String(text) if str_methods::strip(text).is_empty() => {
       problems.push(Problem { loc: loc.to_string(), msg: MUST_NOT_BE_BLANK });
       None
     }

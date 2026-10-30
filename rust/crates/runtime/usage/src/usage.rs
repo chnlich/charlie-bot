@@ -530,7 +530,7 @@ mod tests {
 
   use super::*;
 
-  const PYTHON_FIXTURE: &str = include_str!("../tests/fixtures/python_usage_reference.json");
+  const PYTHON_FIXTURE: &str = include_str!("../tests/fixtures/usage_golden.json");
 
   fn registry() -> Registry {
     Registry::default()

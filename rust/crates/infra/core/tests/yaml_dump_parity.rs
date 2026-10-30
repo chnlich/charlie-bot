@@ -1,7 +1,7 @@
 use charliebot_core::yaml;
 use serde_json::{Value, json};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/yaml_dump_parity.json");
+const PYTHON_FIXTURE: &str = include_str!("fixtures/yaml_dump_parity_golden.json");
 
 /// Several paragraphs. Some lines pass column 80, so the emitter folds them; one line has an apostrophe.
 const LONG_PROMPT: &str = "Review the open pull requests in the release branch and summarize what changed since \

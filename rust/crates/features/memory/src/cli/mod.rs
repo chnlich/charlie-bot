@@ -11,7 +11,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
-use charliebot_core::{config, credentials, event_types, home, pystr, run_token};
+use charliebot_core::{config, credentials, event_types, home, str_methods, run_token};
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::RunRecord;
@@ -239,7 +239,7 @@ fn add(args: &AddArgs) -> Result<(), CliExit> {
   if !first_line.starts_with("# ") {
     python_error("error: body must start with '# <title>'");
   }
-  let title = pystr::strip(&first_line[2..]);
+  let title = str_methods::strip(&first_line[2..]);
   if title.is_empty() {
     python_error("error: empty title after '# '");
   }

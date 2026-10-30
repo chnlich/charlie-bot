@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{paths, pyfmt, timefmt};
+use charliebot_core::{paths, text_repr, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
@@ -160,7 +160,7 @@ impl FileHeaders {
       str::to_string,
     );
     let mtime = timefmt::python_float_seconds(metadata.mtime(), metadata.mtime_nsec());
-    let etag_base = format!("{}-{}", pyfmt::float_repr(mtime), metadata.size());
+    let etag_base = format!("{}-{}", text_repr::float_repr(mtime), metadata.size());
     FileHeaders {
       content_type,
       size: metadata.size(),

@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::{self, CONFIG_FILENAME};
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_store::metadata::MetadataReadError;
 use serde_json::Value;
 
@@ -32,8 +32,8 @@ pub(crate) fn failed(error: impl std::fmt::Display) -> CliExit {
 /// Python's `repr(value)` for a value `json` parsed: strings are quoted, `None` prints bare.
 pub(crate) fn python_repr(value: &Value) -> String {
   match value {
-    Value::String(text) => pyfmt::str_repr(text),
-    other => pyfmt::python_str(other),
+    Value::String(text) => text_repr::str_repr(text),
+    other => text_repr::python_str(other),
   }
 }
 

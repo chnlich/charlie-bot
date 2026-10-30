@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::{fsutil, home, paths};
 use futures_util::future::join_all;
 use serde_json::{Map, Value, json};
@@ -88,7 +88,7 @@ pub fn save_state(state: &State, path: &Path) -> anyhow::Result<()> {
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent)?;
   }
-  let text = format!("{}\n", pyfmt::json_dumps(&Value::Object(state.clone()), &STATE_JSON));
+  let text = format!("{}\n", text_repr::json_dumps(&Value::Object(state.clone()), &STATE_JSON));
   if let Err(error) = fsutil::atomic_write_text(path, &text) {
     tracing::error!(path = %path.display(), error = %error, "host_auth_state_write_failed");
     return Err(error.into());

@@ -11,11 +11,11 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::{responses, validation};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::MetadataFile;
-use charliebot_core::{event_types, pyfmt};
+use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
@@ -161,7 +161,7 @@ pub(crate) async fn create_session(
   headers: HeaderMap,
   body: Body,
 ) -> Response {
-  let body = match fastapi_body::read(&headers, body).await {
+  let body = match request_body::read(&headers, body).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -183,7 +183,7 @@ pub(crate) async fn switch_backend(
   headers: HeaderMap,
   body: Body,
 ) -> Response {
-  let body = match fastapi_body::read(&headers, body).await {
+  let body = match request_body::read(&headers, body).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -204,7 +204,7 @@ pub(crate) async fn patch_session(
   headers: HeaderMap,
   body: Body,
 ) -> Response {
-  let body = match fastapi_body::read(&headers, body).await {
+  let body = match request_body::read(&headers, body).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -576,7 +576,7 @@ fn profile_name(profile: TaskProfile) -> &'static str {
 
 /// Python's repr of a list of strings, as the Python detail texts print it.
 fn list_repr(items: &[&str]) -> String {
-  let quoted: Vec<String> = items.iter().map(|item| pyfmt::str_repr(item)).collect();
+  let quoted: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
   format!("[{}]", quoted.join(", "))
 }
 

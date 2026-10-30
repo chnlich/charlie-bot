@@ -13,8 +13,8 @@ use anyhow::bail;
 use charliebot_agents::backend_pool::is_quota_error;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
-use charliebot_core::pyfmt::{self, JsonStyle};
-use charliebot_pyhtml::{EventKind, folds_at_open, parse_with};
+use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_html::{EventKind, folds_at_open, parse_with};
 use charliebot_registry::backend::LaunchArgs;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -348,7 +348,7 @@ pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
 /// placeholder and its VISIBLE TEXT block when there is a page, then the questions (`ask_probe_input`), joined by
 /// blank lines.
 pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str) -> anyhow::Result<String> {
-  let mut pieces = vec![pyfmt::json_dumps(item, &ITEM_JSON)];
+  let mut pieces = vec![text_repr::json_dumps(item, &ITEM_JSON)];
   if let Some(page) = linked_page {
     let source = omit_data_uris(page);
     pieces.push(source.to_string());

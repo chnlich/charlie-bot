@@ -5,7 +5,7 @@ use std::sync::Arc;
 use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
@@ -71,7 +71,7 @@ fn slack_reply_message(event: &Value) -> Value {
 
 /// The event's `content` as Python text, or `""` when the event has none (`event.get("content", "")`).
 fn content_text(event: &Value) -> String {
-  event.get("content").map(pyfmt::python_str).unwrap_or_default()
+  event.get("content").map(text_repr::python_str).unwrap_or_default()
 }
 
 #[cfg(test)]

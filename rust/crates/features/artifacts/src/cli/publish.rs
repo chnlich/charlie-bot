@@ -9,7 +9,7 @@ use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::paths;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde::Deserialize;
 use serde_yaml::Value;
@@ -198,7 +198,7 @@ fn publish_through_command(artifact: &Path, command: &[String], lane_options: &[
 }
 
 fn os_error_text(error: &io::Error, path: &str) -> String {
-  let path = pyfmt::str_repr(path);
+  let path = text_repr::str_repr(path);
   match error.raw_os_error() {
     Some(code) => format!("[Errno {code}] {}: {path}", nix::errno::Errno::from_raw(code).desc()),
     None => format!("{error}: {path}"),

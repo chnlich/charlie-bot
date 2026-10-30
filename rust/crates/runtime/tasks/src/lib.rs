@@ -12,7 +12,7 @@ pub mod master_state;
 pub mod master_trigger;
 pub mod midturn_delivery;
 pub mod prompts;
-pub mod python_values;
+pub mod event_text;
 pub mod recovery;
 pub mod review;
 pub mod review_text;

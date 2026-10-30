@@ -14,7 +14,7 @@ use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::paths;
-use charliebot_core::pyfmt::format_f;
+use charliebot_core::text_repr::format_f;
 use clap::{CommandFactory, FromArgMatches, Parser};
 
 /// The on-disk trash directory name under the worktree root (`worktree_trash.TRASH_DIR_NAME`).
@@ -187,7 +187,7 @@ fn python_os_error(path: &str, error: &std::io::Error) -> String {
     Some(errno) => {
       let text = error.to_string();
       let strerror = text.strip_suffix(&format!(" (os error {errno})")).unwrap_or(&text);
-      format!("[Errno {errno}] {strerror}: '{}'", charliebot_core::pyfmt::str_repr(path))
+      format!("[Errno {errno}] {strerror}: '{}'", charliebot_core::text_repr::str_repr(path))
     }
     None => format!("{error}: '{path}'"),
   }

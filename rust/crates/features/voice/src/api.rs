@@ -11,9 +11,9 @@ use axum::Router;
 use axum::extract::{FromRequestParts, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use charliebot_compat::fastapi_form::{self, Field, FormModel};
+use charliebot_compat::form_body::{self, Field, FormModel};
 use charliebot_compat::routing::post_only;
-use charliebot_compat::{python_json, responses};
+use charliebot_compat::{json_loads, responses};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
 use charliebot_registry::FeatureContext;
@@ -74,7 +74,7 @@ pub(crate) struct UploadForm {
 /// `POST /api/voice/{session_id}`: multipart fields carry the WAV, selected backend and device object.
 async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, request: Request) -> Response {
   let (mut parts, stream) = request.into_parts();
-  let form = match fastapi_form::read(&parts.headers, stream).await {
+  let form = match form_body::read(&parts.headers, stream).await {
     Ok(form) => form,
     Err(response) => return *response,
   };
@@ -182,7 +182,7 @@ fn devices_form_field(raw: Option<&str>) -> Result<Option<Value>, VoiceRequestEr
   let Some(raw) = raw else {
     return Ok(None);
   };
-  let parsed = python_json::loads_text(raw)
+  let parsed = json_loads::loads_text(raw)
     .map_err(|error| VoiceRequestError::bad_request(format!("malformed devices form field: {error}")))?;
   let has_device_keys = parsed.as_object().is_some_and(|object| {
     object.len() == DEVICE_FIELDS.len() && DEVICE_FIELDS.iter().all(|field| object.contains_key(*field))
@@ -276,13 +276,13 @@ pub(crate) fn python_repr(value: &Value) -> String {
     Value::Bool(true) => "True".to_string(),
     Value::Bool(false) => "False".to_string(),
     Value::Number(number) => number.to_string(),
-    Value::String(text) => charliebot_core::pyfmt::str_repr(text),
+    Value::String(text) => charliebot_core::text_repr::str_repr(text),
     Value::Array(values) => format!("[{}]", values.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
     Value::Object(values) => format!(
       "{{{}}}",
       values
         .iter()
-        .map(|(key, value)| format!("{}: {}", charliebot_core::pyfmt::str_repr(key), python_repr(value)))
+        .map(|(key, value)| format!("{}: {}", charliebot_core::text_repr::str_repr(key), python_repr(value)))
         .collect::<Vec<_>>()
         .join(", ")
     ),

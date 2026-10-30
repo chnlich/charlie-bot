@@ -140,8 +140,8 @@ fn the_seeded_host_files_match_the_recorded_python_bytes() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   for (name, expected) in [
-    ("memory-curator", include_str!("fixtures/setup_seed/memory-curator.python.yaml")),
-    ("storage-cool", include_str!("fixtures/setup_seed/storage-cool.python.yaml")),
+    ("memory-curator", include_str!("fixtures/setup_seed/memory-curator_golden.yaml")),
+    ("storage-cool", include_str!("fixtures/setup_seed/storage-cool_golden.yaml")),
   ] {
     let seeded = std::fs::read_to_string(home.join("config.d/cron.d").join(format!("{name}.yaml")))
       .unwrap_or_else(|error| panic!("read the seeded {name}: {error}"));

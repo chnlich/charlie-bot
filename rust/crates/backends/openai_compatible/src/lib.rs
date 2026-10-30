@@ -5,7 +5,7 @@ mod anthropic_proxy;
 mod factory;
 mod openai_compatible_claude;
 mod options;
-mod pyvalue;
+mod value_ops;
 mod sse;
 mod translate;
 

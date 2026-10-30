@@ -1,11 +1,11 @@
 //! The shared template environment's `tojson` and `urlencode`, and its printing, against the output
-//! Jinja2 gives for the same templates and contexts (`rust/fixtures/python/jinja_filters.json`).
+//! Jinja2 gives for the same templates and contexts (`rust/fixtures/golden/jinja_filters_golden.json`).
 
 use charliebot_compat::jinja;
 use minijinja::Value;
 use serde_json::Value as Json;
 
-const FIXTURE: &str = include_str!("../../../../fixtures/python/jinja_filters.json");
+const FIXTURE: &str = include_str!("../../../../fixtures/golden/jinja_filters_golden.json");
 
 #[test]
 fn filters_and_printing_match_jinja2() {

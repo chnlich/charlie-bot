@@ -15,8 +15,8 @@ use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
 use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_core::paths;
-use charliebot_core::pyregex::compile_python_automata_regex;
-use charliebot_core::pystr;
+use charliebot_core::regex_classes::compile_python_automata_regex;
+use charliebot_core::str_methods;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
@@ -318,7 +318,7 @@ pub async fn post_web_reply_with_request_id(
   request_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
-  if pystr::strip(text).is_empty() {
+  if str_methods::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
   let file_scan_context = file_link_scan_context(features, session_id)?;
@@ -333,7 +333,7 @@ pub async fn post_web_reply_with_request_id(
       user_text_checks::reply_refusal_detail(&violations),
     ));
   }
-  if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
+  if keep_language.is_some_and(|reason| str_methods::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
   let chars = visible_reply_chars(text)?;
@@ -803,8 +803,8 @@ mod tests {
 
   #[test]
   fn py_strip_trims_the_information_separators_as_python_does() {
-    assert_eq!(pystr::strip(" \u{1c}x\u{1f}\n"), "x");
-    assert_eq!(pystr::strip(" \t\n"), "");
+    assert_eq!(str_methods::strip(" \u{1c}x\u{1f}\n"), "x");
+    assert_eq!(str_methods::strip(" \t\n"), "");
   }
 
   #[test]

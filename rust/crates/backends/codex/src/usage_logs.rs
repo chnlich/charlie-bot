@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_core::pyfmt::python_str;
+use charliebot_core::text_repr::python_str;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };

@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
 use charliebot_agents::backend_pool;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
@@ -101,7 +101,7 @@ async fn start_improve_loop(
   request: axum::http::Request<Body>,
 ) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -264,7 +264,7 @@ fn unix_seconds() -> u64 {
 
 async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };

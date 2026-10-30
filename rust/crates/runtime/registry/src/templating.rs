@@ -20,7 +20,7 @@ use axum::http::header;
 use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::{jinja, responses};
-use charliebot_core::{git, pyfmt};
+use charliebot_core::{git, text_repr};
 use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
 use serde_json::json;
@@ -328,7 +328,7 @@ fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
       if let Some(first) = holder.get(&name) {
         return Err(format!(
           "template {} is in both {} and {}",
-          pyfmt::str_repr(&name),
+          text_repr::str_repr(&name),
           first.display(),
           directory.display()
         ));

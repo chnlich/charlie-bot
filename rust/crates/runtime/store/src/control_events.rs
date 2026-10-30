@@ -223,9 +223,9 @@ mod tests {
       ],
     );
     assert_eq!(
-      charliebot_core::pyfmt::json_dumps(
+      charliebot_core::text_repr::json_dumps(
         &event,
-        &charliebot_core::pyfmt::JsonStyle {
+        &charliebot_core::text_repr::JsonStyle {
           ensure_ascii: false,
           sort_keys: false,
           item_separator: ", ",

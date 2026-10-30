@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use nix::fcntl::{Flock, FlockArg, OFlag};
 use serde_json::{Map, Value, json};
 
-use crate::{fsutil, paths, proc_identity, pyfmt, timefmt};
+use crate::{fsutil, paths, proc_identity, text_repr, timefmt};
 
 pub const STATE_DIR_NAME: &str = "state";
 pub const FENCE_LOCK_NAME: &str = "home_writer.lock";
@@ -59,7 +59,7 @@ impl fmt::Display for FenceError {
             "home writer fence held by pid {} (started {}, purpose {}, argv: {})",
             holder.pid,
             holder.started_at,
-            pyfmt::str_repr(&holder.purpose),
+            text_repr::str_repr(&holder.purpose),
             holder.argv
           ),
           None => "home writer fence is held (holder identity unreadable)".to_string(),
@@ -162,7 +162,7 @@ pub fn acquire_home_writer_fence(home: &Path, purpose: &str) -> Result<HomeWrite
     "home": holder.home,
   });
   if let Err(error) =
-    fsutil::atomic_write_text(&fence_identity_path(home), &pyfmt::json_dumps(&record, &pyfmt::FENCE_RECORD_JSON))
+    fsutil::atomic_write_text(&fence_identity_path(home), &text_repr::json_dumps(&record, &text_repr::FENCE_RECORD_JSON))
   {
     // Only the lock is ours to drop here: the record never landed.
     if let Some(lock) = fence.lock.take() {
@@ -186,7 +186,7 @@ pub fn read_fence_holder(home: &Path) -> Option<FenceHolder> {
     Value::Bool(flag) => i64::from(*flag),
     _ => return None,
   };
-  let text_field = |raw: &Map<String, Value>, key: &str| raw.get(key).map_or_else(String::new, pyfmt::python_str);
+  let text_field = |raw: &Map<String, Value>, key: &str| raw.get(key).map_or_else(String::new, text_repr::python_str);
   Some(FenceHolder {
     pid,
     pid_start: raw.get("pid_start").and_then(Value::as_str).map(str::to_string),

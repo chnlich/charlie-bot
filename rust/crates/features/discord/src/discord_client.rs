@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use http::{Method, StatusCode, header};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use regex::Regex;
@@ -80,7 +80,7 @@ pub struct MessageLink {
 /// Parse one discord.com channel or message link. Any other text fails with the `ValueError` message Python prints.
 pub fn parse_message_link(url: &str) -> anyhow::Result<MessageLink> {
   let Some(captures) = MESSAGE_LINK.captures(url) else {
-    bail!("not a discord.com channel/message link: {}", pyfmt::str_repr(url));
+    bail!("not a discord.com channel/message link: {}", text_repr::str_repr(url));
   };
   Ok(MessageLink {
     guild_id: captures[1].to_string(),
@@ -122,7 +122,7 @@ impl Display for DiscordAPIError {
       self.method,
       self.path,
       self.status,
-      pyfmt::str_repr(&self.message)
+      text_repr::str_repr(&self.message)
     )
   }
 }

@@ -74,7 +74,7 @@ pub fn count_or_zero(map: &Map<String, Value>, key: &str) -> anyhow::Result<i64>
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_core::pystr;
+  use charliebot_core::str_methods;
   use serde_json::json;
 
   #[test]
@@ -87,7 +87,7 @@ mod tests {
 
   #[test]
   fn strip_takes_the_information_separators_too() {
-    assert_eq!(pystr::strip("\u{1c} padded \u{a0}"), "padded");
+    assert_eq!(str_methods::strip("\u{1c} padded \u{a0}"), "padded");
   }
 
   #[test]

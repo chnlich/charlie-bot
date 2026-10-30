@@ -8,14 +8,14 @@
 //! way pydantic's lax mode does and return the entry for a value that it rejects.
 //!
 //! The texts follow pydantic 2.12.5 and FastAPI 0.135.2 as the deleted Python environment pinned them.
-//! `rust/fixtures/python/validation_422.json`
+//! `rust/fixtures/golden/validation_422_golden.json`
 //! holds the bodies the Python app answers for these inputs, and the fixture test compares them.
 //!
 //! Parsing a JSON body is not here: pydantic reads the body while it validates it. The JSON decoder's
 //! messages (`json_invalid`) come from CPython's `json` module, which these kinds only carry.
 
 use axum::response::Response;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
@@ -195,11 +195,11 @@ impl Kind {
       Kind::JsonInvalid { .. } => "JSON decode error".to_string(),
       Kind::ValueError { message } => format!("Value error, {message}"),
       Kind::UnionTagNotFound { discriminator } => {
-        format!("Unable to extract tag using discriminator {}", pyfmt::str_repr(discriminator))
+        format!("Unable to extract tag using discriminator {}", text_repr::str_repr(discriminator))
       }
       Kind::UnionTagInvalid { discriminator, tag, expected_tags } => format!(
         "Input tag '{tag}' found using {} does not match any of the expected tags: {}",
-        pyfmt::str_repr(discriminator),
+        text_repr::str_repr(discriminator),
         quoted_list(expected_tags)
       ),
     }
@@ -225,9 +225,9 @@ impl Kind {
       Kind::ModelType { class_name } => Some(json!({"class_name": class_name})),
       // FastAPI's jsonable_encoder writes the ValueError object as an empty mapping (FastAPI 0.135.2).
       Kind::ValueError { .. } => Some(json!({"error": {}})),
-      Kind::UnionTagNotFound { discriminator } => Some(json!({"discriminator": pyfmt::str_repr(discriminator)})),
+      Kind::UnionTagNotFound { discriminator } => Some(json!({"discriminator": text_repr::str_repr(discriminator)})),
       Kind::UnionTagInvalid { discriminator, tag, expected_tags } => Some(json!({
-        "discriminator": pyfmt::str_repr(discriminator),
+        "discriminator": text_repr::str_repr(discriminator),
         "tag": tag,
         "expected_tags": quoted_list(expected_tags),
       })),
@@ -246,12 +246,12 @@ fn items(count: usize) -> &'static str {
 
 /// pydantic's expected-tags text: each tag repr-quoted, joined by `, ` with no `or`.
 fn quoted_list(choices: &[&str]) -> String {
-  choices.iter().map(|choice| pyfmt::str_repr(choice)).collect::<Vec<_>>().join(", ")
+  choices.iter().map(|choice| text_repr::str_repr(choice)).collect::<Vec<_>>().join(", ")
 }
 
 /// pydantic's expected-choices text: `'a'`, `'a' or 'b'`, `'a', 'b' or 'c'`.
 fn one_of(choices: &[&str]) -> String {
-  let quoted: Vec<String> = choices.iter().map(|choice| pyfmt::str_repr(choice)).collect();
+  let quoted: Vec<String> = choices.iter().map(|choice| text_repr::str_repr(choice)).collect();
   match quoted.split_last() {
     None => String::new(),
     Some((last, [])) => last.clone(),

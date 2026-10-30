@@ -8,7 +8,7 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
-use charliebot_core::pyfmt::{JsonStyle, json_dumps};
+use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::turn::TurnContribution;
@@ -28,7 +28,7 @@ const HASH_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
 const DAMAGED_CASE: &str = "non_ascii_rules";
-const PYTHON_FIXTURE: &str = include_str!("fixtures/python_prompt_snapshot_golden.json");
+const PYTHON_FIXTURE: &str = include_str!("fixtures/prompt_snapshot_golden.json");
 
 /// One manager or worker session of the matrix.
 #[derive(Clone, Copy)]

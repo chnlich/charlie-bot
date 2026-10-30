@@ -16,7 +16,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_store::{layout, trigger_files};
 use charliebot_triggers::triggers;
@@ -339,7 +339,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   let Value::Object(record) = record else { unreachable!("the record literal is an object") };
   let dir = launch_dir(sessions_dir, session_id, &launch_id);
   fs::create_dir_all(&dir).map_err(io_failure)?;
-  let record_text = pyfmt::json_dumps(&Value::Object(record.clone()), &LAUNCH_RECORD_JSON);
+  let record_text = text_repr::json_dumps(&Value::Object(record.clone()), &LAUNCH_RECORD_JSON);
   fs::write(launch_record_path(&dir), format!("{record_text}\n")).map_err(io_failure)?;
 
   // The output object: trigger_id and fire_at first, then the record's fields (its trigger_id keeps the first slot).
@@ -438,7 +438,7 @@ fn parse_python_int(text: &str) -> Option<i64> {
 }
 
 fn parse_max_wait(text: &str) -> Result<i64, String> {
-  parse_python_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", pyfmt::str_repr(text)))
+  parse_python_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))
 }
 
 /// `--message` is a short label: `_validate_message` counts characters, not bytes.
@@ -461,7 +461,7 @@ fn parse_watch_target(raw: &str) -> Result<WatchSpec, String> {
     return Ok(WatchSpec::SlurmJob { host: None, job_id: positive_int(rest, raw, "slurm job id")? });
   }
   if scheme.is_empty() {
-    return Err(format!("--watch host must be non-empty (got {})", pyfmt::str_repr(raw)));
+    return Err(format!("--watch host must be non-empty (got {})", text_repr::str_repr(raw)));
   }
   if let Some(job) = rest.strip_prefix("slurm:") {
     let job_id = positive_int(job, raw, "slurm job id")?;
@@ -473,9 +473,9 @@ fn parse_watch_target(raw: &str) -> Result<WatchSpec, String> {
 /// `_positive_int`: an int above zero, with the watch spec named in the error.
 fn positive_int(value: &str, raw: &str, what: &str) -> Result<i64, String> {
   let number =
-    parse_python_int(value).ok_or_else(|| format!("--watch {what} must be int (got {})", pyfmt::str_repr(raw)))?;
+    parse_python_int(value).ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
   if number <= 0 {
-    return Err(format!("--watch {what} must be positive (got {})", pyfmt::str_repr(raw)));
+    return Err(format!("--watch {what} must be positive (got {})", text_repr::str_repr(raw)));
   }
   Ok(number)
 }

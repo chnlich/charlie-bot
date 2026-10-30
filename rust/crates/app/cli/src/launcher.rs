@@ -13,7 +13,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use charliebot_core::{pyfmt, ssh};
+use charliebot_core::{text_repr, ssh};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::waitpid;
@@ -135,7 +135,7 @@ pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) 
   let pid =
     captured.stdout.lines().rev().find(|line| !line.trim().is_empty()).and_then(|line| line.trim().parse::<i32>().ok());
   let Some(pid) = pid else {
-    let stdout = pyfmt::str_repr(&captured.stdout);
+    let stdout = text_repr::str_repr(&captured.stdout);
     return Err(LaunchError::Ssh(format!("failed to parse remote PID from ssh stdout: {stdout}")));
   };
   Ok(Launch { pid, host: Some(host.to_string()), log: remote_log, exit_file: remote_exit })

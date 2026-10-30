@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
-use charliebot_core::pyfmt::{format_g, python_str};
-use charliebot_core::pystr;
+use charliebot_core::text_repr::{format_g, python_str};
+use charliebot_core::str_methods;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
@@ -169,7 +169,7 @@ fn duration_label(seconds: f64) -> String {
 
 /// `" ".join(raw.split())[:80]`: the command with its whitespace runs collapsed, cut to its first 80 characters.
 fn command_note(raw: &str) -> String {
-  pystr::split_whitespace(raw).join(" ").chars().take(COMMAND_NOTE_CHARS).collect()
+  str_methods::split_whitespace(raw).join(" ").chars().take(COMMAND_NOTE_CHARS).collect()
 }
 
 #[cfg(test)]

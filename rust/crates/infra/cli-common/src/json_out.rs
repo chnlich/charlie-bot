@@ -1,6 +1,6 @@
 //! `print_json`: the one home of the CLI's JSON encoding.
 
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::Value;
 
 /// `json.dumps(value, ensure_ascii=False, indent=None)`: one line, `", "` between items.
@@ -18,7 +18,7 @@ pub fn render(value: &Value, indent: Option<usize>) -> String {
     None => ONE_LINE,
     Some(width) => JsonStyle { indent: Some(width), ..INDENTED },
   };
-  format!("{}\n", pyfmt::json_dumps(value, &style))
+  format!("{}\n", text_repr::json_dumps(value, &style))
 }
 
 #[cfg(test)]

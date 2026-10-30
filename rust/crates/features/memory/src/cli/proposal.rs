@@ -6,7 +6,7 @@ use std::process::Command;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::{home, paths, pyfmt, pystr};
+use charliebot_core::{home, paths, text_repr, str_methods};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use super::proposal_check;
@@ -319,7 +319,7 @@ fn store_path(path: &str) -> ProposalResult<PathBuf> {
   if path.starts_with('/') || parts.is_empty() || parts.contains(&"..") {
     return Err(ProposalError::Refusal(format!(
       "path must be store-relative (e.g. entries/<topic>/<slug>.md or topics): {}",
-      pyfmt::str_repr(path)
+      text_repr::str_repr(path)
     )));
   }
   Ok(parts.iter().collect())
@@ -365,7 +365,7 @@ fn line_counts<'a>(lines: impl IntoIterator<Item = &'a str>) -> LineCounts {
 }
 
 fn non_blank_counts(text: &str) -> LineCounts {
-  line_counts(text.split('\n').filter(|line| !pystr::strip(line).is_empty()))
+  line_counts(text.split('\n').filter(|line| !str_methods::strip(line).is_empty()))
 }
 
 fn body_counts(text: &str) -> LineCounts {

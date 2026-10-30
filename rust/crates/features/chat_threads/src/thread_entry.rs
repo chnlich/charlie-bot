@@ -41,7 +41,7 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::paths;
-use charliebot_core::pystr;
+use charliebot_core::str_methods;
 use charliebot_registry::turn::{PromptSource, RuleSegment};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::ChatEvent;
@@ -338,7 +338,7 @@ pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyho
   let bytes =
     std::fs::read(&path).with_context(|| format!("{name} prompt not found at {} — {likely_cause}", path.display()))?;
   let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-  Ok(pystr::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
+  Ok(str_methods::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
 }
 
 /// The thread reply contract: `platform_part`, a blank line, then the platform's scope doc, the red line and the
@@ -429,7 +429,7 @@ pub fn chunk_text(text: &str, limit: usize) -> Vec<String> {
   if !current.is_empty() {
     chunks.push(current);
   }
-  let nonblank: Vec<String> = chunks.iter().filter(|chunk| !pystr::strip(chunk).is_empty()).cloned().collect();
+  let nonblank: Vec<String> = chunks.iter().filter(|chunk| !str_methods::strip(chunk).is_empty()).cloned().collect();
   if nonblank.is_empty() { chunks } else { nonblank }
 }
 
@@ -743,7 +743,7 @@ pub async fn post_reply_with_caller_context(
   let _session_guard = session_lock_for(session_id).lock_owned().await;
   let platform = adapter.platform();
   let session = require_thread_session(platform, features, session_id).await?;
-  if pystr::strip(text).is_empty() {
+  if str_methods::strip(text).is_empty() {
     return Err(ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
   let config = features.config.get().map_err(ThreadReplyError::failure)?;

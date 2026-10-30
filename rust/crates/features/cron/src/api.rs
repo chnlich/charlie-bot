@@ -8,7 +8,7 @@ use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::{get, put};
-use charliebot_compat::fastapi_body::{self, RequestBody};
+use charliebot_compat::request_body::{self, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_core::event_types;
@@ -71,7 +71,7 @@ async fn list_tasks(State(features): State<Arc<FeatureContext>>) -> Response {
 
 async fn create_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, body) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, body).await {
+  let body = match request_body::read(&parts.headers, body).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -126,7 +126,7 @@ async fn update_task(
     return detail(StatusCode::BAD_REQUEST, error);
   }
   let (parts, body) = request.into_parts();
-  let (body, null_bool_fields) = match fastapi_body::read(&parts.headers, body).await {
+  let (body, null_bool_fields) = match request_body::read(&parts.headers, body).await {
     Ok(RequestBody::Json(mut value)) => {
       let mut nulls = Vec::new();
       if let Some(object) = value.as_object_mut() {

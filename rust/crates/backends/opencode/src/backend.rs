@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::home;
-use charliebot_core::pyfmt::python_str;
-use charliebot_core::pystr;
+use charliebot_core::text_repr::python_str;
+use charliebot_core::str_methods;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, RecoverySilence, ServeProcessSpec, ServeTransport,
   ServeTurn, ServeTurnArgs, ServeTurnResult, Translate, TransportKind,
@@ -1127,7 +1127,7 @@ async fn collect_one_shot(stdout: AgentPipeReader) -> anyhow::Result<String> {
   if let Some(error) = error {
     bail!(error);
   }
-  Ok(pystr::strip(&parts.concat()).to_string())
+  Ok(str_methods::strip(&parts.concat()).to_string())
 }
 
 async fn wait_child_exit(exit: &mut watch::Receiver<Option<Result<i32, String>>>) -> anyhow::Result<i32> {

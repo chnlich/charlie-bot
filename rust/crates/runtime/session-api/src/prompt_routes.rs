@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
-use charliebot_core::pyfmt::str_repr;
+use charliebot_core::text_repr::str_repr;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::TaskProfile;

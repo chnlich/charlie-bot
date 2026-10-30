@@ -1,6 +1,6 @@
 //! Scheduled-task request and file models (`src/features/cron/config.py`).
 
-use charliebot_compat::fastapi_body::{BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{BodyModel, Field, FieldType};
 use serde::{Deserialize, Serialize};
 
 /// The Python default for cron task and create-request time zones.

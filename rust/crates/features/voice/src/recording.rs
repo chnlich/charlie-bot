@@ -1,5 +1,5 @@
 use charliebot_core::credentials::Credentials;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use futures_util::future::BoxFuture;
 use tokio::sync::{mpsc, watch};
 
@@ -126,7 +126,7 @@ fn select_backend(
   if !known.contains(&backend_id) {
     return Err(RecordingError::BackendSelection(format!(
       "unknown transcription backend {}; known: {}",
-      pyfmt::str_repr(backend_id),
+      text_repr::str_repr(backend_id),
       known.join(", ")
     )));
   }

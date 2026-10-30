@@ -23,7 +23,7 @@ members = [
     "crates/app/structure",
     "crates/app/switch-helper",
     "crates/runtime/tasks",
-    "crates/infra/pyhtml",
+    "crates/infra/html",
     "crates/features/artifacts",
     "crates/features/backup",
     "crates/features/chat_threads",
@@ -169,7 +169,7 @@ charliebot-memory = { path = "crates/features/memory" }
 charliebot-openai-compatible = { path = "crates/backends/openai_compatible" }
 charliebot-opencode = { path = "crates/backends/opencode" }
 charliebot-packages = { path = "crates/app/packages" }
-charliebot-pyhtml = { path = "crates/infra/pyhtml" }
+charliebot-html = { path = "crates/infra/html" }
 charliebot-registry = { path = "crates/runtime/registry" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/runtime/store" }

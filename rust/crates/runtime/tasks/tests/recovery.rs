@@ -1992,7 +1992,7 @@ async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> an
     message,
     format!(
       "TaskInvalidError: sequence run orphan carries owner_ref {} and no registered controller owns its kind",
-      charliebot_core::pyfmt::str_repr(ORPHAN_OWNER)
+      charliebot_core::text_repr::str_repr(ORPHAN_OWNER)
     ),
     "the error matches Python's class and message"
   );
@@ -2780,7 +2780,7 @@ async fn add_recovery_worker(
   Ok(worker)
 }
 
-const PYTHON_MARKER_FIXTURE: &str = include_str!("fixtures/boot_recovery_marker.json");
+const PYTHON_MARKER_FIXTURE: &str = include_str!("fixtures/boot_recovery_marker_golden.json");
 
 fn recorded_marker_instant(path: &Path) -> anyhow::Result<String> {
   let fixture: Value = serde_json::from_str(PYTHON_MARKER_FIXTURE)?;

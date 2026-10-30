@@ -6,7 +6,7 @@
 //! no exponent padding. CPython's `repr`, which `json.dumps` uses, switches at -4 and 16 and pads the exponent to
 //! two digits. Strings, containers and integers render the same in both.
 
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use serde::Serialize;
 use serde_json::ser::Formatter as JsonFormatter;
 use serde_json::{Serializer, Value};
@@ -27,7 +27,7 @@ pub fn fast_json_bytes(value: &Value) -> Vec<u8> {
 
 /// Starlette's `JSONResponse.render(value)`: `json.dumps(value, ensure_ascii=False, separators=(",", ":"))`.
 pub fn starlette_bytes(value: &Value) -> Vec<u8> {
-  pyfmt::json_dumps(value, &pyfmt::STARLETTE_JSON).into_bytes()
+  text_repr::json_dumps(value, &text_repr::STARLETTE_JSON).into_bytes()
 }
 
 /// The formatter that adds orjson's float text to serde_json's writer.

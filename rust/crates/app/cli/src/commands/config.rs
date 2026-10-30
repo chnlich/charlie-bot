@@ -281,7 +281,7 @@ mod tests {
   fn backends_prints_the_value_the_python_command_printed() {
     let stdout = run("backends").expect("backends prints");
     let printed: Value = serde_json::from_str(stdout.trim_end()).expect("one JSON value");
-    let expected_text = recorded(include_str!("../../tests/fixtures/config_get/backends.python.txt"));
+    let expected_text = recorded(include_str!("../../tests/fixtures/config_get/backends_golden.txt"));
     let expected: Value = serde_json::from_str(expected_text.trim_end()).expect("the recorded Python line is JSON");
     assert_eq!(printed, expected);
     for key in ["pool", "routing", "options"] {
@@ -292,13 +292,13 @@ mod tests {
   #[test]
   fn a_scalar_prints_as_python_prints_it() {
     let stdout = run("headless_chrome_bin").expect("the scalar prints");
-    assert_eq!(stdout, recorded(include_str!("../../tests/fixtures/config_get/headless_chrome_bin.python.txt")));
+    assert_eq!(stdout, recorded(include_str!("../../tests/fixtures/config_get/headless_chrome_bin_golden.txt")));
   }
 
   #[test]
   fn a_model_keeps_its_null_optional_fields() {
     let stdout = run("telegram").expect("telegram prints");
-    let expected_text = recorded(include_str!("../../tests/fixtures/config_get/telegram.python.txt"));
+    let expected_text = recorded(include_str!("../../tests/fixtures/config_get/telegram_golden.txt"));
     assert_eq!(stdout, expected_text);
     assert_eq!(serde_json::from_str::<Value>(stdout.trim_end()).unwrap(), json!({ "chat_id": null }));
   }

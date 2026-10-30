@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
-use charliebot_core::pystr;
-use charliebot_pyhtml::{EventKind, Opcode, OpcodeTag, StreamEvent, escape, opcodes, parse_with, unescape};
+use charliebot_core::str_methods;
+use charliebot_html::{EventKind, Opcode, OpcodeTag, StreamEvent, escape, opcodes, parse_with, unescape};
 use regex::Regex;
 
 const IGNORED_TAGS: &[&str] = &["head", "style", "script", "template", "noscript", "title"];
@@ -274,7 +274,7 @@ fn normalise(text: &str) -> String {
   let mut output = String::new();
   let mut pending_space = false;
   for character in text.chars() {
-    if pystr::is_python_whitespace(character) {
+    if str_methods::is_python_whitespace(character) {
       pending_space = !output.is_empty();
     } else {
       if pending_space {
@@ -292,7 +292,7 @@ fn node_is_boundary(node: &Node) -> bool {
     return true;
   }
   let classes = node.attrs.get("class").and_then(Option::as_deref).unwrap_or("");
-  if node.tag == "span" && pystr::split_whitespace(classes).iter().any(|class| *class == "mtag" || *class == "b") {
+  if node.tag == "span" && str_methods::split_whitespace(classes).iter().any(|class| *class == "mtag" || *class == "b") {
     return true;
   }
   let style = node.attrs.get("style").and_then(Option::as_deref).unwrap_or("").to_lowercase();
@@ -300,7 +300,7 @@ fn node_is_boundary(node: &Node) -> bool {
     return false;
   };
   matches!(
-    pystr::strip(display.as_str()),
+    str_methods::strip(display.as_str()),
     "block" | "flow-root" | "flex" | "grid" | "list-item" | "table" | "table-caption" | "table-cell" | "table-row"
   )
 }
@@ -321,7 +321,7 @@ fn visible_parts(parser: &Parser, node_index: usize) -> Vec<usize> {
 }
 
 fn has_visible_text(parser: &Parser, parts: &[usize]) -> bool {
-  parts.iter().any(|&index| parser.parts[index].text.chars().any(|character| !pystr::is_python_whitespace(character)))
+  parts.iter().any(|&index| parser.parts[index].text.chars().any(|character| !str_methods::is_python_whitespace(character)))
 }
 
 fn collect_leaves(parser: &Parser, root: usize) -> Vec<Leaf> {
@@ -389,7 +389,7 @@ fn first_class_descendant(parser: &Parser, node_index: usize, class_name: &str) 
   for child in &parser.nodes[node_index].children {
     if let Child::Node(child_node) = child {
       let classes = parser.nodes[*child_node].attrs.get("class").and_then(Option::as_deref).unwrap_or("");
-      if pystr::split_whitespace(classes).contains(&class_name) {
+      if str_methods::split_whitespace(classes).contains(&class_name) {
         return Some(*child_node);
       }
       if let Some(found) = first_class_descendant(parser, *child_node, class_name) {
@@ -410,9 +410,9 @@ fn tokenise(text: &str) -> Vec<(String, usize, usize)> {
   let mut index = 0;
   while index < characters.len() {
     let character = characters[index];
-    if pystr::is_python_whitespace(character) {
+    if str_methods::is_python_whitespace(character) {
       index += 1;
-      while index < characters.len() && pystr::is_python_whitespace(characters[index]) {
+      while index < characters.len() && str_methods::is_python_whitespace(characters[index]) {
         index += 1;
       }
       continue;
@@ -597,7 +597,7 @@ fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
       continue;
     }
     let mut cursor = index + 5;
-    while let Some(character) = raw[cursor..].chars().next().filter(|character| pystr::is_python_whitespace(*character))
+    while let Some(character) = raw[cursor..].chars().next().filter(|character| str_methods::is_python_whitespace(*character))
     {
       cursor += character.len_utf8();
     }
@@ -605,7 +605,7 @@ fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
       continue;
     }
     cursor += 1;
-    while let Some(character) = raw[cursor..].chars().next().filter(|character| pystr::is_python_whitespace(*character))
+    while let Some(character) = raw[cursor..].chars().next().filter(|character| str_methods::is_python_whitespace(*character))
     {
       cursor += character.len_utf8();
     }
@@ -625,7 +625,7 @@ fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
     let value_start = cursor;
     let mut value_end = cursor;
     for (offset, character) in raw[cursor..].char_indices() {
-      if pystr::is_python_whitespace(character) || character == '>' {
+      if str_methods::is_python_whitespace(character) || character == '>' {
         break;
       }
       value_end = cursor + offset + character.len_utf8();
@@ -645,13 +645,13 @@ fn add_class(
 ) -> Result<(), String> {
   let (start, raw) = start_tag_raw(source, node)?;
   if let Some((_, value_end, value)) = find_class_attr(raw, true) {
-    if !pystr::split_whitespace(&value).contains(&class_name) {
+    if !str_methods::split_whitespace(&value).contains(&class_name) {
       add_insertion(insertions, start + value_end, format!(" {class_name}"));
     }
     return Ok(());
   }
   if let Some((_, value_end, value)) = find_class_attr(raw, false) {
-    if !pystr::split_whitespace(&value).contains(&class_name) {
+    if !str_methods::split_whitespace(&value).contains(&class_name) {
       add_insertion(insertions, start + value_end, format!("&#32;{class_name}"));
     }
     return Ok(());
@@ -669,7 +669,7 @@ fn has_attribute(raw: &str, name: &str) -> bool {
     }
     let after_name = index + name.len();
     if let Some(character) = raw[after_name..].chars().next()
-      && (pystr::is_python_whitespace(character)
+      && (str_methods::is_python_whitespace(character)
         || matches!(character, '=' | '>')
         || raw[after_name..].starts_with("/>"))
     {
@@ -762,7 +762,7 @@ fn wrapping_removes_direct_text(parser: &Parser, leaf: &Leaf, ranges: &[(usize, 
     let Child::Text(part_index) = child else { continue };
     let part = &parser.parts[*part_index];
     for (index, character) in part.text.chars().enumerate() {
-      if pystr::is_python_whitespace(character) {
+      if str_methods::is_python_whitespace(character) {
         continue;
       }
       has_direct_text = true;
@@ -870,7 +870,7 @@ fn ghost_markup(parser: &Parser, leaf: &Leaf, base_source: &str) -> String {
   let trailing = node
     .end_end
     .map(|end| {
-      base_source[end..].chars().take_while(|character| pystr::is_python_whitespace(*character)).collect::<String>()
+      base_source[end..].chars().take_while(|character| str_methods::is_python_whitespace(*character)).collect::<String>()
     })
     .unwrap_or_default();
   let data = escape(&format!("{text}{trailing}"), true);
@@ -1157,13 +1157,13 @@ fn section_label(parser: &Parser, leaf: &Leaf) -> String {
       let heading: String =
         visible_parts(parser, h2).into_iter().map(|part| parser.parts[part].text.as_str()).collect();
       let heading = LEADING_DIGITS_RE.replace(&normalise(&heading), "").into_owned();
-      return pystr::strip(&TRAILING_CHANGED_RE.replace(&heading, "")).to_string();
+      return str_methods::strip(&TRAILING_CHANGED_RE.replace(&heading, "")).to_string();
     }
     current = parser.nodes[node].parent;
   }
   let element = &parser.nodes[leaf.element];
   let classes = element.attrs.get("class").and_then(Option::as_deref).unwrap_or("");
-  if pystr::split_whitespace(classes).contains(&"mtag") { "header chip".to_string() } else { element.tag.clone() }
+  if str_methods::split_whitespace(classes).contains(&"mtag") { "header chip".to_string() } else { element.tag.clone() }
 }
 
 #[cfg(test)]

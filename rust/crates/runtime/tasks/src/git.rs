@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use ignore::WalkBuilder;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -313,7 +313,7 @@ fn default_branch_from_ls_remote(
   Err(BaseBranchResolutionError::new(format!(
     "{source} in {} advertised no {SYMREF_PREFIX}<branch> symref line; refusing to infer a default from local refs. Output: {}",
     repo_path.display(),
-    pyfmt::str_repr(out)
+    text_repr::str_repr(out)
   )))
 }
 
@@ -462,7 +462,7 @@ pub async fn resolve_base_branch(
   if branch.is_empty() || branch.contains("..") || branch.chars().any(char::is_whitespace) {
     return Err(BaseBranchResolutionError::new(format!(
       "invalid branch name in --base-branch: {}",
-      pyfmt::str_repr(raw)
+      text_repr::str_repr(raw)
     )));
   }
 
@@ -485,7 +485,7 @@ pub async fn resolve_base_branch(
       return Err(BaseBranchResolutionError::new(format!(
         "cannot reach origin to resolve base branch {}: {ls_err}. \
          Retry when the remote is reachable, or pass a full commit SHA to pin the base.",
-        pyfmt::str_repr(branch)
+        text_repr::str_repr(branch)
       )));
     }
     remote_tip = ls_remote_ref_sha(&out, &heads_ref(branch));
@@ -610,7 +610,7 @@ async fn unpublished_branch_resolution(
   let local_sha = git_rev_parse_optional(repo_path, &heads_ref(branch)).await.ok_or_else(|| {
     BaseBranchResolutionError::new(format!(
       "base branch {} exists neither locally nor on origin (origin {}).",
-      pyfmt::str_repr(branch),
+      text_repr::str_repr(branch),
       if origin_configured { "has no such branch" } else { "unreachable or not configured" }
     ))
   })?;
@@ -1063,7 +1063,7 @@ pub async fn git_push_refspec(repo_path: &Path, local_branch: &str, remote_branc
 /// fetched first, so the judgment reads the published tip; a local branch is judged as-is.
 pub async fn git_verify_commit_landed(repo_path: &Path, branch: &str, commit: &str) -> (bool, String) {
   if !is_commit_rev(commit) {
-    return (false, format!("commit {} is not a git commit hash", pyfmt::str_repr(commit)));
+    return (false, format!("commit {} is not a git commit hash", text_repr::str_repr(commit)));
   }
   if let Some(remote_branch) = branch.strip_prefix("origin/") {
     // Judge the published tip, not a possibly stale remote-tracking ref.

@@ -12,8 +12,8 @@ use std::path::Path;
 use std::str::Utf8Error;
 
 use anyhow::anyhow;
-use charliebot_compat::python_json;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_compat::json_loads;
+use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::{Map, Value, json};
 
 use crate::plan_paths;
@@ -96,7 +96,7 @@ pub fn derive_state_str(plan: &Map<String, Value>) -> Result<&'static str, Strin
   let has_versions = plan.get("versions").and_then(Value::as_array).is_some_and(|versions| !versions.is_empty());
   if !has_versions {
     let id = plan.get("id").unwrap_or(&Value::Null);
-    return Err(format!("plan {} has no versions", pyfmt::python_str(id)));
+    return Err(format!("plan {} has no versions", text_repr::python_str(id)));
   }
   derive_state(plan.get("closed").unwrap_or(&Value::Null), plan.get("takeoff").unwrap_or(&Value::Null))
 }
@@ -240,9 +240,9 @@ pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
   let text = std::str::from_utf8(bytes).map_err(|error| LoadFailure::Caught(utf8_error_text(&error, bytes)))?;
   // Python's text-mode read translates every line ending to "\n", and the JSON error positions count that text.
   let text = text.replace("\r\n", "\n").replace('\r', "\n");
-  python_json::loads_text(&text).map_err(|error| match error {
-    python_json::LoadError::Value(text) => LoadFailure::Caught(text),
-    python_json::LoadError::Unrepresentable(what) => {
+  json_loads::loads_text(&text).map_err(|error| match error {
+    json_loads::LoadError::Value(text) => LoadFailure::Caught(text),
+    json_loads::LoadError::Unrepresentable(what) => {
       LoadFailure::Escaped(EscapedError { kind: "ValueError", detail: what })
     }
   })
@@ -258,7 +258,7 @@ pub(crate) fn project_registry(plans: &[Value]) -> Result<Value, String> {
 /// `json_utils.write_json_atomically(path, registry, indent=2)`: the bytes of a registry file. The fork copy and the
 /// plan verbs both write through it, so a registry has one spelling on disk.
 pub(crate) fn registry_text(registry: &Value) -> String {
-  pyfmt::json_dumps(registry, &REGISTRY_JSON)
+  text_repr::json_dumps(registry, &REGISTRY_JSON)
 }
 
 /// `json.dumps(registry, ensure_ascii=False, indent=2)`: the registry's JSON style.
@@ -304,7 +304,7 @@ fn os_error_text(error: &io::Error, path: &Path) -> String {
   let errno = error.raw_os_error().expect("a filesystem call fails with an errno");
   let message = error.to_string();
   let strerror = message.strip_suffix(&format!(" (os error {errno})")).unwrap_or(message.as_str());
-  format!("[Errno {errno}] {strerror}: {}", pyfmt::str_repr(&path.to_string_lossy()))
+  format!("[Errno {errno}] {strerror}: {}", text_repr::str_repr(&path.to_string_lossy()))
 }
 
 /// Python's `UnicodeDecodeError` text for the UTF-8 failure at `error` in `bytes`.
@@ -341,8 +341,8 @@ pub(crate) fn py_type_name(value: &Value) -> &'static str {
 /// `repr(value)` of a JSON value that `json.loads` produced: strings quoted, the rest as `str` prints them.
 pub(crate) fn py_repr(value: &Value) -> String {
   match value {
-    Value::String(text) => pyfmt::str_repr(text),
-    other => pyfmt::python_str(other),
+    Value::String(text) => text_repr::str_repr(text),
+    other => text_repr::python_str(other),
   }
 }
 

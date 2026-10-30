@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{Context, bail};
-use charliebot_core::pystr;
+use charliebot_core::str_methods;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{PANEL_EXPIRED, PANEL_WINDOWS, QuotaAccount};
 use charliebot_store::metadata::UtcDateTime;
@@ -313,7 +313,7 @@ fn latest_token_count(
   matches: fn(&Map<String, Value>) -> anyhow::Result<bool>,
 ) -> anyhow::Result<Option<Map<String, Value>>> {
   for raw_line in lines.iter().rev() {
-    let line = pystr::strip(raw_line);
+    let line = str_methods::strip(raw_line);
     if line.is_empty() {
       continue;
     }
@@ -471,7 +471,7 @@ fn python_float(value: Option<&Value>) -> Option<f64> {
   match value? {
     Value::Number(number) => number.as_f64(),
     Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
-    Value::String(text) => pystr::strip(text).parse::<f64>().ok(),
+    Value::String(text) => str_methods::strip(text).parse::<f64>().ok(),
     _ => None,
   }
 }
@@ -603,7 +603,7 @@ fn extract_spend_events(path: &Path) -> anyhow::Result<Option<Vec<SpendEvent>>> 
   let mut events = Vec::new();
   let mut current_model = String::new();
   for (index, raw_line) in py_splitlines(text).into_iter().enumerate() {
-    let line = pystr::strip(raw_line);
+    let line = str_methods::strip(raw_line);
     if line.is_empty() {
       continue;
     }

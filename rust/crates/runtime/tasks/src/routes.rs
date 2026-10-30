@@ -8,7 +8,7 @@ use axum::extract::{FromRequestParts, Path, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 
@@ -281,7 +281,7 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
 
 async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -593,7 +593,7 @@ async fn send_message(
   request: axum::http::Request<Body>,
 ) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -725,7 +725,7 @@ fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageReq
 /// dispatched (`src/runtime/api/internal.py` `session_message`). An over-limit message is refused before any lookup.
 async fn session_message(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -868,7 +868,7 @@ async fn retry_run(
   request: axum::http::Request<Body>,
 ) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -930,7 +930,7 @@ async fn cancel_run(
   request: axum::http::Request<Body>,
 ) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -991,7 +991,7 @@ async fn body_session_caller(
   request: Request<Body>,
 ) -> Result<(SessionMetadata, CallerIdentity, RequestBody), Response> {
   let (mut parts, body) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, body).await {
+  let body = match request_body::read(&parts.headers, body).await {
     Ok(body) => body,
     Err(response) => return Err(*response),
   };

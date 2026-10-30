@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_yaml::{Mapping, Value};
 
-use crate::{paths, pyfmt};
+use crate::{paths, text_repr};
 
 pub const CONFIG_FILENAME: &str = "config.yaml";
 pub const CREDENTIALS_FILENAME: &str = "credentials.yaml";
@@ -634,7 +634,7 @@ fn parse_option(
     Some(Value::String(name)) if backend_types.contains(&name.as_str()) => name.clone(),
     other => {
       let shown = match other {
-        Some(Value::String(name)) => pyfmt::str_repr(name),
+        Some(Value::String(name)) => text_repr::str_repr(name),
         Some(value) => yaml_key_repr(value),
         None => "None".to_string(),
       };
@@ -674,7 +674,7 @@ fn parse_option(
 /// A YAML mapping key as CPython's `repr` prints the value PyYAML loaded for it.
 pub fn yaml_key_repr(key: &Value) -> String {
   match key {
-    Value::String(text) => pyfmt::str_repr(text),
+    Value::String(text) => text_repr::str_repr(text),
     Value::Null => "None".to_string(),
     Value::Bool(true) => "True".to_string(),
     Value::Bool(false) => "False".to_string(),

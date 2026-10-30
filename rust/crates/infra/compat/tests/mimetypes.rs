@@ -1,10 +1,10 @@
 //! The built-in content-type table against CPython's `mimetypes.guess_type` for every built-in suffix and
-//! for the paths that combine them (`rust/fixtures/python/mimetypes.json`).
+//! for the paths that combine them (`rust/fixtures/golden/mimetypes_golden.json`).
 
 use charliebot_compat::mimetypes::MimeTypes;
 use serde_json::Value;
 
-const FIXTURE: &str = include_str!("../../../../fixtures/python/mimetypes.json");
+const FIXTURE: &str = include_str!("../../../../fixtures/golden/mimetypes_golden.json");
 
 #[test]
 fn guesses_match_cpython() {

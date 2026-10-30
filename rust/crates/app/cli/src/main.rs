@@ -80,7 +80,7 @@ fn main() {
   if !COMMANDS.contains(&subcommand.as_str()) {
     eprintln!(
       "{program}: unknown subcommand {}. Available subcommands: {}",
-      charliebot_core::pyfmt::str_repr(&subcommand),
+      charliebot_core::text_repr::str_repr(&subcommand),
       COMMANDS.join(", ")
     );
     exit(2);

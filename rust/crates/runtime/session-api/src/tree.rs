@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{Store, StoreError, StoreResult, TaskTreeRow};
 use serde::{Deserialize, Serialize};
@@ -105,7 +105,7 @@ fn decode_cursor(cursor: &str) -> StoreResult<(String, UtcDateTime, String)> {
 }
 
 fn malformed_cursor(cursor: &str) -> StoreError {
-  StoreError::invalid(format!("malformed tree page cursor: {}", pyfmt::str_repr(cursor)))
+  StoreError::invalid(format!("malformed tree page cursor: {}", text_repr::str_repr(cursor)))
 }
 
 #[cfg(test)]

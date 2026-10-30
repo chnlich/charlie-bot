@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::pyfmt::str_repr;
-use charliebot_core::pystr;
+use charliebot_core::text_repr::str_repr;
+use charliebot_core::str_methods;
 use unicode_width::UnicodeWidthChar;
 
 pub(super) const TOPICS_FILENAME: &str = "topics";
@@ -47,7 +47,7 @@ pub(super) fn lint_store(root: &Path) -> Result<(Vec<String>, Vec<String>), CliE
         violations.push(format!("{}: empty capture file", path.display()));
       } else if !first_line.starts_with("# ") {
         violations.push(format!("{}: line 1: capture must start with '# <title>'", path.display()));
-      } else if pystr::strip(&first_line[2..]).is_empty() {
+      } else if str_methods::strip(&first_line[2..]).is_empty() {
         violations.push(format!("{}: line 1: empty title after '# '", path.display()));
       }
     }
@@ -173,12 +173,12 @@ fn width_warnings(root: &Path, files: &[PathBuf]) -> Result<Vec<String>, CliExit
 
 pub(super) fn entry_body(text: &str) -> Vec<&str> {
   let lines: Vec<&str> = text.split('\n').collect();
-  if pystr::strip(lines[0]) != "---" {
-    return lines.into_iter().filter(|line| !pystr::strip(line).is_empty()).collect();
+  if str_methods::strip(lines[0]) != "---" {
+    return lines.into_iter().filter(|line| !str_methods::strip(line).is_empty()).collect();
   }
   for (index, line) in lines.iter().enumerate().skip(1) {
-    if pystr::strip(line) == "---" {
-      return lines[index + 1..].iter().copied().filter(|line| !pystr::strip(line).is_empty()).collect();
+    if str_methods::strip(line) == "---" {
+      return lines[index + 1..].iter().copied().filter(|line| !str_methods::strip(line).is_empty()).collect();
     }
   }
   Vec::new()

@@ -2,11 +2,11 @@
 //! chat completions request, an OpenAI answer to an Anthropic message, and the OpenAI chat stream to Anthropic's
 //! events. Each keeps Python's operation order, so a request raises the failure Python raises first.
 
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use super::pyvalue::{
+use super::value_ops::{
   COMPACT_ASCII_JSON, PyResult, first_item, get, get_or_empty, iterate, iterate_member, loads_text, raised,
   require_dict, truthy, type_name, value_error,
 };
@@ -80,7 +80,7 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
 
 /// `str(payload.get(key, missing))` for a member that may be absent.
 fn py_str(value: Option<&Value>, missing: &str) -> String {
-  value.map_or_else(|| missing.to_string(), pyfmt::python_str)
+  value.map_or_else(|| missing.to_string(), text_repr::python_str)
 }
 
 /// `_blocks_to_text(content, label)`: a string as it is, or the text of a list of text blocks.
@@ -115,7 +115,7 @@ fn image_block_to_openai_part(block: &Map<String, Value>, label: &str) -> PyResu
   };
   Ok(json!({
     "type": "image_url",
-    "image_url": {"url": format!("data:{};base64,{data}", pyfmt::python_str(media_type))},
+    "image_url": {"url": format!("data:{};base64,{data}", text_repr::python_str(media_type))},
   }))
 }
 
@@ -147,7 +147,7 @@ fn tool_result_to_openai_content(content: &Value) -> PyResult<(String, Vec<Value
 fn flush_user_parts(converted: &mut Vec<Value>, parts: &mut Vec<Value>) {
   if !parts.is_empty() {
     let content = if parts.iter().all(|part| part["type"] == "text") {
-      Value::String(parts.iter().map(|part| pyfmt::python_str(&part["text"])).collect())
+      Value::String(parts.iter().map(|part| text_repr::python_str(&part["text"])).collect())
     } else {
       Value::Array(parts.clone())
     };
@@ -216,7 +216,7 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
         let mut tool_call = json!({
           "id": id,
           "type": "function",
-          "function": {"name": name, "arguments": pyfmt::json_dumps(&input, &COMPACT_ASCII_JSON)},
+          "function": {"name": name, "arguments": text_repr::json_dumps(&input, &COMPACT_ASCII_JSON)},
         });
         if let Some(extra_content) = block.get("extra_content").filter(|extra_content| !extra_content.is_null()) {
           tool_call["extra_content"] = extra_content.clone();
@@ -243,7 +243,7 @@ fn convert_tools(tools: &Value) -> PyResult<Vec<Value>> {
   for raw in iterate(tools)? {
     let tool = require_dict(&raw, "tool")?;
     if let Some(kind) = tool.get("type").filter(|kind| truthy(kind)) {
-      return value_error(format!("unsupported Anthropic built-in tool type: {}", pyfmt::python_str(kind)));
+      return value_error(format!("unsupported Anthropic built-in tool type: {}", text_repr::python_str(kind)));
     }
     let name = tool.get("name").filter(|name| truthy(name));
     let input_schema = tool.get("input_schema").filter(|schema| !schema.is_null());
@@ -593,7 +593,7 @@ mod tests {
   use serde_json::json;
 
   use super::*;
-  use crate::pyvalue::Fault;
+  use crate::value_ops::Fault;
 
   fn request(payload: Value) -> PyResult<Value> {
     anthropic_to_openai_chat_request(&payload, "upstream-model")

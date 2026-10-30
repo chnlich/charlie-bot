@@ -18,10 +18,10 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, TaggedVariant};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::{event_types, pyfmt, ssh};
+use charliebot_core::{event_types, text_repr, ssh};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus, WatchTarget, fresh_uuid};
@@ -323,7 +323,7 @@ impl TriggerManager {
     let mut bad = Vec::new();
     for (target, (status, raw)) in targets.iter().zip(results) {
       if status != ProbeStatus::Alive {
-        bad.push(format!("{}:{} -> {} ({})", target.host, target.pid, status, pyfmt::str_repr(raw.trim())));
+        bad.push(format!("{}:{} -> {} ({})", target.host, target.pid, status, text_repr::str_repr(raw.trim())));
       }
     }
     if bad.is_empty() {
@@ -1380,7 +1380,7 @@ fn optional_string(value: &Value, field: &str) -> Option<String> {
 
 async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };

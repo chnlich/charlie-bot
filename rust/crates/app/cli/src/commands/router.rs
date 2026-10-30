@@ -27,7 +27,7 @@ use charliebot_cli_common::json_out;
 use charliebot_core::credentials;
 use charliebot_core::home;
 use charliebot_core::paths;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timeouts;
 use clap::{CommandFactory, Parser};
 use serde_json::{Value, json};
@@ -291,7 +291,7 @@ fn request_error(error: &reqwest::Error) -> String {
 
 /// Python `json.dumps(payload)`: escaped non-ASCII, `", "` between items.
 fn dumps_payload(payload: &Value) -> String {
-  pyfmt::json_dumps(
+  text_repr::json_dumps(
     payload,
     &JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None },
   )
@@ -330,7 +330,7 @@ fn design_probability(
 
 /// The backends this request gets, in order, and the one-line reason for them.
 fn choose(config: &RouterConfig, request: &RouteRequest, probability: f64) -> (Vec<String>, String) {
-  let reason = |kind: &str| format!("{kind} p={}", pyfmt::format_f(probability, 2));
+  let reason = |kind: &str| format!("{kind} p={}", text_repr::format_f(probability, 2));
   if probability <= DESIGN_THRESHOLD {
     return (Vec::new(), reason(ROUTINE));
   }

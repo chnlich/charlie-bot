@@ -88,7 +88,7 @@ fn float_repr(value: f64) -> String {
 }
 
 fn recorded_python_members(home: &Path) -> Vec<Value> {
-  let mut decoder = flate2::read::GzDecoder::new(include_bytes!("fixtures/python_backup_manifest.json.gz").as_slice());
+  let mut decoder = flate2::read::GzDecoder::new(include_bytes!("fixtures/backup_manifest_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
   let fixture: Value = serde_json::from_str(&fixture_text).unwrap();

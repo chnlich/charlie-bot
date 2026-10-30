@@ -110,7 +110,7 @@ first invalid byte. Before the split point, a line that parses as JSON but is no
 (Python's `AttributeError` on `event.get`), and so does a truthy `timestamp` that is not a string (Python's
 `TypeError` at the cutoff comparison). Each error returns before any write, so the live log, the archive file and
 `archive_offset` stay byte-identical. Lines end at `\r\n`, a lone `\r`, or `\n`, and a final line without an end is
-kept. A blank line before the split point (`pystr::strip` is empty) is dropped. Archived and kept lines are written
+kept. A blank line before the split point (`str_methods::strip` is empty) is dropped. Archived and kept lines are written
 with a trailing `\n`. A non-JSON line, or a falsy or unparsable `timestamp`, starts the kept part as in Python.
 
 ## Run records (S2, implemented)

@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
-use charliebot_core::pyfmt::python_truthy;
+use charliebot_core::text_repr::python_truthy;
 use charliebot_registry::FeatureContext;
 use flate2::{Compression, GzBuilder};
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
@@ -589,7 +589,7 @@ fn python_value_text(value: &Value) -> String {
     Value::Bool(false) => "False".to_string(),
     Value::String(value) => value.clone(),
     Value::Number(number) if number.is_f64() => {
-      charliebot_core::pyfmt::float_repr(number.as_f64().expect("a float number has an f64 value"))
+      charliebot_core::text_repr::float_repr(number.as_f64().expect("a float number has an f64 value"))
     }
     Value::Number(number) => number.to_string(),
     Value::Array(values) => format!("[{}]", values.iter().map(python_value_repr).collect::<Vec<_>>().join(", ")),
@@ -597,7 +597,7 @@ fn python_value_text(value: &Value) -> String {
       "{{{}}}",
       values
         .iter()
-        .map(|(key, value)| format!("{}: {}", charliebot_core::pyfmt::str_repr(key), python_value_repr(value)))
+        .map(|(key, value)| format!("{}: {}", charliebot_core::text_repr::str_repr(key), python_value_repr(value)))
         .collect::<Vec<_>>()
         .join(", ")
     ),
@@ -606,7 +606,7 @@ fn python_value_text(value: &Value) -> String {
 
 fn python_value_repr(value: &Value) -> String {
   match value {
-    Value::String(value) => charliebot_core::pyfmt::str_repr(value),
+    Value::String(value) => charliebot_core::text_repr::str_repr(value),
     _ => python_value_text(value),
   }
 }
@@ -895,7 +895,7 @@ mod differential_tests {
 
   #[test]
   fn recorded_python_trace_builders_match_seeded_corpus() {
-    let bytes = include_bytes!("../tests/fixtures/python_trace_differential.json.gz");
+    let bytes = include_bytes!("../tests/fixtures/trace_golden.json.gz");
     let mut decoder = GzDecoder::new(bytes.as_slice());
     let mut contents = Vec::new();
     decoder.read_to_end(&mut contents).unwrap();

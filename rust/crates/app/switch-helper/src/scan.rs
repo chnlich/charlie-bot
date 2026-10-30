@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_improve::command::{loops_dir_in, read_loop_state_value};
 use charliebot_store::layout;
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
@@ -68,7 +68,7 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       };
       let id = text_field(&run, "id")?;
       let session_id = text_field(&run, "session_id")?;
-      let display = pyfmt::python_str(&backend);
+      let display = text_repr::python_str(&backend);
       println!("live\t{session_id}\t{id}\t{display}\t{pid}\t{pid_start}");
       let Some(backend_type) = backend.as_str().and_then(|backend| types.get(backend)) else {
         println!(

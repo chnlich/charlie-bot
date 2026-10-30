@@ -14,7 +14,7 @@ use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::run_token;
 use memmap2::Mmap;
 use nix::errno::Errno;
@@ -70,7 +70,7 @@ pub fn read_run_record_file(path: &Path) -> Result<RunRecord, MetadataReadError>
 /// writes its own check's record this way, as Python's `json.dumps` one-liner; the store's own saves write the model
 /// dump through `Store::write_run_record`.
 pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std::io::Result<()> {
-  fs::write(path, pyfmt::json_dumps(record, style))
+  fs::write(path, text_repr::json_dumps(record, style))
 }
 
 // The run event log (`events.jsonl`, `RUN_EVENTS_NAME`): one JSON value per line. This module owns the line's
@@ -615,16 +615,16 @@ fn run_cursor(run: &RunRecord, order: RunOrder) -> String {
 /// Decode a cursor into its boundary and the order it was minted under. The error text is Python's `ValueError`,
 /// which does not carry the decoding cause.
 fn decode_run_cursor(cursor: &str) -> StoreResult<((UtcDateTime, String), RunOrder)> {
-  let malformed = || StoreError::new(format!("malformed run page cursor: {}", pyfmt::str_repr(cursor)));
+  let malformed = || StoreError::new(format!("malformed run page cursor: {}", text_repr::str_repr(cursor)));
   let decoded = run_token::b64url_decode(cursor).map_err(|_| malformed())?;
   let value: RunCursor = serde_json::from_slice(&decoded).map_err(|_| malformed())?;
-  let started_at = if pyfmt::python_truthy(&value.s) {
+  let started_at = if text_repr::python_truthy(&value.s) {
     UtcDateTime::parse(value.s.as_str().ok_or_else(malformed)?).map_err(|_| malformed())?
   } else {
     UtcDateTime::parse("0001-01-01T00:00:00Z").expect("the minimum datetime is valid")
   };
   let order =
-    if value.d.as_ref().is_some_and(pyfmt::python_truthy) { RunOrder::Descending } else { RunOrder::Ascending };
+    if value.d.as_ref().is_some_and(text_repr::python_truthy) { RunOrder::Descending } else { RunOrder::Ascending };
   Ok(((started_at, value.i), order))
 }
 
@@ -1320,7 +1320,7 @@ impl Store {
     let parent = path.parent().expect("run metadata path has a parent");
     fs::create_dir_all(parent).map_err(|error| path_error(parent, error))?;
     let value = serde_json::to_value(run).map_err(|error| StoreError::new(error.to_string()))?;
-    let text = pyfmt::model_json_dumps(&value, &RUN_MODEL_JSON);
+    let text = text_repr::model_json_dumps(&value, &RUN_MODEL_JSON);
     fsutil::atomic_write_text(&path, &text).map_err(|error| path_error(&path, error))?;
     self.records_generation.fetch_add(1, Ordering::Relaxed);
     Ok(())
@@ -1526,7 +1526,7 @@ mod tests {
     let path = dir.path().join(RUN_METADATA_NAME);
     let record = json!({"id": "run-a", "session_id": "s", "kind": "manager_turn"});
 
-    write_run_metadata(&path, &record, &charliebot_core::pyfmt::PYTHON_JSON_DEFAULT).unwrap();
+    write_run_metadata(&path, &record, &charliebot_core::text_repr::PYTHON_JSON_DEFAULT).unwrap();
     assert_eq!(
       std::fs::read_to_string(&path).unwrap(),
       "{\"id\": \"run-a\", \"session_id\": \"s\", \"kind\": \"manager_turn\"}"
@@ -1642,7 +1642,7 @@ mod tests {
       result_ref: None,
     };
     let value = serde_json::to_value(&record).unwrap();
-    let rendered = pyfmt::model_json_dumps(&value, &RUN_MODEL_JSON);
+    let rendered = text_repr::model_json_dumps(&value, &RUN_MODEL_JSON);
     let keys = value.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>();
     assert_eq!(
       keys,

@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
@@ -50,7 +50,7 @@ pub fn matches(path: &str) -> bool {
 /// `POST /api/diag/switch-events`: validate the point, log one `diag_switch` line, answer `{"ok": true}`.
 async fn post_switch_event(State(_features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -220,7 +220,7 @@ fn log_switch_event(event: &SwitchEvent<'_>) {
 
 #[cfg(test)]
 mod tests {
-  use charliebot_compat::fastapi_body::RequestBody;
+  use charliebot_compat::request_body::RequestBody;
   use charliebot_compat::validation::{FieldError, Kind, Loc};
   use serde_json::json;
 

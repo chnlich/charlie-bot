@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use charliebot_core::{RepoRoot, fsutil, pyfmt, pystr, timefmt};
+use charliebot_core::{RepoRoot, fsutil, text_repr, str_methods, timefmt};
 use charliebot_registry::FeatureContext;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value, json};
@@ -97,7 +97,7 @@ pub(crate) async fn amend(
   file: &str,
   amendment: Amendment,
 ) -> Result<Value, VerbError> {
-  if amendment.note.trim_matches(pystr::is_python_whitespace).is_empty() {
+  if amendment.note.trim_matches(str_methods::is_python_whitespace).is_empty() {
     return Err(VerbError::Refused(
       "amend requires a non-empty --note stating why this version differs from its predecessor".to_string(),
     ));
@@ -281,9 +281,9 @@ async fn validate_new_version_file(
   if let Some((plan_id, v)) = find_binding_by_file(plans_of(registry)?, &file_relative)? {
     return Err(VerbError::Refused(format!(
       "file {} already bound to plan {} v{}",
-      pyfmt::str_repr(&file),
-      pyfmt::python_str(&plan_id),
-      pyfmt::python_str(&v)
+      text_repr::str_repr(&file),
+      text_repr::python_str(&plan_id),
+      text_repr::python_str(&v)
     )));
   }
   Ok(file_relative)
@@ -299,10 +299,10 @@ fn validate_file_in_session_dir(features: &FeatureContext, session_id: &str, fil
   let session_dir = features.store.session_dir(session_id);
   let (candidate, relative) = plan_paths::resolve_plan_file(&session_dir, file);
   let Some(relative) = relative else {
-    return Err(VerbError::Refused(format!("file {} resolves outside the session directory", pyfmt::str_repr(file))));
+    return Err(VerbError::Refused(format!("file {} resolves outside the session directory", text_repr::str_repr(file))));
   };
   if !plan_paths::exists(&candidate).map_err(|error| escaped(plans::os_escape(&error, &candidate)))? {
-    return Err(VerbError::Refused(format!("file {} not found inside the session directory", pyfmt::str_repr(file))));
+    return Err(VerbError::Refused(format!("file {} not found inside the session directory", text_repr::str_repr(file))));
   }
   Ok(relative.to_string_lossy().into_owned())
 }
@@ -348,7 +348,7 @@ fn approve_plan(plans: &mut [Value], plan_id: Option<&Value>) -> Result<Map<Stri
     Some(plan_id) => {
       let index = require_open_plan(plans, plan_id)?;
       if !absent(plan_map(&plans[index])?, "takeoff") {
-        return Err(VerbError::Refused(format!("plan {} is already approved", pyfmt::python_str(plan_id))));
+        return Err(VerbError::Refused(format!("plan {} is already approved", text_repr::python_str(plan_id))));
       }
       index
     }
@@ -376,7 +376,7 @@ fn close_plan(plans: &mut [Value], plan_id: &Value, close_as: &str) -> Result<Ma
   if !absent(plan, "closed") {
     return Err(VerbError::Refused(format!(
       "plan {} is already closed ({})",
-      pyfmt::python_str(plan_id),
+      text_repr::python_str(plan_id),
       closed_as_repr(plan)?
     )));
   }
@@ -391,7 +391,7 @@ fn require_open_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbErro
   if !absent(plan, "closed") {
     return Err(VerbError::Refused(format!(
       "plan {} is closed ({})",
-      pyfmt::python_str(plan_id),
+      text_repr::python_str(plan_id),
       closed_as_repr(plan)?
     )));
   }
@@ -406,7 +406,7 @@ fn require_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbError> {
       return Ok(index);
     }
   }
-  Err(VerbError::Refused(format!("plan {} not found in session", pyfmt::python_str(plan_id))))
+  Err(VerbError::Refused(format!("plan {} not found in session", text_repr::python_str(plan_id))))
 }
 
 /// The indices of the plans with neither a closed mark nor a takeoff, in registry order.
@@ -425,7 +425,7 @@ fn open_candidates(plans: &[Value]) -> Result<Vec<usize>, VerbError> {
 fn candidate_ids(plans: &[Value], candidates: &[usize]) -> Result<String, VerbError> {
   let ids = candidates
     .iter()
-    .map(|&index| plan_map(&plans[index]).and_then(id_of).map(pyfmt::python_str))
+    .map(|&index| plan_map(&plans[index]).and_then(id_of).map(text_repr::python_str))
     .collect::<Result<Vec<_>, _>>()?;
   Ok(ids.join(", "))
 }
@@ -551,7 +551,7 @@ fn attribute_error_named(kind: &str) -> VerbError {
 }
 
 fn key_error(key: &str) -> VerbError {
-  VerbError::Failed { kind: "KeyError", detail: pyfmt::str_repr(key) }
+  VerbError::Failed { kind: "KeyError", detail: text_repr::str_repr(key) }
 }
 
 fn type_error(detail: String) -> VerbError {
@@ -617,7 +617,7 @@ mod tests {
     } else {
       present(&features, &locks, "sess", second, "P2".to_string(), Value::Null).await
     };
-    let message = format!("file {} already bound to plan 1 v1", pyfmt::str_repr(&plan_paths::posix_normpath(second)));
+    let message = format!("file {} already bound to plan 1 v1", text_repr::str_repr(&plan_paths::posix_normpath(second)));
     assert!(matches!(&error, Err(VerbError::Refused(detail)) if *detail == message), "{error:?}");
   }
 
@@ -649,7 +649,7 @@ mod tests {
     let error = present_p1(&features, "sess", &outside.to_string_lossy()).await.unwrap_err();
     let file = plan_paths::posix_normpath(&outside.to_string_lossy());
     assert!(
-      matches!(&error, VerbError::Refused(detail) if *detail == format!("file {} resolves outside the session directory", pyfmt::str_repr(&file))),
+      matches!(&error, VerbError::Refused(detail) if *detail == format!("file {} resolves outside the session directory", text_repr::str_repr(&file))),
       "{error:?}"
     );
   }

@@ -27,7 +27,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::master_state::RunTracking;
-use crate::python_values::python_string;
+use crate::event_text::python_string;
 use crate::task_input_prompt::compose_input_prompt;
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).

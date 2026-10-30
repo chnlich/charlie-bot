@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use minijinja::value::ValueKind;
 use minijinja::{AutoEscape, Environment, Error, ErrorKind, Output, State, Value};
 use percent_encoding::{AsciiSet, utf8_percent_encode};
@@ -102,7 +102,7 @@ fn python_text(value: &Value) -> Result<String, Error> {
   Ok(match value.kind() {
     ValueKind::Undefined => String::new(),
     ValueKind::String => value.as_str().expect("a string value has text").to_string(),
-    _ => pyfmt::python_str(&to_json(value)?),
+    _ => text_repr::python_str(&to_json(value)?),
   })
 }
 
@@ -153,7 +153,7 @@ fn tojson(value: Value) -> Result<Value, Error> {
 /// A page that carries a large value as text renders this once in the handler. The filter's path walks the
 /// value into the template engine's value tree and back out again, which costs one pass per element.
 pub fn tojson_text(value: &serde_json::Value) -> String {
-  html_safe_json(pyfmt::json_dumps(value, &pyfmt::JINJA_TOJSON))
+  html_safe_json(text_repr::json_dumps(value, &text_repr::JINJA_TOJSON))
 }
 
 /// Jinja2's `do_urlencode`. A scalar's text is quoted with `/` kept (`urllib.parse.quote`). A mapping, or a
@@ -235,9 +235,9 @@ fn percent_format(template: Value, argument: Value) -> Result<String, Error> {
 /// One conversion of `percent_format`. `%f` takes `.N` (six digits when the spec is empty); `%d` and `%s` take no spec.
 fn convert(spec: &str, conversion: char, value: &serde_json::Value) -> Result<String, Error> {
   match conversion {
-    'f' => Ok(pyfmt::format_f(real(value, conversion)?, precision(spec, conversion)?)),
+    'f' => Ok(text_repr::format_f(real(value, conversion)?, precision(spec, conversion)?)),
     'd' if spec.is_empty() => integer(value),
-    's' if spec.is_empty() => Ok(pyfmt::python_str(value)),
+    's' if spec.is_empty() => Ok(text_repr::python_str(value)),
     _ => Err(format_error(format!(
       "unsupported format conversion '%{spec}{conversion}': the format filter supports %f, %.Nf, %d, %s and %%"
     ))),

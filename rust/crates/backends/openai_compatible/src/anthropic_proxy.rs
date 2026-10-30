@@ -15,13 +15,13 @@ use bstr::ByteSlice;
 use charliebot_compat::http_client;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use futures_util::stream::{self, Stream};
 use serde_json::{Value, json};
 
 use super::options::CcOpenAiOption;
-use super::pyvalue::{self, Fault};
+use super::value_ops::{self, Fault};
 use super::sse::{LineFramer, sse_event};
 use super::translate::{self, Event, OpenAiChatStream};
 
@@ -107,7 +107,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   }
 
   let body = to_bytes(body, usize::MAX).await.map_err(|error| unhandled("ClientDisconnect", error.to_string()))?;
-  let anthropic_payload = pyvalue::loads_bytes(&body)?;
+  let anthropic_payload = value_ops::loads_bytes(&body)?;
   let gemini_stream_rules =
     translate::gemini_stream_rules(&fields.api_base).map_err(|error| unhandled("ValueError", error))?;
   let openai_payload = translate::anthropic_to_openai_chat_request(&anthropic_payload, &option.model)?;
@@ -129,7 +129,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   let mut request = client
     .post(&upstream_url)
     .header(header::CONTENT_TYPE, "application/json")
-    .body(pyfmt::json_dumps(&openai_payload, &pyfmt::STARLETTE_JSON));
+    .body(text_repr::json_dumps(&openai_payload, &text_repr::STARLETTE_JSON));
   if let Some(authorization) = authorization {
     request = request.header(header::AUTHORIZATION, authorization);
   }
@@ -142,7 +142,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
     return Ok(stream_response(upstream, &option.model, gemini_stream_rules));
   }
   let answer = upstream.bytes().await.map_err(upstream_failure)?;
-  let upstream_json = pyvalue::loads_bytes(&answer).map_err(answer_refusal)?;
+  let upstream_json = value_ops::loads_bytes(&answer).map_err(answer_refusal)?;
   let message = translate::openai_chat_response_to_anthropic(&upstream_json, &option.model).map_err(answer_refusal)?;
   Ok(responses::json(StatusCode::OK, &message))
 }

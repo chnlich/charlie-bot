@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_core::paths;
-use charliebot_core::pyfmt::float_repr;
+use charliebot_core::text_repr::float_repr;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 use serde_json::Value;
 

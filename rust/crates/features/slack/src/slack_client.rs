@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use charliebot_compat::http_client::{self, Settings};
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use http::Method;
 use reqwest::{RequestBuilder, Response};
@@ -85,10 +85,10 @@ impl SlackClient {
     let body = json!({"channel": channel, "name": name, "timestamp": ts});
     let response = self.json_request("reactions.remove", &self.bot_token, body)?.send().await?;
     let payload = response_json(response).await?;
-    if !payload.get("ok").is_some_and(pyfmt::python_truthy)
+    if !payload.get("ok").is_some_and(text_repr::python_truthy)
       && payload.get("error").and_then(Value::as_str) != Some("no_reaction")
     {
-      bail!("reactions.remove failed: {}", pyfmt::python_str(&payload));
+      bail!("reactions.remove failed: {}", text_repr::python_str(&payload));
     }
     Ok(payload)
   }
@@ -161,7 +161,7 @@ impl SlackClient {
     url.query_pairs_mut().append_pair("channel", channel_id);
     let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
     let payload = response_json(response).await?;
-    if !payload.get("ok").is_some_and(pyfmt::python_truthy) {
+    if !payload.get("ok").is_some_and(text_repr::python_truthy) {
       tracing::warn!(
         event = "slack_channel_name_unresolved",
         channel = channel_id,
@@ -174,7 +174,7 @@ impl SlackClient {
       .and_then(Value::as_object)
       .and_then(|channel| channel.get("name"))
       .context("conversations.info response has no channel.name")?;
-    Ok((!name.is_null()).then(|| pyfmt::python_str(name)))
+    Ok((!name.is_null()).then(|| text_repr::python_str(name)))
   }
 
   fn request(&self, method: Method, path: &str, token: &str) -> RequestBuilder {
@@ -197,8 +197,8 @@ impl SlackClient {
 
 async fn checked_payload(response: Response, method: &str) -> Result<Value> {
   let payload = response_json(response).await?;
-  if !payload.get("ok").is_some_and(pyfmt::python_truthy) {
-    bail!("{method} failed: {}", pyfmt::python_str(&payload));
+  if !payload.get("ok").is_some_and(text_repr::python_truthy) {
+    bail!("{method} failed: {}", text_repr::python_str(&payload));
   }
   Ok(payload)
 }

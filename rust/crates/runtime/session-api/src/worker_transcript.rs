@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::event_types;
-use charliebot_core::pyfmt;
+use charliebot_core::text_repr;
 use charliebot_store::ChatEvent;
 use charliebot_store::CompactValue;
 use charliebot_store::aggregator;
@@ -508,7 +508,7 @@ fn revision(signature: &[Value], states: &BTreeMap<String, String>, task_state: 
   let mut payload = signature.to_vec();
   payload.push(Value::Array(state_pairs));
   payload.push(Value::String(task_state.to_string()));
-  let text = pyfmt::json_dumps(&Value::Array(payload), &pyfmt::PYTHON_JSON_DEFAULT);
+  let text = text_repr::json_dumps(&Value::Array(payload), &text_repr::PYTHON_JSON_DEFAULT);
   Ok(control_events::sha256_hex(&text)[..24].to_string())
 }
 
@@ -550,7 +550,7 @@ fn client_revision(
     task_state,
     event_stats,
   ]);
-  let text = pyfmt::json_dumps(&payload, &pyfmt::PYTHON_JSON_DEFAULT);
+  let text = text_repr::json_dumps(&payload, &text_repr::PYTHON_JSON_DEFAULT);
   Ok(control_events::sha256_hex(&text)[..24].to_string())
 }
 

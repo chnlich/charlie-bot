@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
@@ -75,7 +75,7 @@ async fn list_plans(State(state): State<PlanRoutes>, AxumPath(session_id): AxumP
 /// `POST /api/internal/plan/present`: the body, then the session check, then the registration.
 async fn plan_present(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -94,7 +94,7 @@ async fn plan_present(State(state): State<PlanRoutes>, request: Request<Body>) -
 /// `POST /api/internal/plan/amend`: the body, then the session check, then the amendment.
 async fn plan_amend(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -111,7 +111,7 @@ async fn plan_amend(State(state): State<PlanRoutes>, request: Request<Body>) -> 
 /// `POST /api/internal/plan/approve`: the body, then the session check, then the approval.
 async fn plan_approve(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -128,7 +128,7 @@ async fn plan_approve(State(state): State<PlanRoutes>, request: Request<Body>) -
 /// `POST /api/internal/plan/close`: the body, then the session check, then the close.
 async fn plan_close(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };

@@ -15,13 +15,13 @@ pub fn validate_repo_path(command: &mut Command, repo: &str) {
     command
       .error(
         ErrorKind::ValueValidation,
-        format!("--repo must be an absolute path (starting with '/'), got: {}", charliebot_core::pyfmt::str_repr(repo)),
+        format!("--repo must be an absolute path (starting with '/'), got: {}", charliebot_core::text_repr::str_repr(repo)),
       )
       .exit();
   }
   if !Path::new(repo).is_dir() {
     command
-      .error(ErrorKind::ValueValidation, format!("--repo does not exist: {}", charliebot_core::pyfmt::str_repr(repo)))
+      .error(ErrorKind::ValueValidation, format!("--repo does not exist: {}", charliebot_core::text_repr::str_repr(repo)))
       .exit();
   }
 }

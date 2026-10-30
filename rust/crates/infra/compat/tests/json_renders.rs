@@ -1,10 +1,10 @@
 //! The JSON renders against the bytes orjson and Starlette write for the same values
-//! (`rust/fixtures/python/json_renders.json`, written by `rust/scripts/gen_compat_fixtures.py`).
+//! (`rust/fixtures/golden/json_renders_golden.json`, written by `rust/scripts/gen_compat_fixtures.py`).
 
 use charliebot_compat::json::{fast_json_bytes, starlette_bytes};
 use serde_json::Value;
 
-const FIXTURE: &str = include_str!("../../../../fixtures/python/json_renders.json");
+const FIXTURE: &str = include_str!("../../../../fixtures/golden/json_renders_golden.json");
 
 #[test]
 fn renders_match_python_byte_for_byte() {

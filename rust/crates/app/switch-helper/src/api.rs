@@ -10,7 +10,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::logline;
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_store::layout;
 use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
 use serde_json::{Value, json};
@@ -26,7 +26,7 @@ pub fn json_field(args: &[OsString]) -> Result<(), CliExit> {
   let [body, name] = exact::<2>(args)?;
   let document = read_json(Path::new(&body)).map_err(failed)?;
   let value = document.get(&name).ok_or_else(|| CliExit::error(format!("the response has no field {name:?}")))?;
-  println!("{}", pyfmt::python_str(value));
+  println!("{}", text_repr::python_str(value));
   Ok(())
 }
 
@@ -48,7 +48,7 @@ pub fn newest_run_fields(args: &[OsString]) -> Result<(), CliExit> {
 /// The newest run's named fields: empty per field while the page holds no run, and for a null field.
 fn newest_run_values(page: &Value, fields: &[String]) -> Result<Vec<String>, CliExit> {
   let items: Option<&Vec<Value>> = match page.get("items") {
-    Some(value) if pyfmt::python_truthy(value) => {
+    Some(value) if text_repr::python_truthy(value) => {
       Some(value.as_array().ok_or_else(|| CliExit::error("the runs page's items is not a list"))?)
     }
     _ => None,
@@ -60,7 +60,7 @@ fn newest_run_values(page: &Value, fields: &[String]) -> Result<Vec<String>, Cli
       continue;
     };
     let value = run.get(field).ok_or_else(|| CliExit::error(format!("the newest run has no field {field:?}")))?;
-    values.push(if value.is_null() { String::new() } else { pyfmt::python_str(value) });
+    values.push(if value.is_null() { String::new() } else { text_repr::python_str(value) });
   }
   Ok(values)
 }
@@ -125,7 +125,7 @@ fn assistant_count(bootstrap: &Value) -> Result<usize, CliExit> {
     Ok::<_, CliExit>(count + usize::from(role == "assistant"))
   })?;
   let draft = bootstrap.get("pending_draft").cloned().unwrap_or(Value::Null);
-  let draft_counts = if pyfmt::python_truthy(&draft) {
+  let draft_counts = if text_repr::python_truthy(&draft) {
     let role = draft.get("role").and_then(Value::as_str).ok_or_else(|| CliExit::error("the draft has no role"))?;
     usize::from(role == "assistant")
   } else {
@@ -158,7 +158,7 @@ fn run_state_lines(page: &Value) -> Result<Vec<String>, CliExit> {
     .map(|run| {
       let id = run.get("id").ok_or_else(|| CliExit::error("a run row has no id"))?;
       let state = run.get("state").ok_or_else(|| CliExit::error("a run row has no state"))?;
-      Ok(format!("{} {}", pyfmt::python_str(id), pyfmt::python_str(state)))
+      Ok(format!("{} {}", text_repr::python_str(id), text_repr::python_str(state)))
     })
     .collect()
 }
@@ -182,7 +182,7 @@ fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
     "keep_worktree": true,
     "request_id": format!("switch-delegation:{session}"),
   });
-  pyfmt::json_dumps(&body, &PYTHON_JSON)
+  text_repr::json_dumps(&body, &PYTHON_JSON)
 }
 
 /// `run-error HOME SESSION RUN`: the message of the last error event in the run's event log, with its whitespace

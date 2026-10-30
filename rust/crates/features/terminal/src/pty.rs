@@ -10,7 +10,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use charliebot_core::pyfmt::python_truthy;
+use charliebot_core::text_repr::python_truthy;
 use charliebot_core::run_token::SESSION_ID_ENV;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};

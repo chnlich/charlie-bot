@@ -5,9 +5,9 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::Context as _;
-use charliebot_compat::python_json;
+use charliebot_compat::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
-use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
@@ -734,14 +734,14 @@ pub fn read_metadata_python(path: &Path, log_event: &str) -> anyhow::Result<Opti
     }
   };
   let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-  match python_json::loads_text(&text) {
+  match json_loads::loads_text(&text) {
     Ok(Value::Null) => Ok(None),
     Ok(value) => Ok(Some(value)),
-    Err(python_json::LoadError::Value(error)) => {
+    Err(json_loads::LoadError::Value(error)) => {
       tracing::debug!(path = %path.display(), error = %error, "{log_event}");
       Ok(None)
     }
-    Err(python_json::LoadError::Unrepresentable(error)) => Err(anyhow::anyhow!("{}: {error}", path.display())),
+    Err(json_loads::LoadError::Unrepresentable(error)) => Err(anyhow::anyhow!("{}: {error}", path.display())),
   }
 }
 
@@ -777,7 +777,7 @@ fn finish_metadata(
       output.insert(name.clone(), value.clone());
     }
   }
-  pyfmt::model_json_dumps(&Value::Object(output), &MODEL_JSON)
+  text_repr::model_json_dumps(&Value::Object(output), &MODEL_JSON)
 }
 
 fn place_slot(output: &mut Map<String, Value>, extras: &Map<String, Value>, slot: &MetadataSlot) {

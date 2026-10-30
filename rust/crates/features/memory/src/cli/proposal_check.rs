@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use charliebot_core::pystr;
+use charliebot_core::str_methods;
 use regex::Regex;
 
 use super::store::{BODY_LINE_COLUMN_LIMIT, display_width, entry_body};
@@ -35,7 +35,7 @@ pub(super) fn prose_violations(text: &str, base_text: Option<&str>, skip_body_li
     }
     for sentence in sentences(&unit) {
       let (masked, _) = mask_backticks(&sentence);
-      let words = pystr::split_whitespace(&masked).len();
+      let words = str_methods::split_whitespace(&masked).len();
       if words > SENTENCE_WORD_LIMIT {
         violations.push(format!("sentence over {SENTENCE_WORD_LIMIT} words ({words}): {sentence}"));
       }
@@ -74,7 +74,7 @@ pub(super) fn negation_warnings(text: &str, base_text: Option<&str>) -> Vec<Stri
   let title = title_line(text);
   if let Some(title) = title.filter(|title| Some(*title) != base_text.and_then(title_line)) {
     let title_text = title.strip_prefix("title:").expect("a title line starts with 'title:'");
-    warnings.extend(negation_payload(pystr::strip(title_text)));
+    warnings.extend(negation_payload(str_methods::strip(title_text)));
   }
   warnings
 }
@@ -94,9 +94,9 @@ fn prose_units(body: &[&str]) -> Vec<String> {
       units.push(text.to_string());
     } else if let Some(unit) = units.last_mut() {
       unit.push(' ');
-      unit.push_str(pystr::strip(line));
+      unit.push_str(str_methods::strip(line));
     } else {
-      units.push(pystr::strip(line).to_string());
+      units.push(str_methods::strip(line).to_string());
     }
   }
   units
@@ -135,10 +135,10 @@ fn sentences(unit: &str) -> Vec<String> {
   let mut start = 0;
   let mut i = 0;
   while i < masked.len() {
-    if masked[i] == '.' && i + 1 < masked.len() && pystr::is_python_whitespace(masked[i + 1]) {
+    if masked[i] == '.' && i + 1 < masked.len() && str_methods::is_python_whitespace(masked[i + 1]) {
       out.push(chars[mapping[start]..=mapping[i]].iter().collect());
       i += 1;
-      while i < masked.len() && pystr::is_python_whitespace(masked[i]) {
+      while i < masked.len() && str_methods::is_python_whitespace(masked[i]) {
         i += 1;
       }
       start = i;
@@ -146,7 +146,7 @@ fn sentences(unit: &str) -> Vec<String> {
       i += 1;
     }
   }
-  if start < masked.len() && masked[start..].iter().any(|&character| !pystr::is_python_whitespace(character)) {
+  if start < masked.len() && masked[start..].iter().any(|&character| !str_methods::is_python_whitespace(character)) {
     out.push(chars[mapping[start]..].iter().collect());
   }
   out

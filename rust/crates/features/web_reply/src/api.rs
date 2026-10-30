@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Source};
 use charliebot_registry::FeatureContext;
@@ -25,7 +25,7 @@ use crate::status;
 /// `POST /api/internal/web/reply`: records the body's text as the session's web reply.
 pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -72,7 +72,7 @@ pub async fn get_dialog(
 /// `POST /api/internal/web/status`: stores the items the body's JSON text names and answers the stored status.
 pub async fn post_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -87,7 +87,7 @@ pub async fn post_status(State(features): State<Arc<FeatureContext>>, request: R
 /// it.
 pub async fn post_status_confirm(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -101,7 +101,7 @@ pub async fn post_status_confirm(State(features): State<Arc<FeatureContext>>, re
 /// `POST /api/internal/web/status/unread`: returns the waiting items that have no matching cold-read event.
 pub async fn post_status_unread(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
@@ -115,7 +115,7 @@ pub async fn post_status_unread(State(features): State<Arc<FeatureContext>>, req
 /// `POST /api/internal/web/ask-check`: records a cold read of one Waiting on you item.
 pub async fn post_ask_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
-  let body = match fastapi_body::read(&parts.headers, stream).await {
+  let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };

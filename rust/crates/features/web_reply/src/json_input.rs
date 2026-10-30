@@ -2,7 +2,7 @@
 
 /// Replace each JSON number, `NaN` or infinity token with zero, preserving the input's JSON shape.
 ///
-/// Callers use this only after `charliebot_compat::python_json` has validated the entire document and reported a value
+/// Callers use this only after `charliebot_compat::json_loads` has validated the entire document and reported a value
 /// it cannot represent. The exact numeric value is unused by these routes; Pydantic only needs to see a number so it
 /// can report the same field type error Python reports.
 pub fn replace_unrepresentable_numbers(text: &str) -> String {

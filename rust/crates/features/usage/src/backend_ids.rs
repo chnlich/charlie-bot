@@ -5,7 +5,7 @@
 //! start.
 
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::{paths, pyfmt};
+use charliebot_core::{paths, text_repr};
 use charliebot_registry::Registry;
 
 /// `check_backend_ids`: `Err` lists every `backends.options` entry whose id its type's usage source cannot attribute.
@@ -43,7 +43,7 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
 
 /// `str()` of a tuple of strings: each item in `repr` form, and a one-item tuple keeps its trailing comma.
 fn python_tuple(items: &[&str]) -> String {
-  let reprs: Vec<String> = items.iter().map(|item| pyfmt::str_repr(item)).collect();
+  let reprs: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
   match reprs.as_slice() {
     [only] => format!("({only},)"),
     _ => format!("({})", reprs.join(", ")),

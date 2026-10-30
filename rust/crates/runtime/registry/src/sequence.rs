@@ -79,7 +79,10 @@ pub trait SequenceController: Send + Sync {
   /// Whether `meta` carries this controller's legacy ownership marker.
   fn owns_session(&self, meta: &SessionMetadata) -> bool;
 
-  /// This controller's per-row listing fields for one batch of session ids.
+  /// This controller's per-row listing fields for one batch of session ids, omitting a session that owns none.
+  ///
+  /// The map is an overlay on the row writer's defaults, so an omitted session renders the same row as one whose
+  /// entry repeats those defaults.
   fn listing_fields(&self, session_ids: &[String], now: UtcDateTime) -> HashMap<String, Map<String, Value>>;
 
   /// Moves every binding of `source` onto `new`, the node that replaced it. `true` when a binding moved.

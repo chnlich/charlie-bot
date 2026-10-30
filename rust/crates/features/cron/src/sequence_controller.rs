@@ -213,30 +213,26 @@ fn row_schedule_fields(
   let mut fields_by_session = HashMap::new();
   let mut earliest_next_fire = None;
   for session_id in &ids {
+    // A session with no bound task owns no row fields: the row writer emits `schedule_task: null` itself,
+    // and an entry holding only that null would make one map per listed session for every listing response.
+    let Some(task) = bound_tasks.get(session_id.as_str()).copied() else { continue };
     let mut fields = Map::new();
-    match bound_tasks.get(session_id.as_str()).copied() {
-      None => {
-        fields.insert("schedule_task".to_string(), Value::Null);
+    fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));
+    fields.insert("schedule_cron".to_string(), Value::String(task.cron.clone()));
+    fields.insert("schedule_timezone".to_string(), Value::String(task.timezone.clone()));
+    fields.insert("schedule_enabled".to_string(), Value::Bool(task.enabled));
+    fields.insert("schedule_allow_failure".to_string(), Value::Bool(task.allow_failure));
+    match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
+      Ok(next) => {
+        earliest_next_fire = Some(earliest_next_fire.map_or_else(
+          || UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"),
+          |earliest: UtcDateTime| {
+            earliest.min(UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"))
+          },
+        ));
+        fields.insert("schedule_next_run".to_string(), Value::String(next));
       }
-      Some(task) => {
-        fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));
-        fields.insert("schedule_cron".to_string(), Value::String(task.cron.clone()));
-        fields.insert("schedule_timezone".to_string(), Value::String(task.timezone.clone()));
-        fields.insert("schedule_enabled".to_string(), Value::Bool(task.enabled));
-        fields.insert("schedule_allow_failure".to_string(), Value::Bool(task.allow_failure));
-        match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
-          Ok(next) => {
-            earliest_next_fire = Some(earliest_next_fire.map_or_else(
-              || UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"),
-              |earliest: UtcDateTime| {
-                earliest.min(UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"))
-              },
-            ));
-            fields.insert("schedule_next_run".to_string(), Value::String(next));
-          }
-          Err(error) => tracing::error!(task = %task.name, error = %error, "cron_listing_next_run_failed"),
-        }
-      }
+      Err(error) => tracing::error!(task = %task.name, error = %error, "cron_listing_next_run_failed"),
     }
     fields_by_session.insert(session_id.clone(), fields);
   }
@@ -855,6 +851,10 @@ mod tests {
     let mut memo = None;
 
     let first = row_schedule_fields(&mut memo, &tasks, 17, &session_ids, now);
+    // Only a bound session owns fields; an unbound one renders its default without an entry.
+    assert_eq!(first.len(), tasks.len());
+    assert_eq!(first[&session_ids[0]]["schedule_task"], json!("synthetic-task-00"));
+    assert!(!first.contains_key(&session_ids[tasks.len()]));
     let warm = row_schedule_fields(&mut memo, &tasks, 17, &session_ids, now);
     assert_eq!(warm, first);
     assert_eq!(memo.as_ref().unwrap().builds, 1);

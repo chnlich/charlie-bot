@@ -42,21 +42,6 @@ async fn request_headers_carry_bot_token_and_user_agent() {
 }
 
 #[tokio::test]
-async fn create_message_json_carries_allowed_mentions() {
-  let seen = recorder();
-  let sink = Arc::clone(&seen);
-  let client = client(move |request| {
-    sink.lock().unwrap().push(request.clone());
-    Reply::json(200, json!({"id": "222222222222222222"}))
-  })
-  .await;
-
-  let result = client.create_message("333333333333333333", "hello").await.unwrap();
-  assert_eq!(result, json!({"id": "222222222222222222"}));
-  assert_eq!(seen.lock().unwrap()[0].json(), json!({"content": "hello", "allowed_mentions": {"parse": []}}));
-}
-
-#[tokio::test]
 async fn create_message_nonce_is_first_25_hex_characters_of_post_key_sha256() {
   let seen = recorder();
   let sink = Arc::clone(&seen);

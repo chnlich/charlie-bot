@@ -1201,7 +1201,7 @@ test('forkSession opens the reusable modal with the active backend selected by d
     elements,
   });
 
-  context.forkSession('session-a');
+  context.forkSession('session-a', null);
 
   assert.equal(elements.get('session-action-modal-overlay').classList.contains('hidden'), false);
   assert.equal(elements.get('session-action-backend').value, 'codex-o3');
@@ -1220,7 +1220,7 @@ test('closeSessionActionModal hides the modal without sending a request', () => 
     elements,
   });
 
-  context.forkSession('session-a');
+  context.forkSession('session-a', null);
   context.closeSessionActionModal();
 
   assert.equal(elements.get('session-action-modal-overlay').classList.contains('hidden'), true);
@@ -1238,7 +1238,7 @@ test('submitSessionActionModal sends backend and null event_index for header clo
     elements,
   });
 
-  context.forkSession('session-a');
+  context.forkSession('session-a', null);
   await context.submitSessionActionModal();
 
   assert.equal(fetchRequests[0].url, '/api/sessions/session-a/fork');

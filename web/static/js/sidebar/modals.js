@@ -113,18 +113,18 @@ function populateSessionActionBackendSelect(selectedBackendId) {
   }
 }
 
-// The backend-choice modal of a session action. Without onConfirm, the confirm
+// The backend-choice modal of a session action. With onConfirm null, the confirm
 // POSTs /api/sessions/<id>/<action> and opens the session it creates. A package
 // passes onConfirm(backend) for an action that stays on this session.
 function openSessionActionModal({
   action,
   sessionId,
-  eventIndex = null,
+  eventIndex,
   title,
   bodyText,
   confirmLabel,
   failureLabel,
-  onConfirm = null,
+  onConfirm,
 }) {
   const overlay = document.getElementById('session-action-modal-overlay');
   const titleEl = document.getElementById('session-action-modal-title');
@@ -182,7 +182,7 @@ async function submitSessionActionModal() {
   }
 }
 
-function forkSession(sessionId, eventIndex = null) {
+function forkSession(sessionId, eventIndex) {
   const isPartialClone = eventIndex != null;
   openSessionActionModal({
     action: 'fork',
@@ -194,6 +194,7 @@ function forkSession(sessionId, eventIndex = null) {
       : 'Create a full clone of this session and choose the backend for the clone.',
     confirmLabel: 'Clone',
     failureLabel: 'Clone',
+    onConfirm: null,
   });
 }
 
@@ -206,6 +207,7 @@ function eloneSession(sessionId, eventIndex) {
     bodyText: 'Start a fresh takeover session from this point. Warning: the current session will be archived.',
     confirmLabel: 'Elon-e',
     failureLabel: 'Elon-e',
+    onConfirm: null,
   });
 }
 
@@ -237,7 +239,7 @@ const TASK_CONTEXT_NONE = '<span class="text-slate-500">(none)</span>';
 
 let taskContextModalSession = null;
 
-function taskContextField(label, valueHtml, {preWrap = true} = {}) {
+function taskContextField(label, valueHtml, {preWrap}) {
   const wrap = preWrap ? 'whitespace-pre-wrap ' : '';
   return `<div><div class="text-xs text-slate-400 mb-1">${label}</div><div class="${wrap}break-words">${valueHtml}</div></div>`;
 }
@@ -263,8 +265,8 @@ function taskContextTaskHtml(task) {
   return `<div class="space-y-3">
     <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Task</div>
     ${taskContextField('Goal', goal ? taskContextGoalHtml(goal) : TASK_CONTEXT_NONE, {preWrap: false})}
-    ${taskContextField('Acceptance', taskContextList(t.acceptance))}
-    ${taskContextField('Context refs', taskContextList(t.context_refs))}
+    ${taskContextField('Acceptance', taskContextList(t.acceptance), {preWrap: true})}
+    ${taskContextField('Context refs', taskContextList(t.context_refs), {preWrap: true})}
   </div>`;
 }
 

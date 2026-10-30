@@ -96,7 +96,6 @@ matchit = "0.9"
 md-5 = "0.10"
 minijinja = { version = "2", features = ["loader", "json"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
-multer = "3.1"
 nix = { version = "0.30", features = ["fs", "process", "hostname", "user", "signal", "term", "ioctl"] }
 percent-encoding = "2"
 proc-macro2 = { version = "1", features = ["span-locations"] }

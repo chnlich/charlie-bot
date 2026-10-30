@@ -44,7 +44,9 @@ impl SearchFileRoots {
 #[derive(Clone)]
 struct SearchMatch {
   revision: u64,
-  files: Vec<(String, PathBuf)>,
+  /// The chat files a repeat query re-checks: every content candidate while the result is short of the cap, and only
+  /// the candidates at or above the last returned row's `updated_at` once the result reaches it.
+  watched: Vec<PathBuf>,
   signatures: Vec<Option<FileSignature>>,
   row_ids: Vec<String>,
 }
@@ -127,7 +129,7 @@ fn search_sessions_with_memos(
     && cached.revision == revision
   {
     let signatures: Vec<Option<FileSignature>> =
-      cached.files.iter().map(|(_, path)| file_signature_unlogged(path).ok()).collect();
+      cached.watched.iter().map(|path| file_signature_unlogged(path).ok()).collect();
     if cached.signatures == signatures {
       return Ok(rows_for_ids(&all, &cached.row_ids));
     }
@@ -144,8 +146,6 @@ fn search_sessions_with_memos(
   }
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
-  let files: Vec<(String, PathBuf)> =
-    content_candidates.iter().map(|(meta, path)| (meta.id.clone(), path.clone())).collect();
   let signatures: Vec<Option<FileSignature>> =
     content_candidates.iter().map(|(meta, path)| file_signature(path, &meta.id, memos)).collect();
 
@@ -184,9 +184,26 @@ fn search_sessions_with_memos(
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
   if scan_failures == 0 {
+    // The result holds at most the newest `SEARCH_RESULT_LIMIT` rows, so a candidate older than the last row cannot
+    // enter a full result however its chat file changes. A repeat query re-checks only the candidates that could
+    // enter it; a short result can still take any candidate, so it keeps watching all of them.
+    let cutoff = names.get(SEARCH_RESULT_LIMIT - 1).map(|meta| meta.updated_at);
+    let mut watched = Vec::new();
+    let mut watched_signatures = Vec::new();
+    for ((meta, path), signature) in content_candidates.iter().zip(signatures) {
+      if cutoff.is_none_or(|cutoff| meta.updated_at >= cutoff) {
+        watched.push(path.clone());
+        watched_signatures.push(signature);
+      }
+    }
     memos.lock().expect("session search memo mutex is not poisoned").remember_match(
       &needle,
-      SearchMatch { revision, files, signatures, row_ids: names.iter().map(|meta| meta.id.clone()).collect() },
+      SearchMatch {
+        revision,
+        watched,
+        signatures: watched_signatures,
+        row_ids: names.iter().map(|meta| meta.id.clone()).collect(),
+      },
     );
   }
   Ok(names.into_iter().map(Arc::clone).collect())
@@ -546,5 +563,40 @@ mod tests {
     assert_eq!(hit.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
     assert_eq!(super::search_sessions_with_memos(&store, "eed", &memos).unwrap().len(), 1);
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the changed file rescans once and its hit covers substrings");
+  }
+
+  /// A full result re-checks only the candidates at or above its last row: a new match in an older session cannot
+  /// enter the 200-row result, while a new match in a newer candidate does.
+  #[test]
+  fn a_full_result_watches_only_candidates_at_or_above_its_last_row() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let write_content = |id: &str, content: &str| {
+      let path = store.chat_events_path(id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, content).unwrap();
+    };
+    for index in 0..super::SEARCH_RESULT_LIMIT {
+      let id = format!("hit-{index:03}");
+      write_session(&store, &id, &format!("hit {index:03}"), SessionStatus::Active, "2026-08-02T12:00:00Z");
+      write_content(&id, "{\"content\":\"walrus in the events\"}\n");
+    }
+    write_session(&store, "old", "old session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    write_session(&store, "newer", "newer session", SessionStatus::Active, "2026-08-03T12:00:00Z");
+
+    let rows = search_sessions(&store, "walrus").unwrap();
+    assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
+    assert!(rows.iter().all(|meta| meta.id.starts_with("hit-")));
+
+    write_content("old", "{\"content\":\"walrus in the events\"}\n");
+    let rows = search_sessions(&store, "walrus").unwrap();
+    assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
+    assert!(!rows.iter().any(|meta| meta.id == "old"), "a match older than the last row stays out of the full result");
+
+    write_content("newer", "{\"content\":\"walrus in the events\"}\n");
+    let rows = search_sessions(&store, "walrus").unwrap();
+    assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
+    assert_eq!(rows[0].id, "newer", "a new match in a watched candidate enters the result");
+    assert!(!rows.iter().any(|meta| meta.id == "old"));
   }
 }

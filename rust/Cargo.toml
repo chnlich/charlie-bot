@@ -14,6 +14,7 @@ members = [
     "crates/infra/shell-harness",
     "crates/infra/compat",
     "crates/infra/cli-common",
+    "crates/infra/improve-sandbox",
     "crates/app/cli",
     "crates/app/packages",
     "crates/app/server",

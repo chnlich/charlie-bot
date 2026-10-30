@@ -2,36 +2,14 @@
 //!
 //! Usage: `improve-sandbox <direction> -- <command> [args...]`
 //!
-//! The boundary limits writes only: every read stays open, so the round reads the checkout, the cargo registry, the
-//! mock data and the instructions file as before. Writes are allowed under the round's own directories and the caches
-//! every direction shares, and denied everywhere else. The live CharlieBot home, the runtime clone, the other
-//! directions' clones and the host worker's trees therefore stay out of reach of a round that writes the wrong path or
-//! runs `rm`:
+//! The boundary limits writes only: every read stays open. `direction_paths` lists the directories that accept a
+//! write; every other path is denied. The live CharlieBot home, the runtime clone and the host worker's trees
+//! therefore stay out of reach. `DEVICE_PATHS` takes a rule for each device that tools write to.
 //!
-//!   writable for this direction only
-//!     ~/improve/<direction>/charlie-bot/     the direction's clone
-//!     ~/improve/<direction>/evidence/        the round's screenshots, logs and summaries
-//!     ~/improve/<direction>/clc-sessions/    the CLC reviewer's sessions
-//!     /tmp/improve-<direction>/              the round's trial trees and scratch
-//!     /tmp/improve-<direction>-tmp/          TMPDIR
-//!     ~/.cache/improve-target/<direction>    the cargo target directory
-//!   writable for every direction
-//!     ~/improve/mock-home/                   the generated mock data and its manifest
-//!     ~/.cargo/registry, ~/.cargo/git, ~/.cargo/.package-cache
-//!     ~/.claude-improve                      the worker's own Claude config directory
-//!   no write rule, so read-only inside the boundary
-//!     ~/improve/home/                        config.yaml and credentials.yaml
-//!     ~/improve/launch/<launch id>/          the instructions file and the in-flight files list
-//!     ~/improve/<direction>/memory-peaks.tsv
-//!
-//! The device paths below carry write rules because tools write to them: /dev/null and the other null and random
-//! devices, /dev/tty for an interactive tool, /dev/ptmx and /dev/pts for a new terminal, and /dev/shm for a browser's
-//! shared memory.
-//!
-//! The program creates each missing allow-list directory, because the rules bind to objects that exist when it starts.
-//! It stops with an error when the kernel cannot enforce Landlock: a round without the boundary would write anywhere
-//! on the host. ABI 3 is required for the truncate rule. On success it replaces itself with the command, so the
-//! command's exit code is the program's exit code.
+//! The program creates each missing allow-list directory, because the rules bind to objects that exist when it
+//! starts. It stops with an error when the kernel cannot enforce Landlock, since an unguarded round could write
+//! anywhere on the host. On success it replaces itself with the command, so the command's exit code is the
+//! program's exit code.
 
 use std::collections::BTreeSet;
 use std::ffi::{CString, OsString};

@@ -70,7 +70,6 @@ fn core_yaml_writer_matches_pyyaml_safe_c_dumper_for_the_corpus() {
   let corpus = corpus();
   let rust: Vec<String> = corpus.iter().map(|value| yaml::dump(value).unwrap()).collect();
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/infra/core/tests/yaml_dump_parity.py");
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let cases = fixture["cases"].as_array().unwrap();
   assert_eq!(cases.len(), corpus.len());

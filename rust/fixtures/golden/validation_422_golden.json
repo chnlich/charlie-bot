@@ -1,5 +1,4 @@
 {
- "generated_by": "rust/scripts/gen_compat_fixtures.py at a572e7ca71858d9ba52f0abc2726fa44213210ac",
  "python": "3.14.7",
  "endpoints": {
   "/query/int": [

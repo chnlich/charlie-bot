@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/store/tests/python_store_ops.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "calls": [
     {

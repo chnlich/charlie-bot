@@ -30,7 +30,6 @@ const LEDGER_DIR: &str = "charlie/usage";
 #[test]
 fn recorded_python_cold_storage_outputs_match_all_tree_and_ledger_fields() {
   let fixture = fixture();
-  assert_eq!(fixture["source"]["helper"], "rust/crates/features/usage/tests/cool_storage_differential.py");
   assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["source"]["now"], "$NOW");
   assert_eq!(fixture["deleted_count"], 39);

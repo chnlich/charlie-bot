@@ -23,7 +23,6 @@ const PYTHON_FIXTURE: &str = include_str!("fixtures/transport_golden.json");
 #[tokio::test]
 async fn python_and_rust_share_cursors_follow_offsets_and_pid_start() {
   let fixture: serde_json::Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/python_transport.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let expected = &fixture["expected"];
   let root = tempfile::tempdir().unwrap();

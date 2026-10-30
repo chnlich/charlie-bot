@@ -114,7 +114,6 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
 
   let client = Client::new();
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/infra/compat/tests/fixtures/fastapi_body_app.py");
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), 137);

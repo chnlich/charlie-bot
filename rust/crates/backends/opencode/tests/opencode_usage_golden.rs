@@ -1,4 +1,4 @@
-//! The opencode usage source checked against its Python reference (`opencode_usage_reference.py`). The synthetic stores
+//! The opencode usage source checked against its Python reference. The synthetic stores
 //! are written once to disk. Each step reads one store with the signature the step names: first Rust reads every step,
 //! then Python reads the same files, and each step's records and signature must be equal. No store's main file changes
 //! under either reader.
@@ -215,7 +215,6 @@ fn insert_rows(connection: &mut Connection, rows: &[Row]) {
 
 fn python_reference(request: &Value) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/opencode_usage_reference.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected"].clone();
   for (index, step) in request["steps"].as_array().unwrap().iter().enumerate() {

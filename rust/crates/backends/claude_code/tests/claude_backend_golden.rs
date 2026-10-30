@@ -146,7 +146,6 @@ fn registered_claude_factory_matches_the_python_argv_and_env_matrix() {
   let registry = Arc::new(registry);
   let expected_rust = cases.iter().map(|case| rust_result(case, &cfg, &registry)).collect::<Vec<_>>();
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/claude_backend_golden.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected_python = fixture["expected"].clone();
   materialize_paths(&mut expected_python);

@@ -1,6 +1,6 @@
 //! `charliebot_compat::json_loads` against recorded `json.loads` outputs over one deterministic corpus.
 //!
-//! The fixture records what `python_json_reference.py` returned at its named commit. The port must give the same outcome
+//! The fixture records what `json.loads` returned at its base commit. The port must give the same outcome
 //! class and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The corpus
 //! must reach every message the JSON decoder and scanner raise.
 
@@ -110,7 +110,6 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
 /// The outputs `json.loads` recorded for the deterministic input corpus.
 fn recorded_reference() -> Vec<Value> {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/python_json_reference.py");
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   fixture["cases"]
     .as_array()

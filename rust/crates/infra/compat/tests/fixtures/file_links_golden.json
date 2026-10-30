@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/infra/compat/tests/file_links_python.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "expected": [
     {

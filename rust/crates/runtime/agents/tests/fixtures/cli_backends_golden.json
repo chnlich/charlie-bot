@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/agents/tests/cli_backends_reference.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "expected": {
     "argv": [

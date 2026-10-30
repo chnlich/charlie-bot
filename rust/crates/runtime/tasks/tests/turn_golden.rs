@@ -637,7 +637,6 @@ async fn run_turn_with_spawn(
 
 fn python_golden_cases() -> anyhow::Result<Vec<GoldenCase>> {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE)?;
-  anyhow::ensure!(fixture["source"] == "rust/crates/runtime/tasks/tests/python_turn_golden.py");
   anyhow::ensure!(fixture["base_commit"] == "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected"].clone();
   replace_fixture_times(&mut expected);

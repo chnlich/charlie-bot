@@ -67,7 +67,6 @@ fn rust_config(data: &Value) -> charliebot_core::config::CharlieBotConfig {
 
 fn python_reference(mode: &str, _data: &Value, _temporary: &TempDir) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/claude_pool_reference.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   fixture["expected_by_mode"][mode].clone()
 }

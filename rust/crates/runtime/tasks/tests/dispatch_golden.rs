@@ -16,7 +16,6 @@ const PYTHON_FIXTURE: &str = include_str!("fixtures/dispatch_golden.json");
 #[tokio::test]
 async fn python_and_rust_write_the_same_dispatch_facts() {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/tasks/tests/python_dispatch_golden.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut python_value = fixture["expected"].clone();
   replace_fixture_values(&mut python_value);

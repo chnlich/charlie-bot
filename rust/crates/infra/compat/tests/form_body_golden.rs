@@ -46,7 +46,6 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
   let mut fixture_json = String::new();
   decoder.read_to_string(&mut fixture_json).unwrap();
   let fixture: Value = serde_json::from_str(&fixture_json).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/infra/compat/tests/fixtures/fastapi_form_app.py");
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), cases.len());

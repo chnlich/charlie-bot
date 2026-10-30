@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/store/tests/python_message_aggregator.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "request": [
     {

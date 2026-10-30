@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/infra/html/tests/fixtures/generate_fixtures.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "fixtures": [
     "corpus.json.gz",

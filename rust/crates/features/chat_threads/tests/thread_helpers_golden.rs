@@ -46,7 +46,6 @@ fn pure_thread_helpers_match_the_recorded_python_cases() {
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
   let fixture = materialize_placeholders(serde_json::from_str(&fixture_text).unwrap());
-  assert_eq!(fixture["source"], "rust/crates/features/chat_threads/tests/thread_helpers_differential.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
 
   let cases = fixture["cases"].as_object().unwrap();

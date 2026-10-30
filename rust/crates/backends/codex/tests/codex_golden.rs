@@ -1,4 +1,4 @@
-//! Cross-implementation checks of the codex package against the recorded output of `codex_python_reference.py`. The
+//! Cross-implementation checks of the codex package against the recorded output. The
 //! Rust port runs the same synthetic inputs, and the test fails with every section that differs.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through the registry factory (96 cases), and the
@@ -496,7 +496,6 @@ fn write_text(path: &Path, text: &str) {
 
 fn run_reference(request: &Value, temporary: &Path) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/codex_python_reference.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["placeholders"]["read_mtime_ns"], "$READ_MTIME_NS");
   assert_eq!(fixture["placeholders"]["quota_observed_at"], "$NOW_MINUS_2H");

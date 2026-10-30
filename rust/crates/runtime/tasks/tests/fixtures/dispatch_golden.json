@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/tasks/tests/python_dispatch_golden.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "expected": {
     "nodes": [

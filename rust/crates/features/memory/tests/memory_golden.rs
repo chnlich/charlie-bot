@@ -13,7 +13,6 @@ fn memory_selections_and_store_setup_match_the_recorded_python_cases() {
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
   let fixture: Value = serde_json::from_str(&fixture_text).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/features/memory/tests/differential.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["seed"], 20261018);
   assert_eq!(fixture["random_stores"], 80);

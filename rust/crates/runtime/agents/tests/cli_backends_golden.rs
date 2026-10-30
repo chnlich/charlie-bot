@@ -1,5 +1,5 @@
 //! Cross-implementation checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
-//! The recorded reference (`fixtures/cli_backends_golden.json`, recorded from the deleted Python reference) holds
+//! The recorded reference (`fixtures/cli_backends_golden.json`) holds
 //! every Python section's answer over the synthetic inputs built here. The test fails with every section that differs.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases); the translator
@@ -492,7 +492,6 @@ fn finish_cases(fx: &Fixture) -> Vec<Value> {
 
 fn run_reference(request: &Value, temporary: &Path) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/cli_backends_reference.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected"].clone();
   replace_fixture_paths(

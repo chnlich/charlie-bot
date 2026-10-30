@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/usage/src/usage.rs::PYTHON_USAGE_REFERENCE",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "cases": [
     {

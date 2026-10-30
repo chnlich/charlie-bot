@@ -92,7 +92,6 @@ fn recorded_python_members(home: &Path) -> Vec<Value> {
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
   let fixture: Value = serde_json::from_str(&fixture_text).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/features/backup/tests/differential_compare.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(
     fixture["fields"],

@@ -900,7 +900,6 @@ mod differential_tests {
     let mut contents = Vec::new();
     decoder.read_to_end(&mut contents).unwrap();
     let fixture: Value = serde_json::from_slice(&contents).unwrap();
-    assert_eq!(fixture["source"]["helper"], "rust/crates/features/trace/tests/differential.py");
     assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
     assert_eq!(fixture["source"]["mtime_ns"], "$FIXED_MTIME_NS");
 

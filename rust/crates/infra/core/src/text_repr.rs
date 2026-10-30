@@ -771,7 +771,6 @@ mod tests {
   #[test]
   fn str_repr_matches_cpython_for_every_code_point() {
     let metadata: Value = serde_json::from_str(CPYTHON_REPRS_METADATA).unwrap();
-    assert_eq!(metadata["source"], "rust/crates/infra/core/src/text_repr.rs::CPYTHON_REPRS");
     assert_eq!(metadata["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
     let reprs: Vec<&str> = CPYTHON_REPRS.split_terminator('\n').collect();
     let code_points: Vec<char> = (0..=0x10_ffff_u32).filter_map(char::from_u32).collect();

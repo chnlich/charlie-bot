@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/tasks/tests/python_prompt_snapshot_golden.py",
   "base_commit": "2b212ebd8549c0d3bc86885ae9c30ac648039a0d",
   "expected": {
     "cases": [

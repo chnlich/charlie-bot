@@ -154,7 +154,6 @@ fn cases(venv_bin: &Path, system_bin: &Path, server_bin_dir: &Path) -> Vec<Case>
 
 fn run_python_reference(repository: &Path, cases: &[Case], temporary: &Path) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/launch_environment_reference.py");
   assert_eq!(fixture["base_commit"], "2b212ebd8549c0d3bc86885ae9c30ac648039a0d");
   let mut expected = fixture["expected"].clone();
   replace_fixture_paths(

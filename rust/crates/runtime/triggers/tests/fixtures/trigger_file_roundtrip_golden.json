@@ -1,5 +1,4 @@
 {
-  "source": "rust/crates/runtime/triggers/tests/trigger_file_roundtrip.py",
   "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
   "python_written_files": {
     "synthetic-delay-pending.json": "{\n  \"id\": \"synthetic-delay-pending\",\n  \"session_id\": \"synthetic-session\",\n  \"fire_at\": \"2026-01-02T03:04:05.123456Z\",\n  \"message\": \"delay\",\n  \"created_at\": \"2026-01-02T03:04:05.123456Z\",\n  \"status\": \"pending\",\n  \"fired_at\": null,\n  \"watch_targets\": [],\n  \"fire_reason\": null\n}",

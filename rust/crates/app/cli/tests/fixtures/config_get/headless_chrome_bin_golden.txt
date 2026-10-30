@@ -1,6 +1,4 @@
-# Expected `charliebot config get headless_chrome_bin` output, recorded from the Python CLI.
-# Helper: CHARLIEBOT_HOME=<copy of config.yaml beside this file> uv run charliebot config get headless_chrome_bin
-#   (src/app/main.py dispatching to src/runtime/cli/config.py).
+# Expected `charliebot config get headless_chrome_bin` output.
 # Base commit: f2b57d3f8
 # The home is config.yaml beside this file; every value in it is synthetic.
 #

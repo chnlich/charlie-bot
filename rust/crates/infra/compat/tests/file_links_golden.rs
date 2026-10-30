@@ -1,7 +1,7 @@
 //! The file-link scanner against Python's `src/runtime/file_urls.py` on one synthetic case matrix.
 //!
 //! The test builds a synthetic home, session directory and user home, writes the case matrix as JSON, and asks
-//! `file_links_python.py` for Python's findings and detail text. `scan_file_links` and `dead_links_detail` answer the
+//! the recorded file for Python's findings and detail text. `scan_file_links` and `dead_links_detail` answer the
 //! same cases here. Every answer must match, and the matrix must reach each form, live and dead, with and without a
 //! correct link.
 //!
@@ -117,14 +117,13 @@ fn finding_json(finding: &FileLink) -> Value {
 #[test]
 fn the_file_link_scanner_matches_python_on_the_case_matrix() {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/infra/compat/tests/file_links_python.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let root = tempfile::tempdir().unwrap();
   let context = build_tree(root.path());
   let cases = cases(root.path(), &context);
   let mut python: Vec<Value> = fixture["expected"].as_array().unwrap().clone();
   materialize_fixture_paths(&mut python, root.path());
-  assert_eq!(python.len(), cases.len(), "file_links_python.py answered a different number of cases");
+  assert_eq!(python.len(), cases.len(), "the recorded file-link answers differ in number from the cases");
 
   let mut rust = Vec::new();
   let mut reached = Vec::new();

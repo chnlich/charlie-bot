@@ -14,14 +14,12 @@ struct Corpus {
 
 #[derive(Deserialize)]
 struct FixtureProvenance {
-  source: String,
   base_commit: String,
   fixtures: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct DifferentialFixture {
-  source: String,
   base_commit: String,
   seed: u64,
   cpython_version: String,
@@ -107,7 +105,6 @@ struct ExpectedOpcode {
 fn fixtures() -> (Corpus, Expected) {
   let provenance: FixtureProvenance =
     serde_json::from_str(include_str!("fixtures/provenance.json")).expect("fixture provenance is valid");
-  assert_eq!(provenance.source, "rust/crates/infra/html/tests/fixtures/generate_fixtures.py");
   assert_eq!(provenance.base_commit, "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(
     provenance.fixtures,
@@ -133,7 +130,6 @@ fn read_gzip_json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> T {
 #[test]
 fn tokenizer_matches_recorded_randomized_cpython_outputs() {
   let fixture: DifferentialFixture = read_gzip_json(include_bytes!("fixtures/differential_golden.json.gz"));
-  assert_eq!(fixture.source, "rust/crates/infra/html/tests/fixtures/differential.py");
   assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
   assert_eq!(fixture.seed, 20261019);
   assert_eq!(fixture.cpython_version, "3.14.7");

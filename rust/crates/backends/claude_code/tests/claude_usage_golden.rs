@@ -1,4 +1,4 @@
-//! The Claude Code usage source checked against its Python reference (`claude_usage_reference.py`): the transcript
+//! The Claude Code usage source checked against its Python reference: the transcript
 //! read, the usage-panel transform, and the cold-storage sweep. Each side runs on synthetic inputs under its own
 //! temporary root, and the two results must be equal.
 
@@ -49,7 +49,6 @@ const TID: &str = "f0e1d2c3-a4b5-4c6d-8e7f-0a1b2c3d4e5f";
 
 fn python_reference(mode: &str, data: &Value) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/claude_usage_reference.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected_by_mode"][mode].clone();
   if mode == "read" {

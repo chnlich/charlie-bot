@@ -448,7 +448,6 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   let cases = matrix();
   let prepared: Vec<Prepared> = cases.iter().map(prepare).collect();
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/tasks/tests/python_prompt_snapshot_golden.py");
   assert_eq!(fixture["base_commit"], "2b212ebd8549c0d3bc86885ae9c30ac648039a0d");
   assert_eq!(fixture["placeholders"]["temp_root"], "$TMPROOT");
   assert_eq!(fixture["placeholders"]["repo_root"], "$REPO");

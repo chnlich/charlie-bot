@@ -2785,10 +2785,6 @@ const PYTHON_MARKER_FIXTURE: &str = include_str!("fixtures/boot_recovery_marker_
 fn recorded_marker_instant(path: &Path) -> anyhow::Result<String> {
   let fixture: Value = serde_json::from_str(PYTHON_MARKER_FIXTURE)?;
   anyhow::ensure!(
-    fixture["source"] == "rust/crates/runtime/tasks/tests/boot_recovery_marker_reference.py",
-    "the marker fixture names its Python reference"
-  );
-  anyhow::ensure!(
     fixture["base_commit"] == "d4021ce3993d7e36b2709f00caf578e1f8541407",
     "the marker fixture names its base commit"
   );

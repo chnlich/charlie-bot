@@ -1,6 +1,6 @@
 //! The Anthropic proxy route of the cc-openai-compatible backend, checked against the Python route.
 //!
-//! `openai_compatible_reference.py` runs the Python route over one case matrix and prints what it did for each case.
+//! The recorded Python route ran over one case matrix and printed what it did for each case.
 //! This test serves each case's upstream from a loopback server. The server answers with the case's status and
 //! chunks, and records the request it was sent. The test posts the case's body to the Rust route and compares four
 //! results. It checks the status, the body with message ids masked, the request sent upstream, and whether a stream
@@ -92,7 +92,6 @@ fn hex(text: &str) -> Vec<u8> {
 /// The matrix the Python route answered, one record per case.
 fn python_reference() -> Vec<Case> {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/openai_compatible_reference.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   fixture["expected"].as_array().unwrap().iter().map(Case::from_record).collect()
 }

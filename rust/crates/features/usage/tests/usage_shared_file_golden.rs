@@ -19,7 +19,6 @@ const TRIGGER_NAMES: [&str; 5] = [
 #[test]
 fn recorded_python_usage_ledger_schema_and_repair_results_match_rust() {
   let fixture = fixture();
-  assert_eq!(fixture["source"]["helper"], "rust/crates/features/usage/tests/shared_file.py");
   assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["python_helper_error"], "AttributeError: 'UsageLedger' object has no attribute 'model_rows'");
 

@@ -1,5 +1,5 @@
 //! The 422 bodies against the bodies FastAPI answers for the same requests
-//! (`rust/fixtures/golden/validation_422_golden.json`, written by `rust/scripts/gen_compat_fixtures.py`).
+//! (`rust/fixtures/golden/validation_422_golden.json`).
 //!
 //! A query or path case replays its URL through the parsers, with the parameter declarations the fixture
 //! lists for its endpoint, and compares the body bytes. A body case rebuilds the errors its JSON body

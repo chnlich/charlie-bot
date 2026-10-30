@@ -558,7 +558,6 @@ mod tests {
       request["backend_option"] = backend_option;
     }
     let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-    assert_eq!(fixture["source"], "rust/crates/runtime/usage/src/usage.rs::PYTHON_USAGE_REFERENCE");
     assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
     for case in fixture["cases"].as_array().unwrap() {
       let mut recorded_request = case["request"].clone();

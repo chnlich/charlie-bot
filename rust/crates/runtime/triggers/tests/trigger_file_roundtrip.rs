@@ -12,7 +12,6 @@ const PYTHON_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip_golde
 // Python: all TriggerStatus and WatchTarget records in src/infra/models.py
 fn python_and_rust_read_and_write_equal_trigger_records() {
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/triggers/tests/trigger_file_roundtrip.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut python_records = fixture["expected"].as_array().unwrap().clone();
   materialize_fixture_values(&mut python_records);

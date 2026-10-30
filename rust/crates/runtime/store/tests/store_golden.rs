@@ -756,7 +756,7 @@ async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
 
 const FORK_ROOT_ID: &str = "synthetic-fork-root";
 
-/// The fork and elone cases of `python_store_ops.py::FORK_CASES`, in the same order.
+/// The fork and elone cases of the recorded store operations, in the same order.
 const FORK_CASES: [(&str, &str, Option<i64>); 9] = [
   ("fork-null", "fork", None),
   ("fork-first", "fork", Some(0)),
@@ -1768,7 +1768,6 @@ fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {
 
 fn run_python_message_aggregator(events: &Value) -> Value {
   let fixture: Value = serde_json::from_str(PYTHON_MESSAGE_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/store/tests/python_message_aggregator.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(&fixture["request"], events);
   fixture["expected"].clone()
@@ -1776,7 +1775,6 @@ fn run_python_message_aggregator(events: &Value) -> Value {
 
 fn run_python_helper_args(root: &Path, args: &[&str]) -> String {
   let fixture: Value = serde_json::from_str(PYTHON_STORE_FIXTURE).unwrap();
-  assert_eq!(fixture["source"], "rust/crates/runtime/store/tests/python_store_ops.py");
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let calls = fixture["calls"].as_array().unwrap();
   let matching = calls

@@ -55,7 +55,7 @@ Three marker keys derive from `name` and so carry no field of their own: `notice
 
 | Method | What the core uses it for | Slack (`SlackThreadAdapter`) | Discord (`DiscordThreadAdapter`) |
 |--------|---------------------------|------------------------------|----------------------------------|
-| `post(address, text)` | `post_with_retry` posts every reply chunk and every notice through it | `SlackClient.post_message` (`chat.postMessage` with `thread_ts`) | `DiscordClient.create_message` on the thread (a JSON body) |
+| `post(address, text)` | `post_with_retry` posts every reply chunk and every notice through it | `SlackClient.post_message` (`chat.postMessage` with `thread_ts`) | `DiscordClient.create_message_with_post_key` on the thread (a JSON body) |
 | `add_ack(block)` | Lights the summon ack when the summon round fires | `reactions.add` of `eyes` (`_ACCEPTANCE_REACTION`) on the mention ts | `add_reaction` of `👀` (`_ACCEPTANCE_EMOJI`) on the mention id |
 | `remove_ack(block)` | Closes the summon ack when a reply, notice, or lost-summon report answers it | `reactions.remove`; a `no_reaction` error is the end state, so the clear is idempotent | `remove_own_reaction` of `👀` |
 | `read_eligible(origin, cfg)` | The eligible thread read behind the freshness gate, the ack check, and the reconnect backfill | one `conversations.replies` call; keeps plain (subtype-absent) human messages from allowed users | `get_messages` paged oldest-first, 100 per call from id `0` until a short page; keeps human-authored, non-webhook messages of type 0 or 19 from allowed users |

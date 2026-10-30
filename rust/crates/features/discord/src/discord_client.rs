@@ -327,14 +327,9 @@ impl DiscordClient {
     Ok(serde_json::from_value(answer)?)
   }
 
-  /// POST /channels/{channel_id}/messages: a text-only message. `allowed_mentions` is always `{"parse": []}`, so a
-  /// reply pings nobody. Returns the created message object.
-  pub async fn create_message(&self, channel_id: &str, content: &str) -> anyhow::Result<Value> {
-    let body = json!({"content": content, "allowed_mentions": {"parse": []}});
-    self.request_body(Method::POST, &format!("/channels/{channel_id}/messages"), Some(body), &[]).await
-  }
-
-  /// Create one message with a stable post key for Discord's nonce deduplication.
+  /// POST /channels/{channel_id}/messages: a text-only message with a stable post key for Discord's nonce
+  /// deduplication. `allowed_mentions` is always `{"parse": []}`, so a reply pings nobody. Returns the created
+  /// message object.
   pub async fn create_message_with_post_key(
     &self,
     channel_id: &str,

@@ -171,12 +171,14 @@
 
   <h2><span class="n">4</span>Summary</h2>
   <ul>
+    {%- if ctx.rows %}
     <li><b>Scale by platform:</b>
       {%- for src in ctx.usage_sources if ctx.per_src[src]["total"] > 0 -%}
         {{- " " if loop.first else ", " -}}
         {{- src }} {{ ctx.per_src[src]["t_comp"] }} ({{ "%.0f"|format(ctx.per_src[src]["share"]) }}%, {{ ctx.per_src[src]["models"] }} models){{ "." if loop.last }}
       {%- endfor -%}
     </li>
+    {%- endif %}
     <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"|format(cache_share) }}% of tokens were cache reads,
       because a long session re-reads its whole context every turn. Ranking by output tokens reflects real production,
       and the two rankings do not agree.</li>

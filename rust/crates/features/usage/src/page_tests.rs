@@ -276,6 +276,7 @@ async fn an_empty_ledger_renders_an_empty_state_without_the_charts() {
   assert!(body.contains("id=\"usage-empty\""), "the page marks its empty state");
   assert!(!body.contains("id=\"c_week\""), "no chart renders");
   assert!(body.contains("id=\"tbl_week\"") && body.contains("id=\"tbl_all\""), "the tables keep their skeletons");
+  assert!(!body.contains("Scale by platform:"), "the platform sentence needs a source with tokens");
   assert!(data_rows(&body).is_empty(), "the payload carries no rows");
 }
 

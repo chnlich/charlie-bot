@@ -1,7 +1,6 @@
 //! Session listing projections shared by sidebar routes.
 
 use std::collections::{HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -11,7 +10,6 @@ use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
-use lru::LruCache;
 use serde_json::{Map, Value, json};
 
 use crate::sidebar;
@@ -25,7 +23,6 @@ const SCHEDULE_FIELDS: [&str; 6] = [
   "schedule_project",
   "schedule_allow_failure",
 ];
-const GZIP_MEMO_LIMIT: usize = 4;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarProjection {
@@ -37,8 +34,7 @@ pub(crate) struct SidebarProjection {
 }
 
 struct SessionsListMemoState {
-  whole_body: Option<(Vec<RowInputs>, Vec<u8>)>,
-  gzip: LruCache<Vec<u8>, Vec<u8>>,
+  whole_body: Option<WholeListingBody>,
   #[cfg(test)]
   render_calls: usize,
 }
@@ -47,11 +43,20 @@ impl Default for SessionsListMemoState {
   fn default() -> Self {
     Self {
       whole_body: None,
-      gzip: LruCache::new(NonZeroUsize::new(GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")),
       #[cfg(test)]
       render_calls: 0,
     }
   }
+}
+
+/// One rendered listing body, its inputs, and the gzip form a request asked for.
+///
+/// The gzip form lives beside the body it compressed: a request that matches the inputs serves both without hashing or
+/// comparing the body, which the memo would otherwise do to find the compressed bytes it already holds.
+struct WholeListingBody {
+  inputs: Vec<RowInputs>,
+  body: Vec<u8>,
+  gzip: Option<Vec<u8>>,
 }
 
 /// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
@@ -257,43 +262,38 @@ pub fn sessions_list_response(
     Ok(inputs) => inputs,
     Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
   };
-  let body = {
-    let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
-    // As `_sessions_list_response`: an unchanged corpus with unchanged overlays serves the rendered body again and
-    // renders no row.
-    let body = match &state.whole_body {
-      Some((cached, body)) if *cached == inputs => body.clone(),
-      _ => {
-        #[cfg(test)]
-        {
-          state.render_calls += inputs.len();
-        }
-        let values = match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>()
-        {
-          Ok(values) => values,
-          Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
-        };
-        let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
-        state.whole_body = Some((inputs, body.clone()));
-        body
-      }
-    };
-    let wants_gzip = request
-      .headers()
-      .get(header::ACCEPT_ENCODING)
-      .and_then(|value| value.to_str().ok())
-      .is_some_and(|value| value.contains("gzip"));
-    if wants_gzip {
-      if let Some(compressed) = state.gzip.get(&body).cloned() {
-        return json_bytes_response(compressed, true);
-      }
-      let compressed = charliebot_compat::compression::gzip_level_one(&body);
-      state.gzip.put(body, compressed.clone());
-      return json_bytes_response(compressed, true);
+  let wants_gzip = request
+    .headers()
+    .get(header::ACCEPT_ENCODING)
+    .and_then(|value| value.to_str().ok())
+    .is_some_and(|value| value.contains("gzip"));
+  let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
+  // As `_sessions_list_response`: an unchanged corpus with unchanged overlays serves the rendered body again and
+  // renders no row.
+  let unchanged = state.whole_body.as_ref().is_some_and(|whole| whole.inputs == inputs);
+  if !unchanged {
+    #[cfg(test)]
+    {
+      state.render_calls += inputs.len();
     }
-    body
-  };
-  json_bytes_response(body, false)
+    let values =
+      match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>() {
+        Ok(values) => values,
+        Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+      };
+    let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+    state.whole_body = Some(WholeListingBody { inputs, body, gzip: None });
+  }
+  let whole = state.whole_body.as_ref().expect("the body is rendered when the inputs changed");
+  if !wants_gzip {
+    return json_bytes_response(whole.body.clone(), false);
+  }
+  if let Some(compressed) = &whole.gzip {
+    return json_bytes_response(compressed.clone(), true);
+  }
+  let compressed = charliebot_compat::compression::gzip_level_one(&whole.body);
+  state.whole_body.as_mut().expect("the body is rendered when the inputs changed").gzip = Some(compressed.clone());
+  json_bytes_response(compressed, true)
 }
 
 /// Render metadata as the Python response model does, excluding `task.goal`.

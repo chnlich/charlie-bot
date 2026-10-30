@@ -39,6 +39,11 @@ pub fn day_of_stamp(text: &str) -> Result<Date, PacificError> {
   day_of(moment)
 }
 
+/// The `YYYY-MM-DD` text of the Pacific day a stored stamp holds: `day_of_stamp` through `date_text`.
+pub fn day_text_of_stamp(text: &str) -> Result<String, PacificError> {
+  day_of_stamp(text).map(date_text)
+}
+
 /// The `YYYY-MM-DD` text of a Pacific day, the form the day API's `date` query and the standing policies' `expires`
 /// dates use. ISO dates compare as text the way they compare as dates.
 pub fn date_text(date: Date) -> String {

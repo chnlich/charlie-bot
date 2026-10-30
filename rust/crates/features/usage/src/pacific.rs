@@ -1,17 +1,14 @@
 //! The usage page's calendar. Every date and stamp the page prints is in America/Los_Angeles, whatever zone the server
 //! runs in, and the last week is the Pacific calendar week before the one `now` falls in: [Monday 00:00, next Monday
-//! 00:00) in that zone, which is 169 hours when the clocks change inside it.
-
-use anyhow::Context;
+//! 00:00) in that zone, which is 169 hours when the clocks change inside it. Core's `pacific` owns the zone and the
+//! Pacific day of a stamp.
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
-pub const ZONE: &str = "America/Los_Angeles";
+use charliebot_core::pacific::zone;
 
-pub fn zone() -> anyhow::Result<TimeZone> {
-  TimeZone::get(ZONE).with_context(|| format!("loading the time zone {ZONE}"))
-}
+pub use charliebot_core::pacific::day_text_of_stamp as day_of_ts;
 
 /// A Pacific calendar week: `[start, end)`, both ends at 00:00 on `monday` in America/Los_Angeles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,13 +54,6 @@ impl Week {
   pub fn utc_day(moment: Timestamp) -> String {
     moment.to_zoned(TimeZone::UTC).strftime("%Y-%m-%d").to_string()
   }
-}
-
-/// The Pacific calendar day of a stored `ts`: the stamp is a UTC instant in one of the ledger's forms (`Z` or an
-/// offset), and a form jiff cannot read fails the read.
-pub fn day_of_ts(ts: &str) -> anyhow::Result<String> {
-  let moment: Timestamp = ts.parse().with_context(|| format!("ledger timestamp {ts:?}"))?;
-  Ok(moment.to_zoned(zone()?).date().to_string())
 }
 
 /// `%Y-%m-%d %H:%M %Z` of an instant in Pacific time: the zone abbreviation is PDT or PST.

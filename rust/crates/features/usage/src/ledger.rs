@@ -618,7 +618,7 @@ fn fold_grouped_row(accs: &mut BTreeMap<(String, String), ModelSum>, row: GroupR
 
 /// The Pacific day of a stored stamp, or nothing for a group that has none.
 fn pacific_day(ts: &str) -> anyhow::Result<String> {
-  if ts.is_empty() { Ok(String::new()) } else { pacific::day_of_ts(ts) }
+  if ts.is_empty() { Ok(String::new()) } else { Ok(pacific::day_of_ts(ts)?) }
 }
 
 fn rows_from_accs(accs: Accs) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String, String>)> {

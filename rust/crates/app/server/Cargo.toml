@@ -22,7 +22,6 @@ charliebot-packages.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
 charliebot-session-api.workspace = true
-charliebot-tasks.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 http.workspace = true
@@ -40,4 +39,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 charliebot-core = { workspace = true, features = ["test-support"] }
+# The thread-rule test assembles a turn through the prompt builder; no server module outside `#[cfg(test)]` names a
+# task type, so this crate's own code does not use the tasks runtime.
+charliebot-tasks.workspace = true
 tempfile.workspace = true

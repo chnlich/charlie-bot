@@ -82,7 +82,6 @@ fn parameter_errors(template: &str, params: &[Value], url: &str) -> Vec<FieldErr
       "int" => validation::parse_int(source, name, &text, param["ge"].as_i64(), param["le"].as_i64()).map(drop),
       "bool" => validation::parse_bool(source, name, &text).map(drop),
       "literal" => validation::parse_literal(source, name, &text, choices(param)).map(drop),
-      "enum" => validation::parse_enum(source, name, &text, choices(param)).map(drop),
       "str" => Ok(()),
       other => panic!("unknown parameter type {other}"),
     };

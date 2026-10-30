@@ -425,16 +425,6 @@ pub fn parse_literal(
     .ok_or_else(|| failure(source, name, text, Kind::Literal(choices)))
 }
 
-/// An `Enum` parameter: the text must equal one of the enum's `choices` (its values).
-pub fn parse_enum(
-  source: Source,
-  name: &str,
-  text: &str,
-  choices: &'static [&'static str],
-) -> Result<&'static str, Box<FieldError>> {
-  choices.iter().copied().find(|choice| *choice == text).ok_or_else(|| failure(source, name, text, Kind::Enum(choices)))
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;

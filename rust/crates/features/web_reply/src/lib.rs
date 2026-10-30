@@ -218,7 +218,7 @@ mod tests {
       .send(
         Method::POST,
         "/api/internal/web/ask-check",
-        Some(json!({"session_id": sid, "item": item.clone(), "backend": "haiku", "answer": "Deploy."})),
+        Some(json!({"session_id": sid, "item": item.clone(), "backend": "haiku", "answer": "Deploy.\ntier: t0 rule: money"})),
       )
       .await;
     assert_eq!(status, StatusCode::OK);
@@ -236,6 +236,8 @@ mod tests {
     assert_eq!(stored_item["link"], item["link"]);
     assert!(stored_item.get("since").is_some(), "a stored item carries its start time");
     assert_eq!(stored_item["since_exact"], json!(true));
+    assert_eq!(stored_item["tier"], json!("t0"), "a stored item carries its cold read's tier");
+    assert_eq!(stored_item["rule"], json!("money"));
     assert_eq!(body["now_chars"], json!(0));
     assert_eq!(body["now_over_budget"], json!(false));
 
@@ -253,6 +255,6 @@ mod tests {
     let ask_checks = home.events(&sid).into_iter().filter(|event| event["type"] == "web_ask_check").collect::<Vec<_>>();
     assert_eq!(ask_checks.len(), 1);
     assert_eq!(ask_checks[0]["backend"], "haiku");
-    assert_eq!(ask_checks[0]["answer"], "Deploy.");
+    assert_eq!(ask_checks[0]["answer"], "Deploy.\ntier: t0 rule: money");
   }
 }

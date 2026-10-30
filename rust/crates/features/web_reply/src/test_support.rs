@@ -24,6 +24,28 @@ use tower::ServiceExt;
 
 use crate::reply;
 
+/// The approval policy table every web test home starts with; a test that changes the table rewrites this file.
+pub const APPROVAL_POLICY_TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
+  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies:
+  - {id: release-restart, scope: \"Release and restart the CharlieBot checkout.\", cap_per_pt_day: null, expires: 2099-01-01}
+  - {id: shared-repo-landing, scope: \"Land on a shared repository's non-main branch.\", cap_per_pt_day: 16, expires: 2099-01-01}
+enable_ask_tier_refusal: false
+";
+
+/// Writes `text` as the home's approval policy table.
+pub fn write_approval_policy_table(home: &Path, text: &str) {
+  let path = home.join("config.d").join("approval_policy.yaml");
+  fs::create_dir_all(path.parent().expect("the table path has a parent")).expect("config.d");
+  fs::write(path, text).expect("the approval policy table writes");
+}
+
 /// The plan-registry reader the server's artifacts package registers; these tests read the same file the same way.
 pub fn read_plans_fixture(session_dir: &Path) -> anyhow::Result<Option<Vec<Value>>> {
   let path = session_dir.join("plans.json");
@@ -79,6 +101,7 @@ impl Home {
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
     fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
       .expect("the synthetic access key writes");
+    write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
     let mut registry = Registry::new();
     registry
       .register_package("src.features.user_text_checks", charliebot_user_text_checks::register)

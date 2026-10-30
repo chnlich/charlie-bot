@@ -11,7 +11,6 @@ fancy-regex.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 libc.workspace = true
-memchr.workspace = true
 memmap2.workspace = true
 nix.workspace = true
 procfs.workspace = true

@@ -690,7 +690,6 @@ dependencies = [
  "getrandom 0.3.4",
  "hmac",
  "libc",
- "memchr",
  "memmap2",
  "nix",
  "procfs",

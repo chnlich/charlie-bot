@@ -9,7 +9,9 @@ page describe, and what is the problem? (2) What is the page's conclusion, and w
 epistemic state does the page itself claim for it (confirmed, hypothesis, refuted, or a
 stated mix)? (3) What does the page ask of the reader, if anything? When the page asks the
 reader to choose, list each VISIBLE TEXT option with its name, action and consequence. When
-an option appears only in the page source, write FOLDED for it.
+an option appears only in the page source, write FOLDED for it. When the options differ in
+what the reader sees and an option shows neither a drawn demo nor a stated reason, write
+NO DEMO for it.
 The reader then answers each choice from what the page shows at open. (4) In which numbered
 section did you first become clear on what the problem is? (5) Name up to five points you
 had to re-read to follow the page.
@@ -31,7 +33,7 @@ You are a careful cold reader. Answer every question from the request and its li
 You are reading one request to a user cold. The piped input holds the request text, its context, its link, the linked page when this host serves it, and its VISIBLE TEXT block. You have no other context. Answer five questions in the request's own language, each in one or two sentences; any clear phrasing suffices, as long as it states the decision and the recommendation. When the input does not give an answer, write NOT STATED.
 (1) What must the user decide or do?
 (2) What does the line of work do now, and why does the decision come now?
-(3) What are the options, what is the consequence of each, and which option does the request recommend? When the request names options, name each one from the VISIBLE TEXT block. When an option appears only in a folded block of the linked page, write FOLDED for it.
+(3) What are the options, what is the consequence of each, and which option does the request recommend? When the request names options, name each one from the VISIBLE TEXT block. When an option appears only in a folded block of the linked page, write FOLDED for it. When the options differ in what the reader sees and an option shows neither a drawn demo nor a stated reason, write NO DEMO for it on the linked page.
 The request then gets each option from what the page shows at open.
 (4) Which links carry the evidence?
 (5) Which kind of step does the request ask about? Choose one:

@@ -74,7 +74,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Write the decision or the action in the item's `text`, in one sentence.
 - Write in `context` what the line does now and why the decision comes now, in one or two sentences.
   The panel then shows why the item waits, before the user opens the page.
-- When a decision needs a page, write each option on its own visible line with its name, action and consequence.
+- When a decision needs a page, write its options by the fork grammar in `prompts/plan_template.html`
+  (BLOCK KIT, section 5).
 - When a decision needs a page, also write your recommendation and the evidence links on it.
   The user then reads every option, and the evidence for it, on one page.
 - Set the item's `link` to that page.
@@ -138,7 +139,7 @@ Remaining lists the milestones between the session and its Goal, so the user rea
   A linked page whose name has no such prefix is not checked.
   When an assertion fails, the command prints each FAIL line and stores nothing.
 - Compare each restatement with your intent:
-  - When a part reads NOT STATED, reads FOLDED, or differs from your intent, revise the item.
+  - When a part reads NOT STATED, reads FOLDED, reads NO DEMO, or differs from your intent, revise the item.
     The user then reads each option where the page shows it.
   - When the reader names an undoable step, check that the item holds no decision that only the user makes.
     Then remove the item, and carry out the step on your recommendation.

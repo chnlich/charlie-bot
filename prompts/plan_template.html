@@ -130,6 +130,19 @@
                     Each answer then states its consequence, so the reader does not infer it.
                     Write the recommendation (p.rec) with one option name in 「」.
                     The fork-options check then matches that name against the option lines.
+                    When the options of a fork differ in what the reader sees, follow the text of each option li
+                    with a div.demo that draws that option's result in the page, outside every details-layer.
+                    Such differences include:
+                      - a web UI or a page layout;
+                      - a report or a message;
+                      - command output.
+                    The reader then compares the options by how they look.
+                    Fill a demo with read-back data where it is at hand.
+                    Label any other data in a demo as sample data.
+                    When a still picture cannot show an option's difference, such as motion or timing, give that
+                    option a p.no-demo line that states the reason.
+                    The fork-demos check holds every option of a fork whose option lines carry a demo or a reason
+                    to one of the two.
                     Every open item also carries a folded explainer, a details.details-layer block
                     collapsed by default, so the reader can verify the recommendation from the block alone while
                     the decision surface stays short: it retells the decision from scratch, glosses per the

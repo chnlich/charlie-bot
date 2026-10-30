@@ -164,7 +164,7 @@ Each item below is a signal to revise the page:
 - Answer 7 lists one or more terms.
 - Answer 8 is NOT STATED, in whole or in part, on a page that reports a run.
 - On a plan or understanding page, answer 3 omits a decision that the page asks for.
-- Answer 3 contains FOLDED, or omits an option that a visible option line shows.
+- Answer 3 contains FOLDED or NO DEMO, or omits an option that a visible option line shows.
 - A re-read point in answer 5 names a decision fork (a div.fork block) in section 1, or a jump between a fork and another section.
 - A re-read point in answer 5 names the run, its variables, or the difference between the compared legs.
 

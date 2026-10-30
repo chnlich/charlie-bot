@@ -73,7 +73,7 @@ impl AgentBackend for GeminiBackend {
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    Box::new(GeminiTranslator::default())
+    Box::new(GeminiTranslator::new())
   }
 
   fn transport(&self) -> TransportKind {
@@ -92,10 +92,14 @@ mod tests {
   #[test]
   fn argv_frames_the_instructions_and_splices_the_resume_and_extra_flags() {
     let backend = backend(LaunchArgs {
-      instructions_content: Some("Use concise answers.".to_string()),
-      resume_session_id: Some("session-123".to_string()),
       extra_flags: vec!["--approval-mode".to_string(), "yolo".to_string()],
-      ..LaunchArgs::default()
+      buffer_limit: None,
+      instructions_content: Some("Use concise answers.".to_string()),
+      instructions_file: None,
+      resume_session_id: Some("session-123".to_string()),
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: serde_json::Map::new(),
     });
     let expected: Vec<&str> = vec![
       "/usr/bin/gemini",
@@ -118,7 +122,17 @@ mod tests {
   #[test]
   fn a_dash_prefixed_prompt_stays_the_value_of_p() {
     assert_eq!(
-      backend(LaunchArgs::default()).argv("--watch-pid only local"),
+      backend(LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+      })
+      .argv("--watch-pid only local"),
       [
         "/usr/bin/gemini",
         "-m",
@@ -140,7 +154,18 @@ mod tests {
       ("GEMINI_API_KEY".to_string(), "gemini-key".to_string()),
       ("GOOGLE_API_KEY".to_string(), "google-key".to_string()),
     ]);
-    let prepared = backend(LaunchArgs::default()).prepare_env(env).unwrap();
+    let prepared = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: serde_json::Map::new(),
+    })
+    .prepare_env(env)
+    .unwrap();
     assert_eq!(prepared, Env::from([("PATH".to_string(), "/usr/bin".to_string())]));
   }
 }

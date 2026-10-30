@@ -12,7 +12,8 @@
 # release's commit. The switch copy runs from .cutover-switch/ beside it, so the switch moves the rehearsal checkout
 # and never this repository. The delegation check of each switch delegates its task on that checkout, so the task's
 # repository and worktrees lie in the rehearsal tree. Every server starts from the rehearsal home's own config,
-# credentials and releases.
+# credentials, releases and approval policy table. The table is the stand-in that trial.sh's home also copies from
+# scripts/release/standin-approval-policy.yaml: the release under test refuses a home without one.
 #
 # Before each switch the rehearsal seeds one live run, because a live switch always has one: the manager turn that
 # requested it. The seed is a manager-turn record whose process is a sleep the new server re-attaches by its recorded
@@ -314,6 +315,13 @@ if [ -n "$BACKEND_CREDENTIAL" ]; then
   printf '      credential: %s\n' "$BACKEND_CREDENTIAL" >> "$CB_HOME/config.yaml"
 fi
 chmod 600 "$CB_HOME/config.yaml"
+
+# The approval policy table is required host configuration, so the rehearsal home carries the stand-in table that the
+# trial's home carries. The old release ignores config.d/approval.d/, so the table serves the switch to the new release
+# and the switch back.
+mkdir -m 700 -p "$CB_HOME/config.d/approval.d" \
+  && cp "$SOURCE_REPO/scripts/release/standin-approval-policy.yaml" "$CB_HOME/config.d/approval.d/policy.yaml" \
+  || preflight_fail "copy the stand-in approval policy table into $CB_HOME/config.d/approval.d"
 
 # The environment every switch and server reads: the tree's home, releases and logs, and a private tmux server.
 export HOME="$TRIAL_HOME"

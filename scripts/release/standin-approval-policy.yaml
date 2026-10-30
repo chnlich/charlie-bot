@@ -1,0 +1,14 @@
+# The stand-in approval policy table of the release trial's home and the switch rehearsal's home. The release under test
+# refuses a home without config.d/approval.d/policy.yaml; trial.sh and switch-rehearsal.sh copy this file there.
+# This is a fixture: a live home keeps its own table.
+consequence_tests:
+  - {id: irreversible, rank: 1, text: "Deletes data with no backup, or sends what cannot be recalled."}
+  - {id: chao-name, rank: 2, text: "A message or publication in Chao's name reaches other people."}
+  - {id: money, rank: 3, text: "Spends money beyond a budget that Chao set."}
+  - {id: authority, rank: 4, text: "Widens what agents may do."}
+  - {id: rule-named, rank: 4, text: "A rule in force names the user's explicit approval for this step."}
+  - {id: reading, rank: 5, text: "Picks a reading for work over about one worker-day."}
+standing_policies:
+  - {id: release-restart, scope: "Release and restart the CharlieBot checkout.", cap_per_pt_day: null,
+    expires: 2099-01-01}
+enable_ask_tier_refusal: false

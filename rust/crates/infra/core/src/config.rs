@@ -362,10 +362,10 @@ fn legacy_destination(key: &str, schema: &ConfigSchema) -> Option<String> {
 
 /// Load `<home>/config.yaml` against the registered packages' `schema`.
 ///
-/// Before validation: any `*.yaml` file directly under `config.d/`, any retired top-level key (core or
-/// package-registered), a retired `backends:` key, and a `charliebot_home` key each refuse the file. A
-/// missing or empty file loads as the schema defaults. Each registered section is parsed; a parse error
-/// fails the load.
+/// Before validation: any `*.yaml` file directly under `config.d/` except the approval policy table, any retired
+/// top-level key (core or package-registered), a retired `backends:` key, and a `charliebot_home` key each refuse
+/// the file. A missing or empty file loads as the schema defaults. Each registered section is parsed; a parse
+/// error fails the load.
 pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfig, ConfigError> {
   let config_path = home.join(CONFIG_FILENAME);
   let config_path_text = paths::display(&config_path);
@@ -379,6 +379,12 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
       .map_err(|error| ConfigError(format!("{}: {error}", paths::display(&config_d))))?;
     entries.sort();
     for entry in entries {
+      // The approval policy table is its own loader's configuration, not a config.yaml fragment.
+      if entry.file_name().is_some_and(|name| name == crate::approval_policy::TABLE_RELATIVE_FILENAME)
+        && entry.is_file()
+      {
+        continue;
+      }
       if entry.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".yaml")) && entry.is_file() {
         return Err(ConfigError(format!(
           "{} is not a config location: package fragment files live in config.d/ subdirectories; keys belong in \
@@ -875,6 +881,17 @@ mod tests {
     std::fs::write(home.path().join("config.d/stray.yaml"), "a: 1").unwrap();
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("stray.yaml is not a config location"), "{error}");
+  }
+
+  #[test]
+  fn the_approval_policy_table_is_not_a_stray_config_location() {
+    let home = home_with(VALID);
+    std::fs::create_dir(home.path().join("config.d")).unwrap();
+    std::fs::write(home.path().join("config.d/approval_policy.yaml"), "enable_ask_tier_refusal: false\n").unwrap();
+
+    let cfg = load(&home).expect("the approval policy table is not a stray config file");
+
+    assert_eq!(cfg.server.host, "127.0.0.1");
   }
 
   #[test]

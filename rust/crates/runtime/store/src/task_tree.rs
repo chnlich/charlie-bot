@@ -253,6 +253,12 @@ pub struct TaskTreeRow {
   pub running_descendant_count: usize,
 }
 
+/// One page of a parent's child rows, and whether a further matching row follows them.
+pub struct TaskTreePage {
+  pub rows: Vec<TaskTreeRow>,
+  pub has_more: bool,
+}
+
 /// A shared task-tree index snapshot for read-only projections.
 #[derive(Clone)]
 pub struct TaskTreeSnapshot {
@@ -948,19 +954,26 @@ impl Store {
     Ok(TaskTreeSnapshot { index: self.tree_index()? })
   }
 
-  /// The rows of one parent's children, in the snapshot's order, with an archived row that has running work kept.
+  /// One page of one parent's children, in the snapshot's order, with an archived row that has running work kept.
   ///
   /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to
   /// that work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived
   /// parent keeps that parent's child page visible; the row still reports `archived`.
   ///
+  /// `after` is the `(created_at, session_id)` of the previous page's last row, and `limit` is the page size. The page
+  /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list: on a home
+  /// whose root holds thousands of sessions, the whole list costs about 5 microseconds per row, so a 100-row page of
+  /// 7,160 rows paid for the 7,060 it truncated away.
+  ///
   /// The rows are computed under `tree_rows_lock`, as Python's `_tree_rows_lock` serializes its page computations.
-  pub fn task_tree_rows(
+  pub fn task_tree_page(
     &self,
     snapshot: &TaskTreeSnapshot,
     parent_id: Option<&str>,
     include_archived: bool,
-  ) -> StoreResult<Vec<TaskTreeRow>> {
+    after: Option<(UtcDateTime, &str)>,
+    limit: usize,
+  ) -> StoreResult<TaskTreePage> {
     let _computing = self.tree_rows_lock.lock().expect("tree rows lock is not poisoned");
     #[cfg(test)]
     {
@@ -970,15 +983,23 @@ impl Store {
       }
     }
     let mut reads = NodeReads::new(self);
-    let mut rows = Vec::with_capacity(snapshot.child_ids(parent_id).len());
+    let mut rows = Vec::new();
     for session_id in snapshot.child_ids(parent_id) {
+      if let Some((after_time, after_id)) = after
+        && (snapshot.meta(session_id)?.created_at, session_id.as_str()) <= (after_time, after_id)
+      {
+        continue;
+      }
       let row = self.tree_row(&snapshot.index, &mut reads, session_id)?;
       if !include_archived && row.archived && row.work_state != "running" && row.running_descendant_count == 0 {
         continue;
       }
+      if rows.len() == limit {
+        return Ok(TaskTreePage { rows, has_more: true });
+      }
       rows.push(row);
     }
-    Ok(rows)
+    Ok(TaskTreePage { rows, has_more: false })
   }
 
   fn tree_row(&self, index: &TreeIndex, reads: &mut NodeReads, session_id: &str) -> StoreResult<TaskTreeRow> {
@@ -4142,7 +4163,8 @@ pub(crate) mod tests {
     for session_id in [&root.id, &mid.id, &worker.id] {
       store.clear_chat_events_cache(session_id);
     }
-    let before = store.task_tree_rows(&store.task_tree_snapshot().unwrap(), Some(&root.id), true).unwrap();
+    let before =
+      store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap().rows;
     assert_eq!(before[0].open_descendant_count, 1);
 
     let (paused_tx, paused_rx) = std::sync::mpsc::channel();
@@ -4162,7 +4184,7 @@ pub(crate) mod tests {
     let root_id = root.id.clone();
     let rows = tokio::task::spawn_blocking(move || -> StoreResult<Vec<TaskTreeRow>> {
       let snapshot = reader.task_tree_snapshot()?;
-      reader.task_tree_rows(&snapshot, Some(&root_id), true)
+      Ok(reader.task_tree_page(&snapshot, Some(&root_id), true, None, 100)?.rows)
     });
     let paused_seen =
       tokio::task::spawn_blocking(move || paused_rx.recv_timeout(Duration::from_secs(1)).is_ok()).await.unwrap();
@@ -4172,7 +4194,8 @@ pub(crate) mod tests {
     let during = rows.await.unwrap().unwrap();
     *store.identity_hook.lock().unwrap() = None;
 
-    let after = store.task_tree_rows(&store.task_tree_snapshot().unwrap(), Some(&root.id), true).unwrap();
+    let after =
+      store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap().rows;
     assert_eq!(after[0].open_descendant_count, 0);
     let expected = if stage == IdentityStage::AfterStat { &before } else { &after };
     assert_eq!(&during, expected);
@@ -4215,7 +4238,7 @@ pub(crate) mod tests {
         let store = Arc::clone(&store);
         let snapshot = snapshot.clone();
         let root_id = root.id.clone();
-        tokio::task::spawn_blocking(move || store.task_tree_rows(&snapshot, Some(&root_id), true))
+        tokio::task::spawn_blocking(move || store.task_tree_page(&snapshot, Some(&root_id), true, None, 100))
       })
       .collect();
     for computation in computations {

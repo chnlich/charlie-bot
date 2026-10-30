@@ -34,7 +34,6 @@ charliebot-discord.workspace = true
 charliebot-slack.workspace = true
 charliebot-web-reply.workspace = true
 flate2.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

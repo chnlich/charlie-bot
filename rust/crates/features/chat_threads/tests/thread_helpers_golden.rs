@@ -6,34 +6,10 @@ use charliebot_chat_threads::thread_entry::{
   follow_floor, follow_wake_label, lost_summons, newest_thread_input, noticed, nudged, operator_only_note, replied,
   unread_after,
 };
+use charliebot_discord::thread_contract::DISCORD;
+use charliebot_slack::thread_contract::SLACK;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
-
-#[allow(dead_code)]
-#[path = "../../slack/src/event_types.rs"]
-mod slack_event_types;
-
-#[allow(dead_code)]
-#[path = "../../discord/src/event_types.rs"]
-mod discord_event_types;
-
-#[allow(dead_code)]
-mod event_types {
-  pub use crate::discord_event_types::DISCORD_REPLY;
-  pub use crate::slack_event_types::SLACK_REPLY;
-}
-
-#[allow(dead_code)]
-#[path = "../../slack/src/metadata.rs"]
-mod metadata;
-
-#[allow(dead_code)]
-#[path = "../../slack/src/thread_contract.rs"]
-mod slack_thread_contract;
-
-#[allow(dead_code)]
-#[path = "../../discord/src/thread_contract.rs"]
-mod discord_thread_contract;
 
 struct Message {
   id: String,
@@ -166,8 +142,8 @@ fn refusal(error: &ThreadReplyError) -> Value {
 
 fn platform_of(case: &Value) -> &'static ThreadPlatform {
   match str_of(case, "platform") {
-    "slack" => &slack_thread_contract::SLACK,
-    "discord" => &discord_thread_contract::DISCORD,
+    "slack" => &SLACK,
+    "discord" => &DISCORD,
     other => panic!("unknown recorded platform {other:?}"),
   }
 }

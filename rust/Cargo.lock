@@ -914,6 +914,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-improve-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "charliebot-memory"
 version = "0.1.0"
 dependencies = [

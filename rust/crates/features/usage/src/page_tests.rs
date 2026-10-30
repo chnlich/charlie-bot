@@ -372,7 +372,7 @@ fn per_source_tiles_count_attributed_accounts() {
 }
 
 #[test]
-fn in_unsplit_carries_into_the_payload_the_table_column_and_the_hero() {
+fn in_unsplit_carries_into_the_payload_row() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
   let rows = vec![row(CC, "claude-sonnet-4", [7, 3, 11, 5, 4], vec![])];
@@ -380,8 +380,6 @@ fn in_unsplit_carries_into_the_payload_the_table_column_and_the_hero() {
   let payload = payload_rows(&context);
   assert_eq!(payload[0]["in_unsplit"], json!(5));
   assert_eq!(payload[0]["total"], json!(30));
-  assert_eq!(context["ctx"]["tot_compact"], json!(compact(Count::Int(30))));
-  assert_eq!(context["ctx"]["in_compact"], json!(compact(Count::Int(26))));
 }
 
 #[tokio::test]
@@ -630,7 +628,6 @@ fn the_window_spans_the_first_and_last_stamps() {
   let context = context_of(&features, vec![early, late]);
   assert_eq!(context["ctx"]["rows"][0]["window"], json!("2026-02-01 → 2026-02-09"));
   assert_eq!(context["window"], json!(["2026-01-05", "2026-02-09"]));
-  assert_eq!(context["window_str"], json!("2026-01-05 → 2026-02-09"));
 }
 
 #[tokio::test]

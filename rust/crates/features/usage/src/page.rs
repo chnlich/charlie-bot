@@ -137,25 +137,12 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
   let rows = Value::Array(merged.iter().map(PageRow::to_json).collect());
   let week_rows = Value::Array(week_merged.iter().map(PageRow::to_json).collect());
   let (window_first, window_last) = window(&read.rows)?;
-  let window_str = if read.rows.is_empty() { String::new() } else { format!("{window_first} → {window_last}") };
   let week_top = page_rows::first_max_by(week_merged.as_slice(), |row| row.output);
   let per_src = per_source(read, registry, &cards, &tot)?;
   let ctx = json!({
     "rows": rows.clone(),
-    "tot_compact": compact(tot.total),
-    "tot_exact": group_thousands(tot.total),
-    "in_compact": compact(tot
-      .in_fresh
-      .add(tot.cache_write, "page input tokens")?
-      .add(tot.cache_read, "page input tokens")?
-      .add(tot.in_unsplit, "page input tokens")?),
     "out_compact": compact(tot.output),
     "out_exact": group_thousands(tot.output),
-    "cr_compact": compact(tot.cache_read),
-    "cw_compact": compact(tot.cache_write),
-    "fresh_compact": compact(tot.in_fresh),
-    "fresh_percent": percent(tot.in_fresh, tot.total),
-    "out_share": ratio(tot.output, tot.total),
     "per_src": per_src,
     "usage_sources": cards.iter().map(|card| card.name).collect::<Vec<_>>(),
     "tot_calls": group_thousands(Count::Int(tot.calls)),
@@ -166,7 +153,6 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
     "ctx": ctx,
     "payload": text_repr::json_dumps(&json!({"rows": rows, "week": week_rows}), &PAYLOAD_JSON),
     "window": [window_first, window_last],
-    "window_str": window_str,
     "cache_share": percent(tot.cache_read, tot.total),
     "generated": pacific::stamp(read.now)?,
     "as_of": as_of(read.last_capture)?,
@@ -215,9 +201,8 @@ fn change(current: Count, previous: Count) -> Value {
   }
 }
 
-/// The tiles of `_token_usage_context`: each card's attributed total, output, distinct models and share of the page
-/// total, and its source's native start. An account attributes to the card that ran its call, so every token lands in
-/// one tile.
+/// The tiles of `_token_usage_context`: each card's attributed total, distinct models and share of the page total, and
+/// its source's native start. An account attributes to the card that ran its call, so every token lands in one tile.
 fn per_source(
   read: &LedgerRead,
   registry: &Registry,
@@ -232,7 +217,6 @@ fn per_source(
       let bucket =
         sums.get_mut(source.as_str()).with_context(|| format!("usage source {source:?} is not a card of the page"))?;
       bucket.total = bucket.total.add(account.total, "usage source total")?;
-      bucket.output = bucket.output.add(account.output, "usage source output")?;
       bucket.models.insert(canonical.clone());
     }
   }
@@ -247,7 +231,6 @@ fn per_source(
       json!({
         "total": page_rows::count_json(bucket.total),
         "t_comp": compact(bucket.total),
-        "output": page_rows::count_json(bucket.output),
         "models": bucket.models.len(),
         "share": percent(bucket.total, tot.total),
         "native_start": read.native_starts.get(ledger_source).map_or("", String::as_str),
@@ -261,7 +244,6 @@ fn per_source(
 #[derive(Default)]
 struct Bucket {
   total: Count,
-  output: Count,
   models: BTreeSet<String>,
 }
 

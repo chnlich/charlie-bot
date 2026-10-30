@@ -675,6 +675,10 @@ test('a For-you panel survives the Everything round trip, and closing it drops t
 
   rig.engine.setView('foryou');
   settle(rig.timers);
+  assert.equal(rig.root.querySelectorAll('.round-buttons').length, 1,
+      'the return puts the one group back, in the bubble');
+  assert.equal(replyOfGroup(roundGroupFor(rig.root, 701)), replyNode,
+      'the group rides the reply bubble again');
   const slotBack = replyNode.nextElementSibling;
   assert.equal(slotBack, slot, 'the cached slot returns with the reply');
   assert.ok(slotBack.querySelector('.explain-panel'), 'the panel is still open');

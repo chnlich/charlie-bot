@@ -690,7 +690,7 @@ impl TriggerManager {
     let groups = wait_groups(&trigger.watch_targets);
     if groups.is_empty() {
       sleep(remaining_until(trigger.fire_at)).await;
-      return Ok(WaitOutcome { reason: "timeout".to_string(), finished: Vec::new(), still_alive: Vec::new() });
+      return Ok(WaitOutcome { reason: WaitReason::Timeout, finished: Vec::new(), still_alive: Vec::new() });
     }
     let waits = groups.into_iter().map(|group| async move {
       match group {
@@ -707,8 +707,8 @@ impl TriggerManager {
       finished.extend(group_finished);
       still_alive.extend(group_alive);
     }
-    let reason = if still_alive.is_empty() { "completed" } else { "timeout" };
-    Ok(WaitOutcome { reason: reason.to_string(), finished, still_alive })
+    let reason = if still_alive.is_empty() { WaitReason::Completed } else { WaitReason::Timeout };
+    Ok(WaitOutcome { reason, finished, still_alive })
   }
 
   async fn watch_dormancy(&self, session_id: &str) -> anyhow::Result<String> {
@@ -739,7 +739,7 @@ impl TriggerManager {
         "[Scheduled trigger fired | {}] {}{}",
         outcome.reason,
         fresh.message,
-        format_suffix(&outcome.reason, &outcome.finished, &outcome.still_alive)
+        format_suffix(outcome.reason, &outcome.finished, &outcome.still_alive)
       )
     };
     if self.features.store.load_meta(&fresh.session_id).await?.is_none() {
@@ -751,7 +751,7 @@ impl TriggerManager {
       return Ok(());
     }
     self.fire_task_tree(&mut fresh, &message).await?;
-    self.stamp_fired(&mut fresh, &outcome.reason).await?;
+    self.stamp_fired(&mut fresh, outcome.reason).await?;
     Ok(())
   }
 
@@ -813,7 +813,7 @@ impl TriggerManager {
     Ok(())
   }
 
-  async fn stamp_fired(&self, trigger: &mut PendingTrigger, reason: &str) -> anyhow::Result<()> {
+  async fn stamp_fired(&self, trigger: &mut PendingTrigger, reason: WaitReason) -> anyhow::Result<()> {
     trigger.status = TriggerStatus::Fired;
     trigger.fired_at = Some(UtcDateTime::now());
     trigger.fire_reason = Some(reason.to_string());
@@ -823,7 +823,7 @@ impl TriggerManager {
       target: "charliebot_triggers",
       trigger_id = %trigger.id,
       session = %trigger.session_id,
-      reason,
+      reason = %reason,
       "trigger_fired"
     );
     Ok(())
@@ -1066,8 +1066,26 @@ impl TriggerManager {
   }
 }
 
+/// Why a trigger's wait ended: every watched target finished, or the deadline came first.
+///
+/// `Display` writes the word that `fire_reason` carries in the trigger file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WaitReason {
+  Completed,
+  Timeout,
+}
+
+impl std::fmt::Display for WaitReason {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(match self {
+      Self::Completed => "completed",
+      Self::Timeout => "timeout",
+    })
+  }
+}
+
 struct WaitOutcome {
-  reason: String,
+  reason: WaitReason,
   finished: Vec<String>,
   still_alive: Vec<String>,
 }
@@ -1122,7 +1140,7 @@ fn local_pid(target: &WatchTarget) -> Option<LocalPid> {
     WatchTarget::LocalPid { pid, exit_file, log } => {
       Some(LocalPid { kind: "local_pid".to_string(), pid: *pid, exit_file: exit_file.clone(), log: log.clone() })
     }
-    _ => None,
+    WatchTarget::RemotePid { .. } | WatchTarget::SlurmJob { .. } => None,
   }
 }
 
@@ -1135,7 +1153,7 @@ fn remote_pid(target: &WatchTarget) -> Option<RemotePid> {
       exit_file: exit_file.clone(),
       log: log.clone(),
     }),
-    _ => None,
+    WatchTarget::LocalPid { .. } | WatchTarget::SlurmJob { .. } => None,
   }
 }
 
@@ -1144,7 +1162,7 @@ fn slurm_job(target: &WatchTarget) -> Option<SlurmJob> {
     WatchTarget::SlurmJob { host, job_id } => {
       Some(SlurmJob { kind: "slurm_job".to_string(), host: host.clone(), job_id: *job_id })
     }
-    _ => None,
+    WatchTarget::LocalPid { .. } | WatchTarget::RemotePid { .. } => None,
   }
 }
 
@@ -1285,16 +1303,18 @@ fn slurm_label(host: Option<&str>, job_id: i64) -> String {
   host.map_or_else(|| format!("slurm:{job_id}"), |host| format!("{host}:slurm:{job_id}"))
 }
 
-fn format_suffix(reason: &str, finished: &[String], still_alive: &[String]) -> String {
+fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]) -> String {
   let finished_part = finished.join(", ");
-  if reason == "completed" {
-    return format!(" (finished: {finished_part})");
-  }
-  let alive_part = still_alive.join(", ");
-  if finished_part.is_empty() {
-    format!(" (still alive: {alive_part})")
-  } else {
-    format!(" (finished: {finished_part}; still alive: {alive_part})")
+  match reason {
+    WaitReason::Completed => format!(" (finished: {finished_part})"),
+    WaitReason::Timeout => {
+      let alive_part = still_alive.join(", ");
+      if finished_part.is_empty() {
+        format!(" (still alive: {alive_part})")
+      } else {
+        format!(" (finished: {finished_part}; still alive: {alive_part})")
+      }
+    }
   }
 }
 
@@ -2218,14 +2238,14 @@ mod tests {
   // Python: tests/test_trigger_remote_slurm_watch.py::test_remote_slurm_completes
   fn fire_suffix_matches_outcomes() {
     assert_eq!(
-      format_suffix("completed", &["slurm:123: COMPLETED 0:0".to_string()], &[]),
+      format_suffix(WaitReason::Completed, &["slurm:123: COMPLETED 0:0".to_string()], &[]),
       " (finished: slurm:123: COMPLETED 0:0)"
     );
     assert_eq!(
-      format_suffix("timeout", &["42".to_string()], &["synthetic-host:43".to_string()]),
+      format_suffix(WaitReason::Timeout, &["42".to_string()], &["synthetic-host:43".to_string()]),
       " (finished: 42; still alive: synthetic-host:43)"
     );
-    assert_eq!(format_suffix("timeout", &[], &["42".to_string()]), " (still alive: 42)");
+    assert_eq!(format_suffix(WaitReason::Timeout, &[], &["42".to_string()]), " (still alive: 42)");
   }
 
   struct NoopCompletion;

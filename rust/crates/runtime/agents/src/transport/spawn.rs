@@ -28,15 +28,13 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf};
 use tokio::sync::{oneshot, watch};
 
 use super::cgroup::{self, SessionCgroup, SessionCgroupConfig};
 use super::identity::{self, ProcessIdentity};
 
 const TURN_TREE_NICE: i32 = 10;
-const PUMP_CHUNK_BYTES: usize = 8192;
-const LOG_FLUSH_BYTES: usize = 64 * 1024;
 pub const STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 /// Read the trimmed final 64 KiB of a process's stderr file.
@@ -1105,67 +1103,6 @@ pub fn parse_backend_line(line: &[u8]) -> Option<Value> {
   }
 }
 
-/// Tee one async byte stream to a truncated log and retain its last 64 KB.
-pub async fn stream_stderr<R>(mut reader: R, log_path: Option<&Path>) -> io::Result<Vec<u8>>
-where
-  R: AsyncRead + Unpin,
-{
-  tee_stream(&mut reader, log_path, |_| {}).await
-}
-
-/// Pump chunks to an optional log and callback while retaining the final 64 KB.
-pub async fn tee_stream<R, F>(reader: &mut R, log_path: Option<&Path>, mut on_chunk: F) -> io::Result<Vec<u8>>
-where
-  R: AsyncRead + Unpin,
-  F: FnMut(&[u8]),
-{
-  let mut output = match log_path {
-    Some(path) => Some(tokio::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path).await?),
-    None => None,
-  };
-  let result: io::Result<Vec<u8>> = async {
-    let mut tail = Vec::with_capacity(STDERR_TAIL_BYTES);
-    let mut buffer = Vec::with_capacity(LOG_FLUSH_BYTES);
-    let mut chunk = vec![0; PUMP_CHUNK_BYTES];
-    loop {
-      let count = reader.read(&mut chunk).await?;
-      if count == 0 {
-        break;
-      }
-      let data = &chunk[..count];
-      on_chunk(data);
-      if let Some(output_file) = output.as_mut() {
-        buffer.extend_from_slice(data);
-        if buffer.len() >= LOG_FLUSH_BYTES || count < PUMP_CHUNK_BYTES {
-          output_file.write_all(&buffer).await?;
-          buffer.clear();
-        }
-      }
-      tail.extend_from_slice(data);
-      if tail.len() > STDERR_TAIL_BYTES {
-        let excess = tail.len() - STDERR_TAIL_BYTES;
-        tail.drain(..excess);
-      }
-    }
-    if !buffer.is_empty() {
-      output.as_mut().expect("log file exists when buffer is nonempty").write_all(&buffer).await?;
-    }
-    Ok(tail)
-  }
-  .await;
-  let flush_result = match output.as_mut() {
-    Some(output_file) => output_file.flush().await,
-    None => Ok(()),
-  };
-  match (result, flush_result) {
-    (Ok(tail), Ok(())) => Ok(tail),
-    (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-    (Err(error), Err(flush_error)) => {
-      Err(io::Error::new(error.kind(), format!("{error}; flushing the log also failed: {flush_error}")))
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use std::fs;
@@ -1545,23 +1482,6 @@ mod tests {
       super::super::kill::wait_or_kill_group(child.wait(), Some(Duration::from_millis(10)), pid, stderr_task).await;
     assert!(result.is_err());
     assert_eq!(super::super::kill::python_exit_code(child.wait().await.unwrap()), -libc::SIGKILL);
-  }
-
-  #[tokio::test]
-  async fn stderr_tee_keeps_only_the_last_64_kb() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("stderr.log");
-    for pass in 0..200 {
-      let tail_byte = !(pass as u8);
-      let mut input = vec![pass as u8; 32];
-      input.extend(vec![tail_byte; STDERR_TAIL_BYTES]);
-
-      let tail = stream_stderr(&input[..], Some(&path)).await.unwrap();
-      assert_eq!(tail, input[32..]);
-      assert_eq!(fs::metadata(&path).unwrap().len(), input.len() as u64);
-      let logged = fs::read(&path).unwrap();
-      assert_eq!(&logged[logged.len() - STDERR_TAIL_BYTES..], &input[32..]);
-    }
   }
 
   async fn shell(args: &[&str]) -> AgentChild {

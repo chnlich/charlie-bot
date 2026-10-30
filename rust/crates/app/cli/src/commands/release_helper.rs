@@ -1335,7 +1335,7 @@ mod tests {
   /// The location column of the cgroup events, from `crates/runtime/agents/src/transport/cgroup.rs`.
   const CGROUP_LOCATION: &str = "agents/transport/cgroup.rs:350";
   /// The location column of the server's startup events, from `crates/app/server/src/main.rs`.
-  const SERVER_LOCATION: &str = "main/main.rs:305";
+  const SERVER_LOCATION: &str = "server/main.rs:307";
 
   #[test]
   fn the_sweep_line_is_read_from_text_and_json_logs() {

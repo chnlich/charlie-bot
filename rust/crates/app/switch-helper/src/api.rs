@@ -260,7 +260,7 @@ mod tests {
     fs::write(
       &dir,
       concat!(
-        "2026-10-29 07:11:32.244Z [info     ] main/main.rs:305               server_ready                   ready_in_ms=1\n",
+        "2026-10-29 07:11:32.244Z [info     ] server/main.rs:307             server_ready                   ready_in_ms=1\n",
         "2026-10-29 07:11:33.000Z [info     ] tasks/recovery.rs:542          task_recovery_resume           run_id='r s'\n",
         // A release before the location column writes the text form without it, which a rollback switch restores.
         "2026-10-29 07:11:35.000Z [info     ] task_recovery_resume           run_id=past\n",

@@ -230,8 +230,8 @@ listed here:
 - Transport gzip uses zlib at level 1, and the Python server uses ISA-L at level 1. The headers and the
   decoded bytes match; the compressed bytes and their `content-length` differ.
 - Logs use the `logline` grammar, with UTC time and a source-location column. The Python server renders structlog's
-  console format, with local time and no location column. Event names and fields match. The Rust server adds `websocket_route_not_ported`,
-  `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
+  console format, with local time and no location column. Event names and fields match. The Rust server adds
+  `websocket_route_not_ported`, `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
   `crates/app/server/src/main.rs`.
 - YAML loads as YAML 1.2 (serde_yaml), and the Python server loads YAML 1.1 (PyYAML). Unquoted `yes`,
   `no`, `on` and `off` are strings here and booleans there.

@@ -1593,15 +1593,6 @@ impl Registry {
     self.turn_contributions.values().any(|contribution| contribution.claims_turn_end_unread(meta))
   }
 
-  /// The chat renderer of `event_type`, or `None` when no contribution renders it.
-  pub fn event_renderer(&self, event_type: &str) -> Option<EventRenderer> {
-    self
-      .turn_contributions
-      .values()
-      .flat_map(|contribution| contribution.event_renderers())
-      .find_map(|(known, renderer)| (known == event_type).then_some(renderer))
-  }
-
   /// Run every contribution's `before_turn` in registration order.
   pub async fn before_turn(
     &self,

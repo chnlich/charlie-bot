@@ -8,8 +8,6 @@ use serde_json::Value;
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip_golden.json");
 
 #[test]
-// Python: tests/test_trigger_pid_watch.py::test_trigger_file_without_exit_fields_still_loads
-// Python: all TriggerStatus and WatchTarget records in src/infra/models.py
 fn read_and_write_equal_trigger_records() {
   let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");

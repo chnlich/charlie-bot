@@ -1,4 +1,4 @@
-//! Delayed and watched task triggers (`src/runtime/triggers.py`).
+//! Delayed and watched task triggers.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -146,7 +146,7 @@ pub struct ScheduleTriggerRequest {
   pub watch_targets: Option<Vec<WatchTarget>>,
 }
 
-/// A trigger creation refusal with Python's route status mapping.
+/// A trigger creation refusal, with the status the schedule route answers for it.
 #[derive(Debug)]
 pub enum TriggerCreateError {
   /// A remote PID or SLURM verify-on-create probe refused the request.
@@ -955,7 +955,7 @@ impl TriggerManager {
     trigger: &PendingTrigger,
     targets: &[SlurmJob],
   ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    // Match Python's host-to-set grouping while retaining first-seen order (`src/runtime/triggers.py:1016-1030`).
+    // One wait group per host, in first-seen order; a job id repeated under a host joins its group once.
     let mut groups: Vec<(Option<String>, Vec<i64>, HashSet<i64>)> = Vec::new();
     let mut group_indexes: HashMap<Option<String>, usize> = HashMap::new();
     for target in targets {
@@ -1245,7 +1245,7 @@ fn program_available(program: &str) -> bool {
 }
 
 fn program_available_on_path(program: &str, paths: Option<&OsStr>) -> bool {
-  // Python's `_SACCT_AVAILABLE` is a process-wide first-lookup memo (`src/runtime/triggers.py:186,504,1053-1058`).
+  // The availability answer is a process-wide memo: the first lookup decides it for every later caller.
   let key = program.to_string();
   let cache = PROGRAM_AVAILABILITY.get_or_init(|| StdMutex::new(HashMap::new()));
   let mut cached = cache.lock().expect("program availability cache mutex is not poisoned");
@@ -1817,7 +1817,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pending_limit.py::test_sixth_registration_raises_with_exact_detail
   async fn sixth_registration_returns_limit_detail() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1841,7 +1840,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pending_limit.py::test_concurrent_registrations_against_four_pending_create_exactly_one
   async fn concurrent_registrations_hold_one_create_slot() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1860,7 +1858,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pending_limit.py::test_slack_follow_rearm_succeeds_on_a_full_session
   async fn replacement_trigger_can_bypass_the_pending_limit() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1878,7 +1875,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pending_limit.py::test_fired_and_cancelled_records_do_not_count
   async fn fired_and_cancelled_records_do_not_count_toward_the_limit() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1897,7 +1893,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/triggers.py::recover_pending
   async fn recovery_starts_only_pending_trigger_waiters() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -1921,7 +1916,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pid_watch.py::test_pid_gone_immediate_fire
   async fn missing_local_pid_gets_the_gone_at_start_label() {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -1933,7 +1927,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pid_watch.py::test_timeout_before_pid_exit
   async fn local_pid_timeout_keeps_the_live_process() {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -1946,7 +1939,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pid_watch.py::test_finished_label_reads_the_exit_file
   async fn local_finished_label_reads_the_exit_file() {
     let (home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -1962,7 +1954,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pid_watch.py::test_finished_label_exit_file_missing_states_no_code
   async fn missing_local_exit_file_states_no_exit_code() {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -1976,7 +1967,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pid_watch.py::test_finished_label_both_fields_null_keeps_the_bare_pid
   async fn local_finished_label_without_exit_metadata_is_bare() {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -1985,20 +1975,17 @@ mod tests {
   }
 
   #[test]
-  // Python: tests/test_trigger_pid_watch.py::test_still_alive_at_timeout_carries_the_log
   fn still_alive_label_keeps_the_log_path() {
     assert_eq!(still_alive_label("42", Some("/synthetic/log")), "42, log /synthetic/log");
   }
 
   #[test]
-  // Python: tests/test_trigger_pid_watch.py::test_trigger_file_without_exit_fields_still_loads
   fn legacy_local_watch_target_loads_without_exit_fields() {
     let target: WatchTarget = serde_json::from_value(json!({ "kind": "local_pid", "pid": 42 })).expect("target");
     assert_eq!(target, WatchTarget::LocalPid { pid: 42, exit_file: None, log: None });
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_cli_accepts_mixed_kinds
   async fn schedule_route_accepts_mixed_watch_target_kinds() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2031,7 +2018,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_create_alive_persists
   async fn remote_pid_is_verified_before_its_trigger_is_saved() {
     let (home, features) = feature_context();
     let manager =
@@ -2046,7 +2032,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_create_dead_rejects
   async fn remote_pid_that_fails_verification_is_refused() {
     let (home, features) = feature_context();
     let manager =
@@ -2071,7 +2056,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_finished_label_reads_the_exit_file_over_ssh
   async fn remote_finished_label_reads_the_exit_file_over_ssh() {
     let (home, features) = feature_context();
     let manager =
@@ -2087,7 +2071,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_finished_label_exit_file_missing_states_no_code
   async fn remote_finished_label_names_a_missing_exit_file() {
     let (home, features) = feature_context();
     let manager =
@@ -2103,7 +2086,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_finished_label_both_fields_null_keeps_host_pid
   async fn remote_finished_label_without_exit_metadata_is_bare() {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -2118,7 +2100,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_still_alive_at_timeout_carries_the_log
   async fn remote_pid_timeout_keeps_its_log_path() {
     let (home, features) = feature_context();
     let manager =
@@ -2137,7 +2118,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_slurm_watch.py::test_remote_slurm_completes
   async fn remote_slurm_terminal_state_has_the_label() {
     let (home, features) = feature_context();
     let manager = fake_manager(
@@ -2154,7 +2134,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_slurm_watch.py::test_unreachable_host_fires_early_with_note
   async fn unreachable_remote_slurm_group_reports_its_probe_error() {
     let (home, features) = feature_context();
     let manager = fake_manager(
@@ -2171,7 +2150,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_slurm_watch.py::test_slurm_single_job_terminal_state
   async fn local_slurm_terminal_state_has_the_label() {
     let (home, features) = feature_context();
     let manager = fake_manager(
@@ -2188,7 +2166,6 @@ mod tests {
   }
 
   #[test]
-  // Python: tests/test_trigger_remote_watch.py::test_cli_accepts_mixed_kinds
   fn mixed_watch_groups_keep_the_first_seen_kind_order() {
     let targets = [
       WatchTarget::SlurmJob { host: None, job_id: 789 },
@@ -2204,7 +2181,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_slurm_watch.py::test_no_sacct_host_slurm_create_fails
   async fn local_slurm_creation_fails_when_sacct_is_missing() {
     let (home, features) = feature_context();
     let bin = home.path().join("fake-bin");
@@ -2235,7 +2211,6 @@ mod tests {
   }
 
   #[test]
-  // Python: tests/test_trigger_remote_slurm_watch.py::test_remote_slurm_completes
   fn fire_suffix_matches_outcomes() {
     assert_eq!(
       format_suffix(WaitReason::Completed, &["slurm:123: COMPLETED 0:0".to_string()], &[]),
@@ -2323,7 +2298,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_task_tree.py::test_trigger_admits_one_durable_input_to_task_tree_node
   async fn fire_admits_one_durable_scheduled_input_before_stamping_fired() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2351,7 +2325,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_succession.py::test_trigger_master_dispatches_the_input_a_task_node_already_holds
   async fn master_wake_reuses_an_existing_stable_input() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2382,7 +2355,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_archive_triggers.py::test_create_trigger_on_an_archived_task_node_is_refused
   async fn archived_session_refuses_trigger_creation_without_writing_a_record() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2397,7 +2369,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_archive_triggers.py::test_create_trigger_on_an_archived_task_node_is_refused
   async fn archived_task_with_a_session_successor_still_refuses_trigger_creation() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2420,7 +2391,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_archive_triggers.py::test_fire_time_backstop_cancels_with_the_archived_reason
   async fn fire_time_backstop_cancels_an_archived_target() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2441,7 +2411,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_archive_triggers.py::test_watchdog_reason_carries_into_the_cancel
   async fn dormancy_watchdog_carries_its_reason_to_the_cancel_record() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2458,7 +2427,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_pending_limit.py::test_api_returns_422_with_exact_detail_and_cli_exits_2
   async fn schedule_route_maps_the_pending_limit_to_422() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2487,7 +2455,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_archive_triggers.py::test_create_trigger_on_an_archived_task_node_is_refused
   async fn schedule_route_maps_archived_target_to_422() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2509,7 +2476,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_trigger_remote_watch.py::test_remote_create_dead_rejects
   async fn schedule_route_maps_remote_verification_refusal_to_422() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2532,7 +2498,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/api/internal.py::schedule_trigger
   async fn schedule_route_returns_trigger_id_and_fire_at() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2554,7 +2519,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/api/internal.py::schedule_trigger (deps.require_found)
   async fn schedule_route_returns_404_for_a_missing_session() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2571,7 +2535,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/api/internal.py::schedule_trigger (watch_targets validation)
   async fn schedule_route_returns_400_for_empty_targets_and_nonpositive_ids() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2597,7 +2560,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_schedule_trigger_cmd.py::route request validation contract
   async fn schedule_route_keeps_422_validation_type_and_location() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2628,7 +2590,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_schedule_trigger_cmd.py::route request validation contract
   async fn schedule_route_reports_member_and_field_errors_in_pydantic_order() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2648,7 +2609,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: tests/test_schedule_trigger_cmd.py::route request validation contract
   async fn schedule_route_names_the_variant_of_a_bad_member_field() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2677,7 +2637,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/api/internal.py::schedule_trigger (member extra keys are dropped by model_dump)
   async fn schedule_route_drops_an_undeclared_member_key_from_the_trigger_file() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2702,7 +2661,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/triggers.py::create_trigger (timedelta overflows past the 64-bit range, after the 404)
   async fn schedule_route_answers_500_for_an_integer_past_the_64_bit_range() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2722,7 +2680,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/api/internal.py::cancel_trigger
   async fn cancel_route_returns_not_found_and_success_answers() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2751,7 +2708,6 @@ mod tests {
   }
 
   #[tokio::test]
-  // Python: src/runtime/api/internal.py::schedule_trigger (remote SLURM watch_probe)
   async fn schedule_route_returns_observed_remote_slurm_state() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);

@@ -230,12 +230,19 @@
       });
     }
 
+    // The header count names the rows on screen: the filter's result, and the
+    // singular noun for a lone event.
+    function updateEventCount(count) {
+      document.getElementById('event-count').textContent = `${count} ${count === 1 ? 'event' : 'events'}`;
+    }
+
     function filterEvents() {
       const q = document.getElementById('type-filter').value.trim().toLowerCase();
       const filtered = q
         ? allEvents.filter(ev => (ev.type || '').toLowerCase().includes(q))
         : allEvents;
       renderEvents(filtered);
+      updateEventCount(filtered.length);
       applyExpandAll();
     }
 
@@ -274,7 +281,6 @@
         });
 
         document.getElementById('loading').classList.add('hidden');
-        document.getElementById('event-count').textContent = `${allEvents.length} events`;
         filterEvents();
       } catch (err) {
         document.getElementById('loading').classList.add('hidden');

@@ -111,27 +111,25 @@ fn parse_charref(input: &str, amp: usize) -> Option<(usize, String)> {
   Some((end, unchanged))
 }
 
-fn numeric_reference(input: &str, amp: usize) -> Option<(usize, String, u32)> {
-  let digits_start = amp + 2;
-  let after_hash = input.get(digits_start..)?;
-  let (digits_start, radix, is_valid_digit): (usize, u32, fn(u8) -> bool) =
-    if matches!(after_hash.chars().next(), Some('x' | 'X')) {
-      (digits_start + 1, 16, is_ascii_hex_digit)
-    } else {
-      (digits_start, 10, is_ascii_digit)
-    };
+/// The digits of a numeric character reference whose `&#` ends at `after_hash`: an `x` or `X` there selects hex
+/// digits, the reference carries at least one, and a reference without a digit yields `None`. Returns the first
+/// digit's index, the index after the last digit, and the radix.
+fn numeric_digits(input: &str, after_hash: usize) -> Option<(usize, usize, u32)> {
   let bytes = input.as_bytes();
-  let mut end = digits_start;
-  while end < bytes.len() && is_valid_digit(bytes[end]) {
+  let hex = matches!(bytes.get(after_hash), Some(b'x' | b'X'));
+  let is_digit: fn(u8) -> bool = if hex { |byte| byte.is_ascii_hexdigit() } else { |byte| byte.is_ascii_digit() };
+  let start = if hex { after_hash + 1 } else { after_hash };
+  let mut end = start;
+  while end < bytes.len() && is_digit(bytes[end]) {
     end += 1;
   }
-  if end == digits_start {
-    return None;
-  }
-  if bytes.get(end) == Some(&b';') {
-    end += 1;
-  }
-  Some((end, input[digits_start..end].trim_end_matches(';').to_owned(), radix))
+  (end > start).then_some((start, end, if hex { 16 } else { 10 }))
+}
+
+fn numeric_reference(input: &str, amp: usize) -> Option<(usize, String, u32)> {
+  let (digits_start, digits_end, radix) = numeric_digits(input, amp + 2)?;
+  let end = if input.as_bytes().get(digits_end) == Some(&b';') { digits_end + 1 } else { digits_end };
+  Some((end, input[digits_start..digits_end].to_owned(), radix))
 }
 
 fn numeric_replacement(digits: &str, radix: u32) -> String {
@@ -199,30 +197,11 @@ fn is_unescape_name_boundary(ch: char) -> bool {
   matches!(ch, '\t' | '\n' | '\u{c}' | ' ' | '<' | '&' | '#' | ';')
 }
 
-fn is_ascii_hex_digit(byte: u8) -> bool {
-  byte.is_ascii_hexdigit()
-}
-
-fn is_ascii_digit(byte: u8) -> bool {
-  byte.is_ascii_digit()
-}
-
 fn attribute_reference(input: &str, amp: usize) -> Option<(usize, String)> {
   let mut end = amp + 1;
   let bytes = input.as_bytes();
   if bytes.get(end) == Some(&b'#') {
-    end += 1;
-    let radix_hex = matches!(bytes.get(end), Some(b'x' | b'X'));
-    if radix_hex {
-      end += 1;
-    }
-    let digit_start = end;
-    while end < bytes.len() && if radix_hex { is_ascii_hex_digit(bytes[end]) } else { bytes[end].is_ascii_digit() } {
-      end += 1;
-    }
-    if end == digit_start {
-      return None;
-    }
+    end = numeric_digits(input, end + 1)?.1;
   } else if bytes.get(end).is_some_and(u8::is_ascii_alphabetic) {
     end += 1;
     while end < bytes.len() && bytes[end].is_ascii_alphanumeric() {
@@ -239,12 +218,20 @@ fn attribute_reference(input: &str, amp: usize) -> Option<(usize, String)> {
 
 #[cfg(test)]
 mod tests {
-  use super::escape;
+  use super::{escape, unescape_attribute};
 
   #[test]
   fn escape_leaves_slashes_as_html_escape_does() {
     // A diff path is full of slashes, and `html.escape` leaves them as they are under either quote setting.
     assert_eq!(escape("src/app/a.py", true), "src/app/a.py");
     assert_eq!(escape("src/app/a.py", false), "src/app/a.py");
+  }
+
+  #[test]
+  fn an_attribute_reference_ends_at_semicolon_or_equals() {
+    // A numeric reference decodes past either terminator, while a named one ending in `=` stays whole.
+    assert_eq!(unescape_attribute("&#38="), "&=");
+    assert_eq!(unescape_attribute("&#38;"), "&");
+    assert_eq!(unescape_attribute("&amp="), "&amp=");
   }
 }

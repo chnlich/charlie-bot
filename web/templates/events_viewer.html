@@ -128,6 +128,64 @@
     let expandAll = false;
 
     // -------------------------------------------------------------------------
+    // Row summary
+    // -------------------------------------------------------------------------
+    // A row previews its event on one line: the string content, the description, or the first
+    // message block that carries text — a typed answer, a tool call, or a tool result. A tool
+    // call or a tool result otherwise shows its badges alone, so a reader cannot tell what ran.
+    const PREVIEW_CHARS = 120;
+
+    function toolResultText(content) {
+      if (typeof content === 'string') return content;
+      if (!Array.isArray(content)) return '';
+      return content.filter(b => b && b.type === 'text' && b.text).map(b => b.text).join(' ');
+    }
+
+    function blockSummary(block) {
+      if (!block || typeof block !== 'object') return '';
+      if (block.type === 'text') return block.text || '';
+      if (block.type === 'tool_use') {
+        const input = block.input === undefined ? '' : JSON.stringify(block.input);
+        return [block.name || 'tool', input].filter(Boolean).join(' ');
+      }
+      if (block.type === 'tool_result') return toolResultText(block.content);
+      return '';
+    }
+
+    function summaryText(ev) {
+      if (typeof ev.content === 'string') return ev.content;
+      if (typeof ev.description === 'string') return ev.description;
+      const blocks = ev.message && Array.isArray(ev.message.content) ? ev.message.content : [];
+      for (const block of blocks) {
+        const text = blockSummary(block);
+        if (text) return text;
+      }
+      return '';
+    }
+
+    // The one-line preview: whitespace collapsed, cut at PREVIEW_CHARS with an ellipsis so a cut
+    // preview reads as cut rather than as the event's whole text.
+    function previewText(ev) {
+      const text = summaryText(ev).replace(/\s+/g, ' ').trim();
+      return text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS) + '…' : text;
+    }
+
+    // The event's time: a `ts` epoch in seconds, or the ISO `timestamp` most event types write.
+    function eventTime(ev) {
+      if (typeof ev.ts === 'number') return new Date(ev.ts * 1000);
+      if (typeof ev.timestamp === 'string') {
+        const parsed = new Date(ev.timestamp);
+        if (!Number.isNaN(parsed.getTime())) return parsed;
+      }
+      return null;
+    }
+
+    function timeText(time) {
+      const pad = n => String(n).padStart(2, '0');
+      return `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
+    }
+
+    // -------------------------------------------------------------------------
     // Render
     // -------------------------------------------------------------------------
     function renderEvents(events) {
@@ -147,30 +205,21 @@
 
         const type = ev.type || 'unknown';
         const badgeCls = badgeStyle(type);
-        const ts = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString('en-US') : '';
-
-        // Summary line: pick a useful one-liner
-        let summary = '';
-        if (ev.content && typeof ev.content === 'string') {
-          summary = ev.content.substring(0, 120);
-        } else if (ev.description) {
-          summary = ev.description.substring(0, 120);
-        } else if (ev.message && ev.message.content) {
-          const blocks = Array.isArray(ev.message.content) ? ev.message.content : [];
-          const textBlock = blocks.find(b => b.type === 'text');
-          if (textBlock) summary = (textBlock.text || '').substring(0, 120);
-        }
+        const time = eventTime(ev);
+        const summary = previewText(ev);
 
         row.innerHTML = `
           <div class="flex items-center gap-2 min-w-0">
             <span class="text-xs font-mono text-slate-600 w-8 flex-shrink-0 text-right">${idx + 1}</span>
             <span class="text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
-            ${ts ? `<span class="text-xs text-slate-600 flex-shrink-0 font-mono">${ts}</span>` : ''}
-            ${summary ? `<span class="text-xs text-slate-400 truncate">${escapeHtml(summary)}</span>` : ''}
+            ${time ? `<span class="text-xs text-slate-600 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
+            <span class="event-preview text-xs text-slate-400 truncate"></span>
           </div>
           <div class="json-body ${expandAll ? '' : 'hidden'} mt-2 ml-10">
             <pre class="text-xs bg-slate-800 rounded p-3 overflow-x-auto leading-5">${syntaxHighlight(ev)}</pre>
           </div>`;
+        // A preview is a tool's input or output, so it enters the row as text and never as markup.
+        row.querySelector('.event-preview').textContent = summary;
 
         row.addEventListener('click', () => {
           const body = row.querySelector('.json-body');

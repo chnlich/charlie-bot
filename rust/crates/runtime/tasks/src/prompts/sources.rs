@@ -40,7 +40,7 @@ pub struct RuleInputs<'a> {
   pub node_ref: Option<&'a str>,
 }
 
-/// A declared model overlay that could not be read. The launch raises an alert with [`Self::python_class_name`] and
+/// A declared model overlay that could not be read. The launch raises an alert with [`Self::class_name`] and
 /// runs without the overlay.
 #[derive(Debug)]
 pub struct OverlayError {
@@ -50,8 +50,8 @@ pub struct OverlayError {
 
 impl OverlayError {
   /// The Python exception class the read raised, by name (`type(error).__name__`).
-  pub fn python_class_name(&self) -> &'static str {
-    self.cause.python_class_name()
+  pub fn class_name(&self) -> &'static str {
+    self.cause.class_name()
   }
 }
 
@@ -122,7 +122,7 @@ pub fn read_local_rule_body(
 /// Reads one managed source file. A missing or unreadable file is a named error that says why.
 fn read_source_file(path: &Path, what: &str) -> anyhow::Result<String> {
   spawner_prompt::read_text(path).map_err(|error| {
-    TaskPromptError::new(format!("{what} is unavailable: {} ({})", path.display(), error.python_message(path))).into()
+    TaskPromptError::new(format!("{what} is unavailable: {} ({})", path.display(), error.error_text(path))).into()
   })
 }
 

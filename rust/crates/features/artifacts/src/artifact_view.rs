@@ -227,7 +227,7 @@ mod tests {
   }
 
   #[test]
-  fn ui_injection_matches_the_python_splice_and_append_rules() {
+  fn ui_injection_matches_the_splice_and_append_rules() {
     let tags = "<script>window.__cbcServerSessionId=\"S\";</script>\n<script src=/static/js/comment_post.js?v=v1></script>\n<script src=/static/features/artifacts/artifact-comments.js?v=v2></script>";
     assert_eq!(
       inject_artifact_ui("<body>one</body>tail</body>", "S", "v1", "v2"),
@@ -237,7 +237,7 @@ mod tests {
   }
 
   #[test]
-  fn injected_script_keeps_python_json_ascii_escapes_for_unicode_session_ids() {
+  fn injected_script_keeps_json_ascii_escapes_for_unicode_session_ids() {
     let html = inject_artifact_ui("<body>page</body>", "计划😀", "v1", "v2");
 
     assert!(html.contains(r#"window.__cbcServerSessionId="\u8ba1\u5212\ud83d\ude00";"#));
@@ -332,7 +332,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn invalid_and_missing_diff_bases_keep_their_python_status_and_details() {
+  async fn invalid_and_missing_diff_bases_keep_their_status_and_details() {
     let (home, features) = features();
     let target = home.path().join("sessions/S/artifacts/plan.html");
     write_page(&target, "<body>Plan</body>");

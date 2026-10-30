@@ -132,7 +132,7 @@ mod tests {
   }
 
   #[test]
-  fn default_backend_check_matches_python_backend_ids() {
+  fn default_backend_check_matches_backend_ids() {
     let home = tempfile::tempdir().expect("make an isolated config home");
     std::fs::write(
       home.path().join("config.yaml"),

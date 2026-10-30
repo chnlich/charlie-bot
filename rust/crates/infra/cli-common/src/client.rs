@@ -73,7 +73,7 @@ pub fn call_api(
   let url = build_url(&ctx.base_url, &call.endpoint, call.params.as_deref());
   // `json.dumps(payload)` defaults: the request body escapes non-ASCII and uses `", "`/`": "`.
   let body = call.payload.as_ref().map(|payload| {
-    charliebot_core::text_repr::json_dumps(payload, &charliebot_core::text_repr::PYTHON_JSON_DEFAULT).into_bytes()
+    charliebot_core::text_repr::json_dumps(payload, &charliebot_core::text_repr::DEFAULT_JSON).into_bytes()
   });
   let mut headers = ctx.headers.clone();
   if body.is_some() {

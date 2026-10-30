@@ -16,11 +16,11 @@ use anyhow::{Context, bail};
 use charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
-use charliebot_core::text_repr;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr;
 use charliebot_registry::usage::{CategoryResult, SessionFacts, SweepScope};
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{UtcDateTime, read_metadata_python};
+use charliebot_store::metadata::{UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME,
@@ -141,8 +141,7 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
       continue;
     }
     let id = session_dir.file_name().expect("a directory entry has a name").to_string_lossy().into_owned();
-    let Some(meta) = read_metadata_python(&session_dir.join(SESSION_METADATA_NAME), "storage_cool_meta_read_failed")?
-    else {
+    let Some(meta) = read_metadata(&session_dir.join(SESSION_METADATA_NAME), "storage_cool_meta_read_failed")? else {
       continue;
     };
     let Value::Object(meta) = meta else {
@@ -165,10 +164,10 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
     return false;
   }
   // `if not raw_updated` drops the falsy values before `str()` reads the rest.
-  let Some(raw_updated) = meta.get("updated_at").filter(|value| text_repr::python_truthy(value)) else {
+  let Some(raw_updated) = meta.get("updated_at").filter(|value| text_repr::is_truthy(value)) else {
     return false;
   };
-  let Some(updated_at) = utc_datetime::parse(&text_repr::python_str(raw_updated)) else {
+  let Some(updated_at) = utc_datetime::parse(&text_repr::value_str(raw_updated)) else {
     return false;
   };
   now.into_inner() - updated_at >= time::Duration::days(MIN_IDLE_DAYS)
@@ -176,7 +175,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
 
 /// `storage_cool._optional_str`: the Python `str()` text of a truthy value, and none for a falsy one.
 fn optional_text(value: Option<&Value>) -> Option<String> {
-  value.filter(|value| text_repr::python_truthy(value)).map(text_repr::python_str)
+  value.filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str)
 }
 
 /// Backend session ids that metadata references, each with the sessions that reference it (`_scan_references`).
@@ -247,7 +246,7 @@ fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBu
     }
     // A record that is not a JSON object references nothing, as `isinstance(meta, dict)` skips it.
     let Some(Value::Object(meta)) =
-      read_metadata_python(&run_dir.join(RUN_METADATA_NAME), "storage_cool_run_meta_read_failed")?
+      read_metadata(&run_dir.join(RUN_METADATA_NAME), "storage_cool_run_meta_read_failed")?
     else {
       continue;
     };
@@ -268,7 +267,9 @@ fn is_transport_name(path: &Path) -> bool {
   if RAW_TRANSPORT_NAMES.contains(&name) {
     return true;
   }
-  name.rsplit_once('.').is_some_and(|(base, suffix)| RAW_TRANSPORT_NAMES.contains(&base) && str_methods::isdigit(suffix))
+  name
+    .rsplit_once('.')
+    .is_some_and(|(base, suffix)| RAW_TRANSPORT_NAMES.contains(&base) && str_methods::isdigit(suffix))
 }
 
 /// One directory's entries, sorted. A failed listing logs and yields None, so one unreadable directory never stops the

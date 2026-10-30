@@ -135,10 +135,10 @@ fn sentences(unit: &str) -> Vec<String> {
   let mut start = 0;
   let mut i = 0;
   while i < masked.len() {
-    if masked[i] == '.' && i + 1 < masked.len() && str_methods::is_python_whitespace(masked[i + 1]) {
+    if masked[i] == '.' && i + 1 < masked.len() && str_methods::is_whitespace(masked[i + 1]) {
       out.push(chars[mapping[start]..=mapping[i]].iter().collect());
       i += 1;
-      while i < masked.len() && str_methods::is_python_whitespace(masked[i]) {
+      while i < masked.len() && str_methods::is_whitespace(masked[i]) {
         i += 1;
       }
       start = i;
@@ -146,7 +146,7 @@ fn sentences(unit: &str) -> Vec<String> {
       i += 1;
     }
   }
-  if start < masked.len() && masked[start..].iter().any(|&character| !str_methods::is_python_whitespace(character)) {
+  if start < masked.len() && masked[start..].iter().any(|&character| !str_methods::is_whitespace(character)) {
     out.push(chars[mapping[start]..].iter().collect());
   }
   out

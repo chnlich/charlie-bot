@@ -355,7 +355,7 @@ fn row_inputs(
       Ok(RowInputs {
         meta: Arc::clone(row),
         derived: derived.get(&row.id).cloned(),
-        thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
+        thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
         run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
         display_backend: if projection.display_backend { display_backend(store, row)? } else { None },
         listing: sequence_fields.get(&row.id).cloned(),

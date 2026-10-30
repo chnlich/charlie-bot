@@ -5,14 +5,14 @@
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
-use charliebot_core::text_repr::{PYTHON_JSON_DEFAULT, json_dumps, python_str};
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::{DEFAULT_JSON, json_dumps, value_str};
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::pricing;
-use super::text::{count_or_zero, empty_object, py_len, py_slice_from, truthy};
+use super::text::{code_point_len, count_or_zero, empty_object, slice_from, truthy};
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
@@ -120,8 +120,8 @@ impl CodexTranslator {
     if full_text.is_empty() {
       return Ok(Vec::new());
     }
-    let previous_len = self.last_agent_text.get(&item_id).map_or(0, |previous| py_len(previous));
-    let delta = py_slice_from(&full_text, previous_len);
+    let previous_len = self.last_agent_text.get(&item_id).map_or(0, |previous| code_point_len(previous));
+    let delta = slice_from(&full_text, previous_len);
     self.last_agent_text.insert(item_id, full_text);
     if delta.is_empty() {
       return Ok(Vec::new());
@@ -151,8 +151,8 @@ impl CodexTranslator {
       return Ok(Vec::new());
     }
     let item_id = item_key(item)?;
-    let previous_len = self.last_reasoning_text.get(&item_id).map_or(0, |previous| py_len(previous));
-    let delta = py_slice_from(&text, previous_len);
+    let previous_len = self.last_reasoning_text.get(&item_id).map_or(0, |previous| code_point_len(previous));
+    let delta = slice_from(&text, previous_len);
     self.last_reasoning_text.insert(item_id, text);
     if delta.is_empty() {
       return Ok(Vec::new());
@@ -178,7 +178,7 @@ impl CodexTranslator {
           _ => item.get("output").cloned().unwrap_or_else(|| json!("")),
         };
         if *stringify_output {
-          vec![make_tool_result_event(tool, &python_str(&output))]
+          vec![make_tool_result_event(tool, &value_str(&output))]
         } else {
           vec![json!({"type": event_types::TOOL_RESULT, "tool_name": tool, "content": output})]
         }
@@ -312,9 +312,9 @@ fn mcp_tool_call(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<V
   let server = item.get("server_label").cloned().unwrap_or_else(|| json!(""));
   let tool = item.get("name").cloned().unwrap_or_else(|| json!(""));
   let tool_name = if truthy(&server) {
-    format!("mcp:{}/{}", python_str(&server), python_str(&tool))
+    format!("mcp:{}/{}", value_str(&server), value_str(&tool))
   } else {
-    format!("mcp:{}", python_str(&tool))
+    format!("mcp:{}", value_str(&tool))
   };
   match text_of(event, "type") {
     Some("item.started") => {
@@ -336,7 +336,7 @@ fn mcp_tool_call(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<V
         Some(result) => result.clone(),
         None => item.get("error").cloned().unwrap_or_else(|| json!("")),
       };
-      vec![make_tool_result_event(&tool_name, &python_str(&output))]
+      vec![make_tool_result_event(&tool_name, &value_str(&output))]
     }
     _ => Vec::new(),
   }
@@ -372,7 +372,7 @@ fn error_item(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<Valu
     return Vec::new();
   }
   let message = match item.get("message") {
-    Some(message) if truthy(message) => python_str(message),
+    Some(message) if truthy(message) => value_str(message),
     _ => format!("Codex item error with no message. Full event: {}", full_event(event)),
   };
   vec![make_error_event(&message)]
@@ -384,20 +384,20 @@ fn failure_message(event_type: &str, event: &Map<String, Value>) -> String {
   let error = event.get("error").cloned().unwrap_or_else(|| json!({}));
   let mut message = match &error {
     Value::Object(error) => error.get("message").cloned().unwrap_or(Value::Null),
-    other => Value::String(python_str(other)),
+    other => Value::String(value_str(other)),
   };
   if !truthy(&message) {
     message = event.get("message").cloned().unwrap_or(Value::Null);
   }
   if truthy(&message) {
-    return python_str(&message);
+    return value_str(&message);
   }
   format!("Codex {event_type} with no message. Full event: {}", full_event(event))
 }
 
 /// `json.dumps(event, default=str)`: the event as the Python logs and messages print it.
 fn full_event(event: &Map<String, Value>) -> String {
-  json_dumps(&Value::Object(event.clone()), &PYTHON_JSON_DEFAULT)
+  json_dumps(&Value::Object(event.clone()), &DEFAULT_JSON)
 }
 
 #[cfg(test)]
@@ -420,7 +420,7 @@ mod tests {
   }
 
   #[test]
-  fn non_string_item_ids_keep_distinct_python_dictionary_keys() {
+  fn non_string_item_ids_keep_distinct_dictionary_keys() {
     let mut translator = CodexTranslator::new("gpt-5.5");
     let integer =
       |text: &str| json!({"type": "item.updated", "item": {"id": 7, "type": "agent_message", "text": text}});

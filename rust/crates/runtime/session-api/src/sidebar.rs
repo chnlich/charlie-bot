@@ -218,8 +218,7 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
   let activity = store.task_tree_activity(session_id)?;
   let mut snapshot = Map::new();
   snapshot.insert("pending_trigger_count".to_string(), Value::from(pending_count));
-  snapshot
-    .insert("next_trigger_at".to_string(), next_trigger.map_or(Value::Null, |value| json!(value.to_python_string())));
+  snapshot.insert("next_trigger_at".to_string(), next_trigger.map_or(Value::Null, |value| json!(value.to_str())));
   snapshot.insert("has_pending_plan_approval".to_string(), Value::Bool(pending_plan_approval));
   snapshot.insert("task_tree_activity".to_string(), json!([activity.has_running_tasks, activity.work_state]));
   Ok(snapshot)

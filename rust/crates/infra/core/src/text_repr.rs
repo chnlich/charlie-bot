@@ -35,7 +35,7 @@ pub const STARLETTE_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
 /// `json.dumps(value)` with every option at its default.
-pub const PYTHON_JSON_DEFAULT: JsonStyle =
+pub const DEFAULT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// `json.dumps(value, indent=2, sort_keys=True)`: the home writer fence identity record.
@@ -222,7 +222,7 @@ fn repr_escape(c: char) -> String {
 
 /// CPython truthiness of a value `json.loads` produced: `None`, `False`, `0`, `""` and the empty containers are false,
 /// and every other value is true.
-pub fn python_truthy(value: &Value) -> bool {
+pub fn is_truthy(value: &Value) -> bool {
   match value {
     Value::Null => false,
     Value::Bool(value) => *value,
@@ -234,14 +234,14 @@ pub fn python_truthy(value: &Value) -> bool {
 }
 
 /// CPython `str(value)` of a value `json.loads` produced: strings print bare, the rest as their repr.
-pub fn python_str(value: &Value) -> String {
+pub fn value_str(value: &Value) -> String {
   match value {
     Value::String(text) => text.clone(),
-    other => python_repr(other),
+    other => value_repr(other),
   }
 }
 
-fn python_repr(value: &Value) -> String {
+fn value_repr(value: &Value) -> String {
   match value {
     Value::Null => "None".to_string(),
     Value::Bool(true) => "True".to_string(),
@@ -251,12 +251,12 @@ fn python_repr(value: &Value) -> String {
       _ => number.to_string(),
     },
     Value::String(text) => str_repr(text),
-    Value::Array(items) => format!("[{}]", items.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
+    Value::Array(items) => format!("[{}]", items.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
     Value::Object(members) => format!(
       "{{{}}}",
       members
         .iter()
-        .map(|(key, item)| format!("{}: {}", str_repr(key), python_repr(item)))
+        .map(|(key, item)| format!("{}: {}", str_repr(key), value_repr(item)))
         .collect::<Vec<_>>()
         .join(", ")
     ),
@@ -596,7 +596,7 @@ mod tests {
   }
 
   #[test]
-  fn format_g_matches_cpython_percent_g() {
+  fn format_g_matches_percent_g() {
     let cases = [
       (1.0, "1"),
       (59.5, "59.5"),
@@ -614,7 +614,7 @@ mod tests {
   }
 
   #[test]
-  fn format_f_rounds_the_exact_binary_value_like_cpython() {
+  fn format_f_rounds_the_exact_binary_value() {
     let cases = [
       (0.125, 2, "0.12"),
       (0.375, 2, "0.38"),
@@ -633,7 +633,7 @@ mod tests {
   }
 
   #[test]
-  fn float_repr_matches_cpython() {
+  fn float_repr_matches_recorded() {
     let cases = [
       (1760771740.0, "1760771740.0"),
       (1760771740.1234567, "1760771740.1234567"),
@@ -730,7 +730,7 @@ mod tests {
   }
 
   #[test]
-  fn starlette_style_matches_cpython_ensure_ascii_false() {
+  fn starlette_style_matches_ensure_ascii_false() {
     // The bytes of `json.dumps(text, ensure_ascii=False)` in CPython: the control set escaped, DEL and
     // the non-ASCII characters raw (the shapes the fixture `json_renders.json` pins at large).
     assert_eq!(
@@ -759,20 +759,20 @@ mod tests {
   }
 
   #[test]
-  fn str_repr_picks_the_quote_like_cpython() {
+  fn str_repr_picks_the_quote() {
     assert_eq!(str_repr("server startup"), "'server startup'");
     assert_eq!(str_repr("it's"), "\"it's\"");
     assert_eq!(str_repr("a'b\"c"), "'a\\'b\"c'");
   }
 
-  const CPYTHON_REPRS: &str = include_str!("../tests/fixtures/text_repr_golden.txt");
-  const CPYTHON_REPRS_METADATA: &str = include_str!("../tests/fixtures/text_repr_metadata_golden.json");
+  const GOLDEN_REPRS: &str = include_str!("../tests/fixtures/text_repr_golden.txt");
+  const GOLDEN_REPRS_METADATA: &str = include_str!("../tests/fixtures/text_repr_metadata_golden.json");
 
   #[test]
-  fn str_repr_matches_cpython_for_every_code_point() {
-    let metadata: Value = serde_json::from_str(CPYTHON_REPRS_METADATA).unwrap();
+  fn str_repr_matches_recorded_for_every_code_point() {
+    let metadata: Value = serde_json::from_str(GOLDEN_REPRS_METADATA).unwrap();
     assert_eq!(metadata["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-    let reprs: Vec<&str> = CPYTHON_REPRS.split_terminator('\n').collect();
+    let reprs: Vec<&str> = GOLDEN_REPRS.split_terminator('\n').collect();
     let code_points: Vec<char> = (0..=0x10_ffff_u32).filter_map(char::from_u32).collect();
     assert_eq!(reprs.len(), metadata["code_point_count"].as_u64().unwrap() as usize);
     assert_eq!(reprs.len(), code_points.len(), "CPython records one repr per code point");

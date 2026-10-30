@@ -158,7 +158,7 @@ fn rendered(errors: &[FieldError]) -> String {
 }
 
 #[test]
-fn query_and_path_bodies_match_fastapi() {
+fn query_and_path_bodies_match_recorded() {
   let fixture = fixture();
   let endpoints = fixture["endpoints"].as_object().expect("the fixture lists endpoints");
   let cases = fixture["query_cases"].as_array().expect("the fixture lists query cases");
@@ -179,7 +179,7 @@ fn query_and_path_bodies_match_fastapi() {
 }
 
 #[test]
-fn body_bodies_match_fastapi() {
+fn body_bodies_match_recorded() {
   let fixture = fixture();
   let cases = fixture["body_cases"].as_array().expect("the fixture lists body cases");
   for case in cases {

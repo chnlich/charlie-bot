@@ -30,10 +30,10 @@ pub(crate) fn failed(error: impl std::fmt::Display) -> CliExit {
 }
 
 /// Python's `repr(value)` for a value `json` parsed: strings are quoted, `None` prints bare.
-pub(crate) fn python_repr(value: &Value) -> String {
+pub(crate) fn value_repr(value: &Value) -> String {
   match value {
     Value::String(text) => text_repr::str_repr(text),
-    other => text_repr::python_str(other),
+    other => text_repr::value_str(other),
   }
 }
 

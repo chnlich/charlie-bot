@@ -182,7 +182,7 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn registration_matches_the_python_usage_source() {
+  fn registration_matches_the_usage_source() {
     // tests/test_usage_sources.py: the name, id prefixes and run_logs_only of the opencode source, and the attribution
     // of the opencode backend type (`src/backends/opencode/__init__.py:24-30`).
     let mut registry = Registry::new();

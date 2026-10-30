@@ -5,9 +5,9 @@ use std::sync::LazyLock;
 
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::text_repr;
-use charliebot_core::regex_classes::compile_python_regex;
+use charliebot_core::regex_classes::compile_regex;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr;
 use charliebot_html::{EventKind, folds_at_open, parse_with, unescape};
 use charliebot_user_text_checks::{self as user_text_checks, UserTextChecksConfig};
 use fancy_regex::Regex;
@@ -101,14 +101,14 @@ const KATEX_CSS_HINT: &str = "katex.min.css";
 const KATEX_JS_HINT: &str = "katex.min.js";
 const KATEX_AUTO_RENDER_HINT: &str = "auto-render.min.js";
 
-static RUN_DECIMAL_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(r"\d+\.\d+"));
+static RUN_DECIMAL_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"\d+\.\d+"));
 static RUN_HELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-  compile_python_regex(
+  compile_regex(
     r"(?i)\b(?:held|kept|stayed|stays|remained|remains)\s+(?:the\s+)?(?:fixed|constant|unchanged|same)\b|\b(?:fixed|constant|unchanged|retained|controlled|same)\b|保持不变|固定不变|保持一致|不变|未变|没变|未改动|没改动|未改|没改|恒定|固定|控制变量",
   )
 });
 static RUN_CHANGED_RE: LazyLock<Regex> = LazyLock::new(|| {
-  compile_python_regex(
+  compile_regex(
     r"(?i)\b(?:changed?|changing|changes?|varied|varying|modified|altered|variable|tweaked)\b|改(?:动|变|了|成|为)|更改|修改|变更|变量|变化",
   )
 });
@@ -263,19 +263,17 @@ pub fn run_fork_assertions(page: &Path, home: &Path) -> anyhow::Result<Option<Ve
   Ok(Some(outcomes))
 }
 
-static GOAL_SECTION_RE: LazyLock<Regex> =
-  LazyLock::new(|| compile_python_regex(r"(?s)Problem / Goal</h2>(.*?)</section>"));
-static TAG_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(r"<[^>]+>"));
-static ORD: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(ORDINAL_PATTERN));
-static INTERNAL_UNLESS_QUALIFIED: LazyLock<Regex> =
-  LazyLock::new(|| compile_python_regex(INTERNAL_UNLESS_QUALIFIED_PATTERN));
-static QUAL: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(QUAL_PATTERN));
-static ANCHOR: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(ANCHOR_PATTERN));
-static SENTENCE_SPLIT: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(SENTENCE_SPLIT_PATTERN));
-static QUOTE: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(QUOTE_PATTERN));
-static GLOSS: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(GLOSS_PATTERN));
-static COLON_GLOSS: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(COLON_GLOSS_PATTERN));
-static TITLE_ANCHOR: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(TITLE_ANCHOR_PATTERN));
+static GOAL_SECTION_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"(?s)Problem / Goal</h2>(.*?)</section>"));
+static TAG_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"<[^>]+>"));
+static ORD: LazyLock<Regex> = LazyLock::new(|| compile_regex(ORDINAL_PATTERN));
+static INTERNAL_UNLESS_QUALIFIED: LazyLock<Regex> = LazyLock::new(|| compile_regex(INTERNAL_UNLESS_QUALIFIED_PATTERN));
+static QUAL: LazyLock<Regex> = LazyLock::new(|| compile_regex(QUAL_PATTERN));
+static ANCHOR: LazyLock<Regex> = LazyLock::new(|| compile_regex(ANCHOR_PATTERN));
+static SENTENCE_SPLIT: LazyLock<Regex> = LazyLock::new(|| compile_regex(SENTENCE_SPLIT_PATTERN));
+static QUOTE: LazyLock<Regex> = LazyLock::new(|| compile_regex(QUOTE_PATTERN));
+static GLOSS: LazyLock<Regex> = LazyLock::new(|| compile_regex(GLOSS_PATTERN));
+static COLON_GLOSS: LazyLock<Regex> = LazyLock::new(|| compile_regex(COLON_GLOSS_PATTERN));
+static TITLE_ANCHOR: LazyLock<Regex> = LazyLock::new(|| compile_regex(TITLE_ANCHOR_PATTERN));
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssertionOutcome {
@@ -622,7 +620,7 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
         format!("h2 {} span.n reads {}, not an integer", text_repr::str_repr(&heading), text_repr::str_repr(&number)),
       )]);
     }
-    values.push(python_decimal_integer(&number).map_err(|error| anyhow!("{error}"))?);
+    values.push(decimal_integer(&number).map_err(|error| anyhow!("{error}"))?);
   }
   let expected = (1..=values.len()).map(|value| value.to_string()).collect::<Vec<_>>();
   if values != expected {
@@ -961,7 +959,7 @@ fn check_goal_budget(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
 }
 
 fn revision_mark_regex(tag: &str, class: &str) -> Regex {
-  compile_python_regex(&format!(
+  compile_regex(&format!(
     r#"(?s)<{tag}\b(?=[^>]*(?<!\S)class\s*=\s*(?:(?:"(?:[^"]*\s)?{class}(?:\s[^"]*)?")|(?:'(?:[^']*\s)?{class}(?:\s[^']*)?')|{class}(?:\s|>)))[^>]*>.*?</{tag}>"#
   ))
 }
@@ -1023,10 +1021,10 @@ fn render_probe(chrome_bin: &Path, probe: &Path) -> anyhow::Result<Result<i32, S
   Ok(headless_render::render_height(chrome_bin, probe_uri.as_str()))
 }
 
-fn python_decimal_integer(text: &str) -> Result<String, String> {
+fn decimal_integer(text: &str) -> Result<String, String> {
   let mut digits = String::with_capacity(text.len());
   for character in text.chars() {
-    let Some(digit) = str_methods::python_decimal_value(character) else {
+    let Some(digit) = str_methods::decimal_value(character) else {
       return Err(format!("invalid literal for int() with base 10: {}", text_repr::str_repr(text)));
     };
     digits.push(char::from(b'0' + digit));
@@ -1253,7 +1251,7 @@ fn ordinal_label(kind: &str) -> String {
 
 fn ordinal_number(number: &str) -> anyhow::Result<Option<usize>> {
   if str_methods::isdigit(number) {
-    return Ok(python_decimal_integer(number).ok().and_then(|value| value.parse().ok()));
+    return Ok(decimal_integer(number).ok().and_then(|value| value.parse().ok()));
   }
   if number == "十" {
     return Ok(Some(10));
@@ -1431,7 +1429,7 @@ fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
 
 /// `_has_readable_text`: the text carries a Unicode letter or digit; punctuation alone is not a gloss.
 fn has_readable_text(text: &str) -> bool {
-  text.chars().any(str_methods::is_python_alphanumeric)
+  text.chars().any(str_methods::is_alphanumeric)
 }
 
 /// `_marked_element_text`: the block's text with the target element fenced by the requirement sentinels, so the text
@@ -1715,7 +1713,7 @@ mod tests {
   }
 
   #[test]
-  fn recorded_python_cases_match_every_plan_assertion_and_control_difference() {
+  fn recorded_cases_match_every_plan_assertion_and_control_difference() {
     let mut decoder =
       flate2::read::GzDecoder::new(include_bytes!("../tests/data/artifact_check_golden.json.gz").as_slice());
     let mut json = String::new();
@@ -1876,7 +1874,7 @@ mod tests {
   }
 
   #[test]
-  fn test_page_height_with_missing_configured_path_uses_the_python_detail() {
+  fn test_page_height_with_missing_configured_path_uses_the_detail() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
     let chrome = directory.path().join("missing-chrome");
@@ -1982,7 +1980,7 @@ mod tests {
   }
 
   #[test]
-  fn weighted_goal_counts_code_points_and_python_whitespace() {
+  fn weighted_goal_counts_code_points_and_str_whitespace() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
     let page = write_page(directory.path(), "plan.html", &plan_page("你\u{001c}好"));

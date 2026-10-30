@@ -295,7 +295,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let state = Arc::new(AppState {
     features,
     build_info,
-    static_mounts: StaticMount::python_app_mounts(repo_root.path(), registry.page_packages()),
+    static_mounts: StaticMount::app_mounts(repo_root.path(), registry.page_packages()),
     mime_types: MimeTypes::load(),
   });
   if !startup_stop.mark_ready() {
@@ -588,7 +588,7 @@ mod tests {
 
   #[test]
   // Python: server.py:293-310.
-  fn shutdown_line_has_python_fields_and_each_close_is_numeric() {
+  fn shutdown_line_has_fields_and_each_close_is_numeric() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let _capture = charliebot_core::test_support::install_events(Arc::new(Capture(Arc::clone(&events))));
     let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack"]

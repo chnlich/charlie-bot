@@ -166,8 +166,7 @@ pub fn build_control_event(
   let mut event = Map::new();
   event.insert("id".to_string(), Value::String(event_id.map_or_else(|| Uuid::new_v4().to_string(), str::to_string)));
   event.insert("type".to_string(), Value::String(event_type.to_string()));
-  event
-    .insert("timestamp".to_string(), Value::String(timestamp.unwrap_or_else(UtcDateTime::now).to_python_isoformat()));
+  event.insert("timestamp".to_string(), Value::String(timestamp.unwrap_or_else(UtcDateTime::now).to_isoformat_text()));
   event.insert("actor".to_string(), Value::String(actor.to_string()));
   event.insert("source_session_id".to_string(), Value::String(source_session_id.to_string()));
   for (key, value) in payload {
@@ -205,12 +204,12 @@ mod tests {
   use super::*;
 
   #[test]
-  fn stable_run_id_matches_the_python_uuid5_namespace() {
+  fn stable_run_id_matches_the_uuid5_namespace() {
     assert_eq!(stable_run_id("session-a", "request-1"), "1a41849d-357a-5529-96ac-75565f82bd39");
   }
 
   #[test]
-  fn control_event_keeps_python_header_and_payload_order() {
+  fn control_event_keeps_header_and_payload_order() {
     let event = build_control_event(
       "run_stop_requested",
       ACTOR_SYSTEM,

@@ -18,7 +18,7 @@ use chrono::{Datelike, Local, NaiveDateTime, Weekday};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use crate::tar_writer::{Member, finish, python_code_points, write_member};
+use crate::tar_writer::{Member, code_points, finish, write_member};
 
 const BACKUP_PREFIX: &str = "charliebot-";
 const BACKUP_SUFFIX: &str = ".tar.gz";
@@ -106,7 +106,7 @@ fn group_name(gid: u32) -> anyhow::Result<String> {
 fn sorted_names(dir: &Path) -> std::io::Result<Vec<OsString>> {
   let mut names =
     fs::read_dir(dir)?.map(|entry| entry.map(|entry| entry.file_name())).collect::<std::io::Result<Vec<_>>>()?;
-  names.sort_by_cached_key(|name| python_code_points(name.as_bytes()));
+  names.sort_by_cached_key(|name| code_points(name.as_bytes()));
   Ok(names)
 }
 

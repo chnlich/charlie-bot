@@ -108,8 +108,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
     }
     item.entry("link".to_string()).or_insert(Value::Null);
   }
-  let updated_at =
-    status.entry("updated_at".to_string()).or_insert_with(|| Value::String(UtcDateTime::now().to_python_string()));
+  let updated_at = status.entry("updated_at".to_string()).or_insert_with(|| Value::String(UtcDateTime::now().to_str()));
   updated_at.as_str().is_some_and(|value| UtcDateTime::parse(value).is_ok())
 }
 
@@ -165,7 +164,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn the_routes_answer_the_readback_the_refusals_and_the_missing_query_as_fastapi_does() {
+  async fn the_routes_answer_the_readback_the_refusals_and_the_missing_query_as_recorded() {
     let home = test_support::Home::new();
     let sid = home.manager("session", None).await;
     let reply = "/api/internal/web/reply";

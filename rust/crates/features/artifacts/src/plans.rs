@@ -96,7 +96,7 @@ pub fn derive_state_str(plan: &Map<String, Value>) -> Result<&'static str, Strin
   let has_versions = plan.get("versions").and_then(Value::as_array).is_some_and(|versions| !versions.is_empty());
   if !has_versions {
     let id = plan.get("id").unwrap_or(&Value::Null);
-    return Err(format!("plan {} has no versions", text_repr::python_str(id)));
+    return Err(format!("plan {} has no versions", text_repr::value_str(id)));
   }
   derive_state(plan.get("closed").unwrap_or(&Value::Null), plan.get("takeoff").unwrap_or(&Value::Null))
 }
@@ -106,21 +106,21 @@ pub fn derive_state_str(plan: &Map<String, Value>) -> Result<&'static str, Strin
 fn derive_state(closed: &Value, takeoff: &Value) -> Result<&'static str, String> {
   if !closed.is_null() {
     let Value::Object(closed) = closed else {
-      return Err(format!("closed must be a dict or None, got {}", py_type_name(closed)));
+      return Err(format!("closed must be a dict or None, got {}", type_name(closed)));
     };
     let close_as = closed.get("as").unwrap_or(&Value::Null);
     return match close_as.as_str() {
       Some(PLAN_CLOSE_SUPERSEDED) => Ok(PLAN_CLOSE_SUPERSEDED),
       Some(PLAN_CLOSE_ABANDONED) => Ok(PLAN_CLOSE_ABANDONED),
       Some(PLAN_CLOSE_COMPLETED) => Ok(PLAN_CLOSE_COMPLETED),
-      _ => Err(format!("unknown closed.as: {}", py_repr(close_as))),
+      _ => Err(format!("unknown closed.as: {}", value_repr(close_as))),
     };
   }
   if takeoff.is_null() {
     return Ok(AWAITING_APPROVAL_STATE);
   }
   if !takeoff.is_object() {
-    return Err(format!("takeoff must be a dict or None, got {}", py_type_name(takeoff)));
+    return Err(format!("takeoff must be a dict or None, got {}", type_name(takeoff)));
   }
   Ok(APPROVED_STATE)
 }
@@ -136,7 +136,7 @@ pub fn require_plan(plans: &[Value], plan_id: i64) -> Result<&Value, String> {
 /// `_project_version(ver)`: the version's registry fields, `null` where it has none.
 fn project_version(version: &Value) -> Result<Value, String> {
   let Value::Object(version) = version else {
-    return Err(format!("version must be a dict, got {}", py_type_name(version)));
+    return Err(format!("version must be a dict, got {}", type_name(version)));
   };
   Ok(Value::Object(picked(version, &VERSION_FIELDS)))
 }
@@ -144,13 +144,13 @@ fn project_version(version: &Value) -> Result<Value, String> {
 /// `_project_plan(plan)`: the plan's registry fields, with each version projected.
 fn project_plan(plan: &Value) -> Result<Map<String, Value>, String> {
   let Value::Object(plan) = plan else {
-    return Err(format!("plan must be a dict, got {}", py_type_name(plan)));
+    return Err(format!("plan must be a dict, got {}", type_name(plan)));
   };
   let mut projected = picked(plan, &PLAN_FIELDS);
   let versions = plan.get("versions").cloned().unwrap_or_else(|| Value::Array(Vec::new()));
   let versions = match versions {
     Value::Array(versions) => versions,
-    other => return Err(format!("versions must be a list, got {}", py_type_name(&other))),
+    other => return Err(format!("versions must be a list, got {}", type_name(&other))),
   };
   let versions = versions.iter().map(project_version).collect::<Result<Vec<_>, _>>()?;
   projected.insert("versions".to_string(), Value::Array(versions));
@@ -208,13 +208,13 @@ pub fn read_plans_tolerant(plans_path: &Path, session_id: &str) -> Result<PlansR
   let data = match data {
     Value::Object(data) => data,
     other => {
-      let error = format!("registry top level is {}, expected dict", py_type_name(&other));
+      let error = format!("registry top level is {}, expected dict", type_name(&other));
       read.errors.push(file_error(session_id, error));
       return Ok(read);
     }
   };
   let plans = match data.get("plans") {
-    Some(plans) => python_iter(plans)?,
+    Some(plans) => iter_items(plans)?,
     None => Vec::new(),
   };
   for plan in plans {
@@ -267,14 +267,12 @@ const REGISTRY_JSON: JsonStyle =
 
 /// The items `for item in value` yields for a registry list. A dict yields its keys and a string its characters. A
 /// number, `null` or a boolean is not iterable, which raises `TypeError` out of the read.
-fn python_iter(value: &Value) -> Result<Vec<Value>, EscapedError> {
+fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
   match value {
     Value::Array(items) => Ok(items.clone()),
     Value::Object(members) => Ok(members.keys().map(|key| Value::String(key.clone())).collect()),
     Value::String(text) => Ok(text.chars().map(|character| Value::String(character.to_string())).collect()),
-    other => {
-      Err(EscapedError { kind: "TypeError", detail: format!("'{}' object is not iterable", py_type_name(other)) })
-    }
+    other => Err(EscapedError { kind: "TypeError", detail: format!("'{}' object is not iterable", type_name(other)) }),
   }
 }
 
@@ -326,7 +324,7 @@ fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
 }
 
 /// The Python type name of a JSON value, as `type(x).__name__` gives it for the value `json.loads` produced.
-pub(crate) fn py_type_name(value: &Value) -> &'static str {
+pub(crate) fn type_name(value: &Value) -> &'static str {
   match value {
     Value::Null => "NoneType",
     Value::Bool(_) => "bool",
@@ -339,10 +337,10 @@ pub(crate) fn py_type_name(value: &Value) -> &'static str {
 }
 
 /// `repr(value)` of a JSON value that `json.loads` produced: strings quoted, the rest as `str` prints them.
-pub(crate) fn py_repr(value: &Value) -> String {
+pub(crate) fn value_repr(value: &Value) -> String {
   match value {
     Value::String(text) => text_repr::str_repr(text),
-    other => text_repr::python_str(other),
+    other => text_repr::value_str(other),
   }
 }
 
@@ -366,7 +364,7 @@ mod tests {
   }
 
   #[test]
-  fn corrupt_registries_yield_the_error_entries_python_yields() {
+  fn corrupt_registries_yield_the_error_entries() {
     let cases: [(&str, Vec<ReadError>); 9] = [
       (
         "{not valid json",
@@ -427,13 +425,13 @@ mod tests {
   }
 
   #[test]
-  fn a_plans_value_that_is_not_iterable_escapes_the_read_as_python_raises_it() {
+  fn a_plans_value_that_is_not_iterable_escapes_the_read() {
     let escaped = read_bytes(br#"{"plans": null}"#).expect_err("Python's read raises TypeError here");
     assert_eq!(escaped, EscapedError { kind: "TypeError", detail: "'NoneType' object is not iterable".to_string() });
   }
 
   #[test]
-  fn undecodable_bytes_name_the_position_as_python_does() {
+  fn undecodable_bytes_name_the_position() {
     let start = read_bytes(b"\xff{}").expect("a decode failure is an error entry");
     assert_eq!(
       start.errors,

@@ -156,7 +156,7 @@ mod tests {
   }
 
   #[test]
-  fn naive_and_offset_values_read_as_python_reads_them() {
+  fn naive_and_offset_values_are_read_as_recorded() {
     assert_eq!(parse("2026-08-05T12:00:00+00:00"), Some(at("2026-08-05T12:00:00Z")));
     assert_eq!(parse("2026-08-05T12:00:00"), Some(at("2026-08-05T12:00:00Z")));
     assert_eq!(parse("2026-08-05T12:00:00+09:00"), Some(at("2026-08-05T03:00:00Z")));
@@ -164,7 +164,7 @@ mod tests {
   }
 
   #[test]
-  fn date_only_and_basic_forms_read_as_python_reads_them() {
+  fn date_only_and_basic_forms_are_read_as_recorded() {
     assert_eq!(parse("2026-08-05"), Some(at("2026-08-05T00:00:00Z")));
     assert_eq!(parse("20260805"), Some(at("2026-08-05T00:00:00Z")));
     assert_eq!(parse("20260805T120000.5Z"), Some(at("2026-08-05T12:00:00.5Z")));
@@ -183,7 +183,7 @@ mod tests {
   }
 
   #[test]
-  fn malformed_text_reads_as_python_refuses_it() {
+  fn malformed_text_is_refused_as_recorded() {
     for text in [
       "",
       "abc",

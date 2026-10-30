@@ -724,7 +724,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn create_profile_literal_errors_keep_the_python_error_type() {
+  async fn create_profile_literal_errors_keep_the_error_type() {
     let (_home, features) = feature_context();
     let (headers, body) = json_request(json!({"request_id": "bad-profile", "profile": "reviewer"}));
 

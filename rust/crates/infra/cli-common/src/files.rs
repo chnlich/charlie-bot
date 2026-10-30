@@ -44,7 +44,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn a_text_file_reads_with_python_text_mode_line_endings() {
+  fn a_text_file_reads_with_text_mode_line_endings() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("message.txt");
     std::fs::write(&path, "first\r\nsecond\rthird\n").unwrap();

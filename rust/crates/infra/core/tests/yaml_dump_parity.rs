@@ -1,7 +1,7 @@
 use charliebot_core::yaml;
 use serde_json::{Value, json};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/yaml_dump_parity_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/yaml_dump_parity_golden.json");
 
 /// Several paragraphs. Some lines pass column 80, so the emitter folds them; one line has an apostrophe.
 const LONG_PROMPT: &str = "Review the open pull requests in the release branch and summarize what changed since \
@@ -69,7 +69,7 @@ fn corpus() -> Vec<Value> {
 fn core_yaml_writer_matches_pyyaml_safe_c_dumper_for_the_corpus() {
   let corpus = corpus();
   let rust: Vec<String> = corpus.iter().map(|value| yaml::dump(value).unwrap()).collect();
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let cases = fixture["cases"].as_array().unwrap();
   assert_eq!(cases.len(), corpus.len());

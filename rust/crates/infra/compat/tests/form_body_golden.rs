@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 const BOUNDARY: &str = "synthetic-form-boundary";
-const PYTHON_FIXTURE: &[u8] = include_bytes!("fixtures/form_body_golden.json.gz");
+const GOLDEN_FIXTURE: &[u8] = include_bytes!("fixtures/form_body_golden.json.gz");
 const FIELDS: &[Field] = &[Field::file("file"), Field::form("note")];
 const MODEL: FormModel = FormModel::new(FIELDS);
 
@@ -29,7 +29,7 @@ struct Case {
 }
 
 #[tokio::test]
-async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
+async fn form_body_matches_recorded_for_the_multipart_corpus() {
   rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a second loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
@@ -42,7 +42,7 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
   let client = Client::new();
   let cases = corpus();
   assert_eq!(cases.len(), 32);
-  let mut decoder = GzDecoder::new(PYTHON_FIXTURE);
+  let mut decoder = GzDecoder::new(GOLDEN_FIXTURE);
   let mut fixture_json = String::new();
   decoder.read_to_string(&mut fixture_json).unwrap();
   let fixture: Value = serde_json::from_str(&fixture_json).unwrap();

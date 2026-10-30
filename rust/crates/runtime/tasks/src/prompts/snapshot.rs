@@ -65,16 +65,16 @@ impl PromptSnapshot {
     if stored_hash.and_then(Value::as_str) != Some(computed_hash.as_str()) {
       return Err(TaskPromptError::new(format!(
         "stored prompt snapshot hash mismatch: recorded {}, content hashes to {}",
-        py_repr(stored_hash),
+        value_repr(stored_hash),
         str_repr(&computed_hash)
       )));
     }
     let measured = snapshot.char_count();
     let stored_count = data.get("char_count");
-    if !stored_count.is_some_and(|count| py_equals_count(count, measured)) {
+    if !stored_count.is_some_and(|count| equals_count(count, measured)) {
       return Err(TaskPromptError::new(format!(
         "stored prompt snapshot char_count mismatch: recorded {}, content measures {measured}",
-        py_repr(stored_count)
+        value_repr(stored_count)
       )));
     }
     for block in &snapshot.blocks {
@@ -172,9 +172,9 @@ fn parse_block(value: &Value) -> Result<PromptBlock, String> {
 /// One source, built the way `PromptSource(**s)` builds it: `scope` and `source_ref` are required, and
 /// `source_session_id` defaults to None.
 fn parse_source(value: &Value) -> Result<PromptSource, String> {
-  let members: &Map<String, Value> = value.as_object().ok_or_else(|| {
-    format!("PromptSource.__init__() argument after ** must be a mapping, not {}", py_type_name(value))
-  })?;
+  let members: &Map<String, Value> = value
+    .as_object()
+    .ok_or_else(|| format!("PromptSource.__init__() argument after ** must be a mapping, not {}", type_name(value)))?;
   if let Some(unexpected) =
     members.keys().find(|key| !matches!(key.as_str(), "scope" | "source_ref" | "source_session_id"))
   {
@@ -192,7 +192,7 @@ fn parse_source(value: &Value) -> Result<PromptSource, String> {
   let session = match members.get("source_session_id") {
     None | Some(Value::Null) => None,
     Some(Value::String(session)) => Some(session.clone()),
-    Some(other) => return Err(format!("source_session_id must be a string, not {}", py_type_name(other))),
+    Some(other) => return Err(format!("source_session_id must be a string, not {}", type_name(other))),
   };
   Ok(PromptSource {
     scope: string_field(value, "scope")?,
@@ -207,23 +207,23 @@ fn subscript<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
     Value::Object(members) => members.get(key).ok_or_else(|| format!("'{key}'")),
     Value::Array(_) => Err("list indices must be integers or slices, not str".to_string()),
     Value::String(_) => Err("string indices must be integers, not 'str'".to_string()),
-    other => Err(format!("'{}' object is not subscriptable", py_type_name(other))),
+    other => Err(format!("'{}' object is not subscriptable", type_name(other))),
   }
 }
 
 fn string_field(value: &Value, key: &str) -> Result<String, String> {
   match subscript(value, key)? {
     Value::String(text) => Ok(text.clone()),
-    other => Err(format!("{key} must be a string, not {}", py_type_name(other))),
+    other => Err(format!("{key} must be a string, not {}", type_name(other))),
   }
 }
 
 fn not_iterable(value: &Value) -> String {
-  format!("'{}' object is not iterable", py_type_name(value))
+  format!("'{}' object is not iterable", type_name(value))
 }
 
 /// The Python type name of a stored JSON value.
-fn py_type_name(value: &Value) -> &'static str {
+fn type_name(value: &Value) -> &'static str {
   match value {
     Value::Null => "NoneType",
     Value::Bool(_) => "bool",
@@ -236,7 +236,7 @@ fn py_type_name(value: &Value) -> &'static str {
 }
 
 /// `repr()` of a stored JSON value, as the mismatch messages print a recorded value. A missing key reads as `None`.
-fn py_repr(value: Option<&Value>) -> String {
+fn value_repr(value: Option<&Value>) -> String {
   match value {
     None | Some(Value::Null) => "None".to_string(),
     Some(Value::Bool(flag)) => if *flag { "True" } else { "False" }.to_string(),
@@ -244,13 +244,13 @@ fn py_repr(value: Option<&Value>) -> String {
     Some(Value::Number(number)) => number.to_string(),
     Some(Value::String(text)) => str_repr(text),
     Some(Value::Array(items)) => {
-      format!("[{}]", items.iter().map(|item| py_repr(Some(item))).collect::<Vec<_>>().join(", "))
+      format!("[{}]", items.iter().map(|item| value_repr(Some(item))).collect::<Vec<_>>().join(", "))
     }
     Some(Value::Object(members)) => format!(
       "{{{}}}",
       members
         .iter()
-        .map(|(key, item)| format!("{}: {}", str_repr(key), py_repr(Some(item))))
+        .map(|(key, item)| format!("{}: {}", str_repr(key), value_repr(Some(item))))
         .collect::<Vec<_>>()
         .join(", ")
     ),
@@ -258,7 +258,7 @@ fn py_repr(value: Option<&Value>) -> String {
 }
 
 /// Python's `recorded != measured` for a stored count: an int, a float equal to it, or True/False as 1/0.
-fn py_equals_count(value: &Value, measured: usize) -> bool {
+fn equals_count(value: &Value, measured: usize) -> bool {
   match value {
     Value::Number(number) if number.is_f64() => number.as_f64() == Some(measured as f64),
     Value::Number(number) => number.as_u64() == Some(measured as u64),

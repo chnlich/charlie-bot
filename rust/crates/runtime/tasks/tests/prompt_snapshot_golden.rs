@@ -22,13 +22,13 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// `json.dumps(value, ensure_ascii=False)` with the default separators and insertion order.
-const PYTHON_STYLE: JsonStyle =
+const DEFAULT_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 const HASH_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
 const DAMAGED_CASE: &str = "non_ascii_rules";
-const PYTHON_FIXTURE: &str = include_str!("fixtures/prompt_snapshot_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/prompt_snapshot_golden.json");
 
 /// One manager or worker session of the matrix.
 #[derive(Clone, Copy)]
@@ -396,7 +396,7 @@ fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot)
   let rendered = json!({
     "name": case.name,
     "declared": declared,
-    "overlay_error": overlay_error.as_ref().map(OverlayError::python_class_name),
+    "overlay_error": overlay_error.as_ref().map(OverlayError::class_name),
     "snapshot": snapshot.to_json_dict(),
   });
   (rendered, snapshot)
@@ -444,10 +444,10 @@ fn damaged_errors(snapshot: &PromptSnapshot) -> Value {
 }
 
 #[test]
-fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
+fn snapshots_match_the_recorded_server_output_byte_for_byte() {
   let cases = matrix();
   let prepared: Vec<Prepared> = cases.iter().map(prepare).collect();
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "2b212ebd8549c0d3bc86885ae9c30ac648039a0d");
   assert_eq!(fixture["placeholders"]["temp_root"], "$TMPROOT");
   assert_eq!(fixture["placeholders"]["repo_root"], "$REPO");
@@ -503,8 +503,8 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   let damaged = damaged.expect("the damaged case is in the matrix");
   let rust = json!({"cases": results, "from_json_errors": damaged_errors(&damaged)});
 
-  let rust_text = json_dumps(&rust, &PYTHON_STYLE);
-  let expected_text = json_dumps(&expected, &PYTHON_STYLE);
+  let rust_text = json_dumps(&rust, &DEFAULT_STYLE);
+  let expected_text = json_dumps(&expected, &DEFAULT_STYLE);
   assert!(rust_text == expected_text, "{}", first_difference(&rust_text, &expected_text));
 }
 

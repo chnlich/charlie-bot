@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use charliebot_core::{RepoRoot, fsutil, text_repr, str_methods, timefmt};
+use charliebot_core::{RepoRoot, fsutil, str_methods, text_repr, timefmt};
 use charliebot_registry::FeatureContext;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value, json};
@@ -97,7 +97,7 @@ pub(crate) async fn amend(
   file: &str,
   amendment: Amendment,
 ) -> Result<Value, VerbError> {
-  if amendment.note.trim_matches(str_methods::is_python_whitespace).is_empty() {
+  if amendment.note.trim_matches(str_methods::is_whitespace).is_empty() {
     return Err(VerbError::Refused(
       "amend requires a non-empty --note stating why this version differs from its predecessor".to_string(),
     ));
@@ -282,8 +282,8 @@ async fn validate_new_version_file(
     return Err(VerbError::Refused(format!(
       "file {} already bound to plan {} v{}",
       text_repr::str_repr(&file),
-      text_repr::python_str(&plan_id),
-      text_repr::python_str(&v)
+      text_repr::value_str(&plan_id),
+      text_repr::value_str(&v)
     )));
   }
   Ok(file_relative)
@@ -299,10 +299,16 @@ fn validate_file_in_session_dir(features: &FeatureContext, session_id: &str, fil
   let session_dir = features.store.session_dir(session_id);
   let (candidate, relative) = plan_paths::resolve_plan_file(&session_dir, file);
   let Some(relative) = relative else {
-    return Err(VerbError::Refused(format!("file {} resolves outside the session directory", text_repr::str_repr(file))));
+    return Err(VerbError::Refused(format!(
+      "file {} resolves outside the session directory",
+      text_repr::str_repr(file)
+    )));
   };
   if !plan_paths::exists(&candidate).map_err(|error| escaped(plans::os_escape(&error, &candidate)))? {
-    return Err(VerbError::Refused(format!("file {} not found inside the session directory", text_repr::str_repr(file))));
+    return Err(VerbError::Refused(format!(
+      "file {} not found inside the session directory",
+      text_repr::str_repr(file)
+    )));
   }
   Ok(relative.to_string_lossy().into_owned())
 }
@@ -315,7 +321,7 @@ fn find_binding_by_file(plans: &[Value], file: &str) -> Result<Option<(Value, Va
     for version in versions_of(plan_fields)? {
       let bound = plan_map(version)?.get("file").ok_or_else(|| key_error("file"))?;
       let Value::String(bound) = bound else {
-        return Err(type_error(format!("normpath() argument must be str, not {}", plans::py_type_name(bound))));
+        return Err(type_error(format!("normpath() argument must be str, not {}", plans::type_name(bound))));
       };
       if plan_paths::posix_normpath(bound) == file {
         let v = plan_map(version)?.get("v").ok_or_else(|| key_error("v"))?;
@@ -348,7 +354,7 @@ fn approve_plan(plans: &mut [Value], plan_id: Option<&Value>) -> Result<Map<Stri
     Some(plan_id) => {
       let index = require_open_plan(plans, plan_id)?;
       if !absent(plan_map(&plans[index])?, "takeoff") {
-        return Err(VerbError::Refused(format!("plan {} is already approved", text_repr::python_str(plan_id))));
+        return Err(VerbError::Refused(format!("plan {} is already approved", text_repr::value_str(plan_id))));
       }
       index
     }
@@ -376,7 +382,7 @@ fn close_plan(plans: &mut [Value], plan_id: &Value, close_as: &str) -> Result<Ma
   if !absent(plan, "closed") {
     return Err(VerbError::Refused(format!(
       "plan {} is already closed ({})",
-      text_repr::python_str(plan_id),
+      text_repr::value_str(plan_id),
       closed_as_repr(plan)?
     )));
   }
@@ -391,7 +397,7 @@ fn require_open_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbErro
   if !absent(plan, "closed") {
     return Err(VerbError::Refused(format!(
       "plan {} is closed ({})",
-      text_repr::python_str(plan_id),
+      text_repr::value_str(plan_id),
       closed_as_repr(plan)?
     )));
   }
@@ -406,7 +412,7 @@ fn require_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbError> {
       return Ok(index);
     }
   }
-  Err(VerbError::Refused(format!("plan {} not found in session", text_repr::python_str(plan_id))))
+  Err(VerbError::Refused(format!("plan {} not found in session", text_repr::value_str(plan_id))))
 }
 
 /// The indices of the plans with neither a closed mark nor a takeoff, in registry order.
@@ -425,7 +431,7 @@ fn open_candidates(plans: &[Value]) -> Result<Vec<usize>, VerbError> {
 fn candidate_ids(plans: &[Value], candidates: &[usize]) -> Result<String, VerbError> {
   let ids = candidates
     .iter()
-    .map(|&index| plan_map(&plans[index]).and_then(id_of).map(text_repr::python_str))
+    .map(|&index| plan_map(&plans[index]).and_then(id_of).map(text_repr::value_str))
     .collect::<Result<Vec<_>, _>>()?;
   Ok(ids.join(", "))
 }
@@ -477,14 +483,14 @@ fn max_integer(values: impl Iterator<Item = Result<i64, VerbError>>) -> Result<O
 
 /// An integer field of the registry. A value of another type fails the comparison Python makes with it.
 fn integer_of(value: &Value) -> Result<i64, VerbError> {
-  value.as_i64().ok_or_else(|| type_error(format!("expected an integer, got {}", plans::py_type_name(value))))
+  value.as_i64().ok_or_else(|| type_error(format!("expected an integer, got {}", plans::type_name(value))))
 }
 
 /// The versions of a plan, as the `[...]` lookup and the `.get` of the verbs read them. A list is the only type that holds them.
 fn versions_of(plan: &Map<String, Value>) -> Result<&Vec<Value>, VerbError> {
   match plan.get("versions").ok_or_else(|| key_error("versions"))? {
     Value::Array(versions) => Ok(versions),
-    other => Err(type_error(format!("versions must be a list, got {}", plans::py_type_name(other)))),
+    other => Err(type_error(format!("versions must be a list, got {}", plans::type_name(other)))),
   }
 }
 
@@ -497,9 +503,9 @@ fn absent(plan: &Map<String, Value>, key: &str) -> bool {
 fn closed_as_repr(plan: &Map<String, Value>) -> Result<String, VerbError> {
   let closed = plan.get("closed").unwrap_or(&Value::Null);
   let Value::Object(closed) = closed else {
-    return Err(type_error(format!("'{}' object is not subscriptable", plans::py_type_name(closed))));
+    return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(closed))));
   };
-  Ok(plans::py_repr(closed.get("as").ok_or_else(|| key_error("as"))?))
+  Ok(plans::value_repr(closed.get("as").ok_or_else(|| key_error("as"))?))
 }
 
 /// `plan["id"]`: the plan's id, which a plan without one lacks.
@@ -511,11 +517,11 @@ fn id_of(plan: &Map<String, Value>) -> Result<&Value, VerbError> {
 /// fails the lookup Python makes, so the verb answers 500.
 fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
-    return Err(type_error(format!("'{}' object is not subscriptable", plans::py_type_name(registry))));
+    return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(registry))));
   };
   match registry.get("plans") {
     Some(Value::Array(plans)) => Ok(plans),
-    Some(other) => Err(type_error(format!("plans must be a list, got {}", plans::py_type_name(other)))),
+    Some(other) => Err(type_error(format!("plans must be a list, got {}", plans::type_name(other)))),
     None => Err(key_error("plans")),
   }
 }
@@ -523,11 +529,11 @@ fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
 /// `data["plans"]` as a list to change.
 fn plans_of_mut(registry: &mut Value) -> Result<&mut Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
-    return Err(type_error(format!("'{}' object is not subscriptable", plans::py_type_name(registry))));
+    return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(registry))));
   };
   match registry.get_mut("plans") {
     Some(Value::Array(plans)) => Ok(plans),
-    Some(other) => Err(type_error(format!("plans must be a list, got {}", plans::py_type_name(other)))),
+    Some(other) => Err(type_error(format!("plans must be a list, got {}", plans::type_name(other)))),
     None => Err(key_error("plans")),
   }
 }
@@ -538,12 +544,12 @@ fn plan_map(plan: &Value) -> Result<&Map<String, Value>, VerbError> {
 }
 
 fn plan_map_mut(plan: &mut Value) -> Result<&mut Map<String, Value>, VerbError> {
-  let kind = plans::py_type_name(plan);
+  let kind = plans::type_name(plan);
   plan.as_object_mut().ok_or_else(|| attribute_error_named(kind))
 }
 
 fn attribute_error(plan: &Value) -> VerbError {
-  attribute_error_named(plans::py_type_name(plan))
+  attribute_error_named(plans::type_name(plan))
 }
 
 fn attribute_error_named(kind: &str) -> VerbError {
@@ -617,7 +623,8 @@ mod tests {
     } else {
       present(&features, &locks, "sess", second, "P2".to_string(), Value::Null).await
     };
-    let message = format!("file {} already bound to plan 1 v1", text_repr::str_repr(&plan_paths::posix_normpath(second)));
+    let message =
+      format!("file {} already bound to plan 1 v1", text_repr::str_repr(&plan_paths::posix_normpath(second)));
     assert!(matches!(&error, Err(VerbError::Refused(detail)) if *detail == message), "{error:?}");
   }
 
@@ -655,7 +662,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn present_refuses_a_nul_byte_as_python_resolve_does() {
+  async fn present_refuses_a_nul_byte_as_resolve_does() {
     let (_home, features) = plan_session("sess", None);
     let error = present_p1(&features, "sess", "artifacts/a\0b.html").await.unwrap_err();
     assert!(matches!(&error, VerbError::Refused(detail) if detail == "lstat: embedded null character in path"));
@@ -834,7 +841,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn approve_refuses_each_plan_it_cannot_approve_with_the_python_message() {
+  async fn approve_refuses_each_plan_it_cannot_approve_with_the_message() {
     let cases = [
       (TWO_AWAITING_REGISTRY, None, "approve requires --plan (multiple candidates: 1, 2)"),
       (CLOSED_REGISTRY, None, "no plan available for approval"),

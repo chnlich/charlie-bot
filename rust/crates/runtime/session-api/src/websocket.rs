@@ -457,7 +457,7 @@ mod tests {
   }
 
   #[test]
-  fn handshake_cursor_query_cases_follow_python() {
+  fn handshake_cursor_query_cases_follow_recorded() {
     // Python accepts a non-empty run of at most 19 ASCII decimal digits (`server.py` `session_websocket`),
     // so leading zeros stay valid and a 19-digit value above i64::MAX parses.
     assert_eq!(parse_handshake_cursor(Some("9")), Some(9));

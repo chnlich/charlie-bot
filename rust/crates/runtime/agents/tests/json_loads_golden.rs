@@ -8,7 +8,7 @@ use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
 use serde_json::{Value, json};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
 /// The messages `json.loads` raises, with the C scanner's wording (`_json.c`). The decoder's two `repr` forms, `Invalid
 /// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by `json/decoder.py`'s pure-Python
@@ -45,7 +45,7 @@ enum Outcome {
 }
 
 #[test]
-fn python_json_matches_json_loads_over_the_corpus() {
+fn json_loads_matches_recorded_over_the_corpus() {
   let records = recorded_reference();
   assert!(records.len() > 9000, "the corpus holds {} inputs", records.len());
 
@@ -64,7 +64,7 @@ fn python_json_matches_json_loads_over_the_corpus() {
       "unrepresentable" => Outcome::Unrepresentable,
       other => panic!("unknown outcome {other}"),
     };
-    let actual = match python_json_load(mode, input) {
+    let actual = match load_by_mode(mode, input) {
       Ok(value) => Outcome::Value(text_repr::json_dumps(&value, &text_repr::STARLETTE_JSON)),
       Err(LoadError::Value(text)) => Outcome::Error(text),
       Err(LoadError::Unrepresentable(_)) => Outcome::Unrepresentable,
@@ -95,7 +95,7 @@ fn python_json_matches_json_loads_over_the_corpus() {
   }
 }
 
-fn python_json_load(mode: &str, input: &str) -> Result<Value, LoadError> {
+fn load_by_mode(mode: &str, input: &str) -> Result<Value, LoadError> {
   match mode {
     "bytes" => json_loads::loads(&hex_bytes(input)),
     "text" => json_loads::loads_text(input),
@@ -109,7 +109,7 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
 
 /// The outputs `json.loads` recorded for the deterministic input corpus.
 fn recorded_reference() -> Vec<Value> {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   fixture["cases"]
     .as_array()

@@ -79,7 +79,7 @@ fn choose_tempdir(
   }
   Err(io::Error::new(
     io::ErrorKind::NotFound,
-    format!("No usable temporary directory found in {}", python_path_list(&candidates)),
+    format!("No usable temporary directory found in {}", path_list_repr(&candidates)),
   ))
 }
 
@@ -112,12 +112,12 @@ fn absolute_path(path: &Path, cwd: &Path) -> PathBuf {
   absolute
 }
 
-fn python_path_list(paths: &[PathBuf]) -> String {
-  let values = paths.iter().map(|path| python_string_literal(&path.to_string_lossy())).collect::<Vec<_>>().join(", ");
+fn path_list_repr(paths: &[PathBuf]) -> String {
+  let values = paths.iter().map(|path| quoted_text(&path.to_string_lossy())).collect::<Vec<_>>().join(", ");
   format!("[{values}]")
 }
 
-fn python_string_literal(value: &str) -> String {
+fn quoted_text(value: &str) -> String {
   let quote = if value.contains('\'') && !value.contains('"') { '"' } else { '\'' };
   let mut literal = String::new();
   literal.push(quote);
@@ -238,7 +238,7 @@ mod tests {
   use std::process::Command;
 
   #[test]
-  fn candidate_environment_variables_win_in_python_order() {
+  fn candidate_environment_variables_win_in_order() {
     let cwd = Path::new("/synthetic/cwd");
     let tmpdir = choose_tempdir(
       Some(OsStr::new("/synthetic/tmpdir")),
@@ -299,7 +299,7 @@ mod tests {
   }
 
   #[test]
-  fn fallback_candidates_follow_python_order_through_the_current_directory() {
+  fn fallback_candidates_follow_order_through_the_current_directory() {
     let cwd = Path::new("/synthetic/cwd");
     let mut attempted = Vec::new();
     let selected = choose_tempdir(None, None, None, cwd, |path| {
@@ -316,7 +316,7 @@ mod tests {
   }
 
   #[test]
-  fn no_usable_candidate_returns_python_tempfile_error_text() {
+  fn no_usable_candidate_returns_tempfile_error_text() {
     let cwd = Path::new("/synthetic/cwd");
     let error = choose_tempdir(None, None, None, cwd, |_| Ok(false)).unwrap_err();
 
@@ -334,11 +334,11 @@ mod tests {
   }
 
   #[test]
-  fn mkdtemp_matches_python_name_mode_parent_and_collision_behavior() {
+  fn mkdtemp_matches_name_mode_parent_and_collision_behavior() {
     if env::var_os("CHARLIEBOT_TEST_TMPDIR_CHILD").is_none() {
       let root = tempfile::tempdir().unwrap();
       let output = Command::new(env::current_exe().unwrap())
-        .args(["--exact", "tempdir::tests::mkdtemp_matches_python_name_mode_parent_and_collision_behavior"])
+        .args(["--exact", "tempdir::tests::mkdtemp_matches_name_mode_parent_and_collision_behavior"])
         .env("TMPDIR", root.path())
         .env("CHARLIEBOT_TEST_TMPDIR_CHILD", "1")
         .output()

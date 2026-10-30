@@ -10,15 +10,15 @@ use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use serde_json::{Map, Value};
 
-use crate::event_text::{python_string, truthy_string};
+use crate::event_text::{truthy_string, value_str};
 
 /// Format a child report as the parent's typed task input (`session_dispatch.child_report_text` before it moved here).
 pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {
-  let mut header = format!("[Report from task {}", python_string(report.get("child_session_id")));
+  let mut header = format!("[Report from task {}", value_str(report.get("child_session_id")));
   if let Some(provenance) = provenance {
     header.push_str(&format!(" ({provenance})"));
   }
-  format!("{header} | outcome {}] {}", python_string(report.get("outcome")), truthy_string(report.get("summary")))
+  format!("{header} | outcome {}] {}", value_str(report.get("outcome")), truthy_string(report.get("summary")))
 }
 
 /// Compose the manager input prompt and uploaded-file list from the claimed facts.
@@ -49,7 +49,7 @@ pub fn compose_input_prompt(
       }
       event_types::CHILD_REPORT => {
         let report = event.to_value();
-        let child_id = python_string(report.get("child_session_id"));
+        let child_id = value_str(report.get("child_session_id"));
         let provenance = report_provenance.get(&child_id).and_then(Value::as_str);
         child_report_text(&report, provenance)
       }

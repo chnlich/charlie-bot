@@ -13,7 +13,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use charliebot_core::{text_repr, ssh};
+use charliebot_core::{ssh, text_repr};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::waitpid;
@@ -305,7 +305,7 @@ mod tests {
   }
 
   #[test]
-  fn shell_quote_matches_python_shlex() {
+  fn shell_quote_matches_shlex_quote() {
     assert_eq!(shell_quote("/tmp/run_1.2-x"), "/tmp/run_1.2-x");
     assert_eq!(shell_quote("a=b:c@d%e+f,g"), "a=b:c@d%e+f,g");
     assert_eq!(shell_quote(""), "''");

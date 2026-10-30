@@ -10,8 +10,8 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use anyhow::{Context, bail};
-use charliebot_core::text_repr::str_repr;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::str_repr;
 
 const TOPICS_FILENAME: &str = "topics";
 const ENTRIES_DIRNAME: &str = "entries";
@@ -259,7 +259,9 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
     topic: header.get("topic").cloned(),
     slug: entry_path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default(),
     scope: header.get("scope").cloned(),
-    audience: header.get("audience").map(|raw| raw.split(',').map(|part| str_methods::strip(part).to_string()).collect()),
+    audience: header
+      .get("audience")
+      .map(|raw| raw.split(',').map(|part| str_methods::strip(part).to_string()).collect()),
     title: title.clone(),
     body: body_lines.join("\n"),
   })
@@ -583,14 +585,14 @@ mod tests {
   }
 
   #[test]
-  fn a_title_loses_python_whitespace_and_a_carriage_return_is_read_as_a_newline() {
+  fn a_title_loses_str_whitespace_and_a_carriage_return_is_read_as_a_newline() {
     let text = "---\nscope: user\ntopic: profile\naudience: worker\ntitle: \u{3000}Café 记忆\u{1c}\n---\nbody\n";
     let entry = parse_entry_text(text, Path::new("entries/profile/x.md")).unwrap();
     assert_eq!(entry.title, "Café 记忆");
   }
 
   #[test]
-  fn a_malformed_header_line_is_quoted_as_python_repr() {
+  fn a_malformed_header_line_is_quoted_as_repr() {
     let text = "---\nTitle: Note\n---\nbody\n";
     let error = parse_entry_text(text, Path::new("entries/profile/x.md")).unwrap_err();
     assert_eq!(error.0, "entries/profile/x.md: line 2: malformed header line: 'Title: Note'");

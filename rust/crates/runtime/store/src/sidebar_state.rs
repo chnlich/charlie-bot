@@ -156,7 +156,7 @@ mod tests {
   }
 
   #[test]
-  fn snapshot_updates_and_derived_memo_have_python_caps() {
+  fn snapshot_updates_and_derived_memo_have_caps() {
     let _guard = TEST_LOCK.lock().expect("sidebar state test mutex is not poisoned");
     reset_for_tests();
     let mut entry = Map::new();

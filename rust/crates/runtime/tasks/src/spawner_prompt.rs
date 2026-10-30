@@ -35,7 +35,7 @@ pub enum TextReadError {
 
 impl TextReadError {
   /// The name of the Python exception class this failure raises (`type(error).__name__`).
-  pub fn python_class_name(&self) -> &'static str {
+  pub fn class_name(&self) -> &'static str {
     match self {
       Self::Io(error) => match error.kind() {
         io::ErrorKind::NotFound => "FileNotFoundError",
@@ -49,7 +49,7 @@ impl TextReadError {
   }
 
   /// The text of the Python exception, `str(error)`, for a read of `path`.
-  pub fn python_message(&self, path: &Path) -> String {
+  pub fn error_text(&self, path: &Path) -> String {
     match self {
       Self::Io(error) => match error.raw_os_error() {
         Some(errno) => {
@@ -224,7 +224,7 @@ pub fn load_marker_sections(
       path.display()
     );
   }
-  let text = read_text(path).map_err(|error| anyhow!(error.python_message(path)))?;
+  let text = read_text(path).map_err(|error| anyhow!(error.error_text(path)))?;
   let sections = split_sections(&text);
   let missing: Vec<&str> = required.iter().copied().filter(|id| !sections.contains_key(*id)).collect();
   if !missing.is_empty() {
@@ -363,7 +363,7 @@ mod tests {
   }
 
   #[test]
-  fn utf8_errors_match_python_ranges_for_invalid_sequences() {
+  fn utf8_errors_match_ranges_for_invalid_sequences() {
     let cases: &[(&[u8], &str)] = &[
       (&[0xE2, 0x28, 0xA1], "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte"),
       (&[0xE2, 0x82, 0x28], "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"),

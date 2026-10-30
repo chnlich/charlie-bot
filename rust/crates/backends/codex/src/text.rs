@@ -15,7 +15,7 @@ pub fn empty_object() -> &'static Map<String, Value> {
 }
 
 /// Python's `str.splitlines()`: the lines of `text` without their terminators. The terminators are wider than `\n`.
-pub fn py_splitlines(text: &str) -> Vec<&str> {
+pub fn splitlines(text: &str) -> Vec<&str> {
   let mut lines = Vec::new();
   let mut start = 0;
   let mut chars = text.char_indices().peekable();
@@ -40,12 +40,12 @@ pub fn py_splitlines(text: &str) -> Vec<&str> {
 }
 
 /// Python's `s[n:]` for a count of code points: the text after its first `n` characters.
-pub fn py_slice_from(text: &str, skip: usize) -> String {
+pub fn slice_from(text: &str, skip: usize) -> String {
   text.chars().skip(skip).collect()
 }
 
 /// Python's `len(s)` for a string: its code point count.
-pub fn py_len(text: &str) -> usize {
+pub fn code_point_len(text: &str) -> usize {
   text.chars().count()
 }
 
@@ -78,11 +78,11 @@ mod tests {
   use serde_json::json;
 
   #[test]
-  fn splitlines_breaks_where_python_does() {
-    assert_eq!(py_splitlines("a\nb\r\nc\rd"), ["a", "b", "c", "d"]);
-    assert_eq!(py_splitlines("x\u{2028}y\u{85}z\n"), ["x", "y", "z"]);
-    assert_eq!(py_splitlines("\n"), [""]);
-    assert!(py_splitlines("").is_empty());
+  fn splitlines_breaks_where_str_does() {
+    assert_eq!(splitlines("a\nb\r\nc\rd"), ["a", "b", "c", "d"]);
+    assert_eq!(splitlines("x\u{2028}y\u{85}z\n"), ["x", "y", "z"]);
+    assert_eq!(splitlines("\n"), [""]);
+    assert!(splitlines("").is_empty());
   }
 
   #[test]
@@ -91,7 +91,7 @@ mod tests {
   }
 
   #[test]
-  fn truthiness_follows_python() {
+  fn truthiness_follows_value_rules() {
     assert!(!truthy(&json!(0)));
     assert!(!truthy(&json!("")));
     assert!(!truthy(&json!([])));

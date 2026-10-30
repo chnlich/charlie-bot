@@ -510,7 +510,7 @@ async fn trigger_master_dispatches_an_existing_stable_input_once() {
 }
 
 #[tokio::test]
-async fn dispatch_without_executor_returns_python_reason_and_liveness_clears_run() {
+async fn dispatch_without_executor_returns_reason_and_liveness_clears_run() {
   let harness = Harness::new();
   let worker = harness.create_task("worker", None, TaskProfile::Worker, "Worker").await;
   harness.dispatcher.admit_input(&worker.id, event_types::USER, "work", "user", json!({})).await.unwrap();
@@ -616,7 +616,7 @@ async fn user_admission_lifts_only_the_target_node() {
     let session_id = child.id.clone();
     async move { dispatcher.admit_input(&session_id, event_type, content, actor, fields).await }
   };
-  admit(event_types::USER, "user", "my turn", json!({"input_id":"m1","timestamp":first.to_python_isoformat()}))
+  admit(event_types::USER, "user", "my turn", json!({"input_id":"m1","timestamp":first.to_isoformat_text()}))
     .await
     .unwrap();
   assert_eq!(updated_at_of(&harness, &child.id).await, first);
@@ -624,11 +624,11 @@ async fn user_admission_lifts_only_the_target_node() {
   assert_eq!(updated_at_of(&harness, &root.id).await, root_at);
 
   // A replayed input_id returns the original event and lifts nothing; a new message lifts the target again.
-  admit(event_types::USER, "user", "my turn", json!({"input_id":"m1","timestamp":second.to_python_isoformat()}))
+  admit(event_types::USER, "user", "my turn", json!({"input_id":"m1","timestamp":second.to_isoformat_text()}))
     .await
     .unwrap();
   assert_eq!(updated_at_of(&harness, &child.id).await, first);
-  admit(event_types::USER, "user", "again", json!({"input_id":"m2","timestamp":second.to_python_isoformat()}))
+  admit(event_types::USER, "user", "again", json!({"input_id":"m2","timestamp":second.to_isoformat_text()}))
     .await
     .unwrap();
   assert_eq!(updated_at_of(&harness, &child.id).await, second);
@@ -680,7 +680,7 @@ async fn user_admission_lifts_only_the_target_node() {
       event_types::USER,
       "to the archived branch",
       "user",
-      json!({"timestamp":later.to_python_isoformat()}),
+      json!({"timestamp":later.to_isoformat_text()}),
     )
     .await
     .unwrap();
@@ -713,7 +713,7 @@ async fn a_user_message_lift_is_stored_before_its_tree_changed_broadcast() {
 
   harness
     .dispatcher
-    .admit_input(&child.id, event_types::USER, "my turn", "user", json!({"timestamp":when.to_python_isoformat()}))
+    .admit_input(&child.id, event_types::USER, "my turn", "user", json!({"timestamp":when.to_isoformat_text()}))
     .await
     .unwrap();
 

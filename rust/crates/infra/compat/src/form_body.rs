@@ -285,7 +285,7 @@ mod tests {
   }
 
   #[test]
-  fn querystring_splits_fields_as_python_multipart_does() {
+  fn querystring_splits_fields_like_multipart() {
     assert_eq!(fields(b"a;b=1&c=2"), [pair("a;b", "1"), pair("c", "2")]);
     assert_eq!(fields(b"a=x;y&b=2"), [pair("a", "x;y"), pair("b", "2")]);
     assert_eq!(fields(b"a=x;y"), [pair("a", "x")]);
@@ -307,7 +307,7 @@ mod tests {
   }
 
   #[test]
-  fn header_options_split_outside_quotes_as_python_multipart_does() {
+  fn header_options_split_outside_quotes_like_multipart() {
     let (media_type, params) = parse_options_header(r#"form-data; name="a;b"; filename="x.txt""#);
     assert_eq!(media_type, "form-data");
     assert_eq!(params, [pair("name", "a;b"), pair("filename", "x.txt")]);

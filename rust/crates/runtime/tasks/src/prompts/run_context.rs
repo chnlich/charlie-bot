@@ -72,10 +72,7 @@ fn stored_snapshot(path: &Path, reference: &str) -> Result<Value, ContextReadErr
     return Err(ContextReadError::internal(format!("stored prompt snapshot missing at {reference}")));
   }
   let text = read_text(path).map_err(|error| {
-    ContextReadError::internal(format!(
-      "stored prompt snapshot unreadable at {reference}: {}",
-      error.python_message(path)
-    ))
+    ContextReadError::internal(format!("stored prompt snapshot unreadable at {reference}: {}", error.error_text(path)))
   })?;
   let stored = json_loads::loads_text(&text).map_err(|error| {
     ContextReadError::internal(format!("stored prompt snapshot unreadable at {reference}: {error}"))

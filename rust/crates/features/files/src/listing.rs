@@ -60,7 +60,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
       name,
       is_dir: metadata.is_dir(),
       size: metadata.len(),
-      modified: timefmt::python_float_seconds(metadata.mtime(), metadata.mtime_nsec()),
+      modified: timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec()),
     });
   }
   children.sort_by_cached_key(|child| (!child.is_dir, child.name.to_lowercase()));
@@ -251,7 +251,7 @@ mod tests {
   }
 
   #[test]
-  fn html_and_file_url_escaping_match_python_bytes() {
+  fn html_and_file_url_escaping_match_recorded_bytes() {
     assert_eq!(escape("&<>\"'/"), "&amp;&lt;&gt;&quot;&#x27;/");
     assert_eq!(quote("a b/#?é~"), "a%20b%2F%23%3F%C3%A9~");
   }

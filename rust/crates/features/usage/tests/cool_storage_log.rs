@@ -51,7 +51,7 @@ impl Visit for FieldText<'_> {
 }
 
 #[test]
-fn sweep_done_event_carries_each_python_field() {
+fn sweep_done_event_carries_each_field() {
   let tree = tempfile::tempdir().expect("the temporary tree");
   let charlie = tree.path().join("charlie");
   let home = tree.path().join("home");

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
-use charliebot_core::text_repr::python_str;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
@@ -22,7 +22,7 @@ use super::translate::CodexTranslator;
 use charliebot_agents::cli_base::prepend_path_dir;
 use charliebot_agents::one_shot::{assistant_text, frame_system_prompt};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
-use charliebot_agents::transport::kill::{kill_process_group, python_exit_code};
+use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, spawn_one_shot};
 
 /// The instructions file a manager turn writes into its session cwd, which Codex auto-detects.
@@ -284,7 +284,7 @@ async fn collect(
           if let Some(message) = message.filter(|value| truthy(value))
             && structured_error.is_none()
           {
-            structured_error = Some(str_methods::strip(&python_str(message)).to_string());
+            structured_error = Some(str_methods::strip(&value_str(message)).to_string());
           }
         }
         Some(event_types::ASSISTANT)
@@ -297,7 +297,7 @@ async fn collect(
     }
   }
   let status = child.wait().await?;
-  Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, python_exit_code(status)))
+  Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code(status)))
 }
 
 /// One NDJSON line parsed, or `None` for a blank line or a line that is not JSON (logged, as the Python reader does).
@@ -359,7 +359,7 @@ mod tests {
   }
 
   #[test]
-  fn instructions_file_without_content_serializes_python_none_as_toml_null() {
+  fn instructions_file_without_content_serializes_none_as_toml_null() {
     let launch =
       LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
     let backend = CodexBackend::from_launch(

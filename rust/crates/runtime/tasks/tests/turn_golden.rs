@@ -50,7 +50,7 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
-const PYTHON_FIXTURE: &str = include_str!("fixtures/turn_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/turn_golden.json");
 
 mod process_guard;
 use process_guard::ProcessGroupGuard;
@@ -635,8 +635,8 @@ async fn run_turn_with_spawn(
     .await
 }
 
-fn python_golden_cases() -> anyhow::Result<Vec<GoldenCase>> {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE)?;
+fn golden_cases() -> anyhow::Result<Vec<GoldenCase>> {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE)?;
   anyhow::ensure!(fixture["base_commit"] == "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected"].clone();
   replace_fixture_times(&mut expected);
@@ -653,8 +653,8 @@ fn replace_fixture_times(value: &mut Value) {
 }
 
 #[tokio::test]
-async fn manager_turn_matches_python_event_stream_matrix() -> anyhow::Result<()> {
-  let cases = python_golden_cases()?;
+async fn manager_turn_matches_recorded_event_stream_matrix() -> anyhow::Result<()> {
+  let cases = golden_cases()?;
   assert_eq!(cases.len(), CASE_COUNT, "turn golden matrix size changed");
   let registry = registry();
   let temp = tempfile::tempdir()?;

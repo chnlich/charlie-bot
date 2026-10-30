@@ -93,7 +93,7 @@ fn session_row(meta: &SessionMetadata, row: TaskTreeRow) -> SessionRow {
 }
 
 fn encode_cursor(revision: &str, created_at: UtcDateTime, session_id: &str) -> String {
-  let payload = json!({"r": revision, "a": created_at.to_python_isoformat(), "i": session_id});
+  let payload = json!({"r": revision, "a": created_at.to_isoformat_text(), "i": session_id});
   URL_SAFE_NO_PAD.encode(charliebot_compat::json::fast_json_bytes(&payload))
 }
 
@@ -194,7 +194,7 @@ mod tests {
   }
 
   #[test]
-  fn tree_cursor_round_trips_and_keeps_python_datetime_text() {
+  fn tree_cursor_round_trips_and_keeps_datetime_text() {
     let created_at = UtcDateTime::parse("2026-01-02T03:04:05Z").unwrap();
     let cursor = encode_cursor("revision", created_at, "synthetic-session");
     let (revision, parsed, id) = decode_cursor(&cursor).unwrap();

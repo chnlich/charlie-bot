@@ -49,7 +49,7 @@ fn golden_cases() {
 /// `charliebot-cli-common`, and `test_port_cache_hit_serves_the_cached_port_in_a_fresh_process` has
 /// no Rust counterpart — no port cache, so `changed_server_port_takes_effect_on_the_next_call`
 /// replaces it.
-const PORTED_PYTHON_TESTS: &[&str] = &[
+const GOLDEN_CASE_TESTS: &[&str] = &[
   "test_main_routes_by_session_env_from_another_session_dir",
   "test_main_rejects_explicit_session_against_session_env",
   "test_main_prints_only_session_and_run_id_from_server_result",
@@ -169,12 +169,12 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
 ];
 
 #[test]
-fn every_ported_python_test_has_a_golden_case() {
+fn every_listed_test_has_a_golden_case() {
   let stems: Vec<String> = case_files()
     .iter()
     .map(|path| path.file_stem().expect("a case file has a stem").to_string_lossy().into_owned())
     .collect();
-  for name in PORTED_PYTHON_TESTS {
+  for name in GOLDEN_CASE_TESTS {
     assert!(stems.iter().any(|stem| stem.starts_with(name)), "{name} has no golden case file");
   }
 }

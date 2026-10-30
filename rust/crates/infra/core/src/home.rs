@@ -24,7 +24,11 @@ pub struct HomeError {
 
 impl fmt::Display for HomeError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    write!(f, "{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {}", text_repr::str_repr(&self.raw))
+    write!(
+      f,
+      "{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {}",
+      text_repr::str_repr(&self.raw)
+    )
   }
 }
 
@@ -111,7 +115,7 @@ mod tests {
   }
 
   #[test]
-  fn a_relative_home_is_refused_with_the_python_message() {
+  fn a_relative_home_is_refused_with_the_message() {
     let error = resolve_home("rel/home").unwrap_err();
     assert_eq!(error.to_string(), "CHARLIEBOT_HOME must be an absolute path or start with '~'; got 'rel/home'");
   }

@@ -11,7 +11,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
-use charliebot_core::{config, credentials, event_types, home, str_methods, run_token};
+use charliebot_core::{config, credentials, event_types, home, run_token, str_methods};
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::RunRecord;
@@ -111,7 +111,7 @@ fn query(args: &QueryArgs) -> Result<(), CliExit> {
   if let Some(fixed) = fixed_audience.as_deref()
     && args.audience.as_deref().is_some_and(|audience| audience != fixed)
   {
-    python_error(&format!(
+    exit_error(&format!(
       "error: --audience {} contradicts the run credential's fixed audience '{fixed}'; a run token cannot broaden its own query",
       args.audience.as_deref().expect("the audience mismatch has a requested audience")
     ));
@@ -129,9 +129,9 @@ fn query(args: &QueryArgs) -> Result<(), CliExit> {
       let topic_hint = value.split_once('/').map(|(topic, _)| topic).filter(|topic| store.topics.contains_key(*topic));
       match topic_hint {
         Some(topic) => {
-          python_error_line(&format!("error: unknown topic: {value} (index lines are topic/slug; try --topic {topic})"))
+          error_line(&format!("error: unknown topic: {value} (index lines are topic/slug; try --topic {topic})"))
         }
-        None => python_error_line(&format!("error: unknown topic: {value}")),
+        None => error_line(&format!("error: unknown topic: {value}")),
       }
     }
     process::exit(1);
@@ -163,14 +163,14 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
   let key = credentials.access_key().unwrap_or_default();
   let claims = match run_token::verify_run_token(token, &key) {
     Ok(claims) => claims,
-    Err(error) => python_error(&format!("error: invalid run token: {error}")),
+    Err(error) => exit_error(&format!("error: invalid run token: {error}")),
   };
   let sessions_root = config::sessions_dir_in(home_dir);
   let session_dir = sessions_root.join(&claims.session_id);
   let run_path = layout::runs_dir(&session_dir).join(&claims.run_id).join(METADATA_FILE_NAME);
   let identity = run_identity::read_run_identity_sync(&run_path).map_err(|error| CliExit::error(error.to_string()))?;
   let Some(identity) = identity else {
-    python_error(&format!("error: {}", run_identity::RUN_IDENTITY_UNKNOWN_DETAIL));
+    exit_error(&format!("error: {}", run_identity::RUN_IDENTITY_UNKNOWN_DETAIL));
   };
   let run: RunRecord = serde_json::from_value(json!({
     "id": identity.id,
@@ -182,14 +182,14 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
   let events_path = layout::chat_events_path(&session_dir);
   let events = read_run_events(&events_path)?;
   if let Some(refusal) = run_identity::run_identity_refusal(Some(&run), &events) {
-    python_error(&format!("error: {refusal}"));
+    exit_error(&format!("error: {refusal}"));
   }
   let metadata = load_json_metadata(&sessions_root.join(&claims.session_id).join(run_identity::SESSION_METADATA_NAME))?;
   let profile = metadata.as_ref().and_then(|value| value.get("profile")).and_then(Value::as_str);
   match profile {
     Some("manager") => Ok("master".to_string()),
     Some("worker") => Ok("worker".to_string()),
-    _ => python_error(&format!(
+    _ => exit_error(&format!(
       "error: run token references session {}, which is not a task-tree node in this instance",
       claims.session_id
     )),
@@ -237,11 +237,11 @@ fn add(args: &AddArgs) -> Result<(), CliExit> {
   };
   let first_line = body.split('\n').next().unwrap_or_default();
   if !first_line.starts_with("# ") {
-    python_error("error: body must start with '# <title>'");
+    exit_error("error: body must start with '# <title>'");
   }
   let title = str_methods::strip(&first_line[2..]);
   if title.is_empty() {
-    python_error("error: empty title after '# '");
+    exit_error("error: empty title after '# '");
   }
   let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
@@ -332,12 +332,12 @@ fn lint(args: &LintArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-fn python_error(message: &str) -> ! {
-  python_error_line(message);
+fn exit_error(message: &str) -> ! {
+  error_line(message);
   process::exit(1)
 }
 
-fn python_error_line(message: &str) {
+fn error_line(message: &str) {
   eprintln!("{message}");
 }
 

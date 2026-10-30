@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_core::text_repr::python_str;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::usage::{RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -154,7 +154,7 @@ fn record(message_id: &str, session_id: &str, data: &str) -> anyhow::Result<Opti
   let provider = field(model_blob, "providerID");
   let mut model = text_or(field(model_blob, "id"), "unknown")?;
   if model.starts_with('/') {
-    model = format!("{} ({})", paths::name(&model), provider.map_or_else(|| "None".to_string(), python_str));
+    model = format!("{} ({})", paths::name(&model), provider.map_or_else(|| "None".to_string(), value_str));
   }
   let account = text_or(provider, "unknown")?;
 

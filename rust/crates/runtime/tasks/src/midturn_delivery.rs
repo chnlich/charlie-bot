@@ -26,8 +26,8 @@ use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
+use crate::event_text::value_str;
 use crate::master_state::RunTracking;
-use crate::event_text::python_string;
 use crate::task_input_prompt::compose_input_prompt;
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
@@ -73,11 +73,11 @@ pub fn record_ack(
   if event.get("type").and_then(Value::as_str) != Some(event_types::INPUT_DELIVERED) {
     return Ok(());
   }
-  let run_id = python_string(event.get("run_id"));
+  let run_id = value_str(event.get("run_id"));
   if run_id != item_run_id {
     anyhow::bail!("input delivery for Run {run_id} reached manager Run {item_run_id}");
   }
-  let input_id = python_string(event.get(event_types::INPUT_EVENT_ID));
+  let input_id = value_str(event.get(event_types::INPUT_EVENT_ID));
   if !user_event_ids.contains(&input_id) {
     user_event_ids.push(input_id.clone());
   }

@@ -7,7 +7,7 @@ use serde_json::Value;
 const FIXTURE: &str = include_str!("../../../../fixtures/golden/json_renders_golden.json");
 
 #[test]
-fn renders_match_python_byte_for_byte() {
+fn renders_match_recorded_byte_for_byte() {
   let fixture: Value = serde_json::from_str(FIXTURE).expect("the fixture is JSON");
   let cases = fixture["cases"].as_array().expect("the fixture lists cases");
   assert!(cases.len() > 500, "the fixture covers the float range and the string escapes");

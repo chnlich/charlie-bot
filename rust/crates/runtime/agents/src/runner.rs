@@ -26,7 +26,7 @@ use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
 use crate::transport::final_stdout;
 use crate::transport::follow;
 use crate::transport::identity::{self, ProcessIdentity};
-use crate::transport::kill::{self, python_exit_code};
+use crate::transport::kill::{self, exit_code};
 use crate::transport::rotation::rotate_stale_transport;
 use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSetup, SpawnSpec, read_stderr_tail};
 
@@ -694,7 +694,7 @@ async fn wait_until_stopped_or_terminate(child: &mut AgentChild) -> anyhow::Resu
 }
 
 async fn reap_child(mut child: AgentChild, sender: watch::Sender<Option<Result<i32, String>>>) {
-  let result = child.wait().await.map(python_exit_code).map_err(|error| error.to_string());
+  let result = child.wait().await.map(exit_code).map_err(|error| error.to_string());
   sender.send_replace(Some(result));
 }
 
@@ -1221,7 +1221,7 @@ mod tests {
   }
 
   #[test]
-  fn diagnostic_commands_are_the_python_probe_strings() {
+  fn diagnostic_commands_are_the_probe_strings() {
     assert_eq!(
       diagnostic_commands(4321, 4000),
       [

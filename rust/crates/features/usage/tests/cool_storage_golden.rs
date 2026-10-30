@@ -28,7 +28,7 @@ const NOW_UNIX: u64 = 1_792_411_200;
 const LEDGER_DIR: &str = "charlie/usage";
 
 #[test]
-fn recorded_python_cold_storage_outputs_match_all_tree_and_ledger_fields() {
+fn recorded_cold_storage_outputs_match_all_tree_and_ledger_fields() {
   let fixture = fixture();
   assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["source"]["now"], "$NOW");

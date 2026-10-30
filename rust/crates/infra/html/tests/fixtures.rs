@@ -128,7 +128,7 @@ fn read_gzip_json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> T {
 }
 
 #[test]
-fn tokenizer_matches_recorded_randomized_cpython_outputs() {
+fn tokenizer_matches_recorded_randomized_outputs() {
   let fixture: DifferentialFixture = read_gzip_json(include_bytes!("fixtures/differential_golden.json.gz"));
   assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
   assert_eq!(fixture.seed, 20261019);
@@ -153,7 +153,7 @@ fn tokenizer_matches_recorded_randomized_cpython_outputs() {
 }
 
 #[test]
-fn tokenizer_matches_cpython_fixture_events() {
+fn tokenizer_matches_recorded_fixture_events() {
   let (corpus, expected) = fixtures();
   assert_eq!(corpus.cpython_version, "3.14.7");
   assert_eq!(expected.cpython_version, corpus.cpython_version);
@@ -179,7 +179,7 @@ fn tokenizer_matches_cpython_fixture_events() {
 }
 
 #[test]
-fn entity_and_escape_helpers_match_cpython_fixtures() {
+fn entity_and_escape_helpers_match_recorded_fixtures() {
   let (_, expected) = fixtures();
   for case in expected.unescape {
     assert_eq!(unescape(&case.input), case.expected, "unescape input {:?}", case.input);
@@ -190,7 +190,7 @@ fn entity_and_escape_helpers_match_cpython_fixtures() {
 }
 
 #[test]
-fn opcodes_match_cpython_sequence_matcher_fixtures() {
+fn opcodes_match_recorded_sequence_matcher_fixtures() {
   let (corpus, expected) = fixtures();
   let expected_by_id: HashMap<&str, &ExpectedOpcodes> =
     expected.opcodes.iter().map(|fixture| (fixture.id.as_str(), fixture)).collect();

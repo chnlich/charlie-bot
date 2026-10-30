@@ -182,7 +182,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn registration_matches_the_python_usage_source_and_attribution() {
+  fn registration_matches_the_usage_source_and_attribution() {
     let mut registry = Registry::new();
     registry.register_package(PACKAGE, register_synthetic).unwrap();
 

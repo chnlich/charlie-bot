@@ -324,7 +324,7 @@ fn a_rate_limited_account_backs_off_without_a_second_request() {
 }
 
 #[test]
-fn an_http_error_returns_the_python_status_error_text() {
+fn an_http_error_returns_the_status_error_text() {
   let fixture = Fixture::new(FRESH, vec![(500, "{}")], vec![]);
   let account = fixture.account("work (default)");
 

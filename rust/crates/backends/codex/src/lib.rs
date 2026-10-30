@@ -114,7 +114,7 @@ mod tests {
   }
 
   #[test]
-  fn registration_matches_the_python_backend_and_usage_source() {
+  fn registration_matches_the_backend_and_usage_source() {
     let mut registry = Registry::new();
     registry.register_package("src.backends.codex", register_synthetic_host).unwrap();
 

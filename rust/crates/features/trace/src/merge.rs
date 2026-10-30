@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
-use charliebot_core::text_repr::python_truthy;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::FeatureContext;
 use flate2::{Compression, GzBuilder};
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
@@ -184,14 +184,14 @@ fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, 
   }
   let payload = CacheKeyPayload { paths: path_rows, slim, mode };
   let mut encoded = Vec::new();
-  let mut serializer = serde_json::Serializer::with_formatter(&mut encoded, PythonAsciiFormatter);
+  let mut serializer = serde_json::Serializer::with_formatter(&mut encoded, AsciiFormatter);
   payload.serialize(&mut serializer).map_err(|error| BuildFailure::Failed(error.to_string()))?;
   Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
-struct PythonAsciiFormatter;
+struct AsciiFormatter;
 
-impl Formatter for PythonAsciiFormatter {
+impl Formatter for AsciiFormatter {
   fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> std::io::Result<()>
   where
     W: ?Sized + Write,
@@ -381,7 +381,7 @@ impl IdSequencer {
   }
 
   fn admit(&mut self, original: &Value) -> u64 {
-    let key = python_value_text(original);
+    let key = value_text(original);
     if let Some(id) = self.seen.get(&key) {
       return *id;
     }
@@ -446,7 +446,7 @@ fn merge_one_trace(
       }
     }
     let original_pid = event.get("pid").cloned().unwrap_or(Value::Null);
-    let pid_key = python_value_text(&original_pid);
+    let pid_key = value_text(&original_pid);
     let synthetic_pid = pid_label_lookup
       .get(&pid_key)
       .map(|label| if label == "CPU" { rank_label.clone() } else { format!("{rank_label}/{label}") })
@@ -454,7 +454,7 @@ fn merge_one_trace(
     event.insert("pid".to_string(), Value::String(synthetic_pid.clone()));
 
     if let Some(original_tid) = event.get("tid").cloned() {
-      let tid_key = python_value_text(&original_tid);
+      let tid_key = value_text(&original_tid);
       let first_sight = !tid_seq.seen.contains_key(&tid_key);
       let synthetic_tid = tid_seq.admit(&original_tid);
       if first_sight {
@@ -508,13 +508,13 @@ fn collect_pid_labels(events: &[Value]) -> Result<(PidLabelOrder, PidLabelLookup
     let Some(args_value) = event.get("args") else {
       continue;
     };
-    if !python_truthy(args_value) {
+    if !is_truthy(args_value) {
       continue;
     }
     let args = args_value.as_object().ok_or_else(|| attribute_failure(args_value, "get"))?;
-    let key = python_value_text(event.get("pid").unwrap_or(&Value::Null));
+    let key = value_text(event.get("pid").unwrap_or(&Value::Null));
     let raw_label = args.get("labels").cloned().unwrap_or(Value::Null);
-    let label = if python_truthy(&raw_label) { python_value_text(&raw_label) } else { String::new() };
+    let label = if is_truthy(&raw_label) { value_text(&raw_label) } else { String::new() };
     if let Some(index) = positions.get(&key).copied() {
       ordered[index].1 = label.clone();
     } else {
@@ -529,7 +529,7 @@ fn collect_pid_labels(events: &[Value]) -> Result<(PidLabelOrder, PidLabelLookup
 fn walk_drops(event: &Map<String, Value>, phase: &Value, slim: bool) -> Result<bool, BuildFailure> {
   if phase.as_str() == Some("M") {
     let name = event.get("name").unwrap_or(&Value::Null);
-    if python_truthy(name) {
+    if is_truthy(name) {
       let name = name.as_str().ok_or_else(|| attribute_failure(name, "startswith"))?;
       if name.starts_with("process_") {
         return Ok(true);
@@ -582,7 +582,7 @@ fn attribute_failure(value: &Value, attribute: &str) -> BuildFailure {
   BuildFailure::Failed(format!("'{type_name}' object has no attribute '{attribute}'"))
 }
 
-fn python_value_text(value: &Value) -> String {
+fn value_text(value: &Value) -> String {
   match value {
     Value::Null => "None".to_string(),
     Value::Bool(true) => "True".to_string(),
@@ -592,27 +592,27 @@ fn python_value_text(value: &Value) -> String {
       charliebot_core::text_repr::float_repr(number.as_f64().expect("a float number has an f64 value"))
     }
     Value::Number(number) => number.to_string(),
-    Value::Array(values) => format!("[{}]", values.iter().map(python_value_repr).collect::<Vec<_>>().join(", ")),
+    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
     Value::Object(values) => format!(
       "{{{}}}",
       values
         .iter()
-        .map(|(key, value)| format!("{}: {}", charliebot_core::text_repr::str_repr(key), python_value_repr(value)))
+        .map(|(key, value)| format!("{}: {}", charliebot_core::text_repr::str_repr(key), value_repr(value)))
         .collect::<Vec<_>>()
         .join(", ")
     ),
   }
 }
 
-fn python_value_repr(value: &Value) -> String {
+fn value_repr(value: &Value) -> String {
   match value {
     Value::String(value) => charliebot_core::text_repr::str_repr(value),
-    _ => python_value_text(value),
+    _ => value_text(value),
   }
 }
 
 fn thread_name_event(pid: &str, tid: u64, raw: &Value, rank_label: &str) -> Value {
-  serde_json::json!({"ph":"M","pid":pid,"tid":tid,"name":"thread_name","args":{"name":format!("{rank_label}/{}", python_value_text(raw))}})
+  serde_json::json!({"ph":"M","pid":pid,"tid":tid,"name":"thread_name","args":{"name":format!("{rank_label}/{}", value_text(raw))}})
 }
 
 fn metadata_event(pid: &str, tid: u64, name: &str, args: Value) -> Value {
@@ -781,7 +781,7 @@ mod tests {
   }
 
   #[test]
-  fn json_parse_errors_keep_python_message_and_character_positions() {
+  fn json_parse_errors_keep_message_and_character_positions() {
     let cases: [(&[u8], &str); 5] = [
       (br#"{"x":"\q"}"#, "invalid escaped sequence in string: line 1 column 7 (char 6)"),
       (b"{\"x\":\"a\nb\"}", "unexpected control character in string: line 1 column 8 (char 7)"),
@@ -887,14 +887,14 @@ mod differential_tests {
   }
 
   #[derive(Serialize)]
-  struct PythonCacheKey<'a> {
+  struct CacheKey<'a> {
     paths: Vec<(String, u64, i64)>,
     slim: bool,
     mode: &'a str,
   }
 
   #[test]
-  fn recorded_python_trace_builders_match_seeded_corpus() {
+  fn recorded_trace_builders_match_seeded_corpus() {
     let bytes = include_bytes!("../tests/fixtures/trace_golden.json.gz");
     let mut decoder = GzDecoder::new(bytes.as_slice());
     let mut contents = Vec::new();
@@ -962,7 +962,7 @@ mod differential_tests {
       for mode in ["gzip", "merge"] {
         let key = &case["cache_keys"][mode];
         assert_eq!(key["recorded_python_key"], "$SHA256(paths, slim, mode)");
-        let expected = python_cache_key(key, root.path(), slim, mode);
+        let expected = cache_key(key, root.path(), slim, mode);
         match merge_cache_key(&paths, slim, mode) {
           Ok(actual) if actual == expected => {}
           Ok(actual) => differences.push(format!("cache key differs for {name}/{mode}: {actual} != {expected}")),
@@ -974,7 +974,7 @@ mod differential_tests {
     assert!(differences.is_empty(), "{} differential mismatches:\n{}", differences.len(), differences.join("\n"));
   }
 
-  fn python_cache_key(reference: &Value, root: &Path, slim: bool, mode: &str) -> String {
+  fn cache_key(reference: &Value, root: &Path, slim: bool, mode: &str) -> String {
     let paths = reference["paths"]
       .as_array()
       .unwrap()
@@ -985,7 +985,7 @@ mod differential_tests {
         (path.to_string_lossy().into_owned(), entry["size"].as_u64().unwrap(), FIXED_MTIME_NS as i64)
       })
       .collect();
-    let payload = PythonCacheKey { paths, slim, mode };
+    let payload = CacheKey { paths, slim, mode };
     format!("{:x}", Sha256::digest(serde_json::to_vec(&payload).unwrap()))
   }
 

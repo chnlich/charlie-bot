@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::value_ops::{
-  COMPACT_ASCII_JSON, PyResult, first_item, get, get_or_empty, iterate, iterate_member, loads_text, raised,
+  COMPACT_ASCII_JSON, ValueResult, first_item, get, get_or_empty, iterate, iterate_member, loads_text, raised,
   require_dict, truthy, type_name, value_error,
 };
 
@@ -21,7 +21,7 @@ pub fn gemini_stream_rules(api_base: &str) -> Result<bool, String> {
 }
 
 /// `anthropic_to_openai_chat_request(payload, upstream_model)`: the chat completions body for `payload`.
-pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -> PyResult<Value> {
+pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -> ValueResult<Value> {
   let messages = match get(payload, "messages")? {
     Some(Value::Array(messages)) => messages,
     _ => return value_error("messages must be a list"),
@@ -40,7 +40,7 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
       }
       Some("user") => converted_messages.extend(convert_user_message(message)?),
       Some("assistant") => converted_messages.push(convert_assistant_message(message)?),
-      _ => return value_error(format!("unsupported message role: {}", py_str(message.get("role"), "None"))),
+      _ => return value_error(format!("unsupported message role: {}", value_str(message.get("role"), "None"))),
     }
   }
   if !system_parts.is_empty() {
@@ -79,12 +79,12 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
 }
 
 /// `str(payload.get(key, missing))` for a member that may be absent.
-fn py_str(value: Option<&Value>, missing: &str) -> String {
-  value.map_or_else(|| missing.to_string(), text_repr::python_str)
+fn value_str(value: Option<&Value>, missing: &str) -> String {
+  value.map_or_else(|| missing.to_string(), text_repr::value_str)
 }
 
 /// `_blocks_to_text(content, label)`: a string as it is, or the text of a list of text blocks.
-fn blocks_to_text(content: &Value, label: &str) -> PyResult<String> {
+fn blocks_to_text(content: &Value, label: &str) -> ValueResult<String> {
   match content {
     Value::String(text) => Ok(text.clone()),
     Value::Array(blocks) => {
@@ -92,9 +92,9 @@ fn blocks_to_text(content: &Value, label: &str) -> PyResult<String> {
       for raw in blocks {
         let block = require_dict(raw, &format!("{label} block"))?;
         if block.get("type").and_then(Value::as_str) != Some("text") {
-          return value_error(format!("unsupported {label} block type: {}", py_str(block.get("type"), "None")));
+          return value_error(format!("unsupported {label} block type: {}", value_str(block.get("type"), "None")));
         }
-        text.push_str(&py_str(block.get("text"), ""));
+        text.push_str(&value_str(block.get("text"), ""));
       }
       Ok(text)
     }
@@ -102,11 +102,11 @@ fn blocks_to_text(content: &Value, label: &str) -> PyResult<String> {
   }
 }
 
-fn image_block_to_openai_part(block: &Map<String, Value>, label: &str) -> PyResult<Value> {
+fn image_block_to_openai_part(block: &Map<String, Value>, label: &str) -> ValueResult<Value> {
   let source_value = block.get("source").cloned().unwrap_or(Value::Null);
   let source = require_dict(&source_value, &format!("{label} source"))?;
   if source.get("type").and_then(Value::as_str) != Some("base64") {
-    return value_error(format!("unsupported {label} source type: {}", py_str(source.get("type"), "None")));
+    return value_error(format!("unsupported {label} source type: {}", value_str(source.get("type"), "None")));
   }
   let media_type = source.get("media_type").filter(|media_type| truthy(media_type));
   let data = source.get("data").and_then(Value::as_str);
@@ -115,11 +115,11 @@ fn image_block_to_openai_part(block: &Map<String, Value>, label: &str) -> PyResu
   };
   Ok(json!({
     "type": "image_url",
-    "image_url": {"url": format!("data:{};base64,{data}", text_repr::python_str(media_type))},
+    "image_url": {"url": format!("data:{};base64,{data}", text_repr::value_str(media_type))},
   }))
 }
 
-fn tool_result_to_openai_content(content: &Value) -> PyResult<(String, Vec<Value>)> {
+fn tool_result_to_openai_content(content: &Value) -> ValueResult<(String, Vec<Value>)> {
   match content {
     Value::String(text) => Ok((text.clone(), Vec::new())),
     Value::Array(blocks) => {
@@ -128,12 +128,12 @@ fn tool_result_to_openai_content(content: &Value) -> PyResult<(String, Vec<Value
       for raw in blocks {
         let block = require_dict(raw, "tool_result content block")?;
         match block.get("type").and_then(Value::as_str) {
-          Some("text") => text.push_str(&py_str(block.get("text"), "")),
+          Some("text") => text.push_str(&value_str(block.get("text"), "")),
           Some("image") => images.push(image_block_to_openai_part(block, "tool_result image")?),
           _ => {
             return value_error(format!(
               "unsupported tool_result content block type: {}",
-              py_str(block.get("type"), "None")
+              value_str(block.get("type"), "None")
             ));
           }
         }
@@ -147,7 +147,7 @@ fn tool_result_to_openai_content(content: &Value) -> PyResult<(String, Vec<Value
 fn flush_user_parts(converted: &mut Vec<Value>, parts: &mut Vec<Value>) {
   if !parts.is_empty() {
     let content = if parts.iter().all(|part| part["type"] == "text") {
-      Value::String(parts.iter().map(|part| text_repr::python_str(&part["text"])).collect())
+      Value::String(parts.iter().map(|part| text_repr::value_str(&part["text"])).collect())
     } else {
       Value::Array(parts.clone())
     };
@@ -157,7 +157,7 @@ fn flush_user_parts(converted: &mut Vec<Value>, parts: &mut Vec<Value>) {
 }
 
 /// `_convert_user_message`: a string stays one user message; blocks split at each tool result.
-fn convert_user_message(message: &Map<String, Value>) -> PyResult<Vec<Value>> {
+fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>> {
   let blocks = match message.get("content") {
     None => return Ok(vec![json!({"role": "user", "content": ""})]),
     Some(Value::String(text)) => return Ok(vec![json!({"role": "user", "content": text})]),
@@ -170,7 +170,7 @@ fn convert_user_message(message: &Map<String, Value>) -> PyResult<Vec<Value>> {
   for raw in blocks {
     let block = require_dict(raw, "user content block")?;
     match block.get("type").and_then(Value::as_str) {
-      Some("text") => user_parts.push(json!({"type": "text", "text": py_str(block.get("text"), "")})),
+      Some("text") => user_parts.push(json!({"type": "text", "text": value_str(block.get("text"), "")})),
       Some("image") => user_parts.push(image_block_to_openai_part(block, "user image")?),
       Some("tool_result") => {
         flush_user_parts(&mut converted, &mut user_parts);
@@ -182,7 +182,9 @@ fn convert_user_message(message: &Map<String, Value>) -> PyResult<Vec<Value>> {
         converted.push(json!({"role": "tool", "tool_call_id": tool_use_id, "content": result_text}));
         tool_result_images.extend(result_images);
       }
-      _ => return value_error(format!("unsupported user content block type: {}", py_str(block.get("type"), "None"))),
+      _ => {
+        return value_error(format!("unsupported user content block type: {}", value_str(block.get("type"), "None")));
+      }
     }
   }
   flush_user_parts(&mut converted, &mut user_parts);
@@ -193,7 +195,7 @@ fn convert_user_message(message: &Map<String, Value>) -> PyResult<Vec<Value>> {
 }
 
 /// `_convert_assistant_message`: the text joins into `content` (null when empty), and each tool use becomes a call.
-fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
+fn convert_assistant_message(message: &Map<String, Value>) -> ValueResult<Value> {
   let blocks = match message.get("content") {
     None => return Ok(json!({"role": "assistant", "content": ""})),
     Some(Value::String(text)) => return Ok(json!({"role": "assistant", "content": text})),
@@ -205,7 +207,7 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
   for raw in blocks {
     let block = require_dict(raw, "assistant content block")?;
     match block.get("type").and_then(Value::as_str) {
-      Some("text") => text.push_str(&py_str(block.get("text"), "")),
+      Some("text") => text.push_str(&value_str(block.get("text"), "")),
       Some("tool_use") => {
         let id = block.get("id").filter(|id| truthy(id));
         let name = block.get("name").filter(|name| truthy(name));
@@ -224,7 +226,10 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
         tool_calls.push(tool_call);
       }
       _ => {
-        return value_error(format!("unsupported assistant content block type: {}", py_str(block.get("type"), "None")));
+        return value_error(format!(
+          "unsupported assistant content block type: {}",
+          value_str(block.get("type"), "None")
+        ));
       }
     }
   }
@@ -238,12 +243,12 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
 }
 
 /// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
-fn convert_tools(tools: &Value) -> PyResult<Vec<Value>> {
+fn convert_tools(tools: &Value) -> ValueResult<Vec<Value>> {
   let mut converted = Vec::new();
   for raw in iterate(tools)? {
     let tool = require_dict(&raw, "tool")?;
     if let Some(kind) = tool.get("type").filter(|kind| truthy(kind)) {
-      return value_error(format!("unsupported Anthropic built-in tool type: {}", text_repr::python_str(kind)));
+      return value_error(format!("unsupported Anthropic built-in tool type: {}", text_repr::value_str(kind)));
     }
     let name = tool.get("name").filter(|name| truthy(name));
     let input_schema = tool.get("input_schema").filter(|schema| !schema.is_null());
@@ -263,7 +268,7 @@ fn convert_tools(tools: &Value) -> PyResult<Vec<Value>> {
 }
 
 /// `_convert_tool_choice`: `auto`, `any` (required), `tool` (a named function) and `none`.
-fn convert_tool_choice(choice: &Map<String, Value>) -> PyResult<Value> {
+fn convert_tool_choice(choice: &Map<String, Value>) -> ValueResult<Value> {
   match choice.get("type").and_then(Value::as_str) {
     Some("auto") => Ok(json!("auto")),
     Some("any") => Ok(json!("required")),
@@ -272,7 +277,7 @@ fn convert_tool_choice(choice: &Map<String, Value>) -> PyResult<Value> {
       None => value_error("tool_choice type 'tool' missing name"),
     },
     Some("none") => Ok(json!("none")),
-    _ => value_error(format!("unsupported tool_choice type: {}", py_str(choice.get("type"), "None"))),
+    _ => value_error(format!("unsupported tool_choice type: {}", value_str(choice.get("type"), "None"))),
   }
 }
 
@@ -288,7 +293,7 @@ fn stop_reason(finish_reason: Option<&Value>) -> Value {
 }
 
 /// `_usage_from_openai(usage)`: the prompt and completion counts, and zero cache counts.
-pub fn usage_from_openai(usage: Option<&Value>) -> PyResult<Value> {
+pub fn usage_from_openai(usage: Option<&Value>) -> ValueResult<Value> {
   let usage = usage.filter(|usage| truthy(usage)).cloned().unwrap_or_else(|| json!({}));
   Ok(json!({
     "input_tokens": get(&usage, "prompt_tokens")?.cloned().unwrap_or_else(|| json!(0)),
@@ -304,7 +309,7 @@ pub fn new_message_id() -> String {
 }
 
 /// `openai_chat_response_to_anthropic(response, requested_model)`: the Anthropic message for a non-streaming answer.
-pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str) -> PyResult<Value> {
+pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str) -> ValueResult<Value> {
   let choices = match get(response, "choices")?.filter(|choices| truthy(choices)) {
     Some(choices) => choices,
     None => return value_error("OpenAI response missing choices"),
@@ -416,7 +421,7 @@ impl OpenAiChatStream {
   }
 
   /// `events_for_chunk(chunk)`: the events one upstream chunk completes.
-  pub fn events_for_chunk(&mut self, chunk: &Value) -> PyResult<Vec<Event>> {
+  pub fn events_for_chunk(&mut self, chunk: &Value) -> ValueResult<Vec<Event>> {
     let mut events = Vec::new();
     if let Some(usage) = get(chunk, "usage")?.filter(|usage| truthy(usage)) {
       self.usage = usage.clone();
@@ -438,7 +443,7 @@ impl OpenAiChatStream {
   }
 
   /// `finish_events()`: closes the open blocks, then the message's delta and its stop.
-  pub fn finish_events(&mut self) -> PyResult<Vec<Event>> {
+  pub fn finish_events(&mut self) -> ValueResult<Vec<Event>> {
     let mut events = Vec::new();
     self.close_text_block(&mut events);
     self.close_tool_blocks(&mut events);
@@ -520,7 +525,7 @@ impl OpenAiChatStream {
   }
 
   /// `_handle_tool_delta`: a call's first delta opens its block; later deltas carry its arguments.
-  fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> PyResult<()> {
+  fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> ValueResult<()> {
     let call_index = match get(tool_call, "index")? {
       None | Some(Value::Null) if self.gemini_stream_rules => json!(0),
       None | Some(Value::Null) => return value_error("streaming tool_call missing index"),
@@ -595,12 +600,12 @@ mod tests {
   use super::*;
   use crate::value_ops::Fault;
 
-  fn request(payload: Value) -> PyResult<Value> {
+  fn request(payload: Value) -> ValueResult<Value> {
     anthropic_to_openai_chat_request(&payload, "upstream-model")
   }
 
   #[test]
-  fn a_non_object_payload_raises_the_attribute_error_python_raises() {
+  fn a_non_object_payload_raises_an_attribute_error() {
     assert_eq!(
       request(json!([1])).unwrap_err(),
       Fault::Raised { kind: "AttributeError", message: "'list' object has no attribute 'get'".to_string() }

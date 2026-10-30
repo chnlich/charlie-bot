@@ -631,7 +631,7 @@ mod tests {
   }
 
   #[test]
-  fn a_document_python_loads_but_serde_cannot_hold_is_refused() {
+  fn a_document_loads_but_serde_cannot_hold_is_refused() {
     assert!(matches!(loads(b"NaN"), Err(LoadError::Unrepresentable(_))));
     assert!(matches!(loads(b"1e400"), Err(LoadError::Unrepresentable(_))));
     assert!(matches!(loads(b"\"\\ud800\""), Err(LoadError::Unrepresentable(_))));

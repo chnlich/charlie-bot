@@ -24,7 +24,7 @@ This crate owns the process transport below the agent backends and the launch ma
 | `kill::kill_process_group`, `kill_group_escalating`, `wait_or_kill_group` | `src/infra/process.py:22`, `:39`, `:53` |
 | `kill::terminate_child` | `src/runtime/agent_process/base.py:1046`, `:1191` |
 | `kill::detach` | `src/runtime/agent_process/base.py:1198` |
-| `kill::python_exit_code` | `src/runtime/agent_process/spawn.py:57` |
+| `kill::exit_code` | `src/runtime/agent_process/spawn.py:57` |
 | `recovery::TypeLineFilter`, `TypeLineFilter::new` | `src/infra/ndjson.py:463`, `:483` |
 | `recovery::parse_raw_lines`, `project_raw_events`, `result_exit_code` | `src/runtime/runs.py:167`, `:200`, `:225` |
 | `recovery::project_raw_file`, `scan_result_exit`, `raw_completion_time` | `src/runtime/runs.py:266`, `:288`, `:311` |

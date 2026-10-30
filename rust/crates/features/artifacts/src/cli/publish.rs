@@ -188,7 +188,7 @@ fn publish_through_command(artifact: &Path, command: &[String], lane_options: &[
     let code = done.status.code().unwrap_or_else(|| -done.status.signal().unwrap_or(1));
     return Err(CliExit::error(format!("publish.command exited {code}; stderr: {stderr}")));
   }
-  let lines = python_lines(&stdout);
+  let lines = split_lines(&stdout);
   if lines.len() != 1 || !URL_PREFIXES.iter().any(|prefix| lines[0].starts_with(prefix)) {
     return Err(CliExit::error(format!(
       "publish.command exited 0 without exactly one http(s) URL line on stdout; stderr: {stderr}"
@@ -205,7 +205,7 @@ fn os_error_text(error: &io::Error, path: &str) -> String {
   }
 }
 
-fn python_lines(text: &str) -> Vec<&str> {
+fn split_lines(text: &str) -> Vec<&str> {
   let mut lines = Vec::new();
   let mut start = 0;
   let mut chars = text.char_indices().peekable();

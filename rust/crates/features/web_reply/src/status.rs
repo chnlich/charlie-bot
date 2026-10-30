@@ -13,8 +13,8 @@ use charliebot_compat::file_urls::ScanContext;
 use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
-use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
@@ -713,7 +713,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     let row = json!({
       "session_id": descendant_id,
       "name": child.name,
-      "updated_at": child_status.updated_at.to_python_string(),
+      "updated_at": child_status.updated_at.to_str(),
       "waiting": payload["waiting"],
     });
     rows.push((child_status.updated_at, row));
@@ -733,7 +733,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
       "session_id": child_id,
       "name": child.name,
       "now": now,
-      "updated_at": child_status.updated_at.to_python_string(),
+      "updated_at": child_status.updated_at.to_str(),
     });
     children.push((child_status.updated_at, row));
   }
@@ -1310,7 +1310,7 @@ mod tests {
   }
 
   #[test]
-  fn an_item_digest_matches_the_python_payload_for_an_item_without_a_link() {
+  fn an_item_digest_matches_the_payload_for_an_item_without_a_link() {
     let item = parse_item(&json!({
       "text": "Pick a layout",
       "context": "Options: grid or list. Grid fits the panel; ships today é界.",
@@ -1325,7 +1325,7 @@ mod tests {
   }
 
   #[test]
-  fn a_link_names_a_host_file_as_python_splits_it() {
+  fn a_link_names_a_host_file_as_it_splits() {
     let names = |link: &str| file_urls::host_file(Some(link)).expect("the link splits");
 
     assert_eq!(names("/tmp/page.html"), Some(PathBuf::from("/tmp/page.html")));

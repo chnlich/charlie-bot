@@ -21,9 +21,9 @@ use futures_util::stream::{self, Stream};
 use serde_json::{Value, json};
 
 use super::options::CcOpenAiOption;
-use super::value_ops::{self, Fault};
 use super::sse::{LineFramer, sse_event};
 use super::translate::{self, Event, OpenAiChatStream};
+use super::value_ops::{self, Fault};
 
 const ROUTE: &str = "/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages";
 const ROUTE_PREFIX: &str = "/api/anthropic-proxy/openai-compatible/";
@@ -273,7 +273,7 @@ impl Relay {
     let Some(raw) = line.strip_prefix(b"data:") else {
       return Ok(());
     };
-    let raw = trim_python_space(raw);
+    let raw = trim_space(raw);
     if raw == b"[DONE]" {
       self.reading = false;
       return Ok(());
@@ -297,7 +297,7 @@ fn fault_failure(fault: Fault) -> (String, String) {
 }
 
 /// `bytes.strip()`: the ASCII whitespace of a Python bytes value, which includes the vertical tab.
-fn trim_python_space(raw: &[u8]) -> &[u8] {
+fn trim_space(raw: &[u8]) -> &[u8] {
   raw.trim_with(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'))
 }
 
@@ -360,13 +360,13 @@ mod tests {
   }
 
   #[test]
-  fn python_strip_removes_the_vertical_tab_too() {
-    assert_eq!(trim_python_space(b" \x0b{}\r\x0c"), b"{}");
-    assert_eq!(trim_python_space(b" \t "), b"");
+  fn strip_removes_the_vertical_tab_too() {
+    assert_eq!(trim_space(b" \x0b{}\r\x0c"), b"{}");
+    assert_eq!(trim_space(b" \t "), b"");
   }
 
   #[tokio::test]
-  async fn a_streamed_answer_carries_the_python_headers_and_frames() {
+  async fn a_streamed_answer_carries_the_recorded_headers_and_frames() {
     let events = stream::iter([Ok::<_, io::Error>(sse_event("message_stop", &json!({})))]);
     let response = sse_response(events);
     assert_eq!(response.status(), StatusCode::OK);

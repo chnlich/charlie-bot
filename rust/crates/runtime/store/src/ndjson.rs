@@ -153,7 +153,7 @@ mod tests {
   }
 
   #[test]
-  fn append_keeps_unicode_and_python_default_spacing() {
+  fn append_keeps_unicode_and_default_spacing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("events.jsonl");
     append(&path, &serde_json::json!({"text": "你好", "id": "a"})).unwrap();

@@ -7,7 +7,7 @@ use serde_json::Value;
 const FIXTURE: &str = include_str!("../../../../fixtures/golden/mimetypes_golden.json");
 
 #[test]
-fn guesses_match_cpython() {
+fn guesses_match_recorded() {
   let fixture: Value = serde_json::from_str(FIXTURE).expect("the fixture is JSON");
   let cases = fixture["cases"].as_array().expect("the fixture lists cases");
   assert!(cases.len() > 200, "the fixture covers every built-in suffix");

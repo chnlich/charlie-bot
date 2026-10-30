@@ -85,7 +85,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
         Ok(None) => return responses::internal_error("RuntimeError", "verified caller run disappeared".to_string()),
         Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
       };
-      let started_at = run.started_at.expect("a verified run has a start timestamp").to_python_isoformat();
+      let started_at = run.started_at.expect("a verified run has a start timestamp").to_isoformat_text();
       (
         Some(charliebot_store::control_events::derived_agent_send_request_id(
           &claims.run_id,

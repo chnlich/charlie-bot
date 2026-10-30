@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 
 use anyhow::bail;
 use charliebot_core::event_types;
-use charliebot_core::text_repr::python_str;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -121,7 +121,7 @@ impl AntigravityBackend {
         .iter()
         .filter_map(|key| envelope.fields.get(*key))
         .find(|value| truthy(value))
-        .map_or_else(|| format!("Antigravity status {}", envelope.status), python_str);
+        .map_or_else(|| format!("Antigravity status {}", envelope.status), value_str);
       return finished(vec![make_error_event(&message)], 1, None);
     }
 
@@ -136,7 +136,7 @@ impl AntigravityBackend {
     if let Some(anchor) = &self.resume_session_id
       && conversation_id.as_str() != Some(anchor.as_str())
     {
-      let observed = python_str(conversation_id);
+      let observed = value_str(conversation_id);
       return finished(
         vec![make_error_event(&format!("agy resume envelope id {observed} does not match anchor {anchor}"))],
         exit_code,

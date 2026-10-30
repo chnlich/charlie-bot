@@ -233,8 +233,8 @@ fn run_header_event(
   withheld: Option<String>,
   tool_calls: Option<usize>,
 ) -> Value {
-  let started = run.started_at.map(UtcDateTime::to_python_isoformat);
-  let terminal = run.ended_at.map(UtcDateTime::to_python_isoformat);
+  let started = run.started_at.map(UtcDateTime::to_isoformat_text);
+  let terminal = run.ended_at.map(UtcDateTime::to_isoformat_text);
   let kind = serde_json::to_value(run.kind).expect("run kind serializes");
   json!({
     "type": event_types::RUN_HEADER,
@@ -263,7 +263,7 @@ fn run_end_event(run: &RunRecord) -> Value {
   json!({
     "type": event_types::RUN_END,
     "run_id": run.id,
-    "timestamp": run.ended_at.map(UtcDateTime::to_python_isoformat),
+    "timestamp": run.ended_at.map(UtcDateTime::to_isoformat_text),
     "duration_seconds": duration_seconds,
   })
 }
@@ -299,26 +299,14 @@ fn delivery_event(
     let event = held.to_value();
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
-        summary =
-          event.get("summary").filter(|value| !value.is_null()).map_or_else(String::new, value_to_python_string);
-        close_refs = event
-          .get("result_refs")
-          .and_then(Value::as_array)
-          .into_iter()
-          .flatten()
-          .map(value_to_python_string)
-          .collect();
-        close_at = event
-          .get("timestamp")
-          .map(value_to_python_string)
-          .ok_or_else(|| StoreError::new("task_closed fact has no timestamp"))?;
+        summary = event.get("summary").filter(|value| !value.is_null()).map_or_else(String::new, value_str);
+        close_refs = event.get("result_refs").and_then(Value::as_array).into_iter().flatten().map(value_str).collect();
+        close_at =
+          event.get("timestamp").map(value_str).ok_or_else(|| StoreError::new("task_closed fact has no timestamp"))?;
       }
       Some(event_types::RUN_FINISHED) => {
         if let Some(run_id) = event.get("run_id") {
-          outcomes.insert(
-            value_to_python_string(run_id),
-            event.get("outcome").map_or_else(String::new, value_to_python_string),
-          );
+          outcomes.insert(value_str(run_id), event.get("outcome").map_or_else(String::new, value_str));
         }
       }
       _ => {}
@@ -364,10 +352,10 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     let event = held.to_value();
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
-        closed_at = truthy_python_string(event.get("timestamp"));
+        closed_at = truthy_str(event.get("timestamp"));
         if let Some(refs) = event.get("result_refs").and_then(Value::as_array) {
           for reference in refs {
-            let reference = value_to_python_string(reference);
+            let reference = value_str(reference);
             if let Some(value) = reference.strip_prefix("landed:") {
               landed = value.to_string();
             }
@@ -375,8 +363,8 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         }
       }
       Some(event_types::RUN_FINISHED) => {
-        let run_id = event.get("run_id").map(value_to_python_string).unwrap_or_else(|| "None".to_string());
-        outcomes.insert(run_id, truthy_python_string(event.get("outcome")));
+        let run_id = event.get("run_id").map(value_str).unwrap_or_else(|| "None".to_string());
+        outcomes.insert(run_id, truthy_str(event.get("outcome")));
       }
       _ => {}
     }
@@ -392,8 +380,8 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         "kind": serde_json::to_value(run.kind).expect("run kind serializes"),
         "backend_label": backend_label,
         "state": states.get(&run.id).map(String::as_str).unwrap_or("queued"),
-        "started_at": run.started_at.map(UtcDateTime::to_python_isoformat),
-        "ended_at": run.ended_at.map(UtcDateTime::to_python_isoformat),
+        "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
+        "ended_at": run.ended_at.map(UtcDateTime::to_isoformat_text),
         "tool_calls": run_tools.get(&run.id).copied().unwrap_or(0),
       })
     })
@@ -405,7 +393,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       let events = run_event_refs(run_events, &run.id);
       json!({
         "run_id": run.id,
-        "started_at": run.started_at.map(UtcDateTime::to_python_isoformat),
+        "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
         "tool_calls": run_tools.get(&run.id).copied().unwrap_or(0),
         "last_text": aggregator::run_last_assistant_text(&events)?,
         "last_tool": aggregator::run_last_tool(&events),
@@ -448,9 +436,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .map(|held| {
       let event = held.to_value();
       json!({
-        "run_id": truthy_python_string(event.get("run_id")),
-        "request_id": truthy_python_string(event.get("request_id")),
-        "timestamp": truthy_python_string(event.get("timestamp")),
+        "run_id": truthy_str(event.get("run_id")),
+        "request_id": truthy_str(event.get("request_id")),
+        "timestamp": truthy_str(event.get("timestamp")),
       })
     })
     .unwrap_or(Value::Null);
@@ -508,7 +496,7 @@ fn revision(signature: &[Value], states: &BTreeMap<String, String>, task_state: 
   let mut payload = signature.to_vec();
   payload.push(Value::Array(state_pairs));
   payload.push(Value::String(task_state.to_string()));
-  let text = text_repr::json_dumps(&Value::Array(payload), &text_repr::PYTHON_JSON_DEFAULT);
+  let text = text_repr::json_dumps(&Value::Array(payload), &text_repr::DEFAULT_JSON);
   Ok(control_events::sha256_hex(&text)[..24].to_string())
 }
 
@@ -550,11 +538,11 @@ fn client_revision(
     task_state,
     event_stats,
   ]);
-  let text = text_repr::json_dumps(&payload, &text_repr::PYTHON_JSON_DEFAULT);
+  let text = text_repr::json_dumps(&payload, &text_repr::DEFAULT_JSON);
   Ok(control_events::sha256_hex(&text)[..24].to_string())
 }
 
-fn value_to_python_string(value: &Value) -> String {
+fn value_str(value: &Value) -> String {
   match value {
     Value::String(value) => value.clone(),
     Value::Null => "None".to_string(),
@@ -563,7 +551,7 @@ fn value_to_python_string(value: &Value) -> String {
   }
 }
 
-fn truthy_python_string(value: Option<&Value>) -> String {
+fn truthy_str(value: Option<&Value>) -> String {
   let Some(value) = value else { return String::new() };
   let truthy = match value {
     Value::Null => false,
@@ -573,7 +561,7 @@ fn truthy_python_string(value: Option<&Value>) -> String {
     Value::Array(value) => !value.is_empty(),
     Value::Object(value) => !value.is_empty(),
   };
-  if truthy { value_to_python_string(value) } else { String::new() }
+  if truthy { value_str(value) } else { String::new() }
 }
 
 fn path_error(path: &Path, error: std::io::Error) -> StoreError {

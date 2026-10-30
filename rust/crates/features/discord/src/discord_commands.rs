@@ -65,7 +65,7 @@ fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
       continue;
     }
     if let Some(mention) = block.get(DISCORD.mention_key).filter(|mention| !mention.is_null()) {
-      pending.insert(text_repr::python_str(&mention.to_value()));
+      pending.insert(text_repr::value_str(&mention.to_value()));
     }
   }
   pending

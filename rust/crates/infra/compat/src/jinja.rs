@@ -76,9 +76,9 @@ fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, 
 /// Python's `str()` of it, escaped with markupsafe's table.
 fn markupsafe_formatter(out: &mut Output, state: &State, value: &Value) -> Result<(), Error> {
   if value.is_safe() || state.auto_escape() == AutoEscape::None {
-    return out.write_str(&python_text(value)?).map_err(Error::from);
+    return out.write_str(&value_str(value)?).map_err(Error::from);
   }
-  out.write_str(&markupsafe_escape(&python_text(value)?)).map_err(Error::from)
+  out.write_str(&markupsafe_escape(&value_str(value)?)).map_err(Error::from)
 }
 
 /// `markupsafe.escape`: `& < > ' "` as `&amp; &lt; &gt; &#39; &#34;`.
@@ -98,11 +98,11 @@ fn markupsafe_escape(text: &str) -> String {
 }
 
 /// Python's `str()` of a template value; an undefined value prints as nothing (Jinja2 `Undefined`).
-fn python_text(value: &Value) -> Result<String, Error> {
+fn value_str(value: &Value) -> Result<String, Error> {
   Ok(match value.kind() {
     ValueKind::Undefined => String::new(),
     ValueKind::String => value.as_str().expect("a string value has text").to_string(),
-    _ => text_repr::python_str(&to_json(value)?),
+    _ => text_repr::value_str(&to_json(value)?),
   })
 }
 
@@ -184,13 +184,13 @@ fn urlencode(value: Value) -> Result<String, Error> {
       }
       Ok(pairs.join("&"))
     }
-    _ => Ok(quote(&python_text(&value)?, &URLENCODE_QUOTE)),
+    _ => Ok(quote(&value_str(&value)?, &URLENCODE_QUOTE)),
   }
 }
 
 /// `url_quote(key, for_qs=True)=url_quote(value, for_qs=True)`, one pair of a query string.
 fn query_pair(key: &Value, value: &Value) -> Result<String, Error> {
-  Ok(format!("{}={}", query_quote(&python_text(key)?), query_quote(&python_text(value)?)))
+  Ok(format!("{}={}", query_quote(&value_str(key)?), query_quote(&value_str(value)?)))
 }
 
 /// Jinja2's `url_quote(text, for_qs=True)`: `urllib.parse.quote` with no safe characters, then `%20` as `+`.
@@ -201,7 +201,7 @@ fn query_quote(text: &str) -> String {
 /// Jinja2's `format` filter (`do_format`): `soft_str(value) % (kwargs or args)` with the one positional argument the
 /// pages pass. The conversions are `%f` and `%.Nf`, `%d`, `%s` and `%%`; any other conversion fails the render.
 fn percent_format(template: Value, argument: Value) -> Result<String, Error> {
-  let template = python_text(&template)?;
+  let template = value_str(&template)?;
   let argument = to_json(&argument)?;
   let mut out = String::with_capacity(template.len());
   let mut pending = Some(&argument);
@@ -237,7 +237,7 @@ fn convert(spec: &str, conversion: char, value: &serde_json::Value) -> Result<St
   match conversion {
     'f' => Ok(text_repr::format_f(real(value, conversion)?, precision(spec, conversion)?)),
     'd' if spec.is_empty() => integer(value),
-    's' if spec.is_empty() => Ok(text_repr::python_str(value)),
+    's' if spec.is_empty() => Ok(text_repr::value_str(value)),
     _ => Err(format_error(format!(
       "unsupported format conversion '%{spec}{conversion}': the format filter supports %f, %.Nf, %d, %s and %%"
     ))),
@@ -442,7 +442,7 @@ mod tests {
   }
 
   #[test]
-  fn format_filter_refuses_an_argument_count_that_python_refuses() {
+  fn format_filter_refuses_a_bad_argument_count() {
     let environment = environment(|_| Ok(None));
     let missing = environment.render_str(r#"{{ "%s %s"|format(1) }}"#, json!({})).expect_err("one argument is short");
     assert!(missing.to_string().contains("not enough arguments"), "{missing}");

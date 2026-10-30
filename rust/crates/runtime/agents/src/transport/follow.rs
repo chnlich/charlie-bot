@@ -269,20 +269,20 @@ fn remove_id(value: Option<&Value>, pending: &mut HashSet<String>) {
 }
 
 fn clamp_event_timestamp(event: &mut Value, mtime: Option<SystemTime>) {
-  if event.get("timestamp").is_some_and(charliebot_core::text_repr::python_truthy) {
+  if event.get("timestamp").is_some_and(charliebot_core::text_repr::is_truthy) {
     return;
   }
   let now = OffsetDateTime::now_utc();
   let mtime = mtime.map(OffsetDateTime::from).unwrap_or(now);
   let clamped = if now < mtime { now } else { mtime };
-  let value = python_isoformat(clamped);
+  let value = isoformat_text(clamped);
   event
     .as_object_mut()
     .expect("translated backend event is an object")
     .insert("timestamp".to_string(), Value::String(value));
 }
 
-fn python_isoformat(value: OffsetDateTime) -> String {
+fn isoformat_text(value: OffsetDateTime) -> String {
   charliebot_core::timefmt::isoformat(value)
 }
 
@@ -321,7 +321,7 @@ mod tests {
   }
 
   #[test]
-  fn a_clamped_timestamp_is_python_isoformat_in_utc() {
+  fn a_clamped_timestamp_is_isoformat_in_utc() {
     let mtime = SystemTime::UNIX_EPOCH + Duration::from_micros(1_792_000_000_500_000);
     let mut event = serde_json::json!({"type": "assistant"});
     clamp_event_timestamp(&mut event, Some(mtime));

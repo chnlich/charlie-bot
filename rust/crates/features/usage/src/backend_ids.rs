@@ -26,7 +26,7 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
         option.id,
         option.backend_type,
         source.name,
-        python_tuple(source.id_prefixes)
+        tuple_repr(source.id_prefixes)
       )),
       Some(_) => {}
     }
@@ -42,7 +42,7 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
 }
 
 /// `str()` of a tuple of strings: each item in `repr` form, and a one-item tuple keeps its trailing comma.
-fn python_tuple(items: &[&str]) -> String {
+fn tuple_repr(items: &[&str]) -> String {
   let reprs: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
   match reprs.as_slice() {
     [only] => format!("({only},)"),
@@ -125,9 +125,9 @@ mod tests {
   }
 
   #[test]
-  fn a_tuple_of_prefixes_prints_as_python_prints_it() {
-    assert_eq!(python_tuple(&["codex-"]), "('codex-',)");
-    assert_eq!(python_tuple(&["charlie-code-", "clc-"]), "('charlie-code-', 'clc-')");
-    assert_eq!(python_tuple(&[]), "()");
+  fn a_tuple_of_prefixes_prints_as_it_prints() {
+    assert_eq!(tuple_repr(&["codex-"]), "('codex-',)");
+    assert_eq!(tuple_repr(&["charlie-code-", "clc-"]), "('charlie-code-', 'clc-')");
+    assert_eq!(tuple_repr(&[]), "()");
   }
 }

@@ -329,7 +329,7 @@ pub fn is_temporary_unavailable_error(text: &str) -> bool {
 pub fn is_temporary_unavailable_result(event: &Value) -> bool {
   match event.get("api_error_status") {
     None | Some(Value::Null) => {
-      is_temporary_unavailable_error(&event.get("result").map(text_repr::python_str).unwrap_or_default())
+      is_temporary_unavailable_error(&event.get("result").map(text_repr::value_str).unwrap_or_default())
     }
     Some(status) => status.as_i64().is_some_and(|code| code == 429 || code >= 500),
   }

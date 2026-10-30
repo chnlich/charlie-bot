@@ -42,7 +42,7 @@ fn config(args: &[OsString]) -> Result<(), CliExit> {
   let home = Path::new(&home);
   let document = read_config(home).map_err(failed)?;
   let port = match document.get("server").and_then(|server| server.get("port")) {
-    Some(port) => text_repr::python_str(port),
+    Some(port) => text_repr::value_str(port),
     None => default_port().to_string(),
   };
   let credentials = credentials::load_credentials(home).map_err(|error| CliExit::error(error.to_string()))?;
@@ -159,7 +159,7 @@ impl Outcome {
   /// `print(outcome or "")`: a falsy outcome reads as no outcome.
   fn text(&self) -> String {
     match &self.value {
-      Some(value) if text_repr::python_truthy(value) => text_repr::python_str(value),
+      Some(value) if text_repr::is_truthy(value) => text_repr::value_str(value),
       _ => String::new(),
     }
   }

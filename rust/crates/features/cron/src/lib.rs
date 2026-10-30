@@ -21,7 +21,7 @@ use serde_json::{Map, Value, json};
 struct CronTurnContribution;
 
 fn render_scheduled_run_skipped(event: &Value) -> Value {
-  let field = |name: &str| event.get(name).map(text_repr::python_str).unwrap_or_default();
+  let field = |name: &str| event.get(name).map(text_repr::value_str).unwrap_or_default();
   json!({"role":"system", "content":format!("Scheduled run of '{}' skipped at {}: {}", field("task"), field("skipped_at"), field("reason"))})
 }
 
@@ -101,7 +101,7 @@ mod tests {
   }
 
   #[test]
-  fn scheduled_handler_registration_keeps_python_name_and_lazy_lookup_rules() {
+  fn scheduled_handler_registration_keeps_name_and_lazy_lookup_rules() {
     // Python: tests/test_scheduled_handlers.py::test_a_second_registration_raises
     // Python: tests/test_scheduled_handlers.py::test_an_unregistered_name_resolves_to_none
     // Python: tests/test_scheduled_handlers.py::test_importing_the_scheduler_loads_no_handler_stack

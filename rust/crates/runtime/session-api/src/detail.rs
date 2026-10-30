@@ -334,7 +334,7 @@ async fn session_transcript(
   let reset = revision.is_empty() || revision != transcript.revision;
   let committed = transcript.projection.committed();
   let messages = if reset { committed } else { committed.get(to_index(after)..).unwrap_or(&[]) };
-  let thinking_since = features.store.busy_since(&session_id).map_or(Value::Null, |at| json!(at.to_python_isoformat()));
+  let thinking_since = features.store.busy_since(&session_id).map_or(Value::Null, |at| json!(at.to_isoformat_text()));
   let body = transcript_json_body(TranscriptJson {
     messages,
     total: committed.len(),
@@ -538,7 +538,7 @@ fn pending_input_events(
       .iter()
       .map(|event| event.to_value())
       .filter(|event| {
-        let input_id = event.get("id").map_or_else(|| "None".to_string(), python_string);
+        let input_id = event.get("id").map_or_else(|| "None".to_string(), value_str);
         !facts.confirmed_input_ids.contains(&input_id) && !claimed.contains(&input_id) && seen.insert(input_id)
       })
       .collect(),
@@ -551,18 +551,18 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
     Some(Value::String(timestamp)) => {
       let timestamp = UtcDateTime::parse(timestamp)
         .map_err(|error| StoreError::new(format!("invalid pending input timestamp: {error}")))?;
-      Value::String(timestamp.to_python_string())
+      Value::String(timestamp.to_str())
     }
     Some(value) => return Err(StoreError::new(format!("invalid pending input timestamp: {value}"))),
   };
   let text = event
     .get("content")
-    .filter(|value| text_repr::python_truthy(value))
-    .or_else(|| event.get("summary").filter(|value| text_repr::python_truthy(value)))
-    .map_or_else(String::new, python_string);
+    .filter(|value| text_repr::is_truthy(value))
+    .or_else(|| event.get("summary").filter(|value| text_repr::is_truthy(value)))
+    .map_or_else(String::new, value_str);
   Ok(json!({
-    "id": event.get("id").map_or_else(|| "None".to_string(), python_string),
-    "type": event.get("type").map_or_else(|| "None".to_string(), python_string),
+    "id": event.get("id").map_or_else(|| "None".to_string(), value_str),
+    "type": event.get("type").map_or_else(|| "None".to_string(), value_str),
     "timestamp": timestamp,
     "actor": event.get("actor").cloned().unwrap_or(Value::Null),
     "source_session_id": event.get("source_session_id").cloned().unwrap_or(Value::Null),
@@ -729,7 +729,7 @@ fn to_index(value: i64) -> usize {
   usize::try_from(value).unwrap_or(0)
 }
 
-fn python_string(value: &Value) -> String {
+fn value_str(value: &Value) -> String {
   match value {
     Value::String(value) => value.clone(),
     Value::Null => "None".to_string(),
@@ -888,7 +888,7 @@ mod tests {
   }
 
   #[test]
-  fn displayed_backend_uses_python_worker_map_and_metadata_fallback() {
+  fn displayed_backend_uses_worker_map_and_metadata_fallback() {
     let mut manager = SessionMetadata::new("synthetic-manager", "Synthetic manager", TaskProfile::Manager);
     manager.backend = "synthetic-configured-backend".to_string();
     manager.run_backend = Some("synthetic-retired-backend".to_string());

@@ -18,13 +18,13 @@ pub enum Fault {
   Raised { kind: &'static str, message: String },
 }
 
-pub type PyResult<T> = Result<T, Fault>;
+pub type ValueResult<T> = Result<T, Fault>;
 
-pub fn value_error<T>(message: impl Into<String>) -> PyResult<T> {
+pub fn value_error<T>(message: impl Into<String>) -> ValueResult<T> {
   Err(Fault::Value(message.into()))
 }
 
-pub fn raised<T>(kind: &'static str, message: impl Into<String>) -> PyResult<T> {
+pub fn raised<T>(kind: &'static str, message: impl Into<String>) -> ValueResult<T> {
   Err(Fault::Raised { kind, message: message.into() })
 }
 
@@ -54,7 +54,7 @@ pub fn truthy(value: &Value) -> bool {
 }
 
 /// `value.get(key)` on a dict: `None` for a missing key, and a present `null` is `Some(Null)`.
-pub fn get<'a>(value: &'a Value, key: &str) -> PyResult<Option<&'a Value>> {
+pub fn get<'a>(value: &'a Value, key: &str) -> ValueResult<Option<&'a Value>> {
   match value {
     Value::Object(members) => Ok(members.get(key)),
     other => raised("AttributeError", format!("'{}' object has no attribute 'get'", type_name(other))),
@@ -62,12 +62,12 @@ pub fn get<'a>(value: &'a Value, key: &str) -> PyResult<Option<&'a Value>> {
 }
 
 /// `value.get(key) or {}`: the member when it is truthy, else an empty dict. Used where Python writes `or {}`.
-pub fn get_or_empty(value: &Value, key: &str) -> PyResult<Value> {
+pub fn get_or_empty(value: &Value, key: &str) -> ValueResult<Value> {
   Ok(get(value, key)?.filter(|member| truthy(member)).cloned().unwrap_or_else(|| Value::Object(Map::new())))
 }
 
 /// `for item in value`: a list yields its items, a dict its keys, a str its characters, and other values raise.
-pub fn iterate(value: &Value) -> PyResult<Vec<Value>> {
+pub fn iterate(value: &Value) -> ValueResult<Vec<Value>> {
   match value {
     Value::Array(items) => Ok(items.clone()),
     Value::Object(members) => Ok(members.keys().map(|key| Value::String(key.clone())).collect()),
@@ -77,7 +77,7 @@ pub fn iterate(value: &Value) -> PyResult<Vec<Value>> {
 }
 
 /// `iterate(value)` for a member that may be absent: `value or []`, so a missing or falsy member iterates nothing.
-pub fn iterate_member(members: Option<&Value>) -> PyResult<Vec<Value>> {
+pub fn iterate_member(members: Option<&Value>) -> ValueResult<Vec<Value>> {
   match members.filter(|member| truthy(member)) {
     Some(member) => iterate(member),
     None => Ok(Vec::new()),
@@ -85,7 +85,7 @@ pub fn iterate_member(members: Option<&Value>) -> PyResult<Vec<Value>> {
 }
 
 /// `value[0]`, for a value already known to be truthy.
-pub fn first_item(value: &Value) -> PyResult<Value> {
+pub fn first_item(value: &Value) -> ValueResult<Value> {
   match value {
     Value::Array(items) => match items.first() {
       Some(item) => Ok(item.clone()),
@@ -101,7 +101,7 @@ pub fn first_item(value: &Value) -> PyResult<Value> {
 }
 
 /// `_require_dict(value, label)`: the value as a dict, or a `ValueError` naming `label`.
-pub fn require_dict<'a>(value: &'a Value, label: &str) -> PyResult<&'a Map<String, Value>> {
+pub fn require_dict<'a>(value: &'a Value, label: &str) -> ValueResult<&'a Map<String, Value>> {
   match value {
     Value::Object(members) => Ok(members),
     _ => value_error(format!("{label} must be an object")),
@@ -109,12 +109,12 @@ pub fn require_dict<'a>(value: &'a Value, label: &str) -> PyResult<&'a Map<Strin
 }
 
 /// `json.loads(text)` on a str, with the exception a load failure raises.
-pub fn loads_text(text: &str) -> PyResult<Value> {
+pub fn loads_text(text: &str) -> ValueResult<Value> {
   json_loads::loads_text(text).map_err(fault_of_load)
 }
 
 /// `json.loads(body)` on bytes, with the exception a load failure raises.
-pub fn loads_bytes(body: &[u8]) -> PyResult<Value> {
+pub fn loads_bytes(body: &[u8]) -> ValueResult<Value> {
   json_loads::loads(body).map_err(fault_of_load)
 }
 
@@ -132,7 +132,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn truthiness_follows_python() {
+  fn truthiness_follows_value_rules() {
     for falsy in [json!(null), json!(false), json!(0), json!(0.0), json!(""), json!([]), json!({})] {
       assert!(!truthy(&falsy), "{falsy} is falsy");
     }
@@ -142,7 +142,7 @@ mod tests {
   }
 
   #[test]
-  fn misuses_raise_the_python_exception_class() {
+  fn misuses_raise_the_exception_class() {
     assert_eq!(
       get(&json!([1]), "k").unwrap_err(),
       Fault::Raised { kind: "AttributeError", message: "'list' object has no attribute 'get'".to_string() }

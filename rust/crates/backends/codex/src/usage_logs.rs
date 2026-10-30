@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_core::text_repr::python_str;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
@@ -202,19 +202,19 @@ fn is_context(line: &Map<String, Value>) -> bool {
 /// The truthy `model` a record's payload names, as text.
 fn payload_model(line: &Map<String, Value>) -> anyhow::Result<Option<String>> {
   let payload = object_or_empty(line, "payload")?;
-  Ok(payload.get("model").filter(|model| truthy(model)).map(python_str))
+  Ok(payload.get("model").filter(|model| truthy(model)).map(value_str))
 }
 
 /// The `session_id` of a record's payload, as text, when it has one.
 fn payload_root(line: &Map<String, Value>) -> anyhow::Result<Option<String>> {
   let payload = object_or_empty(line, "payload")?;
-  Ok(payload.get("session_id").filter(|session_id| !session_id.is_null()).map(python_str))
+  Ok(payload.get("session_id").filter(|session_id| !session_id.is_null()).map(value_str))
 }
 
 /// The record's timestamp, or the empty string when it has none.
 fn timestamp_of(line: &Map<String, Value>) -> String {
   match line.get("timestamp") {
-    Some(timestamp) if truthy(timestamp) => python_str(timestamp),
+    Some(timestamp) if truthy(timestamp) => value_str(timestamp),
     _ => String::new(),
   }
 }

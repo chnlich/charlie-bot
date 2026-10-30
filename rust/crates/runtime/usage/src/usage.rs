@@ -72,8 +72,7 @@ impl UsageFold {
     )?;
     if tokens > 0 {
       self.chosen_prompt_tokens = tokens;
-      self.chosen_model =
-        message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_to_python_string);
+      self.chosen_model = message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
       self.post_compact_tokens = None;
       self.reading_kind = READING_CLAUDE.to_string();
     }
@@ -100,7 +99,7 @@ impl UsageFold {
     let Some(compact) = truthy_object(event.field(event_types::COMPACT_METADATA), "compact_metadata")? else {
       return Ok(());
     };
-    if let Some(tokens) = compact.field(event_types::COMPACT_POST_TOKENS).and_then(python_integer) {
+    if let Some(tokens) = compact.field(event_types::COMPACT_POST_TOKENS).and_then(int_value) {
       self.post_compact_tokens = Some(tokens);
     }
     Ok(())
@@ -113,7 +112,7 @@ impl UsageFold {
       let model_usage = model_usage.as_object().expect("a truthy modelUsage object reads as an object");
       for (model_name, info_value) in model_usage {
         let Some(info) = truthy_object(Some(info_value), "result.modelUsage entry")? else { continue };
-        if let Some(window) = info.get("contextWindow").and_then(python_integer) {
+        if let Some(window) = info.get("contextWindow").and_then(int_value) {
           self.model_windows.insert(model_name.clone(), Value::from(window));
         }
       }
@@ -124,7 +123,7 @@ impl UsageFold {
     }
     match event.field(event_types::RESULT_TOTAL_COST_USD) {
       Some(value) if value.is_null() => self.unknown_cost = true,
-      Some(value) => self.total_cost += python_number(&value.to_owned_value(), "result.total_cost_usd")?,
+      Some(value) => self.total_cost += number_value(&value.to_owned_value(), "result.total_cost_usd")?,
       None => {}
     }
     Ok(())
@@ -197,7 +196,7 @@ impl SessionUsage {
     let config = self.config.get().map_err(|error| StoreError::new(error.to_string()))?;
     let backend_option = config.get_backend_option(&meta.backend);
     let (usage, fold) = self.resolve_with_facts(session_id, meta, backend_option)?;
-    let context_tokens = usage.as_ref().and_then(|usage| usage.get("context_tokens")).and_then(python_integer);
+    let context_tokens = usage.as_ref().and_then(|usage| usage.get("context_tokens")).and_then(int_value);
     Ok((context_tokens, fold.last_request_at))
   }
 
@@ -352,7 +351,7 @@ fn resolve_claude(
   let (context_full, compact_at) = match limits {
     Some(limits) => {
       let declared = limits.declared_window.map(|value| value as i64);
-      let model_window = fold.model_windows.get(&fold.chosen_model).and_then(python_integer);
+      let model_window = fold.model_windows.get(&fold.chosen_model).and_then(int_value);
       let full = match (model_window, declared) {
         (Some(model), Some(declared)) => Some(model.min(declared)),
         (_, declared) => declared,
@@ -373,11 +372,11 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, ru
   };
   let (context_full, compact_at) = match snapshot.get("limit").and_then(Value::as_object) {
     Some(limit) => {
-      let input = limit.get("input").and_then(python_integer);
-      let output = limit.get("output").and_then(python_integer);
+      let input = limit.get("input").and_then(int_value);
+      let output = limit.get("output").and_then(int_value);
       // Python's `limit.get("output", 0)`: only a missing key defaults to zero.
       let output_for_input = output.or_else(|| (!limit.contains_key("output")).then_some(0));
-      let context = limit.get("context").and_then(python_integer);
+      let context = limit.get("context").and_then(int_value);
       if let (Some(input), Some(output)) = (input, output_for_input) {
         (Some(input), snapshot_compact_at(input, output, registry, run_kind))
       } else if let (Some(context), Some(output)) = (context, output)
@@ -390,8 +389,7 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, ru
     }
     None => (None, None),
   };
-  let model =
-    snapshot.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_to_python_string);
+  let model = snapshot.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_str);
   Ok(usage_value(Some(token_sum), context_full, compact_at, &model, cost))
 }
 
@@ -400,10 +398,10 @@ fn resolve_reading(fold: &UsageFold, cost: Option<f64>) -> Value {
   let number = |key: &str| {
     reading.get(key).and_then(|value| match value {
       Value::Bool(_) => None,
-      value => python_integer(value),
+      value => int_value(value),
     })
   };
-  let model = reading.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_to_python_string);
+  let model = reading.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_str);
   usage_value(
     number(event_types::CONTEXT_TOKENS),
     number(event_types::CONTEXT_FULL),
@@ -468,7 +466,7 @@ fn truthy_object<'a, E: EventFields>(value: Option<&'a E>, field: &str) -> Store
   Ok(Some(value))
 }
 
-fn python_integer<E: EventFields>(value: &E) -> Option<i64> {
+fn int_value<E: EventFields>(value: &E) -> Option<i64> {
   value
     .as_bool_field()
     .map(i64::from)
@@ -479,13 +477,13 @@ fn python_integer<E: EventFields>(value: &E) -> Option<i64> {
 fn add_int_fields<E: EventFields>(object: &E, fields: &[&str]) -> StoreResult<i64> {
   fields.iter().try_fold(0_i64, |sum, field| match object.field(field) {
     None => Ok(sum),
-    Some(value) => python_integer(value)
+    Some(value) => int_value(value)
       .map(|value| sum + value)
       .ok_or_else(|| StoreError::new(format!("usage field {field} is not an integer"))),
   })
 }
 
-fn python_number(value: &Value, field: &str) -> StoreResult<f64> {
+fn number_value(value: &Value, field: &str) -> StoreResult<f64> {
   match value {
     Value::Bool(value) => Ok(f64::from(u8::from(*value))),
     Value::Number(value) => {
@@ -495,7 +493,7 @@ fn python_number(value: &Value, field: &str) -> StoreResult<f64> {
   }
 }
 
-fn value_to_python_string<E: EventFields>(value: &E) -> String {
+fn value_str<E: EventFields>(value: &E) -> String {
   if let Some(text) = value.as_str_field() {
     return text.to_string();
   }
@@ -530,7 +528,7 @@ mod tests {
 
   use super::*;
 
-  const PYTHON_FIXTURE: &str = include_str!("../tests/fixtures/usage_golden.json");
+  const GOLDEN_FIXTURE: &str = include_str!("../tests/fixtures/usage_golden.json");
 
   fn registry() -> Registry {
     Registry::default()
@@ -552,12 +550,12 @@ mod tests {
     anthropic_compatible::register(registry)
   }
 
-  fn python_usage_reference(profile: &str, events: &[Value], backend_option: Option<Value>) -> Value {
+  fn golden_usage_reference(profile: &str, events: &[Value], backend_option: Option<Value>) -> Value {
     let mut request = json!({"profile": profile, "events": events});
     if let Some(backend_option) = backend_option {
       request["backend_option"] = backend_option;
     }
-    let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+    let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
     assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
     for case in fixture["cases"].as_array().unwrap() {
       let mut recorded_request = case["request"].clone();
@@ -653,7 +651,7 @@ mod tests {
       json!({"type": "result", "modelUsage": {"synthetic-model": {"contextWindow": 1_000_000}}}),
     ];
 
-    let python = python_usage_reference(
+    let python = golden_usage_reference(
       "manager",
       &events,
       Some(json!({
@@ -696,7 +694,7 @@ mod tests {
   }
 
   #[test]
-  fn usage_run_kind_and_claude_resolution_match_python_for_session_profiles() {
+  fn usage_run_kind_and_claude_resolution_match_for_session_profiles() {
     let events = vec![
       json!({
         "type": "assistant",
@@ -721,7 +719,7 @@ mod tests {
     for (profile_name, profile) in [("manager", TaskProfile::Manager), ("worker", TaskProfile::Worker)] {
       let meta = SessionMetadata::new("synthetic-usage", "Synthetic usage", profile);
       let run_kind = usage_run_kind(&meta);
-      let python = python_usage_reference(profile_name, &events, None);
+      let python = golden_usage_reference(profile_name, &events, None);
       assert_eq!(serde_json::to_value(run_kind).unwrap(), python["run_kind"]);
       assert_eq!(fold_usage(&event_refs(&events), run_kind, &registry, None).unwrap().unwrap(), python["usage"]);
     }
@@ -747,7 +745,7 @@ mod tests {
   }
 
   #[test]
-  fn total_cost_rounds_the_exact_binary_value_like_python() {
+  fn total_cost_rounds_the_exact_binary_value() {
     // Python: round(0.12345, 4) == 0.1235 and round(2.67895, 4) == 2.6789; scaling by 10_000 gets the first wrong.
     for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
       let events = vec![json!({"type": "result", "total_cost_usd": cost})];

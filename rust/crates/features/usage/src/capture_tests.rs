@@ -1641,7 +1641,7 @@ fn charlie_rows(ledger: &mut UsageLedger) -> Vec<LedgerRow> {
 }
 
 #[test]
-fn malformed_type_shapes_capture_the_rows_python_writes() {
+fn malformed_type_shapes_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -1717,7 +1717,7 @@ fn malformed_type_shapes_capture_the_rows_python_writes() {
 }
 
 #[test]
-fn malformed_session_shapes_capture_the_rows_python_writes() {
+fn malformed_session_shapes_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -1829,7 +1829,7 @@ fn malformed_backend_shapes_capture_nothing_and_mark_every_file() {
 }
 
 #[test]
-fn malformed_falsy_values_capture_the_rows_python_writes() {
+fn malformed_falsy_values_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -1900,7 +1900,7 @@ fn stored_counts(ledger: &UsageLedger, record_id: &str) -> Vec<SqlValue> {
 }
 
 #[test]
-fn malformed_count_shapes_capture_the_rows_python_writes() {
+fn malformed_count_shapes_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -2018,7 +2018,7 @@ fn stored_ts(ledger: &UsageLedger, record_id: &str) -> SqlValue {
 }
 
 #[test]
-fn malformed_timestamp_shapes_capture_the_rows_python_writes() {
+fn malformed_timestamp_shapes_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -2117,7 +2117,7 @@ const MASTER_RESULT: &str =
   r#"{"type": "result", "usage": {"input_tokens": 20, "cached_tokens": 4, "output_tokens": 7}}"#;
 
 #[test]
-fn malformed_master_model_shapes_capture_the_rows_python_writes() {
+fn malformed_master_model_shapes_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);

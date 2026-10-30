@@ -6,8 +6,8 @@ mod host_auth;
 mod page;
 mod poller;
 mod probe;
-mod text_lines;
 mod ssh_config;
+mod text_lines;
 mod timestamps;
 
 use std::sync::Arc;

@@ -57,7 +57,7 @@ mod tests {
   use charliebot_store::run_records::CURSOR_NAME;
 
   #[test]
-  fn cursor_wire_format_is_shared_with_python() {
+  fn cursor_wire_format_is_shared_with_the_recorded() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join(CURSOR_NAME);
     let mut writer = RawCursorWriter::new(&path);

@@ -9,7 +9,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/claude_pool_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/claude_pool_golden.json");
 
 const NOW: &str = "2026-09-06T20:00:00Z";
 const ONE_HOUR_AGO: &str = "2026-09-06T18:30:00Z";
@@ -65,8 +65,8 @@ fn rust_config(data: &Value) -> charliebot_core::config::CharlieBotConfig {
   registry.load_config(home).unwrap()
 }
 
-fn python_reference(mode: &str, _data: &Value, _temporary: &TempDir) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn golden_reference(mode: &str, _data: &Value, _temporary: &TempDir) -> Value {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   fixture["expected_by_mode"][mode].clone()
 }
@@ -106,11 +106,11 @@ fn selection_matrix() -> Value {
 }
 
 #[test]
-fn account_selection_matrix_matches_python() {
+fn account_selection_matrix_matches_recorded() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, _directories) = account_data(temporary.path());
   data["cases"] = selection_matrix();
-  let expected = python_reference("selection", &data, &temporary);
+  let expected = golden_reference("selection", &data, &temporary);
   let cfg = rust_config(&data);
   let now = timestamp(NOW);
   let mut actual = Vec::new();
@@ -149,7 +149,7 @@ fn account_selection_matrix_matches_python() {
 }
 
 #[test]
-fn login_required_renderer_matches_python_without_exposing_login_paths() {
+fn login_required_renderer_matches_recorded_without_exposing_login_paths() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, _) = account_data(temporary.path());
   let event = json!({
@@ -159,7 +159,7 @@ fn login_required_renderer_matches_python_without_exposing_login_paths() {
     "reason":"auth_failed",
   });
   data["event"] = event.clone();
-  let expected = python_reference("renderer", &data, &temporary);
+  let expected = golden_reference("renderer", &data, &temporary);
   assert_eq!(turn_contribution::render_login_required(&event), expected);
 }
 
@@ -238,12 +238,12 @@ fn rust_move_case(root: &Path, case: &Value) -> Value {
 }
 
 #[test]
-fn transcript_move_matrix_matches_python_in_both_directions() {
+fn transcript_move_matrix_matches_recorded_in_both_directions() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, _) = account_data(temporary.path());
   data["root"] = json!(temporary.path().join("python-moves"));
   data["cases"] = move_matrix();
-  let expected = python_reference("moves", &data, &temporary);
+  let expected = golden_reference("moves", &data, &temporary);
   let actual = data["cases"]
     .as_array()
     .unwrap()
@@ -274,12 +274,12 @@ fn relay_matrix() -> Value {
 }
 
 #[test]
-fn relay_watch_matrix_matches_python_decisions_and_moves() {
+fn relay_watch_matrix_matches_recorded_decisions_and_moves() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, directories) = account_data(temporary.path());
   data["root"] = json!(temporary.path());
   data["cases"] = relay_matrix();
-  let expected = python_reference("relay", &data, &temporary);
+  let expected = golden_reference("relay", &data, &temporary);
   let cfg = Arc::new(rust_config(&data));
   let mut actual = Vec::new();
   for case in data["cases"].as_array().unwrap() {

@@ -41,7 +41,7 @@ struct Message {
 }
 
 #[test]
-fn pure_thread_helpers_match_the_recorded_python_cases() {
+fn pure_thread_helpers_match_the_recorded_cases() {
   let mut decoder = GzDecoder::new(include_bytes!("fixtures/thread_helpers_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();

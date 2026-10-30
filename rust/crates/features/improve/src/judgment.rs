@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_core::event_types::{ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT};
-use charliebot_core::text_repr::{PYTHON_JSON_DEFAULT, python_str};
+use charliebot_core::text_repr::{DEFAULT_JSON, value_str};
 use charliebot_store::run_records::NewestFirstEvents;
 use regex::Regex;
 use serde_json::Value;
@@ -159,8 +159,8 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
     if status == "rejected" || overage_status == "rejected" {
       let rate_type = info
         .and_then(|info| info.get("rateLimitType"))
-        .filter(|value| !is_python_falsy(value))
-        .map_or_else(|| "rate limit".to_string(), python_str);
+        .filter(|value| !is_falsy(value))
+        .map_or_else(|| "rate limit".to_string(), value_str);
       return Ok(Some(format!("rate-limit rejection ({rate_type})")));
     }
   }
@@ -168,7 +168,7 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
   // A refused launch states its cause on the run's error event; a False flag leaves the text patterns to judge.
   if event_type == Some(ERROR) && event.get(charliebot_core::event_types::QUOTA_EXHAUSTED) == Some(&Value::Bool(true)) {
     let message = event.get("message").context("the quota-exhausted error event has no message")?;
-    return Ok(Some(format!("launch refused with quota exhausted: {}", python_str(message))));
+    return Ok(Some(format!("launch refused with quota exhausted: {}", value_str(message))));
   }
 
   if !matches!(event_type, Some(ERROR | ASSISTANT_ERROR | RESULT)) {
@@ -177,7 +177,7 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
   let is_plain_result = event_type == Some(RESULT)
     && event.get("is_error") != Some(&Value::Bool(true))
     && event.get("api_error_status").is_none_or(Value::is_null)
-    && !python_str(event.get("subtype").unwrap_or(&Value::String(String::new()))).to_lowercase().contains("error");
+    && !value_str(event.get("subtype").unwrap_or(&Value::String(String::new()))).to_lowercase().contains("error");
   if is_plain_result {
     return Ok(None);
   }
@@ -193,11 +193,11 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
 
 /// Python's `str(value).lower()` of an optional field; an absent field reads as `None`.
 fn lowered_str(value: Option<&Value>) -> String {
-  python_str(value.unwrap_or(&Value::Null)).to_lowercase()
+  value_str(value.unwrap_or(&Value::Null)).to_lowercase()
 }
 
 /// Python's truthiness for the JSON values the rate-limit info carries.
-fn is_python_falsy(value: &Value) -> bool {
+fn is_falsy(value: &Value) -> bool {
   match value {
     Value::Null => true,
     Value::Bool(flag) => !flag,
@@ -221,8 +221,8 @@ fn event_text(event: &Value) -> String {
       continue;
     }
     match value {
-      Value::Object(_) | Value::Array(_) => parts.push(charliebot_core::text_repr::json_dumps(value, &PYTHON_JSON_DEFAULT)),
-      other => parts.push(python_str(other)),
+      Value::Object(_) | Value::Array(_) => parts.push(charliebot_core::text_repr::json_dumps(value, &DEFAULT_JSON)),
+      other => parts.push(value_str(other)),
     }
   }
   parts.join("\n")

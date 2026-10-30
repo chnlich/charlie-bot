@@ -487,7 +487,7 @@ fn summary_line_lists_each_category_then_the_total_in_gib() {
 }
 
 #[test]
-fn cold_rule_reads_updated_at_and_status_as_python_does() {
+fn cold_rule_reads_updated_at_and_status() {
   let now = now();
   // `models.parse_utc_datetime` reads a date-only or naive value as UTC, and `str()` of an integer gives its digits.
   assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": "2026-08-05"})), now));
@@ -511,7 +511,7 @@ fn rotation_suffix_counts_unicode_digits_as_isdigit_does() {
 }
 
 #[test]
-fn cc_session_id_reads_each_truthy_value_as_python_str() {
+fn cc_session_id_reads_each_truthy_value_as_str() {
   assert_eq!(optional_text(Some(&json!("ses_x"))).as_deref(), Some("ses_x"));
   assert_eq!(optional_text(Some(&json!(123))).as_deref(), Some("123"));
   assert_eq!(optional_text(Some(&json!(1.5))).as_deref(), Some("1.5"));

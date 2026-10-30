@@ -523,7 +523,7 @@ fn tagged_union_item(
     }
     None => failure(validation::Kind::UnionTagInvalid {
       discriminator,
-      tag: text_repr::python_str(tag),
+      tag: text_repr::value_str(tag),
       expected_tags: variants.iter().map(|variant| variant.tag).collect(),
     }),
   }

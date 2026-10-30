@@ -10,8 +10,8 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
-use charliebot_core::text_repr::str_repr;
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_core::text_repr::str_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::TaskProfile;
 use charliebot_tasks::prompts::{self, PromptEnv, TaskPromptError};
@@ -107,7 +107,7 @@ async fn effective_prompt(
     "mode": "preview",
     "overlay": {
       "declared": coherent.declared,
-      "error": coherent.overlay_error.as_ref().map(|error| error.python_class_name()),
+      "error": coherent.overlay_error.as_ref().map(|error| error.class_name()),
     },
   });
   // Python's `payload.update(snapshot)`: the snapshot's keys join the envelope.

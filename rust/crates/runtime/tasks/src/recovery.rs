@@ -95,8 +95,8 @@ fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTi
   let path = boot_recovery_marker_path(home);
   let parent = path.parent().context("boot-recovery marker has no parent directory")?;
   std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-  let payload = serde_json::json!({"pass_started_at": pass_started_at.to_python_isoformat()});
-  let text = charliebot_core::text_repr::json_dumps(&payload, &charliebot_core::text_repr::PYTHON_JSON_DEFAULT);
+  let payload = serde_json::json!({"pass_started_at": pass_started_at.to_isoformat_text()});
+  let text = charliebot_core::text_repr::json_dumps(&payload, &charliebot_core::text_repr::DEFAULT_JSON);
   charliebot_core::fsutil::atomic_write_text_synced(&path, &text)
     .with_context(|| format!("writing {}", path.display()))?;
   Ok(())
@@ -114,10 +114,8 @@ fn boot_skip_reason(
   }
 
   let marker_instant = marker.into_inner();
-  let marker_seconds = charliebot_core::timefmt::python_float_seconds(
-    marker_instant.unix_timestamp(),
-    i64::from(marker_instant.nanosecond()),
-  );
+  let marker_seconds =
+    charliebot_core::timefmt::float_seconds(marker_instant.unix_timestamp(), i64::from(marker_instant.nanosecond()));
   for path in [layout::chat_events_path(session_dir), session_dir.join(run_records::METADATA_NAME)] {
     let modified = match std::fs::metadata(&path) {
       Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
@@ -126,7 +124,7 @@ fn boot_skip_reason(
     };
     let modified = OffsetDateTime::from(modified);
     let modified_seconds =
-      charliebot_core::timefmt::python_float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
+      charliebot_core::timefmt::float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
     if modified_seconds >= marker_seconds - MARKER_MTIME_SLACK_SECONDS {
       return Ok(Some("file_after_marker"));
     }
@@ -427,7 +425,7 @@ pub async fn reconcile_task_tree(
   if !failed_node && !stop.is_cancelled() {
     write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
   }
-  counters.marker = marker.map(UtcDateTime::to_python_isoformat);
+  counters.marker = marker.map(UtcDateTime::to_isoformat_text);
   Ok(counters)
 }
 
@@ -1695,7 +1693,7 @@ mod tests {
     let marker_path = home.path().join("state").join("boot_recovery.json");
     let marker: Value =
       serde_json::from_slice(&std::fs::read(&marker_path).expect("the marker exists")).expect("the marker is JSON");
-    assert_eq!(marker, json!({"pass_started_at": pass_started_at.to_python_isoformat()}));
+    assert_eq!(marker, json!({"pass_started_at": pass_started_at.to_isoformat_text()}));
     assert!(!marker_path.with_extension("json.tmp").exists(), "the rename consumes the temporary file");
   }
 

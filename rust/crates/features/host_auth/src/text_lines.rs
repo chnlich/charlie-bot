@@ -32,7 +32,7 @@ mod tests {
   use charliebot_core::str_methods;
 
   #[test]
-  fn the_separators_python_recognizes_are_whitespace_and_line_breaks() {
+  fn the_separators_recognized_are_whitespace_and_line_breaks() {
     assert_eq!(str_methods::strip("\u{1c}login\u{1f} "), "login");
     assert_eq!(str_methods::split_whitespace("a\u{1c}b = c"), ["a", "b", "=", "c"]);
     assert_eq!(splitlines("a\u{c}b\r\nc\rd\n"), ["a", "b", "c", "d"]);

@@ -72,7 +72,7 @@ mod tests {
   const HOME: &str = "/home/user";
 
   #[test]
-  fn argv_matches_the_python_builder() {
+  fn argv_matches_the_builder() {
     let fixture: Value = serde_json::from_str(FIXTURE).expect("the fixture is JSON");
     let control_dir = Path::new(HOME).join(".ssh").join("controlmasters");
     let cases = fixture["cases"].as_array().expect("the fixture lists cases");

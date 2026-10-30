@@ -89,15 +89,15 @@ fn list_trash_entries(trash_path: &Path, now: SystemTime) -> Result<Vec<TrashEnt
   }
   let now_seconds = unix_seconds(now);
   let mut children: Vec<PathBuf> = std::fs::read_dir(trash_path)
-    .map_err(|error| CliExit::error(python_os_error(&paths::display(trash_path), &error)))?
+    .map_err(|error| CliExit::error(os_error(&paths::display(trash_path), &error)))?
     .map(|entry| entry.map(|entry| entry.path()))
     .collect::<Result<_, _>>()
-    .map_err(|error| CliExit::error(python_os_error(&paths::display(trash_path), &error)))?;
+    .map_err(|error| CliExit::error(os_error(&paths::display(trash_path), &error)))?;
   children.sort_by(|first, second| first.as_os_str().cmp(second.as_os_str()));
   let mut entries = Vec::new();
   for child in children {
-    let metadata = std::fs::symlink_metadata(&child)
-      .map_err(|error| CliExit::error(python_os_error(&paths::display(&child), &error)))?;
+    let metadata =
+      std::fs::symlink_metadata(&child).map_err(|error| CliExit::error(os_error(&paths::display(&child), &error)))?;
     let age_seconds = now_seconds - modified_seconds(&metadata);
     entries.push(TrashEntry {
       size_bytes: dir_size_bytes(&child),
@@ -142,14 +142,14 @@ fn purge(entries: &[TrashEntry]) -> bool {
           eprintln!(
             "PERMISSION DENIED: {} ({}); contains root-owned files — remove manually with: sudo rm -rf {}",
             entry.path.display(),
-            python_os_error(&entry.path.display().to_string(), &error),
+            os_error(&entry.path.display().to_string(), &error),
             entry.path.display()
           );
         } else {
           eprintln!(
             "FAILED to delete {}: {}",
             entry.path.display(),
-            python_os_error(&entry.path.display().to_string(), &error)
+            os_error(&entry.path.display().to_string(), &error)
           );
         }
       }
@@ -182,7 +182,7 @@ fn modified_seconds(metadata: &std::fs::Metadata) -> f64 {
 }
 
 /// `str(OSError)` with a filename: `[Errno N] <strerror>: '<path>'`.
-fn python_os_error(path: &str, error: &std::io::Error) -> String {
+fn os_error(path: &str, error: &std::io::Error) -> String {
   match error.raw_os_error() {
     Some(errno) => {
       let text = error.to_string();

@@ -138,7 +138,7 @@ mod tests {
   }
 
   #[test]
-  fn defaults_match_the_python_model_and_its_bounds_are_enforced() {
+  fn defaults_match_the_model_and_its_bounds_are_enforced() {
     let option = CharlieCodeOption::from_fields(&fields("api_base: http://test.invalid/v1\n")).unwrap();
     assert_eq!(option.api_base.as_deref(), Some("http://test.invalid/v1"));
     assert!(option.image_input && option.stream);

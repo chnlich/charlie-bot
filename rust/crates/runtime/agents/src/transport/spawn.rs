@@ -1481,7 +1481,7 @@ mod tests {
     let result =
       super::super::kill::wait_or_kill_group(child.wait(), Some(Duration::from_millis(10)), pid, stderr_task).await;
     assert!(result.is_err());
-    assert_eq!(super::super::kill::python_exit_code(child.wait().await.unwrap()), -libc::SIGKILL);
+    assert_eq!(super::super::kill::exit_code(child.wait().await.unwrap()), -libc::SIGKILL);
   }
 
   async fn shell(args: &[&str]) -> AgentChild {

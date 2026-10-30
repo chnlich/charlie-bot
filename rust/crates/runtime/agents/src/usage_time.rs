@@ -25,7 +25,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn utc_isoformat_matches_python_for_whole_and_fractional_seconds() {
+  fn utc_isoformat_matches_for_whole_and_fractional_seconds() {
     assert_eq!(utc_isoformat(1_792_000_000.0).unwrap(), "2026-10-14T17:46:40+00:00");
     assert_eq!(utc_isoformat(1_792_000_000.5).unwrap(), "2026-10-14T17:46:40.500000+00:00");
   }

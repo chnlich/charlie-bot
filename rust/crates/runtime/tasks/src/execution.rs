@@ -19,8 +19,8 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
-use charliebot_core::text_repr;
 use charliebot_core::run_token::{RUN_TOKEN_ENV, RunTokenClaims, sign_run_token};
+use charliebot_core::text_repr;
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
@@ -543,7 +543,7 @@ impl TaskExecutionAdapter {
     ]);
     if let Some(error) = overlay_error {
       event.insert("overlay".to_string(), json!(option.prompt_overlay));
-      event.insert("error".to_string(), json!(error.python_class_name()));
+      event.insert("error".to_string(), json!(error.class_name()));
     }
     self.features.store.persist_and_broadcast(&meta.id, Value::Object(event)).await?;
     Ok(())
@@ -1186,7 +1186,7 @@ impl TaskExecutionAdapter {
     let page_bytes = fs::read(&cold.page_path).with_context(|| format!("reading cold-read page {}", cold.page_path))?;
     let evidence = json!({ "page_path": cold.page_path, "page_sha256": cold_read::page_sha256(&page_bytes) });
     let evidence_path = self.features.store.run_dir(&meta.id, &run.id).join(cold_read::EVIDENCE_FILENAME);
-    fsutil::atomic_write_text(&evidence_path, &text_repr::json_dumps(&evidence, &text_repr::PYTHON_JSON_DEFAULT))?;
+    fsutil::atomic_write_text(&evidence_path, &text_repr::json_dumps(&evidence, &text_repr::DEFAULT_JSON))?;
     let checkout = self.features.startup.require::<charliebot_core::RepoRoot>()?;
     let (_system_prompt, questions) = cold_read::load_texts(checkout.path())?;
     let page_text =
@@ -1341,13 +1341,13 @@ impl TaskExecutionAdapter {
             && event.get("subtype").and_then(Value::as_str) == Some("init")
             && let Some(session_id) = event.get("session_id")
           {
-            return Ok(Some(text_repr::python_str(session_id)));
+            return Ok(Some(text_repr::value_str(session_id)));
           }
           for translated in translate(event)? {
             if translated.get("type").and_then(Value::as_str) == Some(event_types::SESSION_ATTACHED)
               && let Some(session_id) = translated.get("session_id")
             {
-              return Ok(Some(text_repr::python_str(session_id)));
+              return Ok(Some(text_repr::value_str(session_id)));
             }
           }
         }
@@ -1594,7 +1594,7 @@ impl TaskExecutionAdapter {
       json!({ "page_path": cold.page_path, "page_sha256": null })
     };
     evidence["error"] = json!(error);
-    fsutil::atomic_write_text(&evidence_path, &text_repr::json_dumps(&evidence, &text_repr::PYTHON_JSON_DEFAULT))?;
+    fsutil::atomic_write_text(&evidence_path, &text_repr::json_dumps(&evidence, &text_repr::DEFAULT_JSON))?;
     Ok(())
   }
 
@@ -2414,7 +2414,7 @@ impl TaskExecutionAdapter {
       ("type".to_string(), json!(event_types::ERROR)),
       ("message".to_string(), json!(error_text)),
       ("content".to_string(), json!(error_text)),
-      ("timestamp".to_string(), json!(charliebot_store::metadata::UtcDateTime::now().to_python_isoformat())),
+      ("timestamp".to_string(), json!(charliebot_store::metadata::UtcDateTime::now().to_isoformat_text())),
     ]);
     if let Some(quota_exhausted) = quota_exhausted {
       event.insert(event_types::QUOTA_EXHAUSTED.to_string(), json!(quota_exhausted));
@@ -2472,7 +2472,7 @@ impl TaskExecutionAdapter {
             "source": "turn_launch",
             "run_id": run_id,
             "content": format!("{outcome}: {reason}"),
-            "timestamp": charliebot_store::metadata::UtcDateTime::now().to_python_isoformat(),
+            "timestamp": charliebot_store::metadata::UtcDateTime::now().to_isoformat_text(),
           }),
         )
         .await?

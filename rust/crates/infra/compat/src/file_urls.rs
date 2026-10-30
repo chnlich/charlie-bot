@@ -583,7 +583,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn host_file_paths_follow_python_url_splitting_and_unquoting() {
+  fn host_file_paths_follow_url_splitting_and_unquoting() {
     assert_eq!(host_file(Some("/tmp/page.html")).unwrap(), Some(PathBuf::from("/tmp/page.html")));
     assert_eq!(host_file(Some(" /tmp/page.html")).unwrap(), Some(PathBuf::from("/tmp/page.html")));
     assert_eq!(host_file(Some("/tmp/page.html?")).unwrap(), Some(PathBuf::from("/tmp/page.html")));

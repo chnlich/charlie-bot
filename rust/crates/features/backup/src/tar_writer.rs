@@ -43,7 +43,7 @@ pub struct Member<'a> {
 
 /// The code points of a name as Python's `str` holds it: the bytes decoded as UTF-8 with `surrogateescape`,
 /// so each byte outside a UTF-8 sequence stands for U+DC00 plus that byte. Python sorts names by these.
-pub fn python_code_points(name: &[u8]) -> Vec<u32> {
+pub fn code_points(name: &[u8]) -> Vec<u32> {
   let mut points = Vec::with_capacity(name.len());
   for chunk in name.utf8_chunks() {
     points.extend(chunk.valid().chars().map(u32::from));
@@ -75,7 +75,7 @@ fn mtime_ustar(member: &Member) -> i128 {
 /// Stores a text field as Python's ustar text: each code point that is not ASCII becomes `?`
 /// (`stn` with `ascii` and `replace`), and the PAX record keeps the real value.
 fn store_text(field: &mut [u8], value: &[u8]) {
-  let text: Vec<u8> = python_code_points(value).into_iter().map(|c| if c < 0x80 { c as u8 } else { b'?' }).collect();
+  let text: Vec<u8> = code_points(value).into_iter().map(|c| if c < 0x80 { c as u8 } else { b'?' }).collect();
   let len = text.len().min(field.len());
   field[..len].copy_from_slice(&text[..len]);
 }

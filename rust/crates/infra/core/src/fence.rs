@@ -161,9 +161,10 @@ pub fn acquire_home_writer_fence(home: &Path, purpose: &str) -> Result<HomeWrite
     "argv": holder.argv,
     "home": holder.home,
   });
-  if let Err(error) =
-    fsutil::atomic_write_text(&fence_identity_path(home), &text_repr::json_dumps(&record, &text_repr::FENCE_RECORD_JSON))
-  {
+  if let Err(error) = fsutil::atomic_write_text(
+    &fence_identity_path(home),
+    &text_repr::json_dumps(&record, &text_repr::FENCE_RECORD_JSON),
+  ) {
     // Only the lock is ours to drop here: the record never landed.
     if let Some(lock) = fence.lock.take() {
       drop(lock.unlock());
@@ -186,7 +187,7 @@ pub fn read_fence_holder(home: &Path) -> Option<FenceHolder> {
     Value::Bool(flag) => i64::from(*flag),
     _ => return None,
   };
-  let text_field = |raw: &Map<String, Value>, key: &str| raw.get(key).map_or_else(String::new, text_repr::python_str);
+  let text_field = |raw: &Map<String, Value>, key: &str| raw.get(key).map_or_else(String::new, text_repr::value_str);
   Some(FenceHolder {
     pid,
     pid_start: raw.get("pid_start").and_then(Value::as_str).map(str::to_string),

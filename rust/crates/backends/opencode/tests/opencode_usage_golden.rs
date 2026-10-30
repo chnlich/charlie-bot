@@ -15,7 +15,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/opencode_usage_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/opencode_usage_golden.json");
 
 const ACCOUNT: &str = "default";
 
@@ -213,8 +213,8 @@ fn insert_rows(connection: &mut Connection, rows: &[Row]) {
   transaction.commit().unwrap();
 }
 
-fn python_reference(request: &Value) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn golden_reference(request: &Value) -> Value {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected"].clone();
   for (index, step) in request["steps"].as_array().unwrap().iter().enumerate() {
@@ -263,7 +263,7 @@ fn main_files(stores: &BTreeMap<&str, PathBuf>) -> BTreeMap<PathBuf, (Vec<u8>, S
 }
 
 #[test]
-fn read_matches_the_python_usage_log_over_synthetic_stores() {
+fn read_matches_the_usage_log_over_synthetic_stores() {
   let root = TempDir::new().unwrap();
   let rows = matrix_rows();
   let floor = rows.iter().map(|row| row.3).max().unwrap();
@@ -324,7 +324,7 @@ fn read_matches_the_python_usage_log_over_synthetic_stores() {
       .map(|((store, _), previous)| json!({"path": stores[store], "account": ACCOUNT, "previous": previous}))
       .collect::<Vec<_>>(),
   });
-  let python = python_reference(&request);
+  let python = golden_reference(&request);
 
   let rust_steps: Vec<Value> = outcomes
     .iter()

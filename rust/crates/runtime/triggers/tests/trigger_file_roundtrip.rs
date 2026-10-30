@@ -5,13 +5,13 @@ use charliebot_store::trigger_files;
 use charliebot_store::trigger_files::PendingTrigger;
 use serde_json::Value;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/trigger_file_roundtrip_golden.json");
 
 #[test]
 // Python: tests/test_trigger_pid_watch.py::test_trigger_file_without_exit_fields_still_loads
 // Python: all TriggerStatus and WatchTarget records in src/infra/models.py
-fn python_and_rust_read_and_write_equal_trigger_records() {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn read_and_write_equal_trigger_records() {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut python_records = fixture["expected"].as_array().unwrap().clone();
   materialize_fixture_values(&mut python_records);

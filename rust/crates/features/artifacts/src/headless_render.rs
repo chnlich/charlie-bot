@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
-use charliebot_core::text_repr;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr;
 use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
@@ -114,7 +114,7 @@ impl WarmRenderer {
       let reply = self.command("Runtime.evaluate", params.clone())?;
       let value = reply.get("result").and_then(|result| result.get("result")).and_then(|result| result.get("value"));
       if let Some(value) = value.filter(|value| !value.is_null()) {
-        return python_int_value(value).map_err(RenderFailure::Value);
+        return int_value(value).map_err(RenderFailure::Value);
       }
       if self.deadline.is_some_and(|deadline| Instant::now() > deadline) {
         return Err(RenderFailure::Value(
@@ -135,7 +135,7 @@ impl WarmRenderer {
       Err(error) => {
         self.user_data_dir = Some(user_data_dir);
         self.stderr_path = Some(stderr_path);
-        let detail = python_os_error(&error, self.stderr_path.as_deref().expect("stderr path was set"));
+        let detail = os_error(&error, self.stderr_path.as_deref().expect("stderr path was set"));
         return Err(self.launch_failure(detail)?);
       }
     };
@@ -159,7 +159,7 @@ impl WarmRenderer {
       .spawn();
     self.process = match child {
       Ok(child) => Some(child),
-      Err(error) => return Err(self.launch_failure(python_os_error(&error, &self.chrome_bin))?),
+      Err(error) => return Err(self.launch_failure(os_error(&error, &self.chrome_bin))?),
     };
 
     let port_path = user_data_path.join("DevToolsActivePort");
@@ -239,7 +239,7 @@ impl WarmRenderer {
       let reply = self.next_message()?;
       if reply.get("id").and_then(Value::as_u64) == Some(id) {
         if let Some(error) = reply.get("error") {
-          return Err(RenderFailure::Other(format!("{method}: {}", text_repr::python_str(error))));
+          return Err(RenderFailure::Other(format!("{method}: {}", text_repr::value_str(error))));
         }
         return Ok(reply);
       }
@@ -345,7 +345,7 @@ impl WarmRenderer {
     let data = fs::read(stderr_path)?;
     let start = data.len().saturating_sub(400);
     let tail = String::from_utf8_lossy(&data[start..]);
-    let tail = tail.trim_matches(charliebot_python_whitespace);
+    let tail = tail.trim_matches(charliebot_whitespace);
     Ok(if tail.is_empty() { String::new() } else { format!(": {tail}") })
   }
 
@@ -540,19 +540,19 @@ fn is_load_event(value: &Value) -> bool {
   value.get("method").and_then(Value::as_str) == Some("Page.loadEventFired")
 }
 
-fn python_int_value(value: &Value) -> Result<i32, String> {
+fn int_value(value: &Value) -> Result<i32, String> {
   match value {
-    Value::String(text) => python_decimal_integer(text),
+    Value::String(text) => decimal_integer(text),
     Value::Number(number) => number.to_string().parse::<i32>().map_err(|error| error.to_string()),
     Value::Bool(value) => Ok(i32::from(*value)),
-    _ => Err(format!("invalid literal for int(): {}", text_repr::python_str(value))),
+    _ => Err(format!("invalid literal for int(): {}", text_repr::value_str(value))),
   }
 }
 
-fn python_decimal_integer(text: &str) -> Result<i32, String> {
+fn decimal_integer(text: &str) -> Result<i32, String> {
   let mut digits = String::with_capacity(text.len());
   for character in text.chars() {
-    let Some(digit) = str_methods::python_decimal_value(character) else {
+    let Some(digit) = str_methods::decimal_value(character) else {
       return Err(format!("invalid literal for int() with base 10: {}", text_repr::str_repr(text)));
     };
     digits.push(char::from(b'0' + digit));
@@ -560,7 +560,7 @@ fn python_decimal_integer(text: &str) -> Result<i32, String> {
   digits.parse::<i32>().map_err(|error| error.to_string())
 }
 
-fn python_os_error(error: &std::io::Error, path: &Path) -> String {
+fn os_error(error: &std::io::Error, path: &Path) -> String {
   let (number, description) = match error.kind() {
     ErrorKind::NotFound => (2, "No such file or directory"),
     ErrorKind::PermissionDenied => (13, "Permission denied"),
@@ -571,8 +571,8 @@ fn python_os_error(error: &std::io::Error, path: &Path) -> String {
   format!("[Errno {number}] {description}: {}", text_repr::str_repr(&path.to_string_lossy()))
 }
 
-fn charliebot_python_whitespace(character: char) -> bool {
-  str_methods::is_python_whitespace(character)
+fn charliebot_whitespace(character: char) -> bool {
+  str_methods::is_whitespace(character)
 }
 
 /// SIGKILL to the process group `group` ids. The renderer's launch makes the browser its own group leader; the group
@@ -683,7 +683,7 @@ mod tests {
   }
 
   #[test]
-  fn chrome_launch_failure_reports_the_python_message_and_stderr_tail() {
+  fn chrome_launch_failure_reports_the_message_and_stderr_tail() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
     let chrome = chrome_program(directory.path(), json!([{"stderr": "synthetic renderer failure\n"}, {"exit": 1}]));
     let mut renderer = WarmRenderer::new(chrome.clone());

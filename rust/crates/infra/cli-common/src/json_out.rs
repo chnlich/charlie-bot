@@ -27,7 +27,7 @@ mod tests {
   use serde_json::json;
 
   #[test]
-  fn one_line_keeps_non_ascii_and_python_separators() {
+  fn one_line_keeps_non_ascii_and_separators() {
     assert_eq!(render(&json!({ "now": "中文" }), None), "{\"now\": \"中文\"}\n");
   }
 

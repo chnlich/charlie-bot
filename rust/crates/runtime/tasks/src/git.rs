@@ -126,7 +126,7 @@ fn subprocess_git_remote_attempt_timeout() -> Duration {
 }
 
 /// A timeout's seconds the way Python's f-string prints its float value: `0.3s`, `30.0s`, `120.0s`.
-fn py_secs(limit: Duration) -> String {
+fn secs_text(limit: Duration) -> String {
   format!("{:.1}", limit.as_secs_f64())
 }
 
@@ -242,7 +242,7 @@ pub(crate) async fn git_stdout(
   match git_proc_bytes(repo_path, args, limit).await {
     Ok(proc) if proc.returncode == 0 => (true, trimmed(&proc.stdout), String::new()),
     Ok(proc) => (false, trimmed(&proc.stdout), trimmed(&proc.stderr)),
-    Err(_) => (false, String::new(), format!("{timeout_label} timed out after {}s", py_secs(limit))),
+    Err(_) => (false, String::new(), format!("{timeout_label} timed out after {}s", secs_text(limit))),
   }
 }
 
@@ -342,7 +342,7 @@ pub async fn git_current_branch(repo_path: &Path) -> anyhow::Result<String> {
       Err(GitProcError::TimedOut) => {
         anyhow::bail!(
           "git rev-parse timed out after {}s in {}",
-          py_secs(SUBPROCESS_GIT_READ_TIMEOUT_ASYNC),
+          secs_text(SUBPROCESS_GIT_READ_TIMEOUT_ASYNC),
           repo_path.display()
         )
       }
@@ -541,7 +541,7 @@ pub async fn resolve_base_branch(
         Err(_) => {
           return Err(BaseBranchResolutionError::new(format!(
             "git merge-base --is-ancestor {local_sha} {remote_sha} timed out after {}s in {}",
-            py_secs(SUBPROCESS_GIT_READ_TIMEOUT_ASYNC),
+            secs_text(SUBPROCESS_GIT_READ_TIMEOUT_ASYNC),
             repo_path.display()
           )));
         }
@@ -683,7 +683,10 @@ pub async fn git_create_worktree(
     let proc = match outcome {
       Ok(proc) => proc,
       Err(GitProcError::TimedOut) => {
-        anyhow::bail!("git worktree add timed out after {}s for {branch_name}", py_secs(subprocess_git_write_timeout()))
+        anyhow::bail!(
+          "git worktree add timed out after {}s for {branch_name}",
+          secs_text(subprocess_git_write_timeout())
+        )
       }
       Err(GitProcError::Spawn(error)) => anyhow::bail!("git worktree add failed to spawn: {error}"),
     };
@@ -1196,7 +1199,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn invalid_hash_reports_python_string_repr() {
+  async fn invalid_hash_reports_str_repr() {
     // Python: tests/test_task_execution.py::test_landing_verification_negative_cases.
     let root = tempfile::tempdir().expect("temporary directory is available");
     let (verified, reason) = git_verify_commit_landed(root.path(), "main", "not-a-hash").await;

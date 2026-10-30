@@ -8,7 +8,7 @@ use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 
 #[test]
-fn memory_selections_and_store_setup_match_the_recorded_python_cases() {
+fn memory_selections_and_store_setup_match_the_recorded_cases() {
   let mut decoder = GzDecoder::new(include_bytes!("fixtures/memory_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();

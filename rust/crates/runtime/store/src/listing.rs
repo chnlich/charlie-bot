@@ -366,7 +366,7 @@ impl Store {
     rows.truncate(limit);
     let next = if has_more { rows.last() } else { None };
     Ok(ArchivedPage {
-      next_before: next.map(|meta| meta.updated_at.to_python_isoformat()),
+      next_before: next.map(|meta| meta.updated_at.to_isoformat_text()),
       next_before_id: next.map(|meta| meta.id.clone()),
       sessions: rows,
       has_more,

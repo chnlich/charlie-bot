@@ -388,7 +388,7 @@ mod tests {
   }
 
   #[test]
-  fn the_state_file_is_python_json_with_indent_two_and_a_newline() {
+  fn the_state_file_is_json_with_indent_two_and_a_newline() {
     let dir = tempfile::tempdir().expect("a temporary home");
     let path = dir.path().join("nested").join(STATE_FILENAME);
     save_state(&empty_state(), &path).expect("the state is written");

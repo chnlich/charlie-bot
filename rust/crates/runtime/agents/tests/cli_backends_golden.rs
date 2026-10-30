@@ -30,7 +30,7 @@ use charliebot_registry::usage::UsageSource;
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/cli_backends_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/cli_backends_golden.json");
 
 const PROMPT: &str = "Review \"the\" synthetic\nprompt \\ with \u{fc}n\u{ef}code\tand a tab";
 const INSTRUCTIONS: &str = "Rules: \"quoted\" ]\n[section] \\ \u{7f} \u{fc}n\u{ef}";
@@ -112,7 +112,7 @@ impl Fixture {
 // Python: tests/test_anthropic_compatible_backend.py:37.
 // Python: tests/test_anthropic_compatible_backend.py:72.
 #[test]
-fn cli_backends_match_the_python_package_on_synthetic_inputs() {
+fn cli_backends_match_the_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let fx = write_fixtures(root.path());
   let request = request(&fx);
@@ -491,7 +491,7 @@ fn finish_cases(fx: &Fixture) -> Vec<Value> {
 }
 
 fn run_reference(request: &Value, temporary: &Path) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected"].clone();
   replace_fixture_paths(
@@ -654,7 +654,7 @@ fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
 
 // Python: tests/test_anthropic_compatible_backend.py:90.
 #[test]
-fn anthropic_compatible_registration_matches_python_traits_and_usage_attribution() {
+fn anthropic_compatible_registration_matches_traits_and_usage_attribution() {
   use charliebot_registry::backend::{BackendTraits, ResumeStyle};
   use charliebot_store::run_records::RunKind;
 

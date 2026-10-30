@@ -732,7 +732,7 @@ mod tests {
   // Python: tests/test_claude_idle_compaction.py:166.
   // Python: tests/test_claude_idle_compaction.py:167.
   #[test]
-  fn every_idle_compaction_gate_rejects_its_python_case() {
+  fn every_idle_compaction_gate_rejects_its_case() {
     let now = at("2026-09-06T20:00:00Z");
     type GateCase = (&'static str, fn(&mut IdleFacts));
     let cases: [GateCase; 11] = [

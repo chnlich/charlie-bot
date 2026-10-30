@@ -14,8 +14,8 @@ use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity;
-use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::run_token;
+use charliebot_core::text_repr::{self, JsonStyle};
 use memmap2::Mmap;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
@@ -602,7 +602,7 @@ fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
 }
 
 fn run_cursor(run: &RunRecord, order: RunOrder) -> String {
-  let started_at = run_sort_key(run).0.to_python_isoformat();
+  let started_at = run_sort_key(run).0.to_isoformat_text();
   let mut value = Map::new();
   value.insert("s".to_string(), Value::String(started_at));
   value.insert("i".to_string(), Value::String(run.id.clone()));
@@ -618,13 +618,13 @@ fn decode_run_cursor(cursor: &str) -> StoreResult<((UtcDateTime, String), RunOrd
   let malformed = || StoreError::new(format!("malformed run page cursor: {}", text_repr::str_repr(cursor)));
   let decoded = run_token::b64url_decode(cursor).map_err(|_| malformed())?;
   let value: RunCursor = serde_json::from_slice(&decoded).map_err(|_| malformed())?;
-  let started_at = if text_repr::python_truthy(&value.s) {
+  let started_at = if text_repr::is_truthy(&value.s) {
     UtcDateTime::parse(value.s.as_str().ok_or_else(malformed)?).map_err(|_| malformed())?
   } else {
     UtcDateTime::parse("0001-01-01T00:00:00Z").expect("the minimum datetime is valid")
   };
   let order =
-    if value.d.as_ref().is_some_and(text_repr::python_truthy) { RunOrder::Descending } else { RunOrder::Ascending };
+    if value.d.as_ref().is_some_and(text_repr::is_truthy) { RunOrder::Descending } else { RunOrder::Ascending };
   Ok(((started_at, value.i), order))
 }
 
@@ -1526,7 +1526,7 @@ mod tests {
     let path = dir.path().join(RUN_METADATA_NAME);
     let record = json!({"id": "run-a", "session_id": "s", "kind": "manager_turn"});
 
-    write_run_metadata(&path, &record, &charliebot_core::text_repr::PYTHON_JSON_DEFAULT).unwrap();
+    write_run_metadata(&path, &record, &charliebot_core::text_repr::DEFAULT_JSON).unwrap();
     assert_eq!(
       std::fs::read_to_string(&path).unwrap(),
       "{\"id\": \"run-a\", \"session_id\": \"s\", \"kind\": \"manager_turn\"}"
@@ -1563,7 +1563,7 @@ mod tests {
   }
 
   #[test]
-  fn run_facts_memo_keeps_the_python_sixty_four_list_bound() {
+  fn run_facts_memo_keeps_the_sixty_four_list_bound() {
     let mut memo = RunFactsMemo::default();
     let mut first_identity = None;
     let mut first_events = None;
@@ -1613,7 +1613,7 @@ mod tests {
   }
 
   #[test]
-  fn run_record_rejects_extra_fields_and_keeps_python_field_order() {
+  fn run_record_rejects_extra_fields_and_keeps_field_order() {
     let record = RunRecord {
       id: "run-a".to_string(),
       session_id: "session-a".to_string(),
@@ -1684,7 +1684,7 @@ mod tests {
   }
 
   #[test]
-  fn stable_run_cursor_round_trips_the_python_boundary() {
+  fn stable_run_cursor_round_trips_the_boundary() {
     let record = RunRecord {
       id: "run-a".to_string(),
       session_id: "session-a".to_string(),

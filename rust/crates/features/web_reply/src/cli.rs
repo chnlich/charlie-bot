@@ -115,13 +115,13 @@ fn dialog(args: &SessionArgs) -> Result<(), CliExit> {
   let result = client::get("/api/internal/web/dialog", Some(vec![("session_id".to_string(), session_id)]))?;
   let mut blocks = Vec::new();
   for entry in list(field(&result, "entries")?)? {
-    let label = match text_repr::python_str(field(entry, "role")?).as_str() {
+    let label = match text_repr::value_str(field(entry, "role")?).as_str() {
       "user" => "You",
       event_types::WEB_REPLY => "Reply",
       event_types::WEB_REPLY_NOTICE => "Notice",
       role => return Err(CliExit::error(format!("unknown dialog role {role}"))),
     };
-    blocks.push(format!("{label}: {}", text_repr::python_str(field(entry, "content")?)));
+    blocks.push(format!("{label}: {}", text_repr::value_str(field(entry, "content")?)));
   }
   if !blocks.is_empty() {
     println!("{}", blocks.join("\n\n"));
@@ -168,7 +168,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
       None,
       &[],
     )?;
-    println!("Waiting on you: {}\nBackend: {backend}\n{answer}\n", text_repr::python_str(field(item, "text")?));
+    println!("Waiting on you: {}\nBackend: {backend}\n{answer}\n", text_repr::value_str(field(item, "text")?));
   }
   println!("Nothing was stored.");
   std::process::exit(3);
@@ -231,17 +231,17 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
       lines.push(format!(
         "Remaining: {open} of {} left (updated {})",
         remaining.len(),
-        text_repr::python_str(field(status, "remaining_updated_at")?)
+        text_repr::value_str(field(status, "remaining_updated_at")?)
       ));
       for (item, done) in remaining.iter().zip(done) {
         let marker = if done { "✓" } else { "○" };
-        lines.push(format!("  {marker} {}", text_repr::python_str(field(item, "text")?)));
+        lines.push(format!("  {marker} {}", text_repr::value_str(field(item, "text")?)));
       }
     }
     lines.push(format!(
       "Now: {} (updated {})",
       or_not_set(field(status, "now")?),
-      text_repr::python_str(field(status, "updated_at")?)
+      text_repr::value_str(field(status, "updated_at")?)
     ));
     let waiting = list(field(status, "waiting")?)?;
     if waiting.is_empty() {
@@ -255,7 +255,7 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
   }
   for row in list(field(result, "descendants")?)? {
     lines.push(String::new());
-    lines.push(format!("{} ({})", text_repr::python_str(field(row, "name")?), short_session_id(row)?));
+    lines.push(format!("{} ({})", text_repr::value_str(field(row, "name")?), short_session_id(row)?));
     for item in list(field(row, "waiting")?)? {
       lines.extend(item_lines(item)?);
     }
@@ -267,10 +267,10 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
     for row in children {
       lines.push(format!(
         "{} ({}): {} (updated {})",
-        text_repr::python_str(field(row, "name")?),
+        text_repr::value_str(field(row, "name")?),
         short_session_id(row)?,
-        text_repr::python_str(field(row, "now")?),
-        text_repr::python_str(field(row, "updated_at")?)
+        text_repr::value_str(field(row, "now")?),
+        text_repr::value_str(field(row, "updated_at")?)
       ));
     }
   }
@@ -281,12 +281,12 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
 fn item_lines(item: &Value) -> Result<Vec<String>, CliExit> {
   let mut lines = vec![
     item_line(item)?,
-    format!("  since: {}", text_repr::python_str(field(item, "since")?)),
-    format!("  since_exact: {}", text_repr::json_dumps(field(item, "since_exact")?, &text_repr::PYTHON_JSON_DEFAULT)),
+    format!("  since: {}", text_repr::value_str(field(item, "since")?)),
+    format!("  since_exact: {}", text_repr::json_dumps(field(item, "since_exact")?, &text_repr::DEFAULT_JSON)),
   ];
   if let Some(context) = item.get("context").filter(|context| !context.is_null()) {
-    let context = text_repr::python_str(context);
-    let context_lines = py_splitlines(&context);
+    let context = text_repr::value_str(context);
+    let context_lines = splitlines(&context);
     if let Some((first, rest)) = context_lines.split_first() {
       lines.push(format!("  context: {first}"));
       lines.extend(rest.iter().map(|line| format!("  {line}")));
@@ -305,17 +305,21 @@ fn remaining_done(item: &Value) -> Result<bool, CliExit> {
 
 /// `_item_line`: `- <text>`, with ` (<link>)` appended when the item names a link.
 fn item_line(item: &Value) -> Result<String, CliExit> {
-  let text = text_repr::python_str(field(item, "text")?);
+  let text = text_repr::value_str(field(item, "text")?);
   let link = field(item, "link")?;
-  Ok(if text_repr::python_truthy(link) { format!("- {text} ({})", text_repr::python_str(link)) } else { format!("- {text}") })
+  Ok(if text_repr::is_truthy(link) {
+    format!("- {text} ({})", text_repr::value_str(link))
+  } else {
+    format!("- {text}")
+  })
 }
 
 fn short_session_id(row: &Value) -> Result<String, CliExit> {
-  Ok(text_repr::python_str(field(row, "session_id")?).chars().take(8).collect())
+  Ok(text_repr::value_str(field(row, "session_id")?).chars().take(8).collect())
 }
 
 fn or_not_set(value: &Value) -> String {
-  if text_repr::python_truthy(value) { text_repr::python_str(value) } else { "(not set)".to_string() }
+  if text_repr::is_truthy(value) { text_repr::value_str(value) } else { "(not set)".to_string() }
 }
 
 /// A response field the verb reads; a missing one is a broken server contract.
@@ -328,7 +332,7 @@ fn list(value: &Value) -> Result<&Vec<Value>, CliExit> {
 }
 
 /// `str.splitlines()`: the line breaks Python recognizes, none kept, and no empty line after a final break.
-fn py_splitlines(text: &str) -> Vec<&str> {
+fn splitlines(text: &str) -> Vec<&str> {
   let mut lines = Vec::new();
   let mut start = 0;
   let mut chars = text.char_indices().peekable();

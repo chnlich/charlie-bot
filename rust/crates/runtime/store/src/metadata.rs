@@ -43,7 +43,7 @@ impl UtcDateTime {
   }
 
   /// Render the UTC datetime with Python's Pydantic microsecond rule.
-  pub fn to_python_string(self) -> String {
+  pub fn to_str(self) -> String {
     let value = self.0.to_offset(time::UtcOffset::UTC);
     let base = format!(
       "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -59,8 +59,8 @@ impl UtcDateTime {
   }
 
   /// Render the same UTC instant using Python `datetime.isoformat()`'s `+00:00` suffix.
-  pub fn to_python_isoformat(self) -> String {
-    format!("{}+00:00", self.to_python_string().trim_end_matches('Z'))
+  pub fn to_isoformat_text(self) -> String {
+    format!("{}+00:00", self.to_str().trim_end_matches('Z'))
   }
 
   /// Return the underlying UTC instant.
@@ -74,7 +74,7 @@ impl Serialize for UtcDateTime {
   where
     S: Serializer,
   {
-    serializer.serialize_str(&self.to_python_string())
+    serializer.serialize_str(&self.to_str())
   }
 }
 
@@ -90,7 +90,7 @@ impl<'de> Deserialize<'de> for UtcDateTime {
 
 impl fmt::Display for UtcDateTime {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str(&self.to_python_string())
+    f.write_str(&self.to_str())
   }
 }
 
@@ -721,7 +721,7 @@ pub fn read_session_metadata(path: &Path) -> Result<Option<SessionMetadata>, Met
 /// exist, cannot be read, or is not JSON, or when it is JSON null. Invalid UTF-8 fails the read, as Python's
 /// uncaught `UnicodeDecodeError` does, and so does a document the port cannot hold (Python's NaN, for one). A read
 /// or a parse that Python answers `None` for logs `log_event` at debug level and answers `None`.
-pub fn read_metadata_python(path: &Path, log_event: &str) -> anyhow::Result<Option<Value>> {
+pub fn read_metadata(path: &Path, log_event: &str) -> anyhow::Result<Option<Value>> {
   // `Path.exists()` reads a failed stat as absent, and Python logs nothing for that.
   if std::fs::metadata(path).is_err() {
     return Ok(None);
@@ -835,7 +835,7 @@ mod tests {
   }
 
   #[test]
-  fn response_value_supplies_python_session_model_and_slot_defaults_for_legacy_metadata() {
+  fn response_value_supplies_session_model_and_slot_defaults_for_legacy_metadata() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(charliebot_core::metadata_slot::METADATA_FILE_NAME);
     std::fs::write(&path, r#"{"name":"Synthetic","profile":"manager"}"#).unwrap();
@@ -1091,20 +1091,20 @@ mod tests {
   }
 
   #[test]
-  fn read_metadata_python_answers_none_for_every_python_none_and_fails_a_nan_document() {
+  fn read_metadata_answers_none_for_every_none_and_fails_a_nan_document() {
     let (_dir, path) = metadata_with(br#"{"profile": "manager"}"#);
-    assert_eq!(super::read_metadata_python(&path, "probe_read_failed").unwrap().unwrap()["profile"], "manager");
+    assert_eq!(super::read_metadata(&path, "probe_read_failed").unwrap().unwrap()["profile"], "manager");
 
     for text in [b"".as_slice(), b"null".as_slice(), b"{not json".as_slice()] {
       let (_dir, path) = metadata_with(text);
-      assert_eq!(super::read_metadata_python(&path, "probe_read_failed").unwrap(), None, "{text:?}");
+      assert_eq!(super::read_metadata(&path, "probe_read_failed").unwrap(), None, "{text:?}");
     }
     // A document that parses but is not an object is still a document.
     let (_dir, path) = metadata_with(b"[1]");
-    assert_eq!(super::read_metadata_python(&path, "probe_read_failed").unwrap().unwrap()[0], 1);
+    assert_eq!(super::read_metadata(&path, "probe_read_failed").unwrap().unwrap()[0], 1);
 
     let (_dir, path) = metadata_with(b"NaN");
-    let error = super::read_metadata_python(&path, "probe_read_failed").unwrap_err();
+    let error = super::read_metadata(&path, "probe_read_failed").unwrap_err();
     assert_eq!(error.to_string(), format!("{}: JSON value NaN is not representable", path.display()));
   }
 }

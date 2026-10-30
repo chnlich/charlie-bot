@@ -20,7 +20,7 @@ const PACKAGES: [(&str, &str, RegisterFn); 3] = [
 ];
 
 #[test]
-fn contributions_match_the_recorded_python_cases() {
+fn contributions_match_the_recorded_cases() {
   let mut decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();

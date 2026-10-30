@@ -6,7 +6,7 @@ use std::process::Command;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::{home, paths, text_repr, str_methods};
+use charliebot_core::{home, paths, str_methods, text_repr};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use super::proposal_check;

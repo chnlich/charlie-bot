@@ -12,7 +12,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/request_body_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/request_body_golden.json");
 
 const FIELDS: &[Field] = &[
   Field::required("name", FieldType::String),
@@ -98,7 +98,7 @@ struct Case {
 }
 
 #[tokio::test]
-async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
+async fn request_body_matches_recorded_for_the_request_corpus() {
   rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
@@ -113,7 +113,7 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
   });
 
   let client = Client::new();
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), 137);

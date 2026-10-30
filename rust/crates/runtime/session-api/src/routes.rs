@@ -180,7 +180,7 @@ fn archived_page_body(
     let object = value.as_object_mut().expect("session metadata serializes to an object");
     object.insert(
       "thinking_since".to_string(),
-      features.store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
+      features.store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
     );
     object.insert(
       "run_backend".to_string(),
@@ -304,7 +304,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     );
     payload.insert(
       "thinking_since".to_string(),
-      features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_python_isoformat())),
+      features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_isoformat_text())),
     );
     payload.insert(
       "has_pending_trigger".to_string(),
@@ -318,7 +318,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     payload.insert(
       "next_trigger_at".to_string(),
       next.as_str().map_or(next.clone(), |value| {
-        UtcDateTime::parse(value).map_or(next.clone(), |at| json!(at.to_python_isoformat()))
+        UtcDateTime::parse(value).map_or(next.clone(), |at| json!(at.to_isoformat_text()))
       }),
     );
     payload.insert(
@@ -427,7 +427,7 @@ fn apply_derived_fields(
   }
   object.insert(
     "thinking_since".to_string(),
-    store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_python_string())),
+    store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_str())),
   );
 }
 

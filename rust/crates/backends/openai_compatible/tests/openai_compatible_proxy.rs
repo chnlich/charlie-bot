@@ -41,7 +41,7 @@ const PACKAGE: &str = "src.backends.openai_compatible";
 const ACCESS_KEY: &str = "synthetic-access-key";
 const DONE_FRAME: &[u8] = b"data: [DONE]\n\n";
 const MESSAGE_STOP_FRAME: &[u8] = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
-const PYTHON_FIXTURE: &str = include_str!("fixtures/openai_compatible_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/openai_compatible_golden.json");
 
 /// One case of the matrix, as the Python reference printed it.
 struct Case {
@@ -90,8 +90,8 @@ fn hex(text: &str) -> Vec<u8> {
 }
 
 /// The matrix the Python route answered, one record per case.
-fn python_reference() -> Vec<Case> {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn golden_reference() -> Vec<Case> {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   fixture["expected"].as_array().unwrap().iter().map(Case::from_record).collect()
 }
@@ -273,8 +273,8 @@ async fn post_case(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_route_answers_as_the_python_route_does_over_the_matrix() {
-  let cases = python_reference();
+async fn the_route_answers_as_the_recorded_route_over_the_matrix() {
+  let cases = golden_reference();
   let replies =
     cases.iter().map(|case| Reply { status: case.upstream_status, chunks: case.upstream_chunks.clone() }).collect();
   let (upstream_port, upstream) = serve_upstream(replies).await;

@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
-use charliebot_core::text_repr::{format_g, python_str};
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::{format_g, value_str};
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
@@ -100,7 +100,7 @@ impl CharlieCodeTranslator {
       "content": format!(
         "Command {state} after {} (pid {}){suffix}",
         duration_label(elapsed),
-        python_str(pid)
+        value_str(pid)
       ),
     })])
   }

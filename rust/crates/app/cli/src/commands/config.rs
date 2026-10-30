@@ -278,7 +278,7 @@ mod tests {
   }
 
   #[test]
-  fn backends_prints_the_value_the_python_command_printed() {
+  fn backends_prints_the_recorded_value() {
     let stdout = run("backends").expect("backends prints");
     let printed: Value = serde_json::from_str(stdout.trim_end()).expect("one JSON value");
     let expected_text = recorded(include_str!("../../tests/fixtures/config_get/backends_golden.txt"));
@@ -290,7 +290,7 @@ mod tests {
   }
 
   #[test]
-  fn a_scalar_prints_as_python_prints_it() {
+  fn a_scalar_prints_as_str_prints_it() {
     let stdout = run("headless_chrome_bin").expect("the scalar prints");
     assert_eq!(stdout, recorded(include_str!("../../tests/fixtures/config_get/headless_chrome_bin_golden.txt")));
   }

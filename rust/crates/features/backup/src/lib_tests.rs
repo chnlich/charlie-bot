@@ -150,7 +150,7 @@ fn create_backup_names_the_archive_by_local_time() {
 }
 
 #[test]
-fn backup_name_and_date_parser_match_python_timestamp_bytes() {
+fn backup_name_and_date_parser_match_timestamp_bytes() {
   let moment = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap().and_hms_opt(9, 7, 5).unwrap();
   let name = archive_name(moment);
   assert_eq!(name, "charliebot-20261026-090705.tar.gz");

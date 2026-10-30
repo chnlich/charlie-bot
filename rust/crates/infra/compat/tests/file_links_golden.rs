@@ -15,7 +15,7 @@ use charliebot_compat::file_urls::{
 };
 use serde_json::{Value, json};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/file_links_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/file_links_golden.json");
 
 /// The finding shapes the matrix must reach: the form, its liveness, and whether it has a correct link.
 const COVERED: [(FileLinkForm, Option<bool>, bool); 6] = [
@@ -115,8 +115,8 @@ fn finding_json(finding: &FileLink) -> Value {
 }
 
 #[test]
-fn the_file_link_scanner_matches_python_on_the_case_matrix() {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn the_file_link_scanner_matches_recorded_on_the_case_matrix() {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let root = tempfile::tempdir().unwrap();
   let context = build_tree(root.path());

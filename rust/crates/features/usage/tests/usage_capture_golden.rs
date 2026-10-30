@@ -12,7 +12,7 @@ use tempfile::tempdir;
 const FIXED_MTIME_NS: u64 = 1_700_000_000_123_456_789;
 
 #[test]
-fn recorded_python_capture_matches_rows_and_all_ledger_tables() {
+fn recorded_capture_matches_rows_and_all_ledger_tables() {
   let fixture = fixture();
   assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["source"]["mtime_ns"], "$FIXED_MTIME_NS");

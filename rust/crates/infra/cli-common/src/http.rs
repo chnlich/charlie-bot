@@ -59,7 +59,7 @@ async fn send_async(request: &WireRequest) -> Result<WireResponse, TransportErro
 /// class; a connection closed before any status line is Python's missing-status-line parse failure.
 fn map_response_head_error(error: reqwest::Error) -> TransportError {
   if error.is_connect() {
-    return TransportError::ConnectPhase(cpython_os_error_message(&error));
+    return TransportError::ConnectPhase(os_error_message(&error));
   }
   if source_chain_contains(&error, "connection closed before message completed") {
     // hyper's message for a connection closed before the response head; Python's raw client
@@ -70,7 +70,7 @@ fn map_response_head_error(error: reqwest::Error) -> TransportError {
 }
 
 /// CPython `str(OSError)`: `[Errno <errno>] <strerror>`, read off the deepest OS error in the chain.
-fn cpython_os_error_message(error: &reqwest::Error) -> String {
+fn os_error_message(error: &reqwest::Error) -> String {
   let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
   while let Some(current) = source {
     if let Some(io_error) = current.downcast_ref::<std::io::Error>()
@@ -135,7 +135,7 @@ mod tests {
   }
 
   #[test]
-  fn a_refused_connection_is_a_connect_phase_error_with_the_cpython_message() {
+  fn a_refused_connection_is_a_connect_phase_error_with_the_message() {
     let error = send_http(&get(free_port(), "/api/internal/x")).unwrap_err();
     assert_eq!(error, TransportError::ConnectPhase("[Errno 111] Connection refused".to_string()));
   }

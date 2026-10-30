@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::home;
-use charliebot_core::text_repr::python_str;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, RecoverySilence, ServeProcessSpec, ServeTransport,
   ServeTurn, ServeTurnArgs, ServeTurnResult, Translate, TransportKind,
@@ -31,7 +31,7 @@ use charliebot_agents::event_builders;
 use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
-use charliebot_agents::transport::kill::{kill_process_group, python_exit_code};
+use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
@@ -542,8 +542,8 @@ async fn run_turn_body(
 pub fn reject_permission(event: &Value) -> anyhow::Result<()> {
   if event.get("type").and_then(Value::as_str) == Some("permission.asked") {
     let data = object_or_empty(event.get("data"))?;
-    let permission = data.get("permission").map(python_str).unwrap_or_else(|| "None".to_string());
-    let patterns = data.get("patterns").map(python_str).unwrap_or_else(|| "None".to_string());
+    let permission = data.get("permission").map(value_str).unwrap_or_else(|| "None".to_string());
+    let patterns = data.get("patterns").map(value_str).unwrap_or_else(|| "None".to_string());
     bail!(
       "OpenCode requested interactive permission '{permission}' (patterns={patterns}) but CharlieBot runs headless with no approval path; aborting run."
     );
@@ -737,12 +737,12 @@ fn split_model(model: &str) -> anyhow::Result<(&str, &str)> {
 pub(super) fn image_file_attachments(uploaded_files: &[Value]) -> Vec<Value> {
   let mut attachments = Vec::new();
   for reference in uploaded_files {
-    let filename = reference.get("filename").map(python_str).unwrap_or_default();
+    let filename = reference.get("filename").map(value_str).unwrap_or_default();
     let extension = filename.rsplit('.').next().unwrap_or_default();
     let Some(mime) = image_mime(extension) else {
       continue;
     };
-    let path = reference.get("path").map(python_str).unwrap_or_default();
+    let path = reference.get("path").map(value_str).unwrap_or_default();
     let data = match fs::read(&path) {
       Ok(data) => data,
       Err(error) => {
@@ -769,7 +769,7 @@ fn error_text(error: Option<&Value>) -> String {
       .filter(|value| charliebot_agents::cli_base::truthy(value))
       .or_else(|| object.get("data").and_then(Value::as_object).and_then(|data| data.get("message")));
     if let Some(message) = message.filter(|value| charliebot_agents::cli_base::truthy(value)) {
-      return python_str(message);
+      return value_str(message);
     }
   }
   error.to_string()
@@ -836,7 +836,7 @@ impl OpenCodeTranslator {
       }
       "session.execution.interrupted" => {
         self.terminal = Some(TurnTerminal::Interrupted);
-        let reason = data.get("reason").map(python_str).unwrap_or_else(|| "None".to_string());
+        let reason = data.get("reason").map(value_str).unwrap_or_else(|| "None".to_string());
         Ok(vec![event_builders::make_error_event(&format!("OpenCode execution interrupted (reason: {reason})"))])
       }
       "charliebot.opencode_relay.ended" => {
@@ -905,7 +905,7 @@ impl OpenCodeTranslator {
             content.push(required_string(part, "text")?.to_string());
           } else {
             let mime = required_string(part, "mime")?;
-            content.push(part.get("name").map(python_str).unwrap_or(mime.to_string()));
+            content.push(part.get("name").map(value_str).unwrap_or(mime.to_string()));
           }
         }
         Ok(vec![json!({"type": event_types::TOOL_RESULT, "tool_use_id": id, "content": content.join("\n")})])
@@ -1065,7 +1065,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   let (exit_tx, mut exit_rx) = watch::channel(None);
   let mut child = spawned.child;
   tokio::spawn(async move {
-    let code = child.wait().await.map(python_exit_code).map_err(|error| error.to_string());
+    let code = child.wait().await.map(exit_code).map_err(|error| error.to_string());
     let _ = exit_tx.send(Some(code));
   });
   let stderr_task = tokio::spawn(async move {
@@ -1173,7 +1173,7 @@ fn object_or_empty(value: Option<&Value>) -> anyhow::Result<&Map<String, Value>>
 }
 
 #[test]
-fn oneshot_root_uses_the_python_prefix_and_is_removed_on_drop() {
+fn oneshot_root_uses_the_prefix_and_is_removed_on_drop() {
   let root = oneshot_root().expect("creating the opencode one-shot root");
   let name = root.path().file_name().and_then(|n| n.to_str()).expect("one-shot root has a file name").to_string();
   assert!(name.starts_with("charliebot-opencode-oneshot-"), "unexpected one-shot root name: {name}");

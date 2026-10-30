@@ -5,8 +5,8 @@ use std::time::Duration;
 use base64::Engine;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::credentials::Credentials;
-use charliebot_core::text_repr::{self, PYTHON_JSON_DEFAULT};
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -71,7 +71,7 @@ impl Backend {
       "gemini" => Ok(Self {
         id: "gemini",
         kind: BackendKind::Gemini,
-        token: credentials.get("gemini", "api_key").filter(|value| value.is_truthy()).map(|value| value.python_str()),
+        token: credentials.get("gemini", "api_key").filter(|value| value.is_truthy()).map(|value| value.value_str()),
         endpoint_url: GEMINI_ENDPOINT.to_string(),
         clock: Arc::new(EventLoopClock),
       }),
@@ -81,7 +81,7 @@ impl Backend {
         token: credentials
           .get("meta", "model_api_key")
           .filter(|value| value.is_truthy())
-          .map(|value| value.python_str()),
+          .map(|value| value.value_str()),
         endpoint_url: MUSE_ENDPOINT.to_string(),
         clock: Arc::new(EventLoopClock),
       }),
@@ -226,7 +226,7 @@ async fn run_gemini_session(
   languages: Vec<String>,
 ) -> Result<(), TranscriptionError> {
   let setup_send = tokio::select! {
-    result = sender.send(Message::Text(python_json(&gemini_setup(&vocabulary, &languages)))) => result,
+    result = sender.send(Message::Text(dumps_default(&gemini_setup(&vocabulary, &languages)))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   setup_send.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
@@ -384,7 +384,7 @@ async fn run_muse_session(
 ) -> Result<(), TranscriptionError> {
   let handshake = muse_handshake(&session.token, &session.vocabulary, &session.languages);
   let handshake_send = tokio::select! {
-    result = sender.send(Message::Text(python_json(&handshake))) => result,
+    result = sender.send(Message::Text(dumps_default(&handshake))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   handshake_send.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
@@ -412,8 +412,8 @@ async fn run_muse_session(
   if reply.get("type").and_then(Value::as_str) == Some("error") || reply.get("error").is_some() {
     let message = match reply.get("message") {
       Some(Value::String(message)) => message.clone(),
-      Some(value) => python_repr(value),
-      None => python_repr(&reply),
+      Some(value) => value_repr(value),
+      None => value_repr(&reply),
     };
     return Err(TranscriptionError::Rejected(format!("handshake rejected: {message}")));
   }
@@ -579,11 +579,11 @@ fn muse_handshake(token: &str, vocabulary: &[String], languages: &[String]) -> V
 }
 
 async fn send_json(sender: &Sender, value: Value) -> Result<(), String> {
-  sender.send(Message::Text(python_json(&value))).await.map_err(|error| error.to_string())
+  sender.send(Message::Text(dumps_default(&value))).await.map_err(|error| error.to_string())
 }
 
-fn python_json(value: &Value) -> String {
-  text_repr::json_dumps(value, &PYTHON_JSON_DEFAULT)
+fn dumps_default(value: &Value) -> String {
+  text_repr::json_dumps(value, &DEFAULT_JSON)
 }
 
 fn parse_json(raw: &str) -> Result<Value, String> {
@@ -699,19 +699,19 @@ fn sorted_object_keys(value: &Value) -> String {
   format!("[{}]", keys.iter().map(|key| text_repr::str_repr(key)).collect::<Vec<_>>().join(", "))
 }
 
-fn python_repr(value: &Value) -> String {
+fn value_repr(value: &Value) -> String {
   match value {
     Value::Null => "None".to_string(),
     Value::Bool(true) => "True".to_string(),
     Value::Bool(false) => "False".to_string(),
     Value::Number(number) => number.to_string(),
     Value::String(text) => text_repr::str_repr(text),
-    Value::Array(values) => format!("[{}]", values.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
+    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
     Value::Object(values) => format!(
       "{{{}}}",
       values
         .iter()
-        .map(|(key, value)| format!("{}: {}", text_repr::str_repr(key), python_repr(value)))
+        .map(|(key, value)| format!("{}: {}", text_repr::str_repr(key), value_repr(value)))
         .collect::<Vec<_>>()
         .join(", ")
     ),
@@ -756,7 +756,7 @@ fn normalize_transcript(text: String) -> String {
       }
       if let Some(mark) = compact.get(index).copied() {
         let closes_clause = is_clause_mark(mark)
-          && compact.get(index + 1).is_none_or(|next| str_methods::is_python_whitespace(*next) || !next.is_ascii());
+          && compact.get(index + 1).is_none_or(|next| str_methods::is_whitespace(*next) || !next.is_ascii());
         if closes_clause {
           continue;
         }
@@ -885,7 +885,7 @@ mod tests {
   }
 
   #[test]
-  fn normalization_matches_python_unicode_whitespace_rules() {
+  fn normalization_matches_unicode_whitespace_rules() {
     let cases = [
       ("请 帮 我 查 一 下", "请帮我查一下"),
       ("等 一 下 ok ?", "等一下 ok?"),
@@ -909,12 +909,12 @@ mod tests {
   }
 
   #[test]
-  fn wire_json_uses_python_default_escaping_and_spacing() {
-    assert_eq!(python_json(&json!({ "text": "语音" })), r#"{"text": "\u8bed\u97f3"}"#);
+  fn wire_json_uses_default_escaping_and_spacing() {
+    assert_eq!(dumps_default(&json!({ "text": "语音" })), r#"{"text": "\u8bed\u97f3"}"#);
   }
 
   #[test]
-  fn normalizer_matches_every_gemini_python_case() {
+  fn normalizer_matches_every_gemini_case() {
     let cases = [
       ("请 帮 我 查 一 下", "请帮我查一下"),
       ("等 一 下 ok ?", "等一下 ok?"),
@@ -1102,7 +1102,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn muse_abnormal_close_uses_python_mid_stream_text() {
+  async fn muse_abnormal_close_uses_mid_stream_text() {
     let (listener, endpoint) = fake_listener().await;
     let fake = tokio::spawn(async move {
       let mut socket = accept_fake(listener).await;
@@ -1133,7 +1133,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn gemini_clean_close_without_final_has_python_text() {
+  async fn gemini_clean_close_without_final_has_text() {
     let (listener, endpoint) = fake_listener().await;
     let fake = tokio::spawn(async move {
       let mut socket = accept_fake(listener).await;

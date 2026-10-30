@@ -532,7 +532,7 @@ fn test_contract_part_names_the_read_command_and_the_summon_mark() {
 }
 
 #[test]
-fn test_thread_name_matches_python_thread_name() {
+fn test_thread_name_keeps_the_thread_name_format() {
   assert_eq!(thread_name("a<@1>b"), "ab");
   assert_eq!(thread_name("<@١٢>x"), "x");
   assert_eq!(thread_name("hi\u{1c}<@1>there"), "hi there");

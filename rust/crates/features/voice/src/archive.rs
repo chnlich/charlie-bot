@@ -121,7 +121,7 @@ mod tests {
   }
 
   #[test]
-  fn voice_stem_matches_the_python_stem_shape() {
+  fn voice_stem_matches_the_stem_shape() {
     let stem = voice_stem();
     let (stamp, random) = stem.split_once('_').expect("the stem joins the stamp and the random suffix");
     assert_eq!(random.len(), 8);
@@ -138,7 +138,7 @@ mod tests {
   }
 
   #[test]
-  fn wav_bytes_match_python_wave_for_even_and_odd_pcm_lengths() {
+  fn wav_bytes_match_wave_for_even_and_odd_pcm_lengths() {
     assert_eq!(wav_bytes(&[]), include_bytes!("../tests/fixtures/wav-empty.wav"));
     assert_eq!(wav_bytes(&[1]), include_bytes!("../tests/fixtures/wav-one-byte.wav"));
     assert_eq!(wav_bytes(&[1, 2]), include_bytes!("../tests/fixtures/wav-two-bytes.wav"));

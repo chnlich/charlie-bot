@@ -31,7 +31,7 @@ impl CredentialValue {
   }
 
   /// CPython `str(value)`.
-  pub fn python_str(&self) -> String {
+  pub fn value_str(&self) -> String {
     match self {
       CredentialValue::Text(text) => text.clone(),
       CredentialValue::Integer(number) => number.to_string(),
@@ -58,7 +58,7 @@ impl Credentials {
   /// `configured_access_key()`: the `charliebot.access_key` credential, or `None` when it is unset or
   /// falsy. `None` means every access-key gate lets unauthenticated readers through, as in Python.
   pub fn access_key(&self) -> Option<String> {
-    self.get("charliebot", "access_key").filter(|value| value.is_truthy()).map(CredentialValue::python_str)
+    self.get("charliebot", "access_key").filter(|value| value.is_truthy()).map(CredentialValue::value_str)
   }
 
   /// `Credentials.require(section, key)`: the value as `str(...)`, or an error naming the key and the file
@@ -66,7 +66,7 @@ impl Credentials {
   pub fn require(&self, section: &str, key: &str) -> Result<String, ConfigError> {
     self
       .get(section, key)
-      .map(CredentialValue::python_str)
+      .map(CredentialValue::value_str)
       .ok_or_else(|| ConfigError(format!("credentials.{section}.{key} is not set in {}", paths::display(&self.path))))
   }
 }
@@ -238,7 +238,7 @@ mod tests {
   }
 
   #[test]
-  fn the_access_key_follows_python_truthiness() {
+  fn the_access_key_follows_truthiness() {
     assert_eq!(load("charliebot:\n  access_key: k-1\n").unwrap().access_key(), Some("k-1".to_string()));
     assert_eq!(load("charliebot:\n  access_key: 42\n").unwrap().access_key(), Some("42".to_string()));
     assert_eq!(load("charliebot:\n  access_key: \"\"\n").unwrap().access_key(), None);
@@ -271,7 +271,7 @@ mod tests {
   }
 
   #[test]
-  fn require_returns_a_non_string_value_as_python_str() {
+  fn require_returns_a_non_string_value_as_str() {
     let credentials = load("upstream:\n  count: 42\n  flag: false\n  empty: \"\"\n").unwrap();
     assert_eq!(credentials.require("upstream", "count").unwrap(), "42");
     assert_eq!(credentials.require("upstream", "flag").unwrap(), "False");

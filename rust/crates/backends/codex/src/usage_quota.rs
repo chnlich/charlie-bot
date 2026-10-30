@@ -24,7 +24,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
 use super::rollout::{self, mtime_ns, mtime_secs, token_count_payload, walk_files};
-use super::text::{empty_object, object_or_empty, py_splitlines, truthy};
+use super::text::{empty_object, object_or_empty, splitlines, truthy};
 use charliebot_agents::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
@@ -297,7 +297,7 @@ fn read_latest_token_count(
     };
   }
   let tail = std::str::from_utf8(&blob).with_context(|| format!("decoding the tail of {}", path.display()))?;
-  if let Some(event) = latest_token_count(py_splitlines(tail), matches)? {
+  if let Some(event) = latest_token_count(splitlines(tail), matches)? {
     return Ok(Some(event));
   }
   if offset == 0 {
@@ -305,7 +305,7 @@ fn read_latest_token_count(
   }
   let whole = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
   let text = std::str::from_utf8(&whole).with_context(|| format!("decoding {}", path.display()))?;
-  latest_token_count(py_splitlines(text), matches)
+  latest_token_count(splitlines(text), matches)
 }
 
 fn latest_token_count(
@@ -456,7 +456,7 @@ fn codex_credits(raw: &Value, account: &str) -> Option<Map<String, Value>> {
   };
   let mut emitted = Map::new();
   emitted.insert("unlimited".to_string(), Value::Bool(unlimited));
-  match python_float(credits.get("balance")) {
+  match float_value(credits.get("balance")) {
     Some(balance) => {
       emitted.insert("balance".to_string(), json!(balance));
     }
@@ -467,7 +467,7 @@ fn codex_credits(raw: &Value, account: &str) -> Option<Map<String, Value>> {
 
 /// `float(value)` of a JSON value, as Python reads a balance: numbers and booleans convert, and so does a numeric
 /// string.
-fn python_float(value: Option<&Value>) -> Option<f64> {
+fn float_value(value: Option<&Value>) -> Option<f64> {
   match value? {
     Value::Number(number) => number.as_f64(),
     Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
@@ -602,7 +602,7 @@ fn extract_spend_events(path: &Path) -> anyhow::Result<Option<Vec<SpendEvent>>> 
   let text = std::str::from_utf8(&bytes).with_context(|| format!("decoding {}", path.display()))?;
   let mut events = Vec::new();
   let mut current_model = String::new();
-  for (index, raw_line) in py_splitlines(text).into_iter().enumerate() {
+  for (index, raw_line) in splitlines(text).into_iter().enumerate() {
     let line = str_methods::strip(raw_line);
     if line.is_empty() {
       continue;

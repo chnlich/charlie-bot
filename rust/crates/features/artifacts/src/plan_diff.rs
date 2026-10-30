@@ -262,7 +262,7 @@ fn is_void_tag(tag: &str) -> bool {
   VOID_TAGS.contains(&tag)
 }
 
-fn is_python_word(character: char) -> bool {
+fn is_word_char(character: char) -> bool {
   character.is_alphanumeric() || character == '_'
 }
 
@@ -274,7 +274,7 @@ fn normalise(text: &str) -> String {
   let mut output = String::new();
   let mut pending_space = false;
   for character in text.chars() {
-    if str_methods::is_python_whitespace(character) {
+    if str_methods::is_whitespace(character) {
       pending_space = !output.is_empty();
     } else {
       if pending_space {
@@ -292,7 +292,8 @@ fn node_is_boundary(node: &Node) -> bool {
     return true;
   }
   let classes = node.attrs.get("class").and_then(Option::as_deref).unwrap_or("");
-  if node.tag == "span" && str_methods::split_whitespace(classes).iter().any(|class| *class == "mtag" || *class == "b") {
+  if node.tag == "span" && str_methods::split_whitespace(classes).iter().any(|class| *class == "mtag" || *class == "b")
+  {
     return true;
   }
   let style = node.attrs.get("style").and_then(Option::as_deref).unwrap_or("").to_lowercase();
@@ -321,7 +322,7 @@ fn visible_parts(parser: &Parser, node_index: usize) -> Vec<usize> {
 }
 
 fn has_visible_text(parser: &Parser, parts: &[usize]) -> bool {
-  parts.iter().any(|&index| parser.parts[index].text.chars().any(|character| !str_methods::is_python_whitespace(character)))
+  parts.iter().any(|&index| parser.parts[index].text.chars().any(|character| !str_methods::is_whitespace(character)))
 }
 
 fn collect_leaves(parser: &Parser, root: usize) -> Vec<Leaf> {
@@ -410,9 +411,9 @@ fn tokenise(text: &str) -> Vec<(String, usize, usize)> {
   let mut index = 0;
   while index < characters.len() {
     let character = characters[index];
-    if str_methods::is_python_whitespace(character) {
+    if str_methods::is_whitespace(character) {
       index += 1;
-      while index < characters.len() && str_methods::is_python_whitespace(characters[index]) {
+      while index < characters.len() && str_methods::is_whitespace(characters[index]) {
         index += 1;
       }
       continue;
@@ -586,7 +587,7 @@ fn preceding_boundary(raw: &str, index: usize) -> bool {
   raw[..index]
     .chars()
     .next_back()
-    .is_none_or(|character| !is_python_word(character) && character != ':' && character != '-')
+    .is_none_or(|character| !is_word_char(character) && character != ':' && character != '-')
 }
 
 fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
@@ -597,7 +598,7 @@ fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
       continue;
     }
     let mut cursor = index + 5;
-    while let Some(character) = raw[cursor..].chars().next().filter(|character| str_methods::is_python_whitespace(*character))
+    while let Some(character) = raw[cursor..].chars().next().filter(|character| str_methods::is_whitespace(*character))
     {
       cursor += character.len_utf8();
     }
@@ -605,7 +606,7 @@ fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
       continue;
     }
     cursor += 1;
-    while let Some(character) = raw[cursor..].chars().next().filter(|character| str_methods::is_python_whitespace(*character))
+    while let Some(character) = raw[cursor..].chars().next().filter(|character| str_methods::is_whitespace(*character))
     {
       cursor += character.len_utf8();
     }
@@ -625,7 +626,7 @@ fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {
     let value_start = cursor;
     let mut value_end = cursor;
     for (offset, character) in raw[cursor..].char_indices() {
-      if str_methods::is_python_whitespace(character) || character == '>' {
+      if str_methods::is_whitespace(character) || character == '>' {
         break;
       }
       value_end = cursor + offset + character.len_utf8();
@@ -669,7 +670,7 @@ fn has_attribute(raw: &str, name: &str) -> bool {
     }
     let after_name = index + name.len();
     if let Some(character) = raw[after_name..].chars().next()
-      && (str_methods::is_python_whitespace(character)
+      && (str_methods::is_whitespace(character)
         || matches!(character, '=' | '>')
         || raw[after_name..].starts_with("/>"))
     {
@@ -762,7 +763,7 @@ fn wrapping_removes_direct_text(parser: &Parser, leaf: &Leaf, ranges: &[(usize, 
     let Child::Text(part_index) = child else { continue };
     let part = &parser.parts[*part_index];
     for (index, character) in part.text.chars().enumerate() {
-      if str_methods::is_python_whitespace(character) {
+      if str_methods::is_whitespace(character) {
         continue;
       }
       has_direct_text = true;
@@ -870,7 +871,7 @@ fn ghost_markup(parser: &Parser, leaf: &Leaf, base_source: &str) -> String {
   let trailing = node
     .end_end
     .map(|end| {
-      base_source[end..].chars().take_while(|character| str_methods::is_python_whitespace(*character)).collect::<String>()
+      base_source[end..].chars().take_while(|character| str_methods::is_whitespace(*character)).collect::<String>()
     })
     .unwrap_or_default();
   let data = escape(&format!("{text}{trailing}"), true);
@@ -1175,7 +1176,7 @@ mod tests {
   const NEW: &str = include_str!("../../../../../tests/data/plan_sample_v11.html");
 
   #[test]
-  fn seeded_plan_annotations_match_the_recorded_python_outputs() {
+  fn seeded_plan_annotations_match_the_recorded_outputs() {
     let mut decoder = flate2::read::GzDecoder::new(include_bytes!("../tests/data/plan_diff_golden.json.gz").as_slice());
     let mut json = String::new();
     decoder.read_to_string(&mut json).expect("the recorded fixture decompresses");
@@ -1212,7 +1213,7 @@ mod tests {
   }
 
   #[test]
-  fn void_tags_match_the_python_differ_set() {
+  fn void_tags_match_the_differ_set() {
     assert_eq!(
       VOID_TAGS,
       &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",]

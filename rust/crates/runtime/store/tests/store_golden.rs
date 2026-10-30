@@ -46,8 +46,8 @@ const RUN_OPS: &[&str] = &[
 ];
 const RUN_RETRY_OPS: &[&str] = &["retry", "retry_spec", "retry_manager_turn"];
 const RETRY_TASK_SPEC: &str = "synthetic retry task spec";
-const PYTHON_STORE_FIXTURE: &str = include_str!("fixtures/store_ops_golden.json");
-const PYTHON_MESSAGE_FIXTURE: &str = include_str!("fixtures/message_aggregator_golden.json");
+const GOLDEN_STORE_FIXTURE: &str = include_str!("fixtures/store_ops_golden.json");
+const GOLDEN_MESSAGE_FIXTURE: &str = include_str!("fixtures/message_aggregator_golden.json");
 const OPS: &[&str] = &[
   "persist_cc_session_id",
   "persist_native_backend",
@@ -70,9 +70,9 @@ const OPS: &[&str] = &[
 ];
 
 #[tokio::test]
-async fn python_and_rust_store_operations_write_identical_files_and_read_each_others_output() {
+async fn store_operations_write_identical_files_and_read_each_others_output() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare", root.path(), &[]);
+  run_golden_helper("prepare", root.path(), &[]);
   let fixed = UtcDateTime::parse(FIXED_TIME).unwrap();
 
   for operation in OPS {
@@ -214,15 +214,15 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
         .unwrap();
     }
   }
-  run_python_helper("verify", root.path(), &[]);
+  run_golden_helper("verify", root.path(), &[]);
 }
 
 #[tokio::test]
-async fn python_and_rust_keep_a_resource_class_key_from_an_older_session_file() {
+async fn keep_a_resource_class_key_from_an_older_session_file() {
   // A session file written before 637df0572 keeps its resource_class key as an unknown key, after the declared
   // fields. Rust reads it into the unknown keys and writes the same bytes back.
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_old_resource_class", root.path(), &[]);
+  run_golden_helper("prepare_old_resource_class", root.path(), &[]);
   let python_bytes =
     fs::read(root.path().join("python-home").join("sessions").join(SESSION_ID).join("metadata.json")).unwrap();
   let rust_store = make_store(&root.path().join("rust-home"));
@@ -306,7 +306,7 @@ fn read_optional(path: &Path) -> Option<Vec<u8>> {
 /// bytes, one input per case. Each case must match in the failure outcome, the archived count, and the live and
 /// archive bytes; a failed call must also leave the live log, the archive and `archive_offset` unchanged.
 #[tokio::test]
-async fn archive_events_before_matches_python_archive_old_chat_events_sync() {
+async fn archive_events_before_matches_archive_old_chat_events_sync() {
   let cutoff = UtcDateTime::parse("2025-02-03T00:00:00Z").unwrap();
   let cases: [(&str, &[u8]); 9] = [
     (
@@ -372,7 +372,7 @@ async fn archive_events_before_matches_python_archive_old_chat_events_sync() {
   }
 
   let names: Vec<&str> = cases.iter().map(|(name, _)| *name).collect();
-  run_python_helper("archive_cases", root.path(), &names);
+  run_golden_helper("archive_cases", root.path(), &names);
   let python: Value =
     serde_json::from_str(&fs::read_to_string(root.path().join("archive-cases.json")).unwrap()).unwrap();
 
@@ -447,10 +447,10 @@ fn listing_filters_status_and_builds_stable_archived_pages() {
 }
 
 #[tokio::test]
-async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
+async fn run_operations_share_record_and_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_runs", root.path(), &[]);
-  run_python_helper("apply_runs", root.path(), &[]);
+  run_golden_helper("prepare_runs", root.path(), &[]);
+  run_golden_helper("apply_runs", root.path(), &[]);
   let fixed = UtcDateTime::parse(FIXED_TIME).unwrap();
 
   for operation in RUN_OPS.iter().copied() {
@@ -583,13 +583,13 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
     assert_eq!(store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap().id, run_id);
   }
 
-  run_python_helper("verify_runs", root.path(), &[]);
+  run_golden_helper("verify_runs", root.path(), &[]);
 }
 
 #[tokio::test]
-async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
+async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_tasks", root.path(), &[]);
+  run_golden_helper("prepare_tasks", root.path(), &[]);
 
   let python_home = root.path().join("python-task-home");
   let rust_home = root.path().join("rust-task-home");
@@ -631,9 +631,9 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
       .await
       .unwrap();
   }
-  run_python_helper("verify_rust_created", root.path(), &[]);
+  run_golden_helper("verify_rust_created", root.path(), &[]);
 
-  run_python_helper("mutate_tasks", root.path(), &["python-task-home"]);
+  run_golden_helper("mutate_tasks", root.path(), &["python-task-home"]);
   let child_request = CreateTask {
     request_id: "replayed-child-request".to_string(),
     task_parent_id: Some("synthetic-task-root".to_string()),
@@ -679,8 +679,8 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
   );
   drop(guard);
 
-  run_python_helper("verify_tasks", root.path(), &["python-task-home"]);
-  run_python_helper("verify_tasks", root.path(), &["rust-task-home"]);
+  run_golden_helper("verify_tasks", root.path(), &["python-task-home"]);
+  run_golden_helper("verify_tasks", root.path(), &["rust-task-home"]);
   assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
   rust_seed.invalidate_cache("synthetic-task-worker");
   rust_seed.invalidate_tree_index();
@@ -692,16 +692,16 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
 }
 
 #[tokio::test]
-async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
+async fn name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_counter", root.path(), &[]);
+  run_golden_helper("prepare_counter", root.path(), &[]);
 
   let python_home = root.path().join("python-counter-home");
   let rust_home = root.path().join("rust-counter-home");
   copy_tree(&root.path().join("counter-base"), &python_home);
   copy_tree(&root.path().join("counter-base"), &rust_home);
 
-  run_python_helper("create_unnamed_node", root.path(), &["python-counter-home"]);
+  run_golden_helper("create_unnamed_node", root.path(), &["python-counter-home"]);
   let node = make_store(&rust_home)
     .create_task(
       CreateTask {
@@ -724,16 +724,16 @@ async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_wa
 }
 
 #[tokio::test]
-async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
+async fn archive_a_subtree_into_the_same_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_archive", root.path(), &[]);
+  run_golden_helper("prepare_archive", root.path(), &[]);
 
   let python_home = root.path().join("python-archive-home");
   let rust_home = root.path().join("rust-archive-home");
   copy_tree(&root.path().join("archive-base"), &python_home);
   copy_tree(&root.path().join("archive-base"), &rust_home);
 
-  run_python_helper("archive_subtree", root.path(), &["python-archive-home"]);
+  run_golden_helper("archive_subtree", root.path(), &["python-archive-home"]);
   let rust_store = Arc::new(make_store(&rust_home));
   let rust_completion = make_completion(Arc::clone(&rust_store), &rust_home);
   let archived = rust_completion
@@ -848,12 +848,12 @@ fn normalized_home(home: &Path, base: &BTreeSet<String>) -> BTreeMap<PathBuf, Ve
 }
 
 #[tokio::test]
-async fn python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index() {
+async fn fork_and_elone_write_the_same_session_files_at_every_index() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_fork", root.path(), &[]);
+  run_golden_helper("prepare_fork", root.path(), &[]);
   let base = root.path().join("fork-base");
   let base_sessions = session_names(&base);
-  run_python_helper("fork_cases", root.path(), &[]);
+  run_golden_helper("fork_cases", root.path(), &[]);
   let python_outcomes: BTreeMap<String, Value> =
     serde_json::from_str(&fs::read_to_string(root.path().join("fork-outcomes.json")).unwrap()).unwrap();
 
@@ -882,15 +882,15 @@ async fn python_and_rust_fork_and_elone_write_the_same_session_files_at_every_in
 }
 
 #[tokio::test]
-async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
+async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_delegate", root.path(), &[]);
+  run_golden_helper("prepare_delegate", root.path(), &[]);
   let base = root.path().join("delegate-base");
 
   // A run's task_spec_ref is an absolute path, so both implementations write under one home path, in turn.
   let shared_home = root.path().join("delegate-shared-home");
   copy_tree(&base, &shared_home);
-  run_python_helper("delegate_task", root.path(), &["delegate-shared-home"]);
+  run_golden_helper("delegate_task", root.path(), &["delegate-shared-home"]);
   let python_home = root.path().join("delegate-python-result");
   copy_tree(&shared_home, &python_home);
   fs::remove_dir_all(&shared_home).unwrap();
@@ -966,11 +966,11 @@ async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_by
 }
 
 #[tokio::test]
-async fn task_gate_matches_python_cases_and_the_parity_fixture_tree() {
+async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
   let root = tempfile::tempdir().unwrap();
   let cases = materialize_gate_cases();
   fs::write(root.path().join("gate-cases.json"), serde_json::to_vec(&json!({"cases": cases})).unwrap()).unwrap();
-  run_python_helper("gate_parity", root.path(), &[]);
+  run_golden_helper("gate_parity", root.path(), &[]);
   let expected: Value = serde_json::from_slice(&fs::read(root.path().join("gate-results.json")).unwrap()).unwrap();
   let store = make_store(&root.path().join("gate-cases-home"));
   for case in &cases {
@@ -1041,7 +1041,7 @@ async fn task_gate_matches_python_cases_and_the_parity_fixture_tree() {
     assert_eq!(actual, expected[name], "gate case {name}");
   }
 
-  run_python_helper("prepare_parity_gate", root.path(), &[]);
+  run_golden_helper("prepare_parity_gate", root.path(), &[]);
   let fixture_home = root.path().join("parity-fixture").join("home");
   let rust_fixture_home = root.path().join("parity-fixture-rust-home");
   copy_tree(&fixture_home.join("sessions"), &rust_fixture_home.join("sessions"));
@@ -1276,7 +1276,7 @@ async fn run_pages_walk_the_launch_order_and_refuse_a_malformed_cursor() {
 }
 
 #[tokio::test]
-async fn last_ended_run_ranks_a_run_by_its_last_finish_fact_like_python() {
+async fn last_ended_run_ranks_a_run_by_its_last_finish_fact() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("last_ended").join("seed-home");
   let store = make_store(&seed_home);
@@ -1292,7 +1292,7 @@ async fn last_ended_run_ranks_a_run_by_its_last_finish_fact_like_python() {
 }
 
 #[tokio::test]
-async fn terminal_outcome_is_the_last_finish_fact_like_python() {
+async fn terminal_outcome_is_the_last_finish_fact() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("terminal_outcome").join("seed-home");
   let store = make_store(&seed_home);
@@ -1306,7 +1306,7 @@ async fn terminal_outcome_is_the_last_finish_fact_like_python() {
 }
 
 #[tokio::test]
-async fn descending_run_pages_and_cross_order_cursor_refusals_match_python() {
+async fn descending_run_pages_and_cross_order_cursor_refusals_match_recorded() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("pages").join("seed-home");
   let store = make_store(&seed_home);
@@ -1378,7 +1378,7 @@ async fn run_blockers_name_each_run_that_blocks_a_structural_change() {
 }
 
 #[tokio::test]
-async fn a_session_with_two_blocked_runs_reports_both_like_python() {
+async fn a_session_with_two_blocked_runs_reports_both() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("blockers").join("seed-home");
   let store = make_store(&seed_home);
@@ -1760,21 +1760,21 @@ impl SequenceListingFields for TestSequenceListing {
   }
 }
 
-fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {
+fn run_golden_helper(mode: &str, root: &Path, extra: &[&str]) {
   let mut args = vec![mode];
   args.extend_from_slice(extra);
-  let _ = run_python_helper_args(root, &args);
+  let _ = run_golden_helper_args(root, &args);
 }
 
-fn run_python_message_aggregator(events: &Value) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_MESSAGE_FIXTURE).unwrap();
+fn run_golden_message_aggregator(events: &Value) -> Value {
+  let fixture: Value = serde_json::from_str(GOLDEN_MESSAGE_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(&fixture["request"], events);
   fixture["expected"].clone()
 }
 
-fn run_python_helper_args(root: &Path, args: &[&str]) -> String {
-  let fixture: Value = serde_json::from_str(PYTHON_STORE_FIXTURE).unwrap();
+fn run_golden_helper_args(root: &Path, args: &[&str]) -> String {
+  let fixture: Value = serde_json::from_str(GOLDEN_STORE_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let calls = fixture["calls"].as_array().unwrap();
   let matching = calls
@@ -1902,7 +1902,7 @@ fn read_on_copies(root: &Path, seed_home: &Path, case: &str, rust_read: fn(&Stor
   let case_root = root.join(case);
   copy_tree(seed_home, &case_root.join("python-home"));
   copy_tree(seed_home, &case_root.join("rust-home"));
-  let python = serde_json::from_str(&run_python_helper_args(root, &["read_runs", case])).unwrap();
+  let python = serde_json::from_str(&run_golden_helper_args(root, &["read_runs", case])).unwrap();
   (python, rust_read(&make_store(&case_root.join("rust-home"))))
 }
 
@@ -2372,7 +2372,7 @@ fn parity_case_dir(root: &Path, case: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn range_read_matches_python_when_archive_offset_is_positive_and_lines_are_blank_or_malformed() {
+async fn range_read_matches_when_archive_offset_is_positive_and_lines_are_blank_or_malformed() {
   let root = tempfile::tempdir().unwrap();
   let case_dir = parity_case_dir(root.path(), "range_read");
   let base = case_dir.join("base-home");
@@ -2393,7 +2393,7 @@ async fn range_read_matches_python_when_archive_offset_is_positive_and_lines_are
 
   copy_tree(&base, &case_dir.join("python-home"));
   copy_tree(&base, &case_dir.join("rust-home"));
-  run_python_helper("parity:range_read", &case_dir, &[SESSION_ID]);
+  run_golden_helper("parity:range_read", &case_dir, &[SESSION_ID]);
   let expected: Vec<Value> =
     serde_json::from_str(&fs::read_to_string(case_dir.join("expected.json")).unwrap()).unwrap();
 
@@ -2413,7 +2413,7 @@ async fn range_read_matches_python_when_archive_offset_is_positive_and_lines_are
 }
 
 #[tokio::test]
-async fn listing_and_raw_scan_skip_a_malformed_metadata_file_like_python() {
+async fn listing_and_raw_scan_skip_a_malformed_metadata_file() {
   let root = tempfile::tempdir().unwrap();
   let case_dir = parity_case_dir(root.path(), "listing_raw_scan");
   let base = case_dir.join("base-home");
@@ -2440,7 +2440,7 @@ async fn listing_and_raw_scan_skip_a_malformed_metadata_file_like_python() {
 
   copy_tree(&base, &case_dir.join("python-home"));
   copy_tree(&base, &case_dir.join("rust-home"));
-  run_python_helper("parity:listing_raw_scan", &case_dir, &[SESSION_ID]);
+  run_golden_helper("parity:listing_raw_scan", &case_dir, &[SESSION_ID]);
   let expected: Value = serde_json::from_str(&fs::read_to_string(case_dir.join("expected.json")).unwrap()).unwrap();
 
   let store = make_store(&case_dir.join("rust-home"));
@@ -2460,7 +2460,7 @@ async fn listing_and_raw_scan_skip_a_malformed_metadata_file_like_python() {
 }
 
 #[tokio::test]
-async fn load_all_facts_matches_python_fact_history_over_a_stale_archive_file() {
+async fn load_all_facts_matches_fact_history_over_a_stale_archive_file() {
   let root = tempfile::tempdir().unwrap();
   let case_dir = parity_case_dir(root.path(), "facts");
   let base = case_dir.join("base-home");
@@ -2483,7 +2483,7 @@ async fn load_all_facts_matches_python_fact_history_over_a_stale_archive_file() 
 
   copy_tree(&base, &case_dir.join("python-home"));
   copy_tree(&base, &case_dir.join("rust-home"));
-  run_python_helper("parity:facts", &case_dir, &[SESSION_ID]);
+  run_golden_helper("parity:facts", &case_dir, &[SESSION_ID]);
   let expected: Vec<Value> =
     serde_json::from_str(&fs::read_to_string(case_dir.join("expected.json")).unwrap()).unwrap();
 
@@ -2498,7 +2498,7 @@ async fn load_all_facts_matches_python_fact_history_over_a_stale_archive_file() 
 // THREADS_DIR_NAME). The store's readers (Python runs.py, Rust run_records.rs) must keep
 // agreeing on these names.
 #[test]
-fn legacy_master_run_and_thread_log_readers_walk_the_python_layouts() {
+fn legacy_master_run_and_thread_log_readers_walk_the_layouts() {
   let home = tempfile::tempdir().unwrap();
   let sessions = home.path().join("sessions");
   let session = sessions.join("legacy-session");
@@ -2524,7 +2524,7 @@ fn legacy_master_run_and_thread_log_readers_walk_the_python_layouts() {
 /// blocks; Python iterates the characters and ignores them, and the port likewise reads the string
 /// as no blocks. The other fields here follow the same `or []` and truthiness rules.
 #[test]
-fn message_aggregator_accepts_every_shape_python_accepts() {
+fn message_aggregator_accepts_every_recorded_shape() {
   let events = json!([
     {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "draft"}]}},
     {
@@ -2610,7 +2610,7 @@ fn message_aggregator_accepts_every_shape_python_accepts() {
   for event in events.as_array().unwrap() {
     rust_frames.extend(aggregator.feed(event).unwrap());
   }
-  assert_eq!(Value::Array(rust_frames), run_python_message_aggregator(&events));
+  assert_eq!(Value::Array(rust_frames), run_golden_message_aggregator(&events));
 }
 
 /// A running copy of the system sleep binary named `name`, whose `/proc/<pid>/exe` file name is `name`.

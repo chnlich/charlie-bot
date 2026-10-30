@@ -851,7 +851,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
       let rate_type = info.get("rateLimitType").and_then(Value::as_str).unwrap_or("unknown");
       let resets_at_epoch = info.get("resetsAt");
       let resets_at = resets_at_of(resets_at_epoch)?;
-      let epoch_text = text_repr::python_str(resets_at_epoch.unwrap_or(&Value::Null));
+      let epoch_text = text_repr::value_str(resets_at_epoch.unwrap_or(&Value::Null));
       tracing::warn!(
         target: "charliebot_tasks",
         thread = %sink.channel,
@@ -896,7 +896,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
     && event.get("is_error") == Some(&Value::Bool(true))
     && backend_pool::is_temporary_unavailable_result(&event)
   {
-    let text = text_repr::python_str(event.get("result").context("a temporary result error carries its result text")?);
+    let text = text_repr::value_str(event.get("result").context("a temporary result error carries its result text")?);
     sink.append(&event)?;
     return Err(QuotaExhaustedError::new(text, None).into());
   }
@@ -954,7 +954,7 @@ fn prompt_token_sum(usage: &Map<String, Value>) -> i64 {
 
 /// The lowercase text of an event field, for the quota pattern check; empty when the field is absent.
 fn lowered_text(value: Option<&Value>) -> String {
-  value.map(text_repr::python_str).unwrap_or_default().to_lowercase()
+  value.map(text_repr::value_str).unwrap_or_default().to_lowercase()
 }
 
 /// The reset moment of a rate-limit rejection: a number of Unix seconds, `None` for anything else.

@@ -1095,7 +1095,7 @@ const FORMAT_TABLE: &[FormatRow] = &[
     owner: "runtime/store",
     names: &["metadata_path", "SESSION_METADATA_NAME", "METADATA_FILE_NAME"],
     hint: "Read it through `charliebot_store::metadata` (`read_metadata_value`, `read_metadata_object`, \
-           `read_session_metadata`, `read_metadata_python`), and write it through the store's `persist_*` saves.",
+           `read_session_metadata`, `read_metadata`), and write it through the store's `persist_*` saves.",
   },
   FormatRow {
     kind: "thread metadata",

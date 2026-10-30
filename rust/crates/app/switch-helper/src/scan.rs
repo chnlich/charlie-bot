@@ -20,7 +20,7 @@ use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::common::{exact, failed, metadata_read_failure, python_repr, read_config};
+use crate::common::{exact, failed, metadata_read_failure, read_config, value_repr};
 use crate::process;
 
 /// Each backend's registration has moved twice: the agents crate held it from 7b680fcbb until the crate grouping at
@@ -68,12 +68,12 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       };
       let id = text_field(&run, "id")?;
       let session_id = text_field(&run, "session_id")?;
-      let display = text_repr::python_str(&backend);
+      let display = text_repr::value_str(&backend);
       println!("live\t{session_id}\t{id}\t{display}\t{pid}\t{pid_start}");
       let Some(backend_type) = backend.as_str().and_then(|backend| types.get(backend)) else {
         println!(
           "block\tbackend {} of run {id} (pid {pid}) is not in backends.options; restart re-attachment is unknown",
-          python_repr(&backend)
+          value_repr(&backend)
         );
         continue;
       };

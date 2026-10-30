@@ -2728,7 +2728,7 @@ fn boot_marker_path(stack: &Stack) -> PathBuf {
   stack.cfg.charliebot_home.join("state").join("boot_recovery.json")
 }
 
-fn write_python_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Result<()> {
+fn write_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Result<()> {
   let path = boot_marker_path(stack);
   std::fs::create_dir_all(path.parent().expect("boot marker has a parent directory"))?;
   std::fs::write(&path, format!("{{\"pass_started_at\": \"{pass_started_at}\"}}"))?;
@@ -2780,10 +2780,10 @@ async fn add_recovery_worker(
   Ok(worker)
 }
 
-const PYTHON_MARKER_FIXTURE: &str = include_str!("fixtures/boot_recovery_marker_golden.json");
+const GOLDEN_MARKER_FIXTURE: &str = include_str!("fixtures/boot_recovery_marker_golden.json");
 
 fn recorded_marker_instant(path: &Path) -> anyhow::Result<String> {
-  let fixture: Value = serde_json::from_str(PYTHON_MARKER_FIXTURE)?;
+  let fixture: Value = serde_json::from_str(GOLDEN_MARKER_FIXTURE)?;
   anyhow::ensure!(
     fixture["base_commit"] == "d4021ce3993d7e36b2709f00caf578e1f8541407",
     "the marker fixture names its base commit"
@@ -3006,7 +3006,7 @@ async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() 
       },
     )
     .await?;
-    write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+    write_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
     if condition == "file_after_marker" {
       let metadata = std::fs::File::open(stack.store().metadata_path(&worker.id))?;
       metadata.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(4_102_444_800))?;
@@ -3041,7 +3041,7 @@ async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> a
     },
   )
   .await?;
-  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+  write_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
 
   let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
   assert_eq!(counters.full, 2);
@@ -3071,7 +3071,7 @@ async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_co
     },
   )
   .await?;
-  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+  write_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
   let log = LogCapture::default();
   let _guard = log.install();
 
@@ -3098,7 +3098,7 @@ async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::
     RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
   )
   .await?;
-  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+  write_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
   let before = stack.adapter.reconcile_node_calls();
   let boot = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
   assert_eq!(boot.skipped, 1);
@@ -3112,12 +3112,12 @@ async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::
 }
 
 #[tokio::test]
-async fn rust_reads_python_isoformat_marker_with_and_without_microseconds() -> anyhow::Result<()> {
+async fn rust_reads_isoformat_marker_with_and_without_microseconds() -> anyhow::Result<()> {
   // No Python test case: the marker text that src/runtime/task_recovery.py:58-74 reads and writes.
   for timestamp in ["2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05.123456+00:00"] {
     let stack = Stack::start("exit 0").await?;
     std::fs::create_dir_all(stack.cfg.sessions_dir())?;
-    write_python_boot_marker(&stack, timestamp)?;
+    write_boot_marker(&stack, timestamp)?;
 
     let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
     assert_eq!(counters.marker.as_deref(), Some(timestamp));
@@ -3126,7 +3126,7 @@ async fn rust_reads_python_isoformat_marker_with_and_without_microseconds() -> a
 }
 
 #[tokio::test]
-async fn python_fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result<()> {
+async fn fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result<()> {
   // No Python test case: the marker text that src/runtime/task_recovery.py:58-74 reads and writes.
   let stack = Stack::start("exit 0").await?;
   std::fs::create_dir_all(stack.cfg.sessions_dir())?;
@@ -3134,7 +3134,7 @@ async fn python_fromisoformat_reads_the_rust_written_marker_instant() -> anyhow:
   let marker_path = boot_marker_path(&stack);
   let marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
   let rust_instant = UtcDateTime::parse(marker["pass_started_at"].as_str().expect("marker has a pass start"))?;
-  assert_eq!(recorded_marker_instant(&marker_path)?, rust_instant.to_python_isoformat());
+  assert_eq!(recorded_marker_instant(&marker_path)?, rust_instant.to_isoformat_text());
   Ok(())
 }
 
@@ -3238,7 +3238,7 @@ async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyh
   )
   .await?;
   assert_eq!(stack.store().run_backend(&worker.id), None);
-  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+  write_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
 
   let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
   assert_eq!(counters.skipped, 1);

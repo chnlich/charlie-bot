@@ -300,7 +300,7 @@ mod tests {
   }
 
   #[test]
-  fn canonical_model_casefolds_the_leaf_the_way_python_does() {
+  fn canonical_model_casefolds_the_leaf() {
     assert_eq!(canonical_model("zai-org/GLM-5.3-Flash"), "glm-5.3-flash");
     assert_eq!(canonical_model("Kimi-K3 (amd-kimi-k3)"), "kimi-k3");
     assert_eq!(canonical_model("a/b/ß-Model"), "ss-model");

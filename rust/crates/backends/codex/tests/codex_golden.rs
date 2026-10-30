@@ -30,7 +30,7 @@ use serde_yaml::Mapping;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/codex_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/codex_golden.json");
 
 const PROMPT: &str = "Review \"the\" synthetic\nprompt \\ with \u{fc}n\u{ef}code\tand a tab";
 const INSTRUCTIONS: &str = "Rules: \"quoted\" ]\n[section] \\ \u{7f} \u{fc}n\u{ef}";
@@ -87,7 +87,7 @@ impl CodexSessionHost for FixedHost {
 }
 
 #[test]
-fn codex_matches_the_python_package_on_synthetic_inputs() {
+fn codex_matches_the_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let now = OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp()).unwrap();
   let fx = write_fixtures(root.path(), now);
@@ -495,7 +495,7 @@ fn write_text(path: &Path, text: &str) {
 }
 
 fn run_reference(request: &Value, temporary: &Path) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["placeholders"]["read_mtime_ns"], "$READ_MTIME_NS");
   assert_eq!(fixture["placeholders"]["quota_observed_at"], "$NOW_MINUS_2H");

@@ -84,7 +84,7 @@ where
 }
 
 /// Convert an exit status to Python's integer convention, including negative signal numbers.
-pub fn python_exit_code(status: std::process::ExitStatus) -> i32 {
+pub fn exit_code(status: std::process::ExitStatus) -> i32 {
   use std::os::unix::process::ExitStatusExt;
 
   status.code().unwrap_or_else(|| -status.signal().expect("an exit status has a code or signal"))

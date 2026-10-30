@@ -21,7 +21,7 @@ use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::{event_types, text_repr, ssh};
+use charliebot_core::{event_types, ssh, text_repr};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus, WatchTarget, fresh_uuid};
@@ -1464,7 +1464,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     watch_targets = %serde_json::to_string(&trigger.watch_targets).expect("watch targets serialize"),
     "trigger_scheduled"
   );
-  let mut body = json!({ "trigger_id": trigger.id, "fire_at": trigger.fire_at.to_python_isoformat() });
+  let mut body = json!({ "trigger_id": trigger.id, "fire_at": trigger.fire_at.to_isoformat_text() });
   if !watch_probe.is_empty() {
     body["watch_probe"] = Value::Object(watch_probe);
   }
@@ -1798,7 +1798,7 @@ mod tests {
 
   #[tokio::test]
   // Python: tests/test_trigger_pending_limit.py::test_sixth_registration_raises_with_exact_detail
-  async fn sixth_registration_returns_python_limit_detail() {
+  async fn sixth_registration_returns_limit_detail() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
     for index in 0..MAX_PENDING_TRIGGERS {
@@ -2118,7 +2118,7 @@ mod tests {
 
   #[tokio::test]
   // Python: tests/test_trigger_remote_slurm_watch.py::test_remote_slurm_completes
-  async fn remote_slurm_terminal_state_has_the_python_label() {
+  async fn remote_slurm_terminal_state_has_the_label() {
     let (home, features) = feature_context();
     let manager = fake_manager(
       Arc::clone(&features),
@@ -2152,7 +2152,7 @@ mod tests {
 
   #[tokio::test]
   // Python: tests/test_trigger_slurm_watch.py::test_slurm_single_job_terminal_state
-  async fn local_slurm_terminal_state_has_the_python_label() {
+  async fn local_slurm_terminal_state_has_the_label() {
     let (home, features) = feature_context();
     let manager = fake_manager(
       Arc::clone(&features),
@@ -2216,7 +2216,7 @@ mod tests {
 
   #[test]
   // Python: tests/test_trigger_remote_slurm_watch.py::test_remote_slurm_completes
-  fn fire_suffix_matches_python_outcomes() {
+  fn fire_suffix_matches_outcomes() {
     assert_eq!(
       format_suffix("completed", &["slurm:123: COMPLETED 0:0".to_string()], &[]),
       " (finished: slurm:123: COMPLETED 0:0)"
@@ -2703,7 +2703,7 @@ mod tests {
 
   #[tokio::test]
   // Python: src/runtime/api/internal.py::cancel_trigger
-  async fn cancel_route_returns_python_not_found_and_success_answers() {
+  async fn cancel_route_returns_not_found_and_success_answers() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2755,7 +2755,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_schedule_trigger_model_accepts_utf16_and_forbids_extra_fields() {
+  async fn schedule_trigger_model_accepts_utf16_and_forbids_extra_fields() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2783,7 +2783,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_schedule_trigger_body_errors_precede_session_lookup() {
+  async fn schedule_trigger_body_errors_precede_session_lookup() {
     let (_home, features) = feature_context();
     let router = routes(&features);
     let path = "/api/internal/schedule-trigger";

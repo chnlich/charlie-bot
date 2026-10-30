@@ -480,7 +480,7 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
   let stdout = stdout_reader.await.context("joining compaction stdout reader")??;
   let stderr = stderr_reader.await.context("joining compaction stderr reader")??;
   let after = count_compact_boundaries(&transcript)?;
-  let mut outcome = judge(kill::python_exit_code(status), &stdout, &baseline, before, after, family);
+  let mut outcome = judge(kill::exit_code(status), &stdout, &baseline, before, after, family);
   if !outcome.ok {
     let stderr = String::from_utf8_lossy(&stderr);
     let stderr = stderr.trim();

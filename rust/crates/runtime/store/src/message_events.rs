@@ -183,7 +183,7 @@ mod tests {
   }
 
   #[test]
-  fn falsey_upload_values_match_empty_python_upload_lists() {
+  fn falsey_upload_values_match_empty_upload_lists() {
     for value in [json!(null), json!(false), json!(0), json!(""), json!([]), json!({})] {
       assert!(serialize_uploaded_files(Some(&value)).unwrap().is_empty());
     }

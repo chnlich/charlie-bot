@@ -17,14 +17,14 @@ const TRIGGER_NAMES: [&str; 5] = [
 ];
 
 #[test]
-fn recorded_python_usage_ledger_schema_and_repair_results_match_rust() {
+fn recorded_usage_ledger_schema_and_repair_results_match_rust() {
   let fixture = fixture();
   assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["python_helper_error"], "AttributeError: 'UsageLedger' object has no attribute 'model_rows'");
 
   let temp = tempdir().unwrap();
   let python_path = temp.path().join("python.sqlite3");
-  write_python_database(&fixture, &python_path, temp.path());
+  write_database(&fixture, &python_path, temp.path());
   let before = trigger_and_aggregate(&python_path);
   UsageLedger::open(&python_path).unwrap().close().unwrap();
   assert_eq!(before, trigger_and_aggregate(&python_path));
@@ -42,7 +42,7 @@ fn recorded_python_usage_ledger_schema_and_repair_results_match_rust() {
   assert_eq!(rust_after, fixture["rust_opened_rust_snapshot"]);
 
   let damaged_path = temp.path().join("damaged.sqlite3");
-  write_python_database(&fixture, &damaged_path, temp.path());
+  write_database(&fixture, &damaged_path, temp.path());
   {
     let connection = Connection::open(&damaged_path).unwrap();
     for name in TRIGGER_NAMES {
@@ -69,7 +69,7 @@ fn fixture() -> Value {
   serde_json::from_slice(&bytes).unwrap()
 }
 
-fn write_python_database(fixture: &Value, path: &Path, temp_root: &Path) {
+fn write_database(fixture: &Value, path: &Path, temp_root: &Path) {
   fs::write(path, decode_hex(fixture["python_created_ledger_hex"].as_str().unwrap())).unwrap();
   let connection = Connection::open(path).unwrap();
   let rooted = temp_root.join("sessions/log.jsonl").to_string_lossy().into_owned();

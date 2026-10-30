@@ -615,7 +615,7 @@ fn iso_mtime(path: &Path) -> anyhow::Result<String> {
   let modified = fs::metadata(path)?.modified()?;
   let duration = modified.duration_since(UNIX_EPOCH).map_err(|error| anyhow!("invalid file mtime: {error}"))?;
   let nanos = i64::try_from(duration.as_nanos()).context("file mtime is outside the supported timestamp range")?;
-  Ok(to_utc_datetime(OffsetDateTime::from_unix_timestamp_nanos(i128::from(nanos))?).to_python_isoformat())
+  Ok(to_utc_datetime(OffsetDateTime::from_unix_timestamp_nanos(i128::from(nanos))?).to_isoformat_text())
 }
 
 fn refusal_detail(src: &Path, dst: &Path) -> anyhow::Result<String> {
@@ -662,7 +662,7 @@ fn sidecar_files(root: &Path) -> anyhow::Result<BTreeSet<PathBuf>> {
   )
 }
 
-fn python_list(paths: impl IntoIterator<Item = PathBuf>) -> String {
+fn path_list_repr(paths: impl IntoIterator<Item = PathBuf>) -> String {
   let values = paths.into_iter().map(|path| format!("'{}'", path.display())).collect::<Vec<_>>();
   format!("[{}]", values.join(", "))
 }
@@ -673,11 +673,11 @@ fn sidecar_file_diff(src: &Path, dst: &Path) -> anyhow::Result<String> {
   let mut parts = Vec::new();
   let missing = src_files.difference(&dst_files).cloned().collect::<Vec<_>>();
   if !missing.is_empty() {
-    parts.push(format!("missing at dst: {}", python_list(missing)));
+    parts.push(format!("missing at dst: {}", path_list_repr(missing)));
   }
   let extra = dst_files.difference(&src_files).cloned().collect::<Vec<_>>();
   if !extra.is_empty() {
-    parts.push(format!("only at dst: {}", python_list(extra)));
+    parts.push(format!("only at dst: {}", path_list_repr(extra)));
   }
   let mut differing = Vec::new();
   for relative in src_files.intersection(&dst_files) {
@@ -686,7 +686,7 @@ fn sidecar_file_diff(src: &Path, dst: &Path) -> anyhow::Result<String> {
     }
   }
   if !differing.is_empty() {
-    parts.push(format!("size differs: {}", python_list(differing)));
+    parts.push(format!("size differs: {}", path_list_repr(differing)));
   }
   Ok(if parts.is_empty() { "file sets equal".to_string() } else { parts.join("; ") })
 }

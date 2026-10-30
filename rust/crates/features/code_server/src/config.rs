@@ -69,7 +69,7 @@ pub(crate) fn listen_port(config_path: &Path) -> Result<i64, String> {
   let Some((_, port_text)) = bind_addr.rsplit_once(':') else {
     return Err(missing());
   };
-  python_int(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
+  parse_int(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
 }
 
 /// The document at `path`, as `yaml_utils.load_yaml` reads it: `Null` when the file is missing or holds no document.
@@ -107,7 +107,7 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
 
 /// `int(text)` for a port: surrounding whitespace, an optional sign, and digits with single underscores between them.
 /// A value beyond the i64 range reads as not an integer here.
-fn python_int(text: &str) -> Option<i64> {
+fn parse_int(text: &str) -> Option<i64> {
   let text = text.trim();
   let (sign, digits) = match text.strip_prefix('-') {
     Some(rest) => (-1, rest),
@@ -140,16 +140,16 @@ mod tests {
   use super::*;
 
   #[test]
-  fn python_int_reads_what_int_reads_for_a_port() {
-    assert_eq!(python_int("8080"), Some(8080));
-    assert_eq!(python_int(" 8080 "), Some(8080));
-    assert_eq!(python_int("+8080"), Some(8080));
-    assert_eq!(python_int("-1"), Some(-1));
-    assert_eq!(python_int("80_80"), Some(8080));
-    assert_eq!(python_int(""), None);
-    assert_eq!(python_int("80__80"), None);
-    assert_eq!(python_int("_80"), None);
-    assert_eq!(python_int("http"), None);
+  fn int_reads_what_int_reads_for_a_port() {
+    assert_eq!(parse_int("8080"), Some(8080));
+    assert_eq!(parse_int(" 8080 "), Some(8080));
+    assert_eq!(parse_int("+8080"), Some(8080));
+    assert_eq!(parse_int("-1"), Some(-1));
+    assert_eq!(parse_int("80_80"), Some(8080));
+    assert_eq!(parse_int(""), None);
+    assert_eq!(parse_int("80__80"), None);
+    assert_eq!(parse_int("_80"), None);
+    assert_eq!(parse_int("http"), None);
   }
 
   #[test]

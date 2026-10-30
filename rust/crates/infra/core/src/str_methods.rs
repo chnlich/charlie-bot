@@ -109,31 +109,31 @@ const DECIMAL_ZEROES: &[u32] = &[
 
 // Python's alphanumeric set uses Unicode Letter and Number categories. Rust's char predicate also accepts
 // Other_Alphabetic.
-static PYTHON_ALPHANUMERIC: LazyLock<Regex> =
+static ALPHANUMERIC: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"^[\p{L}\p{N}]$").expect("the Python alphanumeric character pattern is valid"));
 
 /// Whether CPython's `str.isalnum()` accepts this character.
-pub fn is_python_alphanumeric(character: char) -> bool {
+pub fn is_alphanumeric(character: char) -> bool {
   let mut buffer = [0; 4];
-  PYTHON_ALPHANUMERIC.is_match(character.encode_utf8(&mut buffer))
+  ALPHANUMERIC.is_match(character.encode_utf8(&mut buffer))
 }
 
-pub fn is_python_digit(character: char) -> bool {
+pub fn is_digit(character: char) -> bool {
   let code_point = character as u32;
   DIGIT_RANGES.iter().any(|&(start, end)| (start..=end).contains(&code_point))
 }
 
 /// Python's `str.isdigit`: a non-empty string whose every character is a digit.
 pub fn isdigit(text: &str) -> bool {
-  !text.is_empty() && text.chars().all(is_python_digit)
+  !text.is_empty() && text.chars().all(is_digit)
 }
 
-pub fn python_decimal_value(character: char) -> Option<u8> {
+pub fn decimal_value(character: char) -> Option<u8> {
   let code_point = character as u32;
   DECIMAL_ZEROES.iter().find_map(|&zero| (zero..zero + 10).contains(&code_point).then(|| (code_point - zero) as u8))
 }
 
-pub fn is_python_whitespace(character: char) -> bool {
+pub fn is_whitespace(character: char) -> bool {
   matches!(
     character,
     '\u{0009}'..='\u{000d}' | '\u{001c}'..='\u{0020}' | '\u{0085}' | '\u{00a0}' | '\u{1680}' |
@@ -141,16 +141,16 @@ pub fn is_python_whitespace(character: char) -> bool {
   )
 }
 
-/// Python's `str.strip()` with no argument: trims the characters that `is_python_whitespace` accepts from both ends.
+/// Python's `str.strip()` with no argument: trims the characters that `is_whitespace` accepts from both ends.
 pub fn strip(text: &str) -> &str {
-  text.trim_matches(is_python_whitespace)
+  text.trim_matches(is_whitespace)
 }
 
 pub fn split_whitespace(text: &str) -> Vec<&str> {
   let mut words = Vec::new();
   let mut start = None;
   for (offset, character) in text.char_indices() {
-    if is_python_whitespace(character) {
+    if is_whitespace(character) {
       if let Some(begin) = start.take() {
         words.push(&text[begin..offset]);
       }
@@ -173,21 +173,21 @@ mod tests {
   use super::*;
 
   #[test]
-  fn python_digit_and_decimal_methods_keep_their_unicode_sets() {
-    assert!(is_python_digit('²'));
-    assert_eq!(python_decimal_value('²'), None);
-    assert_eq!(python_decimal_value('٣'), Some(3));
-    assert!(is_python_digit('٣'));
-    assert!(!is_python_digit('⅓'));
+  fn digit_and_decimal_methods_keep_their_unicode_sets() {
+    assert!(is_digit('²'));
+    assert_eq!(decimal_value('²'), None);
+    assert_eq!(decimal_value('٣'), Some(3));
+    assert!(is_digit('٣'));
+    assert!(!is_digit('⅓'));
   }
 
   #[test]
-  fn python_split_uses_python_whitespace() {
+  fn split_uses_whitespace() {
     assert_eq!(split_whitespace("\u{001c}one\u{3000}two\u{001f}"), ["one", "two"]);
   }
 
   #[test]
-  fn python_strip_trims_both_ends_and_keeps_zero_width_space() {
+  fn strip_trims_both_ends_and_keeps_zero_width_space() {
     assert_eq!(strip("\u{001c}\u{0085}\u{3000}pad\u{3000}\u{0085}\u{001c}"), "pad");
     assert_eq!(strip("\u{200b}pad\u{200b}"), "\u{200b}pad\u{200b}");
   }

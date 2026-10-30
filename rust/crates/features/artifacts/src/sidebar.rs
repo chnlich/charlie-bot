@@ -135,11 +135,11 @@ fn plan_references(data: &Value, parent_dir: &Path) -> anyhow::Result<Vec<Refere
     let plan = attribute_dict(plan)?;
     for (version_index, version) in registry_list(plan.get("versions"))?.iter().enumerate() {
       let version = attribute_dict(version)?;
-      let Some(file) = version.get("file").filter(|file| py_truthy(file)) else {
+      let Some(file) = version.get("file").filter(|file| is_truthy(file)) else {
         continue;
       };
       let Value::String(file) = file else {
-        bail!("unsupported operand type(s) for /: 'PosixPath' and '{}'", plans::py_type_name(file));
+        bail!("unsupported operand type(s) for /: 'PosixPath' and '{}'", plans::type_name(file));
       };
       let (candidate, relative) = plan_paths::resolve_plan_file(parent_dir, file);
       references.push(Reference {
@@ -164,7 +164,7 @@ fn registry_list(value: Option<&Value>) -> anyhow::Result<&[Value]> {
     Some(Value::Object(members)) if members.is_empty() => Ok(&[]),
     Some(Value::String(text)) if text.is_empty() => Ok(&[]),
     Some(Value::Object(_) | Value::String(_)) => bail!("'str' object has no attribute 'get'"),
-    Some(other) => bail!("'{}' object is not iterable", plans::py_type_name(other)),
+    Some(other) => bail!("'{}' object is not iterable", plans::type_name(other)),
   }
 }
 
@@ -172,7 +172,7 @@ fn registry_list(value: Option<&Value>) -> anyhow::Result<&[Value]> {
 fn attribute_dict(value: &Value) -> anyhow::Result<&Map<String, Value>> {
   match value {
     Value::Object(members) => Ok(members),
-    other => bail!("'{}' object has no attribute 'get'", plans::py_type_name(other)),
+    other => bail!("'{}' object has no attribute 'get'", plans::type_name(other)),
   }
 }
 
@@ -190,7 +190,7 @@ fn copy2(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 /// Python's truth value of a JSON value that `json.loads` produced.
-fn py_truthy(value: &Value) -> bool {
+fn is_truthy(value: &Value) -> bool {
   match value {
     Value::Null => false,
     Value::Bool(flag) => *flag,
@@ -318,7 +318,7 @@ mod tests {
   }
 
   #[test]
-  fn a_fork_with_an_outside_parent_artifact_writes_the_registry_bytes_python_writes() {
+  fn a_fork_with_an_outside_parent_artifact_writes_the_registry_bytes() {
     let provenance: Value = serde_json::from_str(include_str!("../tests/data/fork_fixture_source.json"))
       .expect("fixture provenance is valid");
     assert_eq!(provenance["source"], "rust/crates/features/artifacts/tests/plans_fork_fixture.py");

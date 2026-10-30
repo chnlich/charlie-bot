@@ -241,11 +241,11 @@ fn last_capture_time_is_host_scoped_and_default_path_is_under_home_usage() {
 }
 
 #[test]
-fn timestamps_use_python_utc_isoformat_microsecond_precision() {
+fn timestamps_use_utc_isoformat_microsecond_precision() {
   let instant = OffsetDateTime::from_unix_timestamp(0).unwrap();
-  assert_eq!(python_utc_isoformat(instant).unwrap(), "1970-01-01T00:00:00+00:00");
+  assert_eq!(utc_isoformat_text(instant).unwrap(), "1970-01-01T00:00:00+00:00");
   let with_micros = instant.replace_nanosecond(123_456_000).unwrap();
-  assert_eq!(python_utc_isoformat(with_micros).unwrap(), "1970-01-01T00:00:00.123456+00:00");
+  assert_eq!(utc_isoformat_text(with_micros).unwrap(), "1970-01-01T00:00:00.123456+00:00");
 }
 
 // The cases of tests/test_usage_ledger.py, in the file's order.

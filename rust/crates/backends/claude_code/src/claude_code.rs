@@ -18,7 +18,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use charliebot_agents::cli_base::SKIP_PERMISSIONS_FLAG;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
-use charliebot_agents::transport::kill::{kill_process_group, python_exit_code};
+use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use charliebot_core::run_token;
 use charliebot_core::web_search::MCP_PATH;
@@ -117,7 +117,7 @@ pub fn claude_reading_limits_from(run_kind: RunKind, source: &Env) -> ContextLim
   let env = headless_claude_env(run_kind, source);
   let raw_window =
     env.get(claude_launch::AUTO_COMPACT_WINDOW_ENV).expect("headless environment always carries the compact window");
-  let window = match parse_python_positive_integer(raw_window) {
+  let window = match parse_positive_integer(raw_window) {
     Some(value) => value,
     None => {
       warn_unparseable_window(raw_window);
@@ -136,7 +136,7 @@ pub fn claude_reading_limits_from(run_kind: RunKind, source: &Env) -> ContextLim
   }
 }
 
-fn parse_python_positive_integer(raw: &str) -> Option<u64> {
+fn parse_positive_integer(raw: &str) -> Option<u64> {
   let value = raw.trim();
   let (positive, digits) = match value.strip_prefix('+') {
     Some(digits) => (true, digits),
@@ -389,7 +389,7 @@ async fn run_one_shot_process(
     None => output_future.await?,
   };
   stdin_task.await.context("waiting for claude CLI stdin writer failed")??;
-  let exit_code = python_exit_code(output.status);
+  let exit_code = exit_code(output.status);
   if exit_code != 0 {
     let stderr = String::from_utf8(output.stderr)?;
     bail!("claude CLI failed (exit {exit_code}): {}", stderr.trim());
@@ -1154,7 +1154,7 @@ mod tests {
   }
 
   #[test]
-  fn reading_limits_parse_python_integer_whitespace_sign_and_separators() {
+  fn reading_limits_parse_integer_whitespace_sign_and_separators() {
     let source = Env::from([(claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), " +300_000 ".to_string())]);
     assert_eq!(
       claude_reading_limits_from(RunKind::Work, &source),

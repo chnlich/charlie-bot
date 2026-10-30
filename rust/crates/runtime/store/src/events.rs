@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use charliebot_core::{fsutil, text_repr, str_methods};
+use charliebot_core::{fsutil, str_methods, text_repr};
 use memchr::{memchr_iter, memchr2, memchr2_iter};
 use memmap2::Mmap;
 use serde_json::Value;
@@ -79,7 +79,7 @@ impl Store {
       object.insert("id".to_string(), Value::String(uuid::Uuid::new_v4().to_string()));
     }
     if !object.contains_key("timestamp") {
-      object.insert("timestamp".to_string(), Value::String(python_event_timestamp(UtcDateTime::now())));
+      object.insert("timestamp".to_string(), Value::String(event_timestamp(UtcDateTime::now())));
     }
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
@@ -1424,7 +1424,7 @@ fn raw_line_spans(bytes: &[u8]) -> (Vec<(usize, usize)>, bool) {
   (spans, ends_on_boundary)
 }
 
-fn python_event_timestamp(value: UtcDateTime) -> String {
+fn event_timestamp(value: UtcDateTime) -> String {
   let datetime = value.into_inner();
   let base = format!(
     "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -1454,7 +1454,7 @@ fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number:
     return Err(StoreError::new(format!("{}:{line_number}: chat event is not a JSON object", live_path.display())));
   };
   let timestamp = match event.get("timestamp") {
-    Some(timestamp) if text_repr::python_truthy(timestamp) => timestamp,
+    Some(timestamp) if text_repr::is_truthy(timestamp) => timestamp,
     _ => return Ok(false),
   };
   let Value::String(timestamp) = timestamp else {
@@ -1480,9 +1480,9 @@ mod tests {
   use std::time::Duration;
 
   #[test]
-  fn event_timestamp_matches_python_isoformat_offset() {
+  fn event_timestamp_matches_isoformat_offset() {
     let value = UtcDateTime::parse("2026-01-01T00:00:00.123400Z").unwrap();
-    assert_eq!(python_event_timestamp(value), "2026-01-01T00:00:00.123400+00:00");
+    assert_eq!(event_timestamp(value), "2026-01-01T00:00:00.123400+00:00");
   }
 
   #[test]

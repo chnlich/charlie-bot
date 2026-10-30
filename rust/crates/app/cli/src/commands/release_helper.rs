@@ -39,7 +39,7 @@ const COMPACT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
 /// `json.dumps` with every option at its default: the seeded run record and a chat message body.
-const PYTHON_JSON: JsonStyle =
+const DEFAULT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// The startup sweep's removal event, whose `names` list the sweep check reads.
@@ -178,7 +178,7 @@ fn truthy(value: &Value) -> bool {
 /// `value or ""`, as `str(...)`.
 fn or_default(value: Option<&Value>) -> String {
   match value {
-    Some(value) if truthy(value) => text_repr::python_str(value),
+    Some(value) if truthy(value) => text_repr::value_str(value),
     _ => String::new(),
   }
 }
@@ -326,7 +326,7 @@ impl RunCounts {
 fn event_object_id(event: &Value) -> String {
   match event.get("id") {
     None | Some(Value::Null) => String::new(),
-    Some(value) => text_repr::python_str(value),
+    Some(value) => text_repr::value_str(value),
   }
 }
 
@@ -374,7 +374,7 @@ fn run_contract_value(
       && let Some(parent) =
         event.get(event_types::WEB_REPLY).and_then(Value::as_object).and_then(|reply| reply.get(event_types::NUDGE_OF))
     {
-      let parent = text_repr::python_str(parent);
+      let parent = text_repr::value_str(parent);
       if expected_user_ids.contains(&parent) {
         nudge_by_id.insert(id.clone(), parent);
       }
@@ -389,7 +389,7 @@ fn run_contract_value(
   let mut states = Vec::new();
   for run in items {
     let input_ids: Vec<String> = match run.get(event_types::INPUT_EVENT_IDS) {
-      Some(Value::Array(ids)) => ids.iter().map(text_repr::python_str).collect(),
+      Some(Value::Array(ids)) => ids.iter().map(text_repr::value_str).collect(),
       _ => Vec::new(),
     };
     let mut run_classes: BTreeSet<&'static str> = BTreeSet::new();
@@ -815,7 +815,7 @@ fn sweep_removed_names(line: &str) -> Result<Option<Vec<String>>, String> {
   // The server logs `names = ?removed`: the Debug text of the list, which a line holds as a quoted JSON array.
   let encoded = row.field("names").ok_or("the sweep line has no names")?;
   match serde_json::from_str::<Value>(encoded).map_err(|error| error.to_string())? {
-    Value::Array(items) => Ok(Some(items.iter().map(text_repr::python_str).collect())),
+    Value::Array(items) => Ok(Some(items.iter().map(text_repr::value_str).collect())),
     _ => Err("the sweep line's names are not a list".to_string()),
   }
 }
@@ -975,8 +975,8 @@ fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>,
     let Some(api_base) = option.get("api_base").filter(|value| truthy(value)) else {
       continue;
     };
-    let credential = option.get("credential").filter(|value| truthy(value)).map(text_repr::python_str);
-    return Ok(Some((text_repr::python_str(api_base), credential)));
+    let credential = option.get("credential").filter(|value| truthy(value)).map(text_repr::value_str);
+    return Ok(Some((text_repr::value_str(api_base), credential)));
   }
   Ok(None)
 }
@@ -999,7 +999,7 @@ fn backend_option(args: &[String]) -> Result<i32, String> {
 fn credential_api_key(credentials_path: &str, section: &str) -> Result<Option<String>, String> {
   let home = Path::new(credentials_path).parent().ok_or_else(|| format!("{credentials_path} has no directory"))?;
   let credentials = credentials::load_credentials(home).map_err(|error| error.to_string())?;
-  Ok(credentials.get(section, "api_key").map(credentials::CredentialValue::python_str))
+  Ok(credentials.get(section, "api_key").map(credentials::CredentialValue::value_str))
 }
 
 fn credential_key(args: &[String]) -> Result<i32, String> {
@@ -1060,7 +1060,7 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
     "ended_at": Value::Null,
   });
   let metadata = run_dir.join(run_records::RUN_METADATA_NAME);
-  run_records::write_run_metadata(&metadata, &record, &text_repr::PYTHON_JSON_DEFAULT)
+  run_records::write_run_metadata(&metadata, &record, &text_repr::DEFAULT_JSON)
     .map_err(|error| format!("{}: {error}", metadata.display()))?;
   Ok(0)
 }
@@ -1073,7 +1073,8 @@ fn write_message(args: &[String]) -> Result<i32, String> {
   // The message route requires a request_id, which deduplicates a retried send; each trial message is a new send.
   let request_id = format!("trial-{}", uuid::Uuid::new_v4().simple());
   let body = json!({ "content": prompt, "request_id": request_id });
-  fs::write(output_path, text_repr::json_dumps(&body, &PYTHON_JSON)).map_err(|error| format!("{output_path}: {error}"))?;
+  fs::write(output_path, text_repr::json_dumps(&body, &DEFAULT_JSON))
+    .map_err(|error| format!("{output_path}: {error}"))?;
   Ok(0)
 }
 

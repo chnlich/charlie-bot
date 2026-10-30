@@ -285,7 +285,7 @@ the validated checkout root held in typed startup state. Python reads this path 
 | `prompts::assemble_snapshot` | `src/runtime/task_prompts.py:403` |
 | `prompts::build_segments`, `prompts::RuleInputs` | `src/runtime/task_prompts.py:436` (the `overlay`, `chain` and `node_ref` arguments) |
 | `prompts::ChainLink { session_id, subtree_ref }` | the `(session_id, subtree_prompt_ref)` pairs of `src/runtime/task_execution.py:294-313` |
-| `prompts::OverlayError::python_class_name` | `src/runtime/task_prompts.py:241` (`_overlay_segment`) |
+| `prompts::OverlayError::class_name` | `src/runtime/task_prompts.py:241` (`_overlay_segment`) |
 | `prompts::prompt_task_type` | `src/runtime/task_prompts.py:312` |
 | `prompts::read_local_rule_body` | `src/runtime/task_prompts.py:258` |
 | `prompts::resolve_launch_overlay` | `src/runtime/task_execution.py:279` |

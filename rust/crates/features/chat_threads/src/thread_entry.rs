@@ -785,7 +785,7 @@ pub async fn post_reply_with_caller_context(
   let post_request_id = request_id
     .map(str::to_string)
     .unwrap_or_else(|| format!("operator-reply:{}", charliebot_store::control_events::new_request_id()));
-  let created_after = run_started_at.map(str::to_string).unwrap_or_else(|| UtcDateTime::now().to_python_isoformat());
+  let created_after = run_started_at.map(str::to_string).unwrap_or_else(|| UtcDateTime::now().to_isoformat_text());
   for (index, body) in bodies.iter().enumerate() {
     if !post_with_retry(
       adapter.as_ref(),
@@ -1316,8 +1316,8 @@ pub async fn arm_follow_trigger(
         session = session_id,
         thread = %log_fields,
         floor_id = %floor,
-        fire_at = %trigger.fire_at.to_python_isoformat(),
-        chain_start = %start.to_python_isoformat(),
+        fire_at = %trigger.fire_at.to_isoformat_text(),
+        chain_start = %start.to_isoformat_text(),
       );
       Ok(Some(trigger))
     }

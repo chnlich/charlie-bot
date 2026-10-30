@@ -402,7 +402,7 @@ mod tests {
   }
 
   #[test]
-  fn a_pending_entry_renders_its_fields_in_python_order() {
+  fn a_pending_entry_renders_its_fields_in_order() {
     let entry = pending_entry("claude-sonnet", "2026-10-18T07:15:40.685829+00:00");
 
     assert_eq!(

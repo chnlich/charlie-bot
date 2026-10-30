@@ -67,7 +67,7 @@ fn discord_reply_message(event: &Value) -> Value {
 
 /// The event's `content` as Python text, or `""` when the event has none (`event.get("content", "")`).
 fn content_text(event: &Value) -> String {
-  event.get("content").map(text_repr::python_str).unwrap_or_default()
+  event.get("content").map(text_repr::value_str).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ mod tests {
   }
 
   #[test]
-  fn discord_reply_uses_python_string_conversion_for_non_string_content() {
+  fn discord_reply_uses_string_conversion_for_non_string_content() {
     let event = json!({"content": {"message": "Done", "sent": true}});
     assert_eq!(
       discord_reply_message(&event).to_string(),

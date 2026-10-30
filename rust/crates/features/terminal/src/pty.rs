@@ -10,8 +10,8 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use charliebot_core::text_repr::python_truthy;
 use charliebot_core::run_token::SESSION_ID_ENV;
+use charliebot_core::text_repr::is_truthy;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{ForkptyResult, Winsize, forkpty};
@@ -91,7 +91,7 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
   status.code().or_else(|| status.signal().map(|signal| -signal)).unwrap_or_default()
 }
 
-fn python_os_error(error: &io::Error, path: Option<&Path>) -> String {
+fn os_error(error: &io::Error, path: Option<&Path>) -> String {
   let Some(errno) = error.raw_os_error() else {
     return error.to_string();
   };
@@ -106,8 +106,8 @@ fn python_os_error(error: &io::Error, path: Option<&Path>) -> String {
 
 pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, String), String> {
   let binary = tmux_binary()?;
-  let mut stderr_file = tempfile::tempfile().map_err(|error| python_os_error(&error, None))?;
-  let child_stderr = stderr_file.try_clone().map_err(|error| python_os_error(&error, None))?;
+  let mut stderr_file = tempfile::tempfile().map_err(|error| os_error(&error, None))?;
+  let child_stderr = stderr_file.try_clone().map_err(|error| os_error(&error, None))?;
   let mut command = Command::new(&binary);
   command
     .arg("-L")
@@ -118,11 +118,11 @@ pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, Str
     .stdin(Stdio::null())
     .stdout(if capture { Stdio::piped() } else { Stdio::null() })
     .stderr(Stdio::from(child_stderr));
-  let child = command.spawn().map_err(|error| python_os_error(&error, Some(&binary)))?;
-  let output = child.wait_with_output().await.map_err(|error| python_os_error(&error, Some(&binary)))?;
-  stderr_file.seek(SeekFrom::Start(0)).map_err(|error| python_os_error(&error, None))?;
+  let child = command.spawn().map_err(|error| os_error(&error, Some(&binary)))?;
+  let output = child.wait_with_output().await.map_err(|error| os_error(&error, Some(&binary)))?;
+  stderr_file.seek(SeekFrom::Start(0)).map_err(|error| os_error(&error, None))?;
   let mut stderr_bytes = Vec::new();
-  stderr_file.read_to_end(&mut stderr_bytes).map_err(|error| python_os_error(&error, None))?;
+  stderr_file.read_to_end(&mut stderr_bytes).map_err(|error| os_error(&error, None))?;
 
   let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
   let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -213,7 +213,7 @@ impl PtyAttachment {
     let env_ptrs = env.iter().map(|item| item.as_ptr()).chain(std::iter::once(std::ptr::null())).collect::<Vec<_>>();
 
     let mut attachment = PtyAttachment { session_id: session_id.to_string(), pid: None, fd: -1, closed: false };
-    match unsafe { forkpty(None, None) }.map_err(|error| python_os_error(&io::Error::from(error), None))? {
+    match unsafe { forkpty(None, None) }.map_err(|error| os_error(&io::Error::from(error), None))? {
       ForkptyResult::Child => unsafe {
         libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
         let error_number = *libc::__errno_location();
@@ -229,9 +229,9 @@ impl PtyAttachment {
     }
     attachment.set_winsize(INITIAL_ROWS, INITIAL_COLS).map_err(resize_failure_text)?;
     let fd = unsafe { BorrowedFd::borrow_raw(attachment.fd) };
-    let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|error| python_os_error(&io::Error::from(error), None))?;
+    let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|error| os_error(&io::Error::from(error), None))?;
     let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-    fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(|error| python_os_error(&io::Error::from(error), None))?;
+    fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(|error| os_error(&io::Error::from(error), None))?;
     let pid = attachment.pid.expect("the parent PTY holds its child pid");
     tracing::info!(session_id = %attachment.session_id, pid = pid.as_raw(), fd = attachment.fd, "tui_pty_spawned");
     Ok(attachment)
@@ -494,7 +494,7 @@ fn process_text_frame(raw: &str, attachment: &PtyAttachment, relay_error: &mut O
 }
 
 fn decode_input(value: Option<&Value>) -> Result<Vec<u8>, String> {
-  let Some(value) = value.filter(|value| python_truthy(value)) else {
+  let Some(value) = value.filter(|value| is_truthy(value)) else {
     return Ok(Vec::new());
   };
   let Some(encoded) = value.as_str() else {
@@ -511,7 +511,7 @@ fn decode_input(value: Option<&Value>) -> Result<Vec<u8>, String> {
 }
 
 fn parse_resize(value: Option<&Value>, default: i128) -> Result<i128, String> {
-  let Some(value) = value.filter(|value| python_truthy(value)) else {
+  let Some(value) = value.filter(|value| is_truthy(value)) else {
     return Ok(default);
   };
   match value {
@@ -522,12 +522,12 @@ fn parse_resize(value: Option<&Value>, default: i128) -> Result<i128, String> {
       .or_else(|| value.as_u64().map(i128::from))
       .or_else(|| value.as_f64().map(|number| number.trunc() as i128))
       .ok_or_else(|| "value cannot be converted to an integer".to_string()),
-    Value::String(value) => parse_python_int(value),
+    Value::String(value) => parse_int(value),
     _ => Err("value cannot be converted to an integer".to_string()),
   }
 }
 
-fn parse_python_int(value: &str) -> Result<i128, String> {
+fn parse_int(value: &str) -> Result<i128, String> {
   let trimmed = value.trim();
   let bytes = trimmed.as_bytes();
   let mut normalized = String::with_capacity(trimmed.len());
@@ -547,7 +547,7 @@ fn parse_python_int(value: &str) -> Result<i128, String> {
 
 fn resize_failure_text(error: ResizeFailure) -> String {
   match error {
-    ResizeFailure::Io(error) => python_os_error(&error, None),
+    ResizeFailure::Io(error) => os_error(&error, None),
     ResizeFailure::PackedValue => "ushort format requires 0 <= number <= 65535".to_string(),
   }
 }

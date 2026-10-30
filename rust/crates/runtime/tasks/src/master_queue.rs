@@ -789,7 +789,7 @@ async fn broadcast_running_changed(
   fields.insert("has_running_tasks".to_string(), json!(has_running_tasks));
   fields.insert(
     "thinking_since".to_string(),
-    thinking_since.map(|value| json!(value.to_python_isoformat())).unwrap_or(Value::Null),
+    thinking_since.map(|value| json!(value.to_isoformat_text())).unwrap_or(Value::Null),
   );
   fields.insert("auto_trigger".to_string(), json!(auto_trigger));
   callbacks.features.store.broadcast_sidebar(session_id, event_types::RUNNING_CHANGED, fields).await?;
@@ -959,7 +959,7 @@ mod tests {
         .await
         .unwrap();
     assert_eq!(context_tokens, Some(321));
-    assert_eq!(last_request_at.map(|value| value.to_python_string()), Some("2026-10-18T10:00:00Z".to_string()));
+    assert_eq!(last_request_at.map(|value| value.to_str()), Some("2026-10-18T10:00:00Z".to_string()));
 
     append_events(
       &features.store,
@@ -986,7 +986,7 @@ mod tests {
         .await
         .unwrap();
     assert_eq!(context_tokens, Some(150));
-    assert_eq!(last_request_at.map(|value| value.to_python_string()), Some("2026-10-18T10:00:04Z".to_string()));
+    assert_eq!(last_request_at.map(|value| value.to_str()), Some("2026-10-18T10:00:04Z".to_string()));
 
     append_events(
       &features.store,
@@ -1344,7 +1344,7 @@ mod tests {
       CC_SESSION_ID,
     )
     .await;
-    let request = UtcDateTime::now().to_python_string();
+    let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let runs = Arc::new(Mutex::new(Vec::new()));
     let queue = Arc::new(MasterQueue::with_compaction_runner(
@@ -1380,7 +1380,7 @@ mod tests {
       CC_SESSION_ID,
     )
     .await;
-    let request = UtcDateTime::now().to_python_string();
+    let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let runs = Arc::new(Mutex::new(Vec::new()));
     let queue = Arc::new(MasterQueue::with_compaction_runner(
@@ -1427,7 +1427,7 @@ mod tests {
       CC_SESSION_ID,
     )
     .await;
-    let request = UtcDateTime::now().to_python_string();
+    let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let runs = Arc::new(Mutex::new(Vec::new()));
     let queue = Arc::new(MasterQueue::with_compaction_runner(
@@ -1473,7 +1473,7 @@ mod tests {
       CC_SESSION_ID,
     )
     .await;
-    let request = UtcDateTime::now().to_python_string();
+    let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let queue = Arc::new(MasterQueue::with_compaction_runner(Arc::new(BackendPool::default()), runner(panicking_run)));
     arm_round(&queue, &features, &meta.id, "fable").await;

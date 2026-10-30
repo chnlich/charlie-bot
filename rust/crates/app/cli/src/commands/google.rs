@@ -1828,7 +1828,7 @@ appointments and the tax paperwork of the household";
   }
 
   #[test]
-  fn the_consent_url_prints_the_python_bytes() {
+  fn the_consent_url_prints_the_recorded_bytes() {
     let home = credentials_home(DEFAULT_TABLE);
     let table = table(&home);
 

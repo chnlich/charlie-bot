@@ -127,8 +127,8 @@ fn declare(
       bail!(
         "opencode options '{previous_id}' and '{option_id}' declare conflicting {field} values for {provider}/{model}: \
          {} and {}",
-        text_repr::python_str(previous_value),
-        text_repr::python_str(value)
+        text_repr::value_str(previous_value),
+        text_repr::value_str(value)
       );
     }
     Some(_) => {}

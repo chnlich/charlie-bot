@@ -6,8 +6,8 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
-use charliebot_core::str_methods;
 use charliebot_core::ssh;
+use charliebot_core::str_methods;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 

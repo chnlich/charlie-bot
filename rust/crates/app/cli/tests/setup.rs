@@ -133,7 +133,7 @@ fn an_unreadable_default_prompt_fails_the_setup_before_any_write() {
 
 /// The committed defaults seed byte-identical host files to the Python seed's `yaml_utils.save_yaml` output.
 #[test]
-fn the_seeded_host_files_match_the_recorded_python_bytes() {
+fn the_seeded_host_files_match_the_recorded_bytes() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");
   let run = run_setup(&sandbox, &home, false);

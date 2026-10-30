@@ -206,7 +206,7 @@ impl CronScheduler {
       update_cron_slots(
         &self.features,
         &session.id,
-        json!({"last_scheduled_run": python_isoformat(&now)?, "last_scheduled_cron": task.cron}),
+        json!({"last_scheduled_run": isoformat_text(&now)?, "last_scheduled_cron": task.cron}),
       )
       .await?;
       tracing::info!(task = %task.name, old = ?last_cron, new = %task.cron, "scheduler_cron_changed");
@@ -236,7 +236,7 @@ impl CronScheduler {
         .map(|handle| handle.id().to_string())
     };
     if let Some(handle_id) = running_handle {
-      let now_text = python_isoformat(&now)?;
+      let now_text = isoformat_text(&now)?;
       update_cron_slots(
         &self.features,
         &session.id,
@@ -259,7 +259,7 @@ impl CronScheduler {
       return Ok(());
     }
     self
-      .execute_task(task.clone(), Some(python_isoformat(&due)?), true, cfg.clone(), now.with_timezone(&chrono::Utc))
+      .execute_task(task.clone(), Some(isoformat_text(&due)?), true, cfg.clone(), now.with_timezone(&chrono::Utc))
       .await?;
     Ok(())
   }
@@ -285,7 +285,7 @@ impl CronScheduler {
     let session = self.fireable_binding(&task).await?;
     let firing = match firing {
       Some(value) => value,
-      None => UtcDateTime::now().to_python_isoformat(),
+      None => UtcDateTime::now().to_isoformat_text(),
     };
     if task.mode.as_deref() == Some("master") {
       let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
@@ -499,7 +499,7 @@ impl CronScheduler {
     now: chrono::DateTime<chrono::Utc>,
   ) -> anyhow::Result<()> {
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
-    let now = python_isoformat(&now.with_timezone(&timezone))?;
+    let now = isoformat_text(&now.with_timezone(&timezone))?;
     update_cron_slots(
       &self.features,
       &session.id,
@@ -647,10 +647,10 @@ pub(super) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTi
   let inner = now_utc.into_inner();
   let now = chrono::DateTime::<chrono::Utc>::from_timestamp(inner.unix_timestamp(), inner.nanosecond())
     .ok_or_else(|| anyhow::anyhow!("UTC timestamp is outside the supported range"))?;
-  python_isoformat(&CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?)
+  isoformat_text(&CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?)
 }
 
-fn python_isoformat<Tz>(moment: &chrono::DateTime<Tz>) -> anyhow::Result<String>
+fn isoformat_text<Tz>(moment: &chrono::DateTime<Tz>) -> anyhow::Result<String>
 where
   Tz: chrono::TimeZone,
   Tz::Offset: Offset,
@@ -867,7 +867,7 @@ mod tests {
   use std::path::Path;
   use std::sync::Arc;
 
-  use super::{CronExpression, CronScheduler, python_isoformat};
+  use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig};
   use crate::test_support::{FakeGit, GIT_PROGRAM_LOCK, ProcessGroupGuard, feature_context, manager};
 
@@ -901,13 +901,13 @@ mod tests {
   }
 
   #[test]
-  fn cron_stamps_use_python_microseconds_and_keep_the_task_timezone_offset() {
+  fn cron_stamps_use_microseconds_and_keep_the_task_timezone_offset() {
     let timezone = "America/Los_Angeles".parse::<chrono_tz::Tz>().unwrap();
     let whole_seconds = timezone.with_ymd_and_hms(2026, 10, 20, 2, 26, 6).single().unwrap();
     let fractional = whole_seconds.with_nanosecond(685_829_123).unwrap();
 
-    assert_eq!(python_isoformat(&whole_seconds).unwrap(), "2026-10-20T02:26:06-07:00");
-    assert_eq!(python_isoformat(&fractional).unwrap(), "2026-10-20T02:26:06.685829-07:00");
+    assert_eq!(isoformat_text(&whole_seconds).unwrap(), "2026-10-20T02:26:06-07:00");
+    assert_eq!(isoformat_text(&fractional).unwrap(), "2026-10-20T02:26:06.685829-07:00");
   }
 
   #[tokio::test]
@@ -1500,7 +1500,7 @@ mod tests {
     // Python: tests/test_cron_backend.py::test_backend_alignment_preserves_last_run_to_avoid_catchup_fire
     let (home, features) = feature_context();
     let node = crate::test_support::manager(&features, "synthetic-no-catchup-node").await.unwrap();
-    let last_run = UtcDateTime::now().to_python_isoformat();
+    let last_run = UtcDateTime::now().to_isoformat_text();
     let guard = features.store.control_lock().await;
     features
       .store

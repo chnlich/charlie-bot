@@ -18,11 +18,11 @@ const RAW_LINES: [&str; 4] = [
   "{\"type\":\"tool_result\",\"tool_use_id\":\"tool-1\",\"timestamp\":\"2026-01-01T00:00:02Z\"}\n",
   "{\"type\":\"result\",\"subtype\":\"success\",\"timestamp\":\"2026-01-01T00:00:03Z\"}\n",
 ];
-const PYTHON_FIXTURE: &str = include_str!("fixtures/transport_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/transport_golden.json");
 
 #[tokio::test]
-async fn python_and_rust_share_cursors_follow_offsets_and_pid_start() {
-  let fixture: serde_json::Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+async fn share_cursors_follow_offsets_and_pid_start() {
+  let fixture: serde_json::Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let expected = &fixture["expected"];
   let root = tempfile::tempdir().unwrap();

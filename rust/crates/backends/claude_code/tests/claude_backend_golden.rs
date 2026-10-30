@@ -11,7 +11,7 @@ use charliebot_registry::backend::{Env, LaunchArgs};
 use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as YamlValue};
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/claude_backend_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/claude_backend_golden.json");
 
 fn main_module() -> CharlieBotConfig {
   CharlieBotConfig {
@@ -138,14 +138,14 @@ fn materialize_paths(value: &mut Value) {
 }
 
 #[test]
-fn registered_claude_factory_matches_the_python_argv_and_env_matrix() {
+fn registered_claude_factory_matches_the_argv_and_env_matrix() {
   let cases = cases();
   let cfg = main_module();
   let mut registry = Registry::new();
   registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
   let registry = Arc::new(registry);
   let expected_rust = cases.iter().map(|case| rust_result(case, &cfg, &registry)).collect::<Vec<_>>();
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected_python = fixture["expected"].clone();
   materialize_paths(&mut expected_python);

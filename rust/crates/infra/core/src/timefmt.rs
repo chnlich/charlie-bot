@@ -75,7 +75,7 @@ pub fn log_timestamp() -> String {
 }
 
 /// Seconds since the epoch of `instant`, as CPython's `st_mtime` float computes it from the stat pair.
-pub fn python_float_seconds(seconds: i64, nanoseconds: i64) -> f64 {
+pub fn float_seconds(seconds: i64, nanoseconds: i64) -> f64 {
   // posixmodule.c fill_time: `sec + nsec * 1e-9`, evaluated in double.
   seconds as f64 + nanoseconds as f64 * 1e-9
 }

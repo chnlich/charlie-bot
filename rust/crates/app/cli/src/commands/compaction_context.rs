@@ -22,9 +22,9 @@ use charliebot_cli_common::json_out;
 use charliebot_core::config;
 use charliebot_core::home;
 use charliebot_core::paths;
-use charliebot_core::text_repr::{python_truthy, str_repr};
-use charliebot_core::regex_classes::compile_python_regex;
+use charliebot_core::regex_classes::compile_regex;
 use charliebot_core::repo_root;
+use charliebot_core::text_repr::{is_truthy, str_repr};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
 use clap::{CommandFactory, FromArgMatches, Parser};
@@ -135,7 +135,7 @@ fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
     chat_events::read_lines(events_path, LineRule::Terminated).map_err(|error| log_read_error(events_path, error))?;
   for line in lines {
     let line = line.map_err(|error| log_read_error(events_path, error))?;
-    let event = line.decode().map_err(|error| python_json_error(&line.text, &error))?;
+    let event = line.decode().map_err(|error| json_error(&line.text, &error))?;
     let Some(message) = assistant_message(&event) else { continue };
     let Some(content) = message.get("content").and_then(Value::as_array) else { continue };
     for block in content {
@@ -182,7 +182,7 @@ fn reads_from_tool(block: &serde_json::Map<String, Value>) -> Vec<(String, Optio
   let Some(tool_input) = block.get("input").and_then(Value::as_object) else { return Vec::new() };
   match block.get("name").and_then(Value::as_str) {
     Some("Skill") => {
-      let skill = python_or(tool_input.get("skill"), tool_input.get("skill_name"));
+      let skill = or_value(tool_input.get("skill"), tool_input.get("skill_name"));
       match skill {
         Some(Value::String(skill_name)) if !skill_name.is_empty() => vec![(skill_name.clone(), None, None)],
         _ => Vec::new(),
@@ -219,9 +219,9 @@ fn named_path(directory: &str) -> String {
 }
 
 /// Python `left or right` over two optional JSON values.
-fn python_or<'a>(left: Option<&'a Value>, right: Option<&'a Value>) -> Option<&'a Value> {
+fn or_value<'a>(left: Option<&'a Value>, right: Option<&'a Value>) -> Option<&'a Value> {
   match left {
-    Some(value) if python_truthy(value) => Some(value),
+    Some(value) if is_truthy(value) => Some(value),
     _ => right,
   }
 }
@@ -268,7 +268,7 @@ fn skill_locations(value: &str) -> Vec<(String, String)> {
 
 fn command_cwd_regex() -> &'static Regex {
   static REGEX: OnceLock<Regex> = OnceLock::new();
-  REGEX.get_or_init(|| compile_python_regex(r#"^\s*cd\s+('[^']*'|"[^"]*"|[^;&|\s]+)(?:\s*(?:&&|;|$))"#))
+  REGEX.get_or_init(|| compile_regex(r#"^\s*cd\s+('[^']*'|"[^"]*"|[^;&|\s]+)(?:\s*(?:&&|;|$))"#))
 }
 
 /// The absolute `cd` target of a Bash command, `None` when the command does not open with one.
@@ -321,11 +321,11 @@ fn is_env_name(name: &str) -> bool {
 }
 
 fn decode_utf8(bytes: &[u8]) -> Result<String, String> {
-  std::str::from_utf8(bytes).map(str::to_string).map_err(|error| python_utf8_error(bytes, &error))
+  std::str::from_utf8(bytes).map(str::to_string).map_err(|error| utf8_error(bytes, &error))
 }
 
 /// Python universal newlines: `open` translates `\r\n` and `\r` to `\n`.
-fn python_newlines(text: &str) -> String {
+fn newlines(text: &str) -> String {
   if !text.contains('\r') {
     return text.to_string();
   }
@@ -351,7 +351,7 @@ fn python_newlines(text: &str) -> String {
 /// `str(OSError)` with a filename: `[Errno N] <strerror>: '<path>'`. The delete paths of
 /// `gc-trash` are the one place Rust cannot carry Python's inner filename; here the failing path
 /// is always the one the command opened.
-fn python_os_error(path: &str, error: &std::io::Error) -> String {
+fn os_error(path: &str, error: &std::io::Error) -> String {
   match error.raw_os_error() {
     Some(errno) => {
       let text = error.to_string();
@@ -365,12 +365,12 @@ fn python_os_error(path: &str, error: &std::io::Error) -> String {
 /// The error text of a chat log that could not be read, in the words Python gives for the same failure.
 fn log_read_error(events_path: &Path, error: LogReadError) -> String {
   match error {
-    LogReadError::Io(error) | LogReadError::Line { error, .. } => python_os_error(&paths::display(events_path), &error),
-    LogReadError::Utf8(error) => python_utf8_error(error.as_bytes(), &error.utf8_error()),
+    LogReadError::Io(error) | LogReadError::Line { error, .. } => os_error(&paths::display(events_path), &error),
+    LogReadError::Utf8(error) => utf8_error(error.as_bytes(), &error.utf8_error()),
   }
 }
 
-fn python_utf8_error(bytes: &[u8], error: &std::str::Utf8Error) -> String {
+fn utf8_error(bytes: &[u8], error: &std::str::Utf8Error) -> String {
   let start = error.valid_up_to();
   let (byte, offset, reason) = match error.error_len() {
     None => (bytes[start], start, "unexpected end of data"),
@@ -395,7 +395,7 @@ fn is_utf8_start_byte(byte: u8) -> bool {
 /// offending byte: serde's 1-based column is CPython's column, and CPython's `char` is the byte's
 /// character index. The EOF classes shift one column: CPython's scanner stops after consuming the
 /// whole input, serde reports the last byte it read.
-fn python_json_error(line: &str, error: &serde_json::Error) -> String {
+fn json_error(line: &str, error: &serde_json::Error) -> String {
   let message = error.to_string();
   let Some((text, location)) = message.rsplit_once(" at line ") else { return message };
   let Some((line_text, column_text)) = location.split_once(" column ") else { return message };
@@ -677,9 +677,9 @@ fn is_file(path: &Path) -> bool {
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
-  let bytes = std::fs::read(path).map_err(|error| python_os_error(&paths::display(path), &error))?;
+  let bytes = std::fs::read(path).map_err(|error| os_error(&paths::display(path), &error))?;
   let text = decode_utf8(&bytes)?;
-  Ok(python_newlines(&text))
+  Ok(newlines(&text))
 }
 
 fn skill_block(skill: &SkillText) -> String {

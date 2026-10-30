@@ -64,7 +64,7 @@ mod tests {
   }
 
   #[test]
-  fn voice_input_gets_the_python_preamble_byte_for_byte() {
+  fn voice_input_gets_the_preamble_byte_for_byte() {
     let contribution = VoiceTurnContribution;
     let meta =
       serde_json::from_value::<SessionMetadata>(serde_json::json!({ "name": "synthetic", "profile": "manager" }))

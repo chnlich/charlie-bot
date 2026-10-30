@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::text_repr::str_repr;
 use charliebot_core::str_methods;
+use charliebot_core::text_repr::str_repr;
 use unicode_width::UnicodeWidthChar;
 
 pub(super) const TOPICS_FILENAME: &str = "topics";

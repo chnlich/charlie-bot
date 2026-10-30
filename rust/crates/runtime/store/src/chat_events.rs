@@ -409,7 +409,7 @@ mod tests {
   }
 
   #[test]
-  fn append_event_writes_one_python_style_line() {
+  fn append_event_writes_one_line() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let path = dir.path().join("data").join("chat_events.jsonl");
     super::append_event(&path, &serde_json::json!({"a": 1})).unwrap();

@@ -159,7 +159,7 @@ impl FileHeaders {
       },
       str::to_string,
     );
-    let mtime = timefmt::python_float_seconds(metadata.mtime(), metadata.mtime_nsec());
+    let mtime = timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec());
     let etag_base = format!("{}-{}", text_repr::float_repr(mtime), metadata.size());
     FileHeaders {
       content_type,
@@ -314,9 +314,9 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
     }
     let (start_text, end_text) = part.split_once('-').expect("the part holds a dash");
     let (start_text, end_text) = (start_text.trim(), end_text.trim());
-    let start = if start_text.is_empty() { python_int(end_text).map(|end| size - end) } else { python_int(start_text) };
+    let start = if start_text.is_empty() { parse_int(end_text).map(|end| size - end) } else { parse_int(start_text) };
     let end = if !start_text.is_empty() && !end_text.is_empty() {
-      python_int(end_text).map(|end| if end < size { end + 1 } else { size })
+      parse_int(end_text).map(|end| if end < size { end + 1 } else { size })
     } else {
       Some(size)
     };
@@ -350,7 +350,7 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
 }
 
 /// CPython `int(text)` for decimal text: optional sign, digits with single underscores between them.
-fn python_int(text: &str) -> Option<i128> {
+fn parse_int(text: &str) -> Option<i128> {
   let text = text.trim();
   let (negative, digits) = match text.as_bytes().first()? {
     b'-' => (true, &text[1..]),

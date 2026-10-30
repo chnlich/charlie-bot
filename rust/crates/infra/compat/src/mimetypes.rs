@@ -95,7 +95,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn guesses_follow_the_cpython_rules() {
+  fn guesses_follow_the_rules() {
     let database = MimeTypes::builtin();
     let cases = [
       ("/a/app.js", Some("text/javascript")),

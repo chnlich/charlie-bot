@@ -23,7 +23,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
-use charliebot_core::text_repr::python_str;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
@@ -165,7 +165,7 @@ pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Ve
     let Some(model) = message.get("model").filter(|model| json_truthy(model)) else {
       continue;
     };
-    let model = python_str(model);
+    let model = value_str(model);
     if model == "<synthetic>" {
       continue;
     }
@@ -215,15 +215,15 @@ fn parse_marker_line(raw: &[u8], path: &Path) -> anyhow::Result<Option<Map<Strin
 fn usage_key(message: &Map<String, Value>, line: &Map<String, Value>) -> String {
   let candidates: [Option<&Value>; 3] = [message.get("id"), line.get("requestId"), line.get("uuid")];
   match candidates.into_iter().flatten().find(|value| json_truthy(value)) {
-    Some(value) => python_str(value),
-    None => line.get("uuid").map_or_else(|| "None".to_string(), python_str),
+    Some(value) => value_str(value),
+    None => line.get("uuid").map_or_else(|| "None".to_string(), value_str),
   }
 }
 
 /// `line.get("timestamp") or ""`.
 fn timestamp_of(line: &Map<String, Value>) -> String {
   match line.get("timestamp") {
-    Some(timestamp) if json_truthy(timestamp) => python_str(timestamp),
+    Some(timestamp) if json_truthy(timestamp) => value_str(timestamp),
     _ => String::new(),
   }
 }
@@ -376,7 +376,7 @@ mod tests {
   }
 
   #[test]
-  fn usage_keys_follow_the_python_or_chain() {
+  fn usage_keys_follow_the_or_chain() {
     let message: Map<String, Value> = serde_json::from_str(r#"{"id": ""}"#).unwrap();
     let line: Map<String, Value> = serde_json::from_str(r#"{"requestId": "r1", "uuid": "u1"}"#).unwrap();
     assert_eq!(usage_key(&message, &line), "r1");

@@ -15,7 +15,7 @@ use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
 use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_core::paths;
-use charliebot_core::regex_classes::compile_python_automata_regex;
+use charliebot_core::regex_classes::compile_automata_regex;
 use charliebot_core::str_methods;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::ChatEvent;
@@ -60,13 +60,13 @@ const LANGUAGE_HOLD_DETAIL: &str = concat!(
   "To post the reply as written, add --keep-language \"<reason>\" to the command."
 );
 
-static CODE_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"(?s)```.*?```"));
-static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"`[^`]*`"));
-static URL_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"\(?https?://\S+\)?"));
+static CODE_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"(?s)```.*?```"));
+static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"`[^`]*`"));
+static URL_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"\(?https?://\S+\)?"));
 static PATH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|[^\p{L}\p{N}_])([~/][\p{L}\p{N}_./-]+)").unwrap());
-static MARKDOWN_LINK_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"\[([^\]]*)\]\([^)]*\)"));
-static HAN_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"[㐀-䶿一-鿿]"));
-static LATIN_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"[A-Za-z]"));
+static MARKDOWN_LINK_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"\[([^\]]*)\]\([^)]*\)"));
+static HAN_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"[㐀-䶿一-鿿]"));
+static LATIN_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"[A-Za-z]"));
 
 /// The roles the For-you layer shows: the user's messages, the replies and the notices (`reply._FOR_YOU_ROLES`).
 const FOR_YOU_ROLES: [&str; 3] = [USER, WEB_REPLY, WEB_REPLY_NOTICE];
@@ -802,7 +802,7 @@ mod tests {
   }
 
   #[test]
-  fn py_strip_trims_the_information_separators_as_python_does() {
+  fn strip_trims_the_information_separators() {
     assert_eq!(str_methods::strip(" \u{1c}x\u{1f}\n"), "x");
     assert_eq!(str_methods::strip(" \t\n"), "");
   }
@@ -978,7 +978,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_path_after_python_nonword_alphanumerics_is_removed() {
+  async fn a_path_after_nonword_alphanumerics_is_removed() {
     for marker in ["ⓐ", "\u{0345}"] {
       let home = Home::new();
       let sid = home.manager("session", None).await;
@@ -992,7 +992,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_python_nonword_alphanumeric_stops_a_path_run() {
+  async fn a_nonword_alphanumeric_stops_a_path_run() {
     for marker in ["ⓐ", "\u{0345}"] {
       let home = Home::new();
       let sid = home.manager("session", None).await;

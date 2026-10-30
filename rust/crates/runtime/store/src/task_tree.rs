@@ -2652,7 +2652,7 @@ pub(crate) mod tests {
   /// `_MD_HEADING_RE = ^\s{0,3}#{1,6}(\s|$)` (`src/runtime/task_sessions.py:1973-1990`): up to three
   /// leading spaces, one to six marks, then whitespace or the line's end.
   #[test]
-  fn markdown_heading_lines_match_the_python_pattern() {
+  fn markdown_heading_lines_match_the_pattern() {
     for line in ["# Title", "## Sub", "###### six", "#", "  ## indented", "   # three", "\t# tabbed"] {
       assert!(is_markdown_heading(line), "{line:?} is a heading");
     }
@@ -3470,7 +3470,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn agent_create_refusals_are_forbidden_with_python_text() {
+  async fn agent_create_refusals_are_forbidden_with_text() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "agent-root", None, TaskProfile::Manager).await;
@@ -3544,7 +3544,7 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn archived_refusal_is_python_s_plain_sentence_without_blockers() {
+  fn archived_refusal_is_the_plain_sentence_without_blockers() {
     // `task_errors.TaskArchivedError`, raised for machine input to an archived node such as a report to an
     // archived parent: the 409 detail is this sentence alone.
     let error = StoreError::archived("node-a");
@@ -3555,7 +3555,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn invalid_create_requests_are_400_with_python_text() {
+  async fn invalid_create_requests_are_400_with_text() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let worker = create_node(&store, "worker", None, TaskProfile::Worker).await;
@@ -3591,7 +3591,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn absent_task_is_a_404_with_python_text() {
+  async fn absent_task_is_a_404_with_text() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
 
@@ -4679,7 +4679,7 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn task_spec_hash_matches_python_canonical_text() {
+  fn task_spec_hash_matches_canonical_text() {
     let implement = TaskSpec {
       goal: "Ship the é change".to_string(),
       acceptance: vec!["tests pass".to_string()],

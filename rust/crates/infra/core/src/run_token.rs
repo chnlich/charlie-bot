@@ -124,7 +124,7 @@ mod tests {
   }
 
   #[test]
-  fn a_signed_token_verifies_and_matches_the_python_wire_form() {
+  fn a_signed_token_verifies_and_matches_the_wire_form() {
     let token = sign_run_token(&claims(), "k").unwrap();
     // `run_token.sign_run_token(RunTokenClaims("s-1", "r-1", "worker"), "k")` in the Python baseline.
     assert_eq!(

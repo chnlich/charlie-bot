@@ -62,7 +62,7 @@ pub fn supervise(args: &[OsString]) -> anyhow::Result<()> {
     .stdout(stdout)
     .stderr(stderr)
     .status()
-    .map(kill::python_exit_code)
+    .map(kill::exit_code)
     .map_err(|error| format!("starting supervised agent: {error}"));
   write_json(&directory.join(EXIT_NAME), &status)?;
   status.map(|_| ()).map_err(anyhow::Error::msg)

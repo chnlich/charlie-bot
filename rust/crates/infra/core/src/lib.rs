@@ -17,15 +17,15 @@ pub mod metadata_slot;
 pub mod paths;
 mod printable_table;
 pub mod proc_identity;
-pub mod text_repr;
 pub mod regex_classes;
-pub mod str_methods;
 pub mod repo_root;
 pub mod run_token;
 pub mod ssh;
+pub mod str_methods;
 pub mod tempdir;
 #[cfg(feature = "test-support")]
 pub mod test_support;
+pub mod text_repr;
 pub mod timefmt;
 pub mod timeouts;
 pub mod v1_sessions;

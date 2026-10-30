@@ -19,7 +19,7 @@ use charliebot_store::run_records::RunKind;
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/launch_environment_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/launch_environment_golden.json");
 
 struct Case {
   id: String,
@@ -30,7 +30,7 @@ struct Case {
 }
 
 #[test]
-fn complete_agent_child_environments_match_python_for_each_launch_kind() {
+fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   let root = tempfile::tempdir().unwrap();
   let venv_bin = root.path().join("venv/bin");
   let system_bin = root.path().join("system-bin");
@@ -47,7 +47,7 @@ fn complete_agent_child_environments_match_python_for_each_launch_kind() {
   fs::write(system_bin.join("probe.json"), json!({"codex": [{"exit": 0}]}).to_string()).unwrap();
   let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
   let cases = cases(&venv_bin, &system_bin, &server_bin_dir);
-  let python = run_python_reference(&repository, &cases, root.path());
+  let python = run_golden_reference(&repository, &cases, root.path());
   let python_cases = python.as_array().expect("Python reference returns a case array");
   assert_eq!(cases.len(), 14);
   assert_eq!(python_cases.len(), cases.len());
@@ -152,8 +152,8 @@ fn cases(venv_bin: &Path, system_bin: &Path, server_bin_dir: &Path) -> Vec<Case>
   cases
 }
 
-fn run_python_reference(repository: &Path, cases: &[Case], temporary: &Path) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn run_golden_reference(repository: &Path, cases: &[Case], temporary: &Path) -> Value {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "2b212ebd8549c0d3bc86885ae9c30ac648039a0d");
   let mut expected = fixture["expected"].clone();
   replace_fixture_paths(

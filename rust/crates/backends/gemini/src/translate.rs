@@ -3,7 +3,7 @@
 
 use anyhow::bail;
 use charliebot_core::event_types;
-use charliebot_core::text_repr::python_str;
+use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
@@ -113,11 +113,11 @@ impl Translate for GeminiTranslator {
 fn error_message(error: &Value) -> anyhow::Result<String> {
   match error {
     Value::Object(fields) => match fields.get("message") {
-      None => Ok(python_str(error)),
+      None => Ok(value_str(error)),
       Some(Value::String(message)) => Ok(message.clone()),
       Some(other) => bail!("gemini tool error message must be a string, got {other}"),
     },
-    other => Ok(python_str(other)),
+    other => Ok(value_str(other)),
   }
 }
 
@@ -126,7 +126,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn each_event_type_maps_to_the_python_translation() {
+  fn each_event_type_maps_to_the_translation() {
     let mut translator = GeminiTranslator::default();
     let mut translate = |event: Value| translator.translate_event(&event).unwrap();
     assert_eq!(
@@ -182,7 +182,7 @@ mod tests {
   }
 
   #[test]
-  fn a_failed_tool_without_a_message_reports_the_python_str_of_its_error() {
+  fn a_failed_tool_without_a_message_reports_the_str_of_its_error() {
     let mut translator = GeminiTranslator::default();
     let events = translator
       .translate_event(&json!({"type": "tool_result", "status": "error", "tool_id": "Bash", "error": {"code": 7}}))

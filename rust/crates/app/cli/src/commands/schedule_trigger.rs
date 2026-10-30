@@ -422,7 +422,7 @@ fn home_dir() -> Result<PathBuf, CliExit> {
 }
 
 /// `int(text)` for a flag: surrounding whitespace, an optional sign, and digits with single underscores between them.
-fn parse_python_int(text: &str) -> Option<i64> {
+fn parse_int(text: &str) -> Option<i64> {
   let trimmed = text.trim();
   let (negative, unsigned) = match trimmed.strip_prefix('-') {
     Some(rest) => (true, rest),
@@ -438,7 +438,7 @@ fn parse_python_int(text: &str) -> Option<i64> {
 }
 
 fn parse_max_wait(text: &str) -> Result<i64, String> {
-  parse_python_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))
+  parse_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))
 }
 
 /// `--message` is a short label: `_validate_message` counts characters, not bytes.
@@ -473,7 +473,7 @@ fn parse_watch_target(raw: &str) -> Result<WatchSpec, String> {
 /// `_positive_int`: an int above zero, with the watch spec named in the error.
 fn positive_int(value: &str, raw: &str, what: &str) -> Result<i64, String> {
   let number =
-    parse_python_int(value).ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
+    parse_int(value).ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
   if number <= 0 {
     return Err(format!("--watch {what} must be positive (got {})", text_repr::str_repr(raw)));
   }
@@ -485,22 +485,22 @@ mod tests {
   use super::*;
 
   #[test]
-  fn python_int_accepts_the_flag_forms_int_accepts() {
-    assert_eq!(parse_python_int("60"), Some(60));
-    assert_eq!(parse_python_int(" +60 "), Some(60));
-    assert_eq!(parse_python_int("-5"), Some(-5));
-    assert_eq!(parse_python_int("1_000"), Some(1000));
-    assert_eq!(parse_python_int("1__000"), None);
-    assert_eq!(parse_python_int("_1"), None);
-    assert_eq!(parse_python_int("1_"), None);
-    assert_eq!(parse_python_int(""), None);
-    assert_eq!(parse_python_int("-"), None);
-    assert_eq!(parse_python_int("+-5"), None);
-    assert_eq!(parse_python_int("12x"), None);
+  fn int_accepts_the_flag_forms_int_accepts() {
+    assert_eq!(parse_int("60"), Some(60));
+    assert_eq!(parse_int(" +60 "), Some(60));
+    assert_eq!(parse_int("-5"), Some(-5));
+    assert_eq!(parse_int("1_000"), Some(1000));
+    assert_eq!(parse_int("1__000"), None);
+    assert_eq!(parse_int("_1"), None);
+    assert_eq!(parse_int("1_"), None);
+    assert_eq!(parse_int(""), None);
+    assert_eq!(parse_int("-"), None);
+    assert_eq!(parse_int("+-5"), None);
+    assert_eq!(parse_int("12x"), None);
   }
 
   #[test]
-  fn watch_specs_take_the_python_dict_shape() {
+  fn watch_specs_take_the_dict_shape() {
     assert_eq!(parse_watch_target("12345"), Ok(WatchSpec::LocalPid { pid: 12345 }));
     assert_eq!(
       parse_watch_target("neptune:12345"),

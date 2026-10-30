@@ -87,7 +87,7 @@ fn float_repr(value: f64) -> String {
   if text.contains('.') || text.contains('e') { text } else { format!("{text}.0") }
 }
 
-fn recorded_python_members(home: &Path) -> Vec<Value> {
+fn recorded_members(home: &Path) -> Vec<Value> {
   let mut decoder = flate2::read::GzDecoder::new(include_bytes!("fixtures/backup_manifest_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
@@ -240,10 +240,10 @@ fn assert_members_equal(actual: &[Value], expected: &[Value]) {
 }
 
 #[test]
-fn differential_backup_matches_python() {
+fn differential_backup_matches_recorded() {
   let root = tempfile::tempdir().unwrap();
   let (home, rust_archive) = archive_fixture(root.path());
-  let expected = recorded_python_members(&home);
+  let expected = recorded_members(&home);
   let actual = archive_members(&rust_archive);
   assert_members_equal(&actual, &expected);
 }
@@ -252,7 +252,7 @@ fn differential_backup_matches_python() {
 fn differential_control_run_reports_one_planted_difference() {
   let root = tempfile::tempdir().unwrap();
   let (home, rust_archive) = archive_fixture(root.path());
-  let expected = recorded_python_members(&home);
+  let expected = recorded_members(&home);
   let mut actual = archive_members(&rust_archive);
   let first_regular = actual.iter_mut().find(|member| !member["content_hex"].is_null()).unwrap();
   let mut content = decode_hex(first_regular["content_hex"].as_str().unwrap());

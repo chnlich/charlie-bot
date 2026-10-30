@@ -10,7 +10,7 @@ use charliebot_chat_threads::thread_entry::{
 };
 use charliebot_compat::ws_client::{self, Message, Options, Receiver, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::text_repr::python_truthy;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::FeatureContext;
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
@@ -258,11 +258,9 @@ async fn serve_socket_mode(
     }
 
     let inner = (envelope.get("type").and_then(Value::as_str) == Some("events_api"))
-      .then(|| {
-        envelope.get("payload").filter(|payload| python_truthy(payload)).and_then(|payload| payload.get("event"))
-      })
+      .then(|| envelope.get("payload").filter(|payload| is_truthy(payload)).and_then(|payload| payload.get("event")))
       .flatten();
-    let Some(inner) = inner.filter(|event| python_truthy(event)) else {
+    let Some(inner) = inner.filter(|event| is_truthy(event)) else {
       continue;
     };
     match inner.get("type").and_then(Value::as_str) {
@@ -470,8 +468,8 @@ impl ThreadAdapter for SlackThreadAdapter {
           let user = message.get("user").and_then(Value::as_str).map(str::to_string);
           let text = message
             .get("text")
-            .filter(|value| python_truthy(value))
-            .map(charliebot_core::text_repr::python_str)
+            .filter(|value| is_truthy(value))
+            .map(charliebot_core::text_repr::value_str)
             .unwrap_or_default();
           Ok(ThreadMessage {
             id,

@@ -160,11 +160,8 @@ impl MessageAggregator {
       return Err(StoreError::new("chat event must be a JSON object"));
     }
     let event_type = event.field("type").and_then(EventFields::as_str_field);
-    let event_id = event
-      .field("id")
-      .filter(|value| is_truthy(*value))
-      .map(python_string)
-      .unwrap_or_else(|| format!("legacy:{index}"));
+    let event_id =
+      event.field("id").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_else(|| format!("legacy:{index}"));
     match event_type {
       Some(event_types::USER) => self.feed_user(event, index, &event_id),
       Some(event_types::ASSISTANT) => self.feed_assistant(event, index, &event_id),
@@ -309,7 +306,7 @@ impl MessageAggregator {
   fn feed_thinking<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
     self.last_event_index = index;
     let content = event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!(""));
-    self.thinking_buf.push_str(&python_string(&content));
+    self.thinking_buf.push_str(&event_str(&content));
     if self.last_assistant_timestamp.is_none() {
       self.last_assistant_timestamp = event.field("timestamp").map(EventFields::to_owned_value);
     }
@@ -405,7 +402,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }),
     event_types::ASSISTANT_ERROR => json!({
       "role": "system",
-      "content": format!("Error: {}", event.field("content").map_or_else(String::new, python_string)),
+      "content": format!("Error: {}", event.field("content").map_or_else(String::new, event_str)),
     }),
     event_types::ERROR => {
       let content = event
@@ -414,7 +411,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         .or_else(|| event.field("message").filter(|value| is_truthy(*value)))
         .map(EventFields::to_owned_value)
         .unwrap_or_else(|| json!("Unknown error"));
-      json!({"role": "system", "content": format!("Error: {}", python_string(&content))})
+      json!({"role": "system", "content": format!("Error: {}", event_str(&content))})
     }
     event_types::TASK_DELEGATED => json!({
       "role": event_types::TASK_DELEGATED,
@@ -447,7 +444,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       };
       json!({
         "role": "system",
-        "content": format!("{icon} {}: {}", py_string_default(event, "task", ""), py_string_default(event, "message", "")),
+        "content": format!("{icon} {}: {}", string_default(event, "task", ""), string_default(event, "message", "")),
       })
     }
     event_types::CONTEXT_COMPACTED => render_context_compacted(event)?,
@@ -461,7 +458,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       }
       head.push_str(" failed");
       let error = event.field("error").filter(|value| is_truthy(*value));
-      let content = error.map_or(head.clone(), |error| format!("{head} — {}", python_string(error)));
+      let content = error.map_or(head.clone(), |error| format!("{head} — {}", event_str(error)));
       json!({"role": "system", "kind": event_types::CONTEXT_COMPACT_FAILED, "content": content})
     }
     event_types::RESUME_CONTEXT_DROPPED => {
@@ -492,27 +489,27 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }),
     event_types::BACKEND_SWITCHED => json!({
       "role": "system",
-      "content": format!("Backend switched: {} → {}", py_string_default(event, "from", ""), py_string_default(event, "to", "")),
+      "content": format!("Backend switched: {} → {}", string_default(event, "from", ""), string_default(event, "to", "")),
     }),
     event_types::QUOTA_FAILOVER => {
-      let from_backend = py_string_default(event, "from", "");
+      let from_backend = string_default(event, "from", "");
       let recovers_at = event.field("recovers_at").filter(|value| is_truthy(*value));
       let recovery =
-        recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", python_string(value)));
+        recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", event_str(value)));
       json!({
         "role": "system",
-        "content": format!("Quota exhausted on {from_backend}: switched to {}{recovery}", py_string_default(event, "to", "")),
+        "content": format!("Quota exhausted on {from_backend}: switched to {}{recovery}", string_default(event, "to", "")),
       })
     }
     event_types::BACKEND_OVERLAY_INACTIVE | event_types::BACKEND_OVERLAY_UNDECLARED => {
-      let backend = py_string_default(event, "backend", "");
+      let backend = string_default(event, "backend", "");
       if event.field("reason").and_then(EventFields::as_str_field) == Some(event_types::OVERLAY_REASON_UNREADABLE) {
         json!({
           "role": "system",
           "content": format!(
             "Backend {backend}: prompt_overlay '{}' could not be loaded ({}) — running without a fence",
-            py_string_default(event, "overlay", ""),
-            py_string_default(event, "error", ""),
+            string_default(event, "overlay", ""),
+            string_default(event, "error", ""),
           ),
         })
       } else {
@@ -524,8 +521,8 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }
     event_types::MODEL_FALLBACK_NOTICE => {
       let configured =
-        event.field("configured_model").filter(|value| is_truthy(*value)).map(python_string).unwrap_or_default();
-      let served = python_join_strings(event.field("served_models"), "served_models")?;
+        event.field("configured_model").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
+      let served = join_strings(event.field("served_models"), "served_models")?;
       json!({"role": "system", "content": format!("Served by {served} (configured {configured})")})
     }
     event_types::CHILD_REPORT => json!({
@@ -548,7 +545,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         .or_else(|| event.field("message").filter(|value| is_truthy(*value)))
         .map(EventFields::to_owned_value)
         .unwrap_or_else(|| json!("Unknown error"));
-      let text = python_string(&content);
+      let text = event_str(&content);
       json!({
         "role": "system",
         "kind": event_types::RUN_ERROR,
@@ -584,7 +581,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         .filter(|value| is_truthy(*value))
         .map(EventFields::to_owned_value)
         .unwrap_or_else(|| json!(""));
-      let content = format!("Task {}: {}", python_string(&outcome), python_string(&summary)).trim_end().to_string();
+      let content = format!("Task {}: {}", event_str(&outcome), event_str(&summary)).trim_end().to_string();
       json!({"role": "system", "content": content})
     }
     event_types::TASK_REOPENED => {
@@ -593,7 +590,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         .filter(|value| is_truthy(*value))
         .map(EventFields::to_owned_value)
         .unwrap_or_else(|| json!(""));
-      json!({"role": "system", "content": format!("Task reopened: {}", python_string(&reason)).trim_end()})
+      json!({"role": "system", "content": format!("Task reopened: {}", event_str(&reason)).trim_end()})
     }
     event_types::TASK_INPUT_ACKNOWLEDGED => render_task_input_acknowledged(event)?,
     _ => return Ok(None),
@@ -635,17 +632,16 @@ fn render_context_compacted<E: EventFields>(event: &E) -> StoreResult<Value> {
 }
 
 fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
-  let kind =
-    event.field("kind").filter(|value| is_truthy(*value)).map(python_string).unwrap_or_else(|| "run".to_string());
+  let kind = event.field("kind").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_else(|| "run".to_string());
   let backend = event
     .field("backend_label")
     .filter(|value| is_truthy(*value))
     .or_else(|| event.field("backend").filter(|value| is_truthy(*value)))
-    .map(python_string)
+    .map(event_str)
     .unwrap_or_default();
-  let state = event.field("state").filter(|value| is_truthy(*value)).map(python_string).unwrap_or_default();
+  let state = event.field("state").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
   let state_word = if state == "withheld" && event.field("withheld").is_some_and(is_truthy) {
-    format!("withheld · {}", python_string(event.field("withheld").expect("checked field")))
+    format!("withheld · {}", event_str(event.field("withheld").expect("checked field")))
   } else if is_truthy(required_field(event, "launch_failed")?) {
     "launch failed".to_string()
   } else {
@@ -660,7 +656,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
   }
   let tool_calls = event.field("tool_calls").filter(|value| !value.is_null());
   if let Some(tool_calls) = tool_calls {
-    let count = python_int(tool_calls).ok_or_else(|| StoreError::new("run header tool_calls must be an integer"))?;
+    let count = event_int(tool_calls).ok_or_else(|| StoreError::new("run header tool_calls must be an integer"))?;
     parts.push(if count == "1" { "1 tool call".to_string() } else { format!("{count} tool calls") });
   }
   Ok(json!({
@@ -679,11 +675,11 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
 }
 
 fn render_task_input_acknowledged<E: EventFields>(event: &E) -> StoreResult<Value> {
-  let input_ids = python_join_strings(event.field("input_ids"), "input_ids")?;
+  let input_ids = join_strings(event.field("input_ids"), "input_ids")?;
   let mut content = format!("Task input(s) acknowledged as handled: {input_ids}");
   if event.field("note").is_some_and(is_truthy) {
     content.push_str(" — ");
-    content.push_str(&python_string(event.field("note").expect("checked field")));
+    content.push_str(&event_str(event.field("note").expect("checked field")));
   }
   Ok(json!({"role": "system", "content": content.trim_end()}))
 }
@@ -732,7 +728,7 @@ fn extract_tool_result_text<E: EventFields>(block: &E) -> StoreResult<Value> {
   match raw {
     None => Ok(json!("")),
     Some(raw) if raw.is_str() => Ok(raw.to_owned_value()),
-    Some(raw) => Ok(json!(python_string(raw))),
+    Some(raw) => Ok(json!(event_str(raw))),
   }
 }
 
@@ -901,7 +897,7 @@ pub fn run_cause<E: EventFields>(events: &[&E]) -> Option<(String, String, usize
         let timestamp = event
           .field("timestamp")
           .filter(|value| is_truthy(*value))
-          .map(|value| python_string(&value.to_owned_value()))
+          .map(|value| event_str(&value.to_owned_value()))
           .unwrap_or_default();
         return Some((text.to_string(), first_line, index, timestamp));
       }
@@ -983,8 +979,8 @@ fn preferred_value<E: EventFields>(event: &E, primary: &str, fallback: &str) -> 
     .unwrap_or_else(|| json!(""))
 }
 
-fn py_string_default<E: EventFields>(event: &E, key: &str, default: &str) -> String {
-  event.field(key).map_or_else(|| default.to_string(), python_string)
+fn string_default<E: EventFields>(event: &E, key: &str, default: &str) -> String {
+  event.field(key).map_or_else(|| default.to_string(), event_str)
 }
 
 fn required_field<'a, E: EventFields>(event: &'a E, key: &str) -> StoreResult<&'a E> {
@@ -993,7 +989,7 @@ fn required_field<'a, E: EventFields>(event: &'a E, key: &str) -> StoreResult<&'
 
 /// Python's `", ".join(value or [])`: an array joins its strings, while a string or object
 /// contributes its characters or keys, matching how Python iterates those values.
-fn python_join_strings<E: EventFields>(value: Option<&E>, field: &str) -> StoreResult<String> {
+fn join_strings<E: EventFields>(value: Option<&E>, field: &str) -> StoreResult<String> {
   let Some(value) = value.filter(|value| is_truthy(*value)) else {
     return Ok(String::new());
   };
@@ -1018,7 +1014,7 @@ fn python_join_strings<E: EventFields>(value: Option<&E>, field: &str) -> StoreR
 }
 
 /// Python's `int(value)` for the JSON shapes a tool-call count can carry.
-fn python_int<E: EventFields>(value: &E) -> Option<String> {
+fn event_int<E: EventFields>(value: &E) -> Option<String> {
   if let Some(flag) = value.as_bool_field() {
     return Some(if flag { "1" } else { "0" }.to_string());
   }
@@ -1032,10 +1028,10 @@ fn python_int<E: EventFields>(value: &E) -> Option<String> {
     let integer = float.trunc();
     return Some(if integer == 0.0 { "0".to_string() } else { format!("{integer:.0}") });
   }
-  value.as_str_field().and_then(parse_python_int_string)
+  value.as_str_field().and_then(parse_int_string)
 }
 
-fn parse_python_int_string(value: &str) -> Option<String> {
+fn parse_int_string(value: &str) -> Option<String> {
   let value = value.trim();
   let (negative, digits) = if let Some(digits) = value.strip_prefix('-') {
     (true, digits)
@@ -1066,42 +1062,42 @@ fn parse_python_int_string(value: &str) -> Option<String> {
   Some(if negative { format!("-{digits}") } else { digits.to_string() })
 }
 
-/// Python's `str(value)`. A string is read in place; other shapes take the owned form that `python_repr` formats.
-fn python_string<E: EventFields>(value: &E) -> String {
+/// Python's `str(value)`. A string is read in place; other shapes take the owned form that `value_repr` formats.
+fn event_str<E: EventFields>(value: &E) -> String {
   match value.as_str_field() {
     Some(text) => text.to_string(),
-    None => python_string_of_value(&value.to_owned_value()),
+    None => value_str(&value.to_owned_value()),
   }
 }
 
-fn python_string_of_value(value: &Value) -> String {
+fn value_str(value: &Value) -> String {
   match value {
     Value::Null => "None".to_string(),
     Value::Bool(true) => "True".to_string(),
     Value::Bool(false) => "False".to_string(),
     Value::String(value) => value.clone(),
     Value::Number(value) => value.to_string(),
-    Value::Array(_) | Value::Object(_) => python_repr(value),
+    Value::Array(_) | Value::Object(_) => value_repr(value),
   }
 }
 
-fn python_repr(value: &Value) -> String {
+fn value_repr(value: &Value) -> String {
   match value {
-    Value::String(value) => python_repr_string(value),
-    Value::Array(values) => format!("[{}]", values.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
+    Value::String(value) => quoted_text(value),
+    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
     Value::Object(values) => format!(
       "{{{}}}",
       values
         .iter()
-        .map(|(key, value)| format!("{}: {}", python_repr_string(key), python_repr(value)))
+        .map(|(key, value)| format!("{}: {}", quoted_text(key), value_repr(value)))
         .collect::<Vec<_>>()
         .join(", ")
     ),
-    _ => python_string_of_value(value),
+    _ => value_str(value),
   }
 }
 
-fn python_repr_string(value: &str) -> String {
+fn quoted_text(value: &str) -> String {
   let quote = if !value.contains('\'') || value.contains('"') { '\'' } else { '"' };
   let mut repr = String::with_capacity(value.len() + 2);
   repr.push(quote);
@@ -1137,11 +1133,11 @@ mod tests {
   fn parity_renderers() -> HashMap<String, Arc<dyn EventRenderer>> {
     let slack: Arc<dyn EventRenderer> = Arc::new(|event: &Value| {
       let content = event.get("content").cloned().unwrap_or_else(|| json!(""));
-      Ok(Some(json!({"role": "system", "content": format!("Posted to Slack: {}", python_string(&content))})))
+      Ok(Some(json!({"role": "system", "content": format!("Posted to Slack: {}", event_str(&content))})))
     });
     let discord: Arc<dyn EventRenderer> = Arc::new(|event: &Value| {
       let content = event.get("content").cloned().unwrap_or_else(|| json!(""));
-      Ok(Some(json!({"role": "system", "content": format!("Posted to Discord: {}", python_string(&content))})))
+      Ok(Some(json!({"role": "system", "content": format!("Posted to Discord: {}", event_str(&content))})))
     });
     let web_reply: Arc<dyn EventRenderer> = Arc::new(|event: &Value| {
       Ok(Some(json!({"role": "web_reply", "content": event.get("content").cloned().unwrap_or_else(|| json!(""))})))
@@ -1159,7 +1155,7 @@ mod tests {
       })))
     });
     let scheduled_run_skipped: Arc<dyn EventRenderer> = Arc::new(|event: &Value| {
-      let value = |key: &str| python_string(event.get(key).unwrap_or(&json!("")));
+      let value = |key: &str| event_str(event.get(key).unwrap_or(&json!("")));
       Ok(Some(json!({
         "role": "system",
         "content": format!("Scheduled run of '{}' skipped at {}: {}", value("task"), value("skipped_at"), value("reason")),
@@ -1202,7 +1198,7 @@ mod tests {
   }
 
   #[test]
-  fn parity_fixture_matches_python_frames_for_chat_logs_and_synthetic_sequences() {
+  fn parity_fixture_matches_frames_for_chat_logs_and_synthetic_sequences() {
     // Python: src/runtime/message_aggregator.py:539-559 includes the nullable route on every delegation card.
     let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/message_aggregator.json")).unwrap();
     let renderers = parity_renderers();

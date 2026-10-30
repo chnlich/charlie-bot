@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed, python_repr};
+use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed, value_repr};
 use crate::archive;
 use crate::audio::{AudioQueue, PREVIEW_QUEUE_SECONDS};
 use crate::config::VoiceSettings;
@@ -429,16 +429,16 @@ fn preview_end_devices(text: &str) -> Result<Option<Value>, String> {
   let Some(devices) = devices.as_object() else {
     return Err(format!(
       "end frame devices must carry exactly {}: {}",
-      python_repr(&json!(DEVICE_FIELDS)),
-      python_repr(devices)
+      value_repr(&json!(DEVICE_FIELDS)),
+      value_repr(devices)
     ));
   };
   let fields_match = devices.len() == DEVICE_FIELDS.len() && DEVICE_FIELDS.iter().all(|key| devices.contains_key(*key));
   if !fields_match {
     return Err(format!(
       "end frame devices must carry exactly {}: {}",
-      python_repr(&json!(DEVICE_FIELDS)),
-      python_repr(&Value::Object(devices.clone()))
+      value_repr(&json!(DEVICE_FIELDS)),
+      value_repr(&Value::Object(devices.clone()))
     ));
   }
   Ok(Some(Value::Object(devices.clone())))
@@ -641,7 +641,7 @@ mod tests {
   }
 
   #[test]
-  fn control_frames_keep_python_error_text_and_device_order() {
+  fn control_frames_keep_error_text_and_device_order() {
     assert_eq!(preview_end_devices("{bad"), Err("malformed preview control frame '{bad'".to_string()));
     assert_eq!(
       preview_end_devices("{\"type\": \"other\"}"),

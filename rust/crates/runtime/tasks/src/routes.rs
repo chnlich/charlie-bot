@@ -1525,7 +1525,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn delegate_field_contract_and_unknown_session_match_python() {
+  async fn delegate_field_contract_and_unknown_session_match_recorded() {
     // Python: tests/test_task_execution.py::test_delegate_creates_one_child_and_replays_are_stable.
     let (_home, features) = feature_context();
     let router = routes(&features);
@@ -1688,7 +1688,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_send_message_model_reads_valid_utf16_and_defaulted_fields() {
+  async fn send_message_model_reads_valid_utf16_and_defaulted_fields() {
     // Python: src/runtime/api/chat.py:48-80 answers 202 for a valid body; without an executor the
     // dispatch records "execution adapters register in the next stage"
     // (src/runtime/session_dispatch.py:430-502), so the body carries launch false with that reason.
@@ -1723,7 +1723,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_send_message_reports_every_uploaded_file_error_with_the_content_error() {
+  async fn send_message_reports_every_uploaded_file_error_with_the_content_error() {
     // Python: src/infra/models.py:630-640 validates content and each uploaded_files item in declaration
     // order, so a wrong content and a bad item give two errors in one 422 body.
     let (_home, features) = feature_context();
@@ -1791,7 +1791,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_send_message_validation_reports_fastapi_body_errors() {
+  async fn send_message_validation_reports_request_body_errors() {
     let (_home, features) = feature_context();
     add_session(&features, "synthetic-session");
     let router = routes(&features);
@@ -1879,7 +1879,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_send_message_requires_request_id_and_replays_one_event() {
+  async fn send_message_requires_request_id_and_replays_one_event() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-request-session").await;
     install_dispatcher(&features);
@@ -1923,7 +1923,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_dispatch_error_after_admission_returns_accepted_with_error() {
+  async fn dispatch_error_after_admission_returns_accepted_with_error() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-dispatch-error").await;
     install_dispatcher(&features);
@@ -1952,7 +1952,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_retry_run_model_requires_strings_and_forbids_extras() {
+  async fn retry_run_model_requires_strings_and_forbids_extras() {
     let (_home, features) = feature_context();
     add_session(&features, "synthetic-session");
     let router = routes(&features);
@@ -2042,7 +2042,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn python_cancel_run_model_requires_request_id_and_forbids_extras() {
+  async fn cancel_run_model_requires_request_id_and_forbids_extras() {
     let (_home, features) = feature_context();
     let router = routes(&features);
     let path = "/api/sessions/synthetic-session/runs/synthetic-run/cancel";

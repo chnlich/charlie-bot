@@ -66,7 +66,7 @@ pub async fn search(
   let key = credentials
     .get("gemini", "api_key")
     .filter(|value| value.is_truthy())
-    .map(|value| value.python_str())
+    .map(|value| value.value_str())
     .ok_or_else(|| "web search is not configured: credentials.yaml has no gemini.api_key".to_string())?;
   let url = format!("{}/models/{SEARCH_MODEL}:generateContent", endpoint.trim_end_matches('/'));
   let payload = json!({

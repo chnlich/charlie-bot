@@ -533,7 +533,7 @@ async fn page_says_when_the_ledger_was_last_captured() {
 }
 
 #[test]
-fn local_stamp_matches_python_strftime_in_the_system_zone() {
+fn local_stamp_matches_strftime_in_the_system_zone() {
   let moment = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("the instant is in range");
   let unix_seconds = moment.unix_timestamp() as libc::time_t;
   // SAFETY: `tm` contains integer and pointer fields, and `localtime_r` initializes them for this instant.

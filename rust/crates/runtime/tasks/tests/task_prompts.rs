@@ -543,7 +543,7 @@ async fn overlay_states_of_a_launch_are_judged_and_reported() {
 
   let missing = assemble_overlay(&harness, &meta, Some("no-such-overlay")).await;
   assert!(missing.declared);
-  assert_eq!(missing.overlay_error.as_ref().map(|error| error.python_class_name()), Some("FileNotFoundError"));
+  assert_eq!(missing.overlay_error.as_ref().map(|error| error.class_name()), Some("FileNotFoundError"));
   assert!(!has_ref(&missing.snapshot, "prompts/model_overlays/no-such-overlay.md"));
   assert_eq!(resolve_launch_overlay(&backend_option(Some("none"))), (None, true));
 }

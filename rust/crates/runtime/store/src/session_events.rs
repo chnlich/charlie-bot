@@ -678,7 +678,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn compaction_inputs_persist_the_python_synthesized_event_shapes() {
+  async fn compaction_inputs_persist_the_synthesized_event_shapes() {
     let (_home, store) = make_test_store();
     let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
     assert!(store.handle_compaction_event("synthetic", &json!({"type": "user"})).await.unwrap().is_none());

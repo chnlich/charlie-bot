@@ -33,7 +33,7 @@ use super::relay::{self, ServerRecord, TurnRecord};
 use charliebot_agents::cli_base::apply_proxy_env;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::identity::read_pid_stat;
-use charliebot_agents::transport::kill::{kill_process_group, python_exit_code};
+use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{SpawnSetup, SpawnSpec, SpawnedChild, spawn_detached_files};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::read_run_record_file;
@@ -1256,7 +1256,7 @@ impl OpenCodeServer {
     }
     tokio::spawn(async move {
       let code = match child.wait().await {
-        Ok(status) => Ok(python_exit_code(status)),
+        Ok(status) => Ok(exit_code(status)),
         Err(error) => Err(error.to_string()),
       };
       if exit_tx.send(Some(code)).is_err() {

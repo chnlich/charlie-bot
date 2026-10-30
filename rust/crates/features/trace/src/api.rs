@@ -425,7 +425,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn query_and_path_helpers_keep_python_order_and_encoding() {
+  fn query_and_path_helpers_keep_order_and_encoding() {
     let query = query_pairs(Some("trace=one&trace=two+words&slim=No&slim=yes"));
     assert_eq!(
       query.iter().filter(|(name, _)| name == "trace").map(|(_, value)| value.as_str()).collect::<Vec<_>>(),

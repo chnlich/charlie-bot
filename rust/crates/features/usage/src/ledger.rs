@@ -182,7 +182,7 @@ impl UsageLedger {
     sig: &str,
     records: &[StoredRecord],
   ) -> anyhow::Result<usize> {
-    let captured_at = python_utc_isoformat(OffsetDateTime::now_utc())?;
+    let captured_at = utc_isoformat_text(OffsetDateTime::now_utc())?;
     self.conn.execute_batch("SAVEPOINT record_file")?;
     let write_result = (|| -> anyhow::Result<()> {
       for record in records {
@@ -246,7 +246,7 @@ impl UsageLedger {
   pub fn mark_capture_finished(&mut self, host: &str) -> anyhow::Result<()> {
     self.conn.execute(
       sql::LEDGER_META_UPSERT_SQL,
-      params![format!("last_capture_at:{host}"), python_utc_isoformat(OffsetDateTime::now_utc())?],
+      params![format!("last_capture_at:{host}"), utc_isoformat_text(OffsetDateTime::now_utc())?],
     )?;
     Ok(())
   }
@@ -497,7 +497,7 @@ fn rows_from_accs(
   Ok((rows, starts))
 }
 
-fn python_utc_isoformat(now: OffsetDateTime) -> anyhow::Result<String> {
+fn utc_isoformat_text(now: OffsetDateTime) -> anyhow::Result<String> {
   let micros = now.nanosecond() / 1_000;
   let now = now.replace_nanosecond(micros * 1_000)?;
   let formatted = now.format(&Rfc3339)?;

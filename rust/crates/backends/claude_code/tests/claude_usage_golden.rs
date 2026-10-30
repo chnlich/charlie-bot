@@ -21,7 +21,7 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
-const PYTHON_FIXTURE: &str = include_str!("fixtures/claude_usage_golden.json");
+const GOLDEN_FIXTURE: &str = include_str!("fixtures/claude_usage_golden.json");
 
 const ACCOUNT: &str = "work (default)";
 
@@ -47,8 +47,8 @@ const SID_ORPHAN: &str = "22222222-3333-4444-8555-666666666666";
 const SID_FRESH: &str = "33333333-4444-4555-8666-777777777777";
 const TID: &str = "f0e1d2c3-a4b5-4c6d-8e7f-0a1b2c3d4e5f";
 
-fn python_reference(mode: &str, data: &Value) -> Value {
-  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+fn golden_reference(mode: &str, data: &Value) -> Value {
+  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let mut expected = fixture["expected_by_mode"][mode].clone();
   if mode == "read" {
@@ -97,7 +97,7 @@ fn transcript_text(lines: &[&str]) -> String {
 }
 
 #[test]
-fn read_matches_the_python_usage_log_on_synthetic_transcripts() {
+fn read_matches_the_usage_log_on_synthetic_transcripts() {
   let root = TempDir::new().unwrap();
   let projects = root.path().join("claude/projects/-synthetic-project");
   fs::create_dir_all(&projects).unwrap();
@@ -140,7 +140,7 @@ fn read_matches_the_python_usage_log_on_synthetic_transcripts() {
     rust_cases.push(json!({"signature": signature, "records": records.iter().map(record_json).collect::<Vec<_>>()}));
   }
 
-  let python = python_reference(
+  let python = golden_reference(
     "read",
     &json!({
       "root": root.path(),
@@ -161,7 +161,7 @@ fn read_matches_the_python_usage_log_on_synthetic_transcripts() {
 }
 
 #[test]
-fn transform_matches_the_python_usage_panel_on_synthetic_responses() {
+fn transform_matches_the_usage_panel_on_synthetic_responses() {
   let cases = [
     json!({"fiveHour": {"utilization": 12.5, "resetsAt": "2026-10-18T15:00:00Z"},
            "sevenDay": {"utilization": 40, "resetsAt": "2026-10-20T00:00:00Z"}}),
@@ -197,7 +197,7 @@ fn transform_matches_the_python_usage_panel_on_synthetic_responses() {
     .collect();
 
   let python_root = TempDir::new().unwrap();
-  let python = python_reference(
+  let python = golden_reference(
     "transform",
     &json!({
       "root": python_root.path(),
@@ -349,7 +349,7 @@ fn sweep_summary(sweep: &SourceSweep, directories: &BTreeMap<String, PathBuf>) -
 }
 
 #[test]
-fn sweep_matches_the_python_sweep_dry_and_real_on_the_same_spec() {
+fn sweep_matches_the_sweep_dry_and_real_on_the_same_spec() {
   let spec = sweep_spec();
   let rust_root = TempDir::new().unwrap();
   let host =
@@ -365,7 +365,7 @@ fn sweep_matches_the_python_sweep_dry_and_real_on_the_same_spec() {
   let rust = json!({"dry_untouched": dry_untouched, "dry": dry_summary, "real": sweep_summary(&real, &directories)});
 
   let python_root = TempDir::new().unwrap();
-  let python = python_reference("sweep", &json!({"root": python_root.path(), "spec": spec}));
+  let python = golden_reference("sweep", &json!({"root": python_root.path(), "spec": spec}));
 
   assert_eq!(rust, python);
   assert_eq!(rust["dry_untouched"], json!(true));

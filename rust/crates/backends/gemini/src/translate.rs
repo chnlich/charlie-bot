@@ -13,12 +13,16 @@ use charliebot_agents::event_builders::{
 };
 
 /// One gemini stream's translator. It holds the assistant text that the stream has not flushed yet.
-#[derive(Default)]
 pub struct GeminiTranslator {
   text_buffer: String,
 }
 
 impl GeminiTranslator {
+  /// A translator for one stream, with no text buffered yet.
+  pub fn new() -> Self {
+    Self { text_buffer: String::new() }
+  }
+
   /// Translates one stream-json event. A type this translator does not handle flushes the buffer, as Python's fallthrough.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let Some(event) = event.as_object() else {
@@ -127,7 +131,7 @@ mod tests {
 
   #[test]
   fn each_event_type_maps_to_the_translation() {
-    let mut translator = GeminiTranslator::default();
+    let mut translator = GeminiTranslator::new();
     let mut translate = |event: Value| translator.translate_event(&event).unwrap();
     assert_eq!(
       translate(json!({"type": "init", "session_id": "sid"})),
@@ -168,7 +172,7 @@ mod tests {
 
   #[test]
   fn delta_messages_join_the_buffer_until_a_flushing_event() {
-    let mut translator = GeminiTranslator::default();
+    let mut translator = GeminiTranslator::new();
     assert!(
       translator
         .translate_event(&json!({"type": "message", "role": "assistant", "content": "Hel", "delta": true}))
@@ -183,7 +187,7 @@ mod tests {
 
   #[test]
   fn a_failed_tool_without_a_message_reports_the_str_of_its_error() {
-    let mut translator = GeminiTranslator::default();
+    let mut translator = GeminiTranslator::new();
     let events = translator
       .translate_event(&json!({"type": "tool_result", "status": "error", "tool_id": "Bash", "error": {"code": 7}}))
       .unwrap();

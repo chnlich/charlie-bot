@@ -308,7 +308,7 @@ the validated checkout root held in typed startup state. Python reads this path 
 | `spawner_prompt::verify_contract_tokens` | `src/runtime/spawner_prompt.py:143` |
 | `spawner_prompt::worktree_binding_tokens` | `src/runtime/spawner_prompt.py:154` |
 | `spawner_prompt::read_text`, `spawner_prompt::TextReadError` | `src/runtime/task_prompts.py:218` (`Path.read_text`, its error texts) |
-| `verify_trailer::VERIFY_RESULT_TRAILER_PATTERN`, `verify_result_trailer_re`, `verify_result_trailer_expected` | `src/runtime/verify_trailer.py:14-15` |
+| `verify_trailer::VERIFY_RESULT_TRAILER_PATTERN`, `verify_result_trailer_expected` | `src/runtime/verify_trailer.py:14-15` |
 | `review_text::review_rules_text` | `src/runtime/review.py:65` |
 | `review_text::review_numbered_steps` | `src/runtime/review.py:77` |
 | `review_text::review_published_branch` | `src/runtime/review.py:107` |

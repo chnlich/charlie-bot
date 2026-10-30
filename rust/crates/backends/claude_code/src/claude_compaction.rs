@@ -422,14 +422,19 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
     account_label,
     timeout_duration,
   } = run;
+  let log_session_id = if trigger == "idle" {
+    session_cgroup_id.context("idle compaction has no CharlieBot session id")?
+  } else {
+    session_id
+  };
   let program = argv.first().context("compaction argv is empty")?;
   let Some(transcript) = claude_accounts::transcript_path(config_dir, session_id)? else {
     let error = format!("no transcript for {session_id} under {}", config_dir.display());
-    return fail(emit, &error, session_id, account_label, model, failure_trigger).await;
+    return fail(emit, &error, log_session_id, account_label, model, failure_trigger).await;
   };
   let before = count_compact_boundaries(&transcript)?;
   let baseline = newest_cost_state_model_usage(&transcript)?;
-  tracing::info!(target: "charliebot_agents", cc_session_id = session_id, pre_tokens, session = %session_id, account = account_label, trigger, "claude_compaction_starting");
+  tracing::info!(target: "charliebot_agents", cc_session_id = session_id, pre_tokens, session = %log_session_id, account = account_label, trigger, "claude_compaction_starting");
   let spec = SpawnSpec::new(
     program,
     argv.iter().skip(1).map(OsString::from).collect(),
@@ -442,7 +447,7 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
     Ok(spawned) => spawned.child,
     Err(error) => {
       let error = format!("could not start {program}: {error}");
-      return fail(emit, &error, session_id, account_label, model, failure_trigger).await;
+      return fail(emit, &error, log_session_id, account_label, model, failure_trigger).await;
     }
   };
   let pid = child.id().expect("spawned compaction process has a pid");
@@ -469,7 +474,7 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
       stdout_reader.await.context("joining timed-out compaction stdout reader")??;
       stderr_reader.await.context("joining timed-out compaction stderr reader")??;
       let error = format!("timed out after {} s", timeout_duration.as_secs());
-      return fail(emit, &error, session_id, account_label, model, failure_trigger).await;
+      return fail(emit, &error, log_session_id, account_label, model, failure_trigger).await;
     }
   };
   let stdout = stdout_reader.await.context("joining compaction stdout reader")??;
@@ -487,7 +492,7 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
       error,
       models = ?outcome.models,
       stderr = %stderr_tail,
-      session = %session_id,
+      session = %log_session_id,
       account = account_label,
       trigger,
       "claude_compaction_failed"
@@ -514,7 +519,7 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
     post_tokens = ?outcome.post_tokens,
     cache_read_tokens = ?outcome.cache_read_tokens,
     models = ?outcome.models,
-    session = %session_id,
+    session = %log_session_id,
     account = account_label,
     trigger,
     "claude_compaction_done"
@@ -526,12 +531,12 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
 async fn fail(
   emit: &EmitFn,
   error: &str,
-  session_id: &str,
+  log_session_id: &str,
   account_label: &str,
   model: &str,
   trigger: Option<&str>,
 ) -> anyhow::Result<CompactionOutcome> {
-  tracing::warn!(target: "charliebot_agents", error, session = %session_id, account = account_label, trigger, "claude_compaction_failed");
+  tracing::warn!(target: "charliebot_agents", error, session = %log_session_id, account = account_label, trigger, "claude_compaction_failed");
   emit(charliebot_agents::event_builders::make_context_compact_failed_event(Some(error), Some(model), trigger)).await?;
   Ok(CompactionOutcome {
     ok: false,

@@ -1260,6 +1260,7 @@ mod tests {
     env: Env,
     cwd: PathBuf,
     config_dir: PathBuf,
+    session_id: String,
     account_label: String,
     pre_tokens: Option<i64>,
     trigger: String,
@@ -1276,6 +1277,7 @@ mod tests {
         env: run.env.clone(),
         cwd: run.cwd.to_path_buf(),
         config_dir: run.config_dir.to_path_buf(),
+        session_id: run.session_id.to_string(),
         account_label: run.account_label.to_string(),
         pre_tokens: run.pre_tokens,
         trigger: run.trigger.to_string(),
@@ -1400,6 +1402,8 @@ mod tests {
     assert!(run.argv.iter().any(|arg| arg == EXCLUDE_DYNAMIC_SECTIONS_FLAG));
     assert!(run.argv.windows(2).any(|pair| pair[0] == "--model" && pair[1] == "claude-fable-5-1"));
     assert_eq!(run.cwd, cfg.sessions_dir().join(&meta.id));
+    // The transcript lookup inside the compaction reads the Claude session id, not the CharlieBot one.
+    assert_eq!(run.session_id, CC_SESSION_ID);
     assert_eq!(run.config_dir, account_dir);
     assert_eq!(run.pre_tokens, Some(120_000));
     assert_eq!((run.trigger.as_str(), run.failure_trigger.as_deref()), ("idle", Some("idle")));
@@ -1439,6 +1443,7 @@ mod tests {
     started.await.unwrap();
 
     let [run]: [RecordedRun; 1] = runs.lock().unwrap().clone().try_into().unwrap();
+    assert_eq!(run.session_id, CC_SESSION_ID);
     assert_eq!(run.config_dir, default_dir);
     assert_eq!(run.env.get(login_dirs::CLAUDE_CONFIG_DIR_ENV), Some(&default_dir.to_string_lossy().into_owned()));
     assert_eq!(run.account_label, "default");

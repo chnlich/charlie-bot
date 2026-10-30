@@ -508,7 +508,11 @@ pub fn arm_for_round(ctx: IdleArmContext<'_>) -> BoxFuture<'_, anyhow::Result<()
             &cfg,
             &option,
             &account,
-            IdleProcessIdentity { session_id: session_id.clone(), cc_session_id, run_kind: RunKind::ManagerTurn },
+            IdleProcessIdentity {
+              session_id: session_id.clone(),
+              cc_session_id: cc_session_id.clone(),
+              run_kind: RunKind::ManagerTurn,
+            },
             &base_env,
           )?;
           let run = idle_run_options(&option, &account, &cwd, pre_tokens, argv, env);
@@ -517,7 +521,9 @@ pub fn arm_for_round(ctx: IdleArmContext<'_>) -> BoxFuture<'_, anyhow::Result<()
             env: run.env,
             cwd: &run.cwd,
             config_dir: Path::new(&run.config_dir),
-            session_id: &session_id,
+            // The compaction looks the transcript up by the Claude session id; the CharlieBot one stays in
+            // `session_cgroup_id` and the `session` log fields.
+            session_id: &cc_session_id,
             family: &run.family,
             model: &run.model,
             trigger: &run.trigger,

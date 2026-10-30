@@ -667,6 +667,7 @@ pub struct CompactionRun<'a> {
   pub env: Env,
   pub cwd: &'a Path,
   pub config_dir: &'a Path,
+  /// The Claude session id: the transcript file name under `config_dir` and the `--resume` value.
   pub session_id: &'a str,
   pub family: &'a str,
   pub model: &'a str,
@@ -675,6 +676,7 @@ pub struct CompactionRun<'a> {
   pub pre_tokens: Option<i64>,
   pub emit: &'a EmitFn,
   pub cfg: &'a CharlieBotConfig,
+  /// The CharlieBot session id, naming the compaction process's cgroup and its per-session hooks.
   pub session_cgroup_id: Option<&'a str>,
   pub account_label: &'a str,
   pub timeout_duration: Duration,

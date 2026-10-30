@@ -34,16 +34,9 @@ use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
-const BOOTSTRAP_GZIP_MEMO_LIMIT: usize = 16;
 
-type BodyGzipMemo = Mutex<LruCache<Vec<u8>, Vec<u8>>>;
 type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Vec<u8>>>;
 
-fn body_gzip_memo(limit: usize) -> BodyGzipMemo {
-  Mutex::new(LruCache::new(NonZeroUsize::new(limit).expect("the gzip memo limit is nonzero")))
-}
-
-static BOOTSTRAP_GZIP_MEMO: LazyLock<BodyGzipMemo> = LazyLock::new(|| body_gzip_memo(BOOTSTRAP_GZIP_MEMO_LIMIT));
 static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
   Mutex::new(LruCache::new(NonZeroUsize::new(FILE_GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")))
 });
@@ -147,6 +140,63 @@ impl PartialEq for PageBootstrapKey {
       && Arc::ptr_eq(&self.config, &other.config)
       && Arc::ptr_eq(&self.projection, &other.projection)
   }
+}
+
+/// The bootstrap route's JSON body one request built last, with its gzip when a request asked for one.
+///
+/// The body carries the session's message tail: the largest session's is about a hundred megabytes, and building and
+/// serializing it takes about two hundred milliseconds. A repeat request whose payload inputs still hold their value
+/// serves the bytes already built. The key is the page bootstrap's, so a page and this route memoize the same payload
+/// under the same inputs; one entry holds one session, as the page's memo does.
+#[derive(Default)]
+struct BootstrapBodyMemo {
+  entry: Mutex<Option<(PageBootstrapKey, Bytes, Option<Bytes>)>>,
+}
+
+static BOOTSTRAP_BODY_MEMO: LazyLock<BootstrapBodyMemo> = LazyLock::new(BootstrapBodyMemo::default);
+
+/// The bootstrap payload's JSON body for `meta`, and its gzip when `accepts_gzip`, from `memo` when every payload
+/// input still holds its value.
+fn bootstrap_body(
+  memo: &BootstrapBodyMemo,
+  store: &Store,
+  registry: &Registry,
+  cfg: &Arc<CharlieBotConfig>,
+  meta: &SessionMetadata,
+  accepts_gzip: bool,
+) -> StoreResult<(Bytes, Option<Bytes>)> {
+  let key = page_bootstrap_key(store, registry, cfg, meta)?;
+  let mut entry = memo.entry.lock().expect("the bootstrap body memo mutex is not poisoned");
+  let cached = match &key {
+    Some(current) => match entry.as_ref() {
+      Some((cached, body, gzip)) if cached == current => Some((body.clone(), gzip.clone())),
+      _ => None,
+    },
+    None => None,
+  };
+  let (body, mut gzip, held) = match cached {
+    Some(cached) => (cached.0, cached.1, true),
+    None => {
+      let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
+      let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload));
+      let held = key.is_some();
+      if let Some(key) = key {
+        *entry = Some((key, body.clone(), None));
+      }
+      (body, None, held)
+    }
+  };
+  if !accepts_gzip {
+    return Ok((body, None));
+  }
+  if gzip.is_none() {
+    let compressed = Bytes::from(gzip_level_one(&body));
+    if held {
+      entry.as_mut().expect("the memo holds the body it built").2 = Some(compressed.clone());
+    }
+    gzip = Some(compressed);
+  }
+  Ok((body, gzip))
 }
 
 /// The bootstrap payload of `meta`, with its text taken from `memo` when every payload input still holds its value.
@@ -263,9 +313,14 @@ async fn session_bootstrap(
   };
   let store = Arc::clone(&features.store);
   let registry = Arc::clone(&features.registry);
-  let result = tokio::task::spawn_blocking(move || build_bootstrap_payload(&store, &registry, &cfg, &meta)).await;
+  let accepts_gzip = request_wants_gzip(&request);
+  let result = tokio::task::spawn_blocking(move || {
+    bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &registry, &cfg, &meta, accepts_gzip)
+  })
+  .await;
   match result {
-    Ok(Ok(payload)) => gzip_json_body(&request, charliebot_compat::json::fast_json_bytes(&payload)),
+    Ok(Ok((_body, Some(gzip)))) => json_bytes_response(gzip, Some("gzip")),
+    Ok(Ok((body, None))) => json_bytes_response(body, None),
     Ok(Err(error)) => store_error(error),
     Err(error) => store_error(StoreError::new(error.to_string())),
   }
@@ -758,24 +813,6 @@ fn events_file_not_found() -> Response {
   responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Events file not found"}))
 }
 
-fn gzip_json_body(request: &Request<Body>, body: Vec<u8>) -> Response {
-  if !request_wants_gzip(request) {
-    return json_bytes_response(Bytes::from(body), None);
-  }
-  let compressed = {
-    let mut memo = BOOTSTRAP_GZIP_MEMO.lock().expect("bootstrap gzip memo mutex is not poisoned");
-    match memo.get(&body).cloned() {
-      Some(compressed) => compressed,
-      None => {
-        let compressed = gzip_level_one(&body);
-        memo.put(body, compressed.clone());
-        compressed
-      }
-    }
-  };
-  json_bytes_response(Bytes::from(compressed), Some("gzip"))
-}
-
 fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Vec<u8>> {
   let mtime_ns = metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000;
   let size = metadata.size();
@@ -898,11 +935,12 @@ mod tests {
     axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("bootstrap body").to_vec()
   }
 
-  /// The bootstrap's body-keyed gzip memo: the first gzip answer deflates the plain body once,
-  /// and a repeat serves the stored bytes without charging the deflator again.
+  /// The bootstrap's body memo: a repeat serves the body it built until an event moves the projection, and the first
+  /// gzip answer deflates that body once while later ones reuse the stored gzip.
   #[tokio::test]
-  async fn a_repeat_bootstrap_deflates_no_further_body_bytes() {
+  async fn a_repeat_bootstrap_serves_its_body_until_an_event_moves_the_projection() {
     let (_home, features) = feature_context();
+    let cfg = features.config.get().expect("the test config loads");
     let meta = crate::test_support::create_node(&features.store, "gzip-bootstrap", None, TaskProfile::Manager).await;
     features
       .store
@@ -910,6 +948,7 @@ mod tests {
       .await
       .unwrap();
     let plain = bootstrap_body(&features, &meta.id, false).await;
+    assert_eq!(bootstrap_body(&features, &meta.id, false).await, plain, "an unchanged payload keeps its body");
 
     let before = charliebot_compat::compression::level_one_bytes_deflated();
     let first = bootstrap_body(&features, &meta.id, true).await;
@@ -923,6 +962,18 @@ mod tests {
     let second = bootstrap_body(&features, &meta.id, true).await;
     assert_eq!(charliebot_compat::compression::level_one_bytes_deflated() - before, 0);
     assert_eq!(first, second, "the memo serves the stored gzip bytes");
+
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "assistant", "content": "a reply that moves the projection"}))
+      .await
+      .unwrap();
+    let after = bootstrap_body(&features, &meta.id, false).await;
+    let fresh = charliebot_compat::json::fast_json_bytes(
+      &build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap(),
+    );
+    assert_ne!(after, plain, "a new event rebuilds the body");
+    assert_eq!(after, fresh, "the rebuilt body matches a fresh payload");
   }
 
   /// The page bootstrap memo serves the text it built until an event moves the projection, then rebuilds it.

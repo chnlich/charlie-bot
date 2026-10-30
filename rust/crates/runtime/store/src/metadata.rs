@@ -111,16 +111,6 @@ pub enum TaskProfile {
   Worker,
 }
 
-/// Scheduled task result.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LastRunStatus {
-  Running,
-  Success,
-  Failed,
-  Skipped,
-}
-
 /// Task type persisted in `TaskSpec`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TaskType {

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The check script sits beside the hooks directory, in the checkout that installed these hooks; the staged
+# files come from the repository being committed to.
+helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 staged_files=()
@@ -9,5 +12,5 @@ while IFS= read -r -d '' file; do
 done < <(git diff --cached --name-only -z --diff-filter=ACMR)
 
 if [[ ${#staged_files[@]} -gt 0 ]]; then
-  LEAK_SCAN_STAGED=1 tools/check-skills-host-leak.sh "${staged_files[@]}"
+  LEAK_SCAN_STAGED=1 "$helper_dir/check-skills-host-leak.sh" "${staged_files[@]}"
 fi

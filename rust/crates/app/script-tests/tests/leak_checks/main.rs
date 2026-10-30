@@ -368,22 +368,21 @@ fn the_stdin_mode_exit_codes() {
 
 // -- the git hooks and the host scan (tests/test_host_leak_hooks.py) --
 
-/// A scratch repository carrying a copy of the leak tools and the hooks path installed.
-fn leak_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
-  let repo = sandbox.dir("leak-repo");
-  let tools = repo.join("tools");
+/// Copies the leak tools and the two hooks into `checkout`, at the paths a real checkout uses.
+fn copy_leak_tools(checkout: &Path) {
+  let tools = checkout.join("tools");
   std::fs::create_dir_all(tools.join("git-hooks")).unwrap();
   harness::copy_file(&leak_scanner(), &tools.join("check-skills-host-leak.sh"));
   harness::copy_file(&harness::repo_root().join("tools/leak-patterns.sh"), &tools.join("leak-patterns.sh"));
   for hook in ["pre-commit", "commit-msg"] {
     harness::copy_file(&harness::repo_root().join("tools/git-hooks").join(hook), &tools.join("git-hooks").join(hook));
   }
-  let patterns = sandbox.dir("patterns");
-  std::fs::write(patterns.join("secretmarker.txt"), "secretmarker\n").unwrap();
+}
 
+/// The git variables that keep a test's commits independent of the host configuration and identity.
+fn pinned_git_env(sandbox: &Sandbox) -> Env {
   let mut env = sandbox.env();
   env.insert("HOME".to_string(), sandbox.root().display().to_string());
-  env.insert("EXTRA_PATTERNS_FILE".to_string(), patterns.join("secretmarker.txt").display().to_string());
   env.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
   env.insert("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string());
   for name in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] {
@@ -392,8 +391,37 @@ fn leak_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
   for name in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
     env.insert(name.to_string(), "123+example@users.noreply.github.com".to_string());
   }
+  env
+}
+
+/// A scratch repository carrying a copy of the leak tools and the hooks path installed.
+fn leak_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
+  let repo = sandbox.dir("leak-repo");
+  copy_leak_tools(&repo);
+  let patterns = sandbox.dir("patterns");
+  std::fs::write(patterns.join("secretmarker.txt"), "secretmarker\n").unwrap();
+
+  let mut env = pinned_git_env(sandbox);
+  env.insert("EXTRA_PATTERNS_FILE".to_string(), patterns.join("secretmarker.txt").display().to_string());
   git(&env, sandbox.root(), &["init", "-q", "-b", "main", repo.to_str().unwrap()]);
   git(&env, &repo, &["config", "core.hooksPath", "tools/git-hooks"]);
+  (repo, env)
+}
+
+/// A repository to commit to whose `core.hooksPath` is an absolute path into a second checkout that holds the
+/// leak tools and the hooks; the repository itself has no `tools/` directory.
+fn cross_checkout_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
+  let hooks_checkout = sandbox.dir("hooks-checkout");
+  copy_leak_tools(&hooks_checkout);
+  let repo = sandbox.dir("committer-repo");
+  let patterns = sandbox.dir("patterns");
+  std::fs::write(patterns.join("secretmarker.txt"), "secretmarker\n").unwrap();
+
+  let mut env = pinned_git_env(sandbox);
+  env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("committer-home").display().to_string());
+  env.insert("EXTRA_PATTERNS_FILE".to_string(), patterns.join("secretmarker.txt").display().to_string());
+  git(&env, sandbox.root(), &["init", "-q", "-b", "main", repo.to_str().unwrap()]);
+  git(&env, &repo, &["config", "core.hooksPath", hooks_checkout.join("tools/git-hooks").to_str().unwrap()]);
   (repo, env)
 }
 
@@ -435,6 +463,43 @@ fn the_hooks_check_staged_bytes_and_commit_fields() {
   assert!(commit.stderr.contains("committer identity"), "{}", commit.stderr);
 
   assert_eq!(leak_run(&repo, &env, &["commit", "-m", "clean message"]).code, 0);
+}
+
+#[test]
+fn the_installed_checkouts_hooks_check_the_committers_tree() {
+  let sandbox = Sandbox::new();
+  let (repo, env) = cross_checkout_repo(&sandbox);
+
+  std::fs::write(repo.join("leaked.txt"), "secretmarker\n").unwrap();
+  assert_eq!(leak_run(&repo, &env, &["add", "leaked.txt"]).code, 0);
+  let commit = leak_run(&repo, &env, &["commit", "-m", "add leaked file"]);
+  assert_ne!(commit.code, 0, "{}", commit.describe());
+  assert!(commit.stderr.contains("leaked.txt"), "{}", commit.stderr);
+
+  assert_eq!(leak_run(&repo, &env, &["reset", "-q"]).code, 0);
+  std::fs::remove_file(repo.join("leaked.txt")).unwrap();
+  std::fs::write(repo.join("clean.txt"), "clean\n").unwrap();
+  assert_eq!(leak_run(&repo, &env, &["add", "clean.txt"]).code, 0);
+  let commit = leak_run(&repo, &env, &["commit", "-m", "add clean file"]);
+  assert_eq!(commit.code, 0, "{}", commit.describe());
+
+  std::fs::write(repo.join("clean2.txt"), "clean\n").unwrap();
+  assert_eq!(leak_run(&repo, &env, &["add", "clean2.txt"]).code, 0);
+  let commit = leak_run(&repo, &env, &["commit", "-m", "note secretmarker"]);
+  assert_ne!(commit.code, 0, "{}", commit.describe());
+  assert!(commit.stderr.contains("commit message"), "{}", commit.stderr);
+
+  assert_eq!(leak_run(&repo, &env, &["reset", "-q"]).code, 0);
+  std::fs::remove_file(repo.join("clean2.txt")).unwrap();
+  std::fs::create_dir_all(repo.join("src/features/demo")).unwrap();
+  std::fs::write(repo.join("src/features/demo/leak_scan_files.txt"), "notes.txt\n").unwrap();
+  std::fs::write(repo.join("notes.txt"), format!("{HOME_PATH_TEXT}\n")).unwrap();
+  let mut builtin_env = env.clone();
+  builtin_env.remove("EXTRA_PATTERNS_FILE");
+  assert_eq!(leak_run(&repo, &builtin_env, &["add", "notes.txt", "src/features/demo/leak_scan_files.txt"]).code, 0);
+  let commit = leak_run(&repo, &builtin_env, &["commit", "-m", "add notes"]);
+  assert_ne!(commit.code, 0, "{}", commit.describe());
+  assert!(commit.stderr.contains("notes.txt"), "{}", commit.stderr);
 }
 
 #[test]

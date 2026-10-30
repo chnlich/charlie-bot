@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The pattern file sits beside the hooks directory, in the checkout that installed these hooks; the message
+# and identities come from the repository being committed to.
+helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
-source tools/leak-patterns.sh
+source "$helper_dir/leak-patterns.sh"
 
 tmp_patterns=$(mktemp)
 trap 'rm -f "$tmp_patterns"' EXIT

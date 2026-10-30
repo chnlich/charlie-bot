@@ -55,7 +55,7 @@ pub(crate) fn resolve_sidebar_state(
   let flags = vec![include_running, include_trigger, include_plan];
   let ids: Vec<String> = sessions.iter().map(|meta| meta.id.clone()).collect();
   let generation = charliebot_store::sidebar_state::derived_generation();
-  let key = charliebot_store::sidebar_state::DerivedMapKey { session_ids: ids.clone(), flags, generation };
+  let key = charliebot_store::sidebar_state::DerivedMapKey { session_ids: ids, flags, generation };
   let force_full = charliebot_store::sidebar_state::register_poll(force);
   if !force && let Some(derived) = charliebot_store::sidebar_state::peek_derived_map(&key) {
     if force_full {

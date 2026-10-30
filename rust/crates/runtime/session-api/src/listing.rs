@@ -144,9 +144,37 @@ const PAGE_PROJECTION: SidebarProjection = SidebarProjection {
 
 /// The page's whole sidebar text and the inputs it rendered from.
 struct WholePageText {
+  source: PageTextSource,
   inputs: Vec<RowInputs>,
   clear_unread: Option<String>,
   text: Arc<String>,
+}
+
+/// The corpus one page text rendered from, compared before the per-row inputs are rebuilt.
+///
+/// The rows compare by pointer: the store hands out one shared, immutable row while its content holds, so another
+/// pointer means other content while the same pointer means an equal row. The derived overlays compare by pointer
+/// too: their builder keeps one map until a sidebar input moves, and every move bumps the generation that keys the
+/// map, so the same map means the same overlays. The controllers build a fresh field map per request, so their
+/// fields compare by value. Every other input a row reads from the store (busy state, run backend) moves through a
+/// sidebar dirty mark, which also rebuilds the derived map.
+struct PageTextSource {
+  rows: Vec<Arc<SessionMetadata>>,
+  derived: Arc<DerivedSidebarMap>,
+  sequence_fields: HashMap<String, Map<String, Value>>,
+}
+
+impl PageTextSource {
+  fn of(page: &PageRows) -> Self {
+    Self { rows: page.rows.clone(), derived: Arc::clone(&page.derived), sequence_fields: page.sequence_fields.clone() }
+  }
+
+  fn holds(&self, page: &PageRows) -> bool {
+    Arc::ptr_eq(&self.derived, &page.derived)
+      && self.rows.len() == page.rows.len()
+      && self.rows.iter().zip(page.rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now))
+      && self.sequence_fields == page.sequence_fields
+  }
 }
 
 /// The chat page's rendered sidebar texts.
@@ -185,6 +213,17 @@ pub fn active_page_json_text(
   clear_unread: Option<&str>,
   memo: &PageRowsMemo,
 ) -> StoreResult<Arc<String>> {
+  // The corpus check answers the common request before it walks every row's inputs. It proves every input the text
+  // reads still holds, so the text it returns is the text a rebuild would render.
+  {
+    let state = memo.state.lock().expect("the page row memo mutex is not poisoned");
+    if let Some(whole) = &state.whole
+      && whole.clear_unread.as_deref() == clear_unread
+      && whole.source.holds(page)
+    {
+      return Ok(Arc::clone(&whole.text));
+    }
+  }
   let inputs = row_inputs(store, &page.rows, &page.derived, &page.sequence_fields, PAGE_PROJECTION)?;
   let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
   if let Some(whole) = &state.whole
@@ -231,7 +270,12 @@ pub fn active_page_json_text(
   }
   text.push(']');
   let text = Arc::new(text);
-  state.whole = Some(WholePageText { inputs, clear_unread: clear_unread.map(str::to_string), text: Arc::clone(&text) });
+  state.whole = Some(WholePageText {
+    source: PageTextSource::of(page),
+    inputs,
+    clear_unread: clear_unread.map(str::to_string),
+    text: Arc::clone(&text),
+  });
   Ok(text)
 }
 
@@ -556,6 +600,32 @@ mod tests {
     let ordinary_text = active_page_json_text(&features.store, &changed, None, &memo).unwrap();
     let ordinary: Vec<Value> = serde_json::from_str(ordinary_text.as_str()).unwrap();
     assert_eq!(ordinary[0]["name"], "renamed while active");
+  }
+
+  /// A run backend that lands after the page text was memoized still reaches the row, though the corpus pointers do
+  /// not move: the backend change bumps the derived generation, which rebuilds the overlay map the memo compares.
+  #[tokio::test]
+  async fn a_changed_run_backend_renders_into_the_page_text() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "run-backend-row", None, TaskProfile::Manager).await;
+    let memo = PageRowsMemo::default();
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let row_of = |text: &str| -> Value {
+      serde_json::from_str::<Vec<Value>>(text)
+        .unwrap()
+        .into_iter()
+        .find(|row| row["id"] == json!(meta.id))
+        .expect("the created row is in the page")
+    };
+    assert_eq!(row_of(text.as_str())["run_backend"], Value::Null);
+
+    features.store.note_run_backend(&meta.id, "synthetic-backend");
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    assert_eq!(row_of(text.as_str())["run_backend"], "synthetic-backend");
   }
 
   /// A page opened without a session redirects to the row that the rendered page puts first.

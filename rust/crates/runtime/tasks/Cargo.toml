@@ -44,6 +44,7 @@ charliebot-gemini.workspace = true
 charliebot-shell-harness.workspace = true
 charliebot-store = { workspace = true, features = ["write-faults"] }
 charliebot-tasks = { path = ".", features = ["test-hooks"] }
+charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

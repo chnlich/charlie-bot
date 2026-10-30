@@ -305,7 +305,14 @@ mod tests {
   #[tokio::test]
   async fn midturn_offer_writes_only_web_user_messages_and_stops_at_result() {
     let home = tempfile::tempdir().unwrap();
-    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let features = test_fixtures::features_with_packages(
+      &home.path().join("home"),
+      &test_fixtures::claude_config(None),
+      &[
+        ("src.backends.claude_code", charliebot_claude_code::register),
+        ("src.features.web_reply", charliebot_web_reply::register),
+      ],
+    );
     let cfg = features.config.get().unwrap();
     let option = cfg.get_backend_option("fable").unwrap().clone();
     let run_id = "11111111-2222-3333-4444-555555555552";
@@ -345,7 +352,7 @@ mod tests {
     let lines = lines.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
     assert_eq!(lines.iter().map(|line| line["uuid"].clone()).collect::<Vec<_>>(), [json!(run_id), json!(message_id)]);
     assert_eq!(lines[0]["message"]["content"], json!("Initial prompt"));
-    assert_eq!(lines[1]["message"]["content"], json!("Please change the answer."));
+    assert_eq!(lines[1]["message"]["content"], json!("[User message 22222222]\nPlease change the answer."));
 
     let mut thread_meta = SessionMetadata::new("thread", "Slack", TaskProfile::Manager);
     thread_meta.extra.insert("slack_origin".to_string(), json!({"team_id":"T","channel_id":"C","thread_ts":"1.0"}));

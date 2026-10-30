@@ -273,6 +273,13 @@ pub fn user_event(content: &str) -> Value {
   json!({"type": "user", "content": content, "message": {"role": "user", "content": [{"type": "text", "text": content}]}})
 }
 
+/// A `user` chat event with `content` and the id `id`, so that a test names the event's tag.
+pub fn user_event_with_id(id: &str, content: &str) -> Value {
+  let mut event = user_event(content);
+  event["id"] = json!(id);
+  event
+}
+
 /// The id the store stamped on an appended event.
 pub fn id_of(event: &Value) -> &str {
   event["id"].as_str().expect("an appended event carries its id")

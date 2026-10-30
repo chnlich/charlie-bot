@@ -75,6 +75,15 @@ impl TurnContribution for WebReplyTurnContribution {
     })
   }
 
+  /// The tag line that opens each user message of a web session in the turn prompt.
+  fn input_preamble(&self, meta: &SessionMetadata, input_event: &Value) -> Option<String> {
+    if !reply::is_web_session(meta) {
+      return None;
+    }
+    let user_event_id = input_event.get("id").and_then(Value::as_str)?;
+    Some(format!("[User message {}]", reply::message_tag(user_event_id)))
+  }
+
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     vec![
       (WEB_REPLY, web_reply_message),

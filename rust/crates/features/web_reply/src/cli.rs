@@ -59,6 +59,9 @@ struct ReplyArgs {
   /// File holding the reply text; - reads stdin
   #[arg(long)]
   file: String,
+  /// Tag of a user message of this turn that the reply answers, from its [User message <tag>] line; repeatable
+  #[arg(long, value_name = "TAG")]
+  answers: Vec<String>,
   /// Post the reply as written and record REASON; skips the language check
   #[arg(long, value_name = "REASON")]
   keep_language: Option<String>,
@@ -106,8 +109,14 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
 }
 
 fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
-  let extra = args.keep_language.as_ref().map(|reason| Map::from_iter([("keep_language".to_string(), json!(reason))]));
-  post_reply("/api/internal/web/reply", args.session.as_deref(), &args.file, extra)
+  let mut extra = Map::new();
+  if !args.answers.is_empty() {
+    extra.insert("answers".to_string(), json!(args.answers));
+  }
+  if let Some(reason) = &args.keep_language {
+    extra.insert("keep_language".to_string(), json!(reason));
+  }
+  post_reply("/api/internal/web/reply", args.session.as_deref(), &args.file, Some(extra))
 }
 
 fn dialog(args: &SessionArgs) -> Result<(), CliExit> {

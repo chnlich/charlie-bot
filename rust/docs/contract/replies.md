@@ -176,20 +176,25 @@ A web session is a manager session with no Slack or Discord origin. Every web ro
 ### `POST /api/internal/web/reply`
 
 - Handler: `src/features/web_reply/api.py:72`.
-- Body: `{"session_id": string, "text": string, "keep_language": string or null}`; `keep_language` is optional.
+- Body: `{"session_id": string, "text": string, "keep_language": string or null, "answers": [string]}`; `keep_language` and `answers` are optional.
 - 422 `Reply text is empty` for blank text.
 - 422 `Keep-language reason is empty` for a blank `keep_language`.
 - 409 when the language check holds and `keep_language` is absent.
-- 200: `{"posted": true, "chars": <visible chars>, "over_budget": <chars > 500>, "answers": "<user event id or null>"}`.
+- 200: `{"posted": true, "chars": <visible chars>, "over_budget": <chars > 500>, "answers": [<full user event id>, ...]}`.
 
 `chars` counts the text after each inline markdown link `[label](url)` is replaced by its label, so the URL is not
 counted (`src/features/web_reply/reply.py:47`, `:78-80`, `:205`). The stored `web_reply` event holds the same count.
-`answers` is the newest user message (or audit nudge, which maps to its user message) among the running turn's inputs.
-When `keep_language` is present, the server records it with the reply and skips the language check.
+The candidates are the user messages of the running turn's inputs, plus the user message that each nudge among them was
+posted for. A tag in `answers` is the first eight characters of a candidate's id, or its full id, and it must match
+exactly one candidate; each tag binds that candidate. Without `answers`, one candidate binds, no candidate records an empty
+list, and two or more candidates refuse with 422. A tag that matches no candidate or several refuses with 422. A refusal
+names each candidate's tag and the first 40 characters of its text, and records nothing.
+When `keep_language` is present, the server records it with the reply and skips the language check. The language check
+reads the text of the answered messages.
 
 Side effects:
 
-1. Append and broadcast `{"type":"web_reply","content":<text>,"web_reply":{"answers","chars"}}`, with `"keep_language":<reason>` in `web_reply` when the reason is given. An agent reply also stores the request-derived `id` and `request_id`.
+1. Append and broadcast `{"type":"web_reply","content":<text>,"web_reply":{"answer_ids":[<full user event id>, ...],"chars"}}`, with `"keep_language":<reason>` in `web_reply` when the reason is given. A reply recorded before `answer_ids` holds one id under `answers`, or null; every reader reads both forms as a list. An agent reply also stores the request-derived `id` and `request_id`.
 2. Mark the session unread (sidebar `unread_changed` frame when the flag changes).
 3. Log `web_reply_posted`. A held reply logs `web_reply_held` and records nothing.
 

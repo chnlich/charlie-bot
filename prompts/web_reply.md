@@ -21,6 +21,9 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - After the opening reply, continue the work. The user stops the turn with the Stop button.
 - When your steps change later in the turn, continue without a new opening reply.
 - Post exactly one answer reply for each user message of this turn, the messages that arrived during it included.
+- Each user message opens with a `[User message <tag>]` line, and `<tag>` names that message.
+- With two or more user messages of this turn, pass `--answers <tag>` on every web reply, opening replies included.
+  Each tag names one user message that the reply is for, so the round-end audit can check that message.
 - When the web reply nudge woke this turn, post the answer reply that the last turn missed.
 - When another input woke this turn, post one web reply only when this turn did an action from this list:
   - wrote a page for the user;

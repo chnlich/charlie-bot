@@ -1310,6 +1310,7 @@ dependencies = [
  "charliebot-store",
  "charliebot-tasks",
  "charliebot-usage",
+ "charliebot-voice",
  "charliebot-web-reply",
  "futures-util",
  "ignore",

@@ -9,7 +9,7 @@ use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::Env;
 use charliebot_registry::context::{FeatureContext, StartupState};
-use charliebot_registry::{Registry, store_hooks};
+use charliebot_registry::{RegisterFn, Registry, store_hooks};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{CreateTask, Store, TaskCaller};
@@ -37,10 +37,21 @@ pub fn claude_config(account_dir: Option<&Path>) -> String {
 
 /// The feature context over `home`, whose config.yaml is `config_body`, with the cc-claude backend registered.
 pub fn claude_features(home: &Path, config_body: &str) -> Arc<FeatureContext> {
+  features_with_packages(home, config_body, &[("src.backends.claude_code", charliebot_claude_code::register)])
+}
+
+/// The feature context over `home`, whose config.yaml is `config_body`, with each of `packages` registered in order.
+pub fn features_with_packages(
+  home: &Path,
+  config_body: &str,
+  packages: &[(&'static str, RegisterFn)],
+) -> Arc<FeatureContext> {
   std::fs::create_dir_all(home).unwrap();
   std::fs::write(home.join("config.yaml"), config_body).unwrap();
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", charliebot_claude_code::register).unwrap();
+  for (package, register) in packages {
+    registry.register_package(package, *register).unwrap();
+  }
   let registry = Arc::new(registry);
   let config = registry.load_config(home).unwrap();
   let store_config = config.clone();

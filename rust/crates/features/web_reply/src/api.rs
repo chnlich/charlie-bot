@@ -50,6 +50,7 @@ pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Re
       &features,
       &model.session_id,
       &model.text,
+      &model.answers,
       model.keep_language.as_deref(),
       request_id.as_deref(),
     )
@@ -163,12 +164,13 @@ fn session_id_param(query: &HashMap<String, String>) -> Result<String, Box<Field
   }
 }
 
-/// The fields of `WebReplyRequest` in declaration order: the calling session's id, the reply text, and the optional
-/// reason for posting the text past the language check.
+/// The fields of `WebReplyRequest` in declaration order: the calling session's id, the reply text, the optional reason
+/// for posting the text past the language check, and the tags of the user messages the reply answers.
 const REPLY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required("text", FieldType::String),
   Field::optional("keep_language", FieldType::NullableString),
+  Field::optional("answers", FieldType::StringList),
 ];
 const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
@@ -195,6 +197,7 @@ struct ReplyRequest {
   session_id: String,
   text: String,
   keep_language: Option<String>,
+  answers: Vec<String>,
 }
 
 impl ReplyRequest {
@@ -208,7 +211,23 @@ impl ReplyRequest {
       Some(Value::Null) | None => None,
       Some(_) => unreachable!("a validated keep_language is a string or null"),
     };
-    Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text"), keep_language })
+    let answers = match fields.remove("answers") {
+      Some(Value::Array(tags)) => tags
+        .into_iter()
+        .map(|tag| match tag {
+          Value::String(tag) => tag,
+          _ => unreachable!("a validated answers item is a string"),
+        })
+        .collect(),
+      Some(Value::Null) | None => Vec::new(),
+      Some(_) => unreachable!("a validated answers is a list of strings or absent"),
+    };
+    Ok(Self {
+      session_id: text_field(&mut fields, "session_id"),
+      text: text_field(&mut fields, "text"),
+      keep_language,
+      answers,
+    })
   }
 }
 

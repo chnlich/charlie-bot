@@ -1505,7 +1505,7 @@ pub trait TurnContribution: Send + Sync {
     Box::pin(async { Ok(()) })
   }
 
-  /// The text that opens a user input in the turn prompt. At most one contribution answers `Some` for an event.
+  /// The line that opens a user input in the turn prompt. Several contributions' lines join in registration order.
   fn input_preamble(&self, _meta: &SessionMetadata, _input_event: &Value) -> Option<String> {
     None
   }
@@ -1574,18 +1574,15 @@ impl Registry {
     Ok(segments)
   }
 
-  /// The input preamble that a contribution gives `input_event`, or `None`. Two contributions that give one fail.
-  pub fn input_preamble(&self, meta: &SessionMetadata, input_event: &Value) -> anyhow::Result<Option<String>> {
-    let answers: Vec<String> = self
+  /// The input preamble of `input_event`: the preambles that the contributions give, one line each, in registration
+  /// order; `None` when no contribution gives one.
+  pub fn input_preamble(&self, meta: &SessionMetadata, input_event: &Value) -> Option<String> {
+    let preambles: Vec<String> = self
       .turn_contributions
       .values()
       .filter_map(|contribution| contribution.input_preamble(meta, input_event))
       .collect();
-    match answers.as_slice() {
-      [] => Ok(None),
-      [preamble] => Ok(Some(preamble.clone())),
-      _ => bail!("input preamble: more than one turn contribution answers for one event"),
-    }
+    (!preambles.is_empty()).then(|| preambles.join("\n"))
   }
 
   /// True when a registered contribution marks the turn-end unread flag for `meta` itself.

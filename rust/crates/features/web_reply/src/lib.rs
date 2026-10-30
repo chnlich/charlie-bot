@@ -172,7 +172,7 @@ mod tests {
 
     let (status, body) = home.send(Method::POST, reply, Some(json!({"session_id": sid, "text": "the answer"}))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({"posted": true, "chars": 10, "over_budget": false, "answers": null}));
+    assert_eq!(body, json!({"posted": true, "chars": 10, "over_budget": false, "answers": []}));
 
     let (status, body) = home.send(Method::POST, reply, Some(json!({"session_id": "no-such", "text": "x"}))).await;
     assert_eq!((status, body), (StatusCode::NOT_FOUND, json!({"detail": "Session not found"})));

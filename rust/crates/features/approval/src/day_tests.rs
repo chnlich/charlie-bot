@@ -4,6 +4,9 @@
 use std::fs;
 
 use axum::http::Method;
+use charliebot_core::pacific::{day_of, zone};
+use jiff::civil::Date;
+use jiff::{Span, Timestamp};
 use serde_json::{Value, json};
 
 use crate::test_support::Home;
@@ -12,6 +15,11 @@ use crate::test_support::Home;
 const DAY: &str = "2026-10-30";
 /// The previous Pacific day, whose user-act item stays off the day's sheet.
 const PREVIOUS_DAY: &str = "2026-10-29";
+
+/// Noon in Pacific time on `date`, as a stored stamp reads.
+fn pt_noon(date: Date) -> String {
+  date.at(12, 0, 0, 0).to_zoned(zone().expect("the zone loads")).expect("the noon resolves").timestamp().to_string()
+}
 
 fn item(text: &str, tier: Value, rule: Value, since: &str) -> Value {
   json!({"text": text, "context": "Why the item waits.", "link": null, "since": since, "since_exact": true, "tier": tier, "rule": rule})
@@ -157,22 +165,61 @@ async fn the_queue_orders_t0_by_rule_rank_then_review_then_the_rest() {
 }
 
 #[tokio::test]
-async fn the_login_sheet_holds_the_day_s_user_act_items_only() {
+async fn today_s_login_sheet_holds_every_open_user_act_item() {
   let home = Home::new();
-  seed(&home).await;
+  let session = home.manager("Alpha").await;
+  let today = day_of(Timestamp::now()).expect("today reads");
+  let earlier = today.checked_sub(Span::new().days(2)).expect("the earlier day resolves");
+  home
+    .set_web_status(
+      &session,
+      json!({
+        "now": "Running",
+        "waiting": [
+          // Judged two PT days ago and still open: today's sheet carries it.
+          item("Log into the console", json!("user-act"), json!(null), &pt_noon(earlier)),
+          item("Log into the admin console", json!("user-act"), json!(null), &pt_noon(today)),
+          item("Approve the deploy", json!("t0"), json!("money"), &pt_noon(today)),
+        ],
+        "updated_at": pt_noon(today),
+      }),
+    )
+    .await;
 
-  let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={DAY}")).await;
+  let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={today}")).await;
+
+  assert_eq!(status, 200, "{body}");
+  let texts =
+    body["login_sheet"].as_array().unwrap().iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>();
+  assert_eq!(texts, ["Log into the console", "Log into the admin console"]);
+}
+
+#[tokio::test]
+async fn a_past_day_s_login_sheet_holds_that_day_s_user_act_items() {
+  let home = Home::new();
+  let session = home.manager("Alpha").await;
+  let today = day_of(Timestamp::now()).expect("today reads");
+  let earlier = today.checked_sub(Span::new().days(2)).expect("the earlier day resolves");
+  home
+    .set_web_status(
+      &session,
+      json!({
+        "now": "Running",
+        "waiting": [
+          item("Log into the console", json!("user-act"), json!(null), &pt_noon(earlier)),
+          item("Log into the admin console", json!("user-act"), json!(null), &pt_noon(today)),
+        ],
+        "updated_at": pt_noon(today),
+      }),
+    )
+    .await;
+
+  let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={earlier}")).await;
 
   assert_eq!(status, 200, "{body}");
   let texts =
     body["login_sheet"].as_array().unwrap().iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>();
   assert_eq!(texts, ["Log into the console"]);
-
-  let (status, previous) = home.send(Method::GET, &format!("/api/approval/day?date={PREVIOUS_DAY}")).await;
-  assert_eq!(status, 200, "{previous}");
-  let texts =
-    previous["login_sheet"].as_array().unwrap().iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>();
-  assert_eq!(texts, ["Log into the other console"]);
 }
 
 #[tokio::test]

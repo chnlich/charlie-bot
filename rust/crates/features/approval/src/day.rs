@@ -3,9 +3,10 @@
 //! The queue holds every open Waiting on you item across sessions, so every open item appears once: the T0 items
 //! first, ranked by the rank of their rule's consequence test in the approval policy table (an `out-of-scope:<id>`
 //! rule ranks with the chao-name test, as plan section 3 orders them), then the review items, then the items tiered
-//! t1 or t2 and the items without a tier. Equal ranks keep arrival order. The login sheet holds the day's user-act
-//! items. The digest holds the day's digest entries and the day's `policy_table_changed` records, each with its
-//! undo: an entry's `undo` field, a change record's diff.
+//! t1 or t2 and the items without a tier. Equal ranks keep arrival order. The login sheet holds today's every open
+//! user-act item, an item judged on an earlier day included, because the panels list those items only through this
+//! sheet; a past day's sheet holds the items whose start time falls in it. The digest holds the day's digest entries
+//! and the day's `policy_table_changed` records, each with its undo: an entry's `undo` field, a change record's diff.
 
 use axum::http::StatusCode;
 use charliebot_core::approval_digest;
@@ -40,16 +41,14 @@ pub fn parse_date_param(text: &str) -> Result<Date, DayError> {
 /// The day view as the API answers it and the page renders it (`day.approval_day`). A `None` date is today's
 /// Pacific day. The table read is a server-side read, so a changed table records its change before the view lists it.
 pub async fn approval_day(features: &FeatureContext, date: Option<Date>) -> Result<Value, DayError> {
-  let date = match date {
-    Some(date) => date,
-    None => pacific::day_of(jiff::Timestamp::now()).map_err(|error| DayError::Failed(error.into()))?,
-  };
+  let today = pacific::day_of(jiff::Timestamp::now()).map_err(|error| DayError::Failed(error.into()))?;
+  let date = date.unwrap_or(today);
   let cfg = features.config.get().map_err(|error| DayError::Failed(error.into()))?;
   let home = cfg.charliebot_home.clone();
   let loaded = approval_policy::load_and_record(&home).map_err(|error| DayError::Failed(error.into()))?;
   let rows = status::open_waiting_items(features).await.map_err(status_refused)?;
   let queue = queue_rows(&rows, &loaded.table);
-  let login_sheet = login_sheet_rows(&rows, date)?;
+  let login_sheet = login_sheet_rows(&rows, date, today)?;
   let digest = digest_rows(&home, date)?;
   Ok(json!({
     "date": date_text(date),
@@ -124,17 +123,21 @@ fn queue_rows(rows: &[OpenWaitingItem], table: &approval_policy::ApprovalPolicyT
     .collect()
 }
 
-/// The day's login sheet: the user-act items whose start time falls in `date` (`day._login_sheet_rows`).
-fn login_sheet_rows(rows: &[OpenWaitingItem], date: Date) -> Result<Vec<Value>, DayError> {
+/// The login sheet (`day._login_sheet_rows`). Today's holds every open user-act item, whatever day judged it, because
+/// the panels list those items only through this sheet. A past day's holds the items whose start time falls in it.
+fn login_sheet_rows(rows: &[OpenWaitingItem], date: Date, today: Date) -> Result<Vec<Value>, DayError> {
   let mut sheet = Vec::new();
   for row in rows {
     if row.tier.as_deref() != Some("user-act") {
       continue;
     }
-    let day = day_of_stamp(&row.since.to_str()).map_err(|error| DayError::Failed(error.into()))?;
-    if day == date {
-      sheet.push(row_json(row));
+    if date != today {
+      let day = day_of_stamp(&row.since.to_str()).map_err(|error| DayError::Failed(error.into()))?;
+      if day != date {
+        continue;
+      }
     }
+    sheet.push(row_json(row));
   }
   Ok(sheet)
 }

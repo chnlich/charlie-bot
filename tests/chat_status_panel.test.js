@@ -460,7 +460,7 @@ test('the panel collapses its user-act items, own and descendant, into one login
     session_id: OTHER_CHILD_ID,
     name: 'Child two',
     updated_at: '2026-10-16T20:30:00Z',
-    waiting: [{text: 'Child two item', link: null, tier: 'user-act'}],
+    waiting: [{text: 'Child two item', link: null, since: '2026-10-20T18:00:00Z', tier: 'user-act'}],
   }];
   await openSession(rig, {web_status: {
     ...STATUS,
@@ -474,7 +474,7 @@ test('the panel collapses its user-act items, own and descendant, into one login
   const sheet = viewRow(rig.view, 'login-sheet');
   assert.ok(sheet, 'the login-sheet line shows when user-act items exist');
   const text = allElements(sheet).find((el) => el.textContent === '3 actions that only you can do today');
-  assert.ok(text, 'the line counts both sessions\' items');
+  assert.ok(text, 'the line counts both sessions\' items, an item judged earlier included');
   const link = allElements(sheet).filter((el) => el.tagName === 'A');
   assert.deepEqual(link.map((el) => el.href),
     ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date())]);

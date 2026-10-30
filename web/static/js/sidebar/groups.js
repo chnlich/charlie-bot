@@ -162,8 +162,8 @@ function registerGroupMenuItem(item) {
   groupMenuItems.push(item);
 }
 
-// Session-row action buttons: a markup change to one of these buttons lands
-// here, not in one renderer.
+// Session-row action buttons: a markup change to one of these buttons is made
+// here once, not in each renderer.
 const STAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
 
 // The one archive-box outline: the Archive action button (a normal row's and
@@ -203,7 +203,7 @@ function renderStarButton(s, activeBtnClass) {
 }
 
 // The one hover-revealed icon button frame for the session row's plain
-// actions: a markup change lands here, not in one renderer. The star's
+// actions: a markup change is made here once, not in each renderer. The star's
 // dynamic fill and id and the Settings button's data attributes stay at
 // their own renderers.
 function renderRowActionButton(onclick, colorClass, title, svgBody, activeBtnClass) {
@@ -242,7 +242,7 @@ function renderNewChildButton(s, activeBtnClass) {
 // the anchor at click time. The optional rowMenu argument marks which item list the anchor's row
 // builds: the archived row reuses the markup and the data attributes
 // (archived.js's [data-current-group] rewrite included). Only the menu
-// differs. It owns its markup the way the star does: the frame renderer
+// differs. It writes its own markup the way the star does: the frame renderer
 // takes no extra attributes.
 function renderSettingsButton(s, activeBtnClass, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
@@ -256,14 +256,14 @@ function renderSettingsButton(s, activeBtnClass, rowMenu) {
   </button>`;
 }
 
-// Session-row highlight: a tint change lands here, not in one renderer.
+// Session-row highlight: a tint change is made here once, not in each renderer.
 function sessionRowActiveClass(isActive) {
   return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
 }
 
 // The one session-row frame: the anchor open tag, the name span, and the
 // closing tag.
-// A markup change to the row frame lands here, not in one renderer.
+// A markup change to the row frame is made here once, not in each renderer.
 // indicators and line are prebuilt strings — the status column and the content
 // after the name span — and actions the trailing button column. The anchor's
 // session-row class is the plain-CSS hook styles.css's hover reveal keys on
@@ -285,8 +285,8 @@ function renderSessionRowShell(s, {filter, activeClass, options, indicators, lin
 }
 
 // Empty list note shared by the grouped/search lists here and, through the
-// namespace, the archived list in archived.js. A markup change lands here,
-// not in each list's empty branch.
+// namespace, the archived list in archived.js. A markup change is made here
+// once, not in each list's empty branch.
 function renderEmptyNote(text) {
   return `<p class="text-slate-500 text-sm px-3 py-2">${text}</p>`;
 }
@@ -427,7 +427,7 @@ function toggleSessionGroup(key) {
 }
 
 // A group-header create (session-view.js) marks its target expanded before the
-// create's repaint, so the new row lands visible inside the group it names.
+// create's repaint, so the new row appears visible inside the group it names.
 function expandSessionGroup(key) {
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   collapsedState[key] = false;
@@ -465,7 +465,7 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
 // ---------------------------------------------------------------------------
 // Task-tree nesting: a child task node renders under its parent row.
 // ---------------------------------------------------------------------------
-// The expanded set lives in memory only, so a reload starts every parent
+// The expanded set is held in memory only, so a reload starts every parent
 // collapsed (a persisted expand state once hid a preview-cap regression).
 const treeExpandedNodes = new Set();
 // The session whose ancestors the last paint opened (one reveal per switch).
@@ -580,7 +580,7 @@ function renderSessionTree(s, filter, options, childrenOf) {
 
 // Expansion is display only: child rows show or hide and the chevron rotates.
 // A row's icon reads facts only (status.js paints from states, the unread map
-// and the last grouped paint's tree), so no indicator repaint rides a toggle.
+// and the last grouped paint's tree), so no indicator repaint follows a toggle.
 function applyTreeNodeExpansion(sessionId, expanded) {
   if (expanded) treeExpandedNodes.add(sessionId); else treeExpandedNodes.delete(sessionId);
   const selectorId = CSS.escape(sessionId);
@@ -677,8 +677,8 @@ function renderSessionItem(s, filter, options = {}) {
   const line = sessionRowLines.reduce((found, render) => found ?? render(s), null)
       ?? renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
   // A context row dims and carries the active tag after the line, as the mock
-  // shows it. The tag rides outside the name span so a long name cannot push
-  // it out.
+  // shows it. The tag is placed outside the name span so a long name cannot
+  // push it out.
   return renderSessionRowShell(s, {
     filter,
     activeClass: activeClass + (isContextRow ? ' opacity-60' : ''),
@@ -705,7 +705,7 @@ function renderSessionList(sessions, filter, options = {}) {
       archived: 'No archived sessions',
       search: 'No matching sessions',
     };
-    // The Workspace badges ride the empty paint too: with zero sessions a badge
+    // The Workspace badges appear on the empty paint too: with zero sessions a badge
     // is still the one thing paging the maintainer.
     nav.innerHTML = (filter === 'all' ? (options.workspaceBadges || '') : '')
       + renderEmptyNote(labels[filter]);
@@ -749,7 +749,7 @@ function subtreeIdsToRemove(sessions, sessionId) {
 // whole subtree out of the last-rendered list and repaint in place. That list
 // is the one the grouped renderer stored at paint time. The preview window
 // then backfills and counts and toggles resync, with no refetch. The archived
-// view owns its own paginated tree and the search overlay is keyed by the
+// view builds its own paginated tree and the search overlay is keyed by the
 // marker above, so both keep the caller's node-only row removal (false).
 function removeSessionFromRenderedList(sessionId) {
   if (currentFilter === 'archived' || searchListPainted) return false;

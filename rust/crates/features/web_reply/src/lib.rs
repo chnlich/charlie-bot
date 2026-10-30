@@ -218,7 +218,12 @@ mod tests {
       .send(
         Method::POST,
         "/api/internal/web/ask-check",
-        Some(json!({"session_id": sid, "item": item.clone(), "backend": "haiku", "answer": "Deploy.\ntier: t0 rule: money"})),
+        Some(json!({
+          "session_id": sid,
+          "item": item.clone(),
+          "backend": "haiku",
+          "answer": "Deploy.\ntier: t0 rule: money",
+        })),
       )
       .await;
     assert_eq!(status, StatusCode::OK);

@@ -1684,8 +1684,14 @@ mod tests {
   async fn the_refusal_switch_refuses_a_t1_item_and_admits_a_t0_one() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
-    let t1 = json!({"text": "Restart the server", "context": "The release is ready now. Options are restart or wait; restart is recommended."});
-    let t0 = json!({"text": "Publish the page", "context": "The draft is ready now. Options are publish or hold; publish is recommended."});
+    let t1 = json!({
+      "text": "Restart the server",
+      "context": "The release is ready now. Options are restart or wait; restart is recommended.",
+    });
+    let t0 = json!({
+      "text": "Publish the page",
+      "context": "The draft is ready now. Options are publish or hold; publish is recommended.",
+    });
     let t1_answer = "Inside the policy.\ntier: t1 rule: release-restart";
     let t0_answer = "The table's money test names it.\ntier: t0 rule: money";
     record_ask_check(&home.features, &sid, &t1, "haiku", t1_answer).await.expect("the t1 cold read records");

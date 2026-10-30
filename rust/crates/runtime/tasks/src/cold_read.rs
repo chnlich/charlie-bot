@@ -230,13 +230,39 @@ fn is_base64_header(header: &[u8]) -> bool {
   header.rsplit(|&byte| byte == b';').next().is_some_and(|part| part.eq_ignore_ascii_case(b"base64"))
 }
 
-/// The byte offset where the payload starting at `start` ends.
-fn data_payload_end(bytes: &[u8], start: usize, base64: bool) -> usize {
-  let mut index = start;
-  while index < bytes.len() && !DATA_PAYLOAD_END.contains(&bytes[index]) && !(base64 && bytes[index] == b',') {
-    index += 1;
+/// Whether a byte belongs to the base64 alphabet, padding included.
+fn is_base64_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+}
+
+/// Whether a token is a srcset descriptor: a number and its unit, as in `2x`, `480w`, or `1.5x`.
+fn is_srcset_descriptor(token: &[u8]) -> bool {
+  token.split_last().is_some_and(|(unit, number)| {
+    matches!(unit, b'w' | b'x' | b'h')
+      && !number.is_empty()
+      && number.iter().all(|&byte| byte.is_ascii_digit() || byte == b'.')
+  })
+}
+
+/// The byte offset where the payload starting at `start` ends. A base64 payload inside quotes (`wraps`) may wrap onto
+/// further lines, which a URL parser strips, so whitespace followed by a base64 token continues it; a srcset
+/// descriptor after whitespace does not.
+fn data_payload_end(bytes: &[u8], start: usize, base64: bool, wraps: bool) -> usize {
+  let mut end = start;
+  loop {
+    while end < bytes.len() && !DATA_PAYLOAD_END.contains(&bytes[end]) && !(base64 && bytes[end] == b',') {
+      end += 1;
+    }
+    if !wraps {
+      return end;
+    }
+    let token_start = end + bytes[end..].iter().take_while(|byte| byte.is_ascii_whitespace()).count();
+    let token_end = token_start + bytes[token_start..].iter().take_while(|&&byte| is_base64_byte(byte)).count();
+    if token_start == end || token_end == token_start || is_srcset_descriptor(&bytes[token_start..token_end]) {
+      return end;
+    }
+    end = token_end;
   }
-  index
 }
 
 /// The omitted payload's size as the placeholder states it: `512 B`, `1.4 KB`, `2.0 MB`.
@@ -273,7 +299,9 @@ fn omit_data_uris(page_text: &str) -> Cow<'_, str> {
       continue;
     };
     let payload_start = comma + 1;
-    let payload_end = data_payload_end(bytes, payload_start, is_base64_header(&bytes[header_start..comma]));
+    let base64 = is_base64_header(&bytes[header_start..comma]);
+    let quoted = index > 0 && matches!(bytes[index - 1], b'"' | b'\'');
+    let payload_end = data_payload_end(bytes, payload_start, base64, base64 && quoted);
     let out = replaced.get_or_insert_with(|| String::with_capacity(page_text.len()));
     out.push_str(&page_text[copied..payload_start]);
     out.push_str(&format!("[{} omitted]", omitted_size(payload_end - payload_start)));
@@ -599,7 +627,11 @@ mod tests {
   /// A self-contained page whose one image is a base64 PNG payload of `payload_bytes` characters.
   fn page_with_inline_png(payload_bytes: usize) -> String {
     format!(
-      r#"<html><body><p>Before the chart.</p><img alt="The monitor line chart" src="data:image/png;base64,{}"><p>After the chart.</p></body></html>"#,
+      concat!(
+        r#"<html><body><p>Before the chart.</p>"#,
+        r#"<img alt="The monitor line chart" src="data:image/png;base64,{}">"#,
+        r#"<p>After the chart.</p></body></html>"#
+      ),
       "A".repeat(payload_bytes)
     )
   }
@@ -659,6 +691,23 @@ mod tests {
   fn a_data_word_in_the_page_text_is_not_replaced() {
     let page = "<p>metadata: a/b, and the data: schema, and data:foo, stay as prose.</p>";
     assert_eq!(omit_data_uris(page).as_ref(), page);
+  }
+
+  #[test]
+  fn a_base64_payload_wrapped_inside_quotes_is_replaced_whole() {
+    let page = r#"<img src="data:image/png;base64,AAAA
+BBBB
+  CCCC" alt="wrapped"><p>after</p>"#;
+    assert_eq!(
+      omit_data_uris(page).as_ref(),
+      r#"<img src="data:image/png;base64,[16 B omitted]" alt="wrapped"><p>after</p>"#
+    );
+  }
+
+  #[test]
+  fn an_unquoted_base64_payload_ends_at_its_whitespace() {
+    let page = "<img src=data:image/png;base64,AAAA alt=Chart>";
+    assert_eq!(omit_data_uris(page).as_ref(), "<img src=data:image/png;base64,[4 B omitted] alt=Chart>");
   }
 
   #[tokio::test]

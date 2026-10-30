@@ -69,6 +69,23 @@ impl Credentials {
       .map(CredentialValue::value_str)
       .ok_or_else(|| ConfigError(format!("credentials.{section}.{key} is not set in {}", paths::display(&self.path))))
   }
+
+  /// The non-empty `api_key` of `section`: the one section-to-key path for the backend factories and
+  /// `charliebot improve-review`. A missing section, a missing key and an empty value are three errors, each
+  /// naming the item and the file. The key itself never enters the error text.
+  pub fn require_api_key(&self, section: &str) -> Result<String, ConfigError> {
+    let path = paths::display(&self.path);
+    if !self.sections.contains_key(section) {
+      return Err(ConfigError(format!("credentials.{section} is not set in {path}")));
+    }
+    let value = self
+      .get(section, "api_key")
+      .ok_or_else(|| ConfigError(format!("credentials.{section}.api_key is not set in {path}")))?;
+    if !value.is_truthy() {
+      return Err(ConfigError(format!("credentials.{section}.api_key is empty in {path}")));
+    }
+    Ok(value.value_str())
+  }
 }
 
 /// Load `<home>/credentials.yaml`. A missing or empty file loads as no sections; a `null` value counts
@@ -276,6 +293,26 @@ mod tests {
     assert_eq!(credentials.require("upstream", "count").unwrap(), "42");
     assert_eq!(credentials.require("upstream", "flag").unwrap(), "False");
     assert_eq!(credentials.require("upstream", "empty").unwrap(), "");
+  }
+
+  #[test]
+  fn require_api_key_resolves_a_non_empty_key_and_refuses_the_rest() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+      home.path().join(CREDENTIALS_FILENAME),
+      "upstream:\n  api_key: k-1\nempty:\n  api_key: \"\"\nflag:\n  api_key: false\n",
+    )
+    .unwrap();
+    let credentials = load_credentials(home.path()).unwrap();
+    let path = home.path().join(CREDENTIALS_FILENAME).display().to_string();
+
+    assert_eq!(credentials.require_api_key("upstream").unwrap(), "k-1");
+    let error = credentials.require_api_key("missing").unwrap_err().to_string();
+    assert_eq!(error, format!("credentials.missing is not set in {path}"));
+    let error = credentials.require_api_key("empty").unwrap_err().to_string();
+    assert_eq!(error, format!("credentials.empty.api_key is empty in {path}"));
+    let error = credentials.require_api_key("flag").unwrap_err().to_string();
+    assert_eq!(error, format!("credentials.flag.api_key is empty in {path}"));
   }
 
   #[test]

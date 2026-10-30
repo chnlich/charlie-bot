@@ -6,6 +6,8 @@ pub mod factory;
 pub mod options;
 mod translate;
 
+pub use charlie_code_cli::API_KEY_ENV;
+
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};

@@ -28,7 +28,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
     let fields = CcAnthropicCompatibleOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
     let auth_token = match fields.credential.as_deref() {
       None => NO_AUTH_TOKEN.to_string(),
-      Some(credential) => credentials::load_credentials(&cfg.charliebot_home)?.require(credential, "api_key")?,
+      Some(credential) => credentials::load_credentials(&cfg.charliebot_home)?.require_api_key(credential)?,
     };
     if option.model.is_empty() {
       bail!("backend '{}' has no default model", option.id);
@@ -166,5 +166,21 @@ mod tests {
     let env =
       backend.prepare_env(Env::from([(GATEWAY_EXTRA_BODY_ENV.to_string(), "inherited-value".to_string())])).unwrap();
     assert!(!env.contains_key(GATEWAY_EXTRA_BODY_ENV));
+  }
+
+  #[test]
+  fn an_empty_credential_key_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(charliebot_core::config::CREDENTIALS_FILENAME), "endpoint:\n  api_key: \"\"\n")
+      .unwrap();
+    let cfg = Registry::new().load_config(home.path()).unwrap();
+    let option =
+      option("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\ncredential: endpoint\n");
+    let error = AnthropicCompatibleFactory
+      .build(Some(&option), &cfg, LaunchArgs::default())
+      .err()
+      .map(|error| format!("{error:#}"))
+      .expect("an empty key is refused");
+    assert!(error.contains("credentials.endpoint.api_key is empty"), "{error}");
   }
 }

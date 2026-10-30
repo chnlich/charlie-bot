@@ -13,12 +13,12 @@ Sections 1-3 are the Python baseline as history: the Python CLI, its entry point
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
 `rust/crates/infra/cli-common`. Every row in section 3 marked *ported to Rust* runs on the Rust binary, and the
-dispatcher's vocabulary is the 21 caller-bearing names; the four caller-less Python names (`disk-sweep`,
+dispatcher's vocabulary is the 22 caller-bearing names; the four caller-less Python names (`disk-sweep`,
 `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2). The golden cases under
 `rust/crates/app/cli/tests/golden/` were recorded from the Python CLI while it existed and now replay against the Rust
 binary; the replay command is in `rust/crates/app/cli/README.md`. Rust deviations: no port
 cache — the port comes from `<home>/config.yaml`'s `server` section on every call; argument-parser help and usage text
-may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 21 caller-bearing names, so its
+may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 22 caller-bearing names, so its
 help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
 structlog console lines on stdout (a wall-clock stamp and a pid per line) are not reproduced — the golden harness drops
 them from both sides.
@@ -95,6 +95,7 @@ below.
 | `gc-trash [--yes]` | none | Lists `<paths.worktree_dir>/.trash/` with sizes; `--yes` deletes every entry (`rmtree`) | 0; 1 when a deletion fails | *ported to Rust* — the composed host loads and validates the whole `config.yaml` as Python does, and needs `CHARLIEBOT_REPO_ROOT` set (Python reads no checkout path); a failed deletion's message names the entry, where Python's `rmtree` may name an inner file; a top-level trash entry that is a file or a symlink is removed, where Python's `rmtree` refuses it (exit 1) |
 | `improve --repo R --goal-file G --base-branch B [--iterations N] [--plan-file P] [--backend] [--work-branch] [--merge-back] [--session]` | `POST /api/internal/improve`, with a readback | Reads `G` and `P` | 0; 1; 2 | *ported to Rust* |
 | `improve-stop [--session]` | `POST /api/internal/improve/stop` | none | 0 prints `stopped`; 1; 2 | *ported to Rust* |
+| `improve-review --direction D --backend ID --prompt F --pr N --pr-url URL` | none | Reads the entry `ID` in `<home>/config.yaml` (`model`, `api_base`, `context_window`, `credential`) and that credential's non-empty `api_key` in `<home>/credentials.yaml`, then `F`. Writes `/tmp/improve-<D>/review-<random>/{task.md,events.ndjson,verdict.md}` and `~/improve/<D>/clc-sessions/`. Runs `charlie-code` on PATH with the key in the child's environment only; every byte it writes or forwards has the key value replaced by `****`. | 0 prints the verdict file's path and nothing else; 1 a preflight item is missing or the review failed | Rust only; no Python counterpart |
 | `memory query --topic T [--audience master\|worker]` | none | Reads `<home>/memory/` (creates the store scaffold on first use, `files.md` 5.10). With `CHARLIEBOT_RUN_TOKEN` set, it verifies the token against `credentials.charliebot.access_key` and reads `sessions/<sid>/metadata.json`, `data/runs/<run>/metadata.json` and `data/chat_events.jsonl` to fix the audience from the run's session profile. | 0; 1 (unknown topic, invalid token, inactive run, store error); 2 usage | *ported to Rust*
 | `memory add [--file F]` | none | Writes `<home>/memory/staging/<ts>-<sess8>-<slug>.md` and prints its path | 0; 1; 2 | *ported to Rust*
 | `memory lint [--dir D]` | none | Reads the store or `D` | 0, including warnings; 1 on violations; 2 | *ported to Rust*
@@ -133,5 +134,5 @@ uv run python -m src.app.main --help | sed -n '/Available subcommands:/,$p' | ta
   | while read c; do grep -q "\`$c" rust/docs/contract/state/cli.md && echo "ok $c" || echo "MISSING $c"; done
 ```
 
-The Python CLI is deleted; the Rust binary now answers the same question via its dispatcher help, which names the 21
+The Python CLI is deleted; the Rust binary now answers the same question via its dispatcher help, which names the 22
 caller-bearing subcommands.

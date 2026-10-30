@@ -245,7 +245,9 @@ fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
   let (mut server, receiver) = start_server(temporary.path(), &home, false);
   let mut lines = wait_for_event(&mut server, &receiver, "bind_failed", Duration::from_secs(30));
   let line = lines.last().expect("the bind failure line");
-  assert!(line.contains("[error    ] bind_failed "), "{line}");
+  let row = logline::parse(line).expect("the bind failure line is a log line");
+  assert_eq!(row.event, "bind_failed");
+  assert!(row.location.starts_with("server/main.rs:"), "the location names the call in main.rs: {line}");
   assert!(
     field_of(line, "error").is_some_and(|error| error.contains(&format!("127.0.0.1:{port}"))),
     "the bind error names the address: {line}"

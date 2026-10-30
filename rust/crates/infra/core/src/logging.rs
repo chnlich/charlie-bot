@@ -3,7 +3,8 @@
 //! An event's message is its name, the same name the Python server's structlog call logs
 //! (`tracing::info!(path = ..., "charliebot_home_ready")`). A field named `event` names the event instead, and does not
 //! repeat after it; with both, the `event` field wins, as the JSON writer this format replaced extended the message's
-//! map with the fields. A line reads `<UTC time> [<level>] <event> <key=value>...`, with the fields in call order.
+//! map with the fields. A line reads `<UTC time> [<level>] <location> <event> <key=value>...`, with the fields in call
+//! order and the location the file and line of the tracing call.
 
 use std::io::Write;
 
@@ -45,9 +46,46 @@ impl<S: Subscriber> Layer<S> for StdoutLines {
 pub fn render_line(event: &Event<'_>) -> String {
   let mut fields = FieldMap::default();
   event.record(&mut fields);
-  let level = logline::level_word(event.metadata().level());
+  let metadata = event.metadata();
+  let level = logline::level_word(metadata.level());
   let name = fields.event.or(fields.message).unwrap_or_default();
-  logline::render(&timefmt::log_timestamp(), level, &name, &fields.fields)
+  let file = metadata.file().expect("tracing macros record the file");
+  let line = metadata.line().expect("tracing macros record the line");
+  logline::render(&timefmt::log_timestamp(), level, &location_text(file, line), &name, &fields.fields)
+}
+
+/// The location column's text: the file and line of the tracing call, as `<path>:<line>` with the path shortened.
+pub fn location_text(file: &str, line: u32) -> String {
+  format!("{}:{line}", shortened_file(file))
+}
+
+/// A tracing file path as the location column reads it: a workspace path loses its group and `src/`, a cargo registry
+/// path keeps its package and everything after it, and any other path stays as the compiler gave it.
+fn shortened_file(file: &str) -> String {
+  if let Some(shortened) = workspace_file(file) {
+    return shortened;
+  }
+  if let Some(shortened) = registry_file(file) {
+    return shortened;
+  }
+  file.to_string()
+}
+
+/// `crates/<group>/<crate>/src/<rest>` as `<crate>/<rest>`.
+fn workspace_file(file: &str) -> Option<String> {
+  let segments: Vec<&str> = file.split('/').collect();
+  if segments.len() < 5 || segments[0] != "crates" || segments[3] != "src" {
+    return None;
+  }
+  Some(format!("{}/{}", segments[2], segments[4..].join("/")))
+}
+
+/// `…/registry/src/<index>/<package>-<version>/<rest>` as `<package>-<version>/<rest>`.
+fn registry_file(file: &str) -> Option<String> {
+  let (_, after) = file.split_once("registry/src/")?;
+  let (_, after) = after.split_once('/')?;
+  let (package, rest) = after.split_once('/')?;
+  Some(format!("{package}/{rest}"))
 }
 
 /// An event's fields: `message` and `event` name the line, the rest keep their call order.
@@ -102,7 +140,7 @@ mod tests {
   use tracing_subscriber::layer::{Context, SubscriberExt};
   use tracing_subscriber::{Layer, Registry};
 
-  use super::{render_line, targets_filter};
+  use super::{location_text, render_line, targets_filter};
   use crate::logline;
 
   struct Capture(Arc<Mutex<Vec<(String, String)>>>);
@@ -153,6 +191,45 @@ mod tests {
     let row = logline::parse(line).expect("the line reads back");
     assert_eq!(row.event, "slack_listener_connected");
     assert_eq!(row.field("event"), None);
+  }
+
+  #[test]
+  fn a_call_renders_its_file_and_line_in_the_location_column() {
+    use std::cell::Cell;
+
+    let call_line = Cell::new(0);
+    let lines = rendered(|| {
+      call_line.replace(line!() + 1);
+      tracing::info!(event = "slack_listener_connected");
+    });
+    let [line] = lines.as_slice() else { panic!("one call rendered {:?}", lines) };
+    let row = logline::parse(line).expect("the line reads back");
+    assert_eq!(row.location, format!("core/logging.rs:{}", call_line.get()), "{line}");
+    assert_eq!(row.event, "slack_listener_connected");
+  }
+
+  #[test]
+  fn a_workspace_path_drops_the_group_and_src() {
+    assert_eq!(location_text("crates/features/slack/src/slack_listener.rs", 245), "slack/slack_listener.rs:245");
+    assert_eq!(location_text("crates/infra/core/src/logging.rs", 50), "core/logging.rs:50");
+    assert_eq!(
+      location_text("crates/app/cli/src/commands/release_helper.rs", 100),
+      "cli/commands/release_helper.rs:100"
+    );
+  }
+
+  #[test]
+  fn a_registry_path_keeps_the_package_and_the_rest() {
+    assert_eq!(
+      location_text("/home/u/.cargo/registry/src/index.crates.io-6f17d22bba15001f/serde_json-1.0.145/src/lib.rs", 7),
+      "serde_json-1.0.145/src/lib.rs:7"
+    );
+  }
+
+  #[test]
+  fn any_other_path_is_written_as_the_compiler_gave_it() {
+    assert_eq!(location_text("src/main.rs", 3), "src/main.rs:3");
+    assert_eq!(location_text("crates/features/slack/build.rs", 9), "crates/features/slack/build.rs:9");
   }
 
   #[test]

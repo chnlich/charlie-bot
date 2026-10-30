@@ -260,8 +260,10 @@ mod tests {
     fs::write(
       &dir,
       concat!(
-        "2026-10-29 07:11:32.244Z [info     ] server_ready                   ready_in_ms=1\n",
-        "2026-10-29 07:11:33.000Z [info     ] task_recovery_resume           run_id='r s'\n",
+        "2026-10-29 07:11:32.244Z [info     ] main/main.rs:305               server_ready                   ready_in_ms=1\n",
+        "2026-10-29 07:11:33.000Z [info     ] tasks/recovery.rs:542          task_recovery_resume           run_id='r s'\n",
+        // A release before the location column writes the text form without it, which a rollback switch restores.
+        "2026-10-29 07:11:35.000Z [info     ] task_recovery_resume           run_id=past\n",
         "2026-10-26 02:16:37 [info     ] task_recovery_resume           run_id=old\n",
         "2026-10-29 07:11:34.000Z [info     ] task_recovery_resume           run_id=late",
       ),
@@ -271,6 +273,7 @@ mod tests {
     assert!(matches(&dir, "server_ready", &BTreeMap::new()).expect("the log reads"));
     let run = |id: &str| BTreeMap::from([("run_id".to_string(), id.to_string())]);
     assert!(matches(&dir, "task_recovery_resume", &run("r s")).expect("the log reads"));
+    assert!(matches(&dir, "task_recovery_resume", &run("past")).expect("the log reads"));
     assert!(!matches(&dir, "task_recovery_resume", &run("old")).expect("the log reads"));
     assert!(!matches(&dir, "task_recovery_resume", &run("late")).expect("the log reads"));
   }

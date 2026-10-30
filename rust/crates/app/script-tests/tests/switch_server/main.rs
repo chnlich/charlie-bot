@@ -445,7 +445,7 @@ fn readlink_opt(path: &Path) -> Option<PathBuf> {
 /// Its resume line is the one the check wants instead for a run whose process still runs.
 fn drain_line(run_id: &str) -> String {
   let fields = [("session".to_string(), json!(SESSION)), ("run_id".to_string(), json!(run_id))];
-  logline::render("2026-10-26 02:15:04.200Z", "warning", "task_recovery_drain", &fields)
+  logline::render("2026-10-26 02:15:04.200Z", "warning", "tasks/recovery.rs:542", "task_recovery_drain", &fields)
 }
 
 #[test]

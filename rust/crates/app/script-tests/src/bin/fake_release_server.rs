@@ -21,6 +21,7 @@ use charliebot_cli_common::skew;
 use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_core::logging;
 use charliebot_core::logline;
 use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
@@ -180,11 +181,12 @@ fn sorted_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
   Ok(paths)
 }
 
-/// One log line on stdout, in the server's text form: the time, the level, the event and its fields.
+/// One log line on stdout, in the server's text form: the time, the level, the location, the event and its fields.
 fn log(event: &str, fields: Value) {
   let Value::Object(fields) = fields else { panic!("a log line's fields are a JSON object") };
   let fields: Vec<(String, Value)> = fields.into_iter().collect();
-  println!("{}", logline::render(&timefmt::log_timestamp(), "info", event, &fields));
+  let location = logging::location_text(file!(), line!());
+  println!("{}", logline::render(&timefmt::log_timestamp(), "info", &location, event, &fields));
 }
 
 impl Server {

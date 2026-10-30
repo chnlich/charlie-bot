@@ -42,17 +42,20 @@ The server writes each log line to stdout in the grammar of `charliebot_core::lo
 
 - the UTC time to the millisecond, `YYYY-MM-DD HH:MM:SS.mmmZ`;
 - the level in brackets, padded to nine columns;
+- the source location of the tracing call as `<path>:<line>`, padded to 30 columns, so the event names stay aligned and a longer location pushes only its own line;
 - the event name, padded to 30 columns;
 - the fields as `key=value`, in the order the event logs them;
 - a value that is empty, or holds whitespace, a control character, `=`, `'` or `"`, is quoted with Python's `repr(str)` escapes, so one event stays on one line.
 
+The location path is the compiler's file path, shortened: a workspace path `crates/<group>/<crate>/src/<rest>` writes `<crate>/<rest>` (so `crates/app/server/src/request_log.rs` writes `server/request_log.rs`), a cargo registry path `…/registry/src/<index>/<package>-<version>/<rest>` writes `<package>-<version>/<rest>`, and any other path stays as the compiler gave it. The line number is the line where the macro call starts.
+
 Example (synthetic values):
 
 ```text
-2026-01-01 12:00:00.000Z [info     ] http_request                   method=GET path=/api/sessions/ status=200 duration_ms=4 client=127.0.0.1
+2026-01-01 12:00:00.000Z [info     ] server/request_log.rs:39       http_request                   method=GET path=/api/sessions/ status=200 duration_ms=4 client=127.0.0.1
 ```
 
-The Python server rendered the same layout with structlog's console renderer, in local time with the fields sorted by key.
+The Python server rendered the same layout with structlog's console renderer, in local time with the fields sorted by key, and wrote no location column.
 
 uvicorn runs with `log_level="warning"` (`server.py:600`). Thus uvicorn writes no access log. The `http_request` line is the only request log.
 

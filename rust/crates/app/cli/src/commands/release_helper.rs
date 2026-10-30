@@ -1332,6 +1332,11 @@ mod tests {
   /// The time of the fixture lines.
   const STAMP: &str = "2026-10-21 10:00:01.000Z";
 
+  /// The location column of the cgroup events, from `crates/runtime/agents/src/transport/cgroup.rs`.
+  const CGROUP_LOCATION: &str = "agents/transport/cgroup.rs:350";
+  /// The location column of the server's startup events, from `crates/app/server/src/main.rs`.
+  const SERVER_LOCATION: &str = "main/main.rs:305";
+
   #[test]
   fn the_sweep_line_is_read_from_text_and_json_logs() {
     // The server's `names = ?removed`: the Debug text of the list.
@@ -1339,6 +1344,7 @@ mod tests {
     let text = logline::render(
       STAMP,
       "info",
+      CGROUP_LOCATION,
       SWEEP_REMOVED,
       &[("count".to_string(), json!(2)), ("names".to_string(), json!(removed))],
     );
@@ -1350,7 +1356,10 @@ mod tests {
     assert_eq!(sweep_removed_names(encoded).unwrap(), Some(vec!["charliebot-sess-cccccccc".to_string()]));
     let listed = r#"{"event": "session_cgroup_sweep_removed", "names": ["charliebot-sess-dddddddd"]}"#;
     assert_eq!(sweep_removed_names(listed).unwrap(), Some(vec!["charliebot-sess-dddddddd".to_string()]));
-    assert_eq!(sweep_removed_names(&logline::render(STAMP, "info", "server_ready", &[])).unwrap(), None);
+    assert_eq!(
+      sweep_removed_names(&logline::render(STAMP, "info", CGROUP_LOCATION, "server_ready", &[])).unwrap(),
+      None
+    );
   }
 
   #[test]
@@ -1360,6 +1369,7 @@ mod tests {
     let enabled = logline::render(
       STAMP,
       "info",
+      CGROUP_LOCATION,
       CGROUP_ENABLED,
       &[
         ("memory_max_mb".to_string(), json!(1024)),
@@ -1367,8 +1377,13 @@ mod tests {
         ("tasks_max".to_string(), json!(256)),
       ],
     );
-    let created =
-      logline::render(STAMP, "info", CGROUP_CREATED, &[("path".to_string(), json!("/a/charliebot-sess-aaaaaaaa"))]);
+    let created = logline::render(
+      STAMP,
+      "info",
+      CGROUP_LOCATION,
+      CGROUP_CREATED,
+      &[("path".to_string(), json!("/a/charliebot-sess-aaaaaaaa"))],
+    );
     fs::write(&path, format!("{enabled}\n{created}\n")).unwrap();
 
     let rows = log_rows(&path.to_string_lossy()).unwrap();
@@ -1405,8 +1420,11 @@ mod tests {
     let directory = temporary();
     let text = directory.path().join("text.log");
     let json = directory.path().join("json.log");
-    let ready = logline::render(STAMP, "info", "server_ready", &[("ready_in_ms".to_string(), json!(1))]);
-    fs::write(&text, format!("{ready}\n")).unwrap();
+    let ready =
+      logline::render(STAMP, "info", SERVER_LOCATION, "server_ready", &[("ready_in_ms".to_string(), json!(1))]);
+    // A release before the location column writes the text form without it, which a rollback switch restores.
+    let old_ready = format!("{} [info     ] server_ready                   ready_in_ms=1\n", STAMP);
+    fs::write(&text, format!("{ready}\n{old_ready}")).unwrap();
     fs::write(
       &json,
       "{\"event\": \"server_ready\", \"ready_in_ms\": 1, \"level\": \"info\", \"timestamp\": \"2026-10-21T10:00:02.000000Z\"}\n",

@@ -196,8 +196,9 @@ fn test_a_passing_run_installs_both_binaries_and_leaves_current() {
 
 /// A text log whose sweep removed two names, both of them sessions under the home.
 const TEXT_LOG: &str = concat!(
-  "2026-10-21 10:00:00.000Z [info     ] session_cgroup_enabled         memory_max_mb=1024 swap_max_mb=0 tasks_max=256\n",
-  "2026-10-21 10:00:01.000Z [info     ] session_cgroup_sweep_removed   count=2 ",
+  "2026-10-21 10:00:00.000Z [info     ] agents/transport/cgroup.rs:350 session_cgroup_enabled         ",
+  "memory_max_mb=1024 swap_max_mb=0 tasks_max=256\n",
+  "2026-10-21 10:00:01.000Z [info     ] agents/transport/cgroup.rs:361 session_cgroup_sweep_removed   count=2 ",
   "names='[\"charliebot-sess-aaaaaaaa\", \"charliebot-sess-bbbbbbbb\"]'\n",
 );
 

@@ -199,18 +199,6 @@ struct Timing {
   dormancy_interval: Duration,
 }
 
-impl Default for Timing {
-  fn default() -> Self {
-    Self {
-      remote_intervals: REMOTE_PROBE_INTERVALS.into_iter().map(Duration::from_secs).collect(),
-      remote_plateau: Duration::from_secs(REMOTE_PROBE_PLATEAU_SECONDS),
-      sacct_interval: Duration::from_secs(SACCT_POLL_INTERVAL_SECONDS),
-      remote_sacct_grace: Duration::from_secs(REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS),
-      dormancy_interval: Duration::from_secs(DORMANCY_CHECK_SECONDS),
-    }
-  }
-}
-
 impl TriggerManager {
   /// Construct the one manager held in startup state.
   pub fn new(features: Arc<FeatureContext>) -> TriggerManager {
@@ -220,7 +208,13 @@ impl TriggerManager {
       create_locks: StdMutex::new(HashMap::new()),
       probe_programs: ProbePrograms { ssh: "ssh".to_string(), sacct: "sacct".to_string() },
       ssh_control_dir: None,
-      timing: Timing::default(),
+      timing: Timing {
+        remote_intervals: REMOTE_PROBE_INTERVALS.into_iter().map(Duration::from_secs).collect(),
+        remote_plateau: Duration::from_secs(REMOTE_PROBE_PLATEAU_SECONDS),
+        sacct_interval: Duration::from_secs(SACCT_POLL_INTERVAL_SECONDS),
+        remote_sacct_grace: Duration::from_secs(REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS),
+        dormancy_interval: Duration::from_secs(DORMANCY_CHECK_SECONDS),
+      },
     }
   }
 

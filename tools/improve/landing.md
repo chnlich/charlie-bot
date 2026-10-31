@@ -131,28 +131,30 @@ One pull request per round is the unit that CI and the reviewer check.
 
 ## Step 6: review the diff
 
-Make the scratch directory with `mkdir -p /tmp/improve-<direction>` and `mktemp -d /tmp/improve-<direction>/XXXXXX`.
-Write the review task file there: `tools/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
-Run `charlie-code` from that directory, outside the clone.
-Use the model, API base and context window of the `claude-code-kimi-k3.1-pro` entry in `backends.options` of `$CHARLIEBOT_HOME/config.yaml`; the gateway route needs the provider prefix on the model and the `/v1` suffix on the API base:
+Run the review through `charliebot improve-review`, outside the clone:
 
-    charlie-code --json \
-      --model openai/<model> \
-      --api-base <api_base>/v1 \
-      --context-window <context_window> \
-      --session-dir ~/improve/<direction>/clc-sessions \
-      --task-file <task-file>
+    charliebot improve-review \
+      --direction <direction> \
+      --backend claude-code-kimi-k3.1-pro \
+      --prompt tools/improve/code_review_prompt.md \
+      --pr <number> \
+      --pr-url <url>
 
-The round runs on the remote host.
-The write boundary there denies every write outside the round's own directories.
-The review's sessions therefore go to the direction's own folder.
-The scratch directory keeps the reviewer's own git checkouts away from the clone's HEAD.
+The command reads the entry's model, API base and context window from `backends.options` of `$CHARLIEBOT_HOME/config.yaml`; the gateway route needs the provider prefix on the model and the `/v1` suffix on the API base, and the command adds both.
+It reads the entry's `credential`, which is `aigw_charliebot_agents`, from `$CHARLIEBOT_HOME/credentials.yaml` and gives the `api_key` to `charlie-code` as `CHARLIE_CODE_API_KEY`.
+Without that variable the CLI sends `EMPTY` and the gateway rejects the call, so the round passes no key by hand.
+The key enters the child's environment only.
+
+The command writes the task file, `tools/improve/code_review_prompt.md` verbatim followed by one final line `PR: <number> <url>`, under `/tmp/improve-<direction>/review-<random>/`, and keeps the reviewer's sessions under `~/improve/<direction>/clc-sessions/`.
+The round runs on the remote host, whose write boundary allows those two directories and denies every write outside the round's own directories.
+The scratch directory sits outside the clone, so the reviewer's own git checkouts stay away from the clone's HEAD.
 The review is the independent check that the topic is complete and correct.
 
 The reviewer's stdout is an NDJSON event stream.
-Take the verdict from the `final_output` field of its final `result` event.
+The command keeps it in `events.ndjson` in the scratch directory with every key value replaced by `****`, and takes the verdict from the `final_output` field of its final `result` event.
+It prints the path of the verdict file.
 
-Post the verdict as one pull-request comment through the posting script:
+Post the verdict file as one pull-request comment through the posting script:
 
     tools/improve/github-post.sh pr-comment --body-file <verdict file> <PR>
 
@@ -297,7 +299,7 @@ When the main run passed, start at step 1 of the outside-diff steps above.
 
 ## Cleanup before the report
 
-Delete each directory that this round's `mktemp` made, through the exact path that `mktemp` returned.
+Delete each completed review's scratch directory, through the directory of the verdict file path that `charliebot improve-review` printed.
 Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
 The evidence directory stays: it holds the round's screenshots and measurement logs.
 A killed round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1).

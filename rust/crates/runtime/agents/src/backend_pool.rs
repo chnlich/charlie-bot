@@ -75,6 +75,9 @@ pub const BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: &[&str] = &[
 /// The session metadata slot that records whether the backend pool selected a worker's backend.
 pub const METADATA_OWNER: &str = "backend_pool";
 
+/// The session metadata field that records whether the pool chose the backend, held in the `backend_pool` slot.
+pub const BACKEND_FROM_POOL_FIELD: &str = "backend_from_pool";
+
 /// The cooldown for a quota error that names no reset time.
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
 
@@ -356,7 +359,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       on: MetadataFile::Session,
       after: None,
       fields: vec![
-        SlotField { name: "backend_from_pool", default: serde_json::json!(false) },
+        SlotField { name: BACKEND_FROM_POOL_FIELD, default: serde_json::json!(false) },
         SlotField { name: "route", default: Value::Null },
       ],
     },
@@ -365,7 +368,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<String> {
-  let value = values.get_mut("backend_from_pool")?;
+  let value = values.get_mut(BACKEND_FROM_POOL_FIELD)?;
   let boolean = match value {
     Value::Bool(value) => *value,
     Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,
@@ -373,9 +376,9 @@ fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<Strin
     Value::String(value) => match value.to_ascii_lowercase().as_str() {
       "1" | "true" | "t" | "yes" | "y" | "on" => true,
       "0" | "false" | "f" | "no" | "n" | "off" => false,
-      _ => return Some("backend_from_pool must be a boolean".to_string()),
+      _ => return Some(format!("{BACKEND_FROM_POOL_FIELD} must be a boolean")),
     },
-    _ => return Some("backend_from_pool must be a boolean".to_string()),
+    _ => return Some(format!("{BACKEND_FROM_POOL_FIELD} must be a boolean")),
   };
   *value = Value::Bool(boolean);
   if let Some(route) = values.get("route")

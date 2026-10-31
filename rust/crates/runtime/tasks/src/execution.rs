@@ -1900,7 +1900,7 @@ impl TaskExecutionAdapter {
       return true;
     }
     // The pool's slot field `backend_from_pool`, which the metadata holds at its top level (`fields_of(meta, owner)`).
-    meta.extra("backend_from_pool").and_then(Value::as_bool).unwrap_or(false)
+    meta.extra(backend_pool::BACKEND_FROM_POOL_FIELD).and_then(Value::as_bool).unwrap_or(false)
       || meta
         .extra("route")
         .and_then(|route| route.get("backends"))

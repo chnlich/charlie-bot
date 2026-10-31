@@ -480,7 +480,10 @@ async fn delegate_task_tree(
   features.store.runtime_gate(&create_request, &caller)?;
   let child = features.store.create_task(create_request, caller, Default::default()).await?;
   if backend.from_pool || backend.route.is_some() {
-    let mut slot_fields = serde_json::Map::from_iter([("backend_from_pool".to_string(), json!(backend.from_pool))]);
+    let mut slot_fields = serde_json::Map::from_iter([(
+      charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
+      json!(backend.from_pool),
+    )]);
     if let Some(route) = backend.route.as_ref() {
       slot_fields.insert("route".to_string(), json!(route));
     }

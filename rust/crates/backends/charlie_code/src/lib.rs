@@ -7,7 +7,7 @@ pub mod flags;
 pub mod options;
 mod translate;
 
-pub use charlie_code_cli::API_KEY_ENV;
+pub use charlie_code_cli::{API_KEY_ENV, TASK_FILE_NAME};
 
 use std::sync::Arc;
 

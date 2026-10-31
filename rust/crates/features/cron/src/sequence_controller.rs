@@ -388,11 +388,15 @@ fn last_saturday_1am_utc(now: chrono::DateTime<Utc>) -> anyhow::Result<UtcDateTi
   let timezone = chrono_tz::America::Los_Angeles;
   let now_pt = now.with_timezone(&timezone);
   let days_since_saturday = (i64::from(now_pt.weekday().num_days_from_sunday()) + 1).rem_euclid(7);
-  let saturday_1am = now_pt
+  let mut saturday_1am = now_pt
     .date_naive()
     .and_hms_opt(1, 0, 0)
     .ok_or_else(|| anyhow::anyhow!("Saturday 01:00 is not a valid local time"))?
     - chrono::Duration::days(days_since_saturday);
+  // On a Saturday before 01:00 PT, this week's boundary is still ahead; the last one is a week back.
+  if saturday_1am > now_pt.naive_local() {
+    saturday_1am -= chrono::Duration::days(7);
+  }
   let saturday_1am = timezone
     .from_local_datetime(&saturday_1am)
     .single()
@@ -816,7 +820,7 @@ mod tests {
   use serde_json::{Value, json};
   use tokio::sync::watch;
 
-  use super::{CronBinding, register_step_run, row_schedule_fields};
+  use super::{CronBinding, last_saturday_1am_utc, register_step_run, row_schedule_fields};
   use crate::config::{ScheduledTaskConfig, StepConfig};
   use crate::test_support::{feature_context, manager};
 
@@ -869,6 +873,22 @@ mod tests {
     assert_eq!(memo.as_ref().unwrap().builds, 2);
     row_schedule_fields(&mut memo, &tasks, 18, &session_ids, at_fire);
     assert_eq!(memo.as_ref().unwrap().builds, 3);
+  }
+
+  #[test]
+  fn the_last_saturday_boundary_is_always_in_the_past() {
+    // Saturday 00:14 PT: this week's 01:00 boundary is still ahead, so the last one is a week back.
+    let before_one = chrono::DateTime::parse_from_rfc3339("2026-10-31T07:14:00Z").expect("the stamp parses").to_utc();
+    assert_eq!(
+      last_saturday_1am_utc(before_one).expect("the boundary builds").into_inner().unix_timestamp(),
+      chrono::DateTime::parse_from_rfc3339("2026-10-24T08:00:00Z").expect("the stamp parses").timestamp()
+    );
+    // Saturday 02:14 PT: this week's boundary has passed and is the last one.
+    let after_one = chrono::DateTime::parse_from_rfc3339("2026-10-31T09:14:00Z").expect("the stamp parses").to_utc();
+    assert_eq!(
+      last_saturday_1am_utc(after_one).expect("the boundary builds").into_inner().unix_timestamp(),
+      chrono::DateTime::parse_from_rfc3339("2026-10-31T08:00:00Z").expect("the stamp parses").timestamp()
+    );
   }
 
   fn binding(features: &Arc<charliebot_registry::context::FeatureContext>, names: &[&str]) -> CronBinding {

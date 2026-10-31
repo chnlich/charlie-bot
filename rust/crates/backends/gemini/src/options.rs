@@ -1,5 +1,4 @@
-//! The gemini option model. The type names no field of its own, so every key of its option is refused, as pydantic's
-//! `extra='forbid'` refuses it.
+//! The gemini option model. The type names no field of its own, so every key of its option is refused.
 
 use serde_yaml::Mapping;
 

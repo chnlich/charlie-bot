@@ -1,4 +1,4 @@
-//! The gemini command and child environment (`src/backends/gemini/gemini_cli.py`).
+//! The gemini command and child environment.
 
 use std::path::Path;
 

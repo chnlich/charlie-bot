@@ -1,4 +1,4 @@
-//! The gemini backend factory (`src/backends/gemini/factory.py`), resolving the gemini binary from the package's host.
+//! The gemini backend factory, resolving the gemini binary from the package's host.
 
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use charliebot_mock_home::check::check;
+use charliebot_mock_home::check::{CheckOutcome, check};
 use charliebot_mock_home::generate::generate;
 use charliebot_mock_home::{DATA_VERSION, DEFAULT_SEED, PRODUCTION_SESSIONS};
 use clap::{Parser, Subcommand};
@@ -50,18 +50,25 @@ fn positive_count(text: &str) -> Result<usize, String> {
   }
 }
 
+/// The exit code of a completed `check`: success when every check held, failure on a mismatch.
+fn check_exit_code(outcome: CheckOutcome) -> ExitCode {
+  match outcome {
+    CheckOutcome::Matches => ExitCode::SUCCESS,
+    CheckOutcome::Mismatches => ExitCode::FAILURE,
+  }
+}
+
 fn main() -> ExitCode {
   let result = match Cli::parse().command {
-    Action::Generate { output, sessions, seed } => generate(&output, sessions, seed).map(|()| true),
-    Action::Check { output, base_url } => check(&output, &base_url),
+    Action::Generate { output, sessions, seed } => generate(&output, sessions, seed).map(|()| ExitCode::SUCCESS),
+    Action::Check { output, base_url } => check(&output, &base_url).map(check_exit_code),
     Action::Version => {
       println!("{DATA_VERSION}");
-      Ok(true)
+      Ok(ExitCode::SUCCESS)
     }
   };
   match result {
-    Ok(true) => ExitCode::SUCCESS,
-    Ok(false) => ExitCode::FAILURE,
+    Ok(code) => code,
     Err(error) => {
       eprintln!("mock-home: {error:#}");
       ExitCode::FAILURE

@@ -975,7 +975,7 @@ fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>,
     let Some(api_base) = option.get(config::API_BASE_KEY).filter(|value| truthy(value)) else {
       continue;
     };
-    let credential = option.get("credential").filter(|value| truthy(value)).map(text_repr::value_str);
+    let credential = option.get(config::CREDENTIAL_KEY).filter(|value| truthy(value)).map(text_repr::value_str);
     return Ok(Some((text_repr::value_str(api_base), credential)));
   }
   Ok(None)

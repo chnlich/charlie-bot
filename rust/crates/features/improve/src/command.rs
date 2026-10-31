@@ -1,5 +1,5 @@
 //! The loop's durable state: `sessions/<id>/loops/` with the active lock, one directory per loop, its state file and its
-//! live goal and plan (`src/features/improve/improve_command.py:33-242`, `:435-487`).
+//! live goal and plan. The Python original is `src/features/improve/improve_command.py:33-242`, `:435-487`.
 
 use std::fmt;
 use std::io;
@@ -160,7 +160,7 @@ pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -
 }
 
 /// The state file of one loop directory as its JSON value, or `None` when the directory holds no state file. The value
-/// is not checked against `ImproveState`, so a state file that does not match it still reads: the switch helper's scan
+/// is not checked against `ImproveState`, so a state file that does not match it still reads. The switch helper's scan
 /// takes only the status and the controller's PID from it.
 pub fn read_loop_state_value(loop_dir: &Path) -> anyhow::Result<Option<Value>> {
   let path = loop_dir.join(STATE_FILE);

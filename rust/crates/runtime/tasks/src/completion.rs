@@ -1775,18 +1775,10 @@ impl TaskCompletion {
     Ok(())
   }
 
-  /// Recheck saved own-run close requests during startup, returning `None` when recovery is stopped.
-  pub async fn recheck_close_requests_until(
-    &self,
-    session_id: &str,
-    run_id: &str,
-    stop: &StartupStop,
-  ) -> StoreResult<Option<Vec<String>>> {
-    self.recheck_close_requests_inner(session_id, run_id, Some(stop), None).await
-  }
-
-  /// [`Self::recheck_close_requests_until`] for a boot replay that already holds the session's run records in order:
-  /// `newest_run_id` is the last of them, so the recheck does not list the session's runs again.
+  /// Recheck saved own-run close requests during a boot replay that already holds the session's run records in order.
+  ///
+  /// `newest_run_id` is the last of them, so the recheck does not list the session's runs again. Returns `None` when
+  /// recovery is stopped.
   pub async fn recheck_close_requests_newest_until(
     &self,
     session_id: &str,

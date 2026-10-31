@@ -3,7 +3,7 @@ use std::hash::Hash;
 
 /// A contiguous equal block with indices into the two compared sequences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MatchingBlock {
+struct MatchingBlock {
   pub a: usize,
   pub b: usize,
   pub size: usize,
@@ -76,7 +76,7 @@ fn find_longest_match_with_positions<T: Eq + Hash>(
 }
 
 /// Return non-adjacent matching blocks followed by the `SequenceMatcher` sentinel.
-pub fn matching_blocks<T: Eq + Hash>(a: &[T], b: &[T]) -> Vec<MatchingBlock> {
+fn matching_blocks<T: Eq + Hash>(a: &[T], b: &[T]) -> Vec<MatchingBlock> {
   let b_positions = build_b_positions(b);
   let mut queue = vec![(0, a.len(), 0, b.len())];
   let mut blocks = Vec::new();

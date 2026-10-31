@@ -367,6 +367,7 @@ pub async fn reconcile_task_tree(
       .and_then(|name| name.to_str())
       .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
       .to_string();
+    let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
     let Some(meta) = features.store.load_meta(&session_id).await? else {
       continue;
     };
@@ -433,6 +434,35 @@ async fn reconcile_node_until_stopped<T>(stop: &StartupStop, node_pass: impl Fut
   tokio::select! {
     result = node_pass => Some(result),
     _ = stop.cancelled() => None,
+  }
+}
+
+/// The boot-walk step time over which a session logs, so a slow boot names the session it waited in without growing
+/// the log on a healthy one.
+const SLOW_RECOVERY_STEP_MS: u64 = 200;
+
+/// Logs one boot-walk step of one session that took [`SLOW_RECOVERY_STEP_MS`] or more. One line per slow step: the
+/// log never grows with the number of events a healthy boot folds.
+fn log_slow_recovery_step(session_id: &str, step: &str, started: Instant) {
+  let elapsed_ms = started.elapsed().as_millis() as u64;
+  if elapsed_ms >= SLOW_RECOVERY_STEP_MS {
+    tracing::info!(target: "charliebot_tasks", session_id, step, elapsed_ms, "task_recovery_step_slow");
+  }
+}
+
+/// Times one session's boot-walk iteration and logs it at [`SLOW_RECOVERY_STEP_MS`] or more, so a slow boot names
+/// each session whose skip check or node pass it waited in.
+struct SessionTimer {
+  session_id: String,
+  started: Instant,
+}
+
+impl Drop for SessionTimer {
+  fn drop(&mut self) {
+    let elapsed_ms = self.started.elapsed().as_millis() as u64;
+    if elapsed_ms >= SLOW_RECOVERY_STEP_MS {
+      tracing::info!(target: "charliebot_tasks", session_id = %self.session_id, elapsed_ms, "task_recovery_session_slow");
+    }
   }
 }
 
@@ -539,7 +569,9 @@ async fn reconcile_node_inner(
       counters.drained += 1;
       tracing::warn!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_drain");
       let ended = Arc::new(|| false) as ResumeLiveness;
+      let drain_started = Instant::now();
       adapter.resume_run(session_id, &run.id, Some(ended)).await?;
+      log_slow_recovery_step(session_id, "drain_resume_run", drain_started);
       run_records_changed = true;
     }
   }

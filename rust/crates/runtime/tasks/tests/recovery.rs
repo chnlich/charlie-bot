@@ -2855,7 +2855,12 @@ fn manager_turn(session_id: &str, run_id: &str, started_at: &str) -> RunRecord {
 }
 
 /// Saves a close request owned by `owner_run_id`, as `TaskCompletion::save_close_request` writes it.
-async fn save_close_request(stack: &Stack, session_id: &str, request_id: &str, owner_run_id: &str) -> anyhow::Result<()> {
+async fn save_close_request(
+  stack: &Stack,
+  session_id: &str,
+  request_id: &str,
+  owner_run_id: &str,
+) -> anyhow::Result<()> {
   let guard = stack.store().control_lock().await;
   let event = charliebot_store::control_events::build_control_event(
     event_types::TASK_CLOSE_REQUESTED,
@@ -2888,8 +2893,7 @@ async fn land_finish_alone(stack: &Stack, session_id: &str, run_id: &str) -> any
 /// close once, and a close owned by an earlier run stays voided by a newer run in the same records.
 #[tokio::test]
 async fn boot_replay_rechecks_close_requests_against_the_run_snapshot() -> anyhow::Result<()> {
-  for (label, overtaken) in
-    [("the newest run replays its close", false), ("a newer run voids the earlier close", true)]
+  for (label, overtaken) in [("the newest run replays its close", false), ("a newer run voids the earlier close", true)]
   {
     let stack = Stack::start("exit 0").await?;
     let manager = stack.node("close-manager", None, TaskProfile::Manager, None).await?;

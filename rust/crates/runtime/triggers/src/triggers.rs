@@ -419,6 +419,8 @@ impl TriggerManager {
       if !entry.file_type().await?.is_dir() {
         continue;
       }
+      let recovery_started = Instant::now();
+      let mut recovered = 0u64;
       let directory = layout::triggers_dir(&entry.path());
       let directory_for_walk = directory.clone();
       let files = match tokio::task::spawn_blocking(move || trigger_files::iter_trigger_file_stats(directory_for_walk))
@@ -450,6 +452,7 @@ impl TriggerManager {
         }
         if trigger.status == TriggerStatus::Pending {
           self.start_task(trigger.clone());
+          recovered += 1;
           tracing::info!(
             target: "charliebot_triggers",
             trigger_id = %trigger.id,
@@ -458,6 +461,7 @@ impl TriggerManager {
           );
         }
       }
+      log_slow_trigger_recovery(&entry.path(), recovered, recovery_started);
     }
     Ok(())
   }
@@ -1295,6 +1299,22 @@ fn still_alive_label(pid_label: &str, log: Option<&str>) -> String {
 
 fn slurm_label(host: Option<&str>, job_id: i64) -> String {
   host.map_or_else(|| format!("slurm:{job_id}"), |host| format!("{host}:slurm:{job_id}"))
+}
+
+/// The per-session trigger-recovery time over which the boot logs, so a slow boot names the session whose trigger
+/// files it waited on without growing the log on a healthy one.
+const SLOW_TRIGGER_RECOVERY_MS: u64 = 1000;
+
+/// Logs one session's trigger-recovery step that took [`SLOW_TRIGGER_RECOVERY_MS`] or more. One line per slow step:
+/// the step covers the session's trigger-file stat walk, the trigger loads and the [`TriggerManager::start_task`]
+/// calls, the work a slow boot's trigger phase waits in.
+fn log_slow_trigger_recovery(session_dir: &Path, recovered: u64, started: tokio::time::Instant) {
+  let elapsed_ms = started.elapsed().as_millis() as u64;
+  if elapsed_ms < SLOW_TRIGGER_RECOVERY_MS {
+    return;
+  }
+  let session = session_dir.file_name().and_then(|name| name.to_str()).unwrap_or("");
+  tracing::info!(target: "charliebot_triggers", session, triggers = recovered, elapsed_ms, "trigger_recovery_session_slow");
 }
 
 fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]) -> String {

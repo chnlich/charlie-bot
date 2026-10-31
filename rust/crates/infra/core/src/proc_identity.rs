@@ -25,6 +25,13 @@ pub fn read_host_boot_time() -> io::Result<OffsetDateTime> {
   OffsetDateTime::from_unix_timestamp(seconds).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
+/// Read this process's storage reads from `/proc/self/io`: the bytes fetched from the storage layer (`read_bytes`)
+/// and the read syscalls (`syscr`). `None` when the kernel does not expose the file.
+pub fn read_self_storage_reads() -> Option<(u64, u64)> {
+  let io = Process::myself().ok()?.io().ok()?;
+  Some((io.read_bytes, io.syscr))
+}
+
 /// Check the recorded process id, start tick, non-zombie state, and current boot interval.
 pub fn is_run_alive(
   pid: Option<u32>,

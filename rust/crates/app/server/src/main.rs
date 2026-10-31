@@ -304,7 +304,13 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   // Python logs `server_ready` after starting its ready-phase services and yields straight after (`server.py:285-291`).
   // The host_auth poller's 300 ms startup tail keeps its first state read after this line while preserving the stop
   // check: a boot stopped before readiness does not emit `server_ready`.
-  tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready");
+  // The boot's storage reads ride on the same line, so a slow boot states in one place what its disk wait cost.
+  match charliebot_core::proc_identity::read_self_storage_reads() {
+    Some((read_bytes, read_ops)) => {
+      tracing::info!(ready_in_ms = round_ms(boot.elapsed()), read_bytes, read_ops, "server_ready");
+    }
+    None => tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready"),
+  }
 
   let listener = match bind(&cfg.server.host, cfg.server.port).await {
     Ok(listener) => listener,

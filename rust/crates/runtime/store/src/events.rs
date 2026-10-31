@@ -4,6 +4,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use charliebot_core::{fsutil, str_methods, text_repr};
 use memchr::{memchr_iter, memchr2, memchr2_iter};
@@ -24,6 +25,10 @@ use crate::ndjson;
 use crate::read_memos::FileSignature;
 use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
+
+/// The whole-log chat-events load size over which a load logs its file, size and wall time. Loads under it never
+/// log, so the log grows only on the boot's large reads.
+const WHOLE_LOG_LOGGED_BYTES: u64 = 1_000_000;
 
 /// Archived event values plus the live history's shared cache, traversed without cloning live events.
 pub struct ChatEventHistory {
@@ -892,7 +897,10 @@ impl Store {
     if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
       hook();
     }
-    ndjson::read_file_compact_until(path, should_stop)
+    let started = Instant::now();
+    let events = ndjson::read_file_compact_until(path, should_stop);
+    Self::log_whole_log_load(path, started);
+    events
   }
 
   fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
@@ -901,7 +909,19 @@ impl Store {
     if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
       hook();
     }
-    ndjson::read_file_compact(path)
+    let started = Instant::now();
+    let events = ndjson::read_file_compact(path);
+    Self::log_whole_log_load(path, started);
+    events
+  }
+
+  /// Logs a whole-log chat-events load of [`WHOLE_LOG_LOGGED_BYTES`] or more with its file, size and wall time, so a
+  /// slow boot names the log it waited on. One line per large load; grepping the event name counts them.
+  fn log_whole_log_load(path: &Path, started: Instant) {
+    let bytes = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+    if bytes >= WHOLE_LOG_LOGGED_BYTES {
+      tracing::info!(target: "charliebot_store", path = %path.display(), bytes, elapsed_ms = started.elapsed().as_millis() as u64, "chat_events_file_read");
+    }
   }
 
   /// The number of sessions whose live events are cached, and the number of cached events across them.

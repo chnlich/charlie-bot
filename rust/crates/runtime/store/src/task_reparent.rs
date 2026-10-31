@@ -16,6 +16,10 @@ use crate::{StoreError, StoreResult};
 /// The refusal for an agent reparent outside the caller's own subtree.
 pub const AGENT_REPARENT_SCOPE_REFUSAL: &str = "an agent may only reparent within its own subtree: the task must be below the caller's task, and the new parent must be the caller's task or below it";
 
+/// The `caller_session_id` field of the `task_reparented` fact: the agent session that asked for the move, null when
+/// the operator asked. The store writes the fact and the CLI reads it back, so both name the field through this const.
+pub const CALLER_SESSION_ID_FIELD: &str = "caller_session_id";
+
 /// A subtree rule that a reparent moves onto the moved task: the rule's reference and the task that held it.
 #[derive(Clone, Debug)]
 pub(crate) struct CarriedRule {
@@ -112,7 +116,7 @@ pub(crate) fn reparented_event(
     [
       ("previous_parent_id".to_string(), json!(previous_parent_id)),
       ("task_parent_id".to_string(), json!(task_parent_id)),
-      ("caller_session_id".to_string(), json!(caller_session_id)),
+      (CALLER_SESSION_ID_FIELD.to_string(), json!(caller_session_id)),
       ("carried_subtree_prompt".to_string(), carried_subtree_prompt),
     ],
   )

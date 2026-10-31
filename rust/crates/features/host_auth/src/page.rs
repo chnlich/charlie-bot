@@ -25,9 +25,14 @@ pub fn render(
   now: OffsetDateTime,
   request: &Parts,
 ) -> Result<Response, (String, String)> {
-  let context = context(state, now).map_err(|error| ("Exception".to_string(), error.to_string()))?;
+  let mut context = context(state, now).map_err(|error| ("Exception".to_string(), error.to_string()))?;
   let templating =
     features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+  // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
+  let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
+  if let Some(object) = context.as_object_mut() {
+    object.insert("static_asset_version".to_string(), Value::String(asset_version));
+  }
   templating
     .render_page(features, TEMPLATE, &context, request)
     .map_err(|error| (error.kind().to_string(), error.to_string()))

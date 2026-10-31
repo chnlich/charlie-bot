@@ -56,7 +56,12 @@ function refetchSessionList() {
   else switchSidebarFilter(currentFilter);
 }
 registerWsMessageHandler('session_group_changed', refetchSessionList, {advancesCursor: false});
-registerWsMessageHandler('task_tree_changed', refetchSessionList, {advancesCursor: false});
+// A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
+// the badge refetches with the list. Its 5 s poll covers a worker run's start, which broadcasts nothing.
+registerWsMessageHandler('task_tree_changed', () => {
+  refetchSessionList();
+  globalThis.ConcurrencyBadge?.refreshSoon();
+}, {advancesCursor: false});
 
 // A descendant session set its status: the status panel re-reads its child rows.
 registerWsMessageHandler('web_status_subtree', () => refreshSessionStatusPanel(), {advancesCursor: false});
@@ -89,6 +94,8 @@ registerWsMessageHandler('running_changed', (ev) => {
     }
   }
   refreshSessionStatusNow();
+  // A manager turn starts or ends: the concurrency badge's number moved with it.
+  globalThis.ConcurrencyBadge?.refreshSoon();
 }, {advancesCursor: false});
 
 // A backend switch on the active session: the header badge/dropdown must

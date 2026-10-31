@@ -106,10 +106,15 @@ fn read_ledger_at(features: &FeatureContext, now: Timestamp) -> anyhow::Result<L
 
 /// Render the page from one ledger read through the shared template engine.
 fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, (String, String)> {
-  let context =
+  let mut context =
     token_usage_context(read, &features.registry).map_err(|error| ("Exception".to_string(), format!("{error:#}")))?;
   let templating =
     features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+  // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
+  let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
+  if let Some(object) = context.as_object_mut() {
+    object.insert("static_asset_version".to_string(), Value::String(asset_version));
+  }
   templating
     .render_page(features, TEMPLATE, &context, request)
     .map_err(|error| (error.kind().to_string(), error.to_string()))

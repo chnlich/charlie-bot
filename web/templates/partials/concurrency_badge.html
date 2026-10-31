@@ -1,0 +1,81 @@
+{#- The concurrency badge: how many agents run right now, and the chart of that number over time.
+
+    One fragment, included once by every app page: inside the page's top bar where it has one, and as a direct child
+    of <body> where it has none (the `body > .cb-slot` rules then paint that bar). The file-served pages (the file
+    browser and artifact pages) carry neither the bar nor this fragment. The counting belongs to
+    rust/crates/runtime/session-api/src/concurrency.rs; web/static/js/concurrency-badge.js only displays it. -#}
+<div class="cb-slot">
+  <div class="cb-anchor">
+    <button id="concurrency-badge" class="cb-badge" type="button" data-running="0"
+            aria-haspopup="dialog" aria-expanded="false" aria-controls="concurrency-panel"
+            aria-label="0 running">
+      <span class="cb-dot" aria-hidden="true"></span><span id="concurrency-count">0 running</span>
+    </button>
+    <span id="concurrency-tip" class="cb-tip" role="tooltip" hidden></span>
+    <div id="concurrency-panel" class="cb-panel" role="dialog" aria-label="Concurrent agents" hidden>
+      <div class="cb-head">
+        <span class="cb-title">Concurrent agents</span>
+        <div class="cb-ranges" role="group" aria-label="Range">
+          <button type="button" class="cb-range" data-range="24h">24h</button>
+          <button type="button" class="cb-range" data-range="7d" aria-pressed="true">7d</button>
+          <button type="button" class="cb-range" data-range="all">All</button>
+        </div>
+        <button type="button" id="concurrency-close" class="cb-close" aria-label="Close">&times;</button>
+      </div>
+      <p id="concurrency-peak" class="cb-peak"></p>
+      <div id="concurrency-chart" class="cb-chart"></div>
+      <p id="concurrency-status" class="cb-status" hidden></p>
+    </div>
+  </div>
+</div>
+<style>
+  .cb-slot { position: relative; display: flex; align-items: center; margin-left: auto; flex: 0 0 auto }
+  /* A page with no top bar: the fragment's own slot is the bar. */
+  body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
+    border-bottom: 1px solid rgba(128, 138, 152, .28); background: rgba(255, 255, 255, .55) }
+  @media (prefers-color-scheme: dark) {
+    body > .cb-slot { background: rgba(18, 18, 19, .55); border-bottom-color: rgba(128, 138, 152, .3) }
+  }
+  body.dark > .cb-slot { background: rgba(15, 23, 42, .55); border-bottom-color: rgba(148, 163, 184, .25) }
+  .cb-anchor { position: relative; display: flex; align-items: center }
+  .cb-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid rgba(128, 138, 152, .45); background: rgba(128, 138, 152, .12); color: inherit;
+    font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer }
+  .cb-badge:hover { background: rgba(128, 138, 152, .22) }
+  .cb-badge[aria-expanded="true"] { border-color: #2563eb; color: #2563eb }
+  .cb-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #22c55e }
+  .cb-badge[data-running="0"] .cb-dot { background: #94a3b8 }
+  .cb-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; padding: 4px 8px;
+    border-radius: 6px; background: #1b2430; color: #ffffff; font-size: 11.5px; white-space: nowrap;
+    pointer-events: none }
+  .cb-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 50; width: 420px; max-width: 92vw;
+    padding: 12px 14px 14px; border-radius: 10px; border: 1px solid #d9dfe6; background: #ffffff; color: #1b2430;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .18); font-size: 12.5px; text-align: left }
+  @media (prefers-color-scheme: dark) {
+    .cb-panel { border-color: #38383a; background: #1a1a19; color: #f2f2ef }
+  }
+  body.dark .cb-panel { border-color: #334155; background: #1e293b; color: #e2e8f0 }
+  .cb-head { display: flex; align-items: center; gap: 8px }
+  .cb-title { font-size: 13px; font-weight: 600; margin-right: auto }
+  .cb-ranges { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: rgba(128, 138, 152, .16) }
+  .cb-range { padding: 2px 8px; border: 0; border-radius: 5px; background: transparent; color: inherit;
+    font: inherit; font-size: 11.5px; cursor: pointer }
+  .cb-range[aria-pressed="true"] { background: #2563eb; color: #ffffff }
+  .cb-close { width: 22px; height: 22px; border: 0; border-radius: 5px; background: transparent; color: inherit;
+    font-size: 16px; line-height: 1; cursor: pointer; opacity: .65 }
+  .cb-close:hover { opacity: 1 }
+  .cb-peak { margin: 8px 0 0; font-weight: 600; font-variant-numeric: tabular-nums }
+  .cb-chart { position: relative; margin-top: 6px; min-height: 150px }
+  .cb-chart svg { display: block; overflow: visible }
+  .cb-chart .cb-line { fill: none; stroke: #2563eb; stroke-width: 1.5; stroke-linejoin: round }
+  .cb-chart .cb-area { fill: #2563eb; fill-opacity: .16; stroke: none }
+  .cb-chart .cb-grid { stroke: rgba(128, 138, 152, .4); stroke-width: 1 }
+  .cb-chart .cb-axis { fill: currentColor; fill-opacity: .6; font-size: 10px }
+  .cb-chart .cb-cursor { stroke: #2563eb; stroke-width: 1; stroke-dasharray: 3 3 }
+  .cb-chart .cb-dot-mark { fill: #2563eb }
+  .cb-ptip { position: absolute; z-index: 60; padding: 3px 7px; border-radius: 6px; background: #1b2430;
+    color: #ffffff; font-size: 11px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -130%) }
+  .cb-status { margin: 8px 0 0; opacity: .7 }
+  .cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }
+</style>
+<script src="/static/js/concurrency-badge.js?v={{ static_asset_version|urlencode }}"></script>

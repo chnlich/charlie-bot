@@ -378,8 +378,7 @@ async fn render_page(
         object.insert("static_asset_version".to_string(), Value::String(asset_version));
         object.insert("auth_enabled".to_string(), Value::Bool(*auth_enabled));
       }
-      PageRuntime::Home => {}
-      PageRuntime::Events => {
+      PageRuntime::Home | PageRuntime::Events => {
         let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
         object.insert("static_asset_version".to_string(), Value::String(asset_version));
       }

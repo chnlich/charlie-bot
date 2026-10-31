@@ -187,6 +187,7 @@
           {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
         </div>
+        {% include 'partials/concurrency_badge.html' %}
       </header>
       {% for part in page_parts('below_header') %}{% include part %}{% endfor %}
 

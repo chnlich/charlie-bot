@@ -1,5 +1,5 @@
-//! The `gemini` backend type (`src/backends/gemini`): the gemini CLI in stream-json mode, and the two credential keys it
-//! retired, which the config migrates to their replacements.
+//! The `gemini` backend type: the gemini CLI in stream-json mode, and the two legacy credential keys
+//! (`gemini_api_key` and `gemini_model`) that the config migrates to `gemini.api_key` and `gemini.model`.
 
 pub mod factory;
 mod gemini_cli;
@@ -15,7 +15,7 @@ use charliebot_agents::cli_base::CliHost;
 
 const PACKAGE: &str = "src.backends.gemini";
 
-/// Registers the `gemini` type and its retired credential keys. As in Python, the type attributes no usage source.
+/// Registers the `gemini` type and the two legacy credential keys. The registration names no usage source.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   let host =
     CliHost::from_process().map_err(|error| RegistryError { package: PACKAGE, message: format!("{error:#}") })?;

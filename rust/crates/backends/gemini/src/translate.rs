@@ -1,5 +1,5 @@
-//! The gemini stream-json translator (`GeminiCliBackend.translate_event`). Assistant text accumulates until a non-delta
-//! message, or a tool, error or result event, flushes it as one text event.
+//! The gemini stream-json translator. Assistant text accumulates until a non-delta message, or a tool, error or result
+//! event, flushes it as one text event.
 
 use anyhow::bail;
 use charliebot_core::event_types;
@@ -23,7 +23,7 @@ impl GeminiTranslator {
     Self { text_buffer: String::new() }
   }
 
-  /// Translates one stream-json event. A type this translator does not handle flushes the buffer, as Python's fallthrough.
+  /// Translates one stream-json event. A type this translator does not handle flushes the buffer.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let Some(event) = event.as_object() else {
       bail!("gemini event is not a JSON object: {event}");
@@ -113,7 +113,7 @@ impl Translate for GeminiTranslator {
   }
 }
 
-/// The text of a failed tool call: the `message` of an object that carries one, else the Python `str` of the error.
+/// The text of a failed tool call: the `message` of an object that carries one, else `value_str`'s rendering of the error.
 fn error_message(error: &Value) -> anyhow::Result<String> {
   match error {
     Value::Object(fields) => match fields.get("message") {

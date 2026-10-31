@@ -1,10 +1,11 @@
-//! Python value semantics the codex port reproduces: `str.splitlines` and truthiness.
+//! Python value semantics the codex port reads: `str.splitlines` and truthiness, each from its one owner.
 
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
 
 pub use charliebot_agents::cli_base::truthy;
+pub use charliebot_core::str_methods::splitlines;
 
 /// The empty object a missing `x.get(key, {})` falls back to.
 static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
@@ -12,31 +13,6 @@ static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
 /// The empty object a missing `x.get(key, {})` falls back to.
 pub fn empty_object() -> &'static Map<String, Value> {
   &EMPTY_OBJECT
-}
-
-/// Python's `str.splitlines()`: the lines of `text` without their terminators. The terminators are wider than `\n`.
-pub fn splitlines(text: &str) -> Vec<&str> {
-  let mut lines = Vec::new();
-  let mut start = 0;
-  let mut chars = text.char_indices().peekable();
-  while let Some((index, c)) = chars.next() {
-    let terminator = match c {
-      '\r' if matches!(chars.peek(), Some((_, '\n'))) => {
-        chars.next();
-        2
-      }
-      '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-        c.len_utf8()
-      }
-      _ => continue,
-    };
-    lines.push(&text[start..index]);
-    start = index + terminator;
-  }
-  if start < text.len() {
-    lines.push(&text[start..]);
-  }
-  lines
 }
 
 /// `value.get(key)` of a Python dict where a missing or falsy value reads as absent: `value.get(key) or {}`.
@@ -66,14 +42,6 @@ mod tests {
   use super::*;
   use charliebot_core::str_methods;
   use serde_json::json;
-
-  #[test]
-  fn splitlines_breaks_where_str_does() {
-    assert_eq!(splitlines("a\nb\r\nc\rd"), ["a", "b", "c", "d"]);
-    assert_eq!(splitlines("x\u{2028}y\u{85}z\n"), ["x", "y", "z"]);
-    assert_eq!(splitlines("\n"), [""]);
-    assert!(splitlines("").is_empty());
-  }
 
   #[test]
   fn strip_takes_the_information_separators_too() {

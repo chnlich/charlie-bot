@@ -11,8 +11,6 @@ use charliebot_core::str_methods;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use crate::text_lines;
-
 /// The overall wait on one ssh subprocess; the kill it ends is what the classifier reads past.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 pub const DETAIL_MAX_CHARS: usize = 200;
@@ -50,7 +48,7 @@ pub fn build_detail(returncode: i32, output: &str) -> String {
   if stripped.is_empty() {
     return format!("exit {returncode}");
   }
-  let lines = text_lines::splitlines(stripped);
+  let lines = str_methods::splitlines(stripped);
   let (first, rest) = lines.split_first().expect("a non-empty stripped text has a line");
   let mut parts = vec![str_methods::strip(first)];
   if let Some(url_line) = rest.iter().find(|line| line.contains(URL_MARKER)) {

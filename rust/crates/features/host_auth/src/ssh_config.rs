@@ -8,14 +8,12 @@ use std::collections::HashSet;
 use anyhow::bail;
 use charliebot_core::str_methods;
 
-use crate::text_lines;
-
 /// `(alias, hostname)` for every collectable `Host` block of `text`, in file order.
 pub fn parse_hosts(text: &str) -> anyhow::Result<Vec<(String, String)>> {
   let mut hosts = Vec::new();
   let mut seen = HashSet::new();
   let mut block = Block::default();
-  for raw_line in text_lines::splitlines(text) {
+  for raw_line in str_methods::splitlines(text) {
     let line = str_methods::strip(raw_line.split_once('#').map_or(raw_line, |(before, _)| before));
     if line.is_empty() {
       continue;

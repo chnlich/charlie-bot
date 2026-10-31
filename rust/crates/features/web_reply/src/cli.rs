@@ -19,6 +19,7 @@ use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::resolve;
 use charliebot_compat::file_urls;
 use charliebot_core::event_types;
+use charliebot_core::str_methods::splitlines;
 use charliebot_core::text_repr;
 use charliebot_tasks::cold_read;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -340,31 +341,6 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, CliExit> {
 
 fn list(value: &Value) -> Result<&Vec<Value>, CliExit> {
   value.as_array().ok_or_else(|| CliExit::error("the response carries a field that is not a list"))
-}
-
-/// `str.splitlines()`: the line breaks Python recognizes, none kept, and no empty line after a final break.
-fn splitlines(text: &str) -> Vec<&str> {
-  let mut lines = Vec::new();
-  let mut start = 0;
-  let mut chars = text.char_indices().peekable();
-  while let Some((index, ch)) = chars.next() {
-    let break_end = match ch {
-      '\r' if matches!(chars.peek(), Some((_, '\n'))) => {
-        chars.next();
-        index + 2
-      }
-      '\r' | '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-        index + ch.len_utf8()
-      }
-      _ => continue,
-    };
-    lines.push(&text[start..index]);
-    start = break_end;
-  }
-  if start < text.len() {
-    lines.push(&text[start..]);
-  }
-  lines
 }
 
 /// Runs one async probe to completion on a single-threaded runtime owned by this process.

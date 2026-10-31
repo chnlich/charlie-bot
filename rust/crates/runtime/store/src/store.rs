@@ -60,6 +60,13 @@ pub trait SequenceListingFields: Send + Sync {
     session_ids: &[String],
     now: UtcDateTime,
   ) -> StoreResult<HashMap<String, Map<String, Value>>>;
+  /// The ids the controllers bind, or `None` when a controller reads every id a listing holds.
+  ///
+  /// A listing asks only about these ids instead of building one id string per listed session. The answer must name
+  /// every id [`listing_fields`](Self::listing_fields) would return a field for; `None` keeps the full listing.
+  fn bound_listing_ids(&self) -> Option<Vec<String>> {
+    None
+  }
   /// Return sequence subtree roots over a metadata snapshot, borrowing the memoized rows.
   fn sequence_subtree_roots(&self, metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>>;
   /// Return view subtree roots over a metadata snapshot, borrowing the memoized rows.
@@ -106,6 +113,14 @@ pub(crate) struct CachedMetadata {
   pub(crate) signature: Option<(i64, i64)>,
   /// Changes only when a cache entry is replaced.
   pub(crate) identity: Arc<()>,
+}
+
+/// One status corpus in newest-first order, kept while the corpus it sorted still holds.
+pub(crate) struct CachedSortedListing {
+  /// The immutable corpus the sorted rows came from.
+  pub(crate) snapshot: Arc<Vec<Arc<SessionMetadata>>>,
+  /// The corpus rows in newest-first order.
+  pub(crate) rows: Arc<Vec<Arc<SessionMetadata>>>,
 }
 
 pub(crate) struct CachedSubtreeRoots {
@@ -340,6 +355,8 @@ pub struct Store {
   pub(crate) next_listing_generation: AtomicU64,
   /// The last listing walked for each status filter (see [`Store::load_session_metas`]).
   pub(crate) listings_memo: StdMutex<HashMap<Option<SessionStatus>, CachedListing>>,
+  /// The newest-first order of each status filter's last corpus.
+  pub(crate) sorted_listings: StdMutex<HashMap<Option<SessionStatus>, CachedSortedListing>>,
   /// The sessions directory's entry names at the root signature that produced them (`_dir_names_memo`).
   pub(crate) dir_names_memo: StdMutex<Option<DirNames>>,
   #[cfg(test)]
@@ -435,6 +452,7 @@ impl Store {
       listings_revision: AtomicU64::new(0),
       next_listing_generation: AtomicU64::new(1),
       listings_memo: StdMutex::new(HashMap::new()),
+      sorted_listings: StdMutex::new(HashMap::new()),
       dir_names_memo: StdMutex::new(None),
       #[cfg(test)]
       directory_scans: AtomicU64::new(0),

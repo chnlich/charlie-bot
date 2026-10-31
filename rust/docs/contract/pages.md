@@ -188,7 +188,7 @@ Context:
 | `hostname` | `socket.gethostname()` |
 | `static_asset_version` | see above |
 
-The page script fetches `events_url` in the browser.
+The page script fetches the log's last 200 lines from `events_url` in the browser, then loads earlier windows on demand through the same route's `before` offset.
 
 ## `GET /diff`
 

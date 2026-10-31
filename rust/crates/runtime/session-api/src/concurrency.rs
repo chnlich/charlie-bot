@@ -286,7 +286,9 @@ fn bucket_peaks(spans: &[Span], from: OffsetDateTime, to: OffsetDateTime, bucket
           manager -= 1;
         }
       }
-      if best.is_none_or(|(peak, _, _)| running > peak) {
+      // Events at one instant apply together, so only the state after the last of them held during the bucket.
+      let instant_done = events.get(next).is_none_or(|event| event.0 != at);
+      if instant_done && best.is_none_or(|(peak, _, _)| running > peak) {
         best = Some((running, manager, at));
       }
     }
@@ -437,6 +439,19 @@ mod tests {
     assert_eq!((buckets[0].point.running, buckets[0].point.manager, buckets[0].point.worker), (3, 2, 1));
     assert_eq!(buckets[0].point.at, at("2026-10-31T00:00:00Z"), "a point stands at its bucket's start");
     assert_eq!(buckets[0].at_max, at("2026-10-31T00:04:00Z"), "the maximum first holds when w1 starts");
+  }
+
+  /// Runs that end at one instant leave together: a bucket starting then never reports the state between their ends.
+  #[test]
+  fn runs_ending_together_on_a_bucket_start_leave_together() {
+    let now = at("2026-10-31T00:00:00Z");
+    let records = vec![
+      record("a", "work", Some("2026-10-30T22:00:00Z"), Some("2026-10-30T23:00:00Z")),
+      record("b", "work", Some("2026-10-30T22:30:00Z"), Some("2026-10-30T23:00:00Z")),
+    ];
+    let buckets = bucket_peaks(&merged_spans(&records, now), at("2026-10-30T22:00:00Z"), now, 3600);
+    assert_eq!(buckets[0].point.running, 2);
+    assert_eq!(buckets[1].point.running, 0, "both runs ended at 23:00, so the bucket starting then holds none");
   }
 
   /// A worker session with its own running run and no busy entry counts, and so does a Threads-tab session; a

@@ -151,6 +151,17 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     self.emit(EventKind::Data, json!([data]), at, None);
   }
 
+  /// Emit `source[start..end]` as data, unescaping character references when this parser converts them.
+  fn emit_data_span(&mut self, start: usize, end: usize) {
+    let data = &self.source[start..end];
+    if self.convert_charrefs && self.escapable {
+      let decoded = unescape(data);
+      self.emit_data(&decoded, start);
+    } else {
+      self.emit_data(data, start);
+    }
+  }
+
   fn goahead(&mut self, end: bool, mut i: usize) -> Result<usize, ParseError> {
     let n = self.source.len();
     while i < n {
@@ -176,13 +187,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       };
 
       if i < j {
-        let data = &self.source[i..j];
-        if self.convert_charrefs && self.escapable {
-          let decoded = unescape(data);
-          self.emit_data(&decoded, i);
-        } else {
-          self.emit_data(data, i);
-        }
+        self.emit_data_span(i, j);
       }
       i = j;
       if i == n {
@@ -294,13 +299,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     }
 
     if end && i < n {
-      let data = &self.source[i..n];
-      if self.convert_charrefs && self.escapable {
-        let decoded = unescape(data);
-        self.emit_data(&decoded, i);
-      } else {
-        self.emit_data(data, i);
-      }
+      self.emit_data_span(i, n);
       i = n;
     }
     Ok(i)

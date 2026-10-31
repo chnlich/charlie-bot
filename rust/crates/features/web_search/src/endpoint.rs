@@ -1,4 +1,4 @@
-//! The MCP endpoint's mount name and the state each request reads.
+//! The MCP endpoint's state, which each request reads.
 
 use std::sync::Arc;
 
@@ -7,9 +7,6 @@ use charliebot_core::credentials::Credentials;
 use charliebot_core::hot_reload::HotReload;
 
 use crate::search;
-
-/// The MCP server name the endpoint backends mount.
-pub const MCP_SERVER_NAME: &str = "charliebot-web";
 
 /// The endpoint's state: the profile's credentials, the Google base URL and the outbound client.
 ///

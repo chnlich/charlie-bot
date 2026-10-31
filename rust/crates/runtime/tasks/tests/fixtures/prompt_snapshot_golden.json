@@ -964,7 +964,7 @@
     ],
     "from_json_errors": {
       "hash": "stored prompt snapshot hash mismatch: recorded '0000000000000000000000000000000000000000000000000000000000000000', content hashes to '$DAMAGED_HASH'",
-      "char_count": "stored prompt snapshot char_count mismatch: recorded 46694, content measures 46693",
+      "char_count": "stored prompt snapshot char_count mismatch: recorded 47059, content measures 47058",
       "body_ref": "stored prompt snapshot body_ref mismatch: block hashes to e40f2216ea58ac0b4690cf4a1405e9ef6a1da1ae5763c5d7fe2ffc3ea81baec5, recorded 1111111111111111111111111111111111111111111111111111111111111111"
     }
   },

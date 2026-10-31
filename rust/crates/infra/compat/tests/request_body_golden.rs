@@ -47,9 +47,7 @@ const ATTACHMENT_FIELDS: &[Field] =
   &[Field::required("filename", FieldType::String), Field::optional("size", FieldType::NullableInteger)];
 const ATTACHMENT: BodyModel = BodyModel::optional(ATTACHMENT_FIELDS).forbid_extra();
 const ATTACHMENTS_FIELDS: &[Field] =
-  &[Field::optional("attachments", FieldType::NullableModelList { class_name: "StrictFileRef", model: &ATTACHMENT })
-    .min_length(2)
-    .max_length(3)];
+  &[Field::optional("attachments", FieldType::NullableModelList { model: &ATTACHMENT }).min_length(2).max_length(3)];
 const ATTACHMENTS: BodyModel = BodyModel::required(ATTACHMENTS_FIELDS);
 const LOCAL_PID_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&["local_pid"])),

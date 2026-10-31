@@ -151,31 +151,31 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 
   let keep_worktree = cli.keep_worktree == 1;
   let mut invocation = Map::new();
-  invocation.insert("task_type".to_string(), json!(task_type));
-  invocation.insert("repo_path".to_string(), optional_string(&cli.repo));
-  invocation.insert("base_branch".to_string(), optional_string(&cli.base_branch));
-  invocation.insert("task_spec_file".to_string(), json!(cli.task_spec_file));
-  invocation.insert("reviewer_context_file".to_string(), Value::Null);
-  invocation.insert("keep_worktree".to_string(), json!(keep_worktree));
-  invocation.insert("backend".to_string(), optional_string(&cli.backend));
+  invocation.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
+  invocation.insert(task_routes::DELEGATE_REPO_PATH_FIELD.to_string(), optional_string(&cli.repo));
+  invocation.insert(task_routes::DELEGATE_BASE_BRANCH_FIELD.to_string(), optional_string(&cli.base_branch));
+  invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(cli.task_spec_file));
+  invocation.insert(task_routes::DELEGATE_REVIEWER_CONTEXT_FILE_FIELD.to_string(), Value::Null);
+  invocation.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
+  invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), optional_string(&cli.backend));
 
   let mut payload = Map::new();
-  payload.insert("session_id".to_string(), json!(session_id));
-  payload.insert("description".to_string(), json!(task_spec));
-  payload.insert("keep_worktree".to_string(), json!(keep_worktree));
-  payload.insert("task_type".to_string(), json!(task_type));
+  payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
+  payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(task_spec));
+  payload.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
+  payload.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
   payload.insert(event_types::DELEGATE_INVOCATION.to_string(), Value::Object(invocation));
   if let Some(base_branch) = &cli.base_branch {
-    payload.insert("base_branch".to_string(), json!(base_branch));
+    payload.insert(task_routes::DELEGATE_BASE_BRANCH_FIELD.to_string(), json!(base_branch));
   }
   if let Some(backend) = &cli.backend {
-    payload.insert("backend".to_string(), json!(backend));
+    payload.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), json!(backend));
   }
   if let Some(repo) = &cli.repo {
-    payload.insert("repo_path".to_string(), json!(repo));
+    payload.insert(task_routes::DELEGATE_REPO_PATH_FIELD.to_string(), json!(repo));
   }
   if let Some(request_id) = &cli.request_id {
-    payload.insert("request_id".to_string(), json!(request_id));
+    payload.insert(task_routes::DELEGATE_REQUEST_ID_FIELD.to_string(), json!(request_id));
   }
 
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;

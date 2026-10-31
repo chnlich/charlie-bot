@@ -67,6 +67,10 @@ pub const DELEGATE_KEEP_WORKTREE_FIELD: &str = "keep_worktree";
 pub const DELEGATE_BACKEND_FIELD: &str = "backend";
 pub const DELEGATE_REQUEST_ID_FIELD: &str = "request_id";
 
+/// The archive request's flag for archiving a parent task's children too. The route validates it and the CLI sets it,
+/// so the name is spelled once, here.
+pub const ARCHIVE_NON_CHILD_FIELD: &str = "non_child";
+
 /// Build the task orchestration routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
@@ -983,7 +987,7 @@ const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::optional("summary", FieldType::String),
   Field::optional("result_refs", FieldType::StringList),
   Field::optional("run_ids", FieldType::StringList),
-  Field::optional("non_child", FieldType::Boolean),
+  Field::optional(ARCHIVE_NON_CHILD_FIELD, FieldType::Boolean),
 ]);
 
 /// The POST /api/sessions/{session_id}/cancel body model (`src/infra/models.py::CancelTaskRequest`).
@@ -1065,7 +1069,7 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
     run_ids: optional_validated_string_list(&fields, "run_ids"),
     ..CompletionEvidence::default()
   };
-  let non_child = fields.get("non_child").and_then(Value::as_bool).unwrap_or(false);
+  let non_child = fields.get(ARCHIVE_NON_CHILD_FIELD).and_then(Value::as_bool).unwrap_or(false);
   let (status, payload) = match completion
     .archive_task(&meta.id, &validated_string(&fields, "request_id"), &evidence, &caller, non_child)
     .await
@@ -1110,8 +1114,8 @@ async fn cancel_task(State(features): State<Arc<FeatureContext>>, request: Reque
     Err(error) => return task_http_error(error),
   };
   let detail = detail.as_object_mut().expect("session detail is a JSON object");
-  let stopped_runs = result.get("stopped_runs").expect("cancel result has stopped_runs").clone();
-  detail.insert("stopped_runs".to_string(), stopped_runs);
+  let stopped_runs = result.get(completion::STOPPED_RUNS_FIELD).expect("cancel result has stopped_runs").clone();
+  detail.insert(completion::STOPPED_RUNS_FIELD.to_string(), stopped_runs);
   responses::json(StatusCode::OK, &Value::Object(detail.clone()))
 }
 

@@ -28,6 +28,11 @@ use crate::review_text;
 
 /// Prefix for a run reference in a child report's result_refs.
 pub const RUN_REF_PREFIX: &str = "run:";
+
+/// The task close answer's field names. The completion owner writes them, the routes re-emit them, and the CLI reads
+/// them, so each name is spelled once, here.
+pub const CLOSED_EVENT_ID_FIELD: &str = "closed_event_id";
+pub const STOPPED_RUNS_FIELD: &str = "stopped_runs";
 const SPEC_REF_PREFIX: &str = "spec:";
 const REVIEW_REF_PREFIX: &str = "review:";
 const LANDING_REF_PREFIX: &str = "landed:";
@@ -859,7 +864,7 @@ impl TaskCompletion {
       {
         return Ok(Some((
           200,
-          json!({"session_id": session_id, "closed_event_id": event.get("id").map(CompactValue::to_value)}),
+          json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: event.get("id").map(CompactValue::to_value)}),
         )));
       }
     }
@@ -1074,7 +1079,7 @@ impl TaskCompletion {
     }
     Ok(Some((
       200,
-      json!({"session_id": session_id, "closed_event_id": close_event.get("id").map(CompactValue::to_value)}),
+      json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: close_event.get("id").map(CompactValue::to_value)}),
     )))
   }
 
@@ -1247,7 +1252,7 @@ impl TaskCompletion {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "cancel_parent_wake_failed");
     }
     Ok(
-      json!({"session_id": session_id, "closed_event_id": close_event.get("id").map(CompactValue::to_value), "stopped_runs": []}),
+      json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: close_event.get("id").map(CompactValue::to_value), STOPPED_RUNS_FIELD: []}),
     )
   }
 
@@ -1273,7 +1278,7 @@ impl TaskCompletion {
           return with_stopped_runs(replay, Vec::new());
         }
         let closed_event_id = replay
-          .get("closed_event_id")
+          .get(CLOSED_EVENT_ID_FIELD)
           .cloned()
           .ok_or_else(|| StoreError::new("closed worker replay has no closed_event_id"))?;
         let stop_runs = self.cancellation_stop_runs(session_id, &stop_request_id)?;
@@ -1392,7 +1397,7 @@ impl TaskCompletion {
       return Err(error);
     }
     let stopped_runs = self.cancellation_stop_results(session_id, &stop_request_id)?;
-    Ok(json!({"session_id": session_id, "closed_event_id": closed_event_id, "stopped_runs": stopped_runs}))
+    Ok(json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: closed_event_id, STOPPED_RUNS_FIELD: stopped_runs}))
   }
 
   fn cancellation_stop_runs(&self, session_id: &str, request_id: &str) -> StoreResult<Vec<RunRecord>> {
@@ -1549,7 +1554,7 @@ impl TaskCompletion {
         None,
         [
           ("request_id".to_string(), json!(request_id)),
-          ("closed_event_id".to_string(), close_id.map_or(Value::Null, |id| json!(id))),
+          (CLOSED_EVENT_ID_FIELD.to_string(), close_id.map_or(Value::Null, |id| json!(id))),
           ("reason".to_string(), json!(reason)),
         ],
       );
@@ -1745,7 +1750,10 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "sequence_close_parent_wake_failed");
     }
-    Ok((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id").map(CompactValue::to_value)})))
+    Ok((
+      200,
+      json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: close_event.get("id").map(CompactValue::to_value)}),
+    ))
   }
 
   /// Recheck saved own-run close requests after the matching run succeeds.
@@ -1997,7 +2005,7 @@ impl TaskCompletion {
 
 fn with_stopped_runs(mut response: Value, stopped_runs: Vec<Value>) -> StoreResult<Value> {
   let object = response.as_object_mut().ok_or_else(|| StoreError::new("cancel response is not a JSON object"))?;
-  object.insert("stopped_runs".to_string(), json!(stopped_runs));
+  object.insert(STOPPED_RUNS_FIELD.to_string(), json!(stopped_runs));
   Ok(response)
 }
 
@@ -2170,13 +2178,19 @@ fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
 mod tests {
   use std::collections::HashSet;
 
-  use super::TaskCompletion;
+  use super::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, TaskCompletion};
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use charliebot_store::run_records::{RunKind, RunRecord};
   use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
   use serde_json::{Map, json};
 
   use crate::test_fixtures;
+
+  #[test]
+  fn the_close_answer_field_names_are_the_wire_names() {
+    assert_eq!(CLOSED_EVENT_ID_FIELD, "closed_event_id");
+    assert_eq!(STOPPED_RUNS_FIELD, "stopped_runs");
+  }
 
   fn run_record(session_id: &str, run_id: String) -> RunRecord {
     RunRecord {

@@ -1,6 +1,6 @@
-//! The composed process a CLI verb uses when it runs a backend: the loaded config, the registry that holds every
-//! backend type, the checkout the prompts live in, the environment agent children inherit and the process's backend
-//! pool.
+//! The composed process a CLI verb uses when it runs a backend. It holds the loaded config, the registry that holds
+//! every backend type, the checkout the prompts live in, the environment agent children inherit and the process's
+//! backend pool.
 //!
 //! The composition root (the `charliebot` binary) gives each verb the same lazy value. A verb asks for the host only
 //! when it needs one, so the verbs that never run a backend load no config.

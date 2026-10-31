@@ -1,5 +1,6 @@
-//! The module-level helpers of `src/runtime/agent_process/base.py` that the CLI backend types share: the binary lookup,
-//! the child PATH and proxy edits, the Google key strip, and the Python value semantics of their translators.
+//! The module-level helpers of `src/runtime/agent_process/base.py` that the CLI backend types share. They are the
+//! binary lookup, the child PATH and proxy edits, the Google key strip, and the Python value semantics of their
+//! translators.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

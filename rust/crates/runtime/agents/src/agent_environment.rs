@@ -40,10 +40,10 @@ pub fn agent_environment(inherited: &Env, server_bin_dir: &Path) -> anyhow::Resu
     .into_string()
     .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
   values.insert("PATH".to_string(), rewritten_path);
-  // Chrome asks systemd over the session bus to move itself into its own scope; with the bus disabled it cannot, so a
-  // browser stays in the cgroup of the process that started it: an agent's in the session cgroup, the server's
-  // renderer in the server's. `systemctl --user` and `systemd-run --user` reach systemd over its private socket and
-  // keep working.
+  // Chrome asks systemd over the session bus to move itself into its own scope. With the bus disabled it cannot, so a
+  // browser stays in the cgroup of the process that started it. An agent's browser stays in the session cgroup, and
+  // the server's renderer stays in the server's cgroup. `systemctl --user` and `systemd-run --user` reach systemd
+  // over its private socket and keep working.
   values.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   values.entry("PYDANTIC_DISABLE_PLUGINS".to_string()).or_insert_with(|| "__all__".to_string());
   Ok(AgentBaseEnvironment { values })
@@ -59,7 +59,7 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
 }
 
 /// Replace the server's process environment with its agent environment, as `server.py:582` does, and return that
-/// environment as the typed snapshot. `main` calls this before any thread starts and before the config load: every
+/// environment as the typed snapshot. `main` calls this before any thread starts and before the config load. Every
 /// child process copies the process environment, so the web terminal's tmux server and the usage panel's
 /// `claude --version` probe inherit the agent environment too.
 pub fn replace_process_environment(server_bin_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {

@@ -633,11 +633,11 @@ impl AgentRunner {
   }
 }
 
-/// The gated child of a launch until its gate opens. A launch dropped before then, such as one the server's let-go
-/// cancels in its spawn callback, leaves the gate shell stopped before `exec` with no recorded owner, so the guard's drop
-/// kills it: the agent never starts, and the next boot launches the run. The start tick pinned at spawn keeps a reaped
-/// child's reused pid from being signalled. A raw-log launch arms its guard on the spawning thread, so a launch dropped
-/// while the spawn is still in flight drops an armed guard too.
+/// The gated child of a launch until its gate opens. A launch dropped before then leaves the gate shell stopped before
+/// `exec` with no recorded owner, so the guard's drop kills it. One example is a launch the server's let-go cancels in
+/// its spawn callback. The agent never starts, and the next boot launches the run. The start tick pinned at spawn keeps
+/// a reaped child's reused pid from being signalled. A raw-log launch arms its guard on the spawning thread, so a
+/// launch dropped while the spawn is still in flight drops an armed guard too.
 struct SpawnGate {
   child: ProcessIdentity,
   opened: bool,

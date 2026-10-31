@@ -24,9 +24,17 @@ const AUTH_HEADER_VAR: &str = "CHARLIEBOT_SERVE_AUTH_HEADER";
 /// The sessions that are read besides the largest one.
 const PICKED_SESSIONS: usize = 2;
 
-/// Checks the home at `base_url` against the manifest in `output`. Prints each mismatch to stderr and returns `Ok(false)`;
-/// returns `Ok(true)` when every check holds.
-pub fn check(output: &Path, base_url: &str) -> Result<bool> {
+/// Whether a served home matched its manifest.
+pub enum CheckOutcome {
+  /// Every check held.
+  Matches,
+  /// At least one check failed; each mismatch is already on stderr.
+  Mismatches,
+}
+
+/// Checks the home at `base_url` against the manifest in `output`. Prints each mismatch to stderr and returns
+/// `CheckOutcome::Mismatches`, or `CheckOutcome::Matches` when every check holds.
+pub fn check(output: &Path, base_url: &str) -> Result<CheckOutcome> {
   let manifest = Manifest::read(output)?;
   let headers = auth_headers()?;
   let base = base_url.trim_end_matches('/');
@@ -38,14 +46,14 @@ pub fn check(output: &Path, base_url: &str) -> Result<bool> {
     for failure in &failures {
       eprintln!("MISMATCH {failure}");
     }
-    return Ok(false);
+    return Ok(CheckOutcome::Mismatches);
   }
   println!(
     "check passed: {} sessions; newest messages of {} sessions match {MANIFEST_NAME}",
     manifest.session_count,
     checked.len()
   );
-  Ok(true)
+  Ok(CheckOutcome::Matches)
 }
 
 /// The largest session, then `PICKED_SESSIONS` of the others, which the manifest seed picks.

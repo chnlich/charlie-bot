@@ -533,6 +533,9 @@ test('renderExtUsage renders error rows greyed with the error text', () => {
   const row = _rowByKey(strip, 'claude:invite-1');
   assert.ok(row);
   assert.equal(row.classList.contains('opacity-60'), true);
+  // The muted row keeps its words readable: the note inherits slate-300, which
+  // clears 4.5:1 at opacity-60 where the old slate-600 sat at 1.5:1.
+  assert.ok(row.classList.contains('text-slate-300'), 'status words stay above 4.5:1');
   assert.equal(_field(row, 'error').textContent, 'credentials not found');
   const errPill = row.children.find((c) => c.classList.contains('provider-pill'));
   assert.ok(errPill, 'error row carries a provider pill');
@@ -1043,7 +1046,7 @@ test('summary worst reading is the max live utilization across all reported wind
     }
     assert.equal(pctEl.textContent, wantText, key + ': summary reading recomputed from the payload');
     if (wantPct === null) {
-      assert.ok(pctEl.classList.contains('text-slate-500'), key + ': special state is muted');
+      assert.ok(pctEl.classList.contains('text-slate-400'), key + ': special state reads at 6:1, not 3:1');
     } else {
       const wantColor = TEXT_BY_BAR_COLOR[context._barColor(wantPct)];
       assert.ok(wantColor, key + ': _barColor(' + wantPct + ') has a text sibling');

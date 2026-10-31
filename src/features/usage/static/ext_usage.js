@@ -274,11 +274,17 @@ function _buildCreditsGroup(row, credits) {
 // A row that names an account without reporting a quota: not yet read, or read
 // and failed. Both must short-circuit the quota path, where an empty windows list
 // renders as "plan · no cap" — an uncapped-plan claim about an unknown quota.
+//
+// The row stays muted at opacity-60, but its words must stay readable: on the
+// strip's slate-800 background the note at slate-300 renders 4.7:1 and the
+// account name at slate-200 renders 5.4:1, above the 4.5:1 a 12px line needs.
+// The former colours disappeared under the same opacity: slate-600 for the
+// note at 1.5:1, slate-500 for the name at 2.0:1.
 function _buildStatusRow(key, providerData, field, text) {
-  const row = _el('div', 'flex items-center gap-1.5 text-slate-600 opacity-60');
+  const row = _el('div', 'flex items-center gap-1.5 text-slate-300 opacity-60');
   row.setAttribute('data-key', key);
   row.appendChild(_providerPill(providerData));
-  const label = _el('span', 'text-slate-500 font-medium');
+  const label = _el('span', 'text-slate-200 font-medium');
   label.textContent = providerData.account || key;
   row.appendChild(label);
   const note = _el('span', 'italic');
@@ -417,7 +423,11 @@ function _buildSummaryRow(providers) {
     name.textContent = providerData.account || key;
     seg.appendChild(name);
     const reading = _summaryReading(providerData);
-    const pctEl = _el('span', reading.pct === null ? 'text-slate-500' : _barTextColor(reading.pct));
+    // A reading without a percentage is text, not a demoted number: the state
+    // words ("loading", "error"), "no cap", a credit balance and the
+    // unknown-credit dash all take this branch. slate-400 renders 6.0:1 on the
+    // strip, where slate-500 rendered 3.1:1.
+    const pctEl = _el('span', reading.pct === null ? 'text-slate-400' : _barTextColor(reading.pct));
     pctEl.setAttribute('data-field', 'summary-pct');
     pctEl.textContent = reading.text;
     seg.appendChild(pctEl);

@@ -3,17 +3,20 @@
 //! The server builds one `Templating` at startup and inserts it into the startup state. A feature reads it with
 //! `startup.require::<Templating>()` and renders a page with `render_page`, as Starlette's `TemplateResponse` does.
 //!
-//! Each render builds a fresh minijinja environment, so a template, a page part or a template directory
-//! that changes on disk takes effect at the next render without a restart, as Jinja2's auto-reload does.
+//! A render reads each template source's `(mtime, size)` and keeps the last compiled minijinja environment while
+//! that list and the template globals still compare equal, so a repeat render skips compiling the page and its
+//! partials. A template, a page part or a template directory that changes on disk moves the list, and the next
+//! render compiles a fresh environment, so an edit takes effect without a restart as Jinja2's auto-reload does.
 //! The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the registry's template
 //! globals and `page_parts` added. The search path is `web/templates`, then each page package's `templates/`, in
 //! registration order.
 
 use std::collections::HashMap;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::http::HeaderValue;
 use axum::http::header;
@@ -44,6 +47,8 @@ pub struct Templating {
   /// `git_version()`, computed at the first render that asks for it.
   git_version: OnceLock<String>,
   asset_digest: Mutex<AssetDigestState>,
+  /// The last compiled environment, kept while its template sources and globals still hold their value.
+  render_cache: Mutex<Option<RenderCache>>,
 }
 
 #[derive(Default)]
@@ -51,6 +56,19 @@ struct AssetDigestState {
   signature: Vec<(String, i64, u64)>,
   digests: HashMap<String, [u8; 20]>,
   digest: String,
+}
+
+/// One compiled template environment and the inputs it was compiled from.
+///
+/// A render compiles the page and every partial it includes into a fresh environment, so a repeat render of an
+/// unchanged page repeats that compile. The environment is kept while the template sources and the globals compare
+/// equal, which serves a repeat render from the compiled templates; a moved source or global rebuilds it, so an edit
+/// on disk still takes effect at the next render.
+struct RenderCache {
+  /// Each template source's `(rel path, mtime_ns, size)` under the search directories, sorted.
+  sources: Vec<(String, i64, u64)>,
+  globals: Vec<TemplateGlobal>,
+  environment: Arc<Environment<'static>>,
 }
 
 impl Templating {
@@ -65,6 +83,7 @@ impl Templating {
       names_checked: AtomicBool::new(false),
       git_version: OnceLock::new(),
       asset_digest: Mutex::new(AssetDigestState::default()),
+      render_cache: Mutex::new(None),
     }
   }
 
@@ -214,9 +233,35 @@ impl Templating {
       assert_unique_template_names(&self.directories).map_err(RenderError::DuplicateName)?;
       self.names_checked.store(true, Ordering::Release);
     }
-    let environment = self.environment(globals);
+    let sources = self.template_sources()?;
+    let environment = {
+      let mut cache = self.render_cache.lock().expect("the render cache mutex is not poisoned");
+      let reused = cache.as_ref().is_some_and(|entry| entry.sources == sources && entry.globals == globals);
+      if !reused {
+        *cache =
+          Some(RenderCache { sources, globals: globals.clone(), environment: Arc::new(self.environment(globals)) });
+      }
+      Arc::clone(&cache.as_ref().expect("the render cache holds the environment it built").environment)
+    };
     let template = environment.get_template(name).map_err(RenderError::Template)?;
     template.render(Value::from_serialize(context)).map_err(RenderError::Template)
+  }
+
+  /// The `(rel path, mtime_ns, size)` of every template source under the search directories, sorted.
+  ///
+  /// A render reads a template through the loader and a page part through `page_parts`, and both live under a search
+  /// directory. A source that moved changes this list, so a compiled environment that read the old bytes never
+  /// answers a render that would read the new ones.
+  fn template_sources(&self) -> Result<Vec<(String, i64, u64)>, RenderError> {
+    let mut sources = Vec::new();
+    for directory in &self.directories {
+      let mut paths = HashMap::new();
+      let mut entries = Vec::new();
+      walk_static_tree(directory, "", &mut entries, &mut paths).map_err(RenderError::Source)?;
+      sources.extend(entries);
+    }
+    sources.sort();
+    Ok(sources)
   }
 
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
@@ -260,6 +305,8 @@ pub enum RenderError {
   DuplicateName(String),
   /// A template global raised; the page fails with its message.
   Global(String),
+  /// A template search directory could not be read while the render confirmed its compiled templates.
+  Source(io::Error),
   Template(Error),
 }
 
@@ -268,6 +315,7 @@ impl RenderError {
   pub fn kind(&self) -> &'static str {
     match self {
       RenderError::DuplicateName(_) | RenderError::Global(_) => "ValueError",
+      RenderError::Source(_) => "OSError",
       RenderError::Template(error) if error.kind() == ErrorKind::TemplateNotFound => "TemplateNotFound",
       RenderError::Template(error) if error.kind() == ErrorKind::UndefinedError => "UndefinedError",
       RenderError::Template(_) => "TemplateError",
@@ -279,6 +327,7 @@ impl std::fmt::Display for RenderError {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       RenderError::DuplicateName(message) | RenderError::Global(message) => formatter.write_str(message),
+      RenderError::Source(error) => write!(formatter, "{error}"),
       RenderError::Template(error) => write!(formatter, "{error:#}"),
     }
   }
@@ -290,11 +339,6 @@ impl std::error::Error for RenderError {}
 /// `Request`.
 fn request_context(request: &Parts) -> serde_json::Value {
   json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
-}
-
-/// Python's `os.DirEntry.is_dir` and `is_file` answer False for a dangling symlink, so the static walk skips it.
-fn is_not_found(error: &ignore::Error) -> bool {
-  error.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotFound)
 }
 
 /// Build a recursive walk that applies no hidden-file or ignore-file filters.
@@ -312,32 +356,75 @@ fn walk_static_tree(
   pairs: &mut Vec<(String, i64, u64)>,
   paths: &mut HashMap<String, PathBuf>,
 ) -> io::Result<()> {
+  let mut ancestors = Vec::new();
+  walk_static_directory(directory, Path::new(""), prefix, pairs, paths, &mut ancestors)
+}
+
+/// One directory of a static tree and its subdirectories, in the order the ignore walker yielded them.
+///
+/// The walk reads each directory itself instead of building an `ignore` walker for it: the walker's filters,
+/// matchers and path bookkeeping cost more than the handful of files below each served tree. A directory whose
+/// identity is already an ancestor is a symlink loop, so the walk leaves it out instead of entering it forever.
+fn walk_static_directory(
+  directory: &Path,
+  relative: &Path,
+  prefix: &str,
+  pairs: &mut Vec<(String, i64, u64)>,
+  paths: &mut HashMap<String, PathBuf>,
+  ancestors: &mut Vec<(u64, u64)>,
+) -> io::Result<()> {
   use std::os::unix::fs::MetadataExt;
-  for entry in filesystem_walk(directory, true).build() {
+  let root = match fs::metadata(directory) {
+    Ok(metadata) => metadata,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+    Err(error) => return Err(error),
+  };
+  ancestors.push((root.dev(), root.ino()));
+  let entries = match fs::read_dir(directory) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+      ancestors.pop();
+      return Ok(());
+    }
+    Err(error) => {
+      ancestors.pop();
+      return Err(error);
+    }
+  };
+  for entry in entries {
     let entry = match entry {
       Ok(entry) => entry,
-      Err(error) if is_not_found(&error) => continue,
-      Err(error) => return Err(io::Error::other(error)),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+      Err(error) => return Err(error),
     };
-    let relative = entry.path().strip_prefix(directory).expect("a walk yields paths under its root").to_path_buf();
-    let rel = relative.to_str().ok_or_else(|| {
+    let name = entry.file_name();
+    let relative = relative.join(&name);
+    let path_text = relative.to_str().ok_or_else(|| {
       io::Error::new(
         io::ErrorKind::InvalidData,
         format!("static file name is not UTF-8: {}", relative.to_string_lossy()),
       )
     })?;
-    let rel = format!("{prefix}{rel}");
-    let metadata = match entry.metadata() {
+    let rel = format!("{prefix}{path_text}");
+    let path = entry.path();
+    let metadata = match fs::metadata(&path) {
       Ok(metadata) => metadata,
-      Err(error) if error.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotFound) => continue,
-      Err(error) => return Err(io::Error::other(error)),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+      Err(error) => return Err(error),
     };
-    if metadata.is_file() {
+    if metadata.is_dir() {
+      let identity = (metadata.dev(), metadata.ino());
+      if ancestors.contains(&identity) {
+        continue;
+      }
+      walk_static_directory(&path, &relative, prefix, pairs, paths, ancestors)?;
+    } else if metadata.is_file() {
       let mtime_ns = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();
       pairs.push((rel.clone(), mtime_ns, metadata.size()));
-      paths.insert(rel, entry.path().to_path_buf());
+      paths.insert(rel, path);
     }
   }
+  ancestors.pop();
   Ok(())
 }
 
@@ -462,6 +549,34 @@ mod tests {
       .render_page_with_substitutions(&features, "splice.html", &context, &parts, &[("ABSENT", "[]")])
       .unwrap_err();
     assert_eq!(error.kind(), "TemplateError");
+  }
+
+  /// A repeat render answers from the compiled environment, and a template edited on disk moves the source list so
+  /// the next render compiles the new bytes.
+  #[tokio::test]
+  async fn a_repeat_render_reuses_the_environment_and_an_edit_takes_effect() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("repeat.html"), "{{ notes_label() }} one").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/repeat").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    async fn render(templating: &Templating, features: &FeatureContext, parts: &Parts) -> String {
+      let response = templating.render_page(features, "repeat.html", &json!({}), parts).unwrap();
+      let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+      String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    assert_eq!(render(&templating, &features, &parts).await, "synthetic-label one");
+    assert_eq!(render(&templating, &features, &parts).await, "synthetic-label one");
+    fs::write(templates.join("repeat.html"), "{{ notes_label() }} two, longer").unwrap();
+    assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
   }
 
   #[test]

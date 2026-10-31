@@ -2447,8 +2447,7 @@ impl TaskExecutionAdapter {
       .read_run_sync(session_id, run_id)?
       .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
     let outcome = if run.pid.is_some() { "Turn failed" } else { "Turn did not start" };
-    let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"charliebot/session-task-tree");
-    let event_id = Uuid::new_v5(&namespace, format!("turn-launch:{run_id}:{reason}").as_bytes()).to_string();
+    let event_id = control_events::stable_turn_launch_event_id(run_id, reason);
     let epoch = self.features.store.prime_aggregator(session_id).await?;
     let event = {
       let _guard = self.features.store.control_lock().await;

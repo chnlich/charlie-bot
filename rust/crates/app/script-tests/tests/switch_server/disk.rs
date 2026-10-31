@@ -175,3 +175,31 @@ fn test_root_disk_resolves_a_partition_numbered_above_nine_to_its_own_disk() {
     "nvme0n1"
   );
 }
+
+/// A process that starts inside the last sample read its bytes inside that sample, so the timeout report names it.
+#[test]
+fn test_disk_preflight_names_a_process_that_started_inside_the_last_sample() {
+  let mut world = World::new();
+  // A process that was already running gives the before snapshot a baseline, as every real host has.
+  world.write_process(1000, "bash", 100);
+  let process = world.proc.join("5555");
+  let sampler = format!(
+    r#"disk_read_rate_mb() {{
+  mkdir -p {process}
+  printf 'rg\n' > {comm}
+  printf 'read_bytes: 6000\n' > {io}
+  echo 100
+}}
+"#,
+    process = world::quote(&process),
+    comm = world::quote(&process.join("comm")),
+    io = world::quote(&process.join("io")),
+  );
+  world.env.insert("CHARLIEBOT_SWITCH_DISK_WAIT_S".to_string(), "0".to_string());
+
+  let run = world.stubbed_preflight_with(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha, &sampler);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  let logged = world.report(&run);
+  assert!(logged.contains("process 5555 (rg) 6000 bytes"), "{logged}");
+}

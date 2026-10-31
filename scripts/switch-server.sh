@@ -967,12 +967,14 @@ process_io_table() {
 
 # read_deltas BEFORE AFTER: the positive AFTER-minus-BEFORE delta of the third column for each key in the first column,
 # heaviest first, as "key<TAB>label<TAB>bytes<TAB>detail" (detail is whatever the row's fourth column holds). A key
-# missing from either side is skipped.
+# missing from BEFORE started inside the sample, so its whole count is its delta. A key missing from AFTER ended inside
+# the sample, and is skipped. An empty snapshot gives no report: it may be a failed read, and a delta from it would
+# count lifetime totals as the sample's.
 read_deltas() {
   [ -s "$1" ] && [ -s "$2" ] || return 0
   awk -F'\t' '
     NR == FNR { before[$1] = $3; next }
-    ($1 in before) { delta = $3 - before[$1]; if (delta > 0) printf "%s\t%s\t%d\t%s\n", $1, $2, delta, $4 }
+    { delta = $3 - ($1 in before ? before[$1] : 0); if (delta > 0) printf "%s\t%s\t%d\t%s\n", $1, $2, delta, $4 }
   ' "$1" "$2" | sort -t $'\t' -k3,3nr
 }
 

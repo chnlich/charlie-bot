@@ -13,7 +13,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::timefmt::utc_now_iso;
-use charliebot_registry::usage::{PANEL_EXPIRED, PANEL_WINDOWS, QuotaAccount};
+use charliebot_registry::usage::{
+  PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES,
+  PANEL_WINDOWS, QuotaAccount,
+};
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use lru::LruCache;
@@ -88,7 +91,7 @@ impl QuotaAccount for CodexQuotaAccount {
   fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> Map<String, Value> {
     let sampled = text_of(entry, "token_count_observed_at")
       .and_then(parse_iso_utc)
-      .or_else(|| text_of(entry, "fetched_at").and_then(parse_iso_utc));
+      .or_else(|| text_of(entry, PANEL_FETCHED_AT).and_then(parse_iso_utc));
     mark_expired_windows(entry, sampled, now.into_inner())
   }
 }
@@ -370,14 +373,14 @@ fn panel_window_expired(window: &Map<String, Value>, sampled: Option<OffsetDateT
   let Some(sampled) = sampled else {
     return false;
   };
-  let resets_at = text_of(window, "resets_at").and_then(parse_iso_utc);
+  let resets_at = text_of(window, PANEL_RESETS_AT).and_then(parse_iso_utc);
   if let Some(resets_at) = resets_at
     && resets_at <= now
     && sampled < resets_at
   {
     return true;
   }
-  match window.get("window_minutes") {
+  match window.get(PANEL_WINDOW_MINUTES) {
     Some(Value::Number(number)) if number.is_i64() => now - sampled > Duration::minutes(number.as_i64().unwrap_or(0)),
     _ => false,
   }
@@ -433,9 +436,9 @@ fn codex_windows(rate_limits: &Map<String, Value>, account: &str) -> anyhow::Res
     windows.push((
       window_minutes,
       json!({
-        "window_minutes": window_minutes,
-        "utilization": utilization,
-        "resets_at": resets_at,
+        PANEL_WINDOW_MINUTES: window_minutes,
+        PANEL_UTILIZATION: utilization,
+        PANEL_RESETS_AT: resets_at,
       }),
     ));
   }
@@ -487,8 +490,8 @@ fn transform_response(
   let credits = rate_limits.get("credits").and_then(|raw| codex_credits(raw, account));
   let mut usage = Map::new();
   usage.insert(PANEL_WINDOWS.to_string(), Value::Array(codex_windows(rate_limits, account)?));
-  usage.insert("fetched_at".to_string(), json!(fetched_at));
-  usage.insert("provider".to_string(), json!(PROVIDER));
+  usage.insert(PANEL_FETCHED_AT.to_string(), json!(fetched_at));
+  usage.insert(PANEL_PROVIDER.to_string(), json!(PROVIDER));
   usage.insert("token_count_observed_at".to_string(), event.get("timestamp").cloned().unwrap_or_else(|| json!("")));
   let unlimited = credits.as_ref().is_some_and(|reading| reading.get("unlimited") == Some(&Value::Bool(true)));
   if let Some(reading) = credits {

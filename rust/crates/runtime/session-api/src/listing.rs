@@ -40,14 +40,51 @@ struct SessionsListMemoState {
   render_calls: usize,
 }
 
-/// One rendered listing body, its inputs, and the gzip form a request asked for.
+/// One rendered listing body, its corpus, its inputs, and the gzip form a request asked for.
 ///
 /// The gzip form lives beside the body it compressed: a request that matches the inputs serves both without hashing or
 /// comparing the body, which the memo would otherwise do to find the compressed bytes it already holds.
 struct WholeListingBody {
+  source: ListingSource,
   inputs: Vec<RowInputs>,
   body: Vec<u8>,
   gzip: Option<Vec<u8>>,
+}
+
+/// The corpus one listing body rendered from, compared before the per-row inputs are rebuilt.
+///
+/// The rows compare by pointer: the store hands out one shared, immutable row while its content holds, so another
+/// pointer means other content while the same pointer means an equal row. The derived overlays compare by pointer
+/// too: their builder keeps one map until a sidebar input moves, and every move bumps the generation that keys the
+/// map, so the same map means the same overlays. The controllers build a fresh field map per request, so their
+/// fields compare by value. Every other input a row reads from the store (busy state, run backend) moves through a
+/// sidebar dirty mark, which also rebuilds the derived map.
+struct ListingSource {
+  rows: Vec<Arc<SessionMetadata>>,
+  derived: Arc<DerivedSidebarMap>,
+  sequence_fields: HashMap<String, Map<String, Value>>,
+}
+
+impl ListingSource {
+  fn of(
+    rows: &[Arc<SessionMetadata>],
+    derived: &Arc<DerivedSidebarMap>,
+    sequence_fields: &HashMap<String, Map<String, Value>>,
+  ) -> Self {
+    Self { rows: rows.to_vec(), derived: Arc::clone(derived), sequence_fields: sequence_fields.clone() }
+  }
+
+  fn holds(
+    &self,
+    rows: &[Arc<SessionMetadata>],
+    derived: &Arc<DerivedSidebarMap>,
+    sequence_fields: &HashMap<String, Map<String, Value>>,
+  ) -> bool {
+    Arc::ptr_eq(&self.derived, derived)
+      && self.rows.len() == rows.len()
+      && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now))
+      && self.sequence_fields == *sequence_fields
+  }
 }
 
 /// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
@@ -300,7 +337,7 @@ pub fn sessions_list_response(
   request: &Request<Body>,
   store: &Store,
   rows: &[Arc<SessionMetadata>],
-  derived: &DerivedSidebarMap,
+  derived: &Arc<DerivedSidebarMap>,
   sequence_fields: &HashMap<String, Map<String, Value>>,
   memos: &SessionsListMemos,
 ) -> Response {
@@ -311,30 +348,39 @@ pub fn sessions_list_response(
     display_backend: true,
     include_run_backend: false,
   };
-  let inputs = match row_inputs(store, rows, derived, sequence_fields, projection) {
-    Ok(inputs) => inputs,
-    Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
-  };
   let wants_gzip = request
     .headers()
     .get(header::ACCEPT_ENCODING)
     .and_then(|value| value.to_str().ok())
     .is_some_and(|value| value.contains("gzip"));
   let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
-  // As `_sessions_list_response`: an unchanged corpus with unchanged overlays serves the rendered body again and
-  // renders no row.
-  let unchanged = state.whole_body.as_ref().is_some_and(|whole| whole.inputs == inputs);
-  if !unchanged {
-    #[cfg(test)]
-    {
-      state.render_calls += inputs.len();
-    }
-    let values = match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>() {
-      Ok(values) => values,
+  // The corpus check answers the common request before it walks every row's inputs. It proves every input the body
+  // reads still holds, so the body it returns is the body a rebuild would render.
+  let source_holds = state.whole_body.as_ref().is_some_and(|whole| whole.source.holds(rows, derived, sequence_fields));
+  if !source_holds {
+    let inputs = match row_inputs(store, rows, derived, sequence_fields, projection) {
+      Ok(inputs) => inputs,
       Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
     };
-    let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
-    state.whole_body = Some(WholeListingBody { inputs, body, gzip: None });
+    // As `_sessions_list_response`: an unchanged corpus with unchanged overlays serves the rendered body again and
+    // renders no row.
+    let unchanged = state.whole_body.as_ref().is_some_and(|whole| whole.inputs == inputs);
+    if unchanged {
+      let whole = state.whole_body.as_mut().expect("the body is rendered when the inputs are unchanged");
+      whole.source = ListingSource::of(rows, derived, sequence_fields);
+    } else {
+      #[cfg(test)]
+      {
+        state.render_calls += inputs.len();
+      }
+      let values = match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>() {
+        Ok(values) => values,
+        Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+      };
+      let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+      state.whole_body =
+        Some(WholeListingBody { source: ListingSource::of(rows, derived, sequence_fields), inputs, body, gzip: None });
+    }
   }
   let whole = state.whole_body.as_ref().expect("the body is rendered when the inputs changed");
   if !wants_gzip {
@@ -495,7 +541,7 @@ mod tests {
   async fn list_body(
     features: &charliebot_registry::FeatureContext,
     rows: &[Arc<SessionMetadata>],
-    derived: &DerivedSidebarMap,
+    derived: &Arc<DerivedSidebarMap>,
     sequence_fields: &HashMap<String, Map<String, Value>>,
     memos: &SessionsListMemos,
   ) -> Value {
@@ -510,8 +556,8 @@ mod tests {
     let node = crate::test_support::create_node(&features.store, "memo-row", None, TaskProfile::Manager).await;
     let mut rows = vec![Arc::new(features.store.get_session(&node.id).await.unwrap().unwrap())];
     let memos = SessionsListMemos::default();
-    let mut derived = DerivedSidebarMap::new();
-    derived.insert(
+    let mut derived = Arc::new(DerivedSidebarMap::new());
+    Arc::make_mut(&mut derived).insert(
       node.id.clone(),
       Arc::new(json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone()),
     );
@@ -523,7 +569,13 @@ mod tests {
     assert_eq!(memos.state.lock().unwrap().render_calls, 1);
     assert_eq!(first[0]["work_state"], "idle");
 
-    Arc::make_mut(derived.get_mut(&node.id).unwrap()).insert("work_state".to_string(), json!("waiting"));
+    // A sidebar move rebuilds the derived map, so the memo follows the rows to their new overlays.
+    let mut moved = (*derived).clone();
+    moved.insert(
+      node.id.clone(),
+      Arc::new(json!({"has_running_tasks": false, "work_state": "waiting"}).as_object().unwrap().clone()),
+    );
+    derived = Arc::new(moved);
     assert_eq!(list_body(&features, &rows, &derived, &sequence_fields, &memos).await[0]["work_state"], "waiting");
     assert_eq!(memos.state.lock().unwrap().render_calls, 2);
 

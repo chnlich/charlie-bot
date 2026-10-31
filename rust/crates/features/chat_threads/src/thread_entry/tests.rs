@@ -365,7 +365,6 @@ impl FakeAdapter {
         created_at: None,
         metadata: None,
         bot_id: None,
-        is_bot: false,
         eligible: true,
       })
       .collect();

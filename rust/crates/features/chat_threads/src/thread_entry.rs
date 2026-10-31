@@ -196,7 +196,6 @@ pub struct ThreadMessage {
   pub created_at: Option<String>,
   pub metadata: Option<Value>,
   pub bot_id: Option<String>,
-  pub is_bot: bool,
   pub eligible: bool,
 }
 

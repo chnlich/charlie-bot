@@ -503,7 +503,8 @@ struct SourcePositions {
 
 impl SourcePositions {
   fn new(source: &str) -> Self {
-    // CPython 3.14.7's `_OffsetParser` stores one start offset per line.
+    // `HTMLParser.getpos()` measures a column from its line's first character, so `line_starts` records one
+    // start offset per line.
     let line_count = source.bytes().filter(|byte| *byte == b'\n').count() + 1;
     let mut line_starts = Vec::with_capacity(line_count);
     line_starts.push(0);

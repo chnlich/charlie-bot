@@ -6,6 +6,7 @@
 
 mod cleanup;
 mod delegation;
+mod disk;
 mod probe;
 mod world;
 

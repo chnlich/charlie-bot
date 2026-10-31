@@ -39,7 +39,19 @@
 # CHARLIEBOT_SWITCH_READY_WAIT_S replace the 60 s, 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and
 # CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s and 60 s probe waits.
 # CHARLIEBOT_SWITCH_DELEGATION_WAIT_S replaces the 300 s delegation wait. The tests shorten the stop, ready, probe and
-# delegation waits.
+# delegation waits. CHARLIEBOT_SWITCH_DISK_QUIET_MB, CHARLIEBOT_SWITCH_DISK_WAIT_S and
+# CHARLIEBOT_SWITCH_DISK_SAMPLE_S replace the disk preflight's 40 MB/s threshold, 15 min bound and 10 s sample window;
+# CHARLIEBOT_SWITCH_DISKSTATS, CHARLIEBOT_SWITCH_MOUNTINFO, CHARLIEBOT_SWITCH_CGROUP_ROOT and CHARLIEBOT_SWITCH_PROC
+# replace the /proc and /sys/fs/cgroup paths the disk preflight reads, so its tests inject their own.
+#
+# The disk preflight reads files only. It samples the root disk's read rate and waits while the rate stays above the
+# threshold, up to the bound, logging why it waits. A quiet disk proceeds at once. On timeout the switch exits 1 with
+# the old server untouched, and the log names the heaviest session cgroups and processes over the last sample with
+# their bytes. Every switch also logs each charliebot-sess-* cgroup's read bytes before the old server stops and after
+# the new server is ready. The threshold and bound are the 40 MB/s and 15 min the switch runbook has used live: the
+# findings' 20 MB/s over 60 s sits inside the quiet tail of the 2026-10-29 incident (0.1-25 MB/s), where it would keep
+# waiting after the reader ended, while 40 MB/s leaves at least 85 MB/s of the 125 MB/s volume for the boot's reads.
+# A dry run of these readings, with no switch: source this file with any 40-hex commit and call `dry_run_disk`.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,6 +68,19 @@ PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
 # The delegation check's wait for its run. A release rehearsal of 2026-10-27 on a clone of this repository passed the
 # check in 14 s and 16 s; 300 s leaves room for a slower host.
 DELEGATION_WAIT_S="${CHARLIEBOT_SWITCH_DELEGATION_WAIT_S:-300}"
+# The disk preflight. The threshold and bound are the values the switch runbook has used live; the sample window
+# follows one boot's cold-read burst, about 36 s, so a sample responds within it.
+DISK_QUIET_MB="${CHARLIEBOT_SWITCH_DISK_QUIET_MB:-40}"
+DISK_WAIT_S="${CHARLIEBOT_SWITCH_DISK_WAIT_S:-900}"
+DISK_SAMPLE_S="${CHARLIEBOT_SWITCH_DISK_SAMPLE_S:-10}"
+DISK_REPORT_TOP="${CHARLIEBOT_SWITCH_DISK_REPORT_TOP:-10}"
+DISKSTATS="${CHARLIEBOT_SWITCH_DISKSTATS:-/proc/diskstats}"
+MOUNTINFO="${CHARLIEBOT_SWITCH_MOUNTINFO:-/proc/self/mountinfo}"
+CGROUP_ROOT="${CHARLIEBOT_SWITCH_CGROUP_ROOT:-/sys/fs/cgroup}"
+PROC_ROOT="${CHARLIEBOT_SWITCH_PROC:-/proc}"
+ROOT_DISK_NAME=""
+ROOT_PART_DEV=""
+ROOT_DISK_DEV=""
 usage() {
   echo "usage: switch-server.sh rust <full main commit> [--pane PANE]" >&2
   exit 1
@@ -773,6 +798,283 @@ stop_old() {
   log "old server stopped; pane $PANE is free"
 }
 
+# ---- disk preflight: a bounded wait for a quiet root disk, and per-session read records -----------------------------
+#
+# The 2026-10-29 boot took 225 s because the boot's cold reads queued behind a session's whole-home grep on the
+# 125 MB/s root volume. These functions read /proc and the cgroup tree only; they change no cgroup setting.
+
+# root_partition_dev: the major:minor of the filesystem mounted at /.
+root_partition_dev() {
+  awk '$5 == "/" { print $3; exit }' "$MOUNTINFO"
+}
+
+# diskstats_name DEV: the /proc/diskstats name of a major:minor device.
+diskstats_name() {
+  local name
+  name="$(awk -v dev="$1" '$1 ":" $2 == dev { print $3; exit }' "$DISKSTATS")" || return 1
+  [ -n "$name" ] || return 1
+  printf '%s\n' "$name"
+}
+
+# diskstats_dev NAME: the major:minor of a /proc/diskstats name.
+diskstats_dev() {
+  local dev
+  dev="$(awk -v name="$1" '$3 == name { print $1 ":" $2; exit }' "$DISKSTATS")" || return 1
+  [ -n "$dev" ] || return 1
+  printf '%s\n' "$dev"
+}
+
+# root_disk_name: the disk that carries /, read from /proc/diskstats. A partition gives its whole disk, because every
+# partition shares the disk's read budget; a whole-disk mount gives itself.
+root_disk_name() {
+  if [ -n "$ROOT_DISK_NAME" ]; then
+    printf '%s\n' "$ROOT_DISK_NAME"
+    return 0
+  fi
+  local dev name candidate best=""
+  dev="$(root_partition_dev)" || return 1
+  [ -n "$dev" ] || return 1
+  name="$(diskstats_name "$dev")" || return 1
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    case "$name" in
+      "$candidate"p[0-9]*) [ "${#candidate}" -gt "${#best}" ] && best=$candidate ;;
+      "$candidate"[0-9]*) [ "${#candidate}" -gt "${#best}" ] && best=$candidate ;;
+    esac
+  done < <(awk '{ print $3 }' "$DISKSTATS")
+  ROOT_DISK_NAME="${best:-$name}"
+  printf '%s\n' "$ROOT_DISK_NAME"
+}
+
+# root_devices: the major:minor identifiers of the device that carries /: its partition and its whole disk.
+root_devices() {
+  if [ -z "$ROOT_PART_DEV" ]; then
+    ROOT_PART_DEV="$(root_partition_dev)"
+    if ROOT_DISK_NAME="$(root_disk_name)"; then
+      ROOT_DISK_DEV="$(diskstats_dev "$ROOT_DISK_NAME")" || ROOT_DISK_DEV=""
+    else
+      ROOT_DISK_DEV=""
+    fi
+  fi
+  [ -n "$ROOT_PART_DEV" ] && printf '%s\n' "$ROOT_PART_DEV"
+  if [ -n "$ROOT_DISK_DEV" ] && [ "$ROOT_DISK_DEV" != "$ROOT_PART_DEV" ]; then
+    printf '%s\n' "$ROOT_DISK_DEV"
+  fi
+}
+
+# root_read_sectors: the root disk's cumulative sectors-read counter from /proc/diskstats.
+root_read_sectors() {
+  local name
+  name="$(root_disk_name)" || return 1
+  awk -v name="$name" '$3 == name { print $6; found = 1; exit } END { exit !found }' "$DISKSTATS"
+}
+
+# disk_read_rate_mb: the root disk's read rate over DISK_SAMPLE_S seconds, in MB/s. The tests replace this function to
+# inject the sampler, so they never read the live disk.
+disk_read_rate_mb() {
+  local before after window
+  before="$(root_read_sectors)" || return 1
+  window=$DISK_SAMPLE_S
+  [ "$window" -gt 0 ] || window=1
+  sleep "$DISK_SAMPLE_S"
+  after="$(root_read_sectors)" || return 1
+  printf '%s\n' $(( (after - before) * 512 / 1000000 / window ))
+}
+
+# session_cgroups: the charliebot-sess-* cgroup directories under CGROUP_ROOT, one per line.
+session_cgroups() {
+  [ -d "$CGROUP_ROOT" ] || return 1
+  find "$CGROUP_ROOT" -type d -name 'charliebot-sess-*' 2> /dev/null | sort
+}
+
+# proc_read_bytes PID: the process's read_bytes from /proc/<pid>/io.
+proc_read_bytes() {
+  local file="$PROC_ROOT/$1/io"
+  [ -r "$file" ] || return 1
+  awk '$1 == "read_bytes:" { print $2; found = 1; exit } END { exit !found }' "$file" 2> /dev/null
+}
+
+# cgroup_proc_bytes DIR: the sum of read_bytes of the processes the cgroup holds now. It answers a cgroup whose
+# io.stat is missing with a source that exists, so no row prints a zero for a file that was never read.
+cgroup_proc_bytes() {
+  local pid value total=0
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    if value="$(proc_read_bytes "$pid")"; then
+      total=$((total + value))
+    fi
+  done < "$1/cgroup.procs" 2> /dev/null
+  printf '%s\n' "$total"
+}
+
+# session_rbytes_table: one line per charliebot-sess-* cgroup, "name<TAB>source<TAB>bytes<TAB>detail". The source is
+# io.stat, whose rbytes for the root device is the cgroup's device read accounting. A cgroup without io.stat (the io
+# controller is not enabled on it) gets the sum of its processes' /proc/<pid>/io read_bytes, and its detail names the
+# missing io.stat path and the controllers the cgroup does expose. The function returns 1 when any io.stat was
+# missing, so a caller never mistakes the proc sum for the cgroup's device accounting. This one function serves both
+# the timeout error and the switch records.
+session_rbytes_table() {
+  local dir name file devices bytes rc=0 controllers
+  devices="$(root_devices | paste -sd' ' -)"
+  if [ -z "$devices" ]; then
+    printf 'unavailable\tunavailable\t-\tcannot resolve the root device from %s\n' "$MOUNTINFO"
+    return 1
+  fi
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    name="${dir##*/}"
+    file="$dir/io.stat"
+    if [ ! -r "$file" ]; then
+      if controllers="$(cat "$dir/cgroup.controllers" 2> /dev/null)"; then
+        [ -n "$controllers" ] || controllers="(empty)"
+      else
+        controllers="unreadable"
+      fi
+      bytes="$(cgroup_proc_bytes "$dir")"
+      printf '%s\tproc\t%s\tio.stat missing: %s; cgroup.controllers reads: %s\n' \
+        "$name" "$bytes" "$file" "$controllers"
+      rc=1
+      continue
+    fi
+    bytes="$(awk -v devices=" $devices " '
+      index(devices, " " $1 " ") && $2 ~ /^rbytes=/ { sub(/^rbytes=/, "", $2); total += $2 }
+      END { printf "%d\n", total }
+    ' "$file")"
+    printf '%s\tio.stat\t%s\t\n' "$name" "$bytes"
+  done < <(session_cgroups)
+  return "$rc"
+}
+
+# process_io_table: one line per process, "pid<TAB>comm<TAB>read_bytes". A process that ends while the table is built
+# is skipped, which is expected churn rather than a read failure.
+process_io_table() {
+  local dir pid comm bytes
+  for dir in "$PROC_ROOT"/[0-9]*; do
+    [ -d "$dir" ] || continue
+    pid="${dir##*/}"
+    bytes="$(proc_read_bytes "$pid")" || continue
+    comm="$(cat "$dir/comm" 2> /dev/null)" || comm="?"
+    printf '%s\t%s\t%s\n' "$pid" "$comm" "$bytes"
+  done
+}
+
+# read_deltas BEFORE AFTER: the positive AFTER-minus-BEFORE delta of the third column for each key in the first column,
+# heaviest first, as "key<TAB>label<TAB>bytes<TAB>detail" (detail is whatever the row's fourth column holds). A key
+# missing from either side is skipped.
+read_deltas() {
+  [ -s "$1" ] && [ -s "$2" ] || return 0
+  awk -F'\t' '
+    NR == FNR { before[$1] = $3; next }
+    ($1 in before) { delta = $3 - before[$1]; if (delta > 0) printf "%s\t%s\t%d\t%s\n", $1, $2, delta, $4 }
+  ' "$1" "$2" | sort -t $'\t' -k3,3nr
+}
+
+# report_heavy_readers DIR: the heaviest session cgroups and processes over the sample whose snapshots DIR holds. A
+# cgroup row carries the source and detail of the accounting that answered, so a proc sum is never read as an io.stat
+# rbytes and a missing io.stat shows its path.
+report_heavy_readers() {
+  local dir=$1 name source bytes detail pid comm
+  read_deltas "$dir/cgroups.before" "$dir/cgroups.after" | head -n "$DISK_REPORT_TOP" > "$dir/cgroups.deltas"
+  log "heaviest session cgroups over the last ${DISK_SAMPLE_S}s:"
+  if [ -s "$dir/cgroups.deltas" ]; then
+    while IFS=$'\t' read -r name source bytes detail; do
+      if [ -n "$detail" ]; then
+        log "  cgroup $name $bytes bytes ($source; $detail)"
+      else
+        log "  cgroup $name $bytes bytes ($source)"
+      fi
+    done < "$dir/cgroups.deltas"
+  else
+    log "  none"
+  fi
+  read_deltas "$dir/procs.before" "$dir/procs.after" | head -n "$DISK_REPORT_TOP" > "$dir/procs.deltas"
+  log "heaviest processes over the last ${DISK_SAMPLE_S}s:"
+  if [ -s "$dir/procs.deltas" ]; then
+    while IFS=$'\t' read -r pid comm bytes; do
+      log "  process $pid ($comm) $bytes bytes"
+    done < "$dir/procs.deltas"
+  else
+    log "  none"
+  fi
+}
+
+# wait_for_quiet_disk: samples the root disk's read rate and returns once it is at or below DISK_QUIET_MB, up to
+# DISK_WAIT_S. It logs every sample, so the operator sees why a switch waits. On timeout it reports the heaviest
+# session cgroups and processes over the last sample and returns 1; no server is touched here.
+wait_for_quiet_disk() {
+  local dir end rate sample_rc
+  dir="$(mktemp -d)" || {
+    log "cannot make a work directory for the disk preflight"
+    return 1
+  }
+  end=$((SECONDS + DISK_WAIT_S))
+  while :; do
+    session_rbytes_table > "$dir/cgroups.before" || true
+    process_io_table > "$dir/procs.before" || true
+    rate="$(disk_read_rate_mb)"
+    sample_rc=$?
+    if [ "$sample_rc" -ne 0 ]; then
+      log "cannot read the root disk's read rate from $DISKSTATS"
+      rm -rf "$dir"
+      return 1
+    fi
+    session_rbytes_table > "$dir/cgroups.after" || true
+    process_io_table > "$dir/procs.after" || true
+    if [ "$rate" -le "$DISK_QUIET_MB" ]; then
+      log "root disk read ${rate} MB/s over ${DISK_SAMPLE_S}s, at or below ${DISK_QUIET_MB} MB/s; proceeding"
+      rm -rf "$dir"
+      return 0
+    fi
+    log "waiting for the root disk: ${rate} MB/s read over ${DISK_SAMPLE_S}s, above ${DISK_QUIET_MB} MB/s; up to ${DISK_WAIT_S}s"
+    if [ "$SECONDS" -ge "$end" ]; then
+      report_heavy_readers "$dir"
+      rm -rf "$dir"
+      return 1
+    fi
+  done
+}
+
+# record_session_reads LABEL: logs each charliebot-sess-* cgroup's read bytes at one moment of the switch. A cgroup
+# without io.stat is logged with the missing path and its source instead, and the final line says the accounting was
+# degraded. The return status reports that degradation; a caller records it without failing the switch.
+record_session_reads() {
+  local label=$1 dir name source bytes detail rc=0
+  dir="$(mktemp -d)" || {
+    log "session reads $label: cannot make a work directory"
+    return 1
+  }
+  session_rbytes_table > "$dir/table" || rc=1
+  if [ -s "$dir/table" ]; then
+    while IFS=$'\t' read -r name source bytes detail; do
+      if [ -n "$detail" ]; then
+        log "session reads $label: $name $bytes bytes from $source ($detail)"
+      else
+        log "session reads $label: $name $bytes bytes from $source"
+      fi
+    done < "$dir/table"
+  else
+    log "session reads $label: no charliebot-sess-* cgroups"
+  fi
+  [ "$rc" -eq 0 ] || log "session reads $label: io.stat is missing for at least one cgroup; each row names the path and the source read instead"
+  rm -rf "$dir"
+  return "$rc"
+}
+
+# dry_run_disk: the disk preflight's readings without a switch: the sampled root-disk read rate and the per-session
+# rbytes table. It stops nothing and changes nothing.
+dry_run_disk() {
+  local rate rc
+  rate="$(disk_read_rate_mb)" || {
+    log "cannot read the root disk's read rate from $DISKSTATS"
+    return 1
+  }
+  log "root disk read ${rate} MB/s over ${DISK_SAMPLE_S}s; threshold ${DISK_QUIET_MB} MB/s, bound ${DISK_WAIT_S}s"
+  session_rbytes_table
+  rc=$?
+  [ "$rc" -eq 0 ] || log "io.stat is missing for at least one cgroup; each row names the path and the source read instead"
+  return "$rc"
+}
+
 preflight() {
   PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
@@ -803,6 +1105,8 @@ preflight() {
   fi
   PANE_PID="$(tm display-message -p -t "$PANE" '#{pane_pid}' 2> /dev/null)" || fail "no tmux pane $PANE"
   WANT="rust $TARGET_SHA"
+  wait_for_quiet_disk \
+    || fail "the root disk read stayed above ${DISK_QUIET_MB} MB/s within ${DISK_WAIT_S}s; the heaviest readers are the lines above"
   log "preflight passed: $OLD_IMPL -> $WANT; clone at $OLD_SHA; pane $PANE; port $PORT"
 }
 
@@ -911,11 +1215,13 @@ switch_forward() {
   scan_home || die "cannot read the run records in $HOME_DIR"
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"
+  record_session_reads "before the old server stops" || true
   stop_old || die "the old server did not stop"
   git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
   start_in_pane || die "could not type the launcher into pane $PANE"
   wait_ready || die "the new server did not reach server_ready"
+  record_session_reads "after the new server is ready" || true
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
   probe_turn || die "the probe turn failed"

@@ -59,6 +59,9 @@ pub struct World {
   /// A later release: agy cannot re-attach.
   pub new_sha: String,
   pub port: u16,
+  /// The files the disk preflight reads instead of the live disk and cgroup tree.
+  pub cgroups: PathBuf,
+  pub proc: PathBuf,
   /// Processes the test started: the live runs' processes, the release and the improve loop's controller.
   pub live: Vec<Child>,
 }
@@ -83,7 +86,17 @@ impl World {
     fs::create_dir_all(home.join("sessions")).expect("the home's sessions directory");
     let releases = sandbox.dir("releases");
     let logs = sandbox.dir("logs");
+    let diskstats = sandbox.dir("disk").join("diskstats");
+    let mountinfo = sandbox.dir("disk").join("mountinfo");
+    let cgroups = sandbox.dir("cgroups");
+    let proc = sandbox.dir("proc");
     let git_vars = git_env(&sandbox);
+    // The root filesystem is a partition of one disk, as on the live host. The counters do not move, so the
+    // preflight's sampler sees a quiet disk unless a test injects its own.
+    fs::write(&diskstats, "8 0 sda 100 0 1000 0 0 0 0 0 0 0 0\n8 1 sda1 100 0 1000 0 0 0 0 0 0 0 0\n")
+      .expect("the fake diskstats");
+    fs::write(&mountinfo, "28 1 8:1 / / rw,relatime shared:1 - ext4 /dev/root rw,discard\n")
+      .expect("the fake mountinfo");
 
     copy_repo_file("scripts/start-server.sh", &scripts.join("start-server.sh"));
     copy_repo_file("scripts/switch-server.sh", &scripts.join("switch-server.sh"));
@@ -162,6 +175,14 @@ impl World {
     env.insert("CHARLIEBOT_TMUX_SOCKET".to_string(), socket.clone());
     env.insert("CHARLIEBOT_SWITCH_STOP_WAIT_S".to_string(), "3".to_string());
     env.insert("CHARLIEBOT_SWITCH_READY_WAIT_S".to_string(), "30".to_string());
+    // The disk preflight reads these instead of the live disk, cgroup tree and /proc. Its sample window is zero and
+    // its counters do not move, so a switch that does not inject a sampler sees a quiet disk at once.
+    env.insert("CHARLIEBOT_SWITCH_DISKSTATS".to_string(), diskstats.display().to_string());
+    env.insert("CHARLIEBOT_SWITCH_MOUNTINFO".to_string(), mountinfo.display().to_string());
+    env.insert("CHARLIEBOT_SWITCH_CGROUP_ROOT".to_string(), cgroups.display().to_string());
+    env.insert("CHARLIEBOT_SWITCH_PROC".to_string(), proc.display().to_string());
+    env.insert("CHARLIEBOT_SWITCH_DISK_SAMPLE_S".to_string(), "0".to_string());
+    env.insert("CHARLIEBOT_SWITCH_DISK_WAIT_S".to_string(), "5".to_string());
     env.remove("TMUX");
     env.remove("SYSTEMD_RUN_REFUSE_ALL");
 
@@ -178,6 +199,8 @@ impl World {
       rust_sha,
       new_sha,
       port,
+      cgroups,
+      proc,
       live: Vec::new(),
     }
   }
@@ -231,7 +254,7 @@ impl World {
 source "$1" rust "$2"
 REPO_ROOT="$CLONE"
 OLD_IMPL="$3"
-stop_old() { kill -KILL "$RUN_PID"; }
+stop_old() { kill -KILL "$RUN_PID"; log "old server stopped"; }
 start_in_pane() { :; }
 wait_ready() { :; }
 serving() { :; }
@@ -337,24 +360,69 @@ switch_forward
   /// The switch's preflight, with the listener, the pane and the tmux step stubbed out: the listener runs
   /// `running_impl`, and the preflight takes `mode` and `target_sha`. Its live runs go to `preflight.runs`.
   pub fn stubbed_preflight(&self, running_impl: &str, mode: &str, target_sha: &str) -> Run {
-    let script = r#"source "$1" "$2" ${3:+"$3"}
+    self.stubbed_preflight_with(running_impl, mode, target_sha, "")
+  }
+
+  /// The switch's preflight like [`World::stubbed_preflight`], with `prepend` run after the stubs and before the
+  /// preflight: the disk tests install their sampler there.
+  pub fn stubbed_preflight_with(&self, running_impl: &str, mode: &str, target_sha: &str, prepend: &str) -> Run {
+    let script = format!(
+      r#"source "$1" "$2" ${{3:+"$3"}}
 OLD_SOURCE="$4"
 RUNS_FILE="$5"
-listener_pids() { echo 999999; }
-impl_of_pid() { echo "$OLD_SOURCE"; }
-pane_of_pid() { echo '%1'; }
-tm() { echo 999999; }
+listener_pids() {{ echo 999999; }}
+impl_of_pid() {{ echo "$OLD_SOURCE"; }}
+pane_of_pid() {{ echo '%1'; }}
+tm() {{ echo 999999; }}
+{prepend}
 preflight
-"#;
+"#
+    );
     let mut command = harness::command("bash", &self.env);
     command
-      .args(["-c", script, "bash"])
+      .args(["-c", script.as_str(), "bash"])
       .arg(self.switch_script())
       .arg(mode)
       .arg(target_sha)
       .arg(running_impl)
       .arg(self.root().join("preflight.runs"));
     harness::run(&mut command)
+  }
+
+  /// Runs `body` in a shell that has sourced the switch script, with the world's disk, cgroup and proc roots: the
+  /// disk functions' own unit under test.
+  pub fn disk_command(&self, body: &str) -> Run {
+    let script = format!("source \"$1\" rust {} && {body}", self.old_sha);
+    let mut command = harness::command("bash", &self.env);
+    command.args(["-c", script.as_str(), "bash"]).arg(self.switch_script());
+    harness::run(&mut command)
+  }
+
+  /// Writes a fake session cgroup whose io.stat charges `rbytes` bytes to the root disk.
+  pub fn write_session_cgroup(&self, name: &str, rbytes: u64) {
+    let dir = self.cgroups.join(name);
+    fs::create_dir_all(&dir).expect("the session cgroup");
+    fs::write(dir.join("io.stat"), format!("8:0 rbytes={rbytes} wbytes=0 rios=1 wios=0 dbytes=0 dios=0\n"))
+      .expect("the fake io.stat");
+    fs::write(dir.join("cgroup.controllers"), "cpu memory pids\n").expect("the fake controllers");
+    fs::write(dir.join("cgroup.procs"), "").expect("the fake cgroup procs");
+  }
+
+  /// Writes a fake session cgroup with no io.stat, holding `pids` and exposing `controllers`.
+  pub fn write_session_cgroup_without_io(&self, name: &str, controllers: &str, pids: &[u32]) {
+    let dir = self.cgroups.join(name);
+    fs::create_dir_all(&dir).expect("the session cgroup");
+    fs::write(dir.join("cgroup.controllers"), format!("{controllers}\n")).expect("the fake controllers");
+    let procs: String = pids.iter().map(|pid| format!("{pid}\n")).collect();
+    fs::write(dir.join("cgroup.procs"), procs).expect("the fake cgroup procs");
+  }
+
+  /// Writes a fake process's comm and read_bytes under the world's proc root.
+  pub fn write_process(&self, pid: u32, comm: &str, read_bytes: u64) {
+    let dir = self.proc.join(pid.to_string());
+    fs::create_dir_all(&dir).expect("the fake process");
+    fs::write(dir.join("comm"), format!("{comm}\n")).expect("the fake comm");
+    fs::write(dir.join("io"), format!("read_bytes: {read_bytes}\n")).expect("the fake io");
   }
 
   /// One mode of the home helper. The scan takes the running build as `rust <sha>` words, as the test always passed

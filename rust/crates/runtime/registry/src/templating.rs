@@ -268,9 +268,17 @@ impl Templating {
     let mut environment = jinja::environment(jinja::file_system_loader(self.directories.clone()));
     let repo_root = self.repo_root.clone();
     let packages = self.packages.clone();
+    // A page part is a template source, so this environment lives only while every source holds its value; a part
+    // added, removed or moved on disk rebuilds the environment and drops the cache with it.
+    let parts_cache: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
     environment.add_function("page_parts", move |slot: String| {
-      pages::page_parts(&repo_root, &packages, &slot)
-        .map_err(|message| Error::new(ErrorKind::InvalidOperation, format!("ValueError: {message}")))
+      if let Some(parts) = parts_cache.lock().expect("the page parts cache mutex is not poisoned").get(&slot) {
+        return Ok(parts.clone());
+      }
+      let parts = pages::page_parts(&repo_root, &packages, &slot)
+        .map_err(|message| Error::new(ErrorKind::InvalidOperation, format!("ValueError: {message}")))?;
+      parts_cache.lock().expect("the page parts cache mutex is not poisoned").insert(slot, parts.clone());
+      Ok(parts)
     });
     for (name, value) in globals {
       environment.add_function(name, move || value.clone());
@@ -577,6 +585,34 @@ mod tests {
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label one");
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} two, longer").unwrap();
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
+  }
+
+  /// A page part's list is resolved once per compiled environment. A part added on disk is a new template source,
+  /// so the next render rebuilds the environment and includes the part.
+  #[tokio::test]
+  async fn a_page_part_added_on_disk_reaches_the_next_render() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    fs::create_dir_all(templates.join("notes")).unwrap();
+    fs::write(templates.join("parts.html"), "{% for part in page_parts('head') %}{% include part %}{% endfor %}")
+      .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/parts").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    async fn render(templating: &Templating, features: &FeatureContext, parts: &Parts) -> String {
+      let response = templating.render_page(features, "parts.html", &json!({}), parts).unwrap();
+      let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+      String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    assert_eq!(render(&templating, &features, &parts).await, "");
+    fs::write(templates.join("notes").join("page_head.html"), "note-part").unwrap();
+    assert_eq!(render(&templating, &features, &parts).await, "note-part");
   }
 
   #[test]

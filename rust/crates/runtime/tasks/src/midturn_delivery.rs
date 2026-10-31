@@ -16,7 +16,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
-use charliebot_registry::midturn_delivery::{is_gated_turn, offer as offer_write};
+use charliebot_registry::midturn_delivery::{IS_REPLAY_FIELD, is_gated_turn, offer as offer_write};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
@@ -115,7 +115,7 @@ impl<'de> Deserialize<'de> for ReplayLine {
         while let Some(key) = map.next_key::<String>()? {
           match key.as_str() {
             "type" => line.kind = Some(map.next_value()?),
-            "isReplay" => line.is_replay = Some(map.next_value()?),
+            IS_REPLAY_FIELD => line.is_replay = Some(map.next_value()?),
             "uuid" => line.uuid = Some(map.next_value()?),
             _ => {
               let _: IgnoredAny = map.next_value()?;

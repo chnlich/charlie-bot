@@ -23,6 +23,10 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 
+/// The Claude stream-json field that marks a replayed user message. The backend's `translate_replay` and the task
+/// dispatcher's replay-line parser both read it, so they match this name instead of spelling it.
+pub const IS_REPLAY_FIELD: &str = "isReplay";
+
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
 pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 
@@ -221,7 +225,7 @@ pub async fn offer(run_id: &str, inputs: Vec<(String, String)>) -> anyhow::Resul
 /// Turn a replay of a delivered user message into a non-rendered acknowledgement.
 pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<Vec<Value>> {
   if event.get("type").and_then(Value::as_str) != Some(event_types::USER)
-    || event.get("isReplay") != Some(&Value::Bool(true))
+    || event.get(IS_REPLAY_FIELD) != Some(&Value::Bool(true))
   {
     return Ok(vec![event.clone()]);
   }

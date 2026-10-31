@@ -229,12 +229,12 @@ Chat.registerSeparatorButton(function(sessionId, eventIndex) {
 
 // ---------------------------------------------------------------------------
 // Task & context dialog (plan 4.2): a read-only view of a logical session's
-// task record (goal, acceptance, context refs) over the context its next Run
-// would assemble (GET /api/sessions/{id}/effective-prompt: one row per
-// managed block with its sources, delivery and measured length). The dialog
-// shell shares the session-action modal's chrome in index.html; the body is
-// fetched on every open, so it shows the current configuration and stores
-// nothing.
+// task record (goal, acceptance, context refs). Below it sits the context its
+// next Run would assemble: GET /api/sessions/{id}/effective-prompt returns one
+// row per managed block with its sources, delivery and measured length. The
+// dialog shell shares the session-action modal's chrome in index.html. The
+// body is fetched on every open, so it shows the current configuration and
+// stores nothing.
 // ---------------------------------------------------------------------------
 const TASK_CONTEXT_NONE = '<span class="text-slate-500">(none)</span>';
 
@@ -250,10 +250,11 @@ function taskContextList(items) {
   return `<ul class="list-disc pl-4 space-y-0.5">${items.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('')}</ul>`;
 }
 
-// A full goal body renders as prose, the chat bubble's pipeline (escape +
-// renderProseMarkdown + data-raw round-trip): delegation goals open with a
-// "## Goal" heading, and a field that shows it raw paints a literal '## '.
-// The renderer escapes raw HTML itself, so the field stays injection-safe.
+// A full goal body renders as prose through the chat bubble's pipeline:
+// escape + renderProseMarkdown + data-raw round-trip. Delegation goals open
+// with a "## Goal" heading, and a field that shows it raw paints a literal
+// '## '. The renderer escapes raw HTML itself, so the field stays
+// injection-safe.
 function taskContextGoalHtml(goal) {
   const raw = escapeHtml(goal).replace(/"/g, '&quot;');
   return `<div class="prose-msg break-words" data-raw="${raw}">${renderProseMarkdown(goal)}</div>`;

@@ -9,9 +9,10 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::responses;
+use charliebot_core::web_search::MCP_SERVER_NAME;
 use serde_json::{Value, json};
 
-use crate::endpoint::{MCP_SERVER_NAME, WebSearch};
+use crate::endpoint::WebSearch;
 use crate::search;
 
 /// The protocol version answered when the client names none: the version Claude Code 2.1.310 initializes with.

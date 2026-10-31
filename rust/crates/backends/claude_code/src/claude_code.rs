@@ -21,7 +21,7 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use charliebot_core::run_token;
-use charliebot_core::web_search::MCP_PATH;
+use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME};
 
 use super::claude_launch;
 use super::login_dirs;
@@ -36,9 +36,6 @@ pub const MCP_CONFIG_FLAG: &str = "--mcp-config";
 /// Claude Code's built-in web search tool. It asks the API endpoint to search, which the endpoint backends either
 /// refuse or answer without a search, so those backends disallow it and mount the server's tool instead.
 pub const BUILT_IN_WEB_SEARCH_TOOL: &str = "WebSearch";
-/// The MCP server name of the server's web search tool, which `features/web_search` serves. Its route path is that
-/// crate's `MCP_PATH`, which registers the route.
-pub const WEB_SEARCH_MCP_SERVER_NAME: &str = "charliebot-web";
 pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
@@ -539,7 +536,7 @@ pub fn web_search_mcp_config(server_port: u16) -> String {
   server.insert("url".to_string(), Value::String(format!("http://localhost:{server_port}{MCP_PATH}")));
   server.insert("headers".to_string(), Value::Object(headers));
   let mut servers = Map::new();
-  servers.insert(WEB_SEARCH_MCP_SERVER_NAME.to_string(), Value::Object(server));
+  servers.insert(MCP_SERVER_NAME.to_string(), Value::Object(server));
   let mut config = Map::new();
   config.insert("mcpServers".to_string(), Value::Object(servers));
   Value::Object(config).to_string()

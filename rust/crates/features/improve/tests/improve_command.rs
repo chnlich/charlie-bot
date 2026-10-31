@@ -153,7 +153,7 @@ fn the_newest_summary_wins_whichever_kind_carries_it() {
 // Python: tests/test_improve_command.py::test_newest_first_events_prefiltered_parity
 fn the_candidate_prefilter_keeps_the_judgments_inputs() {
   // Over a log with both writer shapes, a giant tool_result line, a type-less line, blank and malformed lines, the
-  // newest-first walk keeps the candidate types and the type-less line, in newest-first order.
+  // newest-first walk keeps the candidate types and the type-less line. The kept lines arrive in newest-first order.
   let home = tempfile::tempdir().expect("temporary home");
   let path = home.path().join("events.jsonl");
   let adopt_signal = json!({"session_id": "abc", "timestamp": "t"});

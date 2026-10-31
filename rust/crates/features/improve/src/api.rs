@@ -136,7 +136,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   let (resolved_backend, resolved_model) = if backend_from_pool {
     (String::new(), String::new())
   } else {
-    // The resolver's role picks only among pool members, and this call never reaches the pool: a pool with a requested
+    // The resolver's role picks only among pool members, and this call never reaches the pool. A pool with a requested
     // backend returns that backend first, and a pool-less config skips the pool branch.
     let (backend, model, _from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
       &cfg,
@@ -250,8 +250,8 @@ fn bad_request(error: anyhow::Error) -> Response {
   responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() }))
 }
 
-/// Fail a freshly reserved loop whose child was refused: the state is marked failed and the active lock cleared, so the
-/// refused request leaves no running loop that no controller owns.
+/// Fail a freshly reserved loop whose child was refused: the state is marked failed and the active lock cleared.
+/// The refused request then leaves no running loop that no controller owns.
 fn fail_reserved_loop(cfg: &CharlieBotConfig, session_id: &str, mut state: ImproveState) -> anyhow::Result<()> {
   state.status = LoopStatus::Failed;
   command::save_loop_state(cfg, session_id, &state)?;

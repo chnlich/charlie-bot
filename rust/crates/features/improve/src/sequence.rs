@@ -4,12 +4,14 @@
 //! The loop keeps its state under `sessions/<id>/loops/<loop_id>/` (`goal.md`, re-read at every iteration, the optional
 //! `plan.md`, and `state.json`). Each iteration is one Run on the loop's worker child, `kind = iteration`, with
 //! `sequence_ref = (improve, owner_ref = <loop dir>, position = <n>)`. Each judged iteration is delivered to the parent
-//! as one child report; the loop's end is one final report. The close step closes the child once under
-//! `improve:<loop id>:close`: `completed` for a landed merge-back, `cancelled` for a user stop, `blocked` when the
-//! iterations ran out without proof, and `failed` for a quota or loop failure.
+//! as one child report; the loop's end is one final report.
 //!
-//! Re-entry is stable: the child id derives from (parent, `improve:<loop id>`) and each iteration Run id from (child,
-//! `improve:<loop id>:iter:<n>`), so a replayed admission or finalization never duplicates either. After a restart the
+//! The close step closes the child once under `improve:<loop id>:close`. The status is `completed` for a landed
+//! merge-back, `cancelled` for a user stop, and `blocked` when the iterations ran out without proof. It is `failed` for
+//! a quota or loop failure.
+//!
+//! Re-entry is stable: the child id derives from (parent, `improve:<loop id>`), and each iteration Run id from (child,
+//! `improve:<loop id>:iter:<n>`). A replayed admission or finalization never duplicates either. After a restart the
 //! loop is never resumed: the startup pass marks it `interrupted`, clears its lock and closes what the crash left open.
 
 use std::path::{Path, PathBuf};

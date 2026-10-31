@@ -134,9 +134,6 @@
       {% endfor %}
     </tbody>
   </table>
-  {% else %}
-  <p class="cap">No host is listed yet: the first probe round has not completed, or the ssh config names none.</p>
-  {% endif %}
 
   <p class="cap"><b>What the deadline column means.</b> The clock starts at a blocked&rarr;direct transition this panel
   saw with its own probe, which means a cache entry had just been written only if you renewed through the browser
@@ -150,6 +147,9 @@
     <span class="k"><i class="dot" style="background:var(--warn)"></i>Needs interactive auth: a human check in a browser or terminal</span>
     <span class="k"><i class="dot" style="background:var(--off)"></i>Unreachable: no usable answer</span>
   </div>
+  {% else %}
+  <p class="cap">No host is listed yet: the first probe round has not completed, or the ssh config names none.</p>
+  {% endif %}
 </div>
 </body>
 </html>

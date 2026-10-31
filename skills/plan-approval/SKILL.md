@@ -55,8 +55,9 @@ An understanding page lists the divergences of a request that admits several rea
 - The Linear block appears only for a repo marked Linear-tracked on the memory entry
   `charliebot/workspace-repos`; a repo not tracked carries no block, and an absent marker list gets one line
   saying the whitelist is not configured. Use the `linear` skill to list candidates or prepare a ready-to-file
-  draft. For a root session, follow the confirmation rule in the `linear` skill. For a sub session, follow the
-  master prompt's External System Writes rule. Fill the draft from the Linear defaults in memory.
+  draft. For a root session, the user decides which and the `linear` skill's confirmation rule applies.
+  For a sub session, follow the master prompt's External System Writes rule. Fill the draft from the Linear defaults
+  in memory.
   After the ticket exists, carry its identifier as a header meta chip on the understanding page and the plan that
   follows.
 - Don't guess: any point the request leaves unstated where different readings lead to

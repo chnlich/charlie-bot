@@ -190,7 +190,8 @@ query($teamId: String!) {
 
 - **English only:** All ticket titles and descriptions must be written in English, regardless of conversation language.
 - **Default assignee:** Use the host-configured default assignee if one is set (host-specific skill / MEMORY); otherwise leave unassigned and ask the user.
-- **User approval required:** Always show the draft and get user confirmation before creating or updating any issue.
+- **Issue writes:** A root session shows the draft and gets user confirmation before creating or updating issues.
+  A sub session follows the master prompt's External System Writes rule.
 - **Feishu for documentation:** Create a Feishu document for a Linear issue when the user asks for one or when the issue's detail is meant for colleagues to read; otherwise the detail stays in the issue's session artifacts rather than in Linear comments or long descriptions. When a doc exists, each Linear issue maps to **one** Feishu document, subsequent updates append to the same Feishu doc never a new one, the Feishu doc title matches the Linear issue title, and the Feishu doc URL is linked in the Linear issue description.
 - **Default Feishu doc sharing:** When creating the Feishu doc associated with a Linear issue, set its public permission to tenant-internal readable via `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}` after the user explicitly approves that permission write. Do not widen to `tenant_editable` unless the user explicitly asks, and do not enable external public access by default.
 - **Permission-write approval:** Any Feishu permission change for an associated Feishu doc, including the default `tenant_readable` setup for a new doc, still requires explicit user approval before sending the Feishu permission write.
@@ -202,7 +203,7 @@ query($teamId: String!) {
 3. Use `searchIssues` for text lookups and `issues` with filters for structured queries
 4. For creating/updating issues, resolve team and user IDs first
 5. Always format output clearly — show identifier, title, state, assignee, and priority
-6. **Before creating or updating issues, confirm the action with the user**
+6. Follow the issue-write rule above before creating or updating issues
 7. **When adding detailed content to an issue:**
    a. Create a Feishu doc only when the user asks for one or when the detail is meant for colleagues to read; otherwise leave the detail in the issue's session artifacts
    b. Check if the issue description already contains a Feishu doc URL — if so, append new content to that existing doc

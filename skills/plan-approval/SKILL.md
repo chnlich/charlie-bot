@@ -54,10 +54,11 @@ An understanding page lists the divergences of a request that admits several rea
   Linear.
 - The Linear block appears only for a repo marked Linear-tracked on the memory entry
   `charliebot/workspace-repos`; a repo not tracked carries no block, and an absent marker list gets one line
-  saying the whitelist is not configured. Recall per the `linear` skill gives a candidate list or a
-  ready-to-file draft, and the user decides which; the draft's fields come from the Linear defaults in memory.
-  The write follows the master prompt's External System Writes rule. After the ticket exists,
-  carry its identifier as a header meta chip on the understanding page and the plan that follows.
+  saying the whitelist is not configured. Use the `linear` skill to list candidates or prepare a ready-to-file
+  draft. For a root session, follow the confirmation rule in the `linear` skill. For a sub session, follow the
+  master prompt's External System Writes rule. Fill the draft from the Linear defaults in memory.
+  After the ticket exists, carry its identifier as a header meta chip on the understanding page and the plan that
+  follows.
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
 - Map each outcome that the request names to a deliverable or a divergence.
@@ -156,7 +157,8 @@ An understanding page lists the divergences of a request that admits several rea
   the user judges it at one read.
 - When work under a Linear ticket lands, draft one English comment for that ticket.
   The comment states the landed design, the resolved choices and the commit.
-  Ask its take off in the completion report. Delegation then waits for no ticket write.
+  A root session asks for its take off in the completion report. A sub session follows the master prompt's External
+  System Writes rule. Delegation then waits for no ticket write.
 - Post one comment per plan lineage or direct change. Work without a ticket posts nothing;
   the plan stage never creates a ticket. Linear then records the design that landed.
 

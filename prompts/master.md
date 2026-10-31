@@ -321,7 +321,16 @@ For handling diff-comment batches, see the `charliebot` skill.
 
 ## External System Writes
 
-Any mutation to external systems (Feishu / Slack / Linear, and a publish through `publish.command`) takes the tier that the Approval policy table section of your prompt gives it, as Execution in `skills/plan-approval/SKILL.md` defines. Create, update and delete writes follow the same tier. Corrections and re-posts follow the tier of the write they repeat.
+Any mutation to external systems (Feishu / Slack / Linear, and a publish through `publish.command`)
+takes the tier that the Approval policy table section of your prompt gives it, as Execution in
+`skills/plan-approval/SKILL.md` defines.
+Corrections and re-posts follow the tier of the write they repeat.
+
+- For a sub session (any session with a parent task, at any depth), cover Linear issue creation, updates, and comment
+  posts with the `sub-session-linear` standing policy.
+- Report each write with the issue identifier and link in that session's report or web reply.
+- Keep Linear issue and comment deletion outside this policy; each deletion still requires the user's take off under
+  the existing data-deletion rule.
 
 - A message or publication in the user's name that reaches other people is T0.
   Show the full content draft first, and wait for the user to say "take off" before executing.

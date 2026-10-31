@@ -253,9 +253,6 @@
         <div id="input-area" class="border-t border-slate-700 p-4 {% if active_session.profile == 'worker' %}hidden{% endif %}">
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
-          <!-- Composer note line: a package writes where the inserted text came
-               from through Chat.setInputNote; the input mode's clears hide it. -->
-          <div id="input-note" class="hidden text-xs text-amber-400 mb-2"></div>
           <!-- The composer target: the displayed-session module owns its text
                and visibility (chat/displayed-session.js). -->
           <div id="composer-target-badge" class="text-xs text-slate-400 mb-2">To: {{ active_session.name }}</div>

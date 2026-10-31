@@ -51,7 +51,6 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     micPending: null,
     input: {value: '', focus() {}, addEventListener() {}},
     chatFlags: [],
-    chatNotes: [],
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
     overlayMap: new Map(),
     beforeunloadCount: 0,
@@ -289,7 +288,6 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     accessTokenAuthorization: () => null,
     Chat: {
       setInputMode: (mode) => state.chatFlags.push(mode),
-      setInputNote: (text) => state.chatNotes.push(text),
       registerInputMode() {},
     },
     autoResize() {},
@@ -884,7 +882,6 @@ test('a final inside the budget inserts once and ends the run with no upload', a
   assert.equal(state.sendLockOpens, 0); // the send lock never engaged
   assert.equal(state.sendLockSettles, 0);
   assert.equal(state.beforeunloadCount, 0);
-  assert.deepEqual(state.chatNotes, []); // the relay's words carry no note
 
   await state.arm(); // the slot is free: the next click starts a new recording
   assert.equal(state.micCalls, 2);
@@ -998,7 +995,6 @@ test('an error frame mid-recording stops visibly and one click uploads the recor
   await tick();
   await tick();
   assert.equal(state.input.value, 'after error');
-  assert.deepEqual(state.chatNotes, []); // the upload sets no note
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1031,7 +1027,6 @@ test('a lost socket mid-recording stops visibly and one click uploads the record
   await tick();
   await tick();
   assert.equal(state.input.value, 'after close');
-  assert.deepEqual(state.chatNotes, []); // the upload sets no note
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1065,7 +1060,6 @@ test('a spent budget stops visibly and one click uploads the recording', async (
   await tick();
   await tick();
   assert.equal(state.input.value, 'upload words');
-  assert.deepEqual(state.chatNotes, []); // the upload sets no note
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1157,10 +1151,9 @@ test('the batch backend opens no relay and uploads right after stop', async () =
   await tick();
   await tick();
   assert.equal(state.input.value, 'recognized words');
-  assert.deepEqual(state.chatNotes, []); // an upload sets no note
 });
 
-test('an empty upload result after the stop-state click sets no note', async () => {
+test('an empty upload result after the stop-state click inserts nothing', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
   socket.openSocket();
@@ -1181,7 +1174,6 @@ test('an empty upload result after the stop-state click sets no note', async () 
   await tick();
   assert.equal(state.input.value, ''); // the empty result inserted nothing
   assert.deepEqual(state.toasts, [{msg: 'No speech detected', isError: false}]);
-  assert.deepEqual(state.chatNotes, []); // no insertion, no note
 });
 
 test('the caret is disabled while a run is active and back on release', async () => {

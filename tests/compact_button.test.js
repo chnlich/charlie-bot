@@ -281,75 +281,33 @@ test('a dictated message posts input_mode voice and the next typed message posts
 });
 
 // ---------------------------------------------------------------------------
-// 3d. The composer note shows on demand and dies with the input mode's clears.
+// 3d. An emptied composer clears the input mode before the next send.
 // ---------------------------------------------------------------------------
-function loadNoteContext() {
+test('emptying the composer clears the input mode', async () => {
   const input = createElement({id: 'msg-input'});
   input.style = {};
-  const note = createElement({id: 'input-note', className: 'hidden text-xs text-amber-400 mb-2'});
   const elements = new Map([
     ['messages', new FakeElement('DIV')],
     ['msg-input', input],
-    ['input-note', note],
   ]);
   const context = loadChatContext(elements);
   context.DRAFT_KEY = null;
   context.startThinking = () => {};
   context.stopThinking = () => {};
-  context.fetch = () => Promise.resolve({ok: true, status: 202, json: async () => ({})});
-  return { context, input, note };
-}
-
-const noteHidden = (note) => note.classList.contains('hidden');
-
-test('setInputNote shows the note line with its text', () => {
-  const { context, note } = loadNoteContext();
-  assert.ok(noteHidden(note)); // the note line starts hidden
-
-  context.Chat.setInputNote('note words');
-  assert.equal(note.textContent, 'note words');
-  assert.ok(!noteHidden(note));
-});
-
-test('a send clears the note with the composer', async () => {
-  const { context, input, note } = loadNoteContext();
-  input.value = 'words';
-  context.Chat.setInputNote('note words');
-  assert.ok(!noteHidden(note));
-
-  await context.sendMessage();
-  assert.equal(note.textContent, '');
-  assert.ok(noteHidden(note));
-});
-
-test('emptying the composer clears the note', () => {
-  const { context, input, note } = loadNoteContext();
-  input.value = 'words';
-  context.Chat.setInputNote('note words');
-
-  input.value = '';
-  for (const handler of input._listeners.input) handler();
-  assert.equal(note.textContent, '');
-  assert.ok(noteHidden(note));
-});
-
-test('setInputMode(null) clears the note', () => {
-  const { context, note } = loadNoteContext();
-  context.Chat.setInputNote('note words');
-  assert.ok(!noteHidden(note));
-
-  context.Chat.setInputMode(null);
-  assert.equal(note.textContent, '');
-  assert.ok(noteHidden(note));
-});
-
-test("setInputMode('voice') keeps the note", () => {
-  const { context, note } = loadNoteContext();
-  context.Chat.setInputNote('note words');
+  const calls = [];
+  context.fetch = (url, opts) => {
+    calls.push({url, opts});
+    return Promise.resolve({ok: true, status: 202, json: async () => ({})});
+  };
 
   context.Chat.setInputMode('voice');
-  assert.equal(note.textContent, 'note words');
-  assert.ok(!noteHidden(note));
+  input.value = 'dictated words';
+  input.value = '';
+  for (const handler of input._listeners.input) handler();
+  input.value = 'typed words';
+  await context.sendMessage();
+
+  assert.equal(JSON.parse(calls[0].opts.body).input_mode, null);
 });
 
 // ---------------------------------------------------------------------------

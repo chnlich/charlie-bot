@@ -45,8 +45,8 @@ async function commitRename() {
       body: JSON.stringify({ name: newName }),
     });
     // Update DOM — the sidebar row, and through the displayed-session module
-    // the header, tab title and composer badge when this is the displayed
-    // session. A rename never changes which session is displayed.
+    // the header and tab title when this is the displayed session. A rename
+    // never changes which session is displayed.
     updateSidebarSessionName(renameSessionId, newName);
     refreshDisplayedSessionName(renameSessionId, newName);
   } catch (err) {

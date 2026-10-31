@@ -562,12 +562,11 @@ async function switchSession(sessionId) {
 
   saveDraftNow();
 
-  // Click-time feedback: the displayed session moves now — header name, tab
-  // title and composer badge — and the sidebar highlight follows below. Every
-  // click gets them, even one later superseded; only the latest generation
-  // renders session content. The move first resolves the composer actions the
-  // previous click held, so a held message posts before this click swaps the
-  // composer.
+  // Click-time feedback: the displayed session moves now — header name and tab
+  // title — and the sidebar highlight follows below. Every click gets them,
+  // even one later superseded; only the latest generation renders session
+  // content. The move first resolves the composer actions the previous click
+  // held, so a held message posts before this click swaps the composer.
   setDisplayedSession(sessionId, switchTargetName(sessionId));
 
   // The composer moves to the target's draft at once: typing during the
@@ -725,8 +724,8 @@ function renderSessionView(data) {
   sessionLoadingMore = false;
   suppressScrollLoad = false;
 
-  // Update header — the displayed-session module owns the header name, the
-  // tab title and the composer badge; a render refreshes the name only.
+  // Update header — the displayed-session module owns the header name and the
+  // tab title; a render refreshes the name only.
   refreshDisplayedSessionName(session.id, session.name);
 
   // Update backend badge
@@ -1204,8 +1203,7 @@ function renderNoActiveSessionView() {
   globalThis.renderPendingTriggersTray(null);
   globalThis.clearSessionStatusPanel();
   document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
-  // Back to the welcome page: the module restores the original tab title and
-  // hides the composer badge.
+  // Back to the welcome page: the module restores the original tab title.
   setDisplayedSession(null, null);
   DRAFT_KEY = null;
   THINKING_SINCE = null;

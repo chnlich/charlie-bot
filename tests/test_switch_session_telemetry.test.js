@@ -436,7 +436,7 @@ test('a send superseded by a newer click posts to the session it bound, and the 
   await clickB;
 });
 
-test('header, tab title and composer badge agree at click, after render and after renames', async () => {
+test('header and tab title agree at click, after render and after renames', async () => {
   const h = buildSwitchHarness();
   h.context.renderSessionView(h.payloadFor('session-a'));
   assertDisplayedAgreement(h, 'Session session-a', 'the initial render');

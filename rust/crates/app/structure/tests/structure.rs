@@ -832,6 +832,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME`.",
   },
   OwnerRow {
+    name: "AGENTS.md",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",
+  },
+  OwnerRow {
     name: "plans.json",
     owner: "features/artifacts",
     hint: "Read the plan registry through `Registry::plan_registry_reader`, which `features/artifacts` registers.",

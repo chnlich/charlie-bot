@@ -27,7 +27,7 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::{UtcDateTime, read_session_metadata};
-use charliebot_store::{control_events, layout};
+use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
 use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -584,7 +584,7 @@ fn find_local_task_reparent(
       .is_some_and(|timestamp| timestamp >= sent_at);
     if object.get("type").and_then(Value::as_str) == Some(event_types::TASK_REPARENTED)
       && object.get("task_parent_id").and_then(Value::as_str) == Some(parent_id)
-      && object.get("caller_session_id").and_then(Value::as_str) == caller_session_id
+      && object.get(CALLER_SESSION_ID_FIELD).and_then(Value::as_str) == caller_session_id
       && written_after_send
     {
       let event_id = object.get("id").cloned().unwrap_or(Value::Null);

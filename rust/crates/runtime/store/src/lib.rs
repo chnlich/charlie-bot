@@ -56,7 +56,7 @@ pub use store::{
   SequenceListingFields, Store, StoreHookFuture, StoreHooks,
 };
 pub use streaming::{SIDEBAR_CHANNEL, STREAM_COALESCE_INTERVAL, StreamingManager, Subscription, session_channel};
-pub use task_reparent::AGENT_REPARENT_SCOPE_REFUSAL;
+pub use task_reparent::{AGENT_REPARENT_SCOPE_REFUSAL, CALLER_SESSION_ID_FIELD};
 pub use task_tree::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, NodeFacts, PatchTask, PromptScope, StructuralBlockers,
   TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, TaskTreePage, TaskTreeRow,

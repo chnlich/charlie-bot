@@ -9,7 +9,9 @@ use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::value_str;
-use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
+use charliebot_registry::backend::{
+  AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, Env, LaunchArgs, Translate, TransportKind,
+};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde::Serialize;
@@ -25,8 +27,7 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, spawn_one_shot};
 
-/// The instructions file a manager turn writes into its session cwd, which Codex auto-detects.
-pub const INSTRUCTIONS_FILE_NAME: &str = "AGENTS.md";
+/// The log event that reports writing the instructions file.
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
 
 /// The stderr a one-shot keeps for its error message; later bytes are read and dropped.
@@ -218,7 +219,7 @@ impl CodexBackend {
 
 impl AgentBackend for CodexBackend {
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
-    Some((INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT))
+    Some((AGENTS_INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT))
   }
 
   fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {

@@ -595,6 +595,10 @@ pub trait Translate: Send {
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
 pub use crate::midturn_delivery::ExitedProbe;
 
+/// The instructions file an agent backend auto-detects in its session cwd. Codex, OpenCode and Charlie Code share
+/// this name; Claude Code names its own file.
+pub const AGENTS_INSTRUCTIONS_FILE_NAME: &str = "AGENTS.md";
+
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
 pub trait AgentBackend: Send {
   /// The instructions file name and the log event that reports writing it, or `None` when the backend takes none.

@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use charliebot_core::paths;
 use charliebot_core::text_repr::float_repr;
-use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
+use charliebot_registry::backend::{
+  AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, Env, LaunchArgs, Translate, TransportKind,
+};
 use serde_json::Value;
 
 use super::options::CharlieCodeOption;
@@ -163,7 +165,7 @@ impl CharlieCodeBackend {
 
 impl AgentBackend for CharlieCodeBackend {
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
-    Some(("AGENTS.md", "charlie_code_wrote_agents_md"))
+    Some((AGENTS_INSTRUCTIONS_FILE_NAME, "charlie_code_wrote_agents_md"))
   }
 
   fn prepare_transport(&mut self, log_dir: &Path) -> anyhow::Result<()> {

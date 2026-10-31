@@ -13,8 +13,8 @@ use charliebot_core::home;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, RecoverySilence, ServeProcessSpec, ServeTransport,
-  ServeTurn, ServeTurnArgs, ServeTurnResult, Translate, TransportKind,
+  AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, RecoverySilence,
+  ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, Translate, TransportKind,
 };
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
@@ -151,7 +151,7 @@ impl OpenCodeBackend {
 
 impl AgentBackend for OpenCodeBackend {
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
-    Some(("AGENTS.md", "opencode_wrote_agents_md"))
+    Some((AGENTS_INSTRUCTIONS_FILE_NAME, "opencode_wrote_agents_md"))
   }
 
   fn prepare_transport(&mut self, _log_dir: &std::path::Path) -> anyhow::Result<()> {

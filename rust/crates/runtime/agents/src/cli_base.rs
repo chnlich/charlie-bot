@@ -53,15 +53,20 @@ impl CliHost {
     Ok(Self { path, home: PathBuf::from(home) })
   }
 
-  /// `Path.home() / ".local" / "bin"`: the directory the child PATH gains, and a binary's fallback directory.
+  /// [`user_local_bin`] of this host's home.
   pub fn user_local_bin(&self) -> PathBuf {
-    self.home.join(".local").join("bin")
+    user_local_bin(&self.home)
   }
 
   /// `base.resolve_binary(name, USER_LOCAL_BIN)` against this host's PATH.
   pub fn resolve_binary(&self, name: &str) -> anyhow::Result<PathBuf> {
     resolve_binary(name, &self.path, &self.user_local_bin())
   }
+}
+
+/// `Path.home() / ".local" / "bin"`: the directory the child PATH gains, and a binary's fallback directory.
+pub fn user_local_bin(home: &Path) -> PathBuf {
+  home.join(".local").join("bin")
 }
 
 /// The first executable `name` on `path`, else `fallback_dir/name` when that exists (`base.resolve_binary`).

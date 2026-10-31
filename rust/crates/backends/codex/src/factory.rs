@@ -4,7 +4,7 @@ use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
-use charliebot_agents::cli_base::resolve_binary;
+use charliebot_agents::cli_base::{resolve_binary, user_local_bin};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 
 use super::backend::CodexBackend;
@@ -34,11 +34,11 @@ impl BackendFactory for CodexFactory {
       bail!("backend '{}' has no default model", option.id);
     }
     let fields = options::parse(&option.type_fields).map_err(anyhow::Error::msg)?;
-    let user_local_bin = self.host.user_local_bin();
-    let codex_bin = resolve_binary("codex", &self.host.path, &user_local_bin)?;
+    let local_bin = user_local_bin(&self.host.home);
+    let codex_bin = resolve_binary("codex", &self.host.path, &local_bin)?;
     Ok(Box::new(CodexBackend::from_launch(
       codex_bin,
-      &user_local_bin,
+      &local_bin,
       &option.model,
       &fields,
       launch,

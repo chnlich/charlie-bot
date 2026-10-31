@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 
 /// The process environment the codex package reads: PATH to find the codex binary, and HOME for `~/.local/bin` and
-/// `~/.codex`.
+/// `~/.codex`. The user-local bin directory is [`charliebot_agents::cli_base::user_local_bin`] of this home.
 #[derive(Clone, Debug)]
 pub struct CodexHost {
   pub path: String,
@@ -22,11 +22,6 @@ impl CodexHost {
       Err(error) => return Err(error).context("PATH must be valid Unicode for the codex package"),
     };
     Ok(Self { path, home: PathBuf::from(home) })
-  }
-
-  /// `Path.home() / ".local" / "bin"`: the directory the child PATH gains, and the binary's fallback.
-  pub fn user_local_bin(&self) -> PathBuf {
-    self.home.join(".local").join("bin")
   }
 
   /// `Path.home() / ".codex"`: the default codex home that holds the rollouts.

@@ -54,6 +54,19 @@ pub const TASK_INPUTS_ACKNOWLEDGE_PATH: &str = "/api/sessions/{session_id}/task-
 pub const DELEGATE_PATH: &str = "/api/internal/delegate";
 pub const SESSION_MESSAGE_PATH: &str = "/api/internal/session-message";
 
+/// The delegate request's field names. The route validates against them and the CLI builds the body from them, so each
+/// name is spelled once, here.
+pub const DELEGATE_SESSION_ID_FIELD: &str = "session_id";
+pub const DELEGATE_DESCRIPTION_FIELD: &str = "description";
+pub const DELEGATE_TASK_TYPE_FIELD: &str = "task_type";
+pub const DELEGATE_REPO_PATH_FIELD: &str = "repo_path";
+pub const DELEGATE_BASE_BRANCH_FIELD: &str = "base_branch";
+pub const DELEGATE_TASK_SPEC_FILE_FIELD: &str = "task_spec_file";
+pub const DELEGATE_REVIEWER_CONTEXT_FILE_FIELD: &str = "reviewer_context_file";
+pub const DELEGATE_KEEP_WORKTREE_FIELD: &str = "keep_worktree";
+pub const DELEGATE_BACKEND_FIELD: &str = "backend";
+pub const DELEGATE_REQUEST_ID_FIELD: &str = "request_id";
+
 /// Build the task orchestration routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
@@ -128,28 +141,28 @@ const COLD_READ_FIELDS: &[Field] = &[
 ];
 const COLD_READ_BODY: BodyModel = BodyModel::required(COLD_READ_FIELDS).forbid_extra();
 const DELEGATE_INVOCATION_FIELDS: &[Field] = &[
-  Field::required("task_type", FieldType::Enum(DELEGATE_TASK_TYPE)),
-  Field::optional("repo_path", FieldType::NullableString),
-  Field::optional("base_branch", FieldType::NullableString),
-  Field::optional("task_spec_file", FieldType::NullableString),
-  Field::optional("reviewer_context_file", FieldType::NullableString),
-  Field::required("keep_worktree", FieldType::Boolean),
-  Field::optional("backend", FieldType::NullableString),
+  Field::required(DELEGATE_TASK_TYPE_FIELD, FieldType::Enum(DELEGATE_TASK_TYPE)),
+  Field::optional(DELEGATE_REPO_PATH_FIELD, FieldType::NullableString),
+  Field::optional(DELEGATE_BASE_BRANCH_FIELD, FieldType::NullableString),
+  Field::optional(DELEGATE_TASK_SPEC_FILE_FIELD, FieldType::NullableString),
+  Field::optional(DELEGATE_REVIEWER_CONTEXT_FILE_FIELD, FieldType::NullableString),
+  Field::required(DELEGATE_KEEP_WORKTREE_FIELD, FieldType::Boolean),
+  Field::optional(DELEGATE_BACKEND_FIELD, FieldType::NullableString),
 ];
 const DELEGATE_INVOCATION_BODY: BodyModel = BodyModel::required(DELEGATE_INVOCATION_FIELDS).forbid_extra();
 const DELEGATE_BODY_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
-  Field::required("description", FieldType::String),
-  Field::optional("base_branch", FieldType::NullableString),
-  Field::optional("backend", FieldType::NullableString),
-  Field::optional("repo_path", FieldType::NullableString),
-  Field::optional("task_type", FieldType::Enum(DELEGATE_TASK_TYPE)),
-  Field::optional("keep_worktree", FieldType::Boolean),
+  Field::required(DELEGATE_SESSION_ID_FIELD, FieldType::String),
+  Field::required(DELEGATE_DESCRIPTION_FIELD, FieldType::String),
+  Field::optional(DELEGATE_BASE_BRANCH_FIELD, FieldType::NullableString),
+  Field::optional(DELEGATE_BACKEND_FIELD, FieldType::NullableString),
+  Field::optional(DELEGATE_REPO_PATH_FIELD, FieldType::NullableString),
+  Field::optional(DELEGATE_TASK_TYPE_FIELD, FieldType::Enum(DELEGATE_TASK_TYPE)),
+  Field::optional(DELEGATE_KEEP_WORKTREE_FIELD, FieldType::Boolean),
   Field::optional(
     event_types::DELEGATE_INVOCATION,
     FieldType::NullableModel { class_name: "DelegateInvocationMetadata", model: &DELEGATE_INVOCATION_BODY },
   ),
-  Field::optional("request_id", FieldType::NullableString),
+  Field::optional(DELEGATE_REQUEST_ID_FIELD, FieldType::NullableString),
   Field::optional("cold_read", FieldType::NullableModel { class_name: "ColdReadSpec", model: &COLD_READ_BODY }),
 ];
 const DELEGATE_BODY: BodyModel = BodyModel::required(DELEGATE_BODY_FIELDS);
@@ -170,7 +183,7 @@ struct DelegateRequest {
 fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Response>> {
   let values = body.validate(&DELEGATE_BODY)?;
   let values = values.expect("a required request body validates to an object");
-  let task_type = match values.get("task_type").and_then(Value::as_str).unwrap_or("implement") {
+  let task_type = match values.get(DELEGATE_TASK_TYPE_FIELD).and_then(Value::as_str).unwrap_or("implement") {
     "implement" => TaskType::Implement,
     "quick-edit" => TaskType::QuickEdit,
     "script-run" => TaskType::ScriptRun,
@@ -183,15 +196,15 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     .filter(|value| !value.is_null())
     .map(|value| serde_json::from_value(value.clone()).expect("validated cold_read matches ColdReadSpec"));
   Ok(DelegateRequest {
-    session_id: values["session_id"].as_str().expect("validated session_id is a string").to_string(),
-    description: values["description"].as_str().expect("validated description is a string").to_string(),
-    base_branch: optional_string(&values, "base_branch"),
-    backend: optional_string(&values, "backend"),
-    repo_path: optional_string(&values, "repo_path"),
+    session_id: values[DELEGATE_SESSION_ID_FIELD].as_str().expect("validated session_id is a string").to_string(),
+    description: values[DELEGATE_DESCRIPTION_FIELD].as_str().expect("validated description is a string").to_string(),
+    base_branch: optional_string(&values, DELEGATE_BASE_BRANCH_FIELD),
+    backend: optional_string(&values, DELEGATE_BACKEND_FIELD),
+    repo_path: optional_string(&values, DELEGATE_REPO_PATH_FIELD),
     task_type,
-    keep_worktree: values.get("keep_worktree").and_then(Value::as_bool).unwrap_or(false),
+    keep_worktree: values.get(DELEGATE_KEEP_WORKTREE_FIELD).and_then(Value::as_bool).unwrap_or(false),
     delegate_invocation: values.get(event_types::DELEGATE_INVOCATION).filter(|value| !value.is_null()).cloned(),
-    request_id: optional_string(&values, "request_id"),
+    request_id: optional_string(&values, DELEGATE_REQUEST_ID_FIELD),
     cold_read,
   })
 }
@@ -259,23 +272,25 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
   let invocation = request.delegate_invocation.as_ref().unwrap_or(&Value::Null);
   if invocation.is_null() {
     return json!({
-      "task_type": task_type_name(request.task_type),
-      "repo_path": request.repo_path,
-      "base_branch": request.base_branch,
-      "task_spec_file": null,
-      "reviewer_context_file": null,
-      "keep_worktree": request.keep_worktree,
-      "backend": request.backend,
+      (DELEGATE_TASK_TYPE_FIELD): task_type_name(request.task_type),
+      (DELEGATE_REPO_PATH_FIELD): request.repo_path,
+      (DELEGATE_BASE_BRANCH_FIELD): request.base_branch,
+      (DELEGATE_TASK_SPEC_FILE_FIELD): null,
+      (DELEGATE_REVIEWER_CONTEXT_FILE_FIELD): null,
+      (DELEGATE_KEEP_WORKTREE_FIELD): request.keep_worktree,
+      (DELEGATE_BACKEND_FIELD): request.backend,
     });
   }
   json!({
-    "task_type": invocation.get("task_type"),
-    "repo_path": invocation.get("repo_path").filter(|value| !value.is_null()),
-    "base_branch": invocation.get("base_branch").filter(|value| !value.is_null()),
-    "task_spec_file": invocation.get("task_spec_file").filter(|value| !value.is_null()),
-    "reviewer_context_file": invocation.get("reviewer_context_file").filter(|value| !value.is_null()),
-    "keep_worktree": invocation.get("keep_worktree"),
-    "backend": invocation.get("backend").filter(|value| !value.is_null()),
+    (DELEGATE_TASK_TYPE_FIELD): invocation.get(DELEGATE_TASK_TYPE_FIELD),
+    (DELEGATE_REPO_PATH_FIELD): invocation.get(DELEGATE_REPO_PATH_FIELD).filter(|value| !value.is_null()),
+    (DELEGATE_BASE_BRANCH_FIELD): invocation.get(DELEGATE_BASE_BRANCH_FIELD).filter(|value| !value.is_null()),
+    (DELEGATE_TASK_SPEC_FILE_FIELD): invocation.get(DELEGATE_TASK_SPEC_FILE_FIELD).filter(|value| !value.is_null()),
+    (DELEGATE_REVIEWER_CONTEXT_FILE_FIELD): invocation
+      .get(DELEGATE_REVIEWER_CONTEXT_FILE_FIELD)
+      .filter(|value| !value.is_null()),
+    (DELEGATE_KEEP_WORKTREE_FIELD): invocation.get(DELEGATE_KEEP_WORKTREE_FIELD),
+    (DELEGATE_BACKEND_FIELD): invocation.get(DELEGATE_BACKEND_FIELD).filter(|value| !value.is_null()),
   })
 }
 

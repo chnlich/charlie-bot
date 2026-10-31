@@ -156,7 +156,6 @@ pub enum FieldType {
   },
   /// A `list[M] | None` field: null is valid, and a list is validated as `ModelList`.
   NullableModelList {
-    class_name: &'static str,
     model: &'static BodyModel,
   },
   /// A `list[A | B | C] | None` field discriminated on `discriminator`, as pydantic's `Field(discriminator=...)`

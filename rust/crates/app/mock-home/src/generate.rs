@@ -163,6 +163,22 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
   json!({"type": "user", "message": {"content": [result]}, "timestamp": timestamp})
 }
 
+/// Whether `event` starts a turn: a plain user message, not a tool result.
+fn opens_turn(event: &Value) -> bool {
+  event.get("type").and_then(Value::as_str) == Some("user") && event.get("content").is_some()
+}
+
+/// One turn separator in the production `master_done` shape that the renderer turns into a separator message.
+fn master_done_event(rng: &mut Rng, timestamp: &str) -> Value {
+  json!({
+    "type": "master_done",
+    "exit_code": 0,
+    "still_thinking": false,
+    "thinking_seconds": rng.range(1, 120),
+    "timestamp": timestamp,
+  })
+}
+
 /// One user message whose line takes exactly `room` bytes, or `None` when `room` cannot hold an empty one.
 fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
   let empty = encode_event(&json!({"type": "user", "content": "", "timestamp": timestamp})).len() as u64;
@@ -176,9 +192,12 @@ fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
   Some(json!({"type": "user", "content": content, "timestamp": timestamp}))
 }
 
-/// Writes events into one log of exactly `target` bytes, ending with one final user message. The last gap is one filler
-/// message, so the log takes the planned size and not a size that the last event overshoots. Returns the bytes and the
-/// event count.
+/// Writes events into one log of exactly `target` bytes, ending with one final user message.
+///
+/// Each turn ends with one `master_done` separator, and a plain user message closes the turn before it. `tail(40)`
+/// snaps to a turn start through these separators, so a seeded log renders a bounded page like a production log
+/// instead of its whole history. The last gap is one filler message, so the log takes the planned size and not a
+/// size that the last event overshoots. Returns the bytes and the event count.
 fn write_event_log(
   path: &Path,
   target: u64,
@@ -192,12 +211,25 @@ fn write_event_log(
   let mut log = BufWriter::new(File::create(path).with_context(|| format!("cannot create {}", path.display()))?);
   let mut written: i64 = 0;
   let mut count: u64 = 0;
+  let mut turn_open = false;
   loop {
     let room = target - written - final_bytes;
     if room < FILLER_THRESHOLD_BYTES {
       break;
     }
     let event = next_event(rng, text, &event_stamp(started_at, count), room as u64);
+    let stimulus = opens_turn(&event);
+    if stimulus && turn_open {
+      let separator = encode_event(&master_done_event(rng, &event_stamp(started_at, count)));
+      if separator.len() as i64 > room {
+        break;
+      }
+      log.write_all(&separator)?;
+      written += separator.len() as i64;
+      count += 1;
+      turn_open = false;
+    }
+    let room = target - written - final_bytes;
     let line = encode_event(&event);
     if line.len() as i64 > room {
       break;
@@ -205,6 +237,17 @@ fn write_event_log(
     log.write_all(&line)?;
     written += line.len() as i64;
     count += 1;
+    if !stimulus {
+      turn_open = true;
+    }
+  }
+  if turn_open {
+    let separator = encode_event(&master_done_event(rng, &event_stamp(started_at, count)));
+    if separator.len() as i64 <= target - written - final_bytes {
+      log.write_all(&separator)?;
+      written += separator.len() as i64;
+      count += 1;
+    }
   }
   let room = target - written - final_bytes;
   if room > 0

@@ -14,7 +14,7 @@ mod text;
 
 /// The data version. It names the mock home's directory, `~/improve/mock-home/<version>/`, and changes with any change
 /// to the bytes that `generate` writes. The digest test in `tests/digest.rs` fails until it changes.
-pub const DATA_VERSION: &str = "1";
+pub const DATA_VERSION: &str = "2";
 /// The session count of the production home, and the default of `generate`.
 pub const PRODUCTION_SESSIONS: usize = 7160;
 /// The seed of `generate` when no seed is given.

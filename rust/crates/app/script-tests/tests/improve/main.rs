@@ -1,6 +1,7 @@
-//! The `mock-home` program's generator, run for real: one seed gives byte-identical output, and the event-log sizes of
-//! a mid-size run follow the production shape. Each test writes its own output into a sandbox it owns. The served checks
-//! of the same generator run in the release tests, against a trial server.
+//! The `mock-home` program's generator, run for real: one seed gives byte-identical output, the event-log sizes of a
+//! mid-size run follow the production shape, and every finished turn ends with a separator. Each test writes its own
+//! output into a sandbox it owns. The served checks of the same generator run in the release tests, against a trial
+//! server.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -84,4 +85,44 @@ fn assert_within(name: &str, measured: f64, declared: f64, tolerance: f64) {
     error <= tolerance,
     "{name}: measured {measured:.0} bytes, declared {declared:.0}, error {error:.3} > {tolerance}"
   );
+}
+
+/// Whether an event is a plain user message rather than a tool result.
+fn is_plain_user(event: &serde_json::Value) -> bool {
+  event.get("type").and_then(serde_json::Value::as_str) == Some("user") && event.get("content").is_some()
+}
+
+#[test]
+fn test_generate_separates_every_finished_turn_with_a_master_done() {
+  let sandbox = Sandbox::new();
+  let output = sandbox.dir("turns");
+  generate(&sandbox, &output, "12", "5");
+
+  let mut separators = 0;
+  for entry in fs::read_dir(&output).expect("the output directory") {
+    let session = entry.expect("a directory entry").path();
+    if !session.is_dir() {
+      continue;
+    }
+    let text = fs::read_to_string(session.join("data/chat_events.jsonl")).expect("an event log");
+    let events: Vec<serde_json::Value> =
+      text.lines().map(|line| serde_json::from_str(line).expect("one JSON event per line")).collect();
+    assert!(is_plain_user(events.last().expect("a log ends with an event")), "a log ends with its checkpoint");
+    for (index, event) in events.iter().enumerate() {
+      if event.get("type").and_then(serde_json::Value::as_str) != Some("master_done") {
+        continue;
+      }
+      separators += 1;
+      assert!(index > 0 && !is_plain_user(&events[index - 1]), "a separator closes a turn with content");
+      assert!(
+        events.get(index + 1).is_some_and(is_plain_user),
+        "a separator is followed by the user message that opens the next turn"
+      );
+      assert_eq!(event["exit_code"], 0);
+      assert_eq!(event["still_thinking"], false);
+      assert!(event["thinking_seconds"].is_number());
+      assert!(event["timestamp"].is_string());
+    }
+  }
+  assert!(separators > 0, "the generated home holds no turn separator");
 }

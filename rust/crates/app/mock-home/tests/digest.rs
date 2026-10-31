@@ -10,9 +10,9 @@ use charliebot_mock_home::generate::generate;
 use sha2::{Digest, Sha256};
 
 /// The data version that `RECORDED_DIGEST` belongs to.
-const RECORDED_VERSION: &str = "1";
+const RECORDED_VERSION: &str = "2";
 /// The digest of a home of `SESSIONS` sessions generated with `SEED`.
-const RECORDED_DIGEST: &str = "411f546911b53e1ed2c3d70601dec4677418945e72a84f6ce5c45e076c38014a";
+const RECORDED_DIGEST: &str = "cfee41c00c363b0b3d87590c98870f7f9940ba15b499f67b1dc901760cc63775";
 const SESSIONS: usize = 3;
 const SEED: u64 = 7;
 

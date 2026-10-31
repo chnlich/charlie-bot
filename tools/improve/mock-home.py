@@ -263,26 +263,64 @@ def filler_event(room, timestamp):
   return {'type': 'user', 'content': content, 'timestamp': timestamp}
 
 
+def opens_turn(event):
+  """Return whether the event starts a turn: a plain user message, not a tool result."""
+  return event['type'] == 'user' and 'content' in event
+
+
+def master_done_event(rng, timestamp):
+  """Return one turn separator in the production master_done shape that the renderer turns into a separator."""
+  return {
+    'type': 'master_done',
+    'exit_code': 0,
+    'still_thinking': False,
+    'thinking_seconds': rng.randint(1, 120),
+    'timestamp': timestamp,
+  }
+
+
 def write_event_log(path, target_bytes, rng, text, started_at, final_text):
   """Write events into one log of exactly target_bytes, ending with one final user message.
 
-  Events are written while they fit in the room left for them. The last gap is filled by one filler message, so the
-  log takes the planned size and not a size that the last event overshoots. Return (bytes, event count).
+  Each turn ends with one master_done separator, and a plain user message closes the turn before it. The page's
+  `tail(40)` snaps to a turn start through these separators, so a seeded log renders a bounded page like a
+  production log instead of its whole history. Events are written while they fit in the room left for them. The
+  last gap is filled by one filler message, so the log takes the planned size and not a size that the last event
+  overshoots. Return (bytes, event count).
   """
   written = 0
   count = 0
+  turn_open = False
   final_bytes = len(encode_event({'type': 'user', 'content': final_text, 'timestamp': event_stamp(started_at, 0)}))
   with open(path, 'wb') as log:
     while True:
       room = target_bytes - written - final_bytes
       if room < FILLER_THRESHOLD_BYTES:
         break
-      line = encode_event(next_event(rng, text, event_stamp(started_at, count), room))
+      event = next_event(rng, text, event_stamp(started_at, count), room)
+      if opens_turn(event) and turn_open:
+        line = encode_event(master_done_event(rng, event_stamp(started_at, count)))
+        if len(line) > room:
+          break
+        log.write(line)
+        written += len(line)
+        count += 1
+        turn_open = False
+        room = target_bytes - written - final_bytes
+      line = encode_event(event)
       if len(line) > room:
         break
       log.write(line)
       written += len(line)
       count += 1
+      if not opens_turn(event):
+        turn_open = True
+    if turn_open:
+      line = encode_event(master_done_event(rng, event_stamp(started_at, count)))
+      if len(line) <= target_bytes - written - final_bytes:
+        log.write(line)
+        written += len(line)
+        count += 1
     room = target_bytes - written - final_bytes
     if room > 0:
       filler = filler_event(room, event_stamp(started_at, count))

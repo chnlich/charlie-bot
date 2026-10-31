@@ -10,8 +10,8 @@
 // ---------------------------------------------------------------------------
 // HTML artifact rendering — linked artifacts/*.html render as compact cards.
 // The sandboxed iframe (a whole live document with its own scripts) exists only
-// while the user has the card expanded, and both the fetch cache and the number
-// of simultaneously expanded frames are bounded.
+// while the user has the card expanded. Both the fetch cache and the number of
+// simultaneously expanded frames are bounded.
 // ---------------------------------------------------------------------------
 var HTML_ARTIFACT_LINK_RE = /(^|\/)artifacts\/[^/]+\.html$/;
 var HTML_ARTIFACT_CACHE_MAX = 8;
@@ -393,7 +393,7 @@ function expandArtifactCard(card) {
   }).catch(function(e) {
     console.warn('Failed to expand linked HTML artifact', fetchUrl, e);
     // This fetch is the probe for an HTML artifact link: a 404 here is the answer a HEAD would
-    // have brought back, so the card carries the marker and no extra request is made.
+    // have brought back. The card therefore carries the marker, and no extra request is made.
     if (e.status === 404) markArtifactCardMissing(card);
   });
 }
@@ -453,7 +453,7 @@ function renderPlanCompactCard(link, ordinal, prose, reg) {
   }
   var mc = document.getElementById('messages');
   // With the turn engine the follow decision is the reader's pin intent,
-  // never the 150px geometry band: a fitting reply opens at the bottom
+  // never the 150px geometry band. A fitting reply opens at the bottom
   // unpinned, and a late card landing there must not yank the view down.
   // Views without the engine keep the geometry read and the direct write.
   var engine = Chat.activeTurnEngineFor(mc);
@@ -725,9 +725,9 @@ installHtmlArtifactListener();
 
 // Artifact pages are a family of file links. A served artifacts/*.html link is answered by the
 // fetch that builds its card. Every artifact-page link keeps its /artifacts/<file> tail however
-// its prefix was composed, so a same-host URL carrying an /artifacts/ segment that the
-// file-server prefix does not resolve is probed all the same; same-host application routes
-// (/diff, /perfetto) carry no such segment.
+// its prefix was composed. A same-host URL carrying an /artifacts/ segment that the file-server
+// prefix does not resolve is probed all the same. Same-host application routes (/diff,
+// /perfetto) carry no such segment.
 Chat.registerFileLinkFamily({
   name: 'artifact-pages',
   textSource: 'https?:\\/\\/[^\\s]+?\\/artifacts\\/' + Chat.FILE_LINK_TAIL_SOURCE,

@@ -154,7 +154,6 @@ impl ThreadAdapter for DiscordThreadAdapter {
             created_at: Some(message.timestamp),
             metadata: None,
             bot_id: None,
-            is_bot: message.author.bot,
             eligible: false,
           })
           .collect(),
@@ -206,7 +205,6 @@ impl ThreadAdapter for DiscordThreadAdapter {
             created_at: Some(message.timestamp.clone()),
             metadata: None,
             bot_id: None,
-            is_bot: message.author.bot,
             eligible: eligible_message(message, allowed_users),
           })
           .collect(),

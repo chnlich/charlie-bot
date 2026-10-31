@@ -408,7 +408,6 @@ impl ThreadAdapter for SlackThreadAdapter {
               created_at: None,
               metadata: message.get("metadata").cloned(),
               bot_id: message.get("bot_id").and_then(Value::as_str).map(str::to_string),
-              is_bot: message.get("bot_id").is_some(),
               eligible: false,
             })
           })
@@ -478,7 +477,6 @@ impl ThreadAdapter for SlackThreadAdapter {
             created_at: None,
             metadata: message.get("metadata").cloned(),
             bot_id: message.get("bot_id").and_then(Value::as_str).map(str::to_string),
-            is_bot: message.get("bot_id").is_some(),
             eligible: eligible_thread_message(message, allowed_user_ids),
           })
         })
@@ -844,7 +842,6 @@ mod tests {
         created_at: None,
         metadata: None,
         bot_id: None,
-        is_bot: false,
         eligible: true,
       }]
     );

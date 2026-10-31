@@ -4,14 +4,15 @@
 // ---------------------------------------------------------------------------
 // Archived view: a keyset-paginated project-grouped tree with a group filter
 // strip — the same tree format the Workspace view builds. Pages merge into one
-// row list (first delivery wins; the server re-delivers a context ancestor a
-// previous page already carried); ordering, membership, and group aggregates
-// come from GET /api/sessions/archived (rust/crates/runtime/session-api/src/routes.rs), and in-list
-// operations (unarchive / delete / set group) update the merged list and the
-// strip counts in place with no refetch. A task-tree broadcast refreshes the
-// loaded range in place: the strip filter, the loaded pages and the scroll
-// position stay. The rendered cap and Load more count archived rows only: a
-// context row is the tree's scaffolding, never part of the user's archived list.
+// row list, and the first delivery wins, because the server re-delivers a
+// context ancestor a previous page already carried. Ordering, membership, and
+// group aggregates come from GET /api/sessions/archived
+// (rust/crates/runtime/session-api/src/routes.rs). In-list operations
+// (unarchive / delete / set group) update the merged list and the strip counts
+// in place, with no refetch. A task-tree broadcast refreshes the loaded range in
+// place: the strip filter, the loaded pages and the scroll position stay. The
+// rendered cap and Load more count archived rows only: a context row is the
+// tree's scaffolding, never part of the user's archived list.
 // ---------------------------------------------------------------------------
 
 const ARCHIVED_PAGE_LIMIT = 100;
@@ -81,9 +82,10 @@ function renderArchivedFoot() {
   }
 }
 
-// The archived view's one render form: every repaint of the merged list — a
-// page append or an in-list removal — routes through this call, so a delivered
-// firing always nests under its scheduled node whatever page delivered it.
+// The archived view's one render form: every repaint of the merged list routes
+// through this call, whether a page append or an in-list removal. A delivered
+// firing therefore always nests under its scheduled node, whichever page
+// delivered it.
 function repaintArchivedTree() {
   if (!archivedState.rows.length) {
     archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
@@ -118,7 +120,7 @@ function appendArchivedRows(sessions) {
 }
 
 // Drop rows from the merged list and repaint: an in-list operation's node-only
-// row removal becomes a tree repaint, so the removed row's children promote
+// row removal becomes a tree repaint. The removed row's children then promote
 // instead of vanishing inside its subtree container.
 function repaintWithoutRows(doomedIds) {
   const doomed = new Set(doomedIds);
@@ -306,9 +308,9 @@ function adjustArchivedGroupCount(group, delta) {
   }
 }
 
-// A star toggle's optimistic flip, mirrored into the merged list: the star
-// renders from the stored row, so the next tree repaint (a page append, an
-// unarchive) paints the same state instead of reverting the button.
+// A star toggle's optimistic flip is mirrored into the merged list: the star
+// renders from the stored row. The next tree repaint (a page append, an
+// unarchive) therefore paints the same state instead of reverting the button.
 function archivedStarToggled(sessionId, starred) {
   const stored = archivedState.rows.find(s => s.id === sessionId);
   if (stored) stored.starred = starred;
@@ -327,8 +329,8 @@ function archivedForgetSession(sessionId) {
 }
 
 // Set group on an archived row: move the strip counts, and drop the row from
-// the tree only when it no longer matches the active strip filter (under
-// "All" it stays). No refetch; the repaint re-derives the nesting, so the
+// the tree only when it no longer matches the active strip filter. The row
+// stays under "All". No refetch; the repaint re-derives the nesting, so the
 // dropped row's children promote instead of vanishing with it.
 function applyArchivedGroupChange(sessionId, group) {
   const oldGroup = archivedState.rowGroups[sessionId];
@@ -339,8 +341,8 @@ function applyArchivedGroupChange(sessionId, group) {
   adjustArchivedGroupCount(next || null, +1);
   archivedState.rowGroups[sessionId] = next;
   // The stored row moves with the counts: the next tree repaint (a page
-  // append, an unarchive) re-derives the groups from it, and the row must
-  // land in its new group rather than revert to the old one.
+  // append, an unarchive) re-derives the groups from it. The row must land in
+  // its new group rather than revert to the old one.
   const stored = archivedState.rows.find(s => s.id === sessionId);
   if (stored) stored.group = next || null;
   const row = document.getElementById('session-' + sessionId);

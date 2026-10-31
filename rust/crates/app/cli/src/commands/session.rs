@@ -28,7 +28,7 @@ use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::{UtcDateTime, read_session_metadata};
 use charliebot_store::{control_events, layout};
-use charliebot_tasks::completion::pending_archive_answer;
+use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
 use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
@@ -351,7 +351,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
     None => Map::new(),
   };
   if args.archive_non_child {
-    body.insert("non_child".to_string(), json!(true));
+    body.insert(task_routes::ARCHIVE_NON_CHILD_FIELD.to_string(), json!(true));
   }
   let request_id = args
     .request_id
@@ -411,7 +411,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
   )?;
   print_result(&result);
 
-  let stopped_runs = result.get("stopped_runs").and_then(Value::as_array).cloned().unwrap_or_default();
+  let stopped_runs = result.get(STOPPED_RUNS_FIELD).and_then(Value::as_array).cloned().unwrap_or_default();
   let unresolved: Vec<&Value> =
     stopped_runs.iter().filter(|item| item.get("outcome").is_none_or(Value::is_null)).collect();
   if unresolved.is_empty() {
@@ -545,7 +545,7 @@ fn scan_task_close(events_path: &Path, task_id: &str, request_id: &str) -> Optio
       return Some(LocalClose::Closed(json!({
         "session_id": task_id,
         "task_state": outcome,
-        "closed_event_id": closed_id,
+        CLOSED_EVENT_ID_FIELD: closed_id,
       })));
     }
     if event_type == Some(event_types::TASK_CLOSE_REQUESTED)

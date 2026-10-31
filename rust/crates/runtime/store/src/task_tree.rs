@@ -3067,6 +3067,16 @@ pub(crate) mod tests {
       .map(|meta| meta.id.clone())
       .collect();
     assert!(!active.contains(&leaf.id));
+    let archived_listing = store.list_sessions(Some(SessionStatus::Archived), None, None).unwrap().rows;
+    let mut archived_listing_ids: Vec<&str> = archived_listing.iter().map(|meta| meta.id.as_str()).collect();
+    archived_listing_ids.sort();
+    let mut expected_listing_ids = vec![root.id.as_str(), child.id.as_str(), leaf.id.as_str()];
+    expected_listing_ids.sort();
+    assert_eq!(archived_listing_ids, expected_listing_ids);
+    assert!(
+      archived_listing.iter().all(|meta| meta.status == SessionStatus::Archived),
+      "a derived-archived row is labelled archived in an archived listing"
+    );
     let archived_page = store.list_archived_page(None, 10, None, None).unwrap();
     let archived_page_ids: Vec<String> = archived_page.sessions.into_iter().map(|meta| meta.id).collect();
     assert!(archived_page_ids.contains(&root.id));

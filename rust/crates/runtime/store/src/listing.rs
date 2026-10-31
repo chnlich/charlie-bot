@@ -8,7 +8,7 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
-use crate::store::{CachedListing, DirNames};
+use crate::store::{CachedListing, CachedSortedListing, DirNames};
 use crate::{Store, StoreError, StoreResult};
 
 /// One read-only view of session metadata and the sequence fields derived for its rows.
@@ -202,7 +202,10 @@ impl Store {
     scheduled: Option<bool>,
   ) -> StoreResult<MetadataListing> {
     let rows = self.list_session_rows(status, starred, scheduled)?;
-    let ids: Vec<String> = rows.iter().map(|meta| meta.id.clone()).collect();
+    let ids = match self.sequence_listing.bound_listing_ids() {
+      Some(ids) => ids,
+      None => rows.iter().map(|meta| meta.id.clone()).collect(),
+    };
     let sequence_fields = self.sequence_listing.listing_fields(&ids, UtcDateTime::now())?;
     Ok(MetadataListing { rows, sequence_fields })
   }
@@ -215,13 +218,40 @@ impl Store {
     scheduled: Option<bool>,
   ) -> StoreResult<Vec<Arc<SessionMetadata>>> {
     let (snapshot, _) = self.load_session_metas_snapshot_versioned(status)?;
-    let mut rows = self.apply_derived_archive_shared(snapshot.as_slice(), status)?;
+    let sorted = self.sorted_corpus(status, snapshot);
+    let mut rows = self.apply_derived_archive_shared(sorted.as_slice(), status)?;
     rows.retain(|meta| {
       starred.is_none_or(|value| meta.starred == value)
         && scheduled.is_none_or(|value| self.sequence_listing.owns_session(meta) == value)
     });
-    rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    // Applying the derived archive keeps the corpus order, except that it appends the active rows it derived an
+    // archive for, so only that status sorts again.
+    if status == Some(SessionStatus::Archived) {
+      rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    }
     Ok(rows)
+  }
+
+  /// One status corpus in newest-first order, from the memo while the corpus still holds.
+  ///
+  /// The corpus rows are immutable between refreshes, so the order they sort to is the same for every request until
+  /// a refresh hands out another corpus. The memo keys on that corpus by identity.
+  fn sorted_corpus(
+    &self,
+    status: Option<SessionStatus>,
+    snapshot: Arc<Vec<Arc<SessionMetadata>>>,
+  ) -> Arc<Vec<Arc<SessionMetadata>>> {
+    let mut memo = self.sorted_listings.lock().expect("sorted listings mutex is not poisoned");
+    if let Some(cached) = memo.get(&status)
+      && Arc::ptr_eq(&cached.snapshot, &snapshot)
+    {
+      return Arc::clone(&cached.rows);
+    }
+    let mut rows: Vec<Arc<SessionMetadata>> = snapshot.iter().map(Arc::clone).collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    let rows = Arc::new(rows);
+    memo.insert(status, CachedSortedListing { snapshot, rows: Arc::clone(&rows) });
+    rows
   }
 
   /// Read rows of one stored status without projecting sequence fields.
@@ -421,8 +451,9 @@ impl Store {
       }
     }
     if status == Some(SessionStatus::Archived) {
-      for meta in self.load_session_metas(Some(SessionStatus::Active))? {
+      for mut meta in self.load_session_metas(Some(SessionStatus::Active))? {
         if derived.contains(&meta.id) {
+          meta.status = SessionStatus::Archived;
           rows.push(Arc::new(meta));
         }
       }
@@ -667,6 +698,30 @@ mod tests {
     write_metadata(&store, "beta", SessionStatus::Active, "2025-02-02T00:00:00Z", None);
     assert_eq!(store.load_session_metas(None).unwrap().len(), 2);
     assert_eq!(store.directory_scans.load(Ordering::Relaxed), scans + 1, "a new directory moves the key");
+  }
+
+  /// A listing's newest-first order is kept while its corpus holds, so a write that moves a row must reach the next
+  /// listing through a corpus refresh rather than through the order memo.
+  #[tokio::test]
+  async fn a_listing_reorders_after_a_store_write_moves_a_row() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "alpha", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    write_metadata(&store, "beta", SessionStatus::Active, "2025-02-02T00:00:00Z", None);
+    let ids = |store: &Store| -> Vec<String> {
+      store
+        .list_session_rows(Some(SessionStatus::Active), None, None)
+        .unwrap()
+        .iter()
+        .map(|row| row.id.clone())
+        .collect()
+    };
+    assert_eq!(ids(&store), ["beta", "alpha"]);
+
+    let mut alpha = store.get_session("alpha").await.unwrap().unwrap();
+    alpha.updated_at = UtcDateTime::parse("2025-02-03T00:00:00Z").unwrap();
+    store.save_metadata_locked(&mut alpha, false).unwrap();
+    assert_eq!(ids(&store), ["alpha", "beta"], "a store write refreshes the corpus the order memo keys on");
   }
 
   /// Python's `load_session_metas` serves its memoized rows read-only on a hit

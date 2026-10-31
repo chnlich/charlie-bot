@@ -122,6 +122,14 @@ impl SequenceListingFields for RegisteredSequences {
     Ok(self.registry.sequence_listing_fields(&ids, now))
   }
 
+  fn bound_listing_ids(&self) -> Option<Vec<String>> {
+    let mut bound = Vec::new();
+    for controller in self.registry.sequence_controllers() {
+      bound.extend(controller.bound_session_ids()?);
+    }
+    Some(bound)
+  }
+
   fn sequence_subtree_roots(&self, metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
     Ok(subtree_roots(metas, |meta| self.registry.sequence_owns_session(meta), false))
   }

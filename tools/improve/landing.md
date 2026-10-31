@@ -73,6 +73,9 @@ The runner names that directory in `IMPROVE_LAUNCH_DIR`:
 
 The launcher runs `tools/improve/inflight-files.sh improve/<direction>/` on this host, because the other lines' worktrees exist only there.
 The runner also adds the files that the other directions' clones change on the remote host, because those clones are standalone repositories that the launcher cannot see.
+The list names live work only: an open pull request, or a branch whose change `origin/main` does not already contain.
+A branch that a squash merge or a rebase already landed names no file, and neither does the runner's own checkout.
+Both computations fetch `origin/main` before they compare a branch against it, because a stale ref would make merged work look live.
 Pick a topic whose files the list does not name.
 A file that another branch changes would force that branch to resolve our conflict.
 

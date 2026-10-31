@@ -454,35 +454,128 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
 fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
   let world = World::new();
   // A standalone clone of another direction, like the host worker's five clones on the remote host.
-  let other_root = world.remote_home.join("improve").join("ux");
-  let clone = other_root.join("charlie-bot");
-  fs::create_dir_all(&other_root).expect("the other direction root");
-  world.git(&other_root, &["init", "-q", "-b", "main", "charlie-bot"]);
-  world.git(&clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
-  fs::write(clone.join("uncommitted.md"), "stale\n").expect("the tracked fixture file");
-  world.git(&clone, &["add", "-A"]);
-  world.git(&clone, &["commit", "-q", "-m", "synthetic base"]);
-  let base = world.git(&clone, &["rev-parse", "HEAD"]);
-  world.git(&clone, &["update-ref", "refs/remotes/origin/main", &base]);
+  let clone = world.other_direction_clone("ux");
   // The committed change rides a topic branch, as a round's branch does.
   world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic topic"]);
   // The uncommitted change sits in the checkout; the untracked file has no git entry at all.
-  fs::write(clone.join("uncommitted.md"), "changed\n").expect("the uncommitted change");
+  fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
 
   let run = world.run(&world.env());
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for changed in ["committed.md", "uncommitted.md", "untracked.md"] {
+  for changed in ["committed.md", "base.md", "untracked.md"] {
     assert!(
       list.lines().any(|line| line == changed),
       "the in-flight list misses the {changed} change of the ux clone:\n{list}"
     );
   }
+}
+
+#[test]
+fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
+  let world = World::new();
+  let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
+  fs::write(&pull_requests, "12\tcharliebot/task-open\tpr-only.md\n").expect("the open pull requests");
+  let mut env = world.env();
+  env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(
+    list.lines().any(|line| line == "pr-only.md"),
+    "the in-flight list misses an open pull request's file:\n{list}"
+  );
+}
+
+#[test]
+fn a_squash_merged_worktree_branch_contributes_no_files() {
+  let world = World::new();
+  // A leftover branch of a round that already landed, checked out in its worktree as the host leaves it.
+  let checkout = world.sandbox.root().join("stale-checkout");
+  world.git(&world.repo, &["branch", "charliebot/stale"]);
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "charliebot/stale"]);
+  fs::write(checkout.join("stale.md"), "landed\n").expect("the landed topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic stale topic"]);
+  // origin/main receives the topic as a squash merge, and a later change moves the same file on, as a later
+  // round does. The launcher's tracking ref still points behind both, so only the script's fetch sees them.
+  world.git(&world.repo, &["merge", "-q", "--squash", "charliebot/stale"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "land the stale topic"]);
+  fs::write(world.repo.join("stale.md"), "landed\nand moved on\n").expect("the later change");
+  world.git(&world.repo, &["commit", "-q", "-am", "move the landed file on"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  world.git(&world.repo, &["update-ref", "refs/remotes/origin/main", &world.commit]);
+  world.git(&world.repo, &["reset", "-q", "--hard", &world.commit]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(!list.lines().any(|line| line == "stale.md"), "the in-flight list names a landed branch's file:\n{list}");
+}
+
+#[test]
+fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
+  let world = World::new();
+  let clone = world.other_direction_clone("ux");
+  // The topic lands on the remote's main as a squash merge, as a closed round's pull request does.
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/stale"]);
+  fs::write(clone.join("stale.md"), "landed\n").expect("the landed topic's file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic stale topic"]);
+  world.git(&clone, &["push", "-q", "origin", "improve/ux/stale"]);
+  let landing = world.sandbox.dir("landing/ux");
+  let origin = world.other_direction_origin("ux").display().to_string();
+  world.git(&world.sandbox.dir("landing"), &["clone", "-q", &origin, "ux"]);
+  world.git(&landing, &["merge", "-q", "--squash", "origin/improve/ux/stale"]);
+  world.git(&landing, &["commit", "-q", "-m", "land the stale topic"]);
+  world.git(&landing, &["push", "-q", "origin", "main"]);
+  // The clone's origin/main still points behind the merge, as a stale checkout's does.
+  let behind = world.git(&clone, &["rev-parse", "HEAD~1"]);
+  world.git(&clone, &["update-ref", "refs/remotes/origin/main", &behind]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(
+    !list.lines().any(|line| line == "stale.md"),
+    "the in-flight list names a branch that a stale origin/main made look live:\n{list}"
+  );
+}
+
+#[test]
+fn the_runners_own_checkout_contributes_no_files() {
+  let world = World::new();
+  // The runner's checkout, with mainline work that its remote's main does not hold.
+  let runner_root = world.remote_home.join("improve/runner");
+  let clone = runner_root.join("charlie-bot");
+  world.git(&world.sandbox.dir("seeds/runner"), &["init", "-q", "-b", "main"]);
+  fs::write(world.sandbox.root().join("seeds/runner/seed.md"), "seed\n").expect("the seed's file");
+  world.git(&world.sandbox.dir("seeds/runner"), &["add", "-A"]);
+  world.git(&world.sandbox.dir("seeds/runner"), &["commit", "-q", "-m", "synthetic base"]);
+  let origin = world.sandbox.dir("remotes/runner.git").display().to_string();
+  world.git(&world.sandbox.dir("seeds/runner"), &["clone", "-q", "--bare", ".", &origin]);
+  world.git(&runner_root, &["clone", "-q", &origin, "charlie-bot"]);
+  fs::write(clone.join("runner-mainline.md"), "runner\n").expect("the runner's mainline file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic runner mainline"]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(
+    !list.lines().any(|line| line == "runner-mainline.md"),
+    "the in-flight list names the runner's own checkout:\n{list}"
+  );
 }
 
 #[test]

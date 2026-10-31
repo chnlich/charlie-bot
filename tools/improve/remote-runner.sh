@@ -178,21 +178,52 @@ rewrite_command() {
   REWRITTEN=("${rewritten[@]}")
 }
 
+# Whether a branch carries a change that origin/main does not already contain.
+#
+# A branch is in flight when it changes a path whose content origin/main still matches the merge
+# base: no landing put anything there, so the path holds only the branch's change. A landing rewrites
+# every path that the landed branch changed, so once the branch has landed origin/main differs from
+# the merge base at each of them, whether the landing kept the branch's commits or squashed them into
+# one. A stale origin/main fails this test, which is why the fetch above comes first.
+# inflight-files.sh reads this repository's worktrees by the same rule.
+branch_is_in_flight() {
+  local root=$1
+  local merge_base=$2
+  local branch=$3
+  local path
+  local -A moved=()
+  while IFS= read -r path; do
+    moved["$path"]=1
+  done < <(git -C "$root" diff --name-only --no-renames "$merge_base" origin/main)
+  while IFS= read -r path; do
+    if [[ -z ${moved[$path]:-} ]]; then
+      return 0
+    fi
+  done < <(git -C "$root" diff --name-only --no-renames "$merge_base" "$branch")
+  return 1
+}
+
 # The other directions' clones are standalone repositories on this host, so the list that the
 # launcher computed there cannot see their work, and two directions pick topics in rust/. Every
-# file that those clones change against origin/main therefore joins the round's list before the
-# clone check: each branch's committed work past its merge base, plus the uncommitted and
-# untracked paths of the checkout, the way inflight-files.sh reads a worktree. A branch without a
-# merge base is skipped with a note, as inflight-files.sh skips one.
+# file that those clones change therefore joins the round's list before the clone check: each
+# branch's committed work when origin/main does not already contain it, plus the uncommitted and
+# untracked paths of the checkout. Each clone's origin/main is fetched first, so a stale ref cannot
+# make merged work look live, and a branch without a merge base is skipped with a note. The
+# runner's own checkout is no direction's clone and contributes nothing.
 other_inflight_files() {
   local clone other branch merge_base
   for clone in "$HOME_DIR"/improve/*/charlie-bot; do
     [[ -d $clone ]] || continue
+    [[ $clone == "$RUNNER_ROOT/charlie-bot" ]] && continue
     other=$(basename -- "$(dirname -- "$clone")")
     [[ $other == "$direction" ]] && continue
+    git -C "$clone" fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main \
+      || fail 1 "cannot fetch origin/main in $clone"
     while IFS= read -r branch; do
       if merge_base=$(git -C "$clone" merge-base origin/main "$branch" 2>/dev/null); then
-        git -C "$clone" diff --name-only "$merge_base" "$branch" || :
+        if branch_is_in_flight "$clone" "$merge_base" "$branch"; then
+          git -C "$clone" diff --name-only --no-renames "$merge_base" "$branch" || :
+        fi
       else
         printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' "$branch" "$clone" >&2
       fi

@@ -145,9 +145,33 @@ for tool in charliebot improve-sandbox mock-home; do
 done
 "#;
 
-/// The origin of the launcher's repository. The direction clone names another origin, so a test can tell which one the
-/// runner cloned from.
-const RUNTIME_ORIGIN: &str = "https://example.invalid/someone/charlie-bot.git";
+const GH: &str = r#"# Fake gh: answer from the fixture that FAKE_GH_PRS names, one line per open pull request: number, head, file.
+if [[ -z ${FAKE_GH_PRS:-} || ! -r $FAKE_GH_PRS ]]; then
+  exit 0
+fi
+case " $* " in
+  *" pr list "*)
+    while IFS=$'\t' read -r number head file; do
+      printf '%s\t%s\n' "$number" "$head"
+    done <"$FAKE_GH_PRS"
+    ;;
+  *" pr diff "*)
+    number=
+    previous=
+    for argument in "$@"; do
+      if [[ $previous == diff ]]; then
+        number=$argument
+        break
+      fi
+      previous=$argument
+    done
+    while IFS=$'\t' read -r pr head file; do
+      [[ $pr == "$number" ]] && printf '%s\n' "$file"
+    done <"$FAKE_GH_PRS"
+    ;;
+esac
+exit 0
+"#;
 
 /// One test's repository, both homes and stub directory.
 pub struct World {
@@ -201,10 +225,15 @@ impl World {
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
     git(&sandbox, &git_env, &repo, &["commit", "-q", "-m", "synthetic launcher commit"]);
     let commit = git(&sandbox, &git_env, &repo, &["rev-parse", "HEAD"]);
-    git(&sandbox, &git_env, &repo, &["update-ref", "refs/remotes/origin/main", &commit]);
-    git(&sandbox, &git_env, &repo, &["remote", "add", "origin", RUNTIME_ORIGIN]);
+    // The launcher's checkout fetches origin/main from a local bare repository, as the real checkout fetches from
+    // GitHub. The direction clone names another origin, so a test can tell which one the runner cloned from.
+    let runtime_origin = sandbox.dir("remotes/runtime.git");
+    let runtime_origin_text = runtime_origin.display().to_string();
+    git(&sandbox, &git_env, &repo, &["clone", "-q", "--bare", ".", &runtime_origin_text]);
+    git(&sandbox, &git_env, &repo, &["remote", "add", "origin", &runtime_origin_text]);
+    git(&sandbox, &git_env, &repo, &["fetch", "-q", "origin"]);
 
-    sandbox.stub("gh", "exit 0\n");
+    sandbox.stub("gh", GH);
     sandbox.stub("ssh", SSH);
     // The local claude that a cron session's own turn runs.
     sandbox.stub("claude", CLAUDE);
@@ -434,6 +463,27 @@ impl World {
     collect(root, root, &mut found);
     found.sort();
     found
+  }
+
+  /// A standalone clone of another direction at `improve/<name>/charlie-bot`, cloned from its own bare origin at
+  /// `remotes/<name>.git`, as the host worker's five clones are on the remote host.
+  pub fn other_direction_clone(&self, name: &str) -> PathBuf {
+    let origin = self.sandbox.dir(&format!("remotes/{name}.git"));
+    let origin_text = origin.display().to_string();
+    let seed = self.sandbox.dir(&format!("seeds/{name}"));
+    self.git(&seed, &["init", "-q", "-b", "main"]);
+    fs::write(seed.join("base.md"), "base\n").expect("the seed's base file");
+    self.git(&seed, &["add", "-A"]);
+    self.git(&seed, &["commit", "-q", "-m", "synthetic base"]);
+    self.git(&seed, &["clone", "-q", "--bare", ".", &origin_text]);
+    let root = self.sandbox.dir(&format!("remote/improve/{name}"));
+    self.git(&root, &["clone", "-q", &origin_text, "charlie-bot"]);
+    root.join("charlie-bot")
+  }
+
+  /// The bare origin of an other direction's clone.
+  pub fn other_direction_origin(&self, name: &str) -> PathBuf {
+    self.sandbox.root().join("remotes").join(format!("{name}.git"))
   }
 
   /// A git command in `cwd` with the fixture identity, for building remote clones.

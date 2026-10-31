@@ -53,6 +53,18 @@
     return event.target instanceof Element ? event.target.closest(selector) : null;
   }
 
+  function panelIsOpen() {
+    const panel = byId('concurrency-panel');
+    return !!panel && !panel.hidden;
+  }
+
+  // The hover tip repeats the live counts, and its z-index paints it over the open panel's range buttons and close
+  // button, so the tip waits for the panel to close.
+  function hideHoverTip() {
+    const tip = byId('concurrency-tip');
+    if (tip) tip.hidden = true;
+  }
+
   function setPanelOpen(open) {
     const badge = byId('concurrency-badge');
     const panel = byId('concurrency-panel');
@@ -61,6 +73,7 @@
     panel.hidden = !open;
     badge.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
+      hideHoverTip();
       loadHistory();
     } else {
       hidePointTip();
@@ -235,6 +248,7 @@
   });
 
   document.addEventListener('mouseover', (event) => {
+    if (panelIsOpen()) return;
     if (closest(event, '#concurrency-badge')) {
       const tip = byId('concurrency-tip');
       if (tip && tip.textContent) tip.hidden = false;

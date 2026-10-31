@@ -53,12 +53,15 @@ impl SearchFileRoots {
 
 #[derive(Clone)]
 struct SearchMatch {
-  revision: u64,
+  /// The corpus the matched rows were taken from. A rebuilt listing answers a new `Arc`, so a pointer match names the
+  /// same rows.
+  corpus: Arc<Vec<Arc<SessionMetadata>>>,
   /// The chat files a repeat query re-checks: every content candidate while the result is short of the cap, and only
   /// the candidates at or above the last returned row's `updated_at` once the result reaches it.
   watched: Vec<PathBuf>,
   signatures: Vec<Option<FileSignature>>,
-  row_ids: Vec<String>,
+  /// The matched rows, newest first, capped at [`SEARCH_RESULT_LIMIT`].
+  rows: Vec<Arc<SessionMetadata>>,
 }
 
 struct SearchMemos {
@@ -132,16 +135,16 @@ fn search_sessions_with_memos(
   }
 
   let needle = query.to_lowercase();
-  let (all, revision) = store.load_session_metas_snapshot_versioned(None)?;
+  let (all, _) = store.load_session_metas_snapshot_versioned(None)?;
   // Python checks the query result's listing identity, then each stored file signature, before doing name matching or
   // content classification (`src/runtime/session_search.py:293-295`). Keep that hot path ahead of candidate rebuilds.
   if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
-    && cached.revision == revision
+    && Arc::ptr_eq(&cached.corpus, &all)
   {
     let watched: Vec<&Path> = cached.watched.iter().map(PathBuf::as_path).collect();
     let signatures: Vec<Option<FileSignature>> = file_signatures(&watched).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
-      return Ok(rows_for_ids(&all, &cached.row_ids));
+      return Ok(cached.rows.clone());
     }
   }
 
@@ -219,23 +222,14 @@ fn search_sessions_with_memos(
     memos.lock().expect("session search memo mutex is not poisoned").remember_match(
       &needle,
       SearchMatch {
-        revision,
+        corpus: Arc::clone(&all),
         watched,
         signatures: watched_signatures,
-        row_ids: names.iter().map(|meta| meta.id.clone()).collect(),
+        rows: names.iter().map(|meta| Arc::clone(meta)).collect(),
       },
     );
   }
   Ok(names.into_iter().map(Arc::clone).collect())
-}
-
-fn rows_for_ids(all: &[Arc<SessionMetadata>], row_ids: &[String]) -> Vec<Arc<SessionMetadata>> {
-  if row_ids.is_empty() {
-    return Vec::new();
-  }
-  let by_id: std::collections::HashMap<&str, &Arc<SessionMetadata>> =
-    all.iter().map(|meta| (meta.id.as_str(), meta)).collect();
-  row_ids.iter().map(|id| Arc::clone(by_id[id.as_str()])).collect()
 }
 
 /// The signature of every path, in the argument order.
@@ -619,6 +613,8 @@ mod tests {
     fs::write(&path, "no match yet; needle appears").unwrap();
     let hit = super::search_sessions_with_memos(&store, "needle", &memos).unwrap();
     assert_eq!(hit.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+    let repeat = super::search_sessions_with_memos(&store, "needle", &memos).unwrap();
+    assert!(Arc::ptr_eq(&hit[0], &repeat[0]), "the repeat query answers with the rows the memo holds");
     assert_eq!(super::search_sessions_with_memos(&store, "eed", &memos).unwrap().len(), 1);
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the changed file rescans once and its hit covers substrings");
   }

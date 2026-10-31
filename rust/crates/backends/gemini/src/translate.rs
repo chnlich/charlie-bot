@@ -23,7 +23,8 @@ impl GeminiTranslator {
     Self { text_buffer: String::new() }
   }
 
-  /// Translates one stream-json event. A type this translator does not handle flushes the buffer.
+  /// Translates one stream-json event. A type this translator does not handle flushes the buffer, while a tool result
+  /// status outside `success` and `error` is an error.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let Some(event) = event.as_object() else {
       bail!("gemini event is not a JSON object: {event}");
@@ -49,7 +50,7 @@ impl GeminiTranslator {
             let error = event.get("error").cloned().unwrap_or_else(|| json!({}));
             events.push(make_tool_result_event(tool_id, &error_message(&error)?));
           }
-          _ => {}
+          other => bail!("gemini tool_result status must be 'success' or 'error', got {other:?}"),
         }
         Ok(events)
       }
@@ -183,6 +184,17 @@ mod tests {
       translator.translate_event(&json!({"type": "tool_use", "tool_name": "Read", "parameters": {}})).unwrap();
     assert_eq!(events[0], json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hel"}]}}));
     assert_eq!(events[1]["name"], "Read");
+  }
+
+  #[test]
+  fn a_tool_result_with_an_unknown_status_is_an_error() {
+    let mut translator = GeminiTranslator::new();
+    let error = translator
+      .translate_event(&json!({"type": "tool_result", "status": "cancelled", "tool_id": "Bash"}))
+      .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("success") && message.contains("error"), "{message}");
+    assert!(message.contains("cancelled"), "{message}");
   }
 
   #[test]

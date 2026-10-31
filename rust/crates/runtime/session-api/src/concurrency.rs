@@ -7,19 +7,23 @@
 //! span its session ran in, and a point's value is the most sessions open at once inside its bucket.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::SystemTime;
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord};
-use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
+use charliebot_store::{SharedSubtreeRoots, Store, StoreError, StoreResult};
+use serde::Serialize;
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
 
@@ -140,36 +144,117 @@ struct Span {
   manager: bool,
 }
 
-fn instant_json(at: OffsetDateTime, running: u32, manager: u32, worker: u32) -> Value {
-  json!({"t": UtcDateTime::from(at).to_str(), "running": running, "manager": manager, "worker": worker})
+/// One instant's four fields: a chart point, or the peak the range marks.
+///
+/// A point is a struct rather than a `Value` map, so a point allocates no map keys. A 7-day series carries 2,016
+/// points, and each one holds four keys a map would copy.
+#[derive(Serialize)]
+struct InstantBody {
+  t: String,
+  running: u32,
+  manager: u32,
+  worker: u32,
+}
+
+impl InstantBody {
+  fn of(at: OffsetDateTime, running: u32, manager: u32, worker: u32) -> Self {
+    Self { t: UtcDateTime::from(at).to_str(), running, manager, worker }
+  }
+}
+
+/// The history route's response body, in the field order the route writes.
+#[derive(Serialize)]
+struct HistoryBody {
+  range: &'static str,
+  from: String,
+  to: String,
+  bucket_seconds: i64,
+  first_record_at: Option<String>,
+  peak: Option<InstantBody>,
+  points: Vec<InstantBody>,
 }
 
 impl History {
-  pub(crate) fn into_json(self) -> Value {
-    json!({
-      "range": self.range,
-      "from": UtcDateTime::from(self.from).to_str(),
-      "to": UtcDateTime::from(self.to).to_str(),
-      "bucket_seconds": self.bucket_seconds,
-      "first_record_at": self.first_record_at.map(|at| UtcDateTime::from(at).to_str()),
-      "peak": self.peak.map(|peak| instant_json(peak.at, peak.running, peak.manager, peak.worker)),
-      "points": self
+  fn into_body(self) -> Vec<u8> {
+    let body = HistoryBody {
+      range: self.range,
+      from: UtcDateTime::from(self.from).to_str(),
+      to: UtcDateTime::from(self.to).to_str(),
+      bucket_seconds: self.bucket_seconds,
+      first_record_at: self.first_record_at.map(|at| UtcDateTime::from(at).to_str()),
+      peak: self.peak.map(|peak| InstantBody::of(peak.at, peak.running, peak.manager, peak.worker)),
+      points: self
         .points
         .iter()
-        .map(|point| instant_json(point.at, point.running, point.manager, point.worker))
-        .collect::<Vec<_>>(),
-    })
+        .map(|point| InstantBody::of(point.at, point.running, point.manager, point.worker))
+        .collect(),
+    };
+    serde_json::to_vec(&body).expect("a history body serializes")
+  }
+}
+
+/// The run-record scan the last request made, with the inputs that key it.
+///
+/// A committed run-record write moves the store's records generation, and a session directory added or removed moves
+/// the sessions directory's mtime. A request whose two inputs still hold takes the scan the earlier request made: the
+/// walk over the home's sessions directories is the route's largest cost. The clock and the range stay outside the
+/// key, because every request applies them to the records afresh.
+struct RecordsMemo {
+  sessions_dir: PathBuf,
+  sessions_mtime: Option<SystemTime>,
+  records_generation: u64,
+  records: Arc<Vec<(String, RunRecord)>>,
+}
+
+static RECORDS_MEMO: LazyLock<Mutex<Option<RecordsMemo>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Every session's run records, from the scan this process last made when its key still holds.
+fn all_run_records(store: &Store) -> StoreResult<Arc<Vec<(String, RunRecord)>>> {
+  let mut memo = RECORDS_MEMO.lock().expect("the run-record memo mutex is not poisoned");
+  scan_records(&mut memo, store)
+}
+
+fn scan_records(memo: &mut Option<RecordsMemo>, store: &Store) -> StoreResult<Arc<Vec<(String, RunRecord)>>> {
+  let sessions_dir = store.config().sessions_dir();
+  let sessions_mtime = sessions_directory_mtime(&sessions_dir)?;
+  // The generation is read before the scan, so a write that lands during it leaves a stale key behind.
+  let records_generation = store.records_generation();
+  let holds = memo.as_ref().is_some_and(|entry| {
+    entry.records_generation == records_generation
+      && entry.sessions_mtime == sessions_mtime
+      && entry.sessions_dir == sessions_dir
+  });
+  if holds {
+    return Ok(Arc::clone(&memo.as_ref().expect("the memo holds a scan").records));
+  }
+  let records = Arc::new(store.list_all_run_records_sync()?);
+  *memo = Some(RecordsMemo { sessions_dir, sessions_mtime, records_generation, records: Arc::clone(&records) });
+  Ok(records)
+}
+
+/// The sessions directory's mtime, or `None` when it does not exist.
+///
+/// The run-record scan reads a missing sessions directory as an empty home, so the key records that state as `None`.
+fn sessions_directory_mtime(sessions_dir: &Path) -> StoreResult<Option<SystemTime>> {
+  match fs::metadata(sessions_dir) {
+    Ok(metadata) => {
+      let modified =
+        metadata.modified().map_err(|error| StoreError::new(format!("{}: {error}", sessions_dir.display())))?;
+      Ok(Some(modified))
+    }
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(StoreError::new(format!("{}: {error}", sessions_dir.display()))),
   }
 }
 
 /// The series of one range, read from every run record.
 pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTime) -> StoreResult<History> {
-  let records = store.list_all_run_records_sync()?;
+  let records = all_run_records(store)?;
   let now = now.into_inner();
   let first_record_at = records.iter().filter_map(|(_, record)| record.started_at).min().map(UtcDateTime::into_inner);
   let from =
     lookback_seconds(range).map_or_else(|| first_record_at.unwrap_or(now), |seconds| now - Duration::seconds(seconds));
-  let buckets = bucket_peaks(&merged_spans(&records, now), from, now, bucket_seconds(range));
+  let buckets = bucket_peaks(&merged_spans(records.as_slice(), now), from, now, bucket_seconds(range));
   let mut peak: Option<Peak> = None;
   for bucket in &buckets {
     if peak.is_none_or(|best| bucket.point.running > best.running) {
@@ -326,8 +411,13 @@ async fn history(State(features): State<Arc<FeatureContext>>, request: Request<B
     Err(response) => return *response,
   };
   let store = Arc::clone(&features.store);
-  match blocking_store(move || history_series(&store, range, UtcDateTime::now()).map(History::into_json)).await {
-    Ok(body) => responses::fast_json(StatusCode::OK, &body),
+  match blocking_store(move || history_series(&store, range, UtcDateTime::now()).map(History::into_body)).await {
+    Ok(body) => Response::builder()
+      .status(StatusCode::OK)
+      .header(header::CONTENT_TYPE, "application/json")
+      .header(header::CONTENT_LENGTH, body.len())
+      .body(Body::from(body))
+      .expect("the history response builds"),
     Err(error) => store_error(error),
   }
 }
@@ -545,5 +635,19 @@ mod tests {
     let peak = series.peak.expect("the running worker reaches a peak");
     assert_eq!((peak.running, peak.manager, peak.worker), (1, 0, 1));
     assert_eq!(series.first_record_at, Some(peak.at));
+  }
+
+  /// A repeat scan takes the records it already read until a session directory moves the key.
+  #[tokio::test]
+  async fn a_records_memo_reuses_its_scan_until_a_session_directory_moves() {
+    let (_home, features) = test_support::feature_context();
+    let mut memo = None;
+    let first = scan_records(&mut memo, &features.store).unwrap();
+    let repeat = scan_records(&mut memo, &features.store).unwrap();
+    assert!(Arc::ptr_eq(&first, &repeat), "an unchanged home takes the scan it already made");
+
+    test_support::create_node(&features.store, "memo-new-session", None, TaskProfile::Manager).await;
+    let after = scan_records(&mut memo, &features.store).unwrap();
+    assert!(!Arc::ptr_eq(&repeat, &after), "a session directory added moves the sessions directory's mtime");
   }
 }

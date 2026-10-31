@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use charliebot_agents::cli_base::CliHost;
+use charliebot_charlie_code::flags;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::BackendOption;
@@ -23,7 +24,8 @@ use serde_json::Value;
 use wait_timeout::ChildExt;
 
 /// The `charlie-code --help` flags the backend's command carries, so the installed CLI answers to it.
-const CONTRACT_FLAGS: [&str; 6] = ["--task-file", "--json", "--model", "--api-base", "--resume", "--context-window"];
+const CONTRACT_FLAGS: [&str; 6] =
+  [flags::TASK_FILE, flags::JSON, flags::MODEL, flags::API_BASE, flags::RESUME, flags::CONTEXT_WINDOW];
 
 /// The install command both failure lines carry; Python's `binary-missing` line is the bare command, and its
 /// `binary-broken` line prefixes the reinstall instruction.

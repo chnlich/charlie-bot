@@ -40,14 +40,14 @@
 //! the nullable type takes null. The validated list holds each item as a validated object, and a missing optional item
 //! field stays absent.
 //!
-//! `FieldType::TaggedUnionList` declares a `list[A | B | C]` field whose items are discriminated on one key, as
-//! pydantic's `Field(discriminator=...)` does, and `FieldType::NullableTaggedUnionList` the same field with `| None`.
+//! `FieldType::NullableTaggedUnionList` declares a `list[A | B | C] | None` field whose items are discriminated on
+//! one key, as pydantic's `Field(discriminator=...)` does.
 //! Each `TaggedVariant` maps a tag value to its member model, which declares the discriminator as a `Literal` of that
 //! tag, so the validated item keeps its tag. A non-object item reports `model_attributes_type` at its index. An object
 //! without the discriminator key reports `union_tag_not_found` at its index, and one whose tag matches no variant
 //! reports `union_tag_invalid` there, with the tag's Python `str()`. A member's own errors sit under `[index, tag]`: a
-//! bad `pid` in a `local_pid` item at index 0 reports `["body", "watch_targets", 0, "local_pid", "pid"]`. Both list
-//! types follow the `ModelList` rules for a non-list value, for null and for the list's bounds.
+//! bad `pid` in a `local_pid` item at index 0 reports `["body", "watch_targets", 0, "local_pid", "pid"]`. The field
+//! follows the `ModelList` rules for a non-list value, for null and for the list's bounds.
 //!
 //! `RequestBody::check` returns the ordered `FieldError`s; `validate` wraps them in FastAPI's 422 response. A missing
 //! optional field stays absent from the returned object so the handler applies the Python default.
@@ -159,13 +159,8 @@ pub enum FieldType {
     class_name: &'static str,
     model: &'static BodyModel,
   },
-  /// A `list[A | B | C]` field discriminated on `discriminator`, as pydantic's `Field(discriminator=...)` does. Each
-  /// item is validated as the variant whose tag it carries.
-  TaggedUnionList {
-    discriminator: &'static str,
-    variants: &'static [TaggedVariant],
-  },
-  /// A `list[A | B | C] | None` field: null is valid, and a list is validated as `TaggedUnionList`.
+  /// A `list[A | B | C] | None` field discriminated on `discriminator`, as pydantic's `Field(discriminator=...)`
+  /// does: null is valid, and each item of a list is validated as the variant whose tag it carries.
   NullableTaggedUnionList {
     discriminator: &'static str,
     variants: &'static [TaggedVariant],
@@ -200,7 +195,6 @@ impl FieldType {
         | FieldType::StringList
         | FieldType::ModelList { .. }
         | FieldType::NullableModelList { .. }
-        | FieldType::TaggedUnionList { .. }
         | FieldType::NullableTaggedUnionList { .. }
     )
   }
@@ -444,8 +438,7 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
     FieldType::NullableModelList { .. } if value.is_null() => Ok(Value::Null),
     FieldType::NullableModelList { model, .. } => model_list(field, value, loc, model),
     FieldType::NullableTaggedUnionList { .. } if value.is_null() => Ok(Value::Null),
-    FieldType::TaggedUnionList { discriminator, variants }
-    | FieldType::NullableTaggedUnionList { discriminator, variants } => {
+    FieldType::NullableTaggedUnionList { discriminator, variants } => {
       tagged_union_list(field, value, loc, discriminator, variants)
     }
     FieldType::NullableModel { class_name, model } => match value {

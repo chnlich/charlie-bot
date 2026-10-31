@@ -1,15 +1,14 @@
 //! The cc-openai-compatible option fields: `api_base` and `credential`, from `src/backends/openai_compatible/options.py`.
 
-use charliebot_core::config::{OptionField, OptionFieldDefault};
+use charliebot_core::config::{API_BASE_KEY, OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
-const API_BASE: &str = "api_base";
 const CREDENTIAL: &str = "credential";
 
 /// The `cc-openai-compatible` option's type-specific fields in `CcOpenAICompatibleBackend`'s declaration order, each
 /// with the value the Python model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
-  OptionField::field("api_base", OptionFieldDefault::Required),
+  OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field("credential", OptionFieldDefault::Null),
 ];
 
@@ -26,12 +25,12 @@ impl CcOpenAiOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(API_BASE | CREDENTIAL) => {}
+        Some(API_BASE_KEY | CREDENTIAL) => {}
         Some(name) => return Err(format!("unknown cc-openai-compatible option field {name:?}")),
         None => return Err(format!("cc-openai-compatible option key must be a string: {key:?}")),
       }
     }
-    let api_base = match fields.get(API_BASE) {
+    let api_base = match fields.get(API_BASE_KEY) {
       None => return Err("cc-openai-compatible option api_base is required".to_string()),
       Some(Value::String(api_base)) => api_base.clone(),
       Some(_) => return Err("cc-openai-compatible option api_base must be a string".to_string()),

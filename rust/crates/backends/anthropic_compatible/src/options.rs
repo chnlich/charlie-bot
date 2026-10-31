@@ -1,24 +1,23 @@
 //! The endpoint, declared context window, optional credential, optional effort, optional executable, request headers
 //! and fixed request body fields of a `cc-anthropic-compatible` entry.
 
-use charliebot_core::config::{OptionField, OptionFieldDefault};
+use charliebot_core::config::{API_BASE_KEY, OptionField, OptionFieldDefault};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
-const API_BASE: &str = "api_base";
 const CONTEXT_WINDOW: &str = "context_window";
 const CREDENTIAL: &str = "credential";
 const EFFORT: &str = "effort";
 const CLI_BINARY: &str = "cli_binary";
 const HEADERS: &str = "headers";
 const EXTRA_BODY: &str = "extra_body";
-const FIELDS: [&str; 7] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
+const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW, CREDENTIAL, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
 /// them. `cli_binary` has no Python reference: the Python option model refused the field.
 pub const SCHEMA: &[OptionField] = &[
-  OptionField::field(API_BASE, OptionFieldDefault::Required),
+  OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Required),
   OptionField::field(CREDENTIAL, OptionFieldDefault::Null),
   OptionField::field(EFFORT, OptionFieldDefault::Null),
@@ -55,7 +54,7 @@ impl CcAnthropicCompatibleOption {
         None => return Err(format!("cc-anthropic-compatible option key must be a string: {key:?}")),
       }
     }
-    let api_base = match fields.get(API_BASE) {
+    let api_base = match fields.get(API_BASE_KEY) {
       None => return Err("cc-anthropic-compatible option api_base is required".to_string()),
       Some(Value::String(api_base)) if !api_base.is_empty() => api_base.clone(),
       Some(Value::String(_)) => return Err("cc-anthropic-compatible option api_base must not be empty".to_string()),

@@ -972,7 +972,7 @@ fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>,
   let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array);
   let Some(options) = options else { return Ok(None) };
   for option in options {
-    let Some(api_base) = option.get("api_base").filter(|value| truthy(value)) else {
+    let Some(api_base) = option.get(config::API_BASE_KEY).filter(|value| truthy(value)) else {
       continue;
     };
     let credential = option.get("credential").filter(|value| truthy(value)).map(text_repr::value_str);

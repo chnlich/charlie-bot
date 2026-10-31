@@ -491,7 +491,11 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
   };
   let result = client::post(
     task_routes::SESSION_MESSAGE_PATH,
-    json!({ "session_id": session_id, "target_session_id": args.target, "content": content }),
+    json!({
+      "session_id": session_id,
+      (task_routes::SESSION_MESSAGE_TARGET_SESSION_ID_FIELD): args.target,
+      "content": content,
+    }),
     None,
     &[(422, EXIT_SEND_REFUSED)],
   )?;

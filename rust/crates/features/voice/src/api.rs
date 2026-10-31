@@ -257,8 +257,9 @@ pub(crate) fn log_voice_transcribed(line: &Transcribed<'_>) {
   );
 }
 
-/// One device field's text as the parity log comparison reads it from both servers: a string as itself, a scalar in
-/// its JSON spelling (null, true, 3), a container in Python's repr, and an absent field as null.
+/// One device field's text as the parity log comparison reads it from both servers.
+/// A string reads as itself, a scalar in its JSON spelling (null, true, 3), a container in Python's repr, and an
+/// absent field as null.
 fn device_text(value: Option<&Value>) -> String {
   match value {
     None | Some(Value::Null) => "null".to_string(),

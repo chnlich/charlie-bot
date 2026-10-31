@@ -119,27 +119,34 @@ document.addEventListener('click', function(e) {
 // ---------------------------------------------------------------------------
 // Sidebar chrome (mobile drawer: hamburger toggle + close on navigation)
 // ---------------------------------------------------------------------------
-function toggleMobileSidebar() {
+function closeMobileSidebar() {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebar-overlay');
-  const isOpen = sidebar.classList.contains('open');
-  if (isOpen) {
-    sidebar.classList.remove('open');
-    overlay.classList.remove('active');
+  sidebar.classList.remove('open');
+  overlay.classList.remove('active');
+}
+
+function toggleMobileSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar.classList.contains('open')) {
+    closeMobileSidebar();
   } else {
     sidebar.classList.add('open');
-    overlay.classList.add('active');
+    document.getElementById('sidebar-overlay').classList.add('active');
   }
 }
 
-// Close sidebar on navigation (mobile)
-document.querySelectorAll('#sidebar a[href]').forEach(function(a) {
-  a.addEventListener('click', function() {
-    if (platform.isMobile) {
-      const sidebar = document.getElementById('sidebar');
-      const overlay = document.getElementById('sidebar-overlay');
-      sidebar.classList.remove('open');
-      overlay.classList.remove('active');
-    }
-  });
+// A phone's sidebar is a drawer over the chat, so a tap that opens a session
+// or a tool page dismisses it. The session rows are rebuilt from a fetch after
+// load, so the listener matches each link as it appears instead of binding the
+// rows once at page load.
+document.addEventListener('click', function(e) {
+  if (platform.isMobile && e.target.closest('#sidebar a[href]')) closeMobileSidebar();
+});
+
+// A create button opens a session without a link click, and a tap on the open
+// session has already closed the drawer above. Both create and switch announce
+// the new active session; the drawer leaves on that signal too.
+document.addEventListener('charliebot:active-session-changed', function() {
+  if (platform.isMobile) closeMobileSidebar();
 });

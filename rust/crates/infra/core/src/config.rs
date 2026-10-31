@@ -29,6 +29,10 @@ pub const CONFIG_D_DIR_NAME: &str = "config.d";
 /// A legacy-key value under this prefix names a `credentials.yaml` key path (`config_registry.CREDENTIALS_PREFIX`).
 pub const CREDENTIALS_PREFIX: &str = "credentials: ";
 
+/// The `api_base` key of a `backends.options[]` entry: the upstream endpoint several backend types read. They import
+/// this name instead of each spelling it.
+pub const API_BASE_KEY: &str = "api_base";
+
 /// Retired keys under `backends:`, replaced by `backends.pool`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 

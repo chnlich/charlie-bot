@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use charliebot_charlie_code::API_KEY_ENV;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::config::{BackendOption, CONFIG_FILENAME};
+use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME};
 use charliebot_core::{credentials, home, paths};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde_json::Value;
@@ -93,7 +93,7 @@ fn review(cli: &ImproveReviewCli) -> Result<PathBuf, String> {
   if option.model.is_empty() {
     return Err(format!("backend entry {} has no model in {}", option.id, config_file.display()));
   }
-  let api_base = text_field(option, "api_base", &config_file)?;
+  let api_base = text_field(option, API_BASE_KEY, &config_file)?;
   let context_window = context_window_field(option, &config_file)?;
   let credential = text_field(option, "credential", &config_file)?;
   let credentials = credentials::load_credentials(&cfg.charliebot_home).map_err(|error| error.to_string())?;

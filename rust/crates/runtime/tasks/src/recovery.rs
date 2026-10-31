@@ -320,6 +320,25 @@ pub fn let_go_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::
   })
 }
 
+/// One session that reached the walk's full pass, with the metadata its absence proof reads.
+struct FullPassSession {
+  session_id: String,
+  meta: SessionMetadata,
+}
+
+/// The threads one absence-proof batch may split across.
+///
+/// Every proof memory-maps its session's event logs and scans their raw bytes, and a fresh home makes that scan
+/// several gigabytes. Each proof reads only its own session's files, so the batch splits across the available cores.
+/// On the 7,160-session mock home sixteen threads leave the scan at about the walk's fixed per-session cost, so more
+/// threads gained nothing.
+const CLASSIFY_WORKERS: usize = 16;
+/// The candidate count below which the absence proofs run on the calling thread.
+///
+/// Starting a thread costs more than a handful of small proofs, so only a batch a production home produces takes the
+/// parallel path.
+const CLASSIFY_MIN_SESSIONS: usize = 64;
+
 /// Reconcile every node this home owns, in sorted directory order (`task_recovery.reconcile_task_tree`). The sequence
 /// controllers mark their interrupted state first.
 pub async fn reconcile_task_tree(
@@ -355,6 +374,7 @@ pub async fn reconcile_task_tree(
     .with_context(|| format!("listing {}", sessions_dir.display()))?;
   session_dirs.sort();
   tracing::info!(target: "charliebot_tasks", sessions = session_dirs.len(), "task_tree_recovery_walk_started");
+  let mut candidates: Vec<FullPassSession> = Vec::new();
   for session_dir in session_dirs {
     if stop.is_cancelled() {
       return Ok(counters);
@@ -392,14 +412,22 @@ pub async fn reconcile_task_tree(
       return Ok(counters);
     }
     counters.full += 1;
-    // A session with no task boundary, no run directory and no prompt ref has nothing to reconcile: its pass can
-    // only report the absence. `has_no_task_node` proves that from the raw event bytes, so the pass here reports
-    // the same absence without folding the log. A probe that cannot read the session's files fails the node, as a
-    // node pass that cannot read them does.
-    let no_node = features.store.has_no_task_node(&meta);
+    candidates.push(FullPassSession { session_id, meta });
+  }
+  // A session with no task boundary, no run directory and no prompt ref has nothing to reconcile: its pass can only
+  // report the absence. `has_no_task_node` proves that from the raw event bytes, so the pass here reports the same
+  // absence without folding the log. Each proof reads only its own session's files, so the whole batch proves in
+  // parallel before the passes run in the walk's order. A probe that cannot read the session's files fails the node,
+  // as a node pass that cannot read them does.
+  let Some(no_nodes) = classify_no_task_nodes(&features.store, &candidates, &stop) else {
+    return Ok(counters);
+  };
+  for (candidate, no_node) in candidates.into_iter().zip(no_nodes) {
     if stop.is_cancelled() {
       return Ok(counters);
     }
+    let session_id = candidate.session_id;
+    let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
     let result = match no_node {
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
       Ok(false) => {
@@ -428,6 +456,53 @@ pub async fn reconcile_task_tree(
   }
   counters.marker = marker.map(UtcDateTime::to_isoformat_text);
   Ok(counters)
+}
+
+/// Whether each candidate session holds no task-tree node, in the candidates' order.
+///
+/// The proofs split across the available cores when the batch is large enough to pay for the threads. A worker that
+/// meets a stop request returns `None`, and the walk then ends with the counters it has, as a sequential stop does.
+fn classify_no_task_nodes(
+  store: &Store,
+  candidates: &[FullPassSession],
+  stop: &StartupStop,
+) -> Option<Vec<StoreResult<bool>>> {
+  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(CLASSIFY_WORKERS);
+  if candidates.len() < CLASSIFY_MIN_SESSIONS || workers < 2 {
+    let mut results = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+      if stop.is_cancelled() {
+        return None;
+      }
+      let _session_timer = SessionTimer { session_id: candidate.session_id.clone(), started: Instant::now() };
+      results.push(store.has_no_task_node(&candidate.meta));
+    }
+    return Some(results);
+  }
+  let chunk = candidates.len().div_ceil(workers);
+  std::thread::scope(|scope| {
+    let chunks: Vec<_> = candidates
+      .chunks(chunk)
+      .map(|chunk| {
+        scope.spawn(move || {
+          let mut results = Vec::with_capacity(chunk.len());
+          for candidate in chunk {
+            if stop.is_cancelled() {
+              return None;
+            }
+            let _session_timer = SessionTimer { session_id: candidate.session_id.clone(), started: Instant::now() };
+            results.push(store.has_no_task_node(&candidate.meta));
+          }
+          Some(results)
+        })
+      })
+      .collect();
+    let mut results = Vec::with_capacity(candidates.len());
+    for chunk in chunks {
+      results.extend(chunk.join().expect("a classification chunk only proves session absence")?);
+    }
+    Some(results)
+  })
 }
 
 async fn reconcile_node_until_stopped<T>(stop: &StartupStop, node_pass: impl Future<Output = T>) -> Option<T> {
@@ -1475,6 +1550,38 @@ mod tests {
   async fn node_pass(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<()> {
     let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
     reconcile_node(features, &adapter, session_id, &mut PassCounters::default(), None).await
+  }
+
+  #[tokio::test]
+  async fn the_absence_batch_proves_every_session_and_keeps_its_order() {
+    let (_home, features) = startup_features().await;
+    let store = &features.store;
+    let count = CLASSIFY_MIN_SESSIONS + 2;
+    let mut candidates = Vec::with_capacity(count);
+    for index in 0..count {
+      let session_id = format!("batch-{index:03}");
+      let dir = store.session_dir(&session_id);
+      std::fs::create_dir_all(layout::data_dir(&dir)).expect("the data directory exists");
+      let events = if index % 7 == 0 {
+        "{\"id\": \"e1\", \"type\": \"task_created\", \"actor\": \"user\"}\n"
+      } else {
+        "{\"id\": \"e1\", \"type\": \"user\", \"content\": \"hello\"}\n"
+      };
+      std::fs::write(layout::chat_events_path(&dir), events).expect("the event log is written");
+      if index % 11 == 0 {
+        std::fs::create_dir_all(store.run_dir(&session_id, "run-1")).expect("the run directory exists");
+      }
+      let meta = SessionMetadata::new(session_id.clone(), "Batch session", TaskProfile::Manager);
+      candidates.push(FullPassSession { session_id, meta });
+    }
+    let stop = StartupStop::default();
+    let proved = classify_no_task_nodes(store, &candidates, &stop).expect("no stop request arrived");
+    assert_eq!(proved.len(), candidates.len(), "every candidate keeps its proof");
+    for (index, (proved, candidate)) in proved.into_iter().zip(&candidates).enumerate() {
+      let sequential = store.has_no_task_node(&candidate.meta).expect("the sequential proof reads the session");
+      assert_eq!(proved.expect("the batch proof reads the session"), sequential, "candidate {index}");
+      assert_eq!(sequential, index % 7 != 0 && index % 11 != 0, "candidate {index}");
+    }
   }
 
   #[tokio::test]

@@ -123,8 +123,9 @@ fn push_mono(planes: &[Vec<f32>], out: &mut Vec<f32>) {
   }
 }
 
-/// Resample with an FFT resampler. Its delay is a whole number of frames at both rates, so the output starts on the
-/// input's first frame; a sinc resampler truncates a fractional delay and shifts the output by up to one frame.
+/// Resample with an FFT resampler.
+/// Its delay is a whole number of frames at both rates, so the output starts on the input's first frame.
+/// A sinc resampler truncates a fractional delay and shifts the output by up to one frame.
 fn resample(samples: &[f32], rate: u32) -> Result<Vec<f32>, String> {
   if rate == TARGET_RATE {
     return Ok(samples.to_vec());

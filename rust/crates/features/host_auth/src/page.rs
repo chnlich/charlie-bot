@@ -3,6 +3,7 @@
 
 use anyhow::Context;
 use axum::response::Response;
+use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
 use http::request::Parts;
@@ -41,7 +42,7 @@ fn context(state: &State, now: OffsetDateTime) -> anyhow::Result<Value> {
   let summary = summary(state, now)?;
   let last_probe = timestamps::local_timestamp(host_auth::opt_str(state, "probed_at")?, LocalFormat::DateZone)?;
   Ok(json!({
-    "probe_running": truthy(state.get("probe_running")),
+    "probe_running": state.get("probe_running").is_some_and(text_repr::is_truthy),
     "hosts": rows,
     "summary": summary,
     "last_probe": last_probe,
@@ -155,18 +156,6 @@ pub fn format_remaining(seconds: f64) -> String {
     format!("{hours} h {minutes} m")
   } else {
     format!("{minutes} m")
-  }
-}
-
-/// Python's `bool(value)` over the state's JSON value.
-fn truthy(value: Option<&Value>) -> bool {
-  match value {
-    None | Some(Value::Null) => false,
-    Some(Value::Bool(flag)) => *flag,
-    Some(Value::Number(number)) => number.as_f64().is_some_and(|number| number != 0.0),
-    Some(Value::String(text)) => !text.is_empty(),
-    Some(Value::Array(items)) => !items.is_empty(),
-    Some(Value::Object(members)) => !members.is_empty(),
   }
 }
 

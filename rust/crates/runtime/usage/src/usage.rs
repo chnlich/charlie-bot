@@ -389,7 +389,7 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, ru
     }
     None => (None, None),
   };
-  let model = snapshot.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_str);
+  let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
   Ok(usage_value(Some(token_sum), context_full, compact_at, &model, cost))
 }
 
@@ -401,7 +401,7 @@ fn resolve_reading(fold: &UsageFold, cost: Option<f64>) -> Value {
       value => int_value(value),
     })
   };
-  let model = reading.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_str);
+  let model = reading.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
   usage_value(
     number(event_types::CONTEXT_TOKENS),
     number(event_types::CONTEXT_FULL),
@@ -439,20 +439,9 @@ fn usage_value(
   })
 }
 
-/// `truthy` over one borrowed event field, `None` included.
+/// CPython truthiness of one borrowed event field, `None` included.
 fn truthy_field<E: EventFields>(value: Option<&E>) -> bool {
   value.is_some_and(is_truthy)
-}
-
-fn truthy(value: Option<&Value>) -> bool {
-  match value {
-    None | Some(Value::Null) => false,
-    Some(Value::Bool(value)) => *value,
-    Some(Value::Number(value)) => value.as_f64().is_some_and(|number| number != 0.0),
-    Some(Value::String(value)) => !value.is_empty(),
-    Some(Value::Array(value)) => !value.is_empty(),
-    Some(Value::Object(value)) => !value.is_empty(),
-  }
 }
 
 fn truthy_object<'a, E: EventFields>(value: Option<&'a E>, field: &str) -> StoreResult<Option<&'a E>> {

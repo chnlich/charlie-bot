@@ -1038,7 +1038,8 @@ wait_for_quiet_disk() {
       rm -rf "$dir"
       return 0
     fi
-    log "waiting for the root disk: ${rate} MB/s read over ${DISK_SAMPLE_S}s, above ${DISK_QUIET_MB} MB/s; up to ${DISK_WAIT_S}s"
+    log "waiting for the root disk: ${rate} MB/s read over ${DISK_SAMPLE_S}s, above ${DISK_QUIET_MB} MB/s;" \
+      "up to ${DISK_WAIT_S}s"
     if [ "$SECONDS" -ge "$end" ]; then
       report_heavy_readers "$dir"
       rm -rf "$dir"
@@ -1068,7 +1069,9 @@ record_session_reads() {
   else
     log "session reads $label: no charliebot-sess-* cgroups"
   fi
-  [ "$rc" -eq 0 ] || log "session reads $label: io.stat is missing for at least one cgroup; each row names the path and the source read instead"
+  [ "$rc" -eq 0 ] \
+    || log "session reads $label:" \
+      "io.stat is missing for at least one cgroup; each row names the path and the source read instead"
   rm -rf "$dir"
   return "$rc"
 }
@@ -1084,7 +1087,8 @@ dry_run_disk() {
   log "root disk read ${rate} MB/s over ${DISK_SAMPLE_S}s; threshold ${DISK_QUIET_MB} MB/s, bound ${DISK_WAIT_S}s"
   session_rbytes_table
   rc=$?
-  [ "$rc" -eq 0 ] || log "io.stat is missing for at least one cgroup; each row names the path and the source read instead"
+  [ "$rc" -eq 0 ] \
+    || log "io.stat is missing for at least one cgroup; each row names the path and the source read instead"
   return "$rc"
 }
 
@@ -1119,7 +1123,8 @@ preflight() {
   PANE_PID="$(tm display-message -p -t "$PANE" '#{pane_pid}' 2> /dev/null)" || fail "no tmux pane $PANE"
   WANT="rust $TARGET_SHA"
   wait_for_quiet_disk \
-    || fail "the root disk read stayed above ${DISK_QUIET_MB} MB/s within ${DISK_WAIT_S}s; the heaviest readers are the lines above"
+    || fail "the root disk read stayed above ${DISK_QUIET_MB} MB/s within ${DISK_WAIT_S}s;" \
+      "the heaviest readers are the lines above"
   log "preflight passed: $OLD_IMPL -> $WANT; clone at $OLD_SHA; pane $PANE; port $PORT"
 }
 

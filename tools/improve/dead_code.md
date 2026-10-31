@@ -32,6 +32,13 @@ A topic whose deletion needs a new consumer is a design change.
 Name such a topic in the final message and open no pull request.
 The round then changes a design, and a design needs the user's decision.
 
+## Search scope
+
+Search the sources named under Scope.
+When a removed name may appear in the repository's prompts, skills, configs and docs, search those files too.
+Never search a path outside this repository, including the home directory.
+A search of the whole home directory read about 36 GB and slowed a round's startup.
+
 ## Evidence
 
 Write the command and its output that show no caller remains for the deleted name.

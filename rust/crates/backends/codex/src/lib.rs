@@ -72,6 +72,7 @@ mod tests {
   use std::path::PathBuf;
   use std::sync::OnceLock;
 
+  use charliebot_agents::cli_base::user_local_bin;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::backend::{BackendTraits, ResumeStyle, UsageResolverHost};
   use charliebot_registry::usage::UsageOps;
@@ -87,7 +88,7 @@ mod tests {
   #[test]
   fn host_paths_follow_the_home_directory() {
     let host = CodexHost { path: "/bin".to_string(), home: PathBuf::from("/synthetic/home") };
-    assert_eq!(host.user_local_bin(), PathBuf::from("/synthetic/home/.local/bin"));
+    assert_eq!(user_local_bin(&host.home), PathBuf::from("/synthetic/home/.local/bin"));
     assert_eq!(host.codex_home(), PathBuf::from("/synthetic/home/.codex"));
   }
 

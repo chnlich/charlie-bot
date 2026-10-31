@@ -3,7 +3,7 @@
 //! answers what the same operation answers on the value `json.loads` produced.
 
 use charliebot_compat::json_loads::{self, LoadError};
-use charliebot_core::text_repr::JsonStyle;
+use charliebot_core::text_repr::{JsonStyle, is_truthy};
 use serde_json::{Map, Value};
 
 /// `json.dumps(value, separators=(",", ":"))` with the default `ensure_ascii`: characters above `~` are escaped.
@@ -41,18 +41,6 @@ pub fn type_name(value: &Value) -> &'static str {
   }
 }
 
-/// Python truthiness: `None`, `False`, zero, and the empty str, list and dict are falsy.
-pub fn truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
-}
-
 /// `value.get(key)` on a dict: `None` for a missing key, and a present `null` is `Some(Null)`.
 pub fn get<'a>(value: &'a Value, key: &str) -> ValueResult<Option<&'a Value>> {
   match value {
@@ -63,7 +51,7 @@ pub fn get<'a>(value: &'a Value, key: &str) -> ValueResult<Option<&'a Value>> {
 
 /// `value.get(key) or {}`: the member when it is truthy, else an empty dict. Used where Python writes `or {}`.
 pub fn get_or_empty(value: &Value, key: &str) -> ValueResult<Value> {
-  Ok(get(value, key)?.filter(|member| truthy(member)).cloned().unwrap_or_else(|| Value::Object(Map::new())))
+  Ok(get(value, key)?.filter(|member| is_truthy(member)).cloned().unwrap_or_else(|| Value::Object(Map::new())))
 }
 
 /// `for item in value`: a list yields its items, a dict its keys, a str its characters, and other values raise.
@@ -78,7 +66,7 @@ pub fn iterate(value: &Value) -> ValueResult<Vec<Value>> {
 
 /// `iterate(value)` for a member that may be absent: `value or []`, so a missing or falsy member iterates nothing.
 pub fn iterate_member(members: Option<&Value>) -> ValueResult<Vec<Value>> {
-  match members.filter(|member| truthy(member)) {
+  match members.filter(|member| is_truthy(member)) {
     Some(member) => iterate(member),
     None => Ok(Vec::new()),
   }
@@ -134,10 +122,10 @@ mod tests {
   #[test]
   fn truthiness_follows_value_rules() {
     for falsy in [json!(null), json!(false), json!(0), json!(0.0), json!(""), json!([]), json!({})] {
-      assert!(!truthy(&falsy), "{falsy} is falsy");
+      assert!(!is_truthy(&falsy), "{falsy} is falsy");
     }
     for truthy_value in [json!(true), json!(1), json!(-1), json!("0"), json!([0]), json!({"k": null})] {
-      assert!(truthy(&truthy_value), "{truthy_value} is truthy");
+      assert!(is_truthy(&truthy_value), "{truthy_value} is truthy");
     }
   }
 

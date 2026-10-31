@@ -170,14 +170,6 @@ impl Store {
     Ok(Some(projection))
   }
 
-  /// Return a memoized projection only when the in-memory event list proves it current.
-  pub fn projection_memo_hit(&self, session_id: &str) -> Option<Arc<MessageProjection>> {
-    let live_len = self.cached_chat_events(session_id)?.len();
-    let projection =
-      self.session_events.projections.lock().expect("projection cache mutex is not poisoned").get(session_id)?;
-    (projection.event_count() == live_len).then_some(projection)
-  }
-
   /// Drop the cached events, live aggregator, projection, and feature-owned runtime state.
   pub fn drop_session_runtime_state(&self, session_id: &str) {
     self.clear_chat_events_cache(session_id);
@@ -639,7 +631,6 @@ mod tests {
     store.append_chat_event("synthetic", json!({"type": "user", "content": "first"})).await.unwrap();
     let first = store.get_message_projection("synthetic").unwrap().unwrap();
     assert_eq!(first.event_count(), 1);
-    assert!(store.projection_memo_hit("synthetic").is_some());
 
     store
       .append_chat_event(
@@ -648,7 +639,6 @@ mod tests {
       )
       .await
       .unwrap();
-    assert!(store.projection_memo_hit("synthetic").is_none());
     let advanced = store.get_message_projection("synthetic").unwrap().unwrap();
     assert_eq!(first.event_count(), 1);
     assert_eq!(advanced.event_count(), 2);
@@ -657,7 +647,6 @@ mod tests {
     let epoch = store.prime_aggregator("synthetic").await.unwrap();
     store.drop_session_runtime_state("synthetic");
     assert_eq!(store.prime_aggregator("synthetic").await.unwrap(), epoch + 1);
-    assert!(store.projection_memo_hit("synthetic").is_none());
   }
 
   #[tokio::test]
@@ -743,7 +732,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn projection_memo_hit_archived_session_is_always_miss() {
+  async fn an_archived_session_has_no_message_projection() {
     let (_home, store) = make_test_store();
     write_test_session(&store, "synthetic");
     store
@@ -758,7 +747,6 @@ mod tests {
     let cutoff = UtcDateTime::parse("2025-01-01T00:00:00Z").unwrap();
     assert!(store.archive_events_before("synthetic", cutoff).await.unwrap().is_some());
     assert!(store.get_message_projection("synthetic").unwrap().is_none());
-    assert!(store.projection_memo_hit("synthetic").is_none());
   }
 
   #[tokio::test]

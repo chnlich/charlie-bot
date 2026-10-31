@@ -921,12 +921,16 @@ cgroup_proc_bytes() {
 # missing, so a caller never mistakes the proc sum for the cgroup's device accounting. This one function serves both
 # the timeout error and the switch records.
 session_rbytes_table() {
-  local dir name file devices bytes rc=0 controllers
+  local dir name file devices dirs bytes rc=0 controllers
   devices="$(root_devices | paste -sd' ' -)"
   if [ -z "$devices" ]; then
     printf 'unavailable\tunavailable\t-\tcannot resolve the root device from %s\n' "$MOUNTINFO"
     return 1
   fi
+  dirs="$(session_cgroups)" || {
+    printf 'unavailable\tunavailable\t-\tcannot list the session cgroups under %s\n' "$CGROUP_ROOT"
+    return 1
+  }
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     name="${dir##*/}"
@@ -948,7 +952,7 @@ session_rbytes_table() {
       END { printf "%d\n", total }
     ' "$file")"
     printf '%s\tio.stat\t%s\t\n' "$name" "$bytes"
-  done < <(session_cgroups)
+  done <<< "$dirs"
   return "$rc"
 }
 

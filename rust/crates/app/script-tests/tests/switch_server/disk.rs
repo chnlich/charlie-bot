@@ -203,3 +203,17 @@ fn test_disk_preflight_names_a_process_that_started_inside_the_last_sample() {
   let logged = world.report(&run);
   assert!(logged.contains("process 5555 (rg) 6000 bytes"), "{logged}");
 }
+
+/// A cgroup root that cannot be listed is a failed read, not a switch with no sessions.
+#[test]
+fn test_session_rbytes_table_fails_when_the_cgroup_root_is_missing() {
+  let mut world = World::new();
+  let missing = world.root().join("no-cgroup-root");
+  world.env.insert("CHARLIEBOT_SWITCH_CGROUP_ROOT".to_string(), missing.display().to_string());
+
+  let run = world.disk_command("session_rbytes_table");
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let row = format!("unavailable\tunavailable\t-\tcannot list the session cgroups under {}", missing.display());
+  assert!(run.stdout.contains(&row), "{}", run.describe());
+}

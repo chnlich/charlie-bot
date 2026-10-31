@@ -1,12 +1,13 @@
 //! The approval day view (plan 4 v2 task W3): one Pacific day's ranked T0 queue, login sheet and digest.
 //!
-//! The queue holds every open Waiting on you item across sessions, so every open item appears once: the T0 items
-//! first, ranked by the rank of their rule's consequence test in the approval policy table (an `out-of-scope:<id>`
-//! rule ranks with the chao-name test, as plan section 3 orders them), then the review items, then the items tiered
-//! t1 or t2 and the items without a tier. Equal ranks keep arrival order. The login sheet holds today's every open
-//! user-act item, an item judged on an earlier day included, because the panels list those items only through this
-//! sheet; a past day's sheet holds the items whose start time falls in it. The digest holds the day's digest entries
-//! and the day's `policy_table_changed` records, each with its undo: an entry's `undo` field, a change record's diff.
+//! The queue holds every open Waiting on you item across sessions, so every open item appears once. The T0 items
+//! come first, ranked by the rank of their rule's consequence test in the approval policy table. An
+//! `out-of-scope:<id>` rule ranks with the chao-name test, as plan section 3 orders them. Then come the review
+//! items, then the items tiered t1 or t2 and the items without a tier. Equal ranks keep arrival order. The login
+//! sheet holds today's every open user-act item, an item judged on an earlier day included, because the panels list
+//! those items only through this sheet. A past day's sheet holds the items whose start time falls in it. The digest
+//! holds the day's digest entries and the day's `policy_table_changed` records, each with its undo: an entry's
+//! `undo` field, a change record's diff.
 
 use axum::http::StatusCode;
 use charliebot_core::approval_digest;
@@ -83,9 +84,9 @@ fn tier_group(tier: Option<&str>) -> u8 {
   }
 }
 
-/// The rank of a T0 item's rule in the table (`day._rule_rank`): the consequence test's rank, the chao-name test's
-/// rank for an `out-of-scope:<id>` rule (plan section 3 orders the out-of-scope uses with the chao-name ones), and
-/// after every ranked rule for a rule the table carries no rank of.
+/// The rank of a T0 item's rule in the table (`day._rule_rank`): the rank of the rule's consequence test. An
+/// `out-of-scope:<id>` rule takes the chao-name test's rank, since plan section 3 orders the out-of-scope uses with
+/// the chao-name ones. A rule the table carries no rank of sorts after every ranked rule.
 fn rule_rank(rule: Option<&str>, table: &approval_policy::ApprovalPolicyTable) -> i64 {
   let Some(rule) = rule else { return i64::MAX };
   if rule.starts_with("out-of-scope:") {

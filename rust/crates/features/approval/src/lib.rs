@@ -1,5 +1,5 @@
-//! `src/features/approval`: the approval day view (plan 4 v2, task W3) — `GET /approval` and the
-//! `GET /api/approval/day` route it reads, one Pacific day's ranked T0 queue, login sheet and digest.
+//! `src/features/approval`: the approval day view (plan 4 v2, task W3). It serves `GET /approval` and the
+//! `GET /api/approval/day` route that page reads: one Pacific day's ranked T0 queue, login sheet and digest.
 
 mod api;
 mod day;

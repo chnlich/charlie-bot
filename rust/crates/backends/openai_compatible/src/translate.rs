@@ -2,13 +2,13 @@
 //! chat completions request, an OpenAI answer to an Anthropic message, and the OpenAI chat stream to Anthropic's
 //! events. Each keeps Python's operation order, so a request raises the failure Python raises first.
 
-use charliebot_core::text_repr;
+use charliebot_core::text_repr::{self, is_truthy};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::value_ops::{
   COMPACT_ASCII_JSON, ValueResult, first_item, get, get_or_empty, iterate, iterate_member, loads_text, raised,
-  require_dict, truthy, type_name, value_error,
+  require_dict, type_name, value_error,
 };
 
 /// One Anthropic stream event: its name, and the data object the SSE frame carries after `type`.
@@ -27,7 +27,7 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
     _ => return value_error("messages must be a list"),
   };
   let mut system_parts = Vec::new();
-  if let Some(system) = get(payload, "system")?.filter(|system| truthy(system)) {
+  if let Some(system) = get(payload, "system")?.filter(|system| is_truthy(system)) {
     system_parts.push(blocks_to_text(system, "system")?);
   }
   let mut converted_messages = Vec::new();
@@ -47,7 +47,7 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
     converted_messages.insert(0, json!({"role": "system", "content": system_parts.join("\n\n")}));
   }
 
-  let stream = get(payload, "stream")?.is_some_and(truthy);
+  let stream = get(payload, "stream")?.is_some_and(is_truthy);
   let mut converted = Map::new();
   converted.insert("model".to_string(), json!(upstream_model));
   converted.insert("messages".to_string(), Value::Array(converted_messages));
@@ -66,7 +66,7 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
     let choice = require_dict(choice, "tool_choice")?;
     converted.insert("tool_choice".to_string(), convert_tool_choice(choice)?);
     if let Some(disable) = choice.get("disable_parallel_tool_use").filter(|disable| !disable.is_null()) {
-      converted.insert("parallel_tool_calls".to_string(), json!(!truthy(disable)));
+      converted.insert("parallel_tool_calls".to_string(), json!(!is_truthy(disable)));
     }
   }
   if stream {
@@ -108,7 +108,7 @@ fn image_block_to_openai_part(block: &Map<String, Value>, label: &str) -> ValueR
   if source.get("type").and_then(Value::as_str) != Some("base64") {
     return value_error(format!("unsupported {label} source type: {}", value_str(source.get("type"), "None")));
   }
-  let media_type = source.get("media_type").filter(|media_type| truthy(media_type));
+  let media_type = source.get("media_type").filter(|media_type| is_truthy(media_type));
   let data = source.get("data").and_then(Value::as_str);
   let (Some(media_type), Some(data)) = (media_type, data) else {
     return value_error(format!("{label} source missing media_type or data"));
@@ -174,7 +174,7 @@ fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>>
       Some("image") => user_parts.push(image_block_to_openai_part(block, "user image")?),
       Some("tool_result") => {
         flush_user_parts(&mut converted, &mut user_parts);
-        let Some(tool_use_id) = block.get("tool_use_id").filter(|id| truthy(id)) else {
+        let Some(tool_use_id) = block.get("tool_use_id").filter(|id| is_truthy(id)) else {
           return value_error("tool_result block missing tool_use_id");
         };
         let content = block.get("content").cloned().unwrap_or_else(|| json!(""));
@@ -209,8 +209,8 @@ fn convert_assistant_message(message: &Map<String, Value>) -> ValueResult<Value>
     match block.get("type").and_then(Value::as_str) {
       Some("text") => text.push_str(&value_str(block.get("text"), "")),
       Some("tool_use") => {
-        let id = block.get("id").filter(|id| truthy(id));
-        let name = block.get("name").filter(|name| truthy(name));
+        let id = block.get("id").filter(|id| is_truthy(id));
+        let name = block.get("name").filter(|name| is_truthy(name));
         let (Some(id), Some(name)) = (id, name) else {
           return value_error("tool_use block missing id or name");
         };
@@ -247,10 +247,10 @@ fn convert_tools(tools: &Value) -> ValueResult<Vec<Value>> {
   let mut converted = Vec::new();
   for raw in iterate(tools)? {
     let tool = require_dict(&raw, "tool")?;
-    if let Some(kind) = tool.get("type").filter(|kind| truthy(kind)) {
+    if let Some(kind) = tool.get("type").filter(|kind| is_truthy(kind)) {
       return value_error(format!("unsupported Anthropic built-in tool type: {}", text_repr::value_str(kind)));
     }
-    let name = tool.get("name").filter(|name| truthy(name));
+    let name = tool.get("name").filter(|name| is_truthy(name));
     let input_schema = tool.get("input_schema").filter(|schema| !schema.is_null());
     let (Some(name), Some(input_schema)) = (name, input_schema) else {
       return value_error("tool missing name or input_schema");
@@ -272,7 +272,7 @@ fn convert_tool_choice(choice: &Map<String, Value>) -> ValueResult<Value> {
   match choice.get("type").and_then(Value::as_str) {
     Some("auto") => Ok(json!("auto")),
     Some("any") => Ok(json!("required")),
-    Some("tool") => match choice.get("name").filter(|name| truthy(name)) {
+    Some("tool") => match choice.get("name").filter(|name| is_truthy(name)) {
       Some(name) => Ok(json!({"type": "function", "function": {"name": name}})),
       None => value_error("tool_choice type 'tool' missing name"),
     },
@@ -294,7 +294,7 @@ fn stop_reason(finish_reason: Option<&Value>) -> Value {
 
 /// `_usage_from_openai(usage)`: the prompt and completion counts, and zero cache counts.
 pub fn usage_from_openai(usage: Option<&Value>) -> ValueResult<Value> {
-  let usage = usage.filter(|usage| truthy(usage)).cloned().unwrap_or_else(|| json!({}));
+  let usage = usage.filter(|usage| is_truthy(usage)).cloned().unwrap_or_else(|| json!({}));
   Ok(json!({
     "input_tokens": get(&usage, "prompt_tokens")?.cloned().unwrap_or_else(|| json!(0)),
     "output_tokens": get(&usage, "completion_tokens")?.cloned().unwrap_or_else(|| json!(0)),
@@ -310,24 +310,24 @@ pub fn new_message_id() -> String {
 
 /// `openai_chat_response_to_anthropic(response, requested_model)`: the Anthropic message for a non-streaming answer.
 pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str) -> ValueResult<Value> {
-  let choices = match get(response, "choices")?.filter(|choices| truthy(choices)) {
+  let choices = match get(response, "choices")?.filter(|choices| is_truthy(choices)) {
     Some(choices) => choices,
     None => return value_error("OpenAI response missing choices"),
   };
   let choice = first_item(choices)?;
   let message = get_or_empty(&choice, "message")?;
   let mut content_blocks = Vec::new();
-  if let Some(content) = get(&message, "content")?.filter(|content| truthy(content)) {
+  if let Some(content) = get(&message, "content")?.filter(|content| is_truthy(content)) {
     content_blocks.push(json!({"type": "text", "text": content}));
   }
   for tool_call in iterate_member(get(&message, "tool_calls")?)? {
     let function = get_or_empty(&tool_call, "function")?;
-    let tool_id = get(&tool_call, "id")?.filter(|id| truthy(id));
-    let name = get(&function, "name")?.filter(|name| truthy(name));
+    let tool_id = get(&tool_call, "id")?.filter(|id| is_truthy(id));
+    let name = get(&function, "name")?.filter(|name| is_truthy(name));
     let (Some(tool_id), Some(name)) = (tool_id, name) else {
       return value_error("OpenAI tool_call missing id or function.name");
     };
-    let arguments = get(&function, "arguments")?.filter(|arguments| truthy(arguments)).cloned();
+    let arguments = get(&function, "arguments")?.filter(|arguments| is_truthy(arguments)).cloned();
     let input = match arguments.unwrap_or_else(|| json!("{}")) {
       Value::String(text) => loads_text(&text)?,
       other => {
@@ -344,8 +344,9 @@ pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str
     content_blocks.push(tool_use);
   }
 
-  let id = get(response, "id")?.filter(|id| truthy(id)).cloned().unwrap_or_else(|| json!(new_message_id()));
-  let model = get(response, "model")?.filter(|model| truthy(model)).cloned().unwrap_or_else(|| json!(requested_model));
+  let id = get(response, "id")?.filter(|id| is_truthy(id)).cloned().unwrap_or_else(|| json!(new_message_id()));
+  let model =
+    get(response, "model")?.filter(|model| is_truthy(model)).cloned().unwrap_or_else(|| json!(requested_model));
   let reason = stop_reason(get(&choice, "finish_reason")?);
   let usage = usage_from_openai(get(response, "usage")?)?;
   Ok(json!({
@@ -423,19 +424,19 @@ impl OpenAiChatStream {
   /// `events_for_chunk(chunk)`: the events one upstream chunk completes.
   pub fn events_for_chunk(&mut self, chunk: &Value) -> ValueResult<Vec<Event>> {
     let mut events = Vec::new();
-    if let Some(usage) = get(chunk, "usage")?.filter(|usage| truthy(usage)) {
+    if let Some(usage) = get(chunk, "usage")?.filter(|usage| is_truthy(usage)) {
       self.usage = usage.clone();
     }
     for choice in iterate_member(get(chunk, "choices")?)? {
       let delta = get_or_empty(&choice, "delta")?;
-      if let Some(content) = get(&delta, "content")?.filter(|content| truthy(content)).cloned() {
+      if let Some(content) = get(&delta, "content")?.filter(|content| is_truthy(content)).cloned() {
         let index = self.open_text_block(&mut events);
         events.push(("content_block_delta", json!({"index": index, "delta": {"type": "text_delta", "text": content}})));
       }
       for tool_call in iterate_member(get(&delta, "tool_calls")?)? {
         self.tool_delta(&tool_call, &mut events)?;
       }
-      if let Some(reason) = get(&choice, "finish_reason")?.filter(|reason| truthy(reason)) {
+      if let Some(reason) = get(&choice, "finish_reason")?.filter(|reason| is_truthy(reason)) {
         self.finish_reason = Some(reason.clone());
       }
     }
@@ -535,7 +536,7 @@ impl OpenAiChatStream {
     if matches!(call_index, Value::Array(_) | Value::Object(_)) {
       return raised("TypeError", format!("unhashable type: '{}'", type_name(&call_index)));
     }
-    let tool_id = get(tool_call, "id")?.filter(|id| truthy(id)).cloned();
+    let tool_id = get(tool_call, "id")?.filter(|id| is_truthy(id)).cloned();
     let mut position = self.tool_calls.iter().position(|call| call.call_index == call_index);
     if let Some(current_position) = position
       && tool_id.as_ref().is_some_and(|tool_id| tool_id != &self.tool_calls[current_position].id)
@@ -546,7 +547,7 @@ impl OpenAiChatStream {
     let position = match position {
       Some(position) => position,
       None => {
-        let name = get(&function, "name")?.filter(|name| truthy(name)).cloned();
+        let name = get(&function, "name")?.filter(|name| is_truthy(name)).cloned();
         let (Some(tool_id), Some(name)) = (tool_id, name) else {
           return value_error("first streaming tool_call delta missing id or function.name");
         };

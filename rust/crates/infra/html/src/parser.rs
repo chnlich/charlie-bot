@@ -129,18 +129,34 @@ where
   Ok(())
 }
 
+/// How the content being tokenized treats a character reference such as `&amp;`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReferenceMode {
+  /// The reference resolves. This covers ordinary data and escapable raw text such as `<textarea>`.
+  Resolve,
+  /// The reference stays literal text, as in raw text such as `<script>`.
+  Literal,
+}
+
 struct Parser<'a, F> {
   source: &'a str,
   convert_charrefs: bool,
   cdata_elem: Option<String>,
-  escapable: bool,
+  reference_mode: ReferenceMode,
   support_cdata: bool,
   handler: F,
 }
 
 impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
   fn new(source: &'a str, convert_charrefs: bool, handler: F) -> Self {
-    Self { source, convert_charrefs, cdata_elem: None, escapable: true, support_cdata: true, handler }
+    Self {
+      source,
+      convert_charrefs,
+      cdata_elem: None,
+      reference_mode: ReferenceMode::Resolve,
+      support_cdata: true,
+      handler,
+    }
   }
 
   fn emit(&mut self, kind: EventKind, args: Value, at: usize, starttag_text: Option<String>) {
@@ -154,7 +170,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
   /// Emit `source[start..end]` as data, unescaping character references when this parser converts them.
   fn emit_data_span(&mut self, start: usize, end: usize) {
     let data = &self.source[start..end];
-    if self.convert_charrefs && self.escapable {
+    if self.convert_charrefs && self.reference_mode == ReferenceMode::Resolve {
       let decoded = unescape(data);
       self.emit_data(&decoded, start);
     } else {
@@ -313,7 +329,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       return None;
     }
     let end_tag = find_raw_end_tag(self.source, start, element);
-    if self.escapable && !self.convert_charrefs {
+    if self.reference_mode == ReferenceMode::Resolve && !self.convert_charrefs {
       let entity = self.source[start..].find('&').map(|position| start + position);
       match (end_tag, entity) {
         (Some(tag), Some(reference)) => Some(tag.min(reference)),
@@ -375,9 +391,9 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     self.emit(event_kind, json!([tag, attr_values]), i, Some(raw.to_owned()));
     if event_kind == EventKind::StartTag {
       if is_cdata_element(&tag) || tag == "plaintext" {
-        self.set_cdata_mode(&tag, false);
+        self.set_cdata_mode(&tag, ReferenceMode::Literal);
       } else if tag == "textarea" || tag == "title" {
-        self.set_cdata_mode(&tag, true);
+        self.set_cdata_mode(&tag, ReferenceMode::Resolve);
       }
     }
     Ok(Some(endpos))
@@ -482,14 +498,14 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     self.parse_bogus_comment(i, true)
   }
 
-  fn set_cdata_mode(&mut self, element: &str, escapable: bool) {
+  fn set_cdata_mode(&mut self, element: &str, reference_mode: ReferenceMode) {
     self.cdata_elem = Some(element.to_lowercase());
-    self.escapable = escapable;
+    self.reference_mode = reference_mode;
   }
 
   fn clear_cdata_mode(&mut self) {
     self.cdata_elem = None;
-    self.escapable = true;
+    self.reference_mode = ReferenceMode::Resolve;
   }
 }
 

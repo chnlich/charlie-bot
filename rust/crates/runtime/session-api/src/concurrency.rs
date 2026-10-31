@@ -76,14 +76,12 @@ impl LiveCount {
 /// other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or when its
 /// own run is running; the split reads the session's profile.
 pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<LiveCount> {
-  let rows = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
-  let derived = sidebar::resolve_sidebar_state(store, registry, &rows, true, false, false, false)?;
+  let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
   let roots = store.subtree_roots_shared()?;
+  listed.retain(|row| listed_in_a_tab(&roots, &row.id));
+  let derived = sidebar::resolve_sidebar_state(store, registry, &listed, true, false, false, false)?;
   let mut count = LiveCount::default();
-  for row in &rows {
-    if !listed_in_a_tab(&roots, &row.id) {
-      continue;
-    }
+  for row in &listed {
     let has_running_tasks =
       derived.get(&row.id).and_then(|entry| entry.get("has_running_tasks")).and_then(Value::as_bool).unwrap_or(false);
     if !has_running_tasks && store.busy_since(&row.id).is_none() {

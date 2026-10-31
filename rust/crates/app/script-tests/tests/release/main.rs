@@ -591,7 +591,12 @@ impl ServeWorld {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
+    // The trial reads its stand-in approval policy table from its own repository, beside trial.sh.
     harness::copy_file(&harness::repo_root().join("scripts/release/trial.sh"), &repo.join("scripts/release/trial.sh"));
+    harness::copy_file(
+      &harness::repo_root().join("scripts/release/standin-approval-policy.yaml"),
+      &repo.join("scripts/release/standin-approval-policy.yaml"),
+    );
     fs::write(repo.join("README.md"), "serve trial\n").expect("the README");
 
     let mut env = sandbox.env();

@@ -24,13 +24,13 @@
 
 //! ## Model options
 //!
-//! `BodyModel::forbid_extra()` matches pydantic's `extra='forbid'`. A `Field` accepts `ge`, `gt`, `le` and `lt` bounds
+//! `BodyModel::forbid_extra()` matches pydantic's `extra='forbid'`. A `Field` accepts `ge`, `gt` and `le` bounds
 //! for integer and float fields, and `min_length` and `max_length` bounds for string and list fields. Number bounds
 //! must use the corresponding `validation::Bound` variant. A bound applies only when an optional field has a value.
 //!
 //! The error order follows pydantic 2.12.5 (pydantic-core 2.41.5 in the worktree `.venv`): declared fields in
 //! declaration order, then forbidden extra keys in input order. A number that violates multiple bounds reports the
-//! first violated bound in the order `le`, `lt`, `ge`, `gt`. Lists report `max_length` before their items and
+//! first violated bound in the order `le`, `ge`, `gt`. Lists report `max_length` before their items and
 //! `min_length` after their items.
 //!
 //! `FieldType::ModelList` declares a `list[M]` field and `FieldType::NullableModelList` a `list[M] | None` field. Each
@@ -221,14 +221,13 @@ pub struct Field {
 struct Bounds {
   gt: Option<validation::Bound>,
   ge: Option<validation::Bound>,
-  lt: Option<validation::Bound>,
   le: Option<validation::Bound>,
   min_length: Option<usize>,
   max_length: Option<usize>,
 }
 
 impl Bounds {
-  const NONE: Bounds = Bounds { gt: None, ge: None, lt: None, le: None, min_length: None, max_length: None };
+  const NONE: Bounds = Bounds { gt: None, ge: None, le: None, min_length: None, max_length: None };
 }
 
 impl Field {
@@ -252,12 +251,6 @@ impl Field {
   pub const fn ge(self, bound: validation::Bound) -> Self {
     assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
     Self { bounds: Bounds { ge: Some(bound), ..self.bounds }, ..self }
-  }
-
-  /// Declare pydantic's `lt`: the value must be less than the bound.
-  pub const fn lt(self, bound: validation::Bound) -> Self {
-    assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
-    Self { bounds: Bounds { lt: Some(bound), ..self.bounds }, ..self }
   }
 
   /// Declare pydantic's `le`: the value must be at most the bound.
@@ -579,7 +572,7 @@ fn list_field(
 impl Bounds {
   /// The first bound that a scalar value violates, or `None` when it passes. A null passes every bound.
   ///
-  /// A number is compared in its bound's type. Pydantic reports `le`, then `lt`, `ge` and `gt`.
+  /// A number is compared in its bound's type. Pydantic reports `le`, then `ge` and `gt`.
   fn violation(&self, value: &Value) -> Option<validation::Kind> {
     match value {
       Value::String(text) => {
@@ -601,11 +594,6 @@ impl Bounds {
           && order(number, bound) == Ordering::Greater
         {
           return Some(validation::Kind::LessThanEqual(bound));
-        }
-        if let Some(bound) = self.lt
-          && order(number, bound) != Ordering::Less
-        {
-          return Some(validation::Kind::LessThan(bound));
         }
         if let Some(bound) = self.ge
           && order(number, bound) == Ordering::Less

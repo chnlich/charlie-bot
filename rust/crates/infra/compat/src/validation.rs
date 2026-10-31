@@ -28,7 +28,7 @@ pub enum Loc {
   Index(usize),
 }
 
-/// A bound of `gt`, `ge`, `lt` or `le`. pydantic keeps the bound's own type: an integer prints as `1`, a float
+/// A bound of `gt`, `ge` or `le`. pydantic keeps the bound's own type: an integer prints as `1`, a float
 /// as `1.0` in `ctx`, and the `msg` prints the number as Rust's `Display` writes it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Bound {
@@ -96,7 +96,6 @@ pub enum Kind {
   Enum(&'static [&'static str]),
   GreaterThan(Bound),
   GreaterThanEqual(Bound),
-  LessThan(Bound),
   LessThanEqual(Bound),
   ExtraForbidden,
   /// `json_invalid`: the body is not JSON. Its `loc` ends with the decoder's character offset, and `error` is
@@ -147,7 +146,6 @@ impl Kind {
       Kind::Enum(_) => "enum",
       Kind::GreaterThan(_) => "greater_than",
       Kind::GreaterThanEqual(_) => "greater_than_equal",
-      Kind::LessThan(_) => "less_than",
       Kind::LessThanEqual(_) => "less_than_equal",
       Kind::ExtraForbidden => "extra_forbidden",
       Kind::JsonInvalid { .. } => "json_invalid",
@@ -189,7 +187,6 @@ impl Kind {
       Kind::Literal(choices) | Kind::Enum(choices) => format!("Input should be {}", one_of(choices)),
       Kind::GreaterThan(bound) => format!("Input should be greater than {}", bound.text()),
       Kind::GreaterThanEqual(bound) => format!("Input should be greater than or equal to {}", bound.text()),
-      Kind::LessThan(bound) => format!("Input should be less than {}", bound.text()),
       Kind::LessThanEqual(bound) => format!("Input should be less than or equal to {}", bound.text()),
       Kind::ExtraForbidden => "Extra inputs are not permitted".to_string(),
       Kind::JsonInvalid { .. } => "JSON decode error".to_string(),
@@ -219,7 +216,6 @@ impl Kind {
       Kind::Literal(choices) | Kind::Enum(choices) => Some(json!({"expected": one_of(choices)})),
       Kind::GreaterThan(bound) => Some(json!({"gt": bound.value()})),
       Kind::GreaterThanEqual(bound) => Some(json!({"ge": bound.value()})),
-      Kind::LessThan(bound) => Some(json!({"lt": bound.value()})),
       Kind::LessThanEqual(bound) => Some(json!({"le": bound.value()})),
       Kind::JsonInvalid { error } => Some(json!({"error": error})),
       Kind::ModelType { class_name } => Some(json!({"class_name": class_name})),

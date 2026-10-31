@@ -603,6 +603,8 @@ async fn replay_followups_with_records(
   };
   let task_facts = node_facts.task()?;
   let completion = features.startup.require::<TaskCompletion>()?;
+  // The snapshot is in the listing's `(started_at, id)` order, so its last run is the session's newest run.
+  let newest_run_id = run_records.last().map(|run| run.id.as_str());
   let Some(review_facts) = replay_review_facts_until(run_records, &mut || stop.is_some_and(StartupStop::is_cancelled))
   else {
     return Ok(());
@@ -664,7 +666,8 @@ async fn replay_followups_with_records(
       counters.followups += 1;
       match stop {
         Some(stop) => {
-          if completion.recheck_close_requests_until(session_id, &run.id, stop).await?.is_none() {
+          let newest = newest_run_id.expect("a manager turn replays inside a session that holds it");
+          if completion.recheck_close_requests_newest_until(session_id, &run.id, newest, stop).await?.is_none() {
             return Ok(());
           }
         }

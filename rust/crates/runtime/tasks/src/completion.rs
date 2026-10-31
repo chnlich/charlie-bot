@@ -1760,7 +1760,7 @@ impl TaskCompletion {
   pub async fn recheck_close_requests(&self, session_id: &str, run_id: &str) -> StoreResult<Vec<String>> {
     Ok(
       self
-        .recheck_close_requests_inner(session_id, run_id, None)
+        .recheck_close_requests_inner(session_id, run_id, None, None)
         .await?
         .expect("a close-request recheck without a startup stop completes"),
     )
@@ -1782,7 +1782,19 @@ impl TaskCompletion {
     run_id: &str,
     stop: &StartupStop,
   ) -> StoreResult<Option<Vec<String>>> {
-    self.recheck_close_requests_inner(session_id, run_id, Some(stop)).await
+    self.recheck_close_requests_inner(session_id, run_id, Some(stop), None).await
+  }
+
+  /// [`Self::recheck_close_requests_until`] for a boot replay that already holds the session's run records in order:
+  /// `newest_run_id` is the last of them, so the recheck does not list the session's runs again.
+  pub async fn recheck_close_requests_newest_until(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    newest_run_id: &str,
+    stop: &StartupStop,
+  ) -> StoreResult<Option<Vec<String>>> {
+    self.recheck_close_requests_inner(session_id, run_id, Some(stop), Some(newest_run_id)).await
   }
 
   async fn recheck_close_requests_inner(
@@ -1790,6 +1802,7 @@ impl TaskCompletion {
     session_id: &str,
     run_id: &str,
     stop: Option<&StartupStop>,
+    newest_run_id: Option<&str>,
   ) -> StoreResult<Option<Vec<String>>> {
     if stop.is_some_and(StartupStop::is_cancelled) {
       return Ok(None);
@@ -1802,7 +1815,11 @@ impl TaskCompletion {
     let close_requests = task.close_requests.clone();
     drop(facts);
     // Any later run of the session voids the requests of the earlier runs: a wake starts a run, and that run decides.
-    if self.store().newest_run_record_sync(session_id)?.is_none_or(|newest| newest.id != run_id) {
+    let is_newest = match newest_run_id {
+      Some(newest_id) => newest_id == run_id,
+      None => self.store().newest_run_record_sync(session_id)?.is_some_and(|newest| newest.id == run_id),
+    };
+    if !is_newest {
       return Ok(Some(Vec::new()));
     }
     let meta = self.store().load_task_meta(session_id).await?;

@@ -2846,6 +2846,71 @@ async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> a
   Ok(())
 }
 
+/// A queued manager-turn record; its `started_at` fixes the records' `(started_at, id)` order.
+fn manager_turn(session_id: &str, run_id: &str, started_at: &str) -> RunRecord {
+  let mut run = synthetic_run(session_id, run_id, RunKind::ManagerTurn);
+  run.backend = Some(BACKEND_ID.to_string());
+  run.started_at = Some(UtcDateTime::parse(started_at).expect("the fixture datetime parses"));
+  run
+}
+
+/// Saves a close request owned by `owner_run_id`, as `TaskCompletion::save_close_request` writes it.
+async fn save_close_request(stack: &Stack, session_id: &str, request_id: &str, owner_run_id: &str) -> anyhow::Result<()> {
+  let guard = stack.store().control_lock().await;
+  let event = charliebot_store::control_events::build_control_event(
+    event_types::TASK_CLOSE_REQUESTED,
+    charliebot_store::control_events::ACTOR_SYSTEM,
+    session_id,
+    Some(&charliebot_store::control_events::stable_close_request_event_id(session_id, request_id)),
+    None,
+    [
+      ("request_id".to_string(), json!(request_id)),
+      ("owner_run_id".to_string(), json!(owner_run_id)),
+      ("summary".to_string(), json!("page delivered")),
+      ("result_refs".to_string(), json!([format!("run:{owner_run_id}")])),
+      ("run_ids".to_string(), json!([owner_run_id])),
+    ],
+  );
+  stack.store().append_control_fact(&guard, session_id, event).await?;
+  Ok(())
+}
+
+/// Lands a run's terminal fact through the store alone, as the crash window the boot replay covers does: the durable
+/// write is in, the completion follow-up never ran.
+async fn land_finish_alone(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<()> {
+  let guard = stack.store().control_lock().await;
+  stack.store().record_finish_locked(&guard, session_id, run_id, RunOutcome::new(RunOutcomeKind::Success)).await?;
+  drop(guard);
+  Ok(())
+}
+
+/// The boot walk rechecks a saved close request against the run-records snapshot: the newest run replays its own
+/// close once, and a close owned by an earlier run stays voided by a newer run in the same records.
+#[tokio::test]
+async fn boot_replay_rechecks_close_requests_against_the_run_snapshot() -> anyhow::Result<()> {
+  for (label, overtaken) in
+    [("the newest run replays its close", false), ("a newer run voids the earlier close", true)]
+  {
+    let stack = Stack::start("exit 0").await?;
+    let manager = stack.node("close-manager", None, TaskProfile::Manager, None).await?;
+    stack.register(manager_turn(&manager.id, "owner-run", "2026-10-18T10:00:00Z")).await?;
+    save_close_request(&stack, &manager.id, "archive-owner", "owner-run").await?;
+    land_finish_alone(&stack, &manager.id, "owner-run").await?;
+    if overtaken {
+      stack.register(manager_turn(&manager.id, "newer-run", "2026-10-18T10:01:00Z")).await?;
+      land_finish_alone(&stack, &manager.id, "newer-run").await?;
+    }
+    recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+    let state = stack.store().task_state(&manager.id)?;
+    if overtaken {
+      assert_eq!(state, "open", "{label}");
+    } else {
+      assert_eq!(state, "archived", "{label}");
+    }
+  }
+  Ok(())
+}
+
 /// Writes `content` as the boot marker, then runs one boot pass over a closed worker and its open manager. The unreadable
 /// marker reads as absent: both nodes get a full check, one `boot_recovery_marker_unreadable` line names the byte size
 /// and `error_type`, and the clean pass rewrites the marker with the start time it ran under.

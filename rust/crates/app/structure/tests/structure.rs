@@ -1,23 +1,23 @@
 //! Workspace structure check: the group of each crate, the dependencies between groups, the runtime layer order, and
 //! the module cycles inside each crate.
 //!
-//! A crate's group comes from its directory under `rust/crates`: `infra/<name>` is `infra`, `runtime/<name>` is
-//! `runtime`, `backends/<name>` is `backends.<name>`, `features/<name>` is `features.<name>`, and `app/<name>` is
-//! `app`. Any other directory fails.
+//! A crate's group comes from its directory under `rust/crates`. The names map as `infra/<name>` to `infra`,
+//! `runtime/<name>` to `runtime`, `backends/<name>` to `backends.<name>`, `features/<name>` to `features.<name>`,
+//! and `app/<name>` to `app`. Any other directory fails.
 //!
 //! Directions: infra depends on infra only. runtime depends on runtime and infra. A backend or a feature depends on
-//! itself, runtime and infra; the backends in `BACKEND_VARIANTS` may also depend on backends.claude_code, and the
-//! features in `CHAT_CHANNELS` may also depend on features.chat_threads. app depends on every group. Normal and build
-//! dependencies count; a dev-dependency does not, because test code follows no direction.
+//! itself, runtime and infra. The backends in `BACKEND_VARIANTS` may also depend on backends.claude_code, and the
+//! features in `CHAT_CHANNELS` may also depend on features.chat_threads. app depends on every group. Normal and
+//! build dependencies count; a dev-dependency does not, because test code follows no direction.
 //!
 //! Inside runtime, every crate is one layer. A runtime crate depends only on its own layer or a lower layer. The table
 //! must cover every runtime crate and name no missing one.
 //!
 //! Each crate's module graph covers every target: its lib (or its main bin), each other bin, test, example and bench.
 //! A node is the target root, a file module or an inline `mod` block. An edge A -> B means A's own code holds a path
-//! that resolves to an item defined in B, through `use` trees, expressions, types, patterns and the tokens of macro
-//! calls. A `mod` declaration is no edge, and a `pub use` that only re-exports a name is no edge until the module's own
-//! code uses that name. A cycle is a strongly connected component of two or more modules.
+//! that resolves to an item defined in B. The path reaches through `use` trees, expressions, types, patterns and the
+//! tokens of macro calls. A `mod` declaration is no edge, and a `pub use` that only re-exports a name is no edge until
+//! the module's own code uses that name. A cycle is a strongly connected component of two or more modules.
 //!
 //! Every module cycle fails: a cycle is a defect of the code, not a recorded exception.
 //!
@@ -892,9 +892,9 @@ const EXTERNAL_EVENT_NAMES: [&str; 17] = [
   "command_progress",
 ];
 
-/// The owner rows for the event names: the production literal values of `infra/core`'s `event_types.rs`, each owned
-/// by `infra/core`, so a new const there is protected with no table edit. A value without `_` stays unprotected: it
-/// is a single word with other meanings in the same code.
+/// The owner rows for the event names: the production literal values of `infra/core`'s `event_types.rs`.
+/// Each name is owned by `infra/core`, so a new const there is protected with no table edit.
+/// A value without `_` stays unprotected: it is a single word with other meanings in the same code.
 fn event_name_rows(workspace: &'static Workspace) -> Vec<OwnerRow> {
   const EVENT_NAME_HINT: &str = "Reference the const in `charliebot_core::event_types` that holds this name.";
   let krate = workspace
@@ -1393,8 +1393,8 @@ fn production_functions(items: &[Item]) -> Vec<FunctionRecord> {
 }
 
 /// The format rule's failures: each production function outside a file kind's owner that names one of the kind's
-/// `names` and makes a decode or an encode call in its body. Each failure gives the function's `file:line`, the kind,
-/// the calls and the owner's hint.
+/// `names`. The function also makes a decode or an encode call in its body. Each failure gives the function's
+/// `file:line`, the kind, the calls and the owner's hint.
 fn format_failures(workspace: &Workspace, table: &[FormatRow]) -> Vec<String> {
   let mut failures = BTreeSet::new();
   for item in &workspace.crates {
@@ -1920,8 +1920,9 @@ fn the_checks_find_each_break() {
 
 /// The owner rule on a synthetic workspace. The owner crate spells its names; the writer crate spells them outside it,
 /// and spells one environment name that the reader crate also spells. Each break fails with its sites and its hint.
-/// Each form the rule allows passes: an owner literal, a named const, a JSON key, prose, a `#[cfg(test)]` item, a route
-/// path that holds a layout name, and a test target. Each line number below is the line of the fixture text.
+/// Each form the rule allows passes: an owner literal, a named const, a JSON key, prose, and a `#[cfg(test)]` item.
+/// A route path that holds a layout name and a test target also pass. Each line number below is the line of the
+/// fixture text.
 #[test]
 fn the_owner_rule_finds_each_break() {
   let owner_dir = tempfile::tempdir().expect("create a temporary directory");
@@ -2111,8 +2112,8 @@ fn the_route_rule_finds_each_break() {
   );
 }
 
-/// The event names of `event_types.rs` become owner rows with no table edit: the derived set holds the value with
-/// `_`, and none of the names the backend output formats also use nor a single word. A writer crate spelling the
+/// The event names of `event_types.rs` become owner rows with no table edit. The derived set holds the values with
+/// `_`, but not the names the backend output formats also use, nor any single word. A writer crate spelling the
 /// protected name fails with its `file:line` and hint; its spellings of the unprotected ones pass.
 #[test]
 fn the_event_names_of_event_types_are_protected() {
@@ -2240,10 +2241,10 @@ fn fixture_count(home: &Path) -> usize {
   );
 }
 
-/// The global-state rule on a synthetic workspace. Each public static fails, the one whose type is a type alias of a
-/// `Mutex` and the plain `&str` one alike, and so do `pub(crate)`, `pub(super)` and `pub(in ..)` and the `pub static`
-/// inside `thread_local!`. The production calls to `set_var` and `setenv` fail, and so does the aliased `use`. A private
-/// static and a `#[cfg(test)]` function pass. Each line number below is the line of the fixture text.
+/// The global-state rule on a synthetic workspace. Each public static fails: the one whose type is a type alias of a
+/// `Mutex`, the plain `&str` one, and the `pub(crate)`, `pub(super)` and `pub(in ..)` forms. The `pub static` inside
+/// `thread_local!` fails too. The production calls to `set_var` and `setenv` fail, and so does the aliased `use`.
+/// A private static and a `#[cfg(test)]` function pass. Each line number below is the line of the fixture text.
 #[test]
 fn the_global_state_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");

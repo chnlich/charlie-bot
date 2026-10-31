@@ -39,7 +39,7 @@ const UPLOADED_FILE_FIELDS: &[Field] = &[
 const UPLOADED_FILE: BodyModel = BodyModel::optional(UPLOADED_FILE_FIELDS);
 const MESSAGE_FIELDS: &[Field] = &[
   Field::required("content", FieldType::String),
-  Field::optional("uploaded_files", FieldType::ModelList { class_name: "UploadedFileRef", model: &UPLOADED_FILE }),
+  Field::optional("uploaded_files", FieldType::ModelList { model: &UPLOADED_FILE }),
   Field::optional("input_mode", FieldType::NullableString),
 ];
 const MESSAGE: BodyModel = BodyModel::required(MESSAGE_FIELDS);
@@ -71,9 +71,9 @@ const SLURM_JOB_FIELDS: &[Field] = &[
 ];
 const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
 const WATCH_TARGETS: &[TaggedVariant] = &[
-  TaggedVariant { tag: "local_pid", class_name: "LocalPid", model: &LOCAL_PID },
-  TaggedVariant { tag: "remote_pid", class_name: "RemotePid", model: &REMOTE_PID },
-  TaggedVariant { tag: "slurm_job", class_name: "SlurmJob", model: &SLURM_JOB },
+  TaggedVariant { tag: "local_pid", model: &LOCAL_PID },
+  TaggedVariant { tag: "remote_pid", model: &REMOTE_PID },
+  TaggedVariant { tag: "slurm_job", model: &SLURM_JOB },
 ];
 const TRIGGER_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),

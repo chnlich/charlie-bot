@@ -148,10 +148,9 @@ pub enum FieldType {
     class_name: &'static str,
     model: &'static BodyModel,
   },
-  /// A `list[M]` field whose items are each validated as the nested model `M`. `class_name` names `M`, but FastAPI
-  /// reports a non-object item as `model_attributes_type`, which names no model, so no error reads it.
+  /// A `list[M]` field whose items are each validated as the nested model `M`. FastAPI reports a non-object item as
+  /// `model_attributes_type`, which names no model.
   ModelList {
-    class_name: &'static str,
     model: &'static BodyModel,
   },
   /// A `list[M] | None` field: null is valid, and a list is validated as `ModelList`.
@@ -166,12 +165,10 @@ pub enum FieldType {
   },
 }
 
-/// One member of a tagged union: the tag value that selects it, its class name, and the model its fields validate as.
-/// `class_name` is read by no error, as with `ModelList`: FastAPI reports a bad item without naming a class.
+/// One member of a tagged union: the tag value that selects it and the model its fields validate as.
 #[derive(Debug, Clone, Copy)]
 pub struct TaggedVariant {
   pub tag: &'static str,
-  pub class_name: &'static str,
   pub model: &'static BodyModel,
 }
 

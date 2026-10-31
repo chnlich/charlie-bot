@@ -100,9 +100,9 @@ const SLURM_JOB_FIELDS: &[Field] = &[
 ];
 const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
 const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
-  TaggedVariant { tag: "local_pid", class_name: "LocalPid", model: &LOCAL_PID },
-  TaggedVariant { tag: "remote_pid", class_name: "RemotePid", model: &REMOTE_PID },
-  TaggedVariant { tag: "slurm_job", class_name: "SlurmJob", model: &SLURM_JOB },
+  TaggedVariant { tag: "local_pid", model: &LOCAL_PID },
+  TaggedVariant { tag: "remote_pid", model: &REMOTE_PID },
+  TaggedVariant { tag: "slurm_job", model: &SLURM_JOB },
 ];
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),

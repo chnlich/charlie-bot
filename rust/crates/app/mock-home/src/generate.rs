@@ -8,6 +8,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use charliebot_core::event_types;
 use charliebot_store::layout;
 use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
@@ -171,10 +172,10 @@ fn opens_turn(event: &Value) -> bool {
 /// One turn separator in the production `master_done` shape that the renderer turns into a separator message.
 fn master_done_event(rng: &mut Rng, timestamp: &str) -> Value {
   json!({
-    "type": "master_done",
+    "type": event_types::MASTER_DONE,
     "exit_code": 0,
-    "still_thinking": false,
-    "thinking_seconds": rng.range(1, 120),
+    event_types::STILL_THINKING: false,
+    event_types::THINKING_SECONDS: rng.range(1, 120),
     "timestamp": timestamp,
   })
 }

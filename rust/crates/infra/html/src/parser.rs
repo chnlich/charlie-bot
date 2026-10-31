@@ -270,8 +270,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       } else if self.source[i..].starts_with("&#") {
         if let Some((end_at, name)) = character_reference(self.source, i) {
           self.emit(EventKind::CharacterReference, json!([name]), i, None);
-          i =
-            if self.source[..end_at].ends_with(';') { end_at } else { end_at - previous_char_len(self.source, end_at) };
+          i = reference_end(self.source, end_at);
           continue;
         }
         if incomplete_character_reference(self.source, i) {
@@ -291,8 +290,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       } else if self.source[i..].starts_with('&') {
         if let Some((end_at, name)) = entity_reference(self.source, i) {
           self.emit(EventKind::EntityReference, json!([name]), i, None);
-          i =
-            if self.source[..end_at].ends_with(';') { end_at } else { end_at - previous_char_len(self.source, end_at) };
+          i = reference_end(self.source, end_at);
           continue;
         }
         if incomplete_reference(self.source, i) {
@@ -681,6 +679,12 @@ fn find_comment_close(source: &str, start: usize) -> Option<usize> {
 
 fn previous_char_len(source: &str, end: usize) -> usize {
   source[..end].chars().next_back().expect("regex delimiter exists").len_utf8()
+}
+
+/// The offset to resume scanning at after a character or entity reference whose extent ends at `end_at`. A reference
+/// with a semicolon consumes it; one without leaves the delimiter for the next event.
+fn reference_end(source: &str, end_at: usize) -> usize {
+  if source[..end_at].ends_with(';') { end_at } else { end_at - previous_char_len(source, end_at) }
 }
 
 fn char_offset_from_end(source: &str, count: usize) -> usize {

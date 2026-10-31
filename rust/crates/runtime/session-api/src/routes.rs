@@ -377,18 +377,28 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   let q = query.get("q").unwrap_or_default().trim().to_string();
   let store = Arc::clone(&features.store);
   let registry = Arc::clone(&features.registry);
-  let (rows, derived) = match blocking_store(move || {
-    let rows = search::search_sessions(&store, &q)?;
-    let derived = sidebar::resolve_sidebar_state(&store, &registry, &rows, true, true, false, false)?;
-    Ok((rows, derived))
+  // Read the generation before the rows, so a state change during this request leaves the body this request keeps
+  // stamped with a generation no later request serves.
+  let generation = sidebar_state::derived_generation();
+  let (answer, derived) = match blocking_store(move || {
+    let answer = search::search_sessions(&store, &q)?;
+    let derived = sidebar::resolve_sidebar_state(&store, &registry, &answer.rows, true, true, false, false)?;
+    Ok((answer, derived))
   })
   .await
   {
     Ok(result) => result,
     Err(error) => return store_error(error),
   };
-  let mut values = Vec::with_capacity(rows.len());
-  for row in &rows {
+  // A repeat query holds the rows and their file signatures; while the derived state still sits at the generation the
+  // body was rendered under, that body is the body a rebuild would render.
+  if let Some(source) = &answer.source
+    && let Some(body) = source.body(generation)
+  {
+    return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
+  }
+  let mut values = Vec::with_capacity(answer.rows.len());
+  for row in &answer.rows {
     let mut value = match listing::metadata_value(&features.store, row) {
       Ok(value) => value,
       Err(error) => return store_error(error),
@@ -397,6 +407,9 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     values.push(value);
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+  if let Some(source) = &answer.source {
+    source.remember_body(generation, Arc::new(body.clone()));
+  }
   gzip_response(&request, body, &SEARCH_GZIP_MEMO)
 }
 
@@ -593,6 +606,30 @@ mod tests {
     let (status, groups) = crate::test_support::answer(response).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(groups, json!(["Alpha", "Beta"]));
+  }
+
+  #[tokio::test]
+  async fn a_repeat_search_answers_with_its_built_body_until_the_derived_state_moves() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "search-body", None, TaskProfile::Manager).await;
+    let events = features.store.chat_events_path(&meta.id);
+    std::fs::create_dir_all(events.parent().unwrap()).unwrap();
+    std::fs::write(&events, "{\"content\":\"walrus in the events\"}\n").unwrap();
+    let search = || Request::builder().uri("/api/sessions/search?q=walrus").body(Body::empty()).unwrap();
+
+    let quiet =
+      to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
+    let repeat =
+      to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(quiet, repeat, "a repeat query answers with the body it built");
+    let quiet: Value = serde_json::from_slice(&quiet).unwrap();
+    assert_eq!(quiet[0]["thinking_since"], Value::Null);
+
+    features.store.mark_busy(&meta.id, UtcDateTime::now()).unwrap();
+    let busy =
+      to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
+    let busy: Value = serde_json::from_slice(&busy).unwrap();
+    assert_ne!(busy[0]["thinking_since"], Value::Null, "a moved derived-state generation renders the row again");
   }
 
   #[tokio::test]

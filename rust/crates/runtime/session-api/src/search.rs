@@ -20,9 +20,9 @@ const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
 /// The threads one signature batch may split across.
 ///
-/// Four threads cut the batch's wall time by about two thirds on the 7,160-session home while its
-/// total CPU stayed inside the run-to-run spread; eight threads raised the total CPU and helped less.
-const SIGNATURE_BATCH_WORKERS: usize = 4;
+/// The batch is one `stat` per watched file and the route waits on its slowest chunk; on the 7,160-session home, eight
+/// threads cut the sweep's wall time by about two fifths.
+const SIGNATURE_BATCH_WORKERS: usize = 8;
 /// The batch length below which the signatures are read on the calling thread.
 ///
 /// Starting a thread costs more than the `stat` calls a short batch makes, so only a batch that a
@@ -51,8 +51,7 @@ impl SearchFileRoots {
   }
 }
 
-#[derive(Clone)]
-struct SearchMatch {
+pub(crate) struct SearchMatch {
   /// The corpus the matched rows were taken from. A rebuilt listing answers a new `Arc`, so a pointer match names the
   /// same rows.
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
@@ -62,6 +61,35 @@ struct SearchMatch {
   signatures: Vec<Option<FileSignature>>,
   /// The matched rows, newest first, capped at [`SEARCH_RESULT_LIMIT`].
   rows: Vec<Arc<SessionMetadata>>,
+  /// The response body rendered from `rows`, with the derived-state generation it holds for.
+  body: Mutex<Option<SearchBody>>,
+}
+
+/// One rendered search response and the derived-state generation its overlay fields came from.
+struct SearchBody {
+  generation: u64,
+  bytes: Arc<Vec<u8>>,
+}
+
+impl SearchMatch {
+  /// The body this match built for `generation`, when it built one for that generation.
+  pub(crate) fn body(&self, generation: u64) -> Option<Arc<Vec<u8>>> {
+    let body = self.body.lock().expect("search body mutex is not poisoned");
+    body.as_ref().filter(|body| body.generation == generation).map(|body| Arc::clone(&body.bytes))
+  }
+
+  /// Keep the body built for `generation` for the repeat requests that generation still answers.
+  pub(crate) fn remember_body(&self, generation: u64, bytes: Arc<Vec<u8>>) {
+    *self.body.lock().expect("search body mutex is not poisoned") = Some(SearchBody { generation, bytes });
+  }
+}
+
+/// One search answer: its rows and the memoized result they belong to.
+pub(crate) struct SearchAnswer {
+  pub rows: Vec<Arc<SessionMetadata>>,
+  /// The memoized result whose signature check held, or the one this pass just stored. `None` when a read failure kept
+  /// this pass out of the memo, and for a blank query, which lists sessions instead of searching them.
+  pub source: Option<Arc<SearchMatch>>,
 }
 
 struct SearchMemos {
@@ -113,25 +141,23 @@ impl SearchMemos {
     self.matches.get(query).cloned()
   }
 
-  fn remember_match(&mut self, query: &str, entry: SearchMatch) {
-    self.matches.put(query.to_string(), Arc::new(entry));
+  fn remember_match(&mut self, query: &str, entry: SearchMatch) -> Arc<SearchMatch> {
+    let entry = Arc::new(entry);
+    self.matches.put(query.to_string(), Arc::clone(&entry));
+    entry
   }
 }
 
 static SEARCH_MEMOS: LazyLock<Mutex<SearchMemos>> = LazyLock::new(|| Mutex::new(SearchMemos::default()));
 
 /// Search every session name and active-session chat content, newest first.
-pub(crate) fn search_sessions(store: &Store, query: &str) -> StoreResult<Vec<Arc<SessionMetadata>>> {
+pub(crate) fn search_sessions(store: &Store, query: &str) -> StoreResult<SearchAnswer> {
   search_sessions_with_memos(store, query, &SEARCH_MEMOS)
 }
 
-fn search_sessions_with_memos(
-  store: &Store,
-  query: &str,
-  memos: &Mutex<SearchMemos>,
-) -> StoreResult<Vec<Arc<SessionMetadata>>> {
+fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMemos>) -> StoreResult<SearchAnswer> {
   if query.trim().is_empty() {
-    return Ok(store.list_sessions(Some(SessionStatus::Active), None, None)?.rows);
+    return Ok(SearchAnswer { rows: store.list_sessions(Some(SessionStatus::Active), None, None)?.rows, source: None });
   }
 
   let needle = query.to_lowercase();
@@ -144,7 +170,7 @@ fn search_sessions_with_memos(
     let watched: Vec<&Path> = cached.watched.iter().map(PathBuf::as_path).collect();
     let signatures: Vec<Option<FileSignature>> = file_signatures(&watched).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
-      return Ok(cached.rows.clone());
+      return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
   }
 
@@ -219,17 +245,20 @@ fn search_sessions_with_memos(
         watched_signatures.push(signature);
       }
     }
-    memos.lock().expect("session search memo mutex is not poisoned").remember_match(
+    let rows: Vec<Arc<SessionMetadata>> = names.into_iter().cloned().collect();
+    let source = memos.lock().expect("session search memo mutex is not poisoned").remember_match(
       &needle,
       SearchMatch {
         corpus: Arc::clone(&all),
         watched,
         signatures: watched_signatures,
-        rows: names.iter().map(|meta| Arc::clone(meta)).collect(),
+        rows: rows.clone(),
+        body: Mutex::new(None),
       },
     );
+    return Ok(SearchAnswer { rows, source: Some(source) });
   }
-  Ok(names.into_iter().map(Arc::clone).collect())
+  Ok(SearchAnswer { rows: names.into_iter().map(Arc::clone).collect(), source: None })
 }
 
 /// The signature of every path, in the argument order.
@@ -542,7 +571,7 @@ mod tests {
     write_session(&store, "archived", "archived", SessionStatus::Archived, "2026-08-01T12:02:00Z");
     write_session(&store, "new", "new", SessionStatus::Active, "2026-08-01T12:01:00Z");
 
-    let rows = search_sessions(&store, "  \t").unwrap();
+    let rows = search_sessions(&store, "  \t").unwrap().rows;
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
   }
 
@@ -568,7 +597,7 @@ mod tests {
       fs::write(path, "{\"content\":\"needle in the events\"}\n").unwrap();
     }
 
-    let rows = search_sessions(&store, "needle").unwrap();
+    let rows = search_sessions(&store, "needle").unwrap().rows;
     let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
     assert_eq!(rows.len(), 200);
     assert!(ids.contains(&"above"));
@@ -583,16 +612,16 @@ mod tests {
     let store = test_store(home.path());
     write_session(&store, "quiet", "quiet", SessionStatus::Active, "2026-08-01T12:00:00Z");
     write_session(&store, "carrier", "carrier", SessionStatus::Active, "2026-08-01T12:01:00Z");
-    assert!(search_sessions(&store, "needle").unwrap().is_empty());
+    assert!(search_sessions(&store, "needle").unwrap().rows.is_empty());
 
     let events = store.chat_events_path("carrier");
     fs::create_dir_all(events.parent().unwrap()).unwrap();
     fs::write(&events, "{\"content\":\"needle in the events\"}\n").unwrap();
-    let content_hits = search_sessions(&store, "needle").unwrap();
+    let content_hits = search_sessions(&store, "needle").unwrap().rows;
     assert_eq!(content_hits.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["carrier"]);
 
     write_session(&store, "named", "needle name", SessionStatus::Archived, "2026-08-01T12:02:00Z");
-    let all_hits = search_sessions(&store, "needle").unwrap();
+    let all_hits = search_sessions(&store, "needle").unwrap().rows;
     assert_eq!(all_hits.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["named", "carrier"]);
   }
 
@@ -606,16 +635,21 @@ mod tests {
     fs::write(&path, "no match yet").unwrap();
     let memos = Mutex::new(super::SearchMemos::default());
 
-    assert!(super::search_sessions_with_memos(&store, "needle", &memos).unwrap().is_empty());
-    assert!(super::search_sessions_with_memos(&store, "needle", &memos).unwrap().is_empty());
+    assert!(super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows.is_empty());
+    assert!(super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows.is_empty());
     assert_eq!(memos.lock().unwrap().scan_calls, 1, "the repeated query does no second file scan");
 
     fs::write(&path, "no match yet; needle appears").unwrap();
     let hit = super::search_sessions_with_memos(&store, "needle", &memos).unwrap();
-    assert_eq!(hit.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+    assert_eq!(hit.rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
     let repeat = super::search_sessions_with_memos(&store, "needle", &memos).unwrap();
-    assert!(Arc::ptr_eq(&hit[0], &repeat[0]), "the repeat query answers with the rows the memo holds");
-    assert_eq!(super::search_sessions_with_memos(&store, "eed", &memos).unwrap().len(), 1);
+    assert!(Arc::ptr_eq(&hit.rows[0], &repeat.rows[0]), "the repeat query answers with the rows the memo holds");
+    let source = repeat.source.expect("a repeat query names the memo it reused");
+    assert!(Arc::ptr_eq(hit.source.as_ref().unwrap(), &source), "the repeat query reuses the same memo entry");
+    source.remember_body(7, Arc::new(b"needle body".to_vec()));
+    assert_eq!(source.body(7).map(|body| body.to_vec()), Some(b"needle body".to_vec()));
+    assert!(source.body(8).is_none(), "a moved derived-state generation drops the body");
+    assert_eq!(super::search_sessions_with_memos(&store, "eed", &memos).unwrap().rows.len(), 1);
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the changed file rescans once and its hit covers substrings");
   }
 
@@ -638,17 +672,17 @@ mod tests {
     write_session(&store, "old", "old session", SessionStatus::Active, "2026-08-01T12:00:00Z");
     write_session(&store, "newer", "newer session", SessionStatus::Active, "2026-08-03T12:00:00Z");
 
-    let rows = search_sessions(&store, "walrus").unwrap();
+    let rows = search_sessions(&store, "walrus").unwrap().rows;
     assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
     assert!(rows.iter().all(|meta| meta.id.starts_with("hit-")));
 
     write_content("old", "{\"content\":\"walrus in the events\"}\n");
-    let rows = search_sessions(&store, "walrus").unwrap();
+    let rows = search_sessions(&store, "walrus").unwrap().rows;
     assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
     assert!(!rows.iter().any(|meta| meta.id == "old"), "a match older than the last row stays out of the full result");
 
     write_content("newer", "{\"content\":\"walrus in the events\"}\n");
-    let rows = search_sessions(&store, "walrus").unwrap();
+    let rows = search_sessions(&store, "walrus").unwrap().rows;
     assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
     assert_eq!(rows[0].id, "newer", "a new match in a watched candidate enters the result");
     assert!(!rows.iter().any(|meta| meta.id == "old"));

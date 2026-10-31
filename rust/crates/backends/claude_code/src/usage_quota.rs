@@ -23,7 +23,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
   PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -749,14 +749,6 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
     windows.push(Window { window_minutes, scope_label: display_name.to_string(), entry: Value::Object(scoped) });
   }
   Ok(windows)
-}
-
-/// `_as_utilization`: a percentage, or `None` for a missing value or a non-number.
-fn as_utilization(value: Option<&Value>) -> Option<f64> {
-  match value {
-    Some(Value::Number(number)) => number.as_f64(),
-    _ => None,
-  }
 }
 
 /// Logs one unrecognized limit shape the first time the process sees it for an account.

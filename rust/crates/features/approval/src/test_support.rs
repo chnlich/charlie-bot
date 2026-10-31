@@ -1,5 +1,6 @@
-//! Fixtures for the approval tests: a store-backed feature context over a temporary home, with the web reply slot the
-//! seeded statuses write through and this package's registrations, and the route calls the tests make.
+//! Fixtures for the approval tests: a store-backed feature context over a temporary home, and the route calls the
+//! tests make. The context carries this package's registrations and the web reply slot the seeded statuses write
+//! through.
 
 use std::fs;
 use std::path::{Path, PathBuf};

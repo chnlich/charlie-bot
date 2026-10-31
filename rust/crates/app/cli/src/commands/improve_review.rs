@@ -16,7 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use charliebot_charlie_code::API_KEY_ENV;
+use charliebot_charlie_code::{API_KEY_ENV, flags};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME};
@@ -166,16 +166,16 @@ fn run_review(
   let model = format!("openai/{}", option.model);
   let endpoint = format!("{}/v1", api_base.trim_end_matches('/'));
   let child = Command::new("charlie-code")
-    .arg("--json")
-    .arg("--model")
+    .arg(flags::JSON)
+    .arg(flags::MODEL)
     .arg(&model)
-    .arg("--api-base")
+    .arg(flags::API_BASE)
     .arg(&endpoint)
-    .arg("--context-window")
+    .arg(flags::CONTEXT_WINDOW)
     .arg(context_window.to_string())
-    .arg("--session-dir")
+    .arg(flags::SESSION_DIR)
     .arg(&session_dir)
-    .arg("--task-file")
+    .arg(flags::TASK_FILE)
     .arg(&task_path)
     .current_dir(&scratch)
     .env(API_KEY_ENV, key)

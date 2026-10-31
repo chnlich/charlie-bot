@@ -12,6 +12,7 @@ use charliebot_registry::backend::{
 };
 use serde_json::Value;
 
+use super::flags;
 use super::options::CharlieCodeOption;
 use super::translate::CharlieCodeTranslator;
 use charliebot_agents::cli_base::{CliHost, apply_proxy_env, image_mime, prepend_path_dir, str_field};
@@ -101,38 +102,38 @@ impl CharlieCodeBackend {
     fs::write(&task_path, prompt).with_context(|| format!("writing {}", task_path.display()))?;
     let mut command = vec![
       self.bin.clone(),
-      "--json".to_string(),
-      "--model".to_string(),
+      flags::JSON.to_string(),
+      flags::MODEL.to_string(),
       self.model.clone(),
-      "--api-base".to_string(),
+      flags::API_BASE.to_string(),
       self.api_base.clone(),
     ];
     if let Some(window) = self.context_window {
-      command.extend(["--context-window".to_string(), window.to_string()]);
+      command.extend([flags::CONTEXT_WINDOW.to_string(), window.to_string()]);
     }
     if !self.stream {
-      command.push("--no-stream".to_string());
+      command.push(flags::NO_STREAM.to_string());
     }
     if let Some(seconds) = self.timeout_seconds {
-      command.extend(["--timeout-seconds".to_string(), seconds.to_string()]);
+      command.extend([flags::TIMEOUT_SECONDS.to_string(), seconds.to_string()]);
     }
     if let Some(top_p) = self.top_p {
-      command.extend(["--top-p".to_string(), float_repr(top_p)]);
+      command.extend([flags::TOP_P.to_string(), float_repr(top_p)]);
     }
     if let Some(temperature) = self.temperature {
-      command.extend(["--temperature".to_string(), float_repr(temperature)]);
+      command.extend([flags::TEMPERATURE.to_string(), float_repr(temperature)]);
     }
     if let Some(session_id) = &self.resume_session_id {
-      command.extend(["--resume".to_string(), session_id.clone()]);
+      command.extend([flags::RESUME.to_string(), session_id.clone()]);
     }
     if let Some(path) = &self.instructions_file {
-      command.extend(["--instructions-file".to_string(), path_text(path)?]);
+      command.extend([flags::INSTRUCTIONS_FILE.to_string(), path_text(path)?]);
     }
     command.extend(self.extra_flags.iter().cloned());
     for image in &self.image_paths {
-      command.extend(["--image".to_string(), image.clone()]);
+      command.extend([flags::IMAGE.to_string(), image.clone()]);
     }
-    command.extend(["--task-file".to_string(), path_text(&task_path)?]);
+    command.extend([flags::TASK_FILE.to_string(), path_text(&task_path)?]);
     Ok(command)
   }
 

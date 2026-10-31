@@ -3,6 +3,7 @@
 
 mod charlie_code_cli;
 pub mod factory;
+pub mod flags;
 pub mod options;
 mod translate;
 

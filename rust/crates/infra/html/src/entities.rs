@@ -111,9 +111,10 @@ fn parse_charref(input: &str, amp: usize) -> Option<(usize, String)> {
   Some((end, unchanged))
 }
 
-/// The digits of a numeric character reference whose `&#` ends at `after_hash`: an `x` or `X` there selects hex
-/// digits, the reference carries at least one, and a reference without a digit yields `None`. Returns the first
-/// digit's index, the index after the last digit, and the radix.
+/// The digits of a numeric character reference whose `&#` ends at `after_hash`.
+/// Returns the first digit's index, the index after the last digit, and the radix.
+/// An `x` or `X` at `after_hash` selects hex digits, and the reference carries at least one.
+/// A reference without a digit yields `None`.
 fn numeric_digits(input: &str, after_hash: usize) -> Option<(usize, usize, u32)> {
   let bytes = input.as_bytes();
   let hex = matches!(bytes.get(after_hash), Some(b'x' | b'X'));

@@ -128,7 +128,7 @@ const UPLOADED_FILE_BODY_FIELDS: &[Field] = &[
 const UPLOADED_FILE_BODY: BodyModel = BodyModel::required(UPLOADED_FILE_BODY_FIELDS);
 const SEND_MESSAGE_BODY_FIELDS: &[Field] = &[
   Field::required("content", FieldType::String),
-  Field::optional("uploaded_files", FieldType::ModelList { class_name: "UploadedFileRef", model: &UPLOADED_FILE_BODY }),
+  Field::optional("uploaded_files", FieldType::ModelList { model: &UPLOADED_FILE_BODY }),
   Field::optional("input_mode", FieldType::NullableString),
   Field::required("request_id", FieldType::String).min_length(1),
 ];

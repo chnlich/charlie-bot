@@ -245,10 +245,23 @@ fn starred_response(features: &FeatureContext) -> Response {
 }
 
 async fn list_groups(State(features): State<Arc<FeatureContext>>) -> Response {
-  match features.store.list_group_names() {
+  match blocking_store(move || list_group_names(&features)).await {
     Ok(groups) => responses::fast_json(StatusCode::OK, &json!(groups)),
     Err(error) => store_error(error),
   }
+}
+
+/// The sorted, distinct, nonempty group names of every stored session.
+///
+/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s, so a call clones
+/// only the names it returns, not the metadata of the sessions that carry no group.
+fn list_group_names(features: &FeatureContext) -> charliebot_store::StoreResult<Vec<String>> {
+  let (rows, _) = features.store.load_session_metas_snapshot_versioned(None)?;
+  let mut groups: Vec<String> =
+    rows.iter().filter_map(|meta| meta.group.as_ref().filter(|group| !group.is_empty()).cloned()).collect();
+  groups.sort();
+  groups.dedup();
+  Ok(groups)
 }
 
 async fn session_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -555,6 +568,31 @@ mod tests {
       features.store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active)).unwrap();
 
     assert_eq!(after_generation, before_generation + 1);
+  }
+
+  #[tokio::test]
+  async fn groups_route_lists_each_nonempty_name_once_in_order() {
+    let (_home, features) = crate::test_support::feature_context();
+    for (name, group) in [
+      ("group alpha one", Some("Alpha")),
+      ("group beta", Some("Beta")),
+      ("group alpha two", Some("Alpha")),
+      ("ungrouped", None),
+    ] {
+      let payload = match group {
+        Some(group) => json!({"name": name, "group": group}),
+        None => json!({"name": name}),
+      };
+      let (headers, body) = crate::test_support::json_request(payload);
+      let created = crate::write_routes::create_session(State(Arc::clone(&features)), headers, body).await;
+      assert_eq!(created.status(), StatusCode::OK, "{name} should be created");
+    }
+
+    let response = list_groups(State(Arc::clone(&features))).await;
+
+    let (status, groups) = crate::test_support::answer(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(groups, json!(["Alpha", "Beta"]));
   }
 
   #[tokio::test]

@@ -10,16 +10,12 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::logline;
-use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_core::text_repr;
 use charliebot_store::layout;
 use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
 use serde_json::{Value, json};
 
 use crate::common::{USAGE, exact, exit_with, failed, read_json};
-
-/// `json.dumps(value)` with every option at its default: one line, `", "` and `": "` separators, ASCII escapes.
-const DEFAULT_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// `json-field BODY NAME`: the top-level field's value as Python's `print` writes it.
 pub fn json_field(args: &[OsString]) -> Result<(), CliExit> {
@@ -182,7 +178,7 @@ fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
     "keep_worktree": true,
     "request_id": format!("switch-delegation:{session}"),
   });
-  text_repr::json_dumps(&body, &DEFAULT_JSON)
+  text_repr::json_dumps(&body, &text_repr::DEFAULT_JSON)
 }
 
 /// `run-error HOME SESSION RUN`: the message of the last error event in the run's event log, with its whitespace

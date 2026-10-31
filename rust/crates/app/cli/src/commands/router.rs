@@ -27,7 +27,7 @@ use charliebot_cli_common::json_out;
 use charliebot_core::credentials;
 use charliebot_core::home;
 use charliebot_core::paths;
-use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_core::text_repr;
 use charliebot_core::timeouts;
 use clap::{CommandFactory, Parser};
 use serde_json::{Value, json};
@@ -291,10 +291,7 @@ fn request_error(error: &reqwest::Error) -> String {
 
 /// Python `json.dumps(payload)`: escaped non-ASCII, `", "` between items.
 fn dumps_payload(payload: &Value) -> String {
-  text_repr::json_dumps(
-    payload,
-    &JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None },
-  )
+  text_repr::json_dumps(payload, &text_repr::DEFAULT_JSON)
 }
 
 /// The `answers.kind.probabilities.design` number of one Jev response. A JSON boolean is not a number.

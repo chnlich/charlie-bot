@@ -196,7 +196,7 @@ impl SessionUsage {
     let config = self.config.get().map_err(|error| StoreError::new(error.to_string()))?;
     let backend_option = config.get_backend_option(&meta.backend);
     let (usage, fold) = self.resolve_with_facts(session_id, meta, backend_option)?;
-    let context_tokens = usage.as_ref().and_then(|usage| usage.get("context_tokens")).and_then(int_value);
+    let context_tokens = usage.as_ref().and_then(|usage| usage.get(event_types::CONTEXT_TOKENS)).and_then(int_value);
     Ok((context_tokens, fold.last_request_at))
   }
 
@@ -329,10 +329,10 @@ fn resolve_fold_tier(
     READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
     READING_RESOLVED => Some(resolve_reading(fold, cost)),
     _ => Some(json!({
-      "context_tokens": null,
-      "context_full": null,
+      (event_types::CONTEXT_TOKENS): null,
+      (event_types::CONTEXT_FULL): null,
       (event_types::CONTEXT_COMPACT_AT): null,
-      "total_cost_usd": cost,
+      (event_types::RESULT_TOTAL_COST_USD): cost,
       "model": "",
     })),
   };
@@ -431,10 +431,10 @@ fn usage_value(
   cost: Option<f64>,
 ) -> Value {
   json!({
-    "context_tokens": context_tokens,
-    "context_full": context_full,
+    (event_types::CONTEXT_TOKENS): context_tokens,
+    (event_types::CONTEXT_FULL): context_full,
     (event_types::CONTEXT_COMPACT_AT): context_compact_at,
-    "total_cost_usd": cost,
+    (event_types::RESULT_TOTAL_COST_USD): cost,
     "model": model,
   })
 }

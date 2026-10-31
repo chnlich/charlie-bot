@@ -7,9 +7,7 @@ use std::time::Duration;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::identity::{is_run_alive, pin_process_identity, read_host_boot_time};
 use charliebot_agents::transport::kill::{detach, kill_process_group};
-use charliebot_agents::transport::spawn::{
-  AgentChild, RawStdin, SpawnSpec, spawn_one_shot, spawn_piped, spawn_raw_log,
-};
+use charliebot_agents::transport::spawn::{AgentChild, RawStdin, SpawnSpec, spawn_one_shot, spawn_raw_log};
 use nix::sys::signal::Signal;
 use time::OffsetDateTime;
 use tokio::runtime::{Builder, Runtime};
@@ -29,12 +27,7 @@ impl Drop for ChildGroupGuard<'_> {
   }
 }
 
-enum ParentDeathSpawn {
-  Piped,
-  OneShot,
-}
-
-fn assert_pdeath_child_survives_blocking_keep_alive(spawn_kind: ParentDeathSpawn) {
+fn assert_pdeath_child_survives_blocking_keep_alive() {
   let root = tempfile::tempdir().unwrap();
   let base = root.path().join("user@1001.service");
   fs::create_dir(&base).unwrap();
@@ -50,14 +43,7 @@ fn assert_pdeath_child_survives_blocking_keep_alive(spawn_kind: ParentDeathSpawn
     Builder::new_current_thread().enable_all().thread_keep_alive(Duration::from_millis(100)).build().unwrap();
   let boot_time = read_host_boot_time().unwrap();
   let started_at = OffsetDateTime::now_utc();
-  let spawned = runtime
-    .block_on(async {
-      match spawn_kind {
-        ParentDeathSpawn::Piped => spawn_piped(&spec).await,
-        ParentDeathSpawn::OneShot => spawn_one_shot(&spec, Some(Signal::SIGKILL)).await,
-      }
-    })
-    .unwrap();
+  let spawned = runtime.block_on(async { spawn_one_shot(&spec, Some(Signal::SIGKILL)).await }).unwrap();
   let child = spawned.child;
   let pid = child.id().unwrap();
   let _guard = ChildGroupGuard { child, pid, runtime: &runtime };
@@ -73,13 +59,8 @@ fn assert_pdeath_child_survives_blocking_keep_alive(spawn_kind: ParentDeathSpawn
 }
 
 #[test]
-fn piped_child_survives_blocking_thread_keep_alive() {
-  assert_pdeath_child_survives_blocking_keep_alive(ParentDeathSpawn::Piped);
-}
-
-#[test]
-fn one_shot_pdeath_child_survives_blocking_thread_keep_alive() {
-  assert_pdeath_child_survives_blocking_keep_alive(ParentDeathSpawn::OneShot);
+fn pdeath_child_survives_blocking_thread_keep_alive() {
+  assert_pdeath_child_survives_blocking_keep_alive();
 }
 
 #[tokio::test]
@@ -161,7 +142,7 @@ async fn spawn_and_exit_helper() {
     detach(child);
     pid
   } else {
-    let child = spawn_piped(&spec).await.unwrap().child;
+    let child = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap().child;
     let pid = child.id().unwrap();
     detach(child);
     pid

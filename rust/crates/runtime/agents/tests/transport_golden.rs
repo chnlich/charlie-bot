@@ -9,7 +9,8 @@ use charliebot_agents::transport::cursor::{RawCursorWriter, read_raw_cursor};
 use charliebot_agents::transport::follow::{DEFAULT_BUFFER_LIMIT, tail_follow_events};
 use charliebot_agents::transport::identity::pin_process_identity;
 use charliebot_agents::transport::kill::terminate_child;
-use charliebot_agents::transport::spawn::{SpawnSpec, pin_identity_and_on_spawn, spawn_piped};
+use charliebot_agents::transport::spawn::{SpawnSpec, pin_identity_and_on_spawn, spawn_one_shot};
+use nix::sys::signal::Signal;
 use serde_json::Value;
 
 const RAW_LINES: [&str; 4] = [
@@ -67,7 +68,7 @@ async fn share_cursors_follow_offsets_and_pid_start() {
     None,
     SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
   );
-  let spawned = spawn_piped(&spec).await.unwrap();
+  let spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
   let (mut spawned, pinned) = pin_identity_and_on_spawn(spawned, |_| async { Ok::<(), ()>(()) }).await.unwrap();
   assert_eq!(pinned, pin_process_identity(spawned.child.id().unwrap()));
   let pid_start = proc_start_time(pinned.pid);

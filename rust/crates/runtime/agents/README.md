@@ -32,7 +32,7 @@ This crate owns the process transport below the agent backends and the launch ma
 | `spawn::SpawnSpec`, its fields, and `SpawnSpec::new` | `src/runtime/agent_process/base.py:785`, `:878` |
 | `spawn::RawStdin`, `SpawnedChild`, and its fields | `src/runtime/agent_process/base.py:936` |
 | `spawn::ChildStdin`, `SpawnSetup`, and `spawn_with_setup` | `src/runtime/agent_process/base.py:858-903`; `src/backends/opencode/server.py:236`; `src/backends/claude_code/claude_code.py:300`; `src/backends/claude_code/claude_compaction.py:288-306`. Parent-side setup sets nice to 10; child-side turn-tree setup raises nice by 10. |
-| `spawn::spawn_raw_log`, `spawn_piped`, `spawn_one_shot` | `src/runtime/agent_process/base.py:785`, `:812`, `:936`; `src/backends/opencode/opencode.py:505`; `src/backends/codex/codex.py:127`. Parent-death children use a process-lifetime spawner thread; children without that signal use Tokio's blocking pool. |
+| `spawn::spawn_raw_log`, `spawn_one_shot` | `src/runtime/agent_process/base.py:785`, `:812`, `:936`; `src/backends/opencode/opencode.py:505`; `src/backends/codex/codex.py:127`. Parent-death children use a process-lifetime spawner thread; children without that signal use Tokio's blocking pool. |
 | `spawn::pin_identity_and_on_spawn` | `src/runtime/agent_process/base.py:919` |
 | `spawn::iter_ndjson_events` | `src/runtime/agent_process/base.py:347` |
 | `spawn::STDERR_TAIL_BYTES` | `src/runtime/agent_process/base.py:37` |

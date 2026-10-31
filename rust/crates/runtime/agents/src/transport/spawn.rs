@@ -179,11 +179,6 @@ pub async fn spawn_raw_log<C: Send + 'static>(
   Ok((SpawnedChild { child, cgroup }, claimed))
 }
 
-/// Spawn a piped child with a new session and parent-death SIGKILL.
-pub async fn spawn_piped(spec: &SpawnSpec) -> io::Result<SpawnedChild> {
-  spawn_with_setup(spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::ParentSideTurnTree).await
-}
-
 /// Spawn a one-shot child with `/dev/null` stdin, piped output, and optional parent-death signal.
 pub async fn spawn_one_shot(spec: &SpawnSpec, pdeathsig: Option<Signal>) -> io::Result<SpawnedChild> {
   spawn_with_setup(spec, pdeathsig, ChildStdin::Null, SpawnSetup::ParentSideTurnTree).await
@@ -1204,8 +1199,12 @@ mod tests {
   #[tokio::test]
   async fn piped_spawn_returns_both_streams() {
     let root = tempfile::tempdir().unwrap();
-    let mut spawned =
-      spawn_piped(&spec("/bin/sh", &["-c", "printf 'out\\n'; printf 'err\\n' >&2"], root.path())).await.unwrap();
+    let mut spawned = spawn_one_shot(
+      &spec("/bin/sh", &["-c", "printf 'out\\n'; printf 'err\\n' >&2"], root.path()),
+      Some(Signal::SIGKILL),
+    )
+    .await
+    .unwrap();
     let mut stdout = spawned.child.stdout.take().unwrap();
     let mut stderr = spawned.child.stderr.take().unwrap();
     let mut out_bytes = Vec::new();
@@ -1223,7 +1222,7 @@ mod tests {
     let mut command = spec("/bin/sh", &["-c", "while [ ! -e release ]; do /bin/sleep 0.01; done"], root.path());
     command.env.insert("PATH".into(), "/bin:/usr/bin".into());
     command.cwd = Some(root.path().to_path_buf());
-    let mut spawned = spawn_piped(&command).await.unwrap();
+    let mut spawned = spawn_one_shot(&command, Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
 
     assert_eq!(spawned.child.clone_calls, 1);
@@ -1245,7 +1244,7 @@ mod tests {
       Some("test1234-session".into()),
       SessionCgroupConfig { base_dir: base, memory_max_mb: 64, swap_max_mb: 32, tasks_max: 0 },
     );
-    let mut spawned = spawn_piped(&spec).await.unwrap();
+    let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
     assert_eq!(fs::read_to_string(procs).unwrap(), format!("{pid}\n"));
     assert!(spawned.cgroup.is_some());
@@ -1434,7 +1433,7 @@ mod tests {
   #[tokio::test]
   async fn pins_identity_before_awaiting_on_spawn_callback() {
     let root = tempfile::tempdir().unwrap();
-    let spawned = spawn_piped(&spec("/bin/sleep", &["30"], root.path())).await.unwrap();
+    let spawned = spawn_one_shot(&spec("/bin/sleep", &["30"], root.path()), Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
     let (mut spawned, pinned) = pin_identity_and_on_spawn(spawned, |identity| async move {
       let stat = identity::read_pid_stat(identity.pid).unwrap();
@@ -1451,7 +1450,7 @@ mod tests {
   #[tokio::test]
   async fn callback_failure_terminates_the_child() {
     let root = tempfile::tempdir().unwrap();
-    let spawned = spawn_piped(&spec("/bin/sleep", &["30"], root.path())).await.unwrap();
+    let spawned = spawn_one_shot(&spec("/bin/sleep", &["30"], root.path()), Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
     let result = pin_identity_and_on_spawn(spawned, |_| async { Err("callback failed") }).await;
     assert!(matches!(result, Err("callback failed")));
@@ -1475,7 +1474,8 @@ mod tests {
   #[tokio::test]
   async fn wait_timeout_kills_the_process_group() {
     let root = tempfile::tempdir().unwrap();
-    let mut child = spawn_piped(&spec("/bin/sleep", &["30"], root.path())).await.unwrap().child;
+    let mut child =
+      spawn_one_shot(&spec("/bin/sleep", &["30"], root.path()), Some(Signal::SIGKILL)).await.unwrap().child;
     let pid = child.id().unwrap();
     let stderr_task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
     let result =

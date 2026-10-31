@@ -132,7 +132,6 @@ pub enum FieldType {
   NullableString,
   Integer,
   NullableInteger,
-  Float,
   NullableFloat,
   Boolean,
   /// A `dict` field whose keys and values are unconstrained.
@@ -188,7 +187,7 @@ impl FieldType {
     matches!(
       (self, bound),
       (FieldType::Integer | FieldType::NullableInteger, validation::Bound::Int(_))
-        | (FieldType::Float | FieldType::NullableFloat, validation::Bound::Float(_))
+        | (FieldType::NullableFloat, validation::Bound::Float(_))
     )
   }
 
@@ -412,12 +411,10 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
         Err(kind) => failure(kind),
       }
     }
-    FieldType::Float | FieldType::NullableFloat => {
-      match float_value(value, matches!(field.field_type, FieldType::NullableFloat)) {
-        Ok(value) => Ok(value),
-        Err(kind) => failure(kind),
-      }
-    }
+    FieldType::NullableFloat => match float_value(value, matches!(field.field_type, FieldType::NullableFloat)) {
+      Ok(value) => Ok(value),
+      Err(kind) => failure(kind),
+    },
     FieldType::Boolean => match boolean_value(value) {
       Ok(value) => Ok(value),
       Err(kind) => failure(kind),

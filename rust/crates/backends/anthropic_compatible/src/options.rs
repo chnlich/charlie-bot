@@ -1,17 +1,16 @@
 //! The endpoint, declared context window, optional credential, optional effort, optional executable, request headers
 //! and fixed request body fields of a `cc-anthropic-compatible` entry.
 
-use charliebot_core::config::{API_BASE_KEY, OptionField, OptionFieldDefault};
+use charliebot_core::config::{API_BASE_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
 const CONTEXT_WINDOW: &str = "context_window";
-const CREDENTIAL: &str = "credential";
 const EFFORT: &str = "effort";
 const CLI_BINARY: &str = "cli_binary";
 const HEADERS: &str = "headers";
 const EXTRA_BODY: &str = "extra_body";
-const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW, CREDENTIAL, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
+const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW, CREDENTIAL_KEY, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
@@ -19,7 +18,7 @@ const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW, CREDENTIAL, EFFORT, CLI
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Required),
-  OptionField::field(CREDENTIAL, OptionFieldDefault::Null),
+  OptionField::field(CREDENTIAL_KEY, OptionFieldDefault::Null),
   OptionField::field(EFFORT, OptionFieldDefault::Null),
   OptionField::field(CLI_BINARY, OptionFieldDefault::Null),
   OptionField::field(HEADERS, OptionFieldDefault::EmptyMap),
@@ -73,7 +72,7 @@ impl CcAnthropicCompatibleOption {
         return Err("cc-anthropic-compatible option context_window must be an integer greater than 0".to_string());
       }
     };
-    let credential = match fields.get(CREDENTIAL) {
+    let credential = match fields.get(CREDENTIAL_KEY) {
       None | Some(Value::Null) => None,
       Some(Value::String(credential)) => Some(credential.clone()),
       Some(_) => return Err("cc-anthropic-compatible option credential must be a string or null".to_string()),

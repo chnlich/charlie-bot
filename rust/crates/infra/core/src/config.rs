@@ -33,6 +33,10 @@ pub const CREDENTIALS_PREFIX: &str = "credentials: ";
 /// this name instead of each spelling it.
 pub const API_BASE_KEY: &str = "api_base";
 
+/// The `credential` key of a `backends.options[]` entry: the `credentials.yaml` section whose `api_key` authenticates
+/// the entry. The option schemas and the CLI's readers import this name instead of each spelling it.
+pub const CREDENTIAL_KEY: &str = "credential";
+
 /// Retired keys under `backends:`, replaced by `backends.pool`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 

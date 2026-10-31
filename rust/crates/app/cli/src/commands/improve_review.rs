@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use charliebot_charlie_code::{API_KEY_ENV, flags};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME};
+use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME, CREDENTIAL_KEY};
 use charliebot_core::{credentials, home, paths};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde_json::Value;
@@ -95,7 +95,7 @@ fn review(cli: &ImproveReviewCli) -> Result<PathBuf, String> {
   }
   let api_base = text_field(option, API_BASE_KEY, &config_file)?;
   let context_window = context_window_field(option, &config_file)?;
-  let credential = text_field(option, "credential", &config_file)?;
+  let credential = text_field(option, CREDENTIAL_KEY, &config_file)?;
   let credentials = credentials::load_credentials(&cfg.charliebot_home).map_err(|error| error.to_string())?;
   let key = credentials.require_api_key(&credential).map_err(|error| error.to_string())?;
 

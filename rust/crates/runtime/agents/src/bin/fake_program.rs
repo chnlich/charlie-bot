@@ -2,11 +2,12 @@
 //!
 //! Cargo builds this binary once. Each fake program is a symlink named for its role (for example `claude`) that
 //! points at this binary, next to a `probe.json` data file. The data file maps each role to its steps, which the
-//! helper runs in order: record argv or stdin into a file, append text to a file, sleep, write stdout or stderr, and
-//! exit. A step list that ends without `exit` is an error. The helper reads its role from `argv[0]`. A bare name is
-//! resolved on `PATH`, as the caller's own `exec` resolved it, so the data file is found beside the symlink.
+//! helper runs in order. The steps record argv or stdin into a file, append text to a file, sleep, write stdout or
+//! stderr, and exit. A step list that ends without `exit` is an error. The helper reads its role from `argv[0]`. A
+//! bare name is resolved on `PATH`, as the caller's own `exec` resolved it, so the data file is found beside the
+//! symlink.
 //!
-//! Tests link fakes to this binary and never write an executable and then run it: a fork in another test thread can
+//! Tests link fakes to this binary and never write an executable and then run it. A fork in another test thread can
 //! hold the written file open for writing, and the exec then fails with ETXTBSY.
 
 use std::collections::HashMap;

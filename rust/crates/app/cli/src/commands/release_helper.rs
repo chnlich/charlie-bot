@@ -38,10 +38,6 @@ use time::macros::format_description;
 const COMPACT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
-/// `json.dumps` with every option at its default: the seeded run record and a chat message body.
-const DEFAULT_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
-
 /// The startup sweep's removal event, whose `names` list the sweep check reads.
 const SWEEP_REMOVED: &str = "session_cgroup_sweep_removed";
 /// The startup event that states the session cgroup limits are on.
@@ -1073,7 +1069,7 @@ fn write_message(args: &[String]) -> Result<i32, String> {
   // The message route requires a request_id, which deduplicates a retried send; each trial message is a new send.
   let request_id = format!("trial-{}", uuid::Uuid::new_v4().simple());
   let body = json!({ "content": prompt, "request_id": request_id });
-  fs::write(output_path, text_repr::json_dumps(&body, &DEFAULT_JSON))
+  fs::write(output_path, text_repr::json_dumps(&body, &text_repr::DEFAULT_JSON))
     .map_err(|error| format!("{output_path}: {error}"))?;
   Ok(0)
 }

@@ -23,6 +23,7 @@ pub mod task_errors;
 pub mod templating;
 pub mod turn;
 pub mod usage;
+mod watch;
 pub mod wiring;
 
 pub use context::{FeatureContext, RunningTurnInputs, StartupState, StartupStop, StateError};

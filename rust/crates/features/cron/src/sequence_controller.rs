@@ -213,8 +213,8 @@ fn row_schedule_fields(
   let mut fields_by_session = HashMap::new();
   let mut earliest_next_fire = None;
   for session_id in &ids {
-    // A session with no bound task owns no row fields: the row writer emits `schedule_task: null` itself,
-    // and an entry holding only that null would make one map per listed session for every listing response.
+    // A session with no bound task owns no row fields: the row writer emits `schedule_task: null` itself.
+    // An entry holding only that null would make one map per listed session for every listing response.
     let Some(task) = bound_tasks.get(session_id.as_str()).copied() else { continue };
     let mut fields = Map::new();
     fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));

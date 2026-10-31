@@ -971,8 +971,8 @@ mod tests {
     );
     let scheduler = CronScheduler::new(Arc::clone(&features));
 
-    // Both ticks run at 08:00:30 of the task's default timezone on a fixed date, so no wall clock decides whether
-    // the first tick fires the 0 8 * * * occurrence.
+    // Both ticks run at 08:00:30 of the task's default timezone on a fixed date. No wall clock then decides
+    // whether the first tick fires the 0 8 * * * occurrence.
     let clock_timezone = crate::config::DEFAULT_TIMEZONE.parse::<chrono_tz::Tz>().unwrap();
     let clock = chrono::NaiveDate::from_ymd_opt(2026, 1, 5)
       .unwrap()

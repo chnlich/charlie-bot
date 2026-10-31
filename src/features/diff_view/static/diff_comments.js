@@ -2,6 +2,7 @@
 (() => {
   const PREFIX = 'cbdc';
   const FILE_BODY_SELECTOR = '[data-cbdc-file-path]';
+  const QUOTE_LIMIT = 400;
   const outputEl = document.getElementById('diff-output');
 
   let currentComparison = window.__cbdiffPage.getComparison();
@@ -58,8 +59,18 @@
     return items.slice().sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0].id;
   }
 
+  // The line range an entry names: one line, or its first and last.
+  function lineRange(startLine, endLine) {
+    return endLine === startLine ? `${startLine}` : `${startLine}-${endLine}`;
+  }
+
+  // What an entry keeps of the typed comment: a suggestion keeps it verbatim, a note trims it.
+  function storedComment(isSuggestion, value) {
+    return isSuggestion ? value : value.trim();
+  }
+
   function appendQuote(lines, quote) {
-    const parts = String(quote).slice(0, 400).split('\n');
+    const parts = String(quote).slice(0, QUOTE_LIMIT).split('\n');
     if (parts.length === 1) {
       lines.push(`   ▸ "${parts[0]}"`);
       return;
@@ -85,7 +96,7 @@
 
     for (let i = 0; i < ordered.length; i++) {
       const entry = ordered[i];
-      const range = entry.endLine === entry.startLine ? `${entry.startLine}` : `${entry.startLine}-${entry.endLine}`;
+      const range = lineRange(entry.startLine, entry.endLine);
       const suggestion = entry.isSuggestion ? ' [suggestion]' : '';
       lines.push(`${i + 1}. ${entry.filePath}:${range} (${entry.side})${suggestion}`);
       appendQuote(lines, entry.quote);
@@ -308,8 +319,7 @@
 
   function anchorForRow(row, body) {
     const side = row.dataset.cbdcSide || (row.dataset.cbdcNewLine ? 'new' : 'old');
-    const line = Number(side === 'old' ? row.dataset.cbdcOldLine || row.dataset.cbdcLine
-      : row.dataset.cbdcNewLine || row.dataset.cbdcLine);
+    const line = Number(rawLineForSide(row, side));
     const file = body.__cbdcFile;
     const anchor = {
       filePath: file.path,
@@ -325,9 +335,14 @@
     return anchor;
   }
 
-  function lineForSide(row, side) {
-    const value = side === 'old' ? row.dataset.cbdcOldLine || row.dataset.cbdcLine
+  // The row's line number on one side of the diff: that side's own cell, else the unified cell.
+  function rawLineForSide(row, side) {
+    return side === 'old' ? row.dataset.cbdcOldLine || row.dataset.cbdcLine
       : row.dataset.cbdcNewLine || row.dataset.cbdcLine;
+  }
+
+  function lineForSide(row, side) {
+    const value = rawLineForSide(row, side);
     return value ? Number(value) : null;
   }
 
@@ -344,7 +359,7 @@
       .sort((a, b) => lineForSide(a, anchor.side) - lineForSide(b, anchor.side))
       .map((row) => row.dataset.cbdcCode)
       .join('\n')
-      .slice(0, 400);
+      .slice(0, QUOTE_LIMIT);
   }
 
   function findAnchorRow(body, anchor, line) {
@@ -417,7 +432,7 @@
       pending.push({
         ...anchor,
         quote: quoteForAnchor(body, anchor),
-        comment: isSuggestion ? textarea.value : textarea.value.trim(),
+        comment: storedComment(isSuggestion, textarea.value),
         isSuggestion,
       });
       if (!batchContext) batchContext = {...currentComparison};
@@ -632,8 +647,8 @@
     body.className = `${PREFIX}-item-body`;
     const quote = document.createElement('div');
     quote.className = `${PREFIX}-quote`;
-    const range = entry.endLine === entry.startLine ? `${entry.startLine}` : `${entry.startLine}-${entry.endLine}`;
-    quote.textContent = `${entry.filePath}:${range} (${entry.side}) · “${entry.quote.slice(0, 400)}”`;
+    const range = lineRange(entry.startLine, entry.endLine);
+    quote.textContent = `${entry.filePath}:${range} (${entry.side}) · “${entry.quote.slice(0, QUOTE_LIMIT)}”`;
     const preview = document.createElement('div');
     preview.className = `${PREFIX}-preview`;
     preview.textContent = entry.isSuggestion ? `suggested replacement:\n${entry.comment}` : entry.comment;
@@ -662,7 +677,7 @@
     swapInInlineEditor(
         textarea, preview,
         (value) => {
-          entry.comment = entry.isSuggestion ? value : value.trim();
+          entry.comment = storedComment(entry.isSuggestion, value);
         },
         refreshTray);
   }

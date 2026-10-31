@@ -138,6 +138,11 @@ pub fn stable_withheld_event_id(run_id: &str, reason: &str) -> String {
   stable_id(&format!("run-launch-withheld:{run_id}:{reason}"))
 }
 
+/// The stable turn-launch notice fact id for one `(run_id, reason)` pair.
+pub fn stable_turn_launch_event_id(run_id: &str, reason: &str) -> String {
+  stable_id(&format!("turn-launch:{run_id}:{reason}"))
+}
+
 /// The SHA-256 digest of UTF-8 text as lowercase hexadecimal.
 pub fn sha256_hex(text: &str) -> String {
   sha256_bytes_hex(text.as_bytes())
@@ -206,6 +211,11 @@ mod tests {
   #[test]
   fn stable_run_id_matches_the_uuid5_namespace() {
     assert_eq!(stable_run_id("session-a", "request-1"), "1a41849d-357a-5529-96ac-75565f82bd39");
+  }
+
+  #[test]
+  fn stable_turn_launch_event_id_matches_the_uuid5_namespace() {
+    assert_eq!(stable_turn_launch_event_id("run-a", "reason"), "49a20cae-8223-5a11-bf89-46aa225aa122");
   }
 
   #[test]

@@ -20,6 +20,9 @@ use charliebot_agents::cli_base::{CliHost, apply_proxy_env, image_mime, prepend_
 /// The child env name that carries the configured API key.
 pub const API_KEY_ENV: &str = "CHARLIE_CODE_API_KEY";
 
+/// The file in the transport directory that carries the prompt; the `--task-file` option names it.
+pub const TASK_FILE_NAME: &str = "task.md";
+
 /// The `charlie-code --json` backend of one launch.
 pub struct CharlieCodeBackend {
   bin: String,
@@ -98,7 +101,7 @@ impl CharlieCodeBackend {
   fn argv(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let transport_dir =
       self.transport_dir.as_ref().context("charlie-code backend: prepare_transport must run before build_command")?;
-    let task_path = transport_dir.join("task.md");
+    let task_path = transport_dir.join(TASK_FILE_NAME);
     fs::write(&task_path, prompt).with_context(|| format!("writing {}", task_path.display()))?;
     let mut command = vec![
       self.bin.clone(),

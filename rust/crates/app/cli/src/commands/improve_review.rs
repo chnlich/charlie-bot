@@ -16,7 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use charliebot_charlie_code::{API_KEY_ENV, flags};
+use charliebot_charlie_code::{API_KEY_ENV, TASK_FILE_NAME, flags};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME, CREDENTIAL_KEY};
@@ -156,7 +156,7 @@ fn run_review(
   let scratch = scratch_base.join(format!("review-{}", uuid::Uuid::new_v4().simple()));
   fs::create_dir(&scratch).map_err(|error| format!("cannot create {}: {error}", scratch.display()))?;
 
-  let task_path = scratch.join("task.md");
+  let task_path = scratch.join(TASK_FILE_NAME);
   fs::write(&task_path, scrub(&task_text(prompt, cli.pr, &cli.pr_url), key))
     .map_err(|error| format!("cannot write {}: {error}", task_path.display()))?;
 

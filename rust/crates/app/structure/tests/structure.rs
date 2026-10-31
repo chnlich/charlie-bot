@@ -841,6 +841,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/registry",
     hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",
   },
+  OwnerRow { name: "task.md", owner: "backends/charlie_code", hint: "Use `charliebot_charlie_code::TASK_FILE_NAME`." },
   OwnerRow {
     name: "plans.json",
     owner: "features/artifacts",

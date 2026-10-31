@@ -133,6 +133,13 @@
   background: #3b82f6;
 }
 body.resizing { cursor: col-resize; user-select: none; }
+/* The new-session backend selector shows its selected label whole. The template's inline max-width: 110px
+   sits three pixels under the width the label needs, so the native select cuts the word ("Release trial"
+   renders "Release tria"), and only an important rule beats an inline style. The selector is the sidebar
+   row's one statement of where a new session will run, so the cap becomes a share of the row instead: at
+   55% the selector takes its own 113px at the default sidebar width and the New Session button beside it
+   keeps the rest. */
+#new-session-backend { max-width: 55% !important; }
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
    warning without hiding the link, which stays clickable. */
 .file-link-missing {

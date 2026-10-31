@@ -112,8 +112,8 @@ impl CodexUsageResolver {
       None => None,
     };
     Ok(Some(Map::from_iter([
-      ("context_tokens".to_string(), native.context_tokens),
-      ("context_full".to_string(), native.context_full),
+      (event_types::CONTEXT_TOKENS.to_string(), native.context_tokens),
+      (event_types::CONTEXT_FULL.to_string(), native.context_full),
       (event_types::CONTEXT_COMPACT_AT.to_string(), json!(auto_compact_limit)),
       (event_types::RESULT_TOTAL_COST_USD.to_string(), json!(cost)),
       ("model".to_string(), json!(native.model)),

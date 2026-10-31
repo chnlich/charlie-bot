@@ -831,16 +831,23 @@ root_disk_name() {
     printf '%s\n' "$ROOT_DISK_NAME"
     return 0
   fi
-  local dev name candidate best=""
+  local dev name candidate prefix rest best=""
   dev="$(root_partition_dev)" || return 1
   [ -n "$dev" ] || return 1
   name="$(diskstats_name "$dev")" || return 1
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
-    case "$name" in
-      "$candidate"p[0-9]*) [ "${#candidate}" -gt "${#best}" ] && best=$candidate ;;
-      "$candidate"[0-9]*) [ "${#candidate}" -gt "${#best}" ] && best=$candidate ;;
+    # Linux names a partition "<disk>p<N>" when the disk name ends in a digit, and "<disk><N>" otherwise. Only one disk
+    # matches a partition name under that rule, so the first match is the disk.
+    case "$candidate" in
+      *[0-9]) prefix="${candidate}p" ;;
+      *) prefix=$candidate ;;
     esac
+    rest="${name#"$prefix"}"
+    if [ "$rest" != "$name" ] && [[ "$rest" =~ ^[0-9]+$ ]]; then
+      best=$candidate
+      break
+    fi
   done < <(awk '{ print $3 }' "$DISKSTATS")
   ROOT_DISK_NAME="${best:-$name}"
   printf '%s\n' "$ROOT_DISK_NAME"

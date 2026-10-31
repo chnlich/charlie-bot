@@ -4,6 +4,8 @@
 //! The tests inject the disk-rate sampler by replacing `disk_read_rate_mb`, and they read their cgroup and process
 //! accounting from the world's fake cgroup and proc roots, so no test depends on the live disk.
 
+use std::fs;
+
 use super::world::{self, World};
 
 /// A sampler that answers each sample from `rates`, in order, and repeats the last value.
@@ -146,4 +148,30 @@ fn test_disk_preflight_fails_when_the_sampler_cannot_read_the_disk() {
   assert_eq!(run.code, 1, "{}", world.report(&run));
   assert!(run.stdout.contains("cannot read the root disk's read rate"), "{}", world.report(&run));
   assert!(!run.stdout.contains("preflight passed:"), "{}", world.report(&run));
+}
+
+/// Resolves the root disk for a fake diskstats table with `/` mounted on the device `root_dev`.
+fn resolved_root_disk(world: &mut World, diskstats: &str, root_dev: &str) -> String {
+  let diskstats_path = world.root().join("root-disk-diskstats");
+  let mountinfo_path = world.root().join("root-disk-mountinfo");
+  fs::write(&diskstats_path, diskstats).expect("the fake diskstats");
+  fs::write(&mountinfo_path, format!("28 1 {root_dev} / / rw,relatime shared:1 - ext4 /dev/root rw\n"))
+    .expect("the fake mountinfo");
+  world.env.insert("CHARLIEBOT_SWITCH_DISKSTATS".to_string(), diskstats_path.display().to_string());
+  world.env.insert("CHARLIEBOT_SWITCH_MOUNTINFO".to_string(), mountinfo_path.display().to_string());
+  let run = world.disk_command("root_disk_name");
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  run.stdout.trim().to_string()
+}
+
+/// Linux names the partitions of a disk whose name ends in a digit "<disk>p<N>", so partition 10 of sda is a partition
+/// of sda, not of sda1. The root disk is the disk that holds the root partition, whatever the partition's number.
+#[test]
+fn test_root_disk_resolves_a_partition_numbered_above_nine_to_its_own_disk() {
+  let mut world = World::new();
+  assert_eq!(resolved_root_disk(&mut world, "8 0 sda\n8 1 sda1\n8 10 sda10\n", "8:10"), "sda");
+  assert_eq!(
+    resolved_root_disk(&mut world, "259 0 nvme0n1\n259 1 nvme0n1p1\n259 12 nvme0n1p12\n", "259:12"),
+    "nvme0n1"
+  );
 }

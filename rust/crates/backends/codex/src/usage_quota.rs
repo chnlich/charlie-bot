@@ -15,7 +15,7 @@ use charliebot_core::str_methods;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
   PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES,
-  PANEL_WINDOWS, QuotaAccount,
+  PANEL_WINDOWS, QuotaAccount, as_utilization,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -357,14 +357,6 @@ pub fn parse_iso_utc(value: &str) -> Option<OffsetDateTime> {
     })
     .ok()
     .map(|parsed| parsed.to_offset(UtcOffset::UTC))
-}
-
-/// The utilization a limit reports as a percentage, or `None` when it reports none or a non-number.
-fn as_utilization(value: Option<&Value>) -> Option<f64> {
-  match value {
-    Some(Value::Number(number)) => number.as_f64(),
-    _ => None,
-  }
 }
 
 /// Whether one stored window's reading is expired at `now`: its reset has passed while the sample predates it, or the

@@ -24,6 +24,14 @@ pub const PANEL_RESETS_AT: &str = "resets_at";
 pub const PANEL_SCOPE_LABEL: &str = "scope_label";
 pub const PANEL_EXPIRED: &str = "expired";
 
+/// The utilization a source reports for a window: a percentage, or `None` when the value is absent or not a number.
+pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
+  match value {
+    Some(Value::Number(number)) => number.as_f64(),
+    _ => None,
+  }
+}
+
 /// One place usage is logged. `name` is the ledger's source value and the usage page's card title. A config backend
 /// id must start with one of `id_prefixes`. `run_logs_only` means CharlieBot's own run logs are the only home, and
 /// such a source has no implementation.

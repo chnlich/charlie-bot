@@ -75,7 +75,6 @@ function buildSwitchHarness() {
     ['backend-badge', createElement()],
     ['input-model-badge', createElement()],
     ['msg-input', createElement()],
-    ['composer-target-badge', createElement()],
     ['rename-input', createElement({id: 'rename-input', className: 'hidden', select() {}})],
     ['thinking', createElement({className: 'hidden'})],
     ['thinking-time', createElement()],
@@ -379,11 +378,10 @@ test('telemetry failure cannot break the switch', async () => {
 // Acceptance: the displayed session, the composer target and the held sends
 // ---------------------------------------------------------------------------
 
-// The three surfaces the displayed-session module paints agree on one name.
+// The two surfaces the displayed-session module paints agree on one name.
 function assertDisplayedAgreement(h, expectedName, label) {
   assert.equal(h.headerName.textContent, expectedName, 'header at ' + label);
   assert.equal(h.context.document.title, expectedName + ' · CharlieBot@localhost:8000', 'title at ' + label);
-  assert.equal(h.elements.get('composer-target-badge').textContent, 'To: ' + expectedName, 'badge at ' + label);
 }
 
 test('a send pressed inside the switch window posts to the session the header names', async () => {
@@ -544,7 +542,7 @@ test('a new session and the archive back to the welcome page keep the display an
   assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-new']);
 
   // Archive the displayed session with no other row left: the welcome view
-  // restores the original title and hides the badge.
+  // restores the original title.
   const h2 = buildSwitchHarness();
   h2.context.renderSessionView(h2.payloadFor('session-a'));
   const rowA = h2.elements.get('session-session-a');
@@ -558,8 +556,6 @@ test('a new session and the archive back to the welcome page keep the display an
   assert.equal(h2.context.SESSION_ID, null);
   assert.equal(h2.context.document.title, 'CharlieBot@localhost:8000',
       'the welcome page restores the original title');
-  assert.equal(h2.elements.get('composer-target-badge').classList.contains('hidden'), true,
-      'the badge hides on the welcome page');
 });
 
 test('a send pressed in a failing switch’s window posts to the bound session before the page navigates', async () => {

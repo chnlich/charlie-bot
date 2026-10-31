@@ -203,10 +203,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 .overflow-toggle { display: none; }
 .input-buttons { position: relative; }
-/* The composer's To: line names the displayed session. A session name can run to
-   thousands of characters, so the line ellipsizes on one row instead of stacking
-   rows of name that shrink the message list and push the composer up. */
-#composer-target-badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-overlay { display: none; }
 .hamburger-btn { display: none !important; }
 @media (max-width: 768px) {

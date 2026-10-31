@@ -2,9 +2,9 @@
 // The displayed session
 // ---------------------------------------------------------------------------
 // One owner of the session this page displays — the session the header names.
-// The header name, the tab title and the composer's To: badge are written
-// here and nowhere else. The template renders all three before any script
-// runs, and this module takes them over from the server-rendered globals.
+// The header name and the tab title are written here and nowhere else. The
+// template renders both before any script runs, and this module takes them
+// over from the server-rendered globals.
 // Every path that changes the page's session reports through
 // setDisplayedSession: a sidebar click, a new session and the archive back to
 // the welcome page. A render and the two rename writers refresh the name
@@ -34,11 +34,6 @@ function paintDisplayedSession() {
   document.title = displayedSessionName
     ? displayedSessionName + ' · CharlieBot@' + PAGE_HOSTNAME
     : DISPLAYED_WELCOME_TITLE;
-  const badge = document.getElementById('composer-target-badge');
-  if (badge) {
-    badge.textContent = 'To: ' + displayedSessionName;
-    badge.classList.toggle('hidden', !displayedSessionName);
-  }
 }
 
 // The one writer of the displayed session. A click that moves on resolves the

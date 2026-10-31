@@ -118,8 +118,9 @@ function connectWS() {
 // Stale-page reload guard
 // ---------------------------------------------------------------------------
 // The 4409 close asks this page to reload, and no-store page responses mean the reload gets the
-// current code. The guard caps the automatic reload at one per tab per 60 seconds, so a layer that
-// still serves old HTML (a stale cache in the path) cannot turn the close into a reload loop.
+// current code. The guard caps the automatic reload at one per tab per 60 seconds. A layer
+// that still serves old HTML (a stale cache in the path) therefore cannot turn the close
+// into a reload loop.
 const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
 const STALE_PAGE_RELOAD_GUARD_MS = 60000;
 

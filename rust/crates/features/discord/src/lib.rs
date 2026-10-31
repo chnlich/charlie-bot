@@ -18,7 +18,7 @@ mod test_support;
 
 use std::sync::Arc;
 
-use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
 use charliebot_registry::{Registry, RegistryError};
 use serde_json::{Map, Value};
 use service::DiscordService;
@@ -54,16 +54,4 @@ fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
     return Some("discord_watermark_id must be a string or null".to_string());
   }
   None
-}
-
-fn valid_origin(value: &mut Value, fields: &[&str]) -> bool {
-  if value.is_null() {
-    return true;
-  }
-  let Some(object) = value.as_object_mut() else { return false };
-  let valid = fields.iter().all(|name| object.get(*name).is_some_and(Value::is_string));
-  if valid {
-    object.retain(|name, _| fields.contains(&name.as_str()));
-  }
-  valid
 }

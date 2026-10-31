@@ -979,6 +979,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "charliebot-cli-common",
+ "charliebot-core",
  "charliebot-session-api",
  "charliebot-store",
  "chrono",

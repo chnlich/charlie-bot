@@ -35,7 +35,11 @@ use crate::{listing, worker_transcript};
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
 
-type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Vec<u8>>>;
+/// The compressed body of an events file, keyed by its path and `(mtime, size)`.
+///
+/// The value is a [`Bytes`] handle, so a hit shares the one stored buffer through a refcount bump;
+/// the largest production log holds about 18 MB of compressed bytes.
+type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Bytes>>;
 
 static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
   Mutex::new(LruCache::new(NonZeroUsize::new(FILE_GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")))
@@ -813,18 +817,17 @@ fn events_file_not_found() -> Response {
   responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Events file not found"}))
 }
 
-fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Vec<u8>> {
+fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Bytes> {
   let mtime_ns = metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000;
   let size = metadata.size();
   let key = (path.to_path_buf(), mtime_ns, size);
+  if let Some(body) =
+    EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned").get(&key).cloned()
   {
-    let mut memo = EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned");
-    if let Some(body) = memo.get(&key).cloned() {
-      return Ok(body);
-    }
+    return Ok(body);
   }
   let bytes = fs::read(path).map_err(|error| path_error(path, error))?;
-  let compressed = gzip_level_one(&bytes);
+  let compressed = Bytes::from(gzip_level_one(&bytes));
   let mut memo = EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned");
   memo.put(key, compressed.clone());
   Ok(compressed)
@@ -847,7 +850,7 @@ fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response 
   builder.body(Body::from(body)).expect("a session JSON response builds")
 }
 
-fn events_gzip_response(body: Vec<u8>) -> Response {
+fn events_gzip_response(body: Bytes) -> Response {
   Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/x-ndjson")

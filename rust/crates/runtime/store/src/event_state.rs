@@ -3,8 +3,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use charliebot_core::memo::BoundedMemo;
+
 use crate::event_types::{ChatEvent, SharedChatEvent};
-use crate::read_memos::{BoundedMemo, StatSignatureMemo};
+use crate::read_memos::StatSignatureMemo;
 
 // Match src/infra/ndjson.py:_COUNT_MEMO_LIMIT and its (mtime_ns, size) signatures.
 pub(crate) const EVENT_COUNT_MEMO_LIMIT: usize = 64;

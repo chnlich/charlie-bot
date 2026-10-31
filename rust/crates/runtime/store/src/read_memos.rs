@@ -1,10 +1,9 @@
 //! Bounded stat-signature memos for the store's disk read paths.
 
 use std::hash::Hash;
-use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 
-use lru::LruCache;
+use charliebot_core::memo::BoundedMemo;
 
 /// The Python memo signature shared by the NDJSON, archive, and trigger readers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,35 +18,6 @@ impl FileSignature {
       mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
       size: metadata.size(),
     }
-  }
-}
-
-/// A locked-caller LRU map with the same get-touch/store-evict rule as `src/infra/memo.py`, which wraps
-/// `collections.OrderedDict`. `lru::LruCache` is that primitive in Rust.
-pub(crate) struct BoundedMemo<K, V> {
-  entries: LruCache<K, V>,
-}
-
-impl<K, V> BoundedMemo<K, V>
-where
-  K: Eq + Hash,
-  V: Clone,
-{
-  pub(crate) fn new(limit: usize) -> Self {
-    Self { entries: LruCache::new(NonZeroUsize::new(limit).expect("a memo limit is nonzero")) }
-  }
-
-  pub(crate) fn get(&mut self, key: &K) -> Option<V> {
-    self.entries.get(key).cloned()
-  }
-
-  pub(crate) fn store(&mut self, key: K, value: V) {
-    self.entries.put(key, value);
-  }
-
-  #[cfg(test)]
-  pub(crate) fn len(&self) -> usize {
-    self.entries.len()
   }
 }
 

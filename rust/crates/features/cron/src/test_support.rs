@@ -205,14 +205,15 @@ fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
 /// The commit SHA the fake origin's `main` points at.
 const FAKE_TIP: &str = "1111111111111111111111111111111111111111";
 
-/// Serializes the tests that depend on the tasks crate's git program override, which is process-global: the tests that
-/// install a [`FakeGit`], and each test that launches a repo-backed run, since its git calls must reach real git.
+/// Serializes the tests that depend on the tasks crate's git program override, which is process-global.
+/// Those are the tests that install a [`FakeGit`] and each test that launches a repo-backed run, whose git calls
+/// must reach real git.
 pub static GIT_PROGRAM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// A `git` stand-in for the repo-backed cron tests. A `/bin/sh` script records each call's argv, answers the calls
-/// `prepare_worktree` makes for origin's `main` and the delivery cleanup that removes the worktree, and fails every
-/// other call so that the test reports it. The tasks crate's `test-hooks` program override routes the module's git
-/// spawns through the script.
+/// A `git` stand-in for the repo-backed cron tests. A `/bin/sh` script records each call's argv. It answers the
+/// calls `prepare_worktree` makes for origin's `main`, plus the delivery cleanup that removes the worktree. Every
+/// other call fails, so the test reports it. The tasks crate's `test-hooks` program override routes the module's
+/// git spawns through the script.
 pub struct FakeGit {
   dir: tempfile::TempDir,
 }

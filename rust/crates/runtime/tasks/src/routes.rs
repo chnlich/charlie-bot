@@ -54,6 +54,10 @@ pub const TASK_INPUTS_ACKNOWLEDGE_PATH: &str = "/api/sessions/{session_id}/task-
 pub const DELEGATE_PATH: &str = "/api/internal/delegate";
 pub const SESSION_MESSAGE_PATH: &str = "/api/internal/session-message";
 
+/// The session-message request's field naming the task that receives the message. The route validates it and the CLI
+/// builds the request from it, so the name is spelled once, here.
+pub const SESSION_MESSAGE_TARGET_SESSION_ID_FIELD: &str = "target_session_id";
+
 /// The delegate request's field names. The route validates against them and the CLI builds the body from them, so each
 /// name is spelled once, here.
 pub const DELEGATE_SESSION_ID_FIELD: &str = "session_id";
@@ -722,7 +726,7 @@ async fn send_message(
 
 const SESSION_MESSAGE_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
-  Field::required("target_session_id", FieldType::String),
+  Field::required(SESSION_MESSAGE_TARGET_SESSION_ID_FIELD, FieldType::String),
   Field::required("content", FieldType::String),
 ];
 const SESSION_MESSAGE_BODY: BodyModel = BodyModel::required(SESSION_MESSAGE_BODY_FIELDS).forbid_extra();
@@ -738,7 +742,7 @@ fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageReq
   let values = values.expect("a required request body validates to an object");
   Ok(SessionMessageRequest {
     session_id: validated_string(&values, "session_id"),
-    target_session_id: validated_string(&values, "target_session_id"),
+    target_session_id: validated_string(&values, SESSION_MESSAGE_TARGET_SESSION_ID_FIELD),
     content: validated_string(&values, "content"),
   })
 }

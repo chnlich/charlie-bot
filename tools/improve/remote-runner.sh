@@ -178,29 +178,76 @@ rewrite_command() {
   REWRITTEN=("${rewritten[@]}")
 }
 
+# Whether every commit of the branch is on origin/main, by patch or by subject.
+#
+# A rebase lands each commit unchanged, and git cherry finds it by patch. A rebase that resolved a
+# conflict changes the patch but keeps the subject, so a commit whose subject origin/main has since
+# the merge base also counts. inflight-files.sh reads this repository's worktrees by the same rules.
+commits_landed() {
+  local root=$1
+  local merge_base=$2
+  local branch=$3
+  local sign sha subject
+  local -A main_subjects=()
+  while IFS= read -r subject; do
+    main_subjects["$subject"]=1
+  done < <(git -C "$root" log --format=%s "$merge_base..origin/main")
+  while read -r sign sha subject; do
+    if [[ $sign == + && -z ${main_subjects[$subject]:-} ]]; then
+      return 1
+    fi
+  done < <(git -C "$root" cherry -v origin/main "$branch")
+  return 0
+}
+
+# Whether origin/main has held the branch's version of every path the branch changes since the
+# merge base.
+#
+# A squash merge lands the branch's content in one commit. A later change may move the path on, but
+# the landed version stays in origin/main's history, so a path that never held the branch's version
+# carries the branch's own change.
+versions_landed() {
+  local root=$1
+  local merge_base=$2
+  local branch=$3
+  local meta path version entry
+  local -A main_versions=()
+  local -a paths=()
+  local -a branch_versions=()
+  while IFS=$'\t' read -r meta path; do
+    read -r _ _ _ version _ <<<"$meta"
+    paths+=("$path")
+    branch_versions+=("$path"$'\t'"$version")
+  done < <(git -C "$root" diff --raw --no-renames --no-abbrev "$merge_base" "$branch")
+  if [[ ${#paths[@]} -eq 0 ]]; then
+    return 0
+  fi
+  while IFS=$'\t' read -r meta path; do
+    read -r _ _ _ version _ <<<"$meta"
+    main_versions["$path"$'\t'"$version"]=1
+  done < <(git --literal-pathspecs -C "$root" log --format= --raw --no-renames --no-abbrev \
+    "$merge_base..origin/main" -- "${paths[@]}" | grep '^:')
+  for entry in "${branch_versions[@]}"; do
+    if [[ -z ${main_versions[$entry]:-} ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
 # Whether a branch carries a change that origin/main does not already contain.
 #
-# A branch is in flight when it changes a path whose content origin/main still matches the merge
-# base: no landing put anything there, so the path holds only the branch's change. A landing rewrites
-# every path that the landed branch changed, so once the branch has landed origin/main differs from
-# the merge base at each of them, whether the landing kept the branch's commits or squashed them into
-# one. A stale origin/main fails this test, which is why the fetch above comes first.
-# inflight-files.sh reads this repository's worktrees by the same rule.
+# The branch has landed when its commits or its versions are on origin/main. Both checks read
+# origin/main, so a stale origin/main would make merged work look live; this is why the fetch above
+# comes first.
 branch_is_in_flight() {
   local root=$1
   local merge_base=$2
   local branch=$3
-  local path
-  local -A moved=()
-  while IFS= read -r path; do
-    moved["$path"]=1
-  done < <(git -C "$root" diff --name-only --no-renames "$merge_base" origin/main)
-  while IFS= read -r path; do
-    if [[ -z ${moved[$path]:-} ]]; then
-      return 0
-    fi
-  done < <(git -C "$root" diff --name-only --no-renames "$merge_base" "$branch")
-  return 1
+  if commits_landed "$root" "$merge_base" "$branch" || versions_landed "$root" "$merge_base" "$branch"; then
+    return 1
+  fi
+  return 0
 }
 
 # The other directions' clones are standalone repositories on this host, so the list that the

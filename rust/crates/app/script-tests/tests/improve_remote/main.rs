@@ -522,6 +522,59 @@ fn a_squash_merged_worktree_branch_contributes_no_files() {
 }
 
 #[test]
+fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
+  let world = World::new();
+  // A leftover branch whose commit never reached origin/main, checked out in its worktree as the host leaves it.
+  let checkout = world.sandbox.root().join("unlanded-checkout");
+  world.git(&world.repo, &["branch", "charliebot/unlanded"]);
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "charliebot/unlanded"]);
+  fs::write(checkout.join("shared.md"), "topic\n").expect("the topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic unlanded topic"]);
+  // origin/main changes the same file with another change, so the branch's version never reached it.
+  fs::write(world.repo.join("shared.md"), "another change\n").expect("the other change");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "change the shared file on main"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  world.git(&world.repo, &["update-ref", "refs/remotes/origin/main", &world.commit]);
+  world.git(&world.repo, &["reset", "-q", "--hard", &world.commit]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(
+    list.lines().any(|line| line == "shared.md"),
+    "the in-flight list misses an unlanded branch's file that origin/main changed:\n{list}"
+  );
+}
+
+#[test]
+fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
+  let world = World::new();
+  // A leftover branch of a round that a rebase landed, checked out in its worktree as the host leaves it.
+  let checkout = world.sandbox.root().join("rebased-checkout");
+  world.git(&world.repo, &["branch", "charliebot/rebased"]);
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "charliebot/rebased"]);
+  fs::write(checkout.join("rebased.md"), "topic\n").expect("the topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic rebased topic"]);
+  // The rebase keeps the commit's subject, and its conflict resolution changes the file's content.
+  fs::write(world.repo.join("rebased.md"), "topic, resolved\n").expect("the resolved file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "synthetic rebased topic"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  world.git(&world.repo, &["update-ref", "refs/remotes/origin/main", &world.commit]);
+  world.git(&world.repo, &["reset", "-q", "--hard", &world.commit]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(!list.lines().any(|line| line == "rebased.md"), "the in-flight list names a rebased branch's file:\n{list}");
+}
+
+#[test]
 fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");

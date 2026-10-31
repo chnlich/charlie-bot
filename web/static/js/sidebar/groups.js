@@ -456,7 +456,9 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
   // outside updateRelativeTimes's [data-time] sweep, so a long archived list
   // never joins the periodic full-table refresh.
   const timeAttr = staticTime ? '' : ` data-time="${timeIso}"`;
-  return `<span class="flex items-center gap-1.5 text-xs text-slate-500">`
+  // The line sits on slate-850, where slate-500 holds about 3.4:1.
+  // slate-400 is still quieter than the name and holds about 6.3:1.
+  return `<span class="flex items-center gap-1.5 text-xs text-slate-400">`
     + `<span class="session-time flex-shrink-0"${timeAttr}>${timeStr}</span>`
     + model
     + `</span>`;

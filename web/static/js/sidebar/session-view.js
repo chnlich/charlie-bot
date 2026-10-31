@@ -157,12 +157,12 @@ function scheduleLazySessionDataLoad() {
 // ---------------------------------------------------------------------------
 // Worker transcript mode (the live record in the main chat column)
 // ---------------------------------------------------------------------------
-// A task-tree worker node's messages are its Runs' transcript; they render
+// A task-tree worker node's messages are its Runs' transcript. They render
 // through the main chat column and stay live through the transcript poll (the
-// server's memoized
-// projection answers an unchanged read with one stat pass). The poll carries
-// thinking_since (the header timer), the signallable run (the stop control),
-// and the streaming draft, so a worker page needs no other live channel.
+// server's memoized projection answers an unchanged read with one stat pass).
+// The poll carries thinking_since (the header timer), the signallable run (the
+// stop control), and the streaming draft, so a worker page needs no other live
+// channel.
 const TRANSCRIPT_POLL_MS = 2000;
 let transcriptMode = null;       // {sessionId} while the view shows one
 let transcriptRevision = '';
@@ -241,8 +241,8 @@ function applyTranscriptUpdate(data) {
       // keeps their message at the same viewport offset.
       const engine = Chat.activeTurnEngineFor(container);
       // The follow decision is the engine's shouldFollow(): a fitting reply
-      // opened at the bottom is not pinned, but its deferred follow must
-      // survive the reset remount the same way the pin does.
+      // opened at the bottom is not pinned. Its deferred follow must survive
+      // the reset remount the same way the pin does.
       const wasPinned = engine ? engine.shouldFollow() : shouldAutoScroll(container);
       const reading = engine
         ? engine.captureReadingAnchor()
@@ -389,9 +389,9 @@ function startThinking(opts) {
 }
 
 // Resumes the indicator when a page load or SPA switch lands while the master
-// is mid-thought. THINKING_SINCE is the server-stamped start the session view
-// and status polls refresh; the send button stays with the in-flight lock, so
-// typing remains available while the run is still processing.
+// is mid-thought. THINKING_SINCE is the server-stamped start that the session
+// view and status polls refresh. The send button stays with the in-flight
+// lock, so typing remains available while the run is still processing.
 function resumeThinkingIfMidThought() {
   if (THINKING_SINCE) {
     thinkingStart = new Date(THINKING_SINCE).getTime();
@@ -475,10 +475,10 @@ function buildEmptySessionBootstrap(session) {
 }
 
 // ---------------------------------------------------------------------------
-// Switch phases + bootstrap cache: five one-line phase records per switch
-// (started/completed/superseded/failed/render_error), plus a short-lived
-// cache so a superseded generation's fetched bootstrap serves an immediate
-// re-click of the same session.
+// Switch phases + bootstrap cache. Five one-line phase records per switch
+// (started/completed/superseded/failed/render_error), plus a short-lived cache
+// so a superseded generation's fetched bootstrap serves an immediate re-click
+// of the same session.
 // ---------------------------------------------------------------------------
 const BOOTSTRAP_CACHE_TTL_MS = 60000;
 const BOOTSTRAP_CACHE_MAX_ENTRIES = 20;
@@ -524,10 +524,11 @@ function switchTargetName(sessionId) {
   return (nameEl && nameEl.textContent) || sessionId;
 }
 
-// Click-time immediate feedback: the placeholder row (thinking pulse-dot style)
-// replaces the stale session DOM before any network wait; the displayed-session
-// module paints the header at the click and renderSessionView repaints both
-// with authoritative data later. The streaming element survives the wipe —
+// Click-time immediate feedback: the placeholder row (thinking pulse-dot
+// style) replaces the stale session DOM before any network wait. The
+// displayed-session module paints the header at the click, and
+// renderSessionView repaints both with authoritative data later.
+// The streaming element survives the wipe —
 // hideStreaming/showStreaming resolve it by id after the render.
 function showSwitchPlaceholder(sessionId) {
   const container = document.getElementById('messages');
@@ -569,7 +570,7 @@ async function switchSession(sessionId) {
   // held, so a held message posts before this click swaps the composer.
   setDisplayedSession(sessionId, switchTargetName(sessionId));
 
-  // The composer moves to the target's draft at once: typing during the
+  // The composer moves to the target's draft at once. Typing during the
   // switch window stores into the target's draft, and the landing leaves the
   // composer as the user left it.
   DRAFT_KEY = 'charliebot-draft-' + sessionId;
@@ -612,8 +613,8 @@ async function switchSession(sessionId) {
       // A newer click owns the view and its held actions: a failure of a
       // superseded switch navigates nowhere.
       if (gen !== switchGeneration) return;
-      // The page navigates to a full load of the target: a composer action
-      // held by this switch resolves first — a held message posts to the
+      // The page navigates to a full load of the target. A composer action
+      // held by this switch resolves first: a held message posts to the
       // session it bound before the navigation drops the page.
       abandonHeldComposerActions(sessionId);
       switching = false;
@@ -845,7 +846,7 @@ function initScrollPagination() {
   });
 }
 
-// The fill rule. Load the next older page when all of these hold: older history
+// The fill rule. Load the next older page when all of these hold. Older history
 // remains, no page is in flight, the list is visible (clientHeight > 0), and its
 // content is no taller than its viewport plus 80px. Such a list cannot scroll,
 // so no scroll event will ever ask for the page. The sizes tell it, not
@@ -862,7 +863,7 @@ function fillIfShort(container, isContinuation) {
 
 Chat.registerProjectionCheck((container) => { fillIfShort(container, false); });
 
-// `isContinuation` marks a call that continues a chain; any other call (a user
+// `isContinuation` marks a call that continues a chain. Any other call (a user
 // gesture, a click on the failed sentinel, a fresh fill) starts a burst and
 // resets the trigger-zone counter.
 async function loadOlderIfNeeded(container, isContinuation) {
@@ -930,7 +931,7 @@ async function loadOlderIfNeeded(container, isContinuation) {
         }
       }
       // A page that merges entirely into the leading pending segment shifts
-      // nothing, so a viewport parked at scrollTop 0 stays there — where no
+      // nothing. A viewport parked at scrollTop 0 then stays there, where no
       // scroll event can ever fire and pagination stalls. Lift by 1px so the
       // next wheel gesture always produces a scroll event.
       if (shift === 0 && sessionHasMore && container.scrollTop <= 0) {
@@ -1087,10 +1088,10 @@ function renderUsageFromData(usage) {
 // Session management
 // ---------------------------------------------------------------------------
 // Both creation entry points (the New Session button and a row's hover "+")
-// send the task creation body: a client request key (a replay under the same
-// parent returns the same node), the parent id (null for a root), always the
-// manager profile, and an empty goal. The server names the node from its
-// session counter, as it names a session.
+// send the task creation body. It carries a client request key, the parent id
+// (null for a root), always the manager profile, and an empty goal. A replay
+// under the same parent returns the same node. The server names the node from
+// its session counter, as it names a session.
 function newTaskRequestId() {
   if (globalThis.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -1124,7 +1125,7 @@ async function createSessionInGroup(group) {
   await createTaskNode(null, group);
 }
 
-// The one create-session POST both entry points make: a scheduled task's born-
+// The one create-session POST both entry points make. A scheduled task's born-
 // bound node and a plain task node carry the same body and headers, so the
 // request shape is stated once here. Returns the created session's payload.
 async function createSessionNode(taskParentId, group) {
@@ -1154,7 +1155,7 @@ async function createTaskNode(taskParentId, group) {
     switching = true;
     ++switchGeneration;
     saveDraftNow();
-    // The new session becomes the displayed one at creation time, and the
+    // The new session becomes the displayed one at creation time. The
     // composer moves to its (empty) draft now, so the landing leaves the
     // composer as the user left it.
     setDisplayedSession(data.id, data.name);

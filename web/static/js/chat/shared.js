@@ -203,9 +203,9 @@ function messageIdentityAttrs(msg) {
 }
 
 // An error row: a system message whose text starts with ERROR_PREFIX. The
-// aggregator's ASSISTANT_ERROR and ERROR handlers (message_aggregator.py,
-// _SIMPLE_HANDLERS) write that prefix, so keep it in step with them. The For you
-// filter and rendering.js both read this one test.
+// aggregator's ASSISTANT_ERROR, ERROR and RUN_ERROR arms in `render_builtin`
+// (`rust/crates/runtime/store/src/aggregator.rs`) write that prefix, so keep it
+// in step with them. The For you filter and rendering.js both read this one test.
 const ERROR_PREFIX = 'Error: ';
 
 function isErrorRow(msg) {

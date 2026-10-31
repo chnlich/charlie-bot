@@ -20,9 +20,10 @@ const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
 /// The threads one signature batch may split across.
 ///
-/// The batch is one `stat` per watched file and the route waits on its slowest chunk; on the 7,160-session home, eight
-/// threads cut the sweep's wall time by about two fifths.
-const SIGNATURE_BATCH_WORKERS: usize = 8;
+/// The batch is one `stat` per watched file and the route waits on its slowest chunk. On the 7,160-session home,
+/// sixteen threads cut the sweep's wall time by about two fifths against eight, and more threads than that gained
+/// nothing.
+const SIGNATURE_BATCH_WORKERS: usize = 16;
 /// The batch length below which the signatures are read on the calling thread.
 ///
 /// Starting a thread costs more than the `stat` calls a short batch makes, so only a batch that a

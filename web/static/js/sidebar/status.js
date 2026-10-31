@@ -176,14 +176,6 @@ function unreadReplyIsCurrent(sessionId, requestSeq) {
   return requestSeq >= (unreadFactSeqBySession[sessionId] || 0);
 }
 
-// The unread state a row renders: the map when this client knows the session
-// (a broadcast, a polled fact, or a fetched row). Otherwise it is the row's
-// own server fact, such as a search hit that has not been through a level
-// fetch yet.
-function rowUnreadState(sessionId, serverValue) {
-  return typeof sessionUnread[sessionId] === 'boolean' ? sessionUnread[sessionId] : !!serverValue;
-}
-
 // ---------------------------------------------------------------------------
 // Activity indicators — one owner, one visual language
 // ---------------------------------------------------------------------------
@@ -535,7 +527,6 @@ const API = {
   recordUnreadFact,
   unreadSeqAtRequest,
   unreadReplyIsCurrent,
-  rowUnreadState,
   renderPendingTriggerIndicator,
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,

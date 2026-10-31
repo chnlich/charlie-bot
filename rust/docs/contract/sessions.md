@@ -309,11 +309,17 @@ Errors: 404 `Session not found`; 422 when `before` is missing or not an int.
 - Handler: `src/runtime/api/sessions.py:1525`.
 - No `require_session`. The route checks the file only.
 
+| Name | In | Type | Required | Default | Validation |
+|---|---|---|---|---|---|
+| `tail` | query | int | no | none, so the whole file | 1..2000, else 422 |
+| `before` | query | int | no | the file end | 0 or more; requires `tail`, else 422 |
+
 | Status | Case | Body |
 |---|---|---|
 | 404 | `sessions/<id>/data/chat_events.jsonl` does not exist | `{"detail":"Events file not found"}` |
 | 200, gzip accepted | | the file bytes gzipped at level 1, `content-type: application/x-ndjson`, `Content-Encoding: gzip`, `Vary: Accept-Encoding` |
 | 200, no gzip | | a `FileResponse` of the file, `content-type: application/x-ndjson`, with `etag`, `last-modified`, `accept-ranges` |
+| 200, `tail` given | | the last `tail` lines that end at or before byte `before`, in the same encodings, with `x-window-start` naming the byte offset where the window starts; a `before` inside a line snaps back to the previous line boundary |
 
 The server memoizes the gzip form per file (mtime, size).
 

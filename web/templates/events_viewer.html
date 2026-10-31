@@ -95,6 +95,14 @@
     </div>
   </div>
 
+  <!-- Earlier events: the page loads the log's tail first, so a large log does not hold the first screen -->
+  <div id="earlier-bar" class="hidden px-4 py-2 border-b border-slate-800">
+    <button id="load-earlier"
+            class="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
+      Load earlier events
+    </button>
+  </div>
+
   <!-- Event list -->
   <div id="event-list" class="divide-y divide-slate-800/60">
     <!-- populated by JS -->
@@ -117,6 +125,9 @@
     // Constants
     // -------------------------------------------------------------------------
     const EVENTS_URL = {{ events_url|tojson }};
+    // The events one request loads: the page shows the newest first, so a log of gigabytes does not
+    // hold the first screen.
+    const EVENTS_PAGE = 200;
 
     // -------------------------------------------------------------------------
     // Badge colour for event type
@@ -135,6 +146,9 @@
     // -------------------------------------------------------------------------
     let allEvents = [];
     let expandAll = false;
+    // The byte offset where the loaded window starts; 0 means the whole log is loaded.
+    let windowStart = 0;
+    let loadingEarlier = false;
 
     // -------------------------------------------------------------------------
     // Row summary
@@ -240,9 +254,11 @@
     }
 
     // The header count names the rows on screen: the filter's result, and the
-    // singular noun for a lone event.
+    // singular noun for a lone event. While earlier events remain unloaded, the
+    // count says that it covers the loaded part of the log.
     function updateEventCount(count) {
-      document.getElementById('event-count').textContent = `${count} ${count === 1 ? 'event' : 'events'}`;
+      const loaded = windowStart > 0 ? ' loaded' : '';
+      document.getElementById('event-count').textContent = `${count}${loaded} ${count === 1 ? 'event' : 'events'}`;
     }
 
     function filterEvents() {
@@ -273,23 +289,38 @@
     // -------------------------------------------------------------------------
     // Fetch JSONL
     // -------------------------------------------------------------------------
+    function parseEvents(text) {
+      return text.split('\n').filter(l => l.trim()).map(line => {
+        try {
+          return JSON.parse(line);
+        } catch (err) {
+          return { type: 'parse_error', raw: line, error: err.message };
+        }
+      });
+    }
+
+    // The byte offset where the served window starts. A server without the window header served the
+    // whole log, so nothing earlier is left to load.
+    function windowStartOf(res) {
+      const value = Number(res.headers.get('x-window-start'));
+      return Number.isFinite(value) && value >= 0 ? value : 0;
+    }
+
+    function updateEarlierBar() {
+      document.getElementById('earlier-bar').classList.toggle('hidden', !(windowStart > 0));
+    }
+
     async function loadEvents() {
       try {
-        const res = await fetch(EVENTS_URL);
+        const res = await fetch(EVENTS_URL + '?tail=' + EVENTS_PAGE);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
-        const text = await res.text();
-        const lines = text.split('\n').filter(l => l.trim());
-        allEvents = lines.map((line, i) => {
-          try {
-            return JSON.parse(line);
-          } catch (err) {
-            return { type: 'parse_error', raw: line, error: err.message, _line: i + 1 };
-          }
-        });
+        windowStart = windowStartOf(res);
+        allEvents = parseEvents(await res.text());
 
         document.getElementById('loading').classList.add('hidden');
+        updateEarlierBar();
         filterEvents();
       } catch (err) {
         document.getElementById('loading').classList.add('hidden');
@@ -299,10 +330,44 @@
       }
     }
 
+    // Prepend the events before the loaded window. The scroll offset is kept on the first row that was
+    // on screen, so the reader stays where they were while earlier rows arrive above.
+    async function loadEarlier() {
+      if (loadingEarlier || !(windowStart > 0)) return;
+      loadingEarlier = true;
+      const button = document.getElementById('load-earlier');
+      button.disabled = true;
+      button.textContent = 'Loading…';
+      const before = windowStart;
+      const previousHeight = document.documentElement.scrollHeight;
+      try {
+        const res = await fetch(EVENTS_URL + '?tail=' + EVENTS_PAGE + '&before=' + before);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        const earlier = parseEvents(await res.text());
+        windowStart = windowStartOf(res);
+        allEvents = earlier.concat(allEvents);
+        filterEvents();
+        window.scrollBy(0, document.documentElement.scrollHeight - previousHeight);
+        document.getElementById('error-msg').classList.add('hidden');
+      } catch (err) {
+        const errEl = document.getElementById('error-msg');
+        errEl.textContent = 'Failed to load earlier events: ' + err.message;
+        errEl.classList.remove('hidden');
+      } finally {
+        loadingEarlier = false;
+        button.disabled = false;
+        button.textContent = 'Load earlier events';
+        updateEarlierBar();
+      }
+    }
+
     // -------------------------------------------------------------------------
     // Wire up controls
     // -------------------------------------------------------------------------
     document.getElementById('type-filter').addEventListener('input', filterEvents);
+    document.getElementById('load-earlier').addEventListener('click', loadEarlier);
 
     document.getElementById('expand-all').addEventListener('change', (e) => {
       expandAll = e.target.checked;

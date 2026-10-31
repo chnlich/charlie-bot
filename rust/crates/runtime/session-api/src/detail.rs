@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,10 @@ use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
+/// The most lines one events window may ask for.
+const EVENTS_WINDOW_MAX_LINES: usize = 2_000;
+/// The bytes one backwards read of an events window examines at a time.
+const EVENTS_WINDOW_CHUNK: u64 = 64 * 1024;
 
 /// The compressed body of an events file, keyed by its path and `(mtime, size)`.
 ///
@@ -575,6 +580,39 @@ async fn events_jsonl(
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return events_file_not_found(),
     Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
   };
+  let query = Query::new(&request);
+  let tail = match query.get("tail") {
+    Some(_) => match query.parse_int("tail", None, Some(1), Some(EVENTS_WINDOW_MAX_LINES as i64)) {
+      Ok(tail) => Some(tail as usize),
+      Err(response) => return *response,
+    },
+    None => None,
+  };
+  let before = match query.get("before") {
+    Some(_) if tail.is_none() => {
+      return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "before requires tail"}));
+    }
+    Some(_) => match query.parse_int("before", None, Some(0), None) {
+      Ok(before) => Some(before as u64),
+      Err(response) => return *response,
+    },
+    None => None,
+  };
+  if let Some(tail) = tail {
+    let size = metadata.size();
+    let wants_gzip = request_wants_gzip(&request);
+    let result = tokio::task::spawn_blocking(move || {
+      let (body, start) = events_window(&path, size, tail, before)?;
+      let gzip = wants_gzip.then(|| Bytes::from(gzip_level_one(&body)));
+      Ok::<_, StoreError>((body, gzip, start))
+    })
+    .await;
+    return match result {
+      Ok(Ok((body, gzip, start))) => events_window_response(body, gzip, start),
+      Ok(Err(error)) => store_error(error),
+      Err(error) => store_error(StoreError::new(error.to_string())),
+    };
+  }
   if !request_wants_gzip(&request) {
     return static_files::serve_file(&path, "application/x-ndjson", request.method(), request.headers());
   }
@@ -584,6 +622,64 @@ async fn events_jsonl(
     Ok(Err(error)) => store_error(error),
     Err(error) => store_error(StoreError::new(error.to_string())),
   }
+}
+
+/// The last `tail` lines of the events file that end at or before byte `before` (the file end when `before` is
+/// `None`), and the byte offset where the window starts.
+///
+/// A `before` that lands inside a line snaps down to the previous line boundary, so every returned byte belongs to
+/// whole lines. The scan reads backwards from the end of the window and stops once `tail` line breaks lie behind it,
+/// so a window of a few hundred lines costs a few reads instead of a read of the whole file.
+fn events_window(path: &Path, size: u64, tail: usize, before: Option<u64>) -> StoreResult<(Bytes, u64)> {
+  let mut file = fs::File::open(path).map_err(|error| path_error(path, error))?;
+  let mut end = before.map_or(size, |offset| offset.min(size));
+  if end > 0 && end < size && read_at(&mut file, end - 1, 1)?[0] != b'\n' {
+    end = line_boundary(&mut file, end)?;
+  }
+  // The file's final line counts as a line even when it carries no terminator.
+  let mut lines = usize::from(end == size && end > 0 && read_at(&mut file, end - 1, 1)?[0] != b'\n');
+  let mut cursor = end;
+  loop {
+    let from = cursor.saturating_sub(EVENTS_WINDOW_CHUNK);
+    let chunk = read_at(&mut file, from, cursor - from)?;
+    for index in (0..chunk.len()).rev() {
+      if chunk[index] == b'\n' {
+        lines += 1;
+        if lines > tail {
+          let start = from + index as u64 + 1;
+          return Ok((Bytes::from(read_at(&mut file, start, end - start)?), start));
+        }
+      }
+    }
+    cursor = from;
+    if cursor == 0 {
+      return Ok((Bytes::from(read_at(&mut file, 0, end)?), 0));
+    }
+  }
+}
+
+/// The largest line boundary at or before `offset`: 0, or the byte after the last newline before it.
+fn line_boundary(file: &mut fs::File, offset: u64) -> StoreResult<u64> {
+  let mut cursor = offset;
+  while cursor > 0 {
+    let from = cursor.saturating_sub(EVENTS_WINDOW_CHUNK);
+    let chunk = read_at(file, from, cursor - from)?;
+    if let Some(index) = chunk.iter().rposition(|byte| *byte == b'\n') {
+      return Ok(from + index as u64 + 1);
+    }
+    cursor = from;
+  }
+  Ok(0)
+}
+
+/// `length` bytes of the file from `start`.
+fn read_at(file: &mut fs::File, start: u64, length: u64) -> StoreResult<Vec<u8>> {
+  let length =
+    usize::try_from(length).map_err(|_| StoreError::new(format!("events window of {length} bytes is too large")))?;
+  let mut buffer = vec![0u8; length];
+  file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(error.to_string()))?;
+  file.read_exact(&mut buffer).map_err(|error| StoreError::new(error.to_string()))?;
+  Ok(buffer)
 }
 
 async fn session_runs(
@@ -848,6 +944,25 @@ fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response 
       .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
   }
   builder.body(Body::from(body)).expect("a session JSON response builds")
+}
+
+/// One window of the events file: its bytes, the byte offset where the window starts, and its gzip form when the
+/// request asked for one.
+fn events_window_response(body: Bytes, gzip: Option<Bytes>, start: u64) -> Response {
+  let (served, encoding) = match gzip {
+    Some(compressed) => (compressed, Some("gzip")),
+    None => (body, None),
+  };
+  let mut builder = Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "application/x-ndjson")
+    .header(header::CONTENT_LENGTH, served.len())
+    .header("x-window-start", start)
+    .header(header::VARY, "Accept-Encoding");
+  if let Some(encoding) = encoding {
+    builder = builder.header(header::CONTENT_ENCODING, encoding);
+  }
+  builder.body(Body::from(served)).expect("an events window response builds")
 }
 
 fn events_gzip_response(body: Bytes) -> Response {
@@ -1233,5 +1348,57 @@ mod tests {
       assert_eq!(page["next_before"], next_before, "before={before}, limit={limit}");
       assert_eq!(page["has_more"], next_before > 0, "before={before}, limit={limit}");
     }
+  }
+
+  #[test]
+  fn an_events_window_walks_back_through_the_lines_of_the_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("chat_events.jsonl");
+    fs::write(&path, "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n{\"n\":5}\n").unwrap();
+    let size = fs::metadata(&path).unwrap().size();
+
+    let (body, start) = events_window(&path, size, 2, None).unwrap();
+    assert_eq!(body.as_ref(), b"{\"n\":4}\n{\"n\":5}\n");
+    assert_eq!(start, 24);
+
+    let (body, start) = events_window(&path, size, 2, Some(start)).unwrap();
+    assert_eq!(body.as_ref(), b"{\"n\":2}\n{\"n\":3}\n");
+    assert_eq!(start, 8);
+
+    let (body, start) = events_window(&path, size, 2, Some(start)).unwrap();
+    assert_eq!(body.as_ref(), b"{\"n\":1}\n", "a window short of its count starts at the file's first byte");
+    assert_eq!(start, 0);
+
+    let (body, start) = events_window(&path, size, 2, Some(0)).unwrap();
+    assert!(body.is_empty(), "a window before the first byte holds no line");
+    assert_eq!(start, 0);
+  }
+
+  #[test]
+  fn an_events_window_counts_a_final_line_without_a_terminator() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("chat_events.jsonl");
+    fs::write(&path, "a\nb\nc").unwrap();
+    let size = fs::metadata(&path).unwrap().size();
+
+    let (body, start) = events_window(&path, size, 1, None).unwrap();
+    assert_eq!(body.as_ref(), b"c");
+    assert_eq!(start, 4);
+
+    let (body, start) = events_window(&path, size, 2, None).unwrap();
+    assert_eq!(body.as_ref(), b"b\nc");
+    assert_eq!(start, 2);
+  }
+
+  #[test]
+  fn an_events_window_snaps_into_line_before_a_mid_line_offset() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("chat_events.jsonl");
+    fs::write(&path, "a\nb\nc\n").unwrap();
+    let size = fs::metadata(&path).unwrap().size();
+
+    let (body, start) = events_window(&path, size, 1, Some(5)).unwrap();
+    assert_eq!(body.as_ref(), b"b\n");
+    assert_eq!(start, 2);
   }
 }

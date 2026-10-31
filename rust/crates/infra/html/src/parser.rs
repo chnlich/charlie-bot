@@ -117,8 +117,8 @@ pub fn parse(source: &str, convert_charrefs: bool) -> Result<Vec<Event>, ParseEr
 }
 
 /// Tokenize a document as `feed(source)` followed by `close()` on a fresh parser, passing each callback to `handler`
-/// as soon as it is emitted. It mirrors `src/features/artifacts/plan_diff.py:744-746` and
-/// `src/features/artifacts/artifact_check.py:208-212`; streamed consumers do not need line and column positions.
+/// as soon as it is emitted. The streamed form carries the byte offset alone; a consumer that needs line and column
+/// positions calls `parse` instead.
 pub fn parse_with<F>(source: &str, convert_charrefs: bool, handler: F) -> Result<(), ParseError>
 where
   F: FnMut(StreamEvent),
@@ -503,7 +503,8 @@ struct SourcePositions {
 
 impl SourcePositions {
   fn new(source: &str) -> Self {
-    // CPython's `_OffsetParser` stores one start offset per line (`src/features/artifacts/plan_diff.py:81-90`).
+    // `HTMLParser.getpos()` measures a column from its line's first character, so `line_starts` records one
+    // start offset per line.
     let line_count = source.bytes().filter(|byte| *byte == b'\n').count() + 1;
     let mut line_starts = Vec::with_capacity(line_count);
     line_starts.push(0);

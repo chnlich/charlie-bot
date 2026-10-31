@@ -451,8 +451,9 @@ impl Store {
       }
     }
     if status == Some(SessionStatus::Archived) {
-      for meta in self.load_session_metas(Some(SessionStatus::Active))? {
+      for mut meta in self.load_session_metas(Some(SessionStatus::Active))? {
         if derived.contains(&meta.id) {
+          meta.status = SessionStatus::Archived;
           rows.push(Arc::new(meta));
         }
       }

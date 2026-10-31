@@ -223,10 +223,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   #resize-handle { display: none; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
-  /* Header on phones: the menu, name, bounded backend badge and Compact keep the
-     first row; the tabs and the events link share the second, the link at its
+  /* Header on phones: the menu and the session name keep the first row, so the
+     name shows its topic and number instead of the first few characters; the
+     bounded backend badge, Compact and the concurrency badge share the second
+     row, and the tabs and the events link share the third, the link at its
      right end. */
   main > header { flex-wrap: wrap; }
+  main > header > .flex-1.min-w-0 { flex-basis: calc(100% - 2.5rem); }
+  #backend-badge, #compact-btn, main > header > .cb-slot { order: 1; }
   #backend-badge { max-width: 120px; overflow: hidden; }
   #backend-badge select { max-width: 100%; }
   #tab-buttons { width: auto; flex: 1 1 calc(100% - 2.5rem); overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }

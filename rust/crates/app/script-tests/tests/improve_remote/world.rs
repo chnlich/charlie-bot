@@ -114,9 +114,16 @@ done
 exec "${arguments[@]:separator+1}"
 "#;
 
-const SYSTEMCTL: &str = r#"# Fake systemctl: record the call and mark the scope stopped.
+const SYSTEMCTL: &str = r#"# Fake systemctl: record the call, answer is-failed from the scope's state, and mark the scope stopped.
 printf '%s\n' "$*" >>"$FAKE_SYSTEMCTL_LOG"
 case $* in
+  *"is-failed"*)
+    case ${FAKE_SCOPE_STATE:-absent} in
+      failed) exit 0 ;;
+      absent) exit 4 ;;
+    esac
+    exit 1
+    ;;
   *"stop improve-"*) : >"$FAKE_SCOPE_STOPPED" ;;
 esac
 exit 0

@@ -18,7 +18,9 @@
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
-# the second one.
+# the second one. A killed round leaves its scope in the failed state, so the runner clears a
+# failed scope of the same name before the start; a live round's scope is not failed and refuses
+# the round.
 #
 # The clone check runs before the CLI build, so a refused clone starts no build. The runner deletes
 # its launch directory when it exits; the round's evidence is a separate directory, which the
@@ -338,6 +340,13 @@ cd "$ROUND_ROOT"
 
 ensure_cli "$commit"
 
+# A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run
+# then refuses the same unit name forever. is-failed reports only that state, so a live round's
+# scope never reaches the reset and the start below still refuses it with exit 5.
+if systemctl --user is-failed --quiet "improve-$direction.scope"; then
+  systemctl --user reset-failed "improve-$direction.scope"
+  printf '%s cleared the failed scope improve-%s.scope\n' "$STDERR_PREFIX" "$direction" >&2
+fi
 # The scope bounds the round's memory: the round and every process it starts, the trial server
 # included, die inside it instead of pushing another owner's build into swap. The scope's stderr
 # is held in a file, so a refused scope can be named, and it is printed once the scope ends.

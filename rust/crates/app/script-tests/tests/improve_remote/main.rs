@@ -346,6 +346,57 @@ fn an_existing_scope_exits_5_and_starts_no_claude() {
 }
 
 #[test]
+fn a_failed_scope_is_reset_and_the_round_starts() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("FAKE_SCOPE_STATE".to_string(), "failed".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start after the reset:\n{}", run.describe());
+  let calls: Vec<String> = world.systemctl_calls().lines().map(str::to_string).collect();
+  let failed = calls.iter().position(|call| call.contains(&format!("is-failed --quiet improve-{DIRECTION}.scope")));
+  let reset = calls.iter().position(|call| call.contains(&format!("reset-failed improve-{DIRECTION}.scope")));
+  let (failed, reset) = (failed.expect("no is-failed call"), reset.expect("no reset-failed call"));
+  assert!(failed < reset, "the reset did not follow the failed report:\n{calls:?}");
+  assert!(stderr(&run).contains(&format!("cleared the failed scope improve-{DIRECTION}.scope")), "{}", run.describe());
+  let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
+  assert!(scope.contains("--unit improve-perf"), "the round started no scope after the reset: {scope}");
+}
+
+#[test]
+fn an_active_scope_exits_5_and_is_not_reset() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
+  env.insert("FAKE_SYSTEMD_RUN_EXISTING".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 5, "{}", run.describe());
+  assert!(!world.claude_ran(), "a round started inside the live round's scope");
+  assert!(stderr(&run).contains("previous round"), "{}", run.describe());
+  let calls = world.systemctl_calls();
+  assert!(
+    calls.contains(&format!("is-failed --quiet improve-{DIRECTION}.scope")),
+    "the runner did not ask for the scope's state:\n{calls}"
+  );
+  assert!(!calls.contains("reset-failed"), "the runner reset a live round's scope:\n{calls}");
+}
+
+#[test]
+fn an_absent_scope_starts_without_a_reset() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  let calls = world.systemctl_calls();
+  assert!(
+    calls.contains(&format!("is-failed --quiet improve-{DIRECTION}.scope")),
+    "the runner did not ask for the scope's state:\n{calls}"
+  );
+  assert!(!calls.contains("reset-failed"), "the runner reset a scope it never found failed:\n{calls}");
+  assert!(!stderr(&run).contains("cleared the failed scope"), "{}", run.describe());
+}
+
+#[test]
 fn a_missing_direction_clone_exits_4_and_starts_no_claude() {
   let world = World::new();
   fs::remove_dir_all(world.remote_home.join("improve").join(DIRECTION).join("charlie-bot")).expect("remove the clone");

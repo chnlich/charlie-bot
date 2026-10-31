@@ -105,8 +105,10 @@ impl SequenceController for TestSequenceController {
     (session_id == "sequence-locked-node").then(|| Arc::new(TestSequenceBinding) as Arc<dyn SequenceBinding>)
   }
 
-  fn owns_session(&self, _meta: &SessionMetadata) -> bool {
-    false
+  /// A synthetic session whose id starts with `sequence-owned-` belongs to this sequence, as a scheduled task's
+  /// session belongs to the cron sequence. Sidebar listings leave it out.
+  fn owns_session(&self, meta: &SessionMetadata) -> bool {
+    meta.id.starts_with("sequence-owned-")
   }
 
   fn listing_fields(&self, _session_ids: &[String], _now: UtcDateTime) -> HashMap<String, Map<String, Value>> {

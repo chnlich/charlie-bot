@@ -37,6 +37,7 @@ page_packages	src.backends.opencode	src.backends.opencode
 page_packages	src.features.files	src.features.files
 routers	runtime.session_api	runtime.session_api
 routers	runtime.session_api	runtime.session_api
+routers	runtime.session_api	runtime.session_api
 routers	runtime.tasks	runtime.tasks
 routers	runtime.triggers	runtime.triggers
 routers	src.features.artifacts	src.features.artifacts

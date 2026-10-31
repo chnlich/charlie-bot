@@ -69,6 +69,13 @@ impl UtcDateTime {
   }
 }
 
+impl From<OffsetDateTime> for UtcDateTime {
+  /// Wrap one instant, normalized to UTC as the stored form is.
+  fn from(value: OffsetDateTime) -> Self {
+    Self(value.to_offset(time::UtcOffset::UTC))
+  }
+}
+
 impl Serialize for UtcDateTime {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
   where

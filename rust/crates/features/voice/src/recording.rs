@@ -1,13 +1,11 @@
 use charliebot_core::credentials::Credentials;
-use charliebot_core::text_repr;
 use futures_util::future::BoxFuture;
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::AudioQueue;
-use crate::transcription::{Backend, TranscriptKind, TranscriptionError};
+use crate::transcription::{self, Backend, BackendSpec, TranscriptKind, TranscriptionError};
 
 pub(crate) const VOICE_CHUNK_SAMPLES: usize = 2048;
-pub(crate) const BACKEND_IDS: &[&str] = &["gemini", "muse"];
 
 pub(crate) struct RecordingTranscript {
   pub(crate) backend_id: String,
@@ -31,15 +29,15 @@ pub(crate) trait RecordingBackend: Send + Sync {
 }
 
 pub(crate) trait RecordingBackendFactory: Send + Sync {
-  fn backend_ids(&self) -> &'static [&'static str];
+  fn backends(&self) -> &'static [BackendSpec];
   fn build(&self, backend_id: &str, credentials: &Credentials) -> Result<Box<dyn RecordingBackend>, String>;
 }
 
 pub(crate) struct OnlineBackendFactory;
 
 impl RecordingBackendFactory for OnlineBackendFactory {
-  fn backend_ids(&self) -> &'static [&'static str] {
-    BACKEND_IDS
+  fn backends(&self) -> &'static [BackendSpec] {
+    transcription::BACKENDS
   }
 
   fn build(&self, backend_id: &str, credentials: &Credentials) -> Result<Box<dyn RecordingBackend>, String> {
@@ -55,7 +53,7 @@ impl RecordingBackend for OnlineBackend {
   }
 
   fn unavailable_reason(&self) -> Option<String> {
-    self.0.unavailable_reason().map(str::to_string)
+    self.0.unavailable_reason()
   }
 
   fn transcribe<'a>(
@@ -122,13 +120,8 @@ fn select_backend(
   credentials: &Credentials,
 ) -> Result<Box<dyn RecordingBackend>, RecordingError> {
   let backend_id = backend_id.unwrap_or(default_backend);
-  let known = factory.backend_ids();
-  if !known.contains(&backend_id) {
-    return Err(RecordingError::BackendSelection(format!(
-      "unknown transcription backend {}; known: {}",
-      text_repr::str_repr(backend_id),
-      known.join(", ")
-    )));
+  if !factory.backends().iter().any(|spec| spec.id == backend_id) {
+    return Err(RecordingError::BackendSelection(transcription::unknown_backend(backend_id)));
   }
   let backend = factory.build(backend_id, credentials).map_err(RecordingError::BackendSelection)?;
   if let Some(reason) = backend.unavailable_reason() {

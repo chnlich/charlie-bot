@@ -19,7 +19,7 @@ use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, WORK_STATE};
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
   TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller,
@@ -465,8 +465,8 @@ fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Respo
   let mut detail = store.session_metadata_value(meta);
   let object = detail.as_object_mut().expect("session metadata serializes to an object");
   object.insert("task_state".to_string(), json!("open"));
-  if object.get("work_state").is_none_or(Value::is_null) {
-    object.insert("work_state".to_string(), json!("idle"));
+  if object.get(WORK_STATE).is_none_or(Value::is_null) {
+    object.insert(WORK_STATE.to_string(), json!("idle"));
   }
   object.insert("archived".to_string(), json!(false));
   object.insert("ancestors".to_string(), json!([]));

@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile};
+use charliebot_store::metadata::{SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, WORK_STATE};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
@@ -630,8 +630,8 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
       "has_running_tasks".to_string(),
       derived.and_then(|entry| entry.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
     );
-    if let Some(work_state) = derived.and_then(|entry| entry.get("work_state")) {
-      object.insert("work_state".to_string(), work_state.clone());
+    if let Some(work_state) = derived.and_then(|entry| entry.get(WORK_STATE)) {
+      object.insert(WORK_STATE.to_string(), work_state.clone());
     }
   }
   if projection.include_trigger {

@@ -13,7 +13,7 @@ use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, UtcDateTime, WORK_STATE};
 use charliebot_store::sidebar_state;
 use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
@@ -339,8 +339,8 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       "has_pending_plan_approval".to_string(),
       entry.and_then(|row| row.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
     );
-    if let Some(work_state) = entry.and_then(|row| row.get("work_state")) {
-      payload.insert("work_state".to_string(), work_state.clone());
+    if let Some(work_state) = entry.and_then(|row| row.get(WORK_STATE)) {
+      payload.insert(WORK_STATE.to_string(), work_state.clone());
     }
     result.insert(meta.id.clone(), Value::Object(payload));
   }
@@ -428,8 +428,8 @@ fn apply_derived_fields(
       "has_running_tasks".to_string(),
       derived.and_then(|row| row.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
     );
-    if let Some(work_state) = derived.and_then(|row| row.get("work_state")) {
-      object.insert("work_state".to_string(), work_state.clone());
+    if let Some(work_state) = derived.and_then(|row| row.get(WORK_STATE)) {
+      object.insert(WORK_STATE.to_string(), work_state.clone());
     }
   }
   if include_trigger {

@@ -283,7 +283,8 @@ mod tests {
     }
   }
 
-  fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+  fn feature_context() -> (crate::test_support::GatedHome, Arc<FeatureContext>) {
+    let permit = crate::test_support::hold_sidebar_gate();
     let home = tempfile::tempdir().unwrap();
     fs::write(home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n")).unwrap();
     let registry = Arc::new(Registry::new());
@@ -310,7 +311,10 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    (home, Arc::new(FeatureContext { config, credentials, store, registry, startup }))
+    (
+      crate::test_support::GatedHome::hold(home, permit),
+      Arc::new(FeatureContext { config, credentials, store, registry, startup }),
+    )
   }
 
   fn add_session(features: &FeatureContext, session_id: &str, group: Option<&str>, has_unread: bool) {

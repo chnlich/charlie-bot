@@ -578,7 +578,9 @@ mod tests {
   use super::*;
   use crate::test_support::{create_node, feature_context};
 
-  async fn worker_context(label: &str) -> (tempfile::TempDir, Arc<charliebot_registry::FeatureContext>, String) {
+  async fn worker_context(
+    label: &str,
+  ) -> (crate::test_support::GatedHome, Arc<charliebot_registry::FeatureContext>, String) {
     let (home, features) = feature_context();
     let root = create_node(features.store.as_ref(), &format!("{label}-manager"), None, TaskProfile::Manager).await;
     let worker =

@@ -401,7 +401,8 @@ mod tests {
 
   use super::*;
 
-  fn test_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+  fn test_context() -> (crate::test_support::GatedHome, Arc<FeatureContext>) {
+    let permit = crate::test_support::hold_sidebar_gate();
     let home = tempfile::tempdir().expect("temporary home");
     std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
     let registry = Arc::new(Registry::new());
@@ -424,7 +425,10 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    (home, Arc::new(FeatureContext { config, credentials, store, registry, startup }))
+    (
+      crate::test_support::GatedHome::hold(home, permit),
+      Arc::new(FeatureContext { config, credentials, store, registry, startup }),
+    )
   }
 
   fn write_session(features: &FeatureContext, session_id: &str, profile: TaskProfile, archive_offset: i64) {

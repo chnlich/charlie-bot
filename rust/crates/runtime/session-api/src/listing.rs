@@ -757,7 +757,8 @@ mod tests {
   }
 
   /// A repeat page request serves the corpus the previous one built, and a session created after it joins the next
-  /// page.
+  /// page. The gate every sidebar-moving fixture holds (`test_support`) keeps the other tests of this binary out of
+  /// the window the pointer assertions read, and the test build never spawns the self-heal sweep.
   #[tokio::test]
   async fn a_repeat_page_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
@@ -790,7 +791,8 @@ mod tests {
   }
 
   /// A repeat listing read serves the corpus the previous one built, and a session created after it joins the next
-  /// listing.
+  /// listing. The gate every sidebar-moving fixture holds (`test_support`) keeps the other tests of this binary out
+  /// of the window the pointer assertions read, and the test build never spawns the self-heal sweep.
   #[tokio::test]
   async fn a_repeat_listing_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();

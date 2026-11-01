@@ -278,7 +278,7 @@ mod tests {
   }
 
   /// A feature context whose dispatcher launches through a recording executor.
-  fn recording_features() -> (tempfile::TempDir, Arc<FeatureContext>, Arc<RecordingExecutor>) {
+  fn recording_features() -> (crate::test_support::GatedHome, Arc<FeatureContext>, Arc<RecordingExecutor>) {
     let (home, features) = feature_context();
     install_dispatcher(&features);
     let executor = Arc::new(RecordingExecutor::default());

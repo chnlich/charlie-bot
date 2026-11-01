@@ -197,6 +197,12 @@ fn schedule_sidebar_sweep(
   registry: Arc<Registry>,
   sessions: Vec<Arc<SessionMetadata>>,
 ) -> StoreResult<()> {
+  // In the test build the sweep never runs: its thread would move the shared sidebar generation long after the read
+  // that scheduled it returned, which is exactly the window the corpus-memo tests of `listing.rs` compare. No test
+  // of this crate observes the sweep itself; `should_start_sweep` covers its policy as a pure function.
+  if cfg!(test) {
+    return Ok(());
+  }
   let now = Instant::now();
   {
     let mut last_start = SIDEBAR_SWEEP_LAST_START.lock().expect("the sweep start time mutex is not poisoned");

@@ -1,7 +1,8 @@
 //! Fixtures shared by the session route tests: a feature context over a temporary home.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
+use std::thread::ThreadId;
 
 use anyhow::bail;
 use axum::body::{Body, to_bytes};
@@ -162,7 +163,88 @@ fn validate_test_session_fields(values: &mut Map<String, Value>) -> Option<Strin
     .then(|| "test_session_value must be a string or null".to_string())
 }
 
-pub(crate) fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+/// The process-wide gate over the sidebar state that this crate's tests share.
+///
+/// The sidebar snapshots, their generation, the poll counters and the two corpus memos of `listing.rs` live for the
+/// whole process, and every metadata write and sidebar probe any test makes moves them. A test that compares two
+/// reads against one corpus they built only holds while no other test of this binary runs beside it, so every
+/// fixture whose tests can move that state holds one gate permit for as long as its feature context lives: the
+/// store-backed tests of the crate run one at a time. A new fixture whose tests write sessions or read the sidebar
+/// must hold the gate too, or its test shares its read window with the movers again.
+static SIDEBAR_GATE: LazyLock<SidebarGate> = LazyLock::new(SidebarGate::default);
+
+/// The gate itself: one holder at a time, re-entered by a thread that builds a second fixture while it holds one.
+#[derive(Default)]
+struct SidebarGate {
+  holder: Mutex<Option<(ThreadId, usize)>>,
+  released: Condvar,
+}
+
+impl SidebarGate {
+  fn acquire(&'static self) -> SidebarGatePermit {
+    let me = std::thread::current().id();
+    let mut holder = self.holder.lock().expect("the sidebar gate mutex is not poisoned");
+    if matches!(&*holder, Some((thread, _)) if *thread == me) {
+      holder.as_mut().expect("the gate records its holder").1 += 1;
+    } else {
+      while holder.is_some() {
+        holder = self.released.wait(holder).expect("the sidebar gate mutex is not poisoned");
+      }
+      *holder = Some((me, 1));
+    }
+    SidebarGatePermit { gate: self }
+  }
+}
+
+/// One held sidebar gate permit. Dropping it lets the next fixture in.
+pub(crate) struct SidebarGatePermit {
+  gate: &'static SidebarGate,
+}
+
+impl Drop for SidebarGatePermit {
+  fn drop(&mut self) {
+    let mut holder = self.gate.holder.lock().expect("the sidebar gate mutex is not poisoned");
+    let (_, depth) = holder.as_mut().expect("the gate records its holder while a permit drops");
+    *depth -= 1;
+    if *depth == 0 {
+      *holder = None;
+      self.gate.released.notify_one();
+    }
+  }
+}
+
+/// Hold the sidebar gate until the returned permit drops.
+pub(crate) fn hold_sidebar_gate() -> SidebarGatePermit {
+  SIDEBAR_GATE.acquire()
+}
+
+/// A test home that holds one sidebar gate permit for as long as the test keeps it.
+///
+/// The permit rides with the home and not with the feature context because the context can leak: the dispatcher
+/// hooks a test installs hold it through the startup state, which never lets it go.
+pub(crate) struct GatedHome {
+  home: tempfile::TempDir,
+  _permit: SidebarGatePermit,
+}
+
+impl std::ops::Deref for GatedHome {
+  type Target = tempfile::TempDir;
+
+  fn deref(&self) -> &tempfile::TempDir {
+    &self.home
+  }
+}
+
+impl GatedHome {
+  /// Gate `home` for the test that keeps it.
+  pub(crate) fn hold(home: tempfile::TempDir, permit: SidebarGatePermit) -> Self {
+    Self { home, _permit: permit }
+  }
+}
+
+pub(crate) fn feature_context() -> (GatedHome, Arc<FeatureContext>) {
+  // This context's tests move the shared sidebar state, so they hold the gate for the context's lifetime.
+  let permit = hold_sidebar_gate();
   let home = tempfile::tempdir().expect("temporary home");
   std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
   std::fs::write(
@@ -192,7 +274,7 @@ pub(crate) fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
     Box::new(move || load_credentials(&credential_home)),
   ));
   let startup = Arc::new(StartupState::default());
-  (home, Arc::new(FeatureContext { config, credentials, store, registry, startup }))
+  (GatedHome::hold(home, permit), Arc::new(FeatureContext { config, credentials, store, registry, startup }))
 }
 
 /// Completion hooks for the route tests, which never finish a run or a sequence child: any call is a test error.

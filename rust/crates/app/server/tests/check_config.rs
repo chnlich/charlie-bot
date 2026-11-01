@@ -4,16 +4,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use charliebot_shell_harness::copy_file;
 use nix::fcntl::{Flock, FlockArg};
 
 fn prepare_server_bin_dir(root: &Path, with_cli: bool) -> PathBuf {
   let directory = root.join("server-bin");
   fs::create_dir_all(&directory).unwrap();
   let server = directory.join("charliebot-server");
-  fs::copy(env!("CARGO_BIN_EXE_charliebot-server"), &server).unwrap();
-  let mut permissions = fs::metadata(&server).unwrap().permissions();
-  permissions.set_mode(0o755);
-  fs::set_permissions(&server, permissions).unwrap();
+  copy_file(Path::new(env!("CARGO_BIN_EXE_charliebot-server")), &server);
   if with_cli {
     write_fake_cli(&directory);
   }

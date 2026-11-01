@@ -1,5 +1,4 @@
 use std::ffi::{OsStr, OsString};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
@@ -175,17 +174,13 @@ async fn failed_tmux_session_reports_stderr_from_the_temporary_file() {
   let fake_bin = root.path().join("fake-bin");
   std::fs::create_dir(&fake_bin).unwrap();
   let fake_tmux = fake_bin.join("tmux");
-  std::fs::write(
+  charliebot_shell_harness::write_executable(
     &fake_tmux,
     "#!/bin/sh
 echo 'synthetic tmux stderr line' >&2
 exit 1
 ",
-  )
-  .unwrap();
-  let mut permissions = std::fs::metadata(&fake_tmux).unwrap().permissions();
-  permissions.set_mode(0o755);
-  std::fs::set_permissions(&fake_tmux, permissions).unwrap();
+  );
 
   let _env = ScopedEnv::new(&["PATH"]);
   _env.set("PATH", Some(fake_bin.as_os_str()));

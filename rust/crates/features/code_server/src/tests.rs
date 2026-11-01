@@ -3,13 +3,13 @@
 
 use std::fs;
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::Registry;
+use charliebot_shell_harness::write_executable;
 use serde_json::{Value, json};
 
 use crate::api::{executable, open_code_server};
@@ -40,16 +40,11 @@ fn write_code_server_config(repo_root: &Path, bind_addr: &str) {
     .expect("the code-server config writes");
 }
 
-fn write_executable(path: &Path, script: &str) {
-  fs::write(path, script).expect("the stub writes");
-  fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("the stub is executable");
-}
-
 /// A stub that listens on `port` and exits once the test process does, so it outlives no test run. It is a `sh`
 /// wrapper whose `exec` runs the `listening_stub` example, so the example keeps the wrapper's process and parent.
 fn listening_stub(path: &Path, port: u16) {
   let binary = built_example("listening_stub");
-  write_executable(path, &format!("#!/bin/sh\nexec '{}' {port}\n", binary.display()));
+  write_executable(path, format!("#!/bin/sh\nexec '{}' {port}\n", binary.display()));
 }
 
 /// The example `name`, which `cargo test` builds into the `examples` directory beside the test binary's profile.

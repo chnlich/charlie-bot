@@ -38,6 +38,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+charliebot-shell-harness.workspace = true
 flate2.workspace = true
 tower.workspace = true
 

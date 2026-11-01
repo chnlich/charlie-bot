@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -11,7 +10,7 @@ use std::time::{Duration, Instant};
 #[allow(dead_code)]
 mod hold;
 
-use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
@@ -458,11 +457,6 @@ fn install_release(releases: &Path, binary: &str) -> PathBuf {
   write_executable(&release.join("charliebot-server"), binary);
   std::os::unix::fs::symlink(RELEASE_SHA, releases.join("current")).expect("write the current release link");
   release
-}
-
-fn write_executable(path: &Path, body: &str) {
-  fs::write(path, body).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-  fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("make the release binary executable");
 }
 
 fn assert_server_scope(run: &Run, sandbox: &Sandbox) {

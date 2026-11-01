@@ -2,10 +2,10 @@
 //! (`$CHARLIEBOT_RELEASES_DIR/current`) and the `charliebot` calls they make through it.
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
 
 const RELEASE_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -27,8 +27,7 @@ fn install_release(sandbox: &Sandbox) -> PathBuf {
   let release = releases.join(RELEASE_SHA);
   fs::create_dir_all(&release).expect("create the release directory");
   let binary = release.join("charliebot");
-  fs::write(&binary, format!("#!/usr/bin/env bash\n{FAKE_CHARLIEBOT}")).expect("write the release CLI");
-  fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("make the release CLI executable");
+  write_executable(&binary, format!("#!/usr/bin/env bash\n{FAKE_CHARLIEBOT}"));
   symlink(RELEASE_SHA, releases.join("current")).expect("write the current release link");
   releases
 }

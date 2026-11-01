@@ -241,6 +241,7 @@ mod tests {
   use charliebot_agents::agent_environment::AgentBaseEnvironment;
   use charliebot_agents::backend_pool::BackendPool;
   use charliebot_registry::Registry;
+  use charliebot_shell_harness::write_executable;
   use serde_yaml::Value;
 
   use super::*;
@@ -310,21 +311,13 @@ mod tests {
 
   fn write_publish_program(home: &Path, body: &str) -> PathBuf {
     let path = home.join("publish-program");
-    fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}")).unwrap();
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&path, permissions).unwrap();
+    write_executable(&path, format!("#!/bin/sh\nset -eu\n{body}"));
     path
   }
 
-  /// Run the script through `/bin/sh` instead of executing the file directly.
-  ///
-  /// A parallel test forks while this file is open for writing, and the child keeps the write descriptor until it
-  /// execs, so a direct exec of the fresh file can fail with `Text file busy` (ETXTBSY). `/bin/sh` is never open for
-  /// writing, and the script's arguments keep their positions (`$0` is the script, `$1` its first argument).
+  /// The argv that runs `program` directly, with `arguments` after it.
   fn command_for(program: &Path, arguments: &[&str]) -> Vec<String> {
-    std::iter::once("/bin/sh".to_string())
-      .chain(std::iter::once(program.to_string_lossy().into_owned()))
+    std::iter::once(program.to_string_lossy().into_owned())
       .chain(arguments.iter().map(|argument| (*argument).to_string()))
       .collect()
   }

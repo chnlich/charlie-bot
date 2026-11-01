@@ -13,10 +13,9 @@
 //! and no delete names a path outside the sandbox.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use charliebot_shell_harness::{self as harness, Env, Sandbox};
+use charliebot_shell_harness::{self as harness, Env, Sandbox, write_executable};
 
 /// The committer identity of every fixture commit.
 const IDENTITY: [(&str, &str); 4] = [
@@ -287,16 +286,12 @@ impl World {
       ("systemctl", SYSTEMCTL),
       ("cargo", CARGO),
     ] {
-      let path = remote_bin.join(name);
-      fs::write(&path, format!("#!/usr/bin/env bash\n{body}")).expect("a remote stub");
-      fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the remote stub executable");
+      write_executable(&remote_bin.join(name), format!("#!/usr/bin/env bash\n{body}"));
     }
     // The round tools of this commit are already built, so the runner skips its build for them.
     let runner_bin = sandbox.dir("remote/improve/runner/bin");
     for (name, body) in [("charliebot", "exit 0\n"), ("improve-sandbox", SANDBOX), ("mock-home", "exit 0\n")] {
-      let tool = runner_bin.join(format!("{name}-{commit}"));
-      fs::write(&tool, format!("#!/usr/bin/env bash\n{body}")).expect("a round tool");
-      fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("make the round tool executable");
+      write_executable(&runner_bin.join(format!("{name}-{commit}")), format!("#!/usr/bin/env bash\n{body}"));
     }
 
     Self {

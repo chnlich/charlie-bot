@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use charliebot_core::logline;
+use charliebot_shell_harness::copy_file;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
@@ -73,10 +74,7 @@ fn test_server_binary(root: &Path) -> PathBuf {
   std::fs::create_dir_all(&directory).expect("the synthetic server directory is created");
   let server = directory.join("charliebot-server");
   if !server.exists() {
-    std::fs::copy(env!("CARGO_BIN_EXE_charliebot-server"), &server).expect("the server binary is copied");
-    let mut permissions = std::fs::metadata(&server).expect("the copied server metadata is read").permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&server, permissions).expect("the copied server is executable");
+    copy_file(Path::new(env!("CARGO_BIN_EXE_charliebot-server")), &server);
   }
   let cli = directory.join("charliebot");
   if !cli.exists() {

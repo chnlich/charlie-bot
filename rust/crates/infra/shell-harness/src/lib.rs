@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -23,9 +23,6 @@ pub type Env = BTreeMap<String, String>;
 
 /// How long one `run` may take before the test fails.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// How many times `spawn` retries ETXTBSY, about two seconds at 10 ms each.
-const ETXTBSY_ATTEMPTS: u32 = 200;
 
 /// The agents' slice's `MemoryMax=80%`, the limit the committed unit file declares.
 const AGENTS_MEMORY_PERCENT: u64 = 80;
@@ -138,9 +135,7 @@ impl Sandbox {
 
   /// Writes a stub command: an executable bash script with `body`, in the stub directory.
   pub fn stub(&self, name: &str, body: &str) {
-    let path = self.bin.join(name);
-    fs::write(&path, format!("#!/usr/bin/env bash\n{body}")).unwrap_or_else(|error| panic!("write {name}: {error}"));
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the stub executable");
+    write_executable(&self.bin.join(name), format!("#!/usr/bin/env bash\n{body}"));
   }
 
   /// The environment of the test process, with the stub directory first on PATH.
@@ -226,8 +221,8 @@ pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
   }
 }
 
-/// Starts `command` and returns the child. A file that another test thread is still writing can refuse to run with
-/// ETXTBSY until that thread's fork has exec'd. The start therefore retries that error for a moment.
+/// Starts `command` and returns the child. An executable from [`write_executable`] or [`copy_file`] starts at once,
+/// so a start that fails panics without a retry.
 ///
 /// The child dies with the thread that starts it: `PR_SET_PDEATHSIG` makes the kernel send it SIGKILL when that
 /// thread exits. A test thread that panics or is cancelled while its process still runs therefore leaves nothing
@@ -248,22 +243,37 @@ pub fn spawn(command: &mut Command) -> Child {
       Ok(())
     });
   }
-  let mut attempts = 0;
-  loop {
-    match command.spawn() {
-      Ok(child) => return child,
-      Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < ETXTBSY_ATTEMPTS => {
-        attempts += 1;
-        thread::sleep(Duration::from_millis(10));
-      }
-      Err(error) => panic!("cannot start {:?}: {error}", command.get_program()),
-    }
-  }
+  command.spawn().unwrap_or_else(|error| panic!("cannot start {:?}: {error}", command.get_program()))
 }
 
 /// Copies a file to `to`, keeping its mode: a built program stays executable.
+///
+/// The copy runs in a `cp` child, so this process never holds a write descriptor on `to`. A fork of this process
+/// inherits every descriptor it holds, and the inherited copy stays open until that fork execs. An inherited write
+/// descriptor on `to` makes an exec of `to` fail with ETXTBSY. The child holds its descriptor only until `cp` exits,
+/// and this process waits for that exit.
 pub fn copy_file(from: &Path, to: &Path) {
-  fs::copy(from, to).unwrap_or_else(|error| panic!("copy {} to {}: {error}", from.display(), to.display()));
+  let status = Command::new("cp")
+    .arg("-p")
+    .arg(from)
+    .arg(to)
+    .status()
+    .unwrap_or_else(|error| panic!("run cp for {}: {error}", from.display()));
+  assert!(status.success(), "copy {} to {}: cp exited with {status}", from.display(), to.display());
+}
+
+/// Writes `contents` to `to` as an executable file, mode 0755. The bytes are staged beside `to` and then copied with
+/// [`copy_file`], so this process never holds a write descriptor on `to` (see there).
+pub fn write_executable(to: &Path, contents: impl AsRef<[u8]>) {
+  let directory = to.parent().unwrap_or_else(|| panic!("{} has no directory", to.display()));
+  let mut staged = tempfile::NamedTempFile::new_in(directory)
+    .unwrap_or_else(|error| panic!("stage {} in {}: {error}", to.display(), directory.display()));
+  staged.write_all(contents.as_ref()).unwrap_or_else(|error| panic!("write {}: {error}", to.display()));
+  // Closes the staged file's write descriptor; `copy_file` reads it by path.
+  let staged = staged.into_temp_path();
+  copy_file(&staged, to);
+  fs::set_permissions(to, fs::Permissions::from_mode(0o755))
+    .unwrap_or_else(|error| panic!("make {} executable: {error}", to.display()));
 }
 
 fn read_text(reader: &mut impl Read) -> String {

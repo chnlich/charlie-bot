@@ -10,7 +10,6 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -434,11 +433,11 @@ fn run_case(case_path: &Path) -> Result<(), String> {
       if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
       }
-      std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
       if relative.starts_with("bin/") {
         // A stub agent CLI under `bin/` runs as a program on the case's PATH.
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-          .map_err(|error| format!("{}: {error}", path.display()))?;
+        charliebot_shell_harness::write_executable(&path, text);
+      } else {
+        std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
       }
     }
   }
@@ -452,10 +451,7 @@ fn run_case(case_path: &Path) -> Result<(), String> {
       if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
       }
-      std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
-      let mut permissions = std::fs::metadata(&path).map_err(|error| error.to_string())?.permissions();
-      permissions.set_mode(0o755);
-      std::fs::set_permissions(&path, permissions).map_err(|error| format!("{}: {error}", path.display()))?;
+      charliebot_shell_harness::write_executable(&path, text);
     }
   }
 

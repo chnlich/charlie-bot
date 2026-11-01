@@ -41,6 +41,7 @@ tracing.workspace = true
 # anyhow::Result; no server module outside `#[cfg(test)]` names anyhow.
 anyhow.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
+charliebot-shell-harness.workspace = true
 # The thread-rule test assembles a turn through the prompt builder; no server module outside `#[cfg(test)]` names a
 # task type, so this crate's own code does not use the tasks runtime.
 charliebot-tasks.workspace = true

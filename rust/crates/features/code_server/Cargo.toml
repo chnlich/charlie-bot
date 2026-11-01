@@ -23,4 +23,5 @@ tracing.workspace = true
 which.workspace = true
 
 [dev-dependencies]
+charliebot-shell-harness.workspace = true
 tempfile.workspace = true

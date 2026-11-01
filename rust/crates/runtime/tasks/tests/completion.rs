@@ -2017,7 +2017,7 @@ fn sleep_stub(directory: &Path, name: &str) -> (std::process::Child, std::path::
     .expect("the sleep binary exists")
     .to_owned();
   let binary = directory.join(name);
-  fs::copy(source, &binary).expect("the sleep binary copies");
+  charliebot_shell_harness::copy_file(Path::new(source), &binary);
   let child = charliebot_shell_harness::spawn(Command::new(&binary).arg("300"));
   (child, binary)
 }

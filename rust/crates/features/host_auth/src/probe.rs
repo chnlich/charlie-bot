@@ -97,10 +97,10 @@ fn returncode(status: ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
-  use std::io::Write;
-  use std::os::unix::fs::PermissionsExt;
   use std::path::{Path, PathBuf};
   use std::sync::OnceLock;
+
+  use charliebot_shell_harness::write_executable;
 
   use super::*;
 
@@ -157,17 +157,13 @@ case "$alias" in
 esac
 "#;
 
-  /// The stand-in's path. It is written once, and its file is closed before any probe runs it, so no forked child
-  /// holds the file open for writing when a probe executes it.
+  /// The stand-in's path. It is written once, by `write_executable`, which never leaves the file open for writing in
+  /// this process, so a probe can execute it while other tests fork.
   fn stand_in() -> PathBuf {
     static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
     let dir = DIR.get_or_init(|| {
       let dir = tempfile::tempdir().expect("a temporary directory");
-      let path = dir.path().join("ssh");
-      let mut file = std::fs::File::create(&path).expect("the stand-in is created");
-      file.write_all(STAND_IN.as_bytes()).expect("the stand-in is written");
-      drop(file);
-      std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("the stand-in is executable");
+      write_executable(&dir.path().join("ssh"), STAND_IN);
       dir
     });
     dir.path().join("ssh")

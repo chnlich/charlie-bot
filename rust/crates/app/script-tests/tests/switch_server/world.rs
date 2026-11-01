@@ -8,14 +8,14 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, ScopeRecord};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, ScopeRecord, write_executable};
 use chrono::{SecondsFormat, Utc};
 use nix::unistd::getuid;
 use regex::Regex;
@@ -808,8 +808,7 @@ pub fn install_release(releases: &Path, sha: &str) {
 /// Replaces a release's `charliebot` with a script of `body`, then refreshes the checksums the preflight verifies.
 pub fn replace_charliebot(release: &Path, body: &str) {
   let path = release.join("charliebot");
-  fs::write(&path, format!("#!/usr/bin/env bash\n{body}")).expect("the charliebot stub");
-  fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the charliebot stub executable");
+  write_executable(&path, format!("#!/usr/bin/env bash\n{body}"));
   write_checksums(release);
 }
 

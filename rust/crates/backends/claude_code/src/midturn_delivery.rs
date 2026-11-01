@@ -107,7 +107,7 @@ mod tests {
     let message_id = "22222222-2222-3333-4444-555555555561";
     let marker = root.path().join("waiting-for-input");
     let stub = root.path().join("claude-stream-json-stub");
-    std::fs::write(
+    charliebot_shell_harness::write_executable(
       &stub,
       concat!(
         "#!/bin/sh\n",
@@ -120,12 +120,7 @@ mod tests {
         "sleep 0.35\n",
         "printf '%s\\n' '{\"type\":\"result\",\"result\":\"second\",\"usage\":{}}'\n",
       ),
-    )
-    .unwrap();
-    {
-      use std::os::unix::fs::PermissionsExt;
-      std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,

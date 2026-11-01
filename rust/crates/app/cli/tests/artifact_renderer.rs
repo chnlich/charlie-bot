@@ -1,6 +1,5 @@
 use std::fs;
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -141,10 +140,7 @@ exec /bin/sleep 300
     pid_path = shell_quote(&pid_path.display().to_string()),
     profile_path_path = shell_quote(&profile_path_path.display().to_string()),
   );
-  fs::write(path, script).unwrap();
-  let mut permissions = fs::metadata(path).unwrap().permissions();
-  permissions.set_mode(0o755);
-  fs::set_permissions(path, permissions).unwrap();
+  harness::write_executable(path, script);
 }
 
 fn shell_quote(value: &str) -> String {

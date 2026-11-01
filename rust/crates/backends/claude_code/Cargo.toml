@@ -28,3 +28,6 @@ tokio.workspace = true
 tracing.workspace = true
 walkdir.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }
+
+[dev-dependencies]
+charliebot-shell-harness.workspace = true

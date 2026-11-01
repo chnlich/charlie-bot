@@ -13,7 +13,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
 use serde_json::json;
 use sha2::Digest as _;
 use world::World;
@@ -299,11 +299,6 @@ fn test_rehearsal_refuses_a_new_release_without_a_release_helper_cli() {
   assert!(!logs.exists(), "the refusal wrote {}", logs.display());
 }
 
-fn write_executable(path: &PathBuf, body: &str) {
-  fs::write(path, body).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-  fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("make the stand-in executable");
-}
-
 #[test]
 fn test_rehearsal_usage_refuses_a_missing_argument() {
   let sandbox = Sandbox::new();
@@ -382,8 +377,7 @@ fn write_cli_shim(directory: &Path) -> PathBuf {
     real = real.display(),
   );
   let cli = directory.join("charliebot");
-  fs::write(&cli, body).unwrap_or_else(|error| panic!("write {}: {error}", cli.display()));
-  fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("make the CLI shim executable");
+  write_executable(&cli, body);
   calls
 }
 

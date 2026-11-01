@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -248,9 +247,7 @@ fn wait_bounded(child: &mut Child) -> Option<i32> {
 /// spaces and re-parsed, as ssh hands it to the remote login shell. The wrapper's mkdir, setsid, PID capture and exit
 /// file then run for real, with no network.
 fn stub_ssh_running_locally(sandbox: &Sandbox) {
-  let ssh = sandbox.bin.join("ssh");
-  fs::write(&ssh, "#!/bin/sh\nshift 11\neval \"$*\"\n").expect("the stub ssh is written");
-  fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("the stub ssh is executable");
+  charliebot_shell_harness::write_executable(&sandbox.bin.join("ssh"), "#!/bin/sh\nshift 11\neval \"$*\"\n");
 }
 
 /// A stub `ssh` in the sandbox's bin directory: it records its argv NUL-separated, prints `stdout`, and exits `code`.
@@ -266,9 +263,7 @@ fn stub_ssh(sandbox: &Sandbox, stdout: &str, stderr: &str, code: i32) -> PathBuf
     stdout_file.display(),
     stderr_file.display()
   );
-  let ssh = sandbox.bin.join("ssh");
-  fs::write(&ssh, script).expect("the stub ssh is written");
-  fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("the stub ssh is executable");
+  charliebot_shell_harness::write_executable(&sandbox.bin.join("ssh"), script);
   argv_file
 }
 

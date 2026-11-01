@@ -1659,6 +1659,7 @@ mod tests {
   use std::io::Read;
   use std::path::{Path, PathBuf};
 
+  use charliebot_shell_harness::write_executable;
   use serde_json::{Value, json};
 
   use super::*;
@@ -1753,11 +1754,7 @@ mod tests {
         "missing" => directory.join("missing-chrome"),
         "failing" => {
           let path = directory.join("chrome-fails.sh");
-          fs::write(&path, "#!/bin/sh\necho 'synthetic renderer failure' >&2\nexit 1\n").unwrap();
-          let mut permissions = fs::metadata(&path).unwrap().permissions();
-          use std::os::unix::fs::PermissionsExt;
-          permissions.set_mode(0o755);
-          fs::set_permissions(&path, permissions).unwrap();
+          write_executable(&path, "#!/bin/sh\necho 'synthetic renderer failure' >&2\nexit 1\n");
           path
         }
         "empty" => PathBuf::from(""),

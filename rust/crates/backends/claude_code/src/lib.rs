@@ -35,10 +35,9 @@ pub use usage_logs::USAGE_SOURCE;
 
 use std::sync::Arc;
 
-use charliebot_registry::Registry;
-use charliebot_registry::RegistryError;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
+use charliebot_registry::{Registry, RegistryError, registration_step};
 use serde_json::{Map, Value};
 
 use self::claude_lifecycle::ClaudeCodeLifecycle;
@@ -52,10 +51,8 @@ const PACKAGE: &str = "src.backends.claude_code";
 /// Register cc-claude, its Claude Code usage source, config section, metadata fields, child environment edit, and
 /// reading limits.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  let host =
-    ClaudeHost::from_process().map_err(|error| RegistryError { package: PACKAGE, message: format!("{error:#}") })?;
-  let http =
-    QuotaHttp::from_process().map_err(|error| RegistryError { package: PACKAGE, message: format!("{error:#}") })?;
+  let host = registration_step(PACKAGE, ClaudeHost::from_process())?;
+  let http = registration_step(PACKAGE, QuotaHttp::from_process())?;
   register_with_host(registry, host, http)
 }
 

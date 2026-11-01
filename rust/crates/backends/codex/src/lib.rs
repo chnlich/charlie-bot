@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
-use charliebot_registry::{Registry, RegistryError};
+use charliebot_registry::{Registry, RegistryError, registration_step};
 
 pub use backend::CodexBackend;
 pub use host::CodexHost;
@@ -30,8 +30,7 @@ use factory::CodexFactory;
 
 /// Registers the codex backend type, its usage resolver, its usage source, and the source's attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  let host = CodexHost::from_process()
-    .map_err(|error| RegistryError { package: "src.backends.codex", message: format!("{error:#}") })?;
+  let host = registration_step("src.backends.codex", CodexHost::from_process())?;
   register_with_host(registry, &host)
 }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
-use charliebot_registry::{Registry, RegistryError};
+use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
 
@@ -20,9 +20,7 @@ const PACKAGE: &str = "src.backends.antigravity";
 
 /// Registers the `antigravity` type and the Antigravity usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  let host =
-    CliHost::from_process().map_err(|error| RegistryError { package: PACKAGE, message: format!("{error:#}") })?;
-  register_with_host(registry, host)
+  register_with_host(registry, registration_step(PACKAGE, CliHost::from_process())?)
 }
 
 /// [`register`] over an explicit host.

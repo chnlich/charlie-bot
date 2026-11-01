@@ -1,11 +1,12 @@
 # charliebot-charlie-code
 
-The `charlie-code` backend type (`src/backends/charlie_code`): the CharlieCode CLI against an OpenAI-compatible
-endpoint. CLC's usage lives only in CharlieBot's own run logs, so its usage source has no log reader.
+The `charlie-code` backend type: the CharlieCode CLI against an OpenAI-compatible endpoint. CLC's usage lives only
+in CharlieBot's own run logs, so its usage source has no log reader.
 
 ## Public API
 
-| Rust item | Python source |
-| --- | --- |
-| `charliebot_charlie_code::{register, USAGE_SOURCE}`, `CharlieCodeBackend`, `API_KEY_ENV` (private `charlie_code_cli`, `translate`, `factory`, `options`) | `src/backends/charlie_code/__init__.py:6-34`; `charlie_code.py:43-166` (backend, command, env, upload gate), `:168-239` (translator), `:28-40` (context fields); `factory.py:44-56`; `options.py:66-81` |
-| `charliebot_core::text_repr::format_g` (the `%g` of the progress labels) | `src/backends/charlie_code/charlie_code.py:21-25` (`_duration_label`) |
+- `register`, `register_with_host` and `USAGE_SOURCE`
+- `factory::CharlieCodeFactory`, which builds one backend per launch from the option entry
+- `flags`, the CLI option names shared by the backend, the review command and the preflight check
+- `options::{CharlieCodeOption, SCHEMA, option_model}`, the type-specific option fields and their bounds
+- `API_KEY_ENV` and `TASK_FILE_NAME`; `CharlieCodeBackend` and the event translator stay private to the crate

@@ -1,5 +1,5 @@
-//! The `charlie-code` backend type (`src/backends/charlie_code`): the CharlieCode CLI against an OpenAI-compatible
-//! endpoint. CLC's usage lives only in CharlieBot's own run logs, so its usage source has no log reader.
+//! The `charlie-code` backend type: the CharlieCode CLI against an OpenAI-compatible endpoint. CLC's usage lives only
+//! in CharlieBot's own run logs, so its usage source has no log reader.
 
 mod charlie_code_cli;
 pub mod factory;

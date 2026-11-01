@@ -1,5 +1,4 @@
-//! The charlie-code backend factory (`src/backends/charlie_code/factory.py`): the option's model and endpoint fields, and
-//! the credential's `api_key`, read in Python's argument order.
+//! The charlie-code backend factory: the option's model and endpoint fields, and the credential's `api_key`.
 
 use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};

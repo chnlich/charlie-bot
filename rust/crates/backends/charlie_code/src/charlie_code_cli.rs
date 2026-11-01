@@ -1,5 +1,5 @@
-//! The charlie-code command, child environment and upload gate (`src/backends/charlie_code/charlie_code.py`). The task
-//! text reaches the child through `task.md` in the transport directory, passed by `--task-file`, and never rides argv.
+//! The charlie-code command, child environment and upload gate. The task text reaches the child through `task.md`
+//! in the transport directory, passed by `--task-file`, and never rides argv.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,8 +45,7 @@ pub struct CharlieCodeBackend {
 }
 
 impl CharlieCodeBackend {
-  /// The backend of one launch. Like Python's constructor, it refuses an option with no `api_base` before it resolves
-  /// the binary.
+  /// The backend of one launch. It refuses an option with no `api_base` before it resolves the binary.
   pub fn from_launch(
     host: &CliHost,
     model: &str,

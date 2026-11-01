@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types::{RATE_LIMIT_EVENT, RATE_LIMIT_INFO};
 use charliebot_registry::backend::LaunchWatch as LaunchWatchTrait;
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
@@ -78,8 +79,8 @@ impl RelayWatch {
 impl LaunchWatchTrait for RelayWatch {
   fn observe(&mut self, event: &Value) -> bool {
     match event.get("type").and_then(Value::as_str) {
-      Some("rate_limit_event") => {
-        let Some(info) = event.get("rate_limit_info").filter(|value| value.is_object()) else {
+      Some(RATE_LIMIT_EVENT) => {
+        let Some(info) = event.get(RATE_LIMIT_INFO).filter(|value| value.is_object()) else {
           return false;
         };
         let moment = claude_accounts::now_or(self.now);

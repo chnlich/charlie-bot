@@ -927,7 +927,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.
-const EXTERNAL_EVENT_NAMES: [&str; 17] = [
+const EXTERNAL_EVENT_NAMES: [&str; 15] = [
   "tool_use",
   "tool_result",
   "input_tokens",
@@ -940,8 +940,6 @@ const EXTERNAL_EVENT_NAMES: [&str; 17] = [
   "compact_metadata",
   "pre_tokens",
   "post_tokens",
-  "rate_limit_event",
-  "rate_limit_info",
   "context_tokens",
   "context_full",
   "command_progress",

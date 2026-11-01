@@ -186,8 +186,8 @@ pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> 
   Ok(snapshot)
 }
 
-/// Load one shared cron snapshot, rereading it when a cron YAML's or a prompt file's mtime changes or a prompt file
-/// goes missing.
+/// Load one shared cron snapshot, rereading it when a cron YAML appears, disappears or changes mtime, or a prompt
+/// file changes mtime or goes missing.
 pub(crate) fn load_snapshot_for_paths(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, bool)> {
   let key = SnapshotKey { directory: directory.to_path_buf(), repo: repo.to_path_buf() };
   let snapshots = SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()));

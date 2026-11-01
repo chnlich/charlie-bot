@@ -709,7 +709,8 @@ impl CronExpression {
     &self,
     base: chrono::DateTime<Tz>,
   ) -> anyhow::Result<chrono::DateTime<Tz>> {
-    // The next fire is the earliest matching local time on the UTC minute grid; the scan is bounded at eight years.
+    // The next fire is the earliest matching local time on the UTC minute grid. The scan stops at the
+    // `8 * 366 * 24 * 60`-second horizon, about 49 days.
     self.next_after_with_work(base).map(|(next, _)| next)
   }
 

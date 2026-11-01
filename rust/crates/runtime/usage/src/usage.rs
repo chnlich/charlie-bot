@@ -7,6 +7,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHost};
+use charliebot_registry::usage::{CLAUDE_READING_KIND, SNAPSHOT_READING_KIND};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::RunKind;
@@ -14,8 +15,6 @@ use charliebot_store::{ChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
-const READING_CLAUDE: &str = "claude";
-const READING_SNAPSHOT: &str = "snapshot";
 const READING_RESOLVED: &str = "resolved";
 const FACTS_MEMO_CAP: usize = 8;
 
@@ -46,7 +45,7 @@ impl UsageFold {
       match event_type {
         Some(event_types::ASSISTANT) => self.feed_assistant(*event)?,
         Some(event_types::SYSTEM) => self.feed_system(*event)?,
-        Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == READING_CLAUDE => {
+        Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == CLAUDE_READING_KIND => {
           self.feed_compaction_metadata(*event)?;
         }
         Some(event_types::RESULT) => self.feed_result(*event)?,
@@ -74,14 +73,14 @@ impl UsageFold {
       self.chosen_prompt_tokens = tokens;
       self.chosen_model = message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
       self.post_compact_tokens = None;
-      self.reading_kind = READING_CLAUDE.to_string();
+      self.reading_kind = CLAUDE_READING_KIND.to_string();
     }
     Ok(())
   }
 
   fn feed_system<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
     match event.field("subtype").and_then(EventFields::as_str_field) {
-      Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == READING_CLAUDE => {
+      Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == CLAUDE_READING_KIND => {
         self.feed_compaction_metadata(event)?;
       }
       Some(event_types::CONTEXT_READING) => {
@@ -119,7 +118,7 @@ impl UsageFold {
     }
     if let Some(snapshot) = event.field(event_types::CONTEXT_SNAPSHOT).filter(|value| value.is_object()) {
       self.snapshot = Some(snapshot.to_owned_value());
-      self.reading_kind = READING_SNAPSHOT.to_string();
+      self.reading_kind = SNAPSHOT_READING_KIND.to_string();
     }
     match event.field(event_types::RESULT_TOTAL_COST_USD) {
       Some(value) if value.is_null() => self.unknown_cost = true,
@@ -325,8 +324,8 @@ fn resolve_fold_tier(
   }
   let cost = fold.cost();
   let usage = match fold.reading_kind.as_str() {
-    READING_CLAUDE => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
-    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
+    CLAUDE_READING_KIND => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
+    SNAPSHOT_READING_KIND => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
     READING_RESOLVED => Some(resolve_reading(fold, cost)),
     _ => Some(json!({
       (event_types::CONTEXT_TOKENS): null,
@@ -347,7 +346,7 @@ fn resolve_claude(
   backend_option: Option<&BackendOption>,
 ) -> StoreResult<Value> {
   let context_tokens = fold.post_compact_tokens.unwrap_or(fold.chosen_prompt_tokens);
-  let limits = registry.reading_limits_for(READING_CLAUDE, run_kind, backend_option);
+  let limits = registry.reading_limits_for(CLAUDE_READING_KIND, run_kind, backend_option);
   let (context_full, compact_at) = match limits {
     Some(limits) => {
       let declared = limits.declared_window.map(|value| value as i64);
@@ -419,7 +418,8 @@ fn subtract_reserve(full: Option<i64>, limits: ContextLimits) -> Option<i64> {
 /// The compaction line of a snapshot reading: `full` minus the registered reserve, bounded by the output cap.
 fn snapshot_compact_at(full: i64, output: i64, registry: &Registry, run_kind: RunKind) -> Option<i64> {
   // The backend option selects only the claude limits, as in Python's `_snapshot_full_and_compact`.
-  let reserve = registry.reading_limits_for(READING_SNAPSHOT, run_kind, None).and_then(|limits| limits.compact_reserve);
+  let reserve =
+    registry.reading_limits_for(SNAPSHOT_READING_KIND, run_kind, None).and_then(|limits| limits.compact_reserve);
   reserve.map(|reserve| full - i64::try_from(reserve).expect("compact reserve fits i64").min(output))
 }
 
@@ -701,7 +701,9 @@ mod tests {
     let mut registry = Registry::new();
     registry
       .register_package("src.backends.claude_code", |registry| {
-        registry.reading_limits("claude", |run_kind| claude_code::claude_reading_limits_from(run_kind, &Env::new()))
+        registry.reading_limits(CLAUDE_READING_KIND, |run_kind| {
+          claude_code::claude_reading_limits_from(run_kind, &Env::new())
+        })
       })
       .unwrap();
 
@@ -750,7 +752,7 @@ mod tests {
     let mut registry = Registry::new();
     registry
       .register_package("src.backends.claude_code", |registry| {
-        registry.reading_limits("claude", |_run_kind| ContextLimits {
+        registry.reading_limits(CLAUDE_READING_KIND, |_run_kind| ContextLimits {
           declared_window: Some(500_000),
           compact_reserve: Some(20_000),
         })
@@ -817,15 +819,15 @@ mod tests {
   }
 
   fn register_opencode_snapshot_limits(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.reading_limits("snapshot", opencode_snapshot_limits)
+    registry.reading_limits(SNAPSHOT_READING_KIND, opencode_snapshot_limits)
   }
 
   fn register_custom_snapshot_limits(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.reading_limits("snapshot", custom_snapshot_limits)
+    registry.reading_limits(SNAPSHOT_READING_KIND, custom_snapshot_limits)
   }
 
   fn register_unknown_reserve_snapshot_limits(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.reading_limits("snapshot", unknown_reserve_snapshot_limits)
+    registry.reading_limits(SNAPSHOT_READING_KIND, unknown_reserve_snapshot_limits)
   }
 
   fn registry_with_snapshot_limits(register: RegisterFn) -> Registry {

@@ -36,7 +36,7 @@ pub use usage_logs::USAGE_SOURCE;
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::UsageSource;
+use charliebot_registry::usage::{CLAUDE_READING_KIND, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 use serde_json::{Map, Value};
 
@@ -105,7 +105,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     }],
   })?;
   registry.child_env("claude_child_env", claude_child_env)?;
-  registry.reading_limits("claude", claude_reading_limits)?;
+  registry.reading_limits(CLAUDE_READING_KIND, claude_reading_limits)?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["claude-"],

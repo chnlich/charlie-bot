@@ -26,7 +26,7 @@ use charliebot_core::config::{
 use charliebot_gemini::factory::GeminiFactory;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
-use charliebot_registry::usage::UsageSource;
+use charliebot_registry::usage::{CLAUDE_READING_KIND, UsageSource};
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
 
@@ -684,7 +684,7 @@ fn anthropic_compatible_registration_matches_traits_and_usage_attribution() {
     None,
     None,
   ));
-  let limits = registry.reading_limits_for("claude", RunKind::ManagerTurn, Some(&option)).unwrap();
+  let limits = registry.reading_limits_for(CLAUDE_READING_KIND, RunKind::ManagerTurn, Some(&option)).unwrap();
   assert_eq!(limits.declared_window, Some(ANTHROPIC_CONTEXT_WINDOW));
   assert_eq!(limits.compact_reserve, Some(33_000));
   assert_eq!(registry.usage_source_for("cc-anthropic-compatible").unwrap().unwrap().name, "Claude Code");

@@ -11,6 +11,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
+use charliebot_registry::usage::SNAPSHOT_READING_KIND;
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::{Map, Value, json};
@@ -2240,7 +2241,7 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
   assert_eq!(source.id_prefixes, &["opencode-", "oc-"]);
   assert_eq!(
     registry
-      .reading_limits_for("snapshot", charliebot_store::run_records::RunKind::Work, None)
+      .reading_limits_for(SNAPSHOT_READING_KIND, charliebot_store::run_records::RunKind::Work, None)
       .unwrap()
       .compact_reserve,
     Some(20_000)

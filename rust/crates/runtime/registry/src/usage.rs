@@ -24,6 +24,13 @@ pub const PANEL_RESETS_AT: &str = "resets_at";
 pub const PANEL_SCOPE_LABEL: &str = "scope_label";
 pub const PANEL_EXPIRED: &str = "expired";
 
+/// The reading-limits kind a backend registers when a session's context follows Claude Code's event stream: the
+/// usage fold classifies such a session under this kind and looks its limits up.
+pub const CLAUDE_READING_KIND: &str = "claude";
+/// The reading-limits kind a backend registers when a session's context comes from snapshot events: the usage fold
+/// classifies such a session under this kind and looks its limits up.
+pub const SNAPSHOT_READING_KIND: &str = "snapshot";
+
 /// The utilization a source reports for a window: a percentage, or `None` when the value is absent or not a number.
 pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   match value {

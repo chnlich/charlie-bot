@@ -1,6 +1,5 @@
-//! The improve sequence controller (`src/features/improve/sequence_controller.py`). It owns every Run whose
-//! `sequence_ref.kind` is `improve`. Recovery never resumes a loop: an ended loop's close step closes its child, and an
-//! interrupted loop is marked for the operator to restart.
+//! The improve sequence controller. It owns every Run whose `sequence_ref.kind` is `improve`. Recovery never resumes a
+//! loop: an ended loop's close step closes its child, and an interrupted loop is marked for the operator to restart.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,7 +28,7 @@ impl SequenceController for ImproveSequenceController {
   }
 
   /// The launch text is the full iteration context: the runner composes it with the repo root (the hook receives no
-  /// startup state). This hook checks that the Run belongs to this controller, as the Python hook does.
+  /// startup state). This hook checks that the Run belongs to this controller.
   fn launch_context<'a>(
     &'a self,
     _meta: &'a SessionMetadata,

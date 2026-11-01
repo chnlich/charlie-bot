@@ -1,5 +1,4 @@
-//! The `charliebot improve` and `charliebot improve-stop` verbs (`src/features/improve/cli.py`,
-//! `src/features/improve/stop_cli.py`).
+//! The `charliebot improve` and `charliebot improve-stop` verbs.
 //!
 //! `improve` reads the goal file (and the optional plan file), posts them to
 //! `/api/internal/improve`, and returns immediately; the iteration loop runs on the server. The

@@ -1,4 +1,4 @@
-//! The `antigravity` backend type (`src/backends/antigravity`): `agy --print`, whose JSON envelope the runner reads once
+//! The `antigravity` backend type: `agy --print`, whose JSON envelope the runner reads once
 //! the process has exited. The CLI logs its usage only into CharlieBot's own run logs, so its usage source has no reader.
 
 mod antigravity_cli;

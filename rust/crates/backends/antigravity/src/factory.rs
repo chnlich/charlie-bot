@@ -1,4 +1,4 @@
-//! The antigravity backend factory (`src/backends/antigravity/factory.py`), resolving the agy binary from the package's host.
+//! The antigravity backend factory, resolving the agy binary from the package's host.
 
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};

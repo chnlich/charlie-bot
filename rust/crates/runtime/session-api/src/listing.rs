@@ -124,10 +124,84 @@ pub struct ListingCorpus {
   pub sequence_fields: HashMap<String, Map<String, Value>>,
 }
 
+/// The active listing corpus one request built, reused while every input that shapes it still holds.
+///
+/// Building the corpus walks every active session: the store filters the corpus and asks each sequence controller
+/// which rows it owns, and the sidebar resolves each row's overlay. A repeat listing reads the same corpus, so the
+/// memo answers it from the identities that would move if any of it changed. The listing generation numbers the
+/// metadata corpus, the derived archive ids name the archive filter, and the sidebar generation names the overlays.
+/// Both identities are held weakly: a dropped store's corpus never answers another store's request.
+static ACTIVE_CORPUS_MEMO: LazyLock<Mutex<Option<ActiveCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
+
+/// One memo entry. The memo holds it by value; only the store and registry it names are weak.
+struct ActiveCorpusEntry {
+  store: Weak<Store>,
+  registry: Weak<Registry>,
+  generation: u64,
+  archived: Arc<Vec<String>>,
+  sidebar_generation: u64,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+  derived: Arc<DerivedSidebarMap>,
+}
+
+impl ActiveCorpusEntry {
+  /// Whether this entry was built from the corpus and overlays that `store` and `registry` hold now.
+  fn holds(
+    &self,
+    store: &Arc<Store>,
+    registry: &Arc<Registry>,
+    generation: u64,
+    archived: &Arc<Vec<String>>,
+    sidebar_generation: u64,
+  ) -> bool {
+    // An upgrade proves the named store still lives: a dropped store's address may be reused by the next store, and
+    // its entry must never answer that one.
+    self.store.upgrade().is_some_and(|held| Arc::ptr_eq(&held, store))
+      && self.registry.upgrade().is_some_and(|held| Arc::ptr_eq(&held, registry))
+      && self.generation == generation
+      // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
+      // index holds an equal list in a new allocation, and the value comparison keeps the corpus it answered for.
+      && (Arc::ptr_eq(&self.archived, archived) || self.archived.as_slice() == archived.as_slice())
+      && self.sidebar_generation == sidebar_generation
+  }
+}
+
 /// Fetch active, non-scheduled sessions, their sidebar overlays and their controller row fields.
 pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<ListingCorpus> {
+  let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
+  let archived = store.derived_archived_ids()?;
+  let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
+  let cached = {
+    let memo = ACTIVE_CORPUS_MEMO.lock().expect("the active corpus memo mutex is not poisoned");
+    memo
+      .as_ref()
+      .filter(|entry| entry.holds(store, registry, generation, &archived, sidebar_generation))
+      .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.derived)))
+  };
+  if let Some((rows, derived)) = cached {
+    // A memo hit still polls, because the periodic self-heal sweep is what catches an edit from outside the server.
+    sidebar::count_memoized_read(store, registry, &rows)?;
+    // The controllers' fields follow their own bindings, which move without the metadata corpus, so a repeat read
+    // rebuilds them and serves only the rows and overlays from the memo.
+    let sequence_fields = store.sequence_listing_fields(&rows)?;
+    return Ok(ListingCorpus { rows: rows.as_ref().clone(), derived, sequence_fields });
+  }
   let listed = store.list_sessions(Some(SessionStatus::Active), None, Some(false))?;
   let derived = sidebar::resolve_sidebar_state(store, registry, &listed.rows, true, true, true, false)?;
+  // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
+  // itself can move an input. A build that moved one stores nothing: its overlays were read under the older
+  // generation, and the next request rebuilds them under the newer one and stores them.
+  if charliebot_store::sidebar_state::derived_generation() == sidebar_generation {
+    *ACTIVE_CORPUS_MEMO.lock().expect("the active corpus memo mutex is not poisoned") = Some(ActiveCorpusEntry {
+      store: Arc::downgrade(store),
+      registry: Arc::downgrade(registry),
+      generation,
+      archived,
+      sidebar_generation,
+      rows: Arc::new(listed.rows.clone()),
+      derived: Arc::clone(&derived),
+    });
+  }
   Ok(ListingCorpus { rows: listed.rows, derived, sequence_fields: listed.sequence_fields })
 }
 
@@ -712,6 +786,31 @@ mod tests {
     assert!(
       page.rows.iter().any(|row| row.id == late.id),
       "the page corpus lists the session created after it was read"
+    );
+  }
+
+  /// A repeat listing read serves the corpus the previous one built, and a session created after it joins the next
+  /// listing.
+  #[tokio::test]
+  async fn a_repeat_listing_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "active-first", None, TaskProfile::Manager).await;
+    // The first read probes the new session and moves the sidebar generation, so it stores nothing; the read after it
+    // resolves the overlays with every probe settled.
+    let _ = active_listing_corpus(&features.store, &features.registry).unwrap();
+    let corpus = active_listing_corpus(&features.store, &features.registry).unwrap();
+    assert_eq!(corpus.rows.len(), 1);
+
+    let again = active_listing_corpus(&features.store, &features.registry).unwrap();
+    assert!(Arc::ptr_eq(&corpus.derived, &again.derived), "a repeat read serves the overlays it already resolved");
+    assert!(Arc::ptr_eq(&corpus.rows[0], &again.rows[0]), "a repeat read serves the rows it already built");
+
+    let late = crate::test_support::create_node(&features.store, "active-late", None, TaskProfile::Manager).await;
+
+    let corpus = active_listing_corpus(&features.store, &features.registry).unwrap();
+    assert!(
+      corpus.rows.iter().any(|row| row.id == late.id),
+      "the listing corpus lists the session created after it was read"
     );
   }
 

@@ -166,6 +166,22 @@ fn should_probe_synchronously(force_full: bool, force: bool, dirty: bool, has_sn
   if force_full && !force { dirty || !has_snapshot } else { force || dirty || !has_snapshot }
 }
 
+/// Count one sidebar read that answered from a memo, and schedule the periodic self-heal sweep when this poll is due.
+///
+/// The poll count bounds how late an edit from outside the server can show: every tenth poll sweeps the active
+/// sessions and stores what moved, which moves the sidebar generation that invalidates the memo. A route that
+/// answered from a memo without counting its read would stop the sweeps for a client that only reads that route.
+pub(crate) fn count_memoized_read(
+  store: &Arc<Store>,
+  registry: &Arc<Registry>,
+  sessions: &[Arc<SessionMetadata>],
+) -> StoreResult<()> {
+  if charliebot_store::sidebar_state::register_poll(false) {
+    schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), sessions.to_vec())?;
+  }
+  Ok(())
+}
+
 /// Whether one poll may start a self-heal sweep now: none runs, and the last one started at least `interval` ago.
 fn should_start_sweep(running: bool, last_started: Option<Instant>, now: Instant, interval: Duration) -> bool {
   if running {

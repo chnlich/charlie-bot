@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
 use std::thread;
 
-use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
+use charliebot_core::cgroup::{PROCS_FILE_NAME, SESSION_CGROUP_OOM_SCORE_ADJ};
 use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
@@ -358,7 +358,7 @@ impl PreparedSpawn {
     let cwd = spec.cwd.as_ref().map(|path| c_string(path.as_os_str().as_bytes())).transpose()?;
     let (child_cgroup, child_oom_score_adj) = match (setup, cgroup.as_ref()) {
       (SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup, Some(state)) => (
-        Some(c_string(state.path.join("cgroup.procs").as_os_str().as_bytes())?),
+        Some(c_string(state.path.join(PROCS_FILE_NAME).as_os_str().as_bytes())?),
         libc::c_int::try_from(SESSION_CGROUP_OOM_SCORE_ADJ).expect("oom_score_adj fits c_int"),
       ),
       _ => (None, 0),

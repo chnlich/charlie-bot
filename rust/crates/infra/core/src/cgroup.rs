@@ -14,6 +14,8 @@ use nix::unistd::Pid;
 pub const SESSION_CGROUP_PREFIX: &str = "charliebot-sess-";
 /// The one leaf slice that holds every session cgroup. It carries the host's agent memory limit.
 pub const AGENTS_SLICE: &str = "charliebot-agents.slice";
+/// The control file that lists a cgroup's processes; a write to it moves a pid into the cgroup.
+pub const PROCS_FILE_NAME: &str = "cgroup.procs";
 /// The pre-split parent of the session slices. Nothing is created here; a leftover directory is still swept.
 pub const RETIRED_APP_SLICE: &str = "app.slice";
 /// The `oom_score_adj` of every agent process: a host-wide OOM picks an agent process before the server, which keeps
@@ -132,7 +134,7 @@ fn end_session_browsers_with_wait(base_dir: &Path, session_id: &str, wait: Durat
 fn session_procs(base_dir: &Path, session_id: &str) -> Vec<u32> {
   let mut pids = Vec::new();
   for slice in session_slice_dirs(base_dir) {
-    let procs_path = session_cgroup_path(&slice, session_id).join("cgroup.procs");
+    let procs_path = session_cgroup_path(&slice, session_id).join(PROCS_FILE_NAME);
     match fs::read_to_string(&procs_path) {
       Ok(procs) => pids.extend(procs.split_whitespace().filter_map(|entry| entry.parse::<u32>().ok())),
       Err(error) if error.kind() == io::ErrorKind::NotFound => {}

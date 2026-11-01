@@ -881,6 +881,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::metadata_slot::METADATA_FILE_NAME`, or `charliebot_store::layout::metadata_path` for a \
            session.",
   },
+  OwnerRow { name: "cgroup.procs", owner: "infra/core", hint: "Use `charliebot_core::cgroup::PROCS_FILE_NAME`." },
   OwnerRow { name: "data", owner: "runtime/store", hint: "Use `charliebot_store::layout::data_dir`." },
   OwnerRow { name: "runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::runs_dir`." },
   OwnerRow { name: "triggers", owner: "runtime/store", hint: "Use `charliebot_store::layout::triggers_dir`." },

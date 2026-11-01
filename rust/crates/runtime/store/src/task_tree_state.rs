@@ -217,7 +217,7 @@ pub(crate) struct TreeIndex {
   pub(crate) metas: HashMap<String, Arc<SessionMetadata>>,
   pub(crate) children: HashMap<Option<String>, Vec<String>>,
   pub(crate) revision: String,
-  pub(crate) derived_archived_ids: Vec<String>,
+  pub(crate) derived_archived_ids: Arc<Vec<String>>,
   pub(crate) archive_by_id: HashMap<String, bool>,
 }
 

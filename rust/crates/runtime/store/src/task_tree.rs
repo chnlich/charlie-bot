@@ -945,8 +945,11 @@ impl Store {
   }
 
   /// Return every task node whose effective archive state is inherited or fact-derived.
-  pub fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-    Ok(self.tree_index()?.derived_archived_ids.clone())
+  ///
+  /// The list belongs to the shared task index, so a reader that only compares or filters it shares the index's
+  /// copy instead of cloning one entry per session on every request.
+  pub fn derived_archived_ids(&self) -> StoreResult<Arc<Vec<String>>> {
+    Ok(Arc::clone(&self.tree_index()?.derived_archived_ids))
   }
 
   /// Return a shared snapshot for a task-tree read page.
@@ -2099,7 +2102,7 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     metas,
     children,
     revision: String::new(),
-    derived_archived_ids: Vec::new(),
+    derived_archived_ids: Arc::new(Vec::new()),
     archive_by_id: HashMap::new(),
   };
   let mut memo = HashMap::new();
@@ -2138,7 +2141,7 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     return Ok(None);
   }
   index.revision = control_events::sha256_hex(&structural.join("\n"));
-  index.derived_archived_ids = derived_archived_ids;
+  index.derived_archived_ids = Arc::new(derived_archived_ids);
   Ok(Some(index))
 }
 
@@ -3054,7 +3057,7 @@ pub(crate) mod tests {
     drop(guard);
     store.invalidate_tree_index();
     assert!(store.archived_of(&leaf.id).unwrap());
-    let mut archived = store.derived_archived_ids().unwrap();
+    let mut archived = store.derived_archived_ids().unwrap().as_ref().clone();
     archived.sort();
     let mut expected_archived = vec![root.id.clone(), child.id.clone(), leaf.id.clone()];
     expected_archived.sort();
@@ -3129,6 +3132,10 @@ pub(crate) mod tests {
     assert_eq!(store.tree_index_metadata_reads.load(Ordering::Relaxed), 0);
     assert!(Arc::ptr_eq(&cached, first.metas.get(&root.id).unwrap()));
     assert!(Arc::ptr_eq(&first, &second));
+    assert!(
+      Arc::ptr_eq(&store.derived_archived_ids().unwrap(), &store.derived_archived_ids().unwrap()),
+      "the archive ids belong to the shared index, so a reader shares rather than clones them"
+    );
     assert_eq!(store.child_ids(&root.id).unwrap(), [child.id]);
   }
 

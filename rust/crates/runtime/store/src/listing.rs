@@ -418,7 +418,7 @@ impl Store {
   /// Collect unarchived task ancestors needed to render an archived page as a tree.
   pub async fn archived_context_rows(&self, rows: &[SessionMetadata]) -> StoreResult<Vec<SessionMetadata>> {
     let present: HashSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
-    let derived: HashSet<String> = self.derived_archived_ids()?.into_iter().collect();
+    let derived: HashSet<String> = self.derived_archived_ids()?.iter().cloned().collect();
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for row in rows {
@@ -444,7 +444,7 @@ impl Store {
     snapshot: &[Arc<SessionMetadata>],
     status: Option<SessionStatus>,
   ) -> StoreResult<Vec<Arc<SessionMetadata>>> {
-    let derived: HashSet<String> = self.derived_archived_ids()?.into_iter().collect();
+    let derived: HashSet<String> = self.derived_archived_ids()?.iter().cloned().collect();
     if derived.is_empty() {
       return Ok(snapshot.iter().map(Arc::clone).collect());
     }
@@ -477,7 +477,7 @@ impl Store {
     mut metas: Vec<SessionMetadata>,
     status: Option<SessionStatus>,
   ) -> StoreResult<Vec<SessionMetadata>> {
-    let derived: HashSet<String> = self.derived_archived_ids()?.into_iter().collect();
+    let derived: HashSet<String> = self.derived_archived_ids()?.iter().cloned().collect();
     if derived.is_empty() {
       return Ok(metas);
     }

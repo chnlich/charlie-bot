@@ -19,8 +19,10 @@
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
 # the second one. A killed round leaves its scope in the failed state, so the runner clears a
-# failed scope of the same name before the start; a live round's scope is not failed and refuses
-# the round.
+# failed scope of the same name before the start. A loaded scope whose round is over is stale: a
+# process that outlived the round, a detached mock-home helper for instance, keeps the unit active
+# and refuses every later fire, so the runner stops it, every process in the cgroup included,
+# before the start. A live round's launch directory and leader refuse the round with exit 5.
 #
 # The clone check runs before the CLI build, so a refused clone starts no build. The runner deletes
 # its launch directory when it exits; the round's evidence is a separate directory, which the
@@ -294,6 +296,41 @@ check_clone() {
     || fail 4 "the direction clone's origin does not point at charlie-bot: ${origin:-no origin}"
 }
 
+# Whether a live round of this direction holds the scope.
+#
+# The evidence is the round's own: its leader, the `--in-scope` bash that the systemd-run call
+# below starts from the round's launch directory, and that launch directory, which the wrapper
+# removes when it exits. The leader's command line names both, so a live round shows the pair and
+# a finished round does not; elapsed time and process names cannot tell the two apart, so neither
+# decides here. The wrapper counts too: between the scope's start and the leader's first moment it
+# is the round's only process, and a second fire of the direction must refuse it, not stop it.
+round_is_live() {
+  local proc launch_dir
+  local -a arguments=()
+  for proc in /proc/[0-9]*/cmdline; do
+    [[ $proc != "/proc/$$/cmdline" ]] || continue
+    [[ -r $proc ]] || continue
+    arguments=()
+    while IFS= read -r -d '' argument; do
+      arguments+=("$argument")
+    done <"$proc"
+    (( ${#arguments[@]} >= 5 )) || continue
+    [[ ${arguments[1]} == "$HOME_DIR"/improve/launch/*/remote-runner.sh ]] || continue
+    case ${arguments[2]} in
+      # The leader: bash <launch dir>/remote-runner.sh --in-scope <launch id> <direction>.
+      --in-scope) [[ ${arguments[4]} == "$direction" ]] || continue ;;
+      # The --prepare form holds no direction and starts no scope.
+      --prepare) continue ;;
+      # The wrapper: bash <launch dir>/remote-runner.sh <launch id> <direction> <CLI commit>.
+      *) [[ ${arguments[3]} == "$direction" ]] || continue ;;
+    esac
+    launch_dir=$(dirname -- "${arguments[1]}")
+    [[ -d $launch_dir ]] || continue
+    return 0
+  done
+  return 1
+}
+
 # The hooks of a round call `charliebot`, and the round's boundary and mock data come from the same
 # commit. The three programs build together from the commit this host's runtime clone runs, in a
 # checkout the runner owns. Their build inputs are the runner's own too: CARGO_HOME, TMPDIR, and the
@@ -419,11 +456,32 @@ cd "$ROUND_ROOT"
 ensure_cli "$commit"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run
-# then refuses the same unit name forever. is-failed reports only that state, so a live round's
-# scope never reaches the reset and the start below still refuses it with exit 5.
+# then refuses the same unit name forever, so the runner clears it before the start.
+#
+# An active scope holds either a live round or a finished one whose scope stayed loaded: on
+# 2026-11-01 a detached mock-home helper kept improve-perf.scope active for 36 minutes after its
+# round had exited cleanly, and every later fire of the direction refused with `already loaded`.
+# A live round keeps the refusal below; a stale scope is stopped first, and the stop takes every
+# process in the cgroup, because the leftover process is the reason the unit survived.
 if systemctl --user is-failed --quiet "improve-$direction.scope"; then
   systemctl --user reset-failed "improve-$direction.scope"
   printf '%s cleared the failed scope improve-%s.scope\n' "$STDERR_PREFIX" "$direction" >&2
+elif systemctl --user is-active --quiet "improve-$direction.scope"; then
+  if round_is_live; then
+    fail 5 "the previous round still runs: unit improve-$direction.scope exists"
+  fi
+  cgroup=$(systemctl --user show --property=ControlGroup --value "improve-$direction.scope" 2>/dev/null) || cgroup=
+  procs=
+  if [[ -n $cgroup ]]; then
+    procs=$(paste -sd ' ' "/sys/fs/cgroup$cgroup/cgroup.procs" 2>/dev/null) || procs=
+  fi
+  systemctl --user stop "improve-$direction.scope"
+  if [[ -n $procs ]]; then
+    printf '%s stopped the stale scope improve-%s.scope: its round is over, and the leftover processes %s went with it\n' \
+      "$STDERR_PREFIX" "$direction" "$procs" >&2
+  else
+    printf '%s stopped the stale scope improve-%s.scope: its round is over\n' "$STDERR_PREFIX" "$direction" >&2
+  fi
 fi
 # The scope bounds the round's memory: the round and every process it starts, the trial server
 # included, die inside it instead of pushing another owner's build into swap. The scope's stderr

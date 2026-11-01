@@ -96,9 +96,10 @@ fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
-const SYSTEMD_RUN: &str = r#"# Fake systemd-run: record the call, then run the command after `--`.
+const SYSTEMD_RUN: &str = r#"# Fake systemd-run: record the call, then run the command after `--`. An already-loaded unit
+# refuses the start, unless a fake systemctl stop has ended that unit first.
 printf '%s\n' "$*" >>"$FAKE_SYSTEMD_RUN_LOG"
-if [[ ${FAKE_SYSTEMD_RUN_EXISTING:-0} == 1 ]]; then
+if [[ ${FAKE_SYSTEMD_RUN_EXISTING:-0} == 1 && ! -e $FAKE_SCOPE_STOPPED ]]; then
   printf 'Failed to start transient scope unit: Unit improve-perf.scope was already loaded or has a fragment file.\n' >&2
   exit 1
 fi
@@ -114,7 +115,8 @@ done
 exec "${arguments[@]:separator+1}"
 "#;
 
-const SYSTEMCTL: &str = r#"# Fake systemctl: record the call, answer is-failed from the scope's state, and mark the scope stopped.
+const SYSTEMCTL: &str = r#"# Fake systemctl: record the call, answer is-failed and is-active from the scope's state, and mark
+# the scope stopped.
 printf '%s\n' "$*" >>"$FAKE_SYSTEMCTL_LOG"
 case $* in
   *"is-failed"*)
@@ -123,6 +125,10 @@ case $* in
       absent) exit 4 ;;
     esac
     exit 1
+    ;;
+  *"is-active"*)
+    [[ ${FAKE_SCOPE_STATE:-} == active ]] && exit 0
+    exit 3
     ;;
   *"stop improve-"*) : >"$FAKE_SCOPE_STOPPED" ;;
 esac

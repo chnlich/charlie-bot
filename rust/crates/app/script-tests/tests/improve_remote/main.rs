@@ -364,21 +364,88 @@ fn a_failed_scope_is_reset_and_the_round_starts() {
 }
 
 #[test]
-fn an_active_scope_exits_5_and_is_not_reset() {
+fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
   let world = World::new();
+  let mut env = world.env();
+  // The scope a finished round left: active, its launch directory gone, no process of the round
+  // alive. The start still needs the name free, like a real systemd-run after a stop that landed.
+  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
+  env.insert("FAKE_SYSTEMD_RUN_EXISTING".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start after the stale scope was stopped:\n{}", run.describe());
+  let calls = world.systemctl_calls();
+  assert!(
+    calls.contains(&format!("is-active --quiet improve-{DIRECTION}.scope")),
+    "the runner did not ask whether the scope is active:\n{calls}"
+  );
+  assert!(
+    calls.contains(&format!("stop improve-{DIRECTION}.scope")),
+    "the runner did not stop the stale scope:\n{calls}"
+  );
+  assert!(!calls.contains("reset-failed"), "the runner reset an active scope:\n{calls}");
+  assert!(
+    stderr(&run).contains(&format!("stopped the stale scope improve-{DIRECTION}.scope")),
+    "the runner did not report the stale scope it stopped:\n{}",
+    run.describe()
+  );
+  let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
+  assert!(scope.contains("--unit improve-perf"), "the round started no scope after the stop: {scope}");
+}
+
+#[test]
+fn an_active_scope_with_a_launch_directory_but_no_leader_is_stopped_and_the_round_starts() {
+  let world = World::new();
+  // A launch directory alone is not a live round: its wrapper removes it when it exits, and the
+  // leader that would name it is gone, so the scope's round is over and only a leftover process
+  // keeps the unit loaded.
+  let launch = world.remote_home.join("improve/launch/20261101T083100Z-1-100");
+  fs::create_dir_all(&launch).expect("the finished round's launch directory");
   let mut env = world.env();
   env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
   env.insert("FAKE_SYSTEMD_RUN_EXISTING".to_string(), "1".to_string());
   let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start after the stale scope was stopped:\n{}", run.describe());
+  assert!(
+    stderr(&run).contains(&format!("stopped the stale scope improve-{DIRECTION}.scope")),
+    "the runner did not report the stale scope it stopped:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+fn an_active_scope_with_a_live_round_still_refuses_with_status_5() {
+  let world = World::new();
+  // The previous round: its launch directory, which its wrapper removes when it exits, and its
+  // leader, the --in-scope bash that runs from that directory. Both alive, so the second start of
+  // the direction refuses, and nothing stops the live round.
+  let launch = world.remote_home.join("improve/launch/20261101T103100Z-1-200");
+  fs::create_dir_all(&launch).expect("the live round's launch directory");
+  let leader_script = launch.join("remote-runner.sh");
+  fs::write(&leader_script, "#!/usr/bin/env bash\nsleep 30\n").expect("the leader script");
+  let mut command = harness::command("bash", &world.env());
+  command.arg(&leader_script).args(["--in-scope", "20261101T103100Z-1-200", DIRECTION]);
+  let mut leader = harness::spawn(&mut command);
+  let mut env = world.env();
+  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
+  let run = world.run(&env);
+  leader.kill().expect("kill the leader");
+  let _ = leader.wait();
   assert_eq!(run.code, 5, "{}", run.describe());
-  assert!(!world.claude_ran(), "a round started inside the live round's scope");
+  assert!(!world.claude_ran(), "a round started inside the live round's scope:\n{}", run.describe());
   assert!(stderr(&run).contains("previous round"), "{}", run.describe());
   let calls = world.systemctl_calls();
   assert!(
-    calls.contains(&format!("is-failed --quiet improve-{DIRECTION}.scope")),
-    "the runner did not ask for the scope's state:\n{calls}"
+    !calls.contains(&format!("stop improve-{DIRECTION}.scope")),
+    "the runner stopped a live round's scope:\n{calls}"
   );
   assert!(!calls.contains("reset-failed"), "the runner reset a live round's scope:\n{calls}");
+  assert!(
+    !world.systemd_run_log.exists(),
+    "the runner tried to start a scope over the live round's:\n{}",
+    world.systemd_run_log.display()
+  );
 }
 
 #[test]

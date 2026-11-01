@@ -23,6 +23,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
+use crate::boundary::BoundaryState;
 use crate::config::{ScheduledTaskConfig, StepConfig};
 use crate::{loader, scheduler};
 
@@ -314,10 +315,12 @@ impl SequenceController for CronSequenceController {
         .map(|sequence| sequence.owner_ref.clone());
       let result = redrive_firing(session_id, tree).await;
       if let Some(owner_ref) = owner_ref {
-        match &result {
-          Ok(done) => crate::boundary::notify_boundary(session_id, &owner_ref, *done, false),
-          Err(_) => crate::boundary::notify_boundary(session_id, &owner_ref, false, true),
-        }
+        let state = match &result {
+          Ok(true) => BoundaryState::Done,
+          Ok(false) => BoundaryState::Running,
+          Err(_) => BoundaryState::Failed,
+        };
+        crate::boundary::notify_boundary(session_id, &owner_ref, state);
       }
       result.map(|_| ())
     })
@@ -824,6 +827,7 @@ mod tests {
   use tokio::sync::watch;
 
   use super::{CronBinding, last_saturday_1am_utc, register_step_run, row_schedule_fields};
+  use crate::boundary::BoundaryState;
   use crate::config::{ScheduledTaskConfig, StepConfig};
   use crate::test_support::{feature_context, manager};
 
@@ -833,15 +837,21 @@ mod tests {
     let owner_ref = "cron:synthetic-task:synthetic-firing";
     let mut receiver = crate::boundary::subscribe_boundary(leaf_id, owner_ref);
 
-    crate::boundary::notify_boundary(leaf_id, owner_ref, false, false);
+    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Running);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 1);
-    assert!(!receiver.borrow().done);
+    assert_eq!(receiver.borrow().state, BoundaryState::Running);
 
-    crate::boundary::notify_boundary(leaf_id, owner_ref, true, false);
+    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Done);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 2);
-    assert!(receiver.borrow().done);
+    assert_eq!(receiver.borrow().state, BoundaryState::Done);
+
+    // A settled chain keeps its state, so a late report cannot reopen it.
+    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Failed);
+    receiver.changed().await.unwrap();
+    assert_eq!(receiver.borrow_and_update().generation, 3);
+    assert_eq!(receiver.borrow().state, BoundaryState::Done);
     crate::boundary::remove_boundary(leaf_id, owner_ref);
   }
 

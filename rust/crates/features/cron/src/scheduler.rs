@@ -632,7 +632,7 @@ fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
 async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<crate::boundary::BoundaryNotice>) {
   loop {
     let notice = *boundary.borrow_and_update();
-    if notice.done || notice.failed {
+    if notice.state.is_settled() {
       return;
     }
     if boundary.changed().await.is_err() {

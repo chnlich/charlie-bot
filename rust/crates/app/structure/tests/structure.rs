@@ -866,6 +866,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
   OwnerRow {
+    name: "America/Los_Angeles",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::pacific::ZONE`, the house time zone.",
+  },
+  OwnerRow {
     name: "metadata.json",
     owner: "infra/core",
     hint: "Use `charliebot_core::metadata_slot::METADATA_FILE_NAME`, or `charliebot_store::layout::metadata_path` for a \

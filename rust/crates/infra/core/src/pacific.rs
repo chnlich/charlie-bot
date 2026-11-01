@@ -6,7 +6,8 @@ use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
-/// The zone every approval day reads in.
+/// The house time zone (`config.HOUSE_TIMEZONE`): the zone every approval day reads in, and the default of a scheduled
+/// task that names none.
 pub const ZONE: &str = "America/Los_Angeles";
 
 /// A Pacific-day read that refused (`pacific.PacificError`).

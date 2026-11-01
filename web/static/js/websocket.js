@@ -21,7 +21,8 @@ let wsGeneration = 0;
 // runs before that point, and its event leaves the cursor where it is.
 const wsMessageHandlers = new Map();
 
-function registerWsMessageHandler(type, handler, {advancesCursor}) {
+function registerWsMessageHandler(type, handler, options) {
+  const advancesCursor = options?.advancesCursor;
   if (typeof type !== 'string' || !type || typeof handler !== 'function' || typeof advancesCursor !== 'boolean') {
     throw new Error('Invalid WebSocket message handler registration');
   }

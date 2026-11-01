@@ -25,9 +25,9 @@ Two rounds of one direction never run together: the runner's scope name, `improv
 
 Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
 
-At round start, delete what a killed round left under `/tmp/improve-<direction>/`.
+At round start, delete what an earlier round left under `/tmp/improve-<direction>/`.
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
-A killed round's scratch holds large copies, so the next round removes it before it starts.
+An earlier round's scratch holds large copies, so the next round removes it before it starts.
 
 The runner checks the clone before claude starts, and a missing or foreign clone ends that launch with exit 4.
 End the round with a report when the clone lacks `core.hooksPath tools/git-hooks`:
@@ -157,13 +157,21 @@ The reviewer's stdout is an NDJSON event stream.
 The command keeps it in `events.ndjson` in the scratch directory with every key value replaced by `****`, and takes the verdict from the `final_output` field of its final `result` event.
 It prints the path of the verdict file.
 
+One foreground tool call ends at 15 minutes, the round's per-call tool limit.
+A review of any length completes: the round waits for it past that limit and reads back its outcome.
+The outcome is the verdict path when the review finished and the error when it failed.
+The round chooses how to wait.
+
 Post the verdict file as one pull-request comment through the posting script:
 
     tools/improve/github-post.sh pr-comment --body-file <verdict file> <PR>
 
 The comment is the review record on the pull request, and it carries the verdict without the event stream.
 Act on every finding on the same branch before the merge.
-A round whose review cannot run leaves the pull request open and reports the reason in the final message.
+A round whose review cannot run or fails leaves the pull request open and reports the reason in the final message.
+On a failed review, the command prints charlie-code's own error message from the event stream and the path of the kept `events.ndjson`.
+The round quotes that error verbatim in the final message.
+A failed review's scratch directory stays on disk until the next round's start (Step 1).
 A silent skip breaks the protocol.
 
 ## Step 7: land the pull request or abandon it
@@ -305,7 +313,7 @@ When the main run passed, start at step 1 of the outside-diff steps above.
 Delete each completed review's scratch directory, through the directory of the verdict file path that `charliebot improve-review` printed.
 Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
 The evidence directory stays: it holds the round's screenshots and measurement logs.
-A killed round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1).
+An earlier round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1).
 The runner empties `/tmp/improve-<direction>-tmp/` when the next round's scope starts, so a killed round's TMPDIR does not grow.
 
 ## Step 9: report once at the end

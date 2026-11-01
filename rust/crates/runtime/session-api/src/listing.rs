@@ -7,22 +7,13 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
+use charliebot_store::metadata::{SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::sidebar;
 pub use crate::sidebar::DerivedSidebarMap;
-
-const SCHEDULE_FIELDS: [&str; 6] = [
-  "schedule_cron",
-  "schedule_timezone",
-  "schedule_enabled",
-  "schedule_next_run",
-  "schedule_project",
-  "schedule_allow_failure",
-];
 
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarProjection {

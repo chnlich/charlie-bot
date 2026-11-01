@@ -879,6 +879,32 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::layout::chat_events_path`.",
   },
+  OwnerRow { name: "schedule_cron", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_CRON`." },
+  OwnerRow {
+    name: "schedule_enabled",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEDULE_ENABLED`.",
+  },
+  OwnerRow {
+    name: "schedule_next_run",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEDULE_NEXT_RUN`.",
+  },
+  OwnerRow {
+    name: "schedule_timezone",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEDULE_TIMEZONE`.",
+  },
+  OwnerRow {
+    name: "schedule_project",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEDULE_PROJECT`.",
+  },
+  OwnerRow {
+    name: "schedule_allow_failure",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEDULE_ALLOW_FAILURE`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

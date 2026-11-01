@@ -23,7 +23,6 @@ use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreError, StoreResult};
-use serde::Serialize;
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
@@ -171,41 +170,14 @@ struct Span {
   manager: bool,
 }
 
-/// One instant's four fields: a chart point, or the peak the range marks.
-///
-/// A point is a struct rather than a `Value` map, so a point allocates no map keys. A 7-day series carries 2,016
-/// points, and each one holds four keys a map would copy.
-#[derive(Serialize)]
-struct InstantBody {
-  t: Stamp,
-  running: u32,
-  manager: u32,
-  worker: u32,
-}
-
-impl InstantBody {
-  fn of(at: OffsetDateTime, running: u32, manager: u32, worker: u32) -> Self {
-    Self { t: Stamp(at), running, manager, worker }
-  }
-}
-
-/// An instant whose JSON text is `UtcDateTime::to_str`'s, written without the formatting machinery.
-///
-/// The text is the route's largest single cost: a 7-day series carries 2,016 points, and each `format!` builds its
-/// own `String` through the generic formatter before the serializer copies the digits out again. Writing the digits
-/// into a stack buffer keeps the same bytes and drops both allocations.
-#[derive(Clone, Copy)]
-struct Stamp(OffsetDateTime);
-
-impl Serialize for Stamp {
-  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-    let mut text = [0u8; STAMP_CHARS];
-    serializer.serialize_str(stamp_text(&mut text, self.0))
-  }
-}
-
 /// The longest stamp text: `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
 const STAMP_CHARS: usize = 27;
+
+/// One point's bytes at their longest: `{"t":"...","running":N,"manager":N,"worker":N},`.
+const INSTANT_BYTES: usize = 104;
+
+/// The body's fixed fields: the range, the two range ends, the bucket width, the first record and the peak.
+const HISTORY_BODY_HEADROOM: usize = 192;
 
 /// Write `at` as `UtcDateTime::to_str` writes it: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`, the fraction only when nonzero.
 ///
@@ -262,35 +234,84 @@ fn write_digits(text: &mut [u8; STAMP_CHARS], length: &mut usize, value: u32, wi
   }
 }
 
-/// The history route's response body, in the field order the route writes.
-#[derive(Serialize)]
-struct HistoryBody {
-  range: &'static str,
-  from: Stamp,
-  to: Stamp,
-  bucket_seconds: i64,
-  first_record_at: Option<Stamp>,
-  peak: Option<InstantBody>,
-  points: Vec<InstantBody>,
+impl History {
+  /// Write the response body in the field order and text clients parse.
+  ///
+  /// The generic serializer's per-entry dispatch and one intermediate `String` per stamp are the route's largest
+  /// cost on a 2,016-point series, so the fixed field names and the digits go straight into one buffer.
+  fn into_body(self) -> Vec<u8> {
+    let mut body = Vec::with_capacity(HISTORY_BODY_HEADROOM + self.points.len() * INSTANT_BYTES);
+    body.extend_from_slice(b"{\"range\":\"");
+    body.extend_from_slice(self.range.as_bytes());
+    body.extend_from_slice(b"\",\"from\":\"");
+    push_stamp(&mut body, self.from);
+    body.extend_from_slice(b"\",\"to\":\"");
+    push_stamp(&mut body, self.to);
+    body.extend_from_slice(b"\",\"bucket_seconds\":");
+    push_decimal(&mut body, self.bucket_seconds);
+    body.extend_from_slice(b",\"first_record_at\":");
+    match self.first_record_at {
+      Some(at) => {
+        body.push(b'"');
+        push_stamp(&mut body, at);
+        body.push(b'"');
+      }
+      None => body.extend_from_slice(b"null"),
+    }
+    body.extend_from_slice(b",\"peak\":");
+    match self.peak {
+      Some(peak) => push_instant(&mut body, peak.at, peak.running, peak.manager, peak.worker),
+      None => body.extend_from_slice(b"null"),
+    }
+    body.extend_from_slice(b",\"points\":[");
+    for (index, point) in self.points.iter().enumerate() {
+      if index > 0 {
+        body.push(b',');
+      }
+      push_instant(&mut body, point.at, point.running, point.manager, point.worker);
+    }
+    body.extend_from_slice(b"]}");
+    body
+  }
 }
 
-impl History {
-  fn into_body(self) -> Vec<u8> {
-    let body = HistoryBody {
-      range: self.range,
-      from: Stamp(self.from),
-      to: Stamp(self.to),
-      bucket_seconds: self.bucket_seconds,
-      first_record_at: self.first_record_at.map(Stamp),
-      peak: self.peak.map(|peak| InstantBody::of(peak.at, peak.running, peak.manager, peak.worker)),
-      points: self
-        .points
-        .iter()
-        .map(|point| InstantBody::of(point.at, point.running, point.manager, point.worker))
-        .collect(),
-    };
-    serde_json::to_vec(&body).expect("a history body serializes")
+/// Append one chart point or peak as `{"t":<stamp>,"running":N,"manager":N,"worker":N}`.
+fn push_instant(body: &mut Vec<u8>, at: OffsetDateTime, running: u32, manager: u32, worker: u32) {
+  body.extend_from_slice(b"{\"t\":\"");
+  push_stamp(body, at);
+  body.extend_from_slice(b"\",\"running\":");
+  push_decimal(body, i64::from(running));
+  body.extend_from_slice(b",\"manager\":");
+  push_decimal(body, i64::from(manager));
+  body.extend_from_slice(b",\"worker\":");
+  push_decimal(body, i64::from(worker));
+  body.push(b'}');
+}
+
+/// Append `at`'s stamp text, the bytes `UtcDateTime::to_str` writes.
+fn push_stamp(body: &mut Vec<u8>, at: OffsetDateTime) {
+  let mut text = [0u8; STAMP_CHARS];
+  body.extend_from_slice(stamp_text(&mut text, at).as_bytes());
+}
+
+/// Append `value` in decimal, as serde_json writes an integer.
+fn push_decimal(body: &mut Vec<u8>, value: i64) {
+  let mut digits = [0u8; 20];
+  let mut index = digits.len();
+  let mut rest = value.unsigned_abs();
+  loop {
+    index -= 1;
+    digits[index] = b'0' + (rest % 10) as u8;
+    rest /= 10;
+    if rest == 0 {
+      break;
+    }
   }
+  if value < 0 {
+    index -= 1;
+    digits[index] = b'-';
+  }
+  body.extend_from_slice(&digits[index..]);
 }
 
 /// The run-record scan the last request made, with the inputs that key it.
@@ -535,6 +556,92 @@ mod tests {
 
   fn at(text: &str) -> OffsetDateTime {
     OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).expect("a test instant")
+  }
+
+  /// The serializer's rendering, the byte contract the direct writer meets.
+  #[derive(serde::Serialize)]
+  struct ReferenceInstant {
+    t: ReferenceStamp,
+    running: u32,
+    manager: u32,
+    worker: u32,
+  }
+
+  impl ReferenceInstant {
+    fn of(at: OffsetDateTime, running: u32, manager: u32, worker: u32) -> Self {
+      Self { t: ReferenceStamp(at), running, manager, worker }
+    }
+  }
+
+  #[derive(Clone, Copy)]
+  struct ReferenceStamp(OffsetDateTime);
+
+  impl serde::Serialize for ReferenceStamp {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+      let mut text = [0u8; STAMP_CHARS];
+      serializer.serialize_str(stamp_text(&mut text, self.0))
+    }
+  }
+
+  #[derive(serde::Serialize)]
+  struct ReferenceBody {
+    range: &'static str,
+    from: ReferenceStamp,
+    to: ReferenceStamp,
+    bucket_seconds: i64,
+    first_record_at: Option<ReferenceStamp>,
+    peak: Option<ReferenceInstant>,
+    points: Vec<ReferenceInstant>,
+  }
+
+  fn reference_body(history: &History) -> Vec<u8> {
+    let body = ReferenceBody {
+      range: history.range,
+      from: ReferenceStamp(history.from),
+      to: ReferenceStamp(history.to),
+      bucket_seconds: history.bucket_seconds,
+      first_record_at: history.first_record_at.map(ReferenceStamp),
+      peak: history.peak.map(|peak| ReferenceInstant::of(peak.at, peak.running, peak.manager, peak.worker)),
+      points: history
+        .points
+        .iter()
+        .map(|point| ReferenceInstant::of(point.at, point.running, point.manager, point.worker))
+        .collect(),
+    };
+    serde_json::to_vec(&body).expect("a reference history body serializes")
+  }
+
+  /// The direct writer keeps the serializer's bytes, with and without a peak and a first record.
+  #[test]
+  fn the_history_body_keeps_the_serializers_bytes() {
+    let point = |minutes: i64, running: u32, manager: u32| Point {
+      at: at("2026-11-01T12:00:00Z") + Duration::minutes(minutes),
+      running,
+      manager,
+      worker: running - manager,
+    };
+    let populated = History {
+      range: "7d",
+      from: at("2026-10-25T12:00:00.25Z"),
+      to: at("2026-11-01T12:00:00Z"),
+      bucket_seconds: 300,
+      first_record_at: Some(at("2026-10-26T04:07:31.5Z")),
+      peak: Some(Peak { at: at("2026-10-30T08:15:00Z"), running: 3, manager: 1, worker: 2 }),
+      points: vec![point(0, 0, 0), point(5, 1, 1), point(10, 3, 1), point(15, u32::MAX, 0)],
+    };
+    let empty = History {
+      range: "24h",
+      from: at("2026-10-31T12:00:00Z"),
+      to: at("2026-11-01T12:00:00Z"),
+      bucket_seconds: 60,
+      first_record_at: None,
+      peak: None,
+      points: vec![point(0, 0, 0)],
+    };
+    for history in [populated, empty] {
+      let expected = reference_body(&history);
+      assert_eq!(history.into_body(), expected, "the direct writer keeps the serializer's bytes");
+    }
   }
 
   fn record(session: &str, kind: &str, start: Option<&str>, end: Option<&str>) -> (String, RunRecord) {

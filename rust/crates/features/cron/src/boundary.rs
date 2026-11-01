@@ -5,16 +5,18 @@ use std::sync::{Mutex, OnceLock};
 
 use tokio::sync::watch;
 
-/// How far one firing's step chain has got: `Running` while a step still works, `Done` after the last step,
-/// `Failed` when a step's turn ended in an error.
+/// What one step-chain redrive reports about a firing's steps. `Running` means a step is still working or
+/// has yet to start. `Finished` means the redrive found nothing left to start. `Errored` means the redrive
+/// itself returned an error.
 ///
-/// A settled chain stays settled: the first terminal report is the one a waiter acts on.
+/// A step whose turn failed still ends its chain as `Finished`: the failure travels in the boundary report.
+/// A settled chain stays settled, so the first terminal report is the one a waiter acts on.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum BoundaryState {
   #[default]
   Running,
-  Done,
-  Failed,
+  Finished,
+  Errored,
 }
 
 impl BoundaryState {
@@ -22,7 +24,7 @@ impl BoundaryState {
   fn merged(self, later: BoundaryState) -> BoundaryState {
     match self {
       BoundaryState::Running => later,
-      BoundaryState::Done | BoundaryState::Failed => self,
+      BoundaryState::Finished | BoundaryState::Errored => self,
     }
   }
 
@@ -30,7 +32,7 @@ impl BoundaryState {
   pub(super) fn is_settled(self) -> bool {
     match self {
       BoundaryState::Running => false,
-      BoundaryState::Done | BoundaryState::Failed => true,
+      BoundaryState::Finished | BoundaryState::Errored => true,
     }
   }
 }

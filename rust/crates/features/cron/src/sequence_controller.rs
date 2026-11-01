@@ -316,9 +316,9 @@ impl SequenceController for CronSequenceController {
       let result = redrive_firing(session_id, tree).await;
       if let Some(owner_ref) = owner_ref {
         let state = match &result {
-          Ok(true) => BoundaryState::Done,
+          Ok(true) => BoundaryState::Finished,
           Ok(false) => BoundaryState::Running,
-          Err(_) => BoundaryState::Failed,
+          Err(_) => BoundaryState::Errored,
         };
         crate::boundary::notify_boundary(session_id, &owner_ref, state);
       }
@@ -842,16 +842,16 @@ mod tests {
     assert_eq!(receiver.borrow_and_update().generation, 1);
     assert_eq!(receiver.borrow().state, BoundaryState::Running);
 
-    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Done);
+    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Finished);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 2);
-    assert_eq!(receiver.borrow().state, BoundaryState::Done);
+    assert_eq!(receiver.borrow().state, BoundaryState::Finished);
 
     // A settled chain keeps its state, so a late report cannot reopen it.
-    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Failed);
+    crate::boundary::notify_boundary(leaf_id, owner_ref, BoundaryState::Errored);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 3);
-    assert_eq!(receiver.borrow().state, BoundaryState::Done);
+    assert_eq!(receiver.borrow().state, BoundaryState::Finished);
     crate::boundary::remove_boundary(leaf_id, owner_ref);
   }
 

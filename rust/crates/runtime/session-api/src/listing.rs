@@ -536,7 +536,7 @@ pub fn sessions_list_response(
   if let Some(compressed) = &whole.gzip {
     return json_bytes_response(compressed.clone(), true);
   }
-  let compressed = charliebot_compat::compression::gzip_level_one(&whole.body);
+  let compressed = charliebot_compat::compression::gzip_memoized_body(&whole.body);
   state.whole_body.as_mut().expect("the body is rendered when the inputs changed").gzip = Some(compressed.clone());
   json_bytes_response(compressed, true)
 }

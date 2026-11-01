@@ -1,6 +1,6 @@
 //! The gemini backend factory, resolving the gemini binary from the package's host.
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
@@ -26,15 +26,13 @@ impl BackendFactory for GeminiFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the gemini backend type needs its backends.options entry")?;
-    if option.model.is_empty() {
-      bail!("backend '{}' has no default model", option.id);
-    }
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let gemini_bin = self
       .host
       .resolve_binary("gemini")?
       .into_os_string()
       .into_string()
       .map_err(|path| anyhow::anyhow!("the gemini binary path is not valid Unicode: {path:?}"))?;
-    Ok(Box::new(GeminiBackend::from_launch(gemini_bin, &option.model, launch)))
+    Ok(Box::new(GeminiBackend::from_launch(gemini_bin, &model, launch)))
   }
 }

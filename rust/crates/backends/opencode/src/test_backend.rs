@@ -944,23 +944,6 @@ fn image_attachments_become_data_urls_and_other_files_are_skipped() {
 }
 
 #[test]
-fn option_default_model_requires_a_configured_model() {
-  // Python: tests/test_spawner_backend_propagation.py::test_resolve_backend_option_rejects_missing_model_for_model_required_backends
-  let option = BackendOption {
-    id: "opencode".to_string(),
-    label: "OpenCode".to_string(),
-    model: String::new(),
-    prompt_overlay: None,
-    backend_type: "opencode".to_string(),
-    type_fields: serde_yaml::Mapping::new(),
-  };
-  assert_eq!(
-    super::option_default_model(&option, "backend ").unwrap_err().to_string(),
-    "backend 'opencode' has no default model"
-  );
-}
-
-#[test]
 fn snapshot_reading_limits_keep_the_opencode_reserve() {
   assert_eq!(
     opencode_limits::snapshot_reading_limits(charliebot_store::run_records::RunKind::Work),

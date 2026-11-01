@@ -413,10 +413,8 @@ async fn run_loop(
       };
       match member {
         Some(member) => {
-          if member.model.is_empty() {
-            bail!("pool member '{}' has no default model", member.id);
-          }
-          (member.id.clone(), Some(member.model.clone()))
+          let model = member.required_model("pool member").map_err(anyhow::Error::msg)?;
+          (member.id.clone(), Some(model))
         }
         None => {
           progress.blocked = Some((iteration, pool.no_member_message(cfg), String::new()));

@@ -1,6 +1,6 @@
 //! The codex backend factory (`src/backends/codex/factory.py`) and the codex binary lookup (`base.resolve_binary`).
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
@@ -30,16 +30,14 @@ impl BackendFactory for CodexFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the codex backend type needs its backends.options entry")?;
-    if option.model.is_empty() {
-      bail!("backend '{}' has no default model", option.id);
-    }
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let fields = options::parse(&option.type_fields).map_err(anyhow::Error::msg)?;
     let local_bin = user_local_bin(&self.host.home);
     let codex_bin = resolve_binary("codex", &self.host.path, &local_bin)?;
     Ok(Box::new(CodexBackend::from_launch(
       codex_bin,
       &local_bin,
-      &option.model,
+      &model,
       &fields,
       launch,
       SessionCgroupConfig::from_config(cfg),

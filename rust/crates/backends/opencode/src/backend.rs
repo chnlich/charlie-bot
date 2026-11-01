@@ -219,7 +219,7 @@ impl BackendFactory for OpenCodeFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the opencode backend type needs its backends.options entry")?;
-    let model = option_default_model(option, "backend ")?;
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let fields = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
     let one_shot_context = model_overrides_config(std::slice::from_ref(option))?;
     self.pool.record_options(&cfg.backends.options);
@@ -243,14 +243,6 @@ impl BackendFactory for OpenCodeFactory {
     }
     Ok(Box::new(backend))
   }
-}
-
-/// Return the option's configured model, reporting an empty model with its backend role.
-pub fn option_default_model(option: &charliebot_core::config::BackendOption, subject: &str) -> anyhow::Result<String> {
-  if option.model.is_empty() {
-    bail!("{subject}'{}' has no default model", option.id);
-  }
-  Ok(option.model.clone())
 }
 
 /// The immutable launch settings carried from the factory into the Serve transport.

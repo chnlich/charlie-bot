@@ -26,7 +26,7 @@ use charliebot_registry::{Registry, RegistryError, registration_step};
 use usage_logs::OpencodeLogs;
 
 use self::backend::{OpenCodeFactory, OpenCodeLifecycle};
-pub use backend::{OpenCodeBackend, OpenCodeTranslator, option_default_model, reject_permission};
+pub use backend::{OpenCodeBackend, OpenCodeTranslator, reject_permission};
 pub use options::OpenCodeOption;
 pub use server::{
   OpenCodeHost, OpenCodeProgram, OpenCodeServer, OpenCodeServerPool, ServerTimeouts, Turn, headless_config,

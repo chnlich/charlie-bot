@@ -1,5 +1,5 @@
-//! The `cc-openai-compatible` backend type and the Anthropic proxy route its calls go through
-//! (`src/backends/openai_compatible`). The Claude CLI runs every call, so the type's usage counts under Claude Code.
+//! The `cc-openai-compatible` backend type and the Anthropic proxy route its calls go through.
+//! The Claude CLI runs every call, so the type's usage counts under Claude Code.
 
 mod anthropic_proxy;
 mod factory;

@@ -1,4 +1,4 @@
-//! The byte-level parts of the proxy's stream: the line framing of `src/infra/sse.py` and the frame `_sse_event` writes.
+//! The byte-level parts of the proxy's stream: the line framing, and the frame one SSE event writes.
 
 use axum::response::sse::Event;
 use charliebot_core::text_repr;
@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 
 use super::value_ops::COMPACT_ASCII_JSON;
 
-/// Splits a byte stream into lines as `sse.iter_sse_lines` frames them. CRLF, LF and CR each end a line. A CR at a
-/// chunk's end waits for the next byte, so a CRLF split across chunks is still one terminator.
+/// Splits a byte stream into lines. CRLF, LF and CR each end a line. A CR at a chunk's end waits for the next byte,
+/// so a CRLF split across chunks is still one terminator.
 #[derive(Default)]
 pub struct LineFramer {
   line: Vec<u8>,
@@ -47,7 +47,7 @@ impl LineFramer {
   }
 }
 
-/// `_sse_event(event, data)`: the event named `event` with a compact JSON data field whose first member is `type`.
+/// The event named `event`, with a compact JSON data field whose first member is `type`.
 pub fn sse_event(event: &str, data: &Value) -> Event {
   let mut members = Map::new();
   members.insert("type".to_string(), Value::String(event.to_string()));

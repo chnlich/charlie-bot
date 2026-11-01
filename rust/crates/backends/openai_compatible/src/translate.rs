@@ -1,6 +1,6 @@
-//! The translations of `src/backends/openai_compatible/anthropic_proxy.py`: an Anthropic Messages request to an OpenAI
-//! chat completions request, an OpenAI answer to an Anthropic message, and the OpenAI chat stream to Anthropic's
-//! events. Each keeps Python's operation order, so a request raises the failure Python raises first.
+//! The proxy's translations: an Anthropic Messages request to an OpenAI chat completions request, an OpenAI answer
+//! to an Anthropic message, and the OpenAI chat stream to Anthropic's events. Each keeps the golden fixture's
+//! operation order, so a request raises the first failure it records.
 
 use charliebot_core::text_repr::{self, is_truthy};
 use serde_json::{Map, Value, json};

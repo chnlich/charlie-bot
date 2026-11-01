@@ -1,4 +1,5 @@
-//! The cc-openai-compatible factory: the proxy base URL, the access key and the model, from `factory.py`.
+//! The cc-openai-compatible factory: it builds a Claude Code backend pointed at the server's proxy, with the
+//! credential's access key and the option's model.
 
 use anyhow::bail;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};

@@ -1,5 +1,5 @@
-//! Claude Code run against the server's Anthropic proxy: `OpenAICompatibleClaudeBackend` from
-//! `openai_compatible_claude.py`, which is `AnthropicEndpointBackend` with the proxy URL and the access key.
+//! Claude Code run against the server's Anthropic proxy: an `AnthropicEndpointBackend` with the proxy URL and the
+//! access key.
 
 use anyhow::bail;
 use charliebot_registry::backend::LaunchArgs;

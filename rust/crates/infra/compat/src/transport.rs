@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use charliebot_core::proxy_env::{HTTPS_PROXY, NO_PROXY};
 use hyper_util::client::proxy::matcher::Matcher;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::CertificateDer;
@@ -27,8 +28,8 @@ impl Settings {
   pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Settings {
     let value = |name: &str| lookup(name).filter(|value| !value.is_empty());
     Settings {
-      https_proxy: value("HTTPS_PROXY"),
-      no_proxy: value("NO_PROXY"),
+      https_proxy: value(HTTPS_PROXY),
+      no_proxy: value(NO_PROXY),
       cert_file: value("SSL_CERT_FILE").map(PathBuf::from),
     }
   }

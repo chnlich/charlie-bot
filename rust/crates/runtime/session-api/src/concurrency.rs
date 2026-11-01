@@ -74,16 +74,35 @@ impl LiveCount {
   }
 }
 
+/// The live count one request derived, with the derived sidebar map it read.
+struct DerivedCount {
+  map: Arc<sidebar::DerivedSidebarMap>,
+  count: LiveCount,
+}
+
+/// The live count the last request derived, kept while the map it read is still the map the sidebar state hands out.
+///
+/// The memo holds the map rather than its address, because a freed map's address would match a later allocation.
+static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<DerivedCount>>> = LazyLock::new(|| Mutex::new(None));
+
 /// Count the sessions whose own row paints the spinner.
 ///
 /// The rows are the ones the sidebar lists: the active sessions no sequence owns, less the ones a sidebar view owns
 /// other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or when its
 /// own run is running; the split reads the session's profile.
+///
+/// A repeat poll serves the count the last request derived. Every input the count reads moves the sidebar state's
+/// generation: a busy interval opening or closing, a probe storing a snapshot, a changed corpus. The map
+/// `resolve_sidebar_state` returns is keyed on that generation and the listed rows, so the same map still describes
+/// the same count.
 pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<LiveCount> {
   let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
   let roots = store.subtree_roots_shared()?;
   listed.retain(|row| listed_in_a_tab(&roots, &row.id));
   let derived = sidebar::resolve_sidebar_state(store, registry, &listed, true, false, false, false)?;
+  if let Some(count) = memoized_live_count(&derived) {
+    return Ok(count);
+  }
   let mut count = LiveCount::default();
   for row in &listed {
     let has_running_tasks =
@@ -97,7 +116,15 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
       TaskProfile::Worker => count.worker += 1,
     }
   }
+  *LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned") =
+    Some(DerivedCount { map: derived, count });
   Ok(count)
+}
+
+/// The count the last request derived while the map it read is still the map the sidebar state hands out.
+fn memoized_live_count(derived: &Arc<sidebar::DerivedSidebarMap>) -> Option<LiveCount> {
+  let memo = LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned");
+  memo.as_ref().filter(|entry| Arc::ptr_eq(&entry.map, derived)).map(|entry| entry.count)
 }
 
 /// Whether one active row appears in a sidebar tab: the Workspace tab lists the rows outside every owned subtree, and
@@ -566,6 +593,21 @@ mod tests {
 
     let count = live_count(&features.store, &features.registry).unwrap();
     assert_eq!(count, LiveCount { running: 3, manager: 1, worker: 2 }, "the sequence-owned session is not listed");
+  }
+
+  /// A repeat poll serves the count of the map it read, and a busy change moves the count the next poll derives.
+  #[tokio::test]
+  async fn a_repeat_live_count_follows_a_busy_change() {
+    let (_home, features) = test_support::feature_context();
+    let worker = test_support::create_node(&features.store, "memo-worker", None, TaskProfile::Worker).await;
+    assert_eq!(live_count(&features.store, &features.registry).unwrap(), LiveCount::default());
+    features.store.mark_busy(&worker.id, UtcDateTime::now()).unwrap();
+    assert_eq!(
+      live_count(&features.store, &features.registry).unwrap(),
+      LiveCount { running: 1, manager: 0, worker: 1 }
+    );
+    features.store.clear_busy(&worker.id);
+    assert_eq!(live_count(&features.store, &features.registry).unwrap(), LiveCount::default());
   }
 
   /// An idle sidebar counts nothing.

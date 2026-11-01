@@ -311,8 +311,8 @@ mod tests {
   }
 
   impl RecordingBackendFactory for FakeFactory {
-    fn backend_ids(&self) -> &'static [&'static str] {
-      recording::BACKEND_IDS
+    fn backends(&self) -> &'static [crate::transcription::BackendSpec] {
+      crate::transcription::BACKENDS
     }
 
     fn build(

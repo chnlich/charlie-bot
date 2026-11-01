@@ -8,7 +8,7 @@ use minijinja::Value;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::recording;
+use crate::transcription;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -33,27 +33,24 @@ fn default_backend() -> String {
 
 impl VoiceSettings {
   fn backends(&self, credentials: &Credentials) -> serde_json::Value {
-    let availability = |section: &str, key: &str| {
-      if credentials.get(section, key).is_some_and(|value| value.is_truthy()) {
-        serde_json::Value::Null
-      } else {
-        json!(format!("needs {section}.{key}"))
-      }
-    };
-    json!([
-      {
-        "id": "gemini",
-        "label": "Gemini 3.5 Transcribe Live",
-        "live_partials": true,
-        "unavailable_reason": availability("gemini", "api_key")
-      },
-      {
-        "id": "muse",
-        "label": "Muse Voice Transcribe",
-        "live_partials": true,
-        "unavailable_reason": availability("meta", "model_api_key")
-      }
-    ])
+    serde_json::Value::Array(
+      transcription::BACKENDS
+        .iter()
+        .map(|spec| {
+          let configured = credentials.get(spec.credential.0, spec.credential.1).is_some_and(|value| value.is_truthy());
+          json!({
+            "id": spec.id,
+            "label": spec.label,
+            "live_partials": spec.live_partials,
+            "unavailable_reason": if configured {
+              serde_json::Value::Null
+            } else {
+              json!(transcription::needed_credential(spec))
+            },
+          })
+        })
+        .collect(),
+    )
   }
 }
 
@@ -77,13 +74,13 @@ fn parse_settings(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
 
 pub(crate) fn check_default_backend(cfg: &CharlieBotConfig) -> Result<(), String> {
   let value = &cfg.section::<VoiceSettings>("voice").default_backend;
-  if recording::BACKEND_IDS.contains(&value.as_str()) {
+  if transcription::BACKENDS.iter().any(|spec| spec.id == value.as_str()) {
     return Ok(());
   }
   Err(format!(
     "voice.default_backend {} is not a transcription backend; known: {}",
     text_repr::str_repr(value),
-    recording::BACKEND_IDS.join(", ")
+    transcription::known_ids()
   ))
 }
 

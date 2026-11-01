@@ -51,76 +51,112 @@ pub(crate) struct TranscriptEvent {
   pub(crate) acknowledged: oneshot::Sender<()>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum BackendKind {
   Gemini,
   Muse,
 }
 
-pub(crate) struct Backend {
-  id: &'static str,
+/// One transcription backend the feature offers.
+///
+/// The catalog below is the one home for a backend's id, label, credential, endpoint and preview support; config,
+/// selection and relay read it instead of restating a fact.
+pub(crate) struct BackendSpec {
+  pub(crate) id: &'static str,
+  pub(crate) label: &'static str,
+  pub(crate) credential: (&'static str, &'static str),
+  pub(crate) live_partials: bool,
   kind: BackendKind,
+  endpoint: &'static str,
+}
+
+pub(crate) const BACKENDS: &[BackendSpec] = &[
+  BackendSpec {
+    id: "gemini",
+    label: "Gemini 3.5 Transcribe Live",
+    credential: ("gemini", "api_key"),
+    live_partials: true,
+    kind: BackendKind::Gemini,
+    endpoint: GEMINI_ENDPOINT,
+  },
+  BackendSpec {
+    id: "muse",
+    label: "Muse Voice Transcribe",
+    credential: ("meta", "model_api_key"),
+    live_partials: true,
+    kind: BackendKind::Muse,
+    endpoint: MUSE_ENDPOINT,
+  },
+];
+
+#[cfg(test)]
+fn spec_of(kind: BackendKind) -> &'static BackendSpec {
+  BACKENDS.iter().find(|spec| spec.kind == kind).expect("the catalog holds every backend kind")
+}
+
+/// The catalog's ids in order, as the refusal messages list them.
+pub(crate) fn known_ids() -> String {
+  BACKENDS.iter().map(|spec| spec.id).collect::<Vec<_>>().join(", ")
+}
+
+/// The refusal for an id outside the catalog.
+pub(crate) fn unknown_backend(id: &str) -> String {
+  format!("unknown transcription backend {}; known: {}", text_repr::str_repr(id), known_ids())
+}
+
+/// The credential an entry needs, as the config surface and the refusals name it.
+pub(crate) fn needed_credential(spec: &BackendSpec) -> String {
+  format!("needs {}.{}", spec.credential.0, spec.credential.1)
+}
+
+fn missing_credential(spec: &BackendSpec) -> String {
+  format!("{}.{} is not set in credentials.yaml", spec.credential.0, spec.credential.1)
+}
+
+/// The entry's credential, when the profile's value is truthy: a numeric zero or boolean false counts as unset.
+fn credential_token(credentials: &Credentials, spec: &BackendSpec) -> Option<String> {
+  credentials.get(spec.credential.0, spec.credential.1).filter(|value| value.is_truthy()).map(|value| value.value_str())
+}
+
+pub(crate) struct Backend {
+  spec: &'static BackendSpec,
   token: Option<String>,
-  endpoint_url: String,
+  endpoint: String,
   clock: Arc<dyn Clock>,
 }
 
 impl Backend {
   pub(crate) fn build(id: &str, credentials: &Credentials) -> Result<Self, String> {
-    match id {
-      "gemini" => Ok(Self {
-        id: "gemini",
-        kind: BackendKind::Gemini,
-        token: credentials.get("gemini", "api_key").filter(|value| value.is_truthy()).map(|value| value.value_str()),
-        endpoint_url: GEMINI_ENDPOINT.to_string(),
-        clock: Arc::new(EventLoopClock),
-      }),
-      "muse" => Ok(Self {
-        id: "muse",
-        kind: BackendKind::Muse,
-        token: credentials
-          .get("meta", "model_api_key")
-          .filter(|value| value.is_truthy())
-          .map(|value| value.value_str()),
-        endpoint_url: MUSE_ENDPOINT.to_string(),
-        clock: Arc::new(EventLoopClock),
-      }),
-      _ => Err(format!("unknown transcription backend {}; known: gemini, muse", text_repr::str_repr(id))),
-    }
+    let spec = BACKENDS.iter().find(|spec| spec.id == id).ok_or_else(|| unknown_backend(id))?;
+    Ok(Self {
+      spec,
+      token: credential_token(credentials, spec),
+      endpoint: spec.endpoint.to_string(),
+      clock: Arc::new(EventLoopClock),
+    })
   }
 
   #[cfg(test)]
   pub(crate) fn gemini_for_test(token: &str, endpoint_url: &str) -> Self {
-    Self {
-      id: "gemini",
-      kind: BackendKind::Gemini,
-      token: Some(token.to_string()),
-      endpoint_url: endpoint_url.to_string(),
-      clock: Arc::new(EventLoopClock),
-    }
+    Self::for_test(BackendKind::Gemini, token, endpoint_url, Arc::new(EventLoopClock))
   }
 
   #[cfg(test)]
   fn muse_for_test(token: &str, endpoint_url: &str, clock: Arc<dyn Clock>) -> Self {
-    Self {
-      id: "muse",
-      kind: BackendKind::Muse,
-      token: Some(token.to_string()),
-      endpoint_url: endpoint_url.to_string(),
-      clock,
-    }
+    Self::for_test(BackendKind::Muse, token, endpoint_url, clock)
+  }
+
+  #[cfg(test)]
+  fn for_test(kind: BackendKind, token: &str, endpoint_url: &str, clock: Arc<dyn Clock>) -> Self {
+    Self { spec: spec_of(kind), token: Some(token.to_string()), endpoint: endpoint_url.to_string(), clock }
   }
 
   pub(crate) fn id(&self) -> &'static str {
-    self.id
+    self.spec.id
   }
 
-  pub(crate) fn unavailable_reason(&self) -> Option<&'static str> {
-    match (&self.kind, self.token.as_deref()) {
-      (BackendKind::Gemini, None) => Some("needs gemini.api_key"),
-      (BackendKind::Muse, None) => Some("needs meta.model_api_key"),
-      _ => None,
-    }
+  pub(crate) fn unavailable_reason(&self) -> Option<String> {
+    self.token.is_none().then(|| needed_credential(self.spec))
   }
 
   pub(crate) async fn transcribe(
@@ -131,13 +167,10 @@ impl Backend {
     vocabulary: Vec<String>,
     languages: Vec<String>,
   ) -> Result<(), TranscriptionError> {
-    match self.kind {
+    match self.spec.kind {
       BackendKind::Gemini => {
-        let token = self
-          .token
-          .as_deref()
-          .ok_or_else(|| TranscriptionError::Rejected("gemini.api_key is not set in credentials.yaml".to_string()))?;
-        let url = format!("{}?key={token}", self.endpoint_url);
+        let token = self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(self.spec)))?;
+        let url = format!("{}?key={token}", self.endpoint);
         let options = Options {
           open_timeout: Some(GEMINI_OPEN_TIMEOUT),
           close_timeout: Some(WS_CLIENT_CLOSE_TIMEOUT),
@@ -154,13 +187,11 @@ impl Backend {
         run_gemini(sender, receiver, audio, &mut cancelled, events, vocabulary, languages).await
       }
       BackendKind::Muse => {
-        let token = self.token.as_deref().ok_or_else(|| {
-          TranscriptionError::Rejected("meta.model_api_key is not set in credentials.yaml".to_string())
-        })?;
+        let token = self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(self.spec)))?;
         let options = Options { close_timeout: Some(WS_CLIENT_CLOSE_TIMEOUT), ..WEBSOCKETS_16_DEFAULTS };
         let settings = ws_client::Settings::from_env();
         let connected = tokio::select! {
-          result = ws_client::connect(&self.endpoint_url, &options, &settings) => result,
+          result = ws_client::connect(&self.endpoint, &options, &settings) => result,
           _ = wait_cancelled(&mut cancelled) => return Ok(()),
         };
         let (sender, receiver) = connected.map_err(|error| TranscriptionError::Failure(error.to_string()))?;

@@ -9,12 +9,16 @@
 //! The scratch directory sits outside the clone the round reviews: the reviewer's own git checkouts stay away
 //! from the clone's HEAD, and no non-PR content enters the clone. The session directory is the direction's own
 //! folder, because the improve sandbox allows writes only under the round's own directories.
+//!
+//! A failed review keeps its scratch directory, and its message names the kept `events.ndjson`. The child's
+//! stderr can hold only provider-doc noise while its real error sits in the event stream, so the message takes
+//! the stream's error event first.
 
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use charliebot_charlie_code::{API_KEY_ENV, TASK_FILE_NAME, flags};
 use charliebot_cli_common::args::with_infer_long_args;
@@ -188,18 +192,21 @@ fn run_review(
   fs::write(&events_path, scrub(&stream, key))
     .map_err(|error| format!("cannot write {}: {error}", events_path.display()))?;
 
-  if !output.status.success() {
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let detail = if stderr_text.trim().is_empty() {
-      error_event(&stream).unwrap_or_else(|| format!("charlie-code exited with {}", output.status))
-    } else {
-      stderr_text.trim_end().to_string()
-    };
-    return Err(format!("charlie-code review of {} failed: {detail}", credential));
-  }
+  let verdict = if output.status.success() {
+    final_verdict(&stream)
+  } else {
+    Err(failure_detail(&stream, &output.stderr, &output.status))
+  };
+  let verdict = verdict.map_err(|detail| {
+    format!(
+      "charlie-code review of {} failed: {detail}\nThe event stream is kept at {}",
+      credential,
+      events_path.display()
+    )
+  })?;
 
   let verdict_path = scratch.join("verdict.md");
-  fs::write(&verdict_path, scrub(&final_verdict(&stream)?, key))
+  fs::write(&verdict_path, scrub(&verdict, key))
     .map_err(|error| format!("cannot write {}: {error}", verdict_path.display()))?;
   Ok(verdict_path)
 }
@@ -231,15 +238,30 @@ fn final_verdict(stream: &str) -> Result<String, String> {
   verdict.ok_or_else(|| "charlie-code wrote no result event".to_string())
 }
 
-/// The message of the stream's last `error` event, for a child that failed without stderr text.
+/// The failure text: the message of the stream's last `error` event that carries text, else the child's stderr
+/// text, else the exit status. LiteLLM writes provider-doc links to stderr, so a failed review's stderr is
+/// non-empty while its real error sits only in the stream.
+fn failure_detail(stream: &str, stderr: &[u8], status: &ExitStatus) -> String {
+  if let Some(message) = error_event(stream) {
+    return message;
+  }
+  let stderr_text = String::from_utf8_lossy(stderr);
+  if stderr_text.trim().is_empty() {
+    format!("charlie-code exited with {status}")
+  } else {
+    stderr_text.trim_end().to_string()
+  }
+}
+
+/// The message of the stream's last `error` event.
 fn error_event(stream: &str) -> Option<String> {
   stream.lines().rev().find_map(|line| {
     let event = serde_json::from_str::<Value>(line).ok()?;
-    if event.get("type").and_then(Value::as_str) == Some("error") {
-      event.get("message").and_then(Value::as_str).map(str::to_string)
-    } else {
-      None
+    if event.get("type").and_then(Value::as_str) != Some("error") {
+      return None;
     }
+    let message = event.get("message").and_then(Value::as_str)?;
+    (!message.trim().is_empty()).then_some(message.to_string())
   })
 }
 
@@ -250,6 +272,8 @@ fn scrub(text: &str, key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+  use std::os::unix::process::ExitStatusExt;
+
   use super::*;
 
   #[test]
@@ -283,5 +307,21 @@ mod tests {
   #[test]
   fn the_scrub_replaces_every_occurrence() {
     assert_eq!(scrub("a k b k", "k"), "a **** b ****");
+  }
+
+  #[test]
+  fn a_failure_takes_the_stream_error_over_stderr_text() {
+    let stream = "{\"type\":\"error\",\"message\":\"gateway refused\"}\n";
+    let status = ExitStatus::from_raw(1 << 8);
+    let noisy_stderr = "Provider List: https://docs.litellm.ai/docs/providers\n";
+    assert_eq!(failure_detail(stream, noisy_stderr.as_bytes(), &status), "gateway refused");
+  }
+
+  #[test]
+  fn a_failure_without_a_stream_error_keeps_the_stderr_text_or_the_exit_status() {
+    let status = ExitStatus::from_raw(3 << 8);
+    assert_eq!(failure_detail("", b"litellm: no deployment\n\n", &status), "litellm: no deployment");
+    let empty_error = "{\"type\":\"error\",\"message\":\" \"}\n";
+    assert_eq!(failure_detail(empty_error, b"", &status), "charlie-code exited with exit status: 3");
   }
 }

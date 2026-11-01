@@ -312,7 +312,7 @@ fn the_key_is_scrubbed_from_every_success_output_and_file() {
 }
 
 #[test]
-fn a_failing_review_exits_nonzero_with_its_scrubbed_error_text() {
+fn a_failing_review_reports_the_stream_error_over_stderr_noise() {
   let sandbox = Sandbox::new();
   let (direction, _scratch) = Scratch::new();
   let home = scratch_home(&sandbox, "gateway", KEY);
@@ -322,7 +322,8 @@ fn a_failing_review_exits_nonzero_with_its_scrubbed_error_text() {
   recording_stub(
     &sandbox,
     &record,
-    "printf 'gateway refused %s\\n' \"$CHARLIE_CODE_API_KEY\" >&2\n\
+    "printf 'Provider List: https://docs.litellm.ai/docs/providers\\n' >&2\n\
+     printf 'Provider List: https://docs.litellm.ai/docs/providers\\n' >&2\n\
      printf '{\"type\":\"error\",\"message\":\"gateway refused %s\"}\\n' \"$CHARLIE_CODE_API_KEY\"\n\
      exit 1",
   );
@@ -332,9 +333,72 @@ fn a_failing_review_exits_nonzero_with_its_scrubbed_error_text() {
 
   assert_eq!(result.code, 1, "{}", result.describe());
   assert!(result.stdout.is_empty(), "{}", result.stdout);
-  assert!(result.stderr.contains("gateway refused ****"), "{}", result.stderr);
+  assert!(result.stderr.contains("charlie-code review of gateway failed: gateway refused ****"), "{}", result.stderr);
+  assert!(!result.stderr.contains("Provider List"), "the stream's error wins over stderr noise: {}", result.stderr);
   assert!(!result.stderr.contains(KEY), "{}", result.stderr);
   let scratch_dir = review_scratch(&direction);
-  assert!(fs::read_to_string(scratch_dir.join("events.ndjson")).unwrap().contains("gateway refused ****"));
+  let events_path = scratch_dir.join("events.ndjson");
+  assert!(result.stderr.contains(&events_path.display().to_string()), "{}", result.stderr);
+  assert!(fs::read_to_string(&events_path).unwrap().contains("gateway refused ****"));
+  assert_no_key_anywhere(&scratch_dir, &record);
+}
+
+#[test]
+fn a_review_without_a_result_event_names_the_kept_stream() {
+  let sandbox = Sandbox::new();
+  let (direction, _scratch) = Scratch::new();
+  let home = scratch_home(&sandbox, "gateway", KEY);
+  let prompt = sandbox.dir("prompt");
+  fs::write(prompt.join("review.md"), "review\n").unwrap();
+  let record = sandbox.root().join("record.txt");
+  recording_stub(&sandbox, &record, "printf '{\"type\":\"thought\",\"text\":\"x\"}\\n'\nexit 0");
+  let env = env(&sandbox, &home, &record, true);
+
+  let result = run(&env, &direction, "review-entry", &prompt.join("review.md"));
+
+  assert_eq!(result.code, 1, "{}", result.describe());
+  assert!(result.stdout.is_empty(), "{}", result.stdout);
+  assert!(
+    result.stderr.contains("charlie-code review of gateway failed: charlie-code wrote no result event"),
+    "{}",
+    result.stderr
+  );
+  let scratch_dir = review_scratch(&direction);
+  let events_path = scratch_dir.join("events.ndjson");
+  assert!(result.stderr.contains(&events_path.display().to_string()), "{}", result.stderr);
+  assert!(fs::read_to_string(&events_path).unwrap().contains("thought"));
+  assert_no_key_anywhere(&scratch_dir, &record);
+}
+
+#[test]
+fn a_failing_review_without_an_error_event_keeps_the_stderr_text() {
+  let sandbox = Sandbox::new();
+  let (direction, _scratch) = Scratch::new();
+  let home = scratch_home(&sandbox, "gateway", KEY);
+  let prompt = sandbox.dir("prompt");
+  fs::write(prompt.join("review.md"), "review\n").unwrap();
+  let record = sandbox.root().join("record.txt");
+  recording_stub(
+    &sandbox,
+    &record,
+    "printf 'litellm: no healthy deployment for %s\\n' \"$CHARLIE_CODE_API_KEY\" >&2\n\
+     exit 1",
+  );
+  let env = env(&sandbox, &home, &record, true);
+
+  let result = run(&env, &direction, "review-entry", &prompt.join("review.md"));
+
+  assert_eq!(result.code, 1, "{}", result.describe());
+  assert!(result.stdout.is_empty(), "{}", result.stdout);
+  assert!(
+    result.stderr.contains("charlie-code review of gateway failed: litellm: no healthy deployment for ****"),
+    "{}",
+    result.stderr
+  );
+  assert!(!result.stderr.contains(KEY), "{}", result.stderr);
+  let scratch_dir = review_scratch(&direction);
+  let events_path = scratch_dir.join("events.ndjson");
+  assert!(result.stderr.contains(&events_path.display().to_string()), "{}", result.stderr);
+  assert!(fs::read_to_string(&events_path).unwrap().is_empty(), "no event stream, so the file is empty");
   assert_no_key_anywhere(&scratch_dir, &record);
 }

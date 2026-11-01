@@ -34,7 +34,10 @@
   .heroCard .lab { font-size:12px; color:var(--mut); margin:0 0 2px }
   .heroCard .val { font-size:34px; line-height:1.1; font-weight:640; letter-spacing:-1px; font-variant-numeric:tabular-nums }
   .heroCard .val.model { font-size:16px; line-height:1.35; letter-spacing:0; padding-top:9px; overflow-wrap:anywhere }
-  .heroCard .foot { font-size:12px; color:var(--mut2); margin:4px 0 0 }
+  /* Every secondary figure on this page reads in the body muted tone: --mut2 renders 3.70:1 on the
+     white card and 3.38:1 on the page background, under the 4.5:1 floor for text this small; --mut
+     renders 5.77:1 and 5.28:1. */
+  .heroCard .foot { font-size:12px; color:var(--mut); margin:4px 0 0 }
   .heroCard .split { font-size:11.5px; line-height:1.5 }
   .card { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:16px 18px 12px }
   .card.empty { margin:0 0 4px }
@@ -52,7 +55,7 @@
   .chart .bar { position:absolute; left:0; top:2px; height:18px; border-radius:0 4px 4px 0; min-width:2px }
   .chart .vl { font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; white-space:nowrap; text-align:right; padding-right:4px }
   .axis { position:relative; height:20px; grid-column:2/3; margin-top:2px }
-  .axis span { position:absolute; top:2px; transform:translateX(-50%); font-size:11px; color:var(--mut2);
+  .axis span { position:absolute; top:2px; transform:translateX(-50%); font-size:11px; color:var(--mut);
     font-variant-numeric:tabular-nums; white-space:nowrap }
   .gridlines { position:absolute; inset:0; pointer-events:none }
   .gridlines i { position:absolute; top:0; bottom:0; width:1px; background:var(--grid) }
@@ -73,7 +76,7 @@
   table.data td.mdl .sw { width:9px; height:9px; border-radius:2px; display:inline-block; margin:0 7px 0 0 }
   table.data td.src { text-align:left; white-space:nowrap }
   table.data td.src .sw { width:9px; height:9px; border-radius:2px; display:inline-block; margin:0 7px 0 0 }
-  table.data td.win { color:var(--mut2); font-family:var(--mono); font-size:11px; text-align:left; white-space:nowrap }
+  table.data td.win { color:var(--mut); font-family:var(--mono); font-size:11px; text-align:left; white-space:nowrap }
   table.data tr.xrow > td { background:var(--panel); padding:8px 10px 10px }
   table.data tr.xrow table.data { font-size:12px; margin:0 0 6px }
   table.data tr.sum td { font-weight:650; background:var(--panel2) }
@@ -82,7 +85,7 @@
   button.tg[aria-expanded="true"], button.tg2[aria-expanded="true"] { color:var(--tx) }
   .accts { margin:8px 0 0 }
   .accts table.data { margin-top:6px }
-  .foot { color:var(--mut2); font-size:12px; margin-top:22px }
+  .foot { color:var(--mut); font-size:12px; margin-top:22px }
   @media (max-width:760px) {
     body { padding:18px 14px 30px }
     .heroCard .val { font-size:30px }
@@ -93,7 +96,7 @@
     table.data.stack tr.xrow { border:1px solid var(--bd); border-top:none; border-radius:0 0 10px 10px; padding:0 10px 8px }
     table.data.stack tr.xrow > td { border:none; padding:6px 0 0 }
     table.data.stack td { border:none; text-align:left; white-space:normal; padding:2px 0 }
-    table.data.stack td::before { content:attr(data-l); display:inline-block; min-width:118px; color:var(--mut2); font-size:11.5px }
+    table.data.stack td::before { content:attr(data-l); display:inline-block; min-width:118px; color:var(--mut); font-size:11.5px }
     table.data.stack td[data-l=""]::before, table.data.stack td.mdl::before, table.data.stack td.src::before { content:none }
     /* A cell with no label reserves no gutter: an empty-state row's sentence and an expanded
        row's full-width detail cell use the whole phone width. */

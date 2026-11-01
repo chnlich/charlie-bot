@@ -19,6 +19,12 @@ pub const SYNC_CLAUDE_AI_SKILLS_SETTINGS_KEY: &str = "syncClaudeAiSkills";
 pub const DISABLE_BUNDLED_SKILLS_SETTINGS_KEY: &str = "disableBundledSkills";
 pub const FAST_MODE_SETTINGS_KEY: &str = "fastMode";
 
+/// The PreToolUse hook event: the backend registers `charliebot wait-guard` under it, and the CLI's answer must name it.
+pub const PRE_TOOL_USE_HOOK_EVENT: &str = "PreToolUse";
+/// The SessionStart hook event: the backend registers `charliebot compaction-context` under it, and the CLI's answer
+/// names it.
+pub const SESSION_START_HOOK_EVENT: &str = "SessionStart";
+
 pub const HEADLESS_FORWARDED_ENV: [&str; 4] =
   [AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV, AUTO_COMPACT_WINDOW_ENV, SIMPLE_SYSTEM_PROMPT_ENV];
 
@@ -54,14 +60,14 @@ pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> 
     })
     .collect();
   let mut settings = Map::new();
-  settings.insert("hooks".to_string(), json!({"SessionStart": [{"matcher": "compact", "hooks": hooks}]}));
+  settings.insert("hooks".to_string(), json!({SESSION_START_HOOK_EVENT: [{"matcher": "compact", "hooks": hooks}]}));
   settings
 }
 
 fn add_wait_guard_hook(settings: &mut Map<String, Value>) {
   let hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
   hooks.as_object_mut().expect("Claude hook settings are an object").insert(
-    "PreToolUse".to_string(),
+    PRE_TOOL_USE_HOOK_EVENT.to_string(),
     json!([{
       "matcher": "Bash",
       "hooks": [{"type": "command", "command": "charliebot wait-guard"}]

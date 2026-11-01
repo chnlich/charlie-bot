@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::OnceLock;
 
+use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::exit::CliExit;
 use fancy_regex::{Captures, Regex};
 use serde_json::{Value, json};
@@ -48,7 +49,7 @@ fn run<R: Read, W: Write>(mut input: R, output: &mut W) -> Result<(), CliExit> {
 fn deny_decision() -> Value {
   json!({
     "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
+      "hookEventName": claude_launch::PRE_TOOL_USE_HOOK_EVENT,
       "permissionDecision": "deny",
       "permissionDecisionReason": DENY_REASON
     }

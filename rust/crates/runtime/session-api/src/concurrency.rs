@@ -20,7 +20,7 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreError, StoreResult};
 use serde_json::{Value, json};
@@ -87,6 +87,7 @@ struct LiveCountMemo {
   sequence_roots: Arc<HashMap<String, String>>,
   view_roots: Arc<HashMap<String, HashMap<String, String>>>,
   sidebar_generation: u64,
+  rows: Vec<Arc<SessionMetadata>>,
   count: LiveCount,
 }
 
@@ -105,13 +106,14 @@ static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<LiveCountMemo>>> = LazyLock::new(|
 ///
 /// A repeat poll serves the count the last request derived while the corpus, the two subtree-root maps, the derived
 /// archive set and the sidebar state still hold. A busy interval opening or closing, a probe storing a snapshot and a
-/// changed corpus each move the sidebar generation, and a metadata write moves the corpus generation.
+/// changed corpus each move the sidebar generation, and a metadata write moves the corpus generation. The hit still
+/// polls the sidebar state, because the periodic self-heal sweep is what catches an edit from outside the server.
 pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<LiveCount> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
   let roots = store.subtree_roots_shared()?;
   let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
-  if let Some(count) = memoized_live_count(store, registry, generation, &archived, &roots, sidebar_generation) {
+  if let Some(count) = memoized_live_count(store, registry, generation, &archived, &roots, sidebar_generation)? {
     return Ok(count);
   }
   let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
@@ -142,13 +144,14 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
       sequence_roots: Arc::clone(&roots.sequence),
       view_roots: Arc::clone(&roots.views),
       sidebar_generation,
+      rows: listed,
       count,
     });
   }
   Ok(count)
 }
 
-/// The count the last request derived while every input it read still holds.
+/// The count the last request derived while every input it read still holds, polled for the self-heal sweep.
 fn memoized_live_count(
   store: &Arc<Store>,
   registry: &Arc<Registry>,
@@ -156,22 +159,23 @@ fn memoized_live_count(
   archived: &Arc<Vec<String>>,
   roots: &SharedSubtreeRoots,
   sidebar_generation: u64,
-) -> Option<LiveCount> {
+) -> StoreResult<Option<LiveCount>> {
   let memo = LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned");
-  memo
-    .as_ref()
-    .filter(|entry| {
-      Weak::ptr_eq(&entry.store, &Arc::downgrade(store))
-        && Weak::ptr_eq(&entry.registry, &Arc::downgrade(registry))
-        && entry.generation == generation
-        // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
-        // index holds an equal list in a new allocation, and the value comparison keeps the count it answered for.
-        && (Arc::ptr_eq(&entry.archived, archived) || entry.archived.as_slice() == archived.as_slice())
-        && Arc::ptr_eq(&entry.sequence_roots, &roots.sequence)
-        && Arc::ptr_eq(&entry.view_roots, &roots.views)
-        && entry.sidebar_generation == sidebar_generation
-    })
-    .map(|entry| entry.count)
+  let Some(entry) = memo.as_ref().filter(|entry| {
+    Weak::ptr_eq(&entry.store, &Arc::downgrade(store))
+      && Weak::ptr_eq(&entry.registry, &Arc::downgrade(registry))
+      && entry.generation == generation
+      // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
+      // index holds an equal list in a new allocation, and the value comparison keeps the count it answered for.
+      && (Arc::ptr_eq(&entry.archived, archived) || entry.archived.as_slice() == archived.as_slice())
+      && Arc::ptr_eq(&entry.sequence_roots, &roots.sequence)
+      && Arc::ptr_eq(&entry.view_roots, &roots.views)
+      && entry.sidebar_generation == sidebar_generation
+  }) else {
+    return Ok(None);
+  };
+  sidebar::count_memoized_read(store, registry, &entry.rows)?;
+  Ok(Some(entry.count))
 }
 
 /// Whether one active row appears in a sidebar tab: the Workspace tab lists the rows outside every owned subtree, and
@@ -871,7 +875,7 @@ mod tests {
     assert_eq!(count, LiveCount { running: 3, manager: 1, worker: 2 }, "the sequence-owned session is not listed");
   }
 
-  /// A repeat poll serves the count of the map it read, and a busy change moves the count the next poll derives.
+  /// A repeat poll serves the count the earlier poll derived, and a busy change moves the count the next poll derives.
   #[tokio::test]
   async fn a_repeat_live_count_follows_a_busy_change() {
     let (_home, features) = test_support::feature_context();

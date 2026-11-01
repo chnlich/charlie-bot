@@ -95,6 +95,8 @@ pub const USAGE_OUTPUT_TOKENS: &str = "output_tokens";
 pub const USAGE_CACHE_READ_INPUT_TOKENS: &str = "cache_read_input_tokens";
 pub const USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens";
 pub const RESULT_TOTAL_COST_USD: &str = "total_cost_usd";
+/// The result event's context snapshot: the model, its context limit and the token counts at the result.
+pub const CONTEXT_SNAPSHOT: &str = "context_snapshot";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

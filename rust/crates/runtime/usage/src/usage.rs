@@ -117,7 +117,7 @@ impl UsageFold {
         }
       }
     }
-    if let Some(snapshot) = event.field("context_snapshot").filter(|value| value.is_object()) {
+    if let Some(snapshot) = event.field(event_types::CONTEXT_SNAPSHOT).filter(|value| value.is_object()) {
       self.snapshot = Some(snapshot.to_owned_value());
       self.reading_kind = READING_SNAPSHOT.to_string();
     }

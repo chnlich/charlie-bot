@@ -45,7 +45,7 @@ pub fn make_result_event(
     (event_types::RESULT_TOTAL_COST_USD.to_string(), cost),
   ]);
   if let Some(snapshot) = context_snapshot {
-    event.insert("context_snapshot".to_string(), snapshot);
+    event.insert(event_types::CONTEXT_SNAPSHOT.to_string(), snapshot);
   }
   Value::Object(event)
 }

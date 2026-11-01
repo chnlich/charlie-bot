@@ -11,7 +11,7 @@ use axum::http::{HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::gzip_level_one;
+use charliebot_compat::compression::{gzip_level_one, gzip_memoized_body};
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
@@ -134,7 +134,7 @@ impl PageBodyMemo {
       Some(match &entry.gzip {
         Some(compressed) => compressed.clone(),
         None => {
-          let compressed = Bytes::from(gzip_level_one(&body));
+          let compressed = Bytes::from(gzip_memoized_body(&body));
           entry.gzip = Some(compressed.clone());
           compressed
         }

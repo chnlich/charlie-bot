@@ -82,8 +82,7 @@ mod tests {
       .map_err(|error| format!("{error:#}"))
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_effort_to_cli_command
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_omits_effort_from_cli_command_by_default
+  // The option's effort reaches the claude command as `--effort <value>`; an option without effort adds no flag.
   #[test]
   fn effort_reaches_the_claude_command_only_when_the_option_sets_it() {
     let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
@@ -118,7 +117,7 @@ mod tests {
     assert!(error.contains("cli_binary must be a string or null"), "{error}");
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_custom_headers
+  // The option's headers reach the child as the gateway's custom-headers value.
   #[test]
   fn factory_routes_custom_headers() {
     let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
@@ -127,7 +126,7 @@ mod tests {
     assert_eq!(env[GATEWAY_CUSTOM_HEADERS_ENV], "x-litellm-tags: deepseek");
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_multiple_custom_headers
+  // Multiple headers reach the child in option order, one header per line.
   #[test]
   fn factory_routes_multiple_custom_headers() {
     let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
@@ -137,7 +136,7 @@ mod tests {
     assert_eq!(env[GATEWAY_CUSTOM_HEADERS_ENV], "x-litellm-tags: deepseek\nx-client-name: charliebot");
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_omits_custom_headers_when_option_has_none_and_parent_sets_them
+  // An option without headers sets no custom-headers value, so the parent's value does not carry over.
   #[test]
   fn factory_omits_custom_headers_when_the_option_has_none_and_the_parent_sets_them() {
     let backend = build("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n").unwrap();
@@ -147,7 +146,7 @@ mod tests {
     assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_extra_body
+  // The option's extra_body reaches the child as the gateway's extra-body JSON.
   #[test]
   fn factory_routes_extra_body() {
     let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
@@ -159,7 +158,7 @@ mod tests {
     );
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_factory_omits_extra_body_when_option_has_none_and_parent_sets_it
+  // An option without extra_body sets no extra-body value, so the parent's value does not carry over.
   #[test]
   fn factory_omits_extra_body_when_the_option_has_none_and_the_parent_sets_it() {
     let backend = build("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n").unwrap();

@@ -189,16 +189,18 @@
     }
     const width = Math.max(240, container.clientWidth || 360);
     const height = CHART_HEIGHT;
-    const top = 12;
-    const bottom = 18;
+    // The top margin holds the peak label above the maximum gridline; the bottom margin holds the day labels
+    // below the zero line. The plot spans the two margins and 0 sits on its floor, where the area fill ends.
+    const plotTop = 12;
+    const plotBottom = height - 18;
     const maximum = points.reduce((most, point) => Math.max(most, point.running), 0);
     // The scale keeps a nonzero height for a series that is all zero, while the axis names the real maximum.
     const scale = Math.max(1, maximum);
     const step = points.length > 1 ? (width - 2) / (points.length - 1) : 0;
     const xAt = (index) => 1 + index * step;
-    const yAt = (value) => bottom + (height - top - bottom) * (1 - value / scale);
+    const yAt = (value) => plotBottom - (plotBottom - plotTop) * (value / scale);
     const segments = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${xAt(index).toFixed(1)},${yAt(point.running).toFixed(1)}`);
-    const area = `${segments.join('')}L${xAt(points.length - 1).toFixed(1)},${height - bottom}L1,${height - bottom}Z`;
+    const area = `${segments.join('')}L${xAt(points.length - 1).toFixed(1)},${plotBottom}L1,${plotBottom}Z`;
     const first = points[0].t;
     const last = points[points.length - 1].t;
     container.innerHTML = `
@@ -211,11 +213,11 @@
         <text class="cb-axis" x="${width - 1}" y="${height - 4}" text-anchor="end">${dayLabel(last)}</text>
         <path class="cb-area" d="${area}"></path>
         <path class="cb-line" d="${segments.join('')}"></path>
-        <line class="cb-cursor" x1="0" y1="${top}" x2="0" y2="${height - bottom}" visibility="hidden"></line>
+        <line class="cb-cursor" x1="0" y1="${plotTop}" x2="0" y2="${plotBottom}" visibility="hidden"></line>
         <circle class="cb-dot-mark" cx="0" cy="0" r="3" visibility="hidden"></circle>
       </svg>
       <div class="cb-ptip" hidden></div>`;
-    layout = {width, height, top, bottom, step, xAt, yAt, box: container, svg: container.querySelector('svg')};
+    layout = {width, height, plotTop, plotBottom, step, xAt, yAt, box: container, svg: container.querySelector('svg')};
   }
 
   function showPointTip(clientX) {

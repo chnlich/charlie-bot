@@ -14,11 +14,23 @@ function getRoundRating(roundId) {
   return activeRoundRatings[String(roundId)] || null;
 }
 
+// The two ratings the server stores and the colors each one takes. Every site reads its rating's entry, so an
+// unknown rating fails here instead of wearing the other rating's color.
+const RATING_STYLES = new Map([
+  ['thumbs_up', { active: 'text-green-400', hover: 'hover:text-green-400' }],
+  ['thumbs_down', { active: 'text-red-400', hover: 'hover:text-red-400' }],
+]);
+
+function ratingStyle(rating) {
+  const style = RATING_STYLES.get(rating);
+  if (!style) throw new Error('unknown round rating: ' + rating);
+  return style;
+}
+
 function roundRatingButtonClass(buttonRating, activeRating) {
+  const style = ratingStyle(buttonRating);
   const active = buttonRating === activeRating;
-  const activeClass = buttonRating === 'thumbs_up' ? 'text-green-400' : 'text-red-400';
-  const hoverClass = buttonRating === 'thumbs_up' ? 'hover:text-green-400' : 'hover:text-red-400';
-  return 'round-rating-button p-0.5 text-sm leading-none transition-colors duration-150 ' + (active ? activeClass : 'text-slate-500 ' + hoverClass);
+  return 'round-rating-button p-0.5 text-sm leading-none transition-colors duration-150 ' + (active ? style.active : 'text-slate-500 ' + style.hover);
 }
 
 function renderRoundRatingButtons(sessionId, roundId) {
@@ -42,12 +54,11 @@ function renderRoundRatingButtons(sessionId, roundId) {
 
 function applyRoundRatingButtonState(btn, activeRating) {
   const buttonRating = btn.dataset.roundRating;
+  const style = ratingStyle(buttonRating);
   const isActive = buttonRating === activeRating;
   btn.classList.toggle('text-slate-500', !isActive);
-  btn.classList.toggle('text-green-400', buttonRating === 'thumbs_up' && isActive);
-  btn.classList.toggle('text-red-400', buttonRating === 'thumbs_down' && isActive);
-  btn.classList.toggle('hover:text-green-400', buttonRating === 'thumbs_up' && !isActive);
-  btn.classList.toggle('hover:text-red-400', buttonRating === 'thumbs_down' && !isActive);
+  btn.classList.toggle(style.active, isActive);
+  btn.classList.toggle(style.hover, !isActive);
   btn.setAttribute('aria-pressed', String(isActive));
 }
 

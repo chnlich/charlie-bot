@@ -21,6 +21,7 @@ pub mod pacific;
 pub mod paths;
 mod printable_table;
 pub mod proc_identity;
+pub mod proxy_env;
 pub mod regex_classes;
 pub mod repo_root;
 pub mod run_token;

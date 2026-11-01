@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_core::proxy_env::{HTTP_PROXY, HTTPS_PROXY, NO_PROXY};
 use charliebot_registry::backend::Env;
 use serde_json::{Map, Value};
 
@@ -125,10 +126,10 @@ pub fn merge_local_no_proxy(value: &str) -> String {
 /// Points a child env's outbound traffic at `proxy_url`, in place (`base.apply_proxy_env`). HTTP_PROXY and HTTPS_PROXY
 /// both carry the URL, and NO_PROXY gains the local exemptions.
 pub fn apply_proxy_env(env: &mut Env, proxy_url: &str) {
-  env.insert("HTTP_PROXY".to_string(), proxy_url.to_string());
-  env.insert("HTTPS_PROXY".to_string(), proxy_url.to_string());
-  let no_proxy = merge_local_no_proxy(env.get("NO_PROXY").map_or("", String::as_str));
-  env.insert("NO_PROXY".to_string(), no_proxy);
+  env.insert(HTTP_PROXY.to_string(), proxy_url.to_string());
+  env.insert(HTTPS_PROXY.to_string(), proxy_url.to_string());
+  let no_proxy = merge_local_no_proxy(env.get(NO_PROXY).map_or("", String::as_str));
+  env.insert(NO_PROXY.to_string(), no_proxy);
 }
 
 /// The prompt with the instructions framed in, as `_effective_prompt` does for a backend with no system-prompt flag.

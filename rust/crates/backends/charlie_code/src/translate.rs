@@ -1,5 +1,5 @@
-//! The charlie-code NDJSON translator (`CharlieCodeBackend.translate_event`). Each event maps to its CC event. The
-//! translator keeps each command's text by id, so a progress ping can name the command it reports on.
+//! The charlie-code NDJSON translator. Each event maps to its CC event. The translator keeps each command's text by
+//! id, so a progress ping can name the command it reports on.
 
 use std::collections::HashMap;
 
@@ -162,12 +162,12 @@ fn required_number(event: &Map<String, Value>, key: &str) -> anyhow::Result<f64>
   }
 }
 
-/// `_duration_label`: progress ticks read in minutes from one minute up (`1.25 min`), else in seconds (`5 s`).
+/// A progress tick reads in minutes from one minute up (`1.25 min`), else in seconds (`5 s`).
 fn duration_label(seconds: f64) -> String {
   if seconds >= 60.0 { format!("{} min", format_g(seconds / 60.0)) } else { format!("{} s", format_g(seconds)) }
 }
 
-/// `" ".join(raw.split())[:80]`: the command with its whitespace runs collapsed, cut to its first 80 characters.
+/// The command with its whitespace runs collapsed to single spaces, cut to its first 80 characters.
 fn command_note(raw: &str) -> String {
   str_methods::split_whitespace(raw).join(" ").chars().take(COMMAND_NOTE_CHARS).collect()
 }

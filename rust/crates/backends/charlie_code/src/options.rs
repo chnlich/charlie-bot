@@ -1,5 +1,5 @@
-//! The charlie-code option fields (`src/backends/charlie_code/options.py`). Each field carries the bound pydantic checks
-//! for it, and the type refuses any key it does not name.
+//! The charlie-code option fields. Each field carries the bound pydantic checks for it, and the type refuses any key
+//! it does not name.
 
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY,
@@ -13,7 +13,7 @@ const TOP_P: &str = "top_p";
 const TEMPERATURE: &str = "temperature";
 
 /// The `charlie-code` option's type-specific fields in `CharlieCodeBackend`'s declaration order, each with the value
-/// the Python model holds when an entry omits it. `charliebot config get backends` renders them.
+/// the backend takes when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Null),

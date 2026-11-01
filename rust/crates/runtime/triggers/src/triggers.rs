@@ -24,7 +24,9 @@ use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, ssh, text_repr};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
-use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus, WatchTarget, fresh_uuid};
+use charliebot_store::trigger_files::{
+  self, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget, fresh_uuid,
+};
 use charliebot_store::{StoreError, layout};
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -79,14 +81,14 @@ static PROGRAM_AVAILABILITY: OnceLock<StdMutex<HashMap<String, bool>>> = OnceLoc
 #[cfg(test)]
 static PROGRAM_SEARCHES: AtomicUsize = AtomicUsize::new(0);
 const LOCAL_PID_FIELDS: &[Field] = &[
-  Field::required("kind", FieldType::Literal(&["local_pid"])),
+  Field::required("kind", FieldType::Literal(&[LOCAL_PID_KIND])),
   Field::required("pid", FieldType::Integer),
   Field::optional("exit_file", FieldType::NullableString),
   Field::optional("log", FieldType::NullableString),
 ];
 const LOCAL_PID: BodyModel = BodyModel::optional(LOCAL_PID_FIELDS);
 const REMOTE_PID_FIELDS: &[Field] = &[
-  Field::required("kind", FieldType::Literal(&["remote_pid"])),
+  Field::required("kind", FieldType::Literal(&[REMOTE_PID_KIND])),
   Field::required("host", FieldType::String),
   Field::required("pid", FieldType::Integer),
   Field::optional("exit_file", FieldType::NullableString),
@@ -94,15 +96,15 @@ const REMOTE_PID_FIELDS: &[Field] = &[
 ];
 const REMOTE_PID: BodyModel = BodyModel::optional(REMOTE_PID_FIELDS);
 const SLURM_JOB_FIELDS: &[Field] = &[
-  Field::required("kind", FieldType::Literal(&["slurm_job"])),
+  Field::required("kind", FieldType::Literal(&[SLURM_JOB_KIND])),
   Field::optional("host", FieldType::NullableString),
   Field::required("job_id", FieldType::Integer),
 ];
 const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
 const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
-  TaggedVariant { tag: "local_pid", model: &LOCAL_PID },
-  TaggedVariant { tag: "remote_pid", model: &REMOTE_PID },
-  TaggedVariant { tag: "slurm_job", model: &SLURM_JOB },
+  TaggedVariant { tag: LOCAL_PID_KIND, model: &LOCAL_PID },
+  TaggedVariant { tag: REMOTE_PID_KIND, model: &REMOTE_PID },
+  TaggedVariant { tag: SLURM_JOB_KIND, model: &SLURM_JOB },
 ];
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
@@ -1136,7 +1138,7 @@ pub struct SlurmJob {
 fn local_pid(target: &WatchTarget) -> Option<LocalPid> {
   match target {
     WatchTarget::LocalPid { pid, exit_file, log } => {
-      Some(LocalPid { kind: "local_pid".to_string(), pid: *pid, exit_file: exit_file.clone(), log: log.clone() })
+      Some(LocalPid { kind: LOCAL_PID_KIND.to_string(), pid: *pid, exit_file: exit_file.clone(), log: log.clone() })
     }
     WatchTarget::RemotePid { .. } | WatchTarget::SlurmJob { .. } => None,
   }
@@ -1145,7 +1147,7 @@ fn local_pid(target: &WatchTarget) -> Option<LocalPid> {
 fn remote_pid(target: &WatchTarget) -> Option<RemotePid> {
   match target {
     WatchTarget::RemotePid { host, pid, exit_file, log } => Some(RemotePid {
-      kind: "remote_pid".to_string(),
+      kind: REMOTE_PID_KIND.to_string(),
       host: host.clone(),
       pid: *pid,
       exit_file: exit_file.clone(),
@@ -1158,7 +1160,7 @@ fn remote_pid(target: &WatchTarget) -> Option<RemotePid> {
 fn slurm_job(target: &WatchTarget) -> Option<SlurmJob> {
   match target {
     WatchTarget::SlurmJob { host, job_id } => {
-      Some(SlurmJob { kind: "slurm_job".to_string(), host: host.clone(), job_id: *job_id })
+      Some(SlurmJob { kind: SLURM_JOB_KIND.to_string(), host: host.clone(), job_id: *job_id })
     }
     WatchTarget::LocalPid { .. } | WatchTarget::RemotePid { .. } => None,
   }
@@ -1379,18 +1381,18 @@ fn schedule_request(payload: &Value) -> anyhow::Result<ScheduleTriggerRequest> {
 /// Build one watched target from a validated member of the tagged union.
 fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
   Ok(match value["kind"].as_str().expect("validated tag") {
-    "local_pid" => WatchTarget::LocalPid {
+    LOCAL_PID_KIND => WatchTarget::LocalPid {
       pid: integer_field(value, "pid")?,
       exit_file: optional_string(value, "exit_file"),
       log: optional_string(value, "log"),
     },
-    "remote_pid" => WatchTarget::RemotePid {
+    REMOTE_PID_KIND => WatchTarget::RemotePid {
       host: value["host"].as_str().expect("validated string field").to_string(),
       pid: integer_field(value, "pid")?,
       exit_file: optional_string(value, "exit_file"),
       log: optional_string(value, "log"),
     },
-    "slurm_job" => {
+    SLURM_JOB_KIND => {
       WatchTarget::SlurmJob { host: optional_string(value, "host"), job_id: integer_field(value, "job_id")? }
     }
     other => unreachable!("validated watch target kind {other}"),

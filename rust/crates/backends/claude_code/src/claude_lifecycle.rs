@@ -91,8 +91,8 @@ impl BackendLifecycle for ClaudeCliLifecycle {
     vec![json!({
       "type": event_types::MODEL_FALLBACK_NOTICE,
       "backend": option.id,
-      "configured_model": option.model,
-      "served_models": served_models,
+      event_types::CONFIGURED_MODEL: option.model,
+      event_types::SERVED_MODELS: served_models,
     })]
   }
 

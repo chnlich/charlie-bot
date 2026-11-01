@@ -83,6 +83,10 @@ pub const RATE_LIMIT_INFO: &str = "rate_limit_info";
 pub const BACKEND_SWITCHED: &str = "backend_switched";
 pub const QUOTA_FAILOVER: &str = "quota_failover";
 pub const MODEL_FALLBACK_NOTICE: &str = "model_fallback_notice";
+/// The configured model in a `model_fallback_notice` payload.
+pub const CONFIGURED_MODEL: &str = "configured_model";
+/// The models the backend served instead, in the same payload.
+pub const SERVED_MODELS: &str = "served_models";
 pub const BACKEND_OVERLAY_INACTIVE: &str = "backend_overlay_inactive";
 pub const OVERLAY_REASON_UNREADABLE: &str = "unreadable";
 pub const BACKEND_OVERLAY_UNDECLARED: &str = "backend_overlay_undeclared";

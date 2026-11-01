@@ -926,6 +926,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",
   },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
+  OwnerRow {
+    name: "has_pending_plan_approval",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL`.",
+  },
+  OwnerRow {
+    name: "task_tree_activity",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::sidebar_state::TASK_TREE_ACTIVITY`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

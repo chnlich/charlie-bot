@@ -336,8 +336,8 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       }),
     );
     payload.insert(
-      "has_pending_plan_approval".to_string(),
-      entry.and_then(|row| row.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
+      sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
+      entry.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
     if let Some(work_state) = entry.and_then(|row| row.get(WORK_STATE)) {
       payload.insert(WORK_STATE.to_string(), work_state.clone());
@@ -448,8 +448,8 @@ fn apply_derived_fields(
   }
   if include_plan {
     object.insert(
-      "has_pending_plan_approval".to_string(),
-      derived.and_then(|row| row.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
+      sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
+      derived.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
   object.insert(

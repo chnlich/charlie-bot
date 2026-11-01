@@ -43,7 +43,8 @@ fn lookback_seconds(range: &str) -> Option<i64> {
   match range {
     "24h" => Some(24 * 60 * 60),
     "7d" => Some(7 * 24 * 60 * 60),
-    _ => None,
+    "all" => None,
+    other => unreachable!("the route rejects an unknown range before this read: {other}"),
   }
 }
 

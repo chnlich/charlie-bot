@@ -205,7 +205,7 @@ impl Serialize for Stamp {
 }
 
 /// The longest stamp text: `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
-const STAMP_CHARS: usize = 28;
+const STAMP_CHARS: usize = 27;
 
 /// Write `at` as `UtcDateTime::to_str` writes it: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`, the fraction only when nonzero.
 ///

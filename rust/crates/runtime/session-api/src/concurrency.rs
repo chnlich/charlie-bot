@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::SystemTime;
 
 use axum::Router;
@@ -73,16 +73,29 @@ impl LiveCount {
   }
 }
 
-/// The live count one request derived, with the derived sidebar map it read.
-struct DerivedCount {
-  map: Arc<sidebar::DerivedSidebarMap>,
+/// The live count one request derived, with the inputs whose identities still name it.
+///
+/// The corpus generation names the active metadata rows the listing returns, the derived archive set and the two
+/// subtree-root maps name the filters the listed rows pass, and the sidebar generation names every overlay and busy
+/// mark the count reads. The store and registry are held weakly: a dropped store's entry never answers another
+/// store's request.
+struct LiveCountMemo {
+  store: Weak<Store>,
+  registry: Weak<Registry>,
+  generation: u64,
+  archived: Arc<Vec<String>>,
+  sequence_roots: Arc<HashMap<String, String>>,
+  view_roots: Arc<HashMap<String, HashMap<String, String>>>,
+  sidebar_generation: u64,
   count: LiveCount,
 }
 
-/// The live count the last request derived, kept while the map it read is still the map the sidebar state hands out.
+/// The live count the last request derived, kept while the inputs it read still hold.
 ///
-/// The memo holds the map rather than its address, because a freed map's address would match a later allocation.
-static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<DerivedCount>>> = LazyLock::new(|| Mutex::new(None));
+/// Deriving the count lists every active row, filters it through the subtree maps, resolves every row's overlay and
+/// walks the busy table. The badge polls this route every five seconds from every open page, so a repeat poll reads
+/// the identities that would move if any input changed and serves the count it already derived.
+static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<LiveCountMemo>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Count the sessions whose own row paints the spinner.
 ///
@@ -90,18 +103,20 @@ static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<DerivedCount>>> = LazyLock::new(||
 /// other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or when its
 /// own run is running; the split reads the session's profile.
 ///
-/// A repeat poll serves the count the last request derived. Every input the count reads moves the sidebar state's
-/// generation: a busy interval opening or closing, a probe storing a snapshot, a changed corpus. The map
-/// `resolve_sidebar_state` returns is keyed on that generation and the listed rows, so the same map still describes
-/// the same count.
+/// A repeat poll serves the count the last request derived while the corpus, the two subtree-root maps, the derived
+/// archive set and the sidebar state still hold. A busy interval opening or closing, a probe storing a snapshot and a
+/// changed corpus each move the sidebar generation, and a metadata write moves the corpus generation.
 pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<LiveCount> {
-  let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
+  let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
+  let archived = store.derived_archived_ids()?;
   let roots = store.subtree_roots_shared()?;
-  listed.retain(|row| listed_in_a_tab(&roots, &row.id));
-  let derived = sidebar::resolve_sidebar_state(store, registry, &listed, true, false, false, false)?;
-  if let Some(count) = memoized_live_count(&derived) {
+  let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
+  if let Some(count) = memoized_live_count(store, registry, generation, &archived, &roots, sidebar_generation) {
     return Ok(count);
   }
+  let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
+  listed.retain(|row| listed_in_a_tab(&roots, &row.id));
+  let derived = sidebar::resolve_sidebar_state(store, registry, &listed, true, false, false, false)?;
   let mut count = LiveCount::default();
   for row in &listed {
     let has_running_tasks =
@@ -115,15 +130,48 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
       TaskProfile::Worker => count.worker += 1,
     }
   }
-  *LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned") =
-    Some(DerivedCount { map: derived, count });
+  // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so a
+  // derivation that moved one stores nothing: its overlays were read under the older generation, and the next poll
+  // rebuilds them under the newer one and stores them.
+  if charliebot_store::sidebar_state::derived_generation() == sidebar_generation {
+    *LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned") = Some(LiveCountMemo {
+      store: Arc::downgrade(store),
+      registry: Arc::downgrade(registry),
+      generation,
+      archived,
+      sequence_roots: Arc::clone(&roots.sequence),
+      view_roots: Arc::clone(&roots.views),
+      sidebar_generation,
+      count,
+    });
+  }
   Ok(count)
 }
 
-/// The count the last request derived while the map it read is still the map the sidebar state hands out.
-fn memoized_live_count(derived: &Arc<sidebar::DerivedSidebarMap>) -> Option<LiveCount> {
+/// The count the last request derived while every input it read still holds.
+fn memoized_live_count(
+  store: &Arc<Store>,
+  registry: &Arc<Registry>,
+  generation: u64,
+  archived: &Arc<Vec<String>>,
+  roots: &SharedSubtreeRoots,
+  sidebar_generation: u64,
+) -> Option<LiveCount> {
   let memo = LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned");
-  memo.as_ref().filter(|entry| Arc::ptr_eq(&entry.map, derived)).map(|entry| entry.count)
+  memo
+    .as_ref()
+    .filter(|entry| {
+      Weak::ptr_eq(&entry.store, &Arc::downgrade(store))
+        && Weak::ptr_eq(&entry.registry, &Arc::downgrade(registry))
+        && entry.generation == generation
+        // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
+        // index holds an equal list in a new allocation, and the value comparison keeps the count it answered for.
+        && (Arc::ptr_eq(&entry.archived, archived) || entry.archived.as_slice() == archived.as_slice())
+        && Arc::ptr_eq(&entry.sequence_roots, &roots.sequence)
+        && Arc::ptr_eq(&entry.view_roots, &roots.views)
+        && entry.sidebar_generation == sidebar_generation
+    })
+    .map(|entry| entry.count)
 }
 
 /// Whether one active row appears in a sidebar tab: the Workspace tab lists the rows outside every owned subtree, and

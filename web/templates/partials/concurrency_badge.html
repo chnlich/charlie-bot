@@ -42,7 +42,17 @@
     border: 1px solid rgba(128, 138, 152, .45); background: rgba(128, 138, 152, .12); color: inherit;
     font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer }
   .cb-badge:hover { background: rgba(128, 138, 152, .22) }
-  .cb-badge[aria-expanded="true"] { border-color: #2563eb; color: #2563eb }
+  /* The open badge's accent follows the page theme: #2563eb renders 5.17:1 on white and 2.68:1 on the dark
+     badge background, so a dark page takes blue-300 #93c5fd (7.69:1) and a blue-400 #60a5fa ring. The two dark
+     blocks carry identical declarations, and :where() keeps the media rule at zero specificity so an explicit
+     data-theme choice wins, as in partials/standalone_base_styles.html. */
+  :root { --cb-open-fg: #2563eb; --cb-open-ring: #2563eb }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
+  }
+  :root[data-theme="dark"] { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
+  body.dark { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
+  .cb-badge[aria-expanded="true"] { border-color: var(--cb-open-ring); color: var(--cb-open-fg) }
   .cb-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #22c55e }
   .cb-badge[data-running="0"] .cb-dot { background: #94a3b8 }
   .cb-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; padding: 4px 8px;

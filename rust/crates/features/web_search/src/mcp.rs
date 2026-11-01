@@ -89,29 +89,36 @@ fn tools_list() -> Value {
 async fn call_tool(server: WebSearch, params: Option<&Value>) -> Value {
   let name = params.and_then(|params| params.get("name")).and_then(Value::as_str).unwrap_or("");
   if name != TOOL_NAME {
-    return tool_result(format!("unknown tool: {name}"), true);
+    return tool_result(format!("unknown tool: {name}"), ToolOutcome::Failure);
   }
   let query =
     params.and_then(|params| params.pointer("/arguments/query")).and_then(Value::as_str).map(str::trim).unwrap_or("");
   if query.is_empty() {
-    return tool_result("the web_search tool needs a non-empty query argument".to_string(), true);
+    return tool_result("the web_search tool needs a non-empty query argument".to_string(), ToolOutcome::Failure);
   }
   let credentials = match server.credentials.get() {
     Ok(credentials) => credentials,
-    Err(error) => return tool_result(format!("reading credentials.yaml failed: {error}"), true),
+    Err(error) => return tool_result(format!("reading credentials.yaml failed: {error}"), ToolOutcome::Failure),
   };
   let client = match server.client() {
     Ok(client) => client,
-    Err(error) => return tool_result(error, true),
+    Err(error) => return tool_result(error, ToolOutcome::Failure),
   };
   match search::search(&credentials, &client, &server.endpoint, query).await {
-    Ok(found) => tool_result(found.render(), false),
-    Err(error) => tool_result(error, true),
+    Ok(found) => tool_result(found.render(), ToolOutcome::Success),
+    Err(error) => tool_result(error, ToolOutcome::Failure),
   }
 }
 
-fn tool_result(text: String, is_error: bool) -> Value {
-  json!({"content": [{"type": "text", "text": text}], "isError": is_error})
+/// Whether a tool call's text reports success or failure, which the MCP result's `isError` field carries.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolOutcome {
+  Success,
+  Failure,
+}
+
+fn tool_result(text: String, outcome: ToolOutcome) -> Value {
+  json!({"content": [{"type": "text", "text": text}], "isError": outcome == ToolOutcome::Failure})
 }
 
 fn error_response(id: Value, code: i64, message: String) -> Value {

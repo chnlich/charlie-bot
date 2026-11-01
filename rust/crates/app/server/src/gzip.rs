@@ -438,6 +438,20 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn an_empty_response_never_answers_a_later_body() {
+    // A `HEAD` of a static file answers its headers with no body and the same ETag, so the memo must not keep that
+    // empty body under the version's key.
+    let (headers, head) = run_at("/static/c.js", Some("\"v1\""), Responder::Gzip, "text/plain", Body::empty()).await;
+    assert!(head.is_empty());
+    assert!(headers.get(header::CONTENT_ENCODING).is_none());
+
+    let text = "c".repeat(MINIMUM_SIZE * 2);
+    let (_, get) =
+      run_at("/static/c.js", Some("\"v1\""), Responder::Gzip, "text/plain", Body::from(text.clone())).await;
+    assert_eq!(inflated(&get), text, "the version's body is computed, not the empty one");
+  }
+
+  #[tokio::test]
   async fn a_response_without_an_etag_is_never_memoized() {
     let first = "a".repeat(MINIMUM_SIZE * 2);
     let (_, compressed) = run_at("/api/thing", None, Responder::Gzip, "text/plain", Body::from(first)).await;

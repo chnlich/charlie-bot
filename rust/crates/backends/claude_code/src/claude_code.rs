@@ -21,6 +21,7 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use charliebot_core::run_token;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME};
 
 use super::claude_launch;
@@ -738,7 +739,9 @@ pub fn out_of_family_served_models(events: &[Value], configured_model: &str) -> 
   let mut seen = HashSet::new();
   let mut served = Vec::new();
   for event in events {
-    if truthy(event.get("parent_tool_use_id")) || event.get("type").and_then(Value::as_str) != Some("assistant") {
+    if event.get("parent_tool_use_id").is_some_and(is_truthy)
+      || event.get("type").and_then(Value::as_str) != Some("assistant")
+    {
       continue;
     }
     let Some(message) = event.get("message").and_then(Value::as_object) else {
@@ -779,17 +782,6 @@ fn strip_date_suffix(model: &str) -> &str {
     prefix
   } else {
     model
-  }
-}
-
-fn truthy(value: Option<&Value>) -> bool {
-  match value {
-    None | Some(Value::Null) | Some(Value::Bool(false)) => false,
-    Some(Value::Bool(true)) => true,
-    Some(Value::Number(number)) => number.as_f64().is_none_or(|value| value != 0.0),
-    Some(Value::String(value)) => !value.is_empty(),
-    Some(Value::Array(values)) => !values.is_empty(),
-    Some(Value::Object(values)) => !values.is_empty(),
   }
 }
 

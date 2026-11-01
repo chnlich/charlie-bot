@@ -159,22 +159,10 @@ fn load_json(path: &str) -> Result<Value, String> {
   serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))
 }
 
-/// CPython truthiness of a value `json.loads` produced.
-fn truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_some_and(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
-}
-
 /// `value or ""`, as `str(...)`.
 fn or_default(value: Option<&Value>) -> String {
   match value {
-    Some(value) if truthy(value) => text_repr::value_str(value),
+    Some(value) if text_repr::is_truthy(value) => text_repr::value_str(value),
     _ => String::new(),
   }
 }
@@ -361,7 +349,7 @@ fn run_contract_value(
     let kind = event.get("type").and_then(Value::as_str);
     // The server sends one session status reminder after a turn that ended without a status set or confirm.
     if kind == Some(event_types::AGENT_MESSAGE)
-      && event.get(event_types::WEB_STATUS_REMINDER).is_some_and(truthy)
+      && event.get(event_types::WEB_STATUS_REMINDER).is_some_and(text_repr::is_truthy)
       && !id.is_empty()
     {
       reminder_ids.insert(id.clone());
@@ -516,7 +504,7 @@ fn child_workers(args: &[String]) -> Result<i32, String> {
     if metadata.get("profile").and_then(Value::as_str) != Some("worker") {
       continue;
     }
-    let task = metadata.get("task").filter(|value| truthy(value)).cloned().unwrap_or_else(|| json!({}));
+    let task = metadata.get("task").filter(|value| text_repr::is_truthy(value)).cloned().unwrap_or_else(|| json!({}));
     let id = match or_default(metadata.get("id")) {
       id if !id.is_empty() => id,
       _ => directory.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -968,10 +956,11 @@ fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>,
   let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array);
   let Some(options) = options else { return Ok(None) };
   for option in options {
-    let Some(api_base) = option.get(config::API_BASE_KEY).filter(|value| truthy(value)) else {
+    let Some(api_base) = option.get(config::API_BASE_KEY).filter(|value| text_repr::is_truthy(value)) else {
       continue;
     };
-    let credential = option.get(config::CREDENTIAL_KEY).filter(|value| truthy(value)).map(text_repr::value_str);
+    let credential =
+      option.get(config::CREDENTIAL_KEY).filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str);
     return Ok(Some((text_repr::value_str(api_base), credential)));
   }
   Ok(None)

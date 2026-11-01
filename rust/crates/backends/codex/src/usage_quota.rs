@@ -1,4 +1,4 @@
-//! Codex's quota account for the quota panel (`src/backends/codex/usage_quota.py`). The payload is read from the
+//! Codex's quota account for the quota panel. The payload is read from the
 //! rollouts under `<codex home>/sessions`. The newest plan-pool `token_count` event gives the rate-limit windows and
 //! credits. The 24-hour and 7-day spend is priced from every recent rollout's per-request token counts. Nothing is
 //! written, and no network call is made.
@@ -344,8 +344,8 @@ fn parse_codex_timestamp(value: Option<&Value>) -> anyhow::Result<OffsetDateTime
   Ok(parsed.to_offset(UtcOffset::UTC))
 }
 
-/// An ISO 8601 timestamp as a UTC instant, or `None` when it is empty or unparseable. A timestamp without an offset is
-/// read as UTC, as `datetime.fromisoformat` does in the Python usage source.
+/// An ISO 8601 timestamp as a UTC instant, or `None` when it is empty or unparseable. A timestamp without an offset
+/// is read as UTC: it is parsed with `+00:00` appended.
 pub fn parse_iso_utc(value: &str) -> Option<OffsetDateTime> {
   if value.is_empty() {
     return None;
@@ -532,7 +532,7 @@ impl SpendUsage {
   }
 }
 
-/// Spend totals per model, in the order each model first appears, so the priced sum adds in the Python order.
+/// Spend totals per model, in the order each model first appears, so the priced sum adds in that order.
 #[derive(Default)]
 struct ModelTotals(Vec<(String, SpendUsage)>);
 
@@ -686,7 +686,7 @@ impl SpendMemo {
     Self { entries: LruCache::new(capacity) }
   }
 
-  /// The events stored for `path` under `signature`. A hit refreshes the entry's recency, as the Python memo does.
+  /// The events stored for `path` under `signature`. A hit refreshes the entry's recency.
   fn fresh(&mut self, path: &Path, signature: (i128, u64)) -> Option<Arc<Vec<SpendEvent>>> {
     let entry = self.entries.get(path)?;
     (entry.signature == signature).then(|| Arc::clone(&entry.events))

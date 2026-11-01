@@ -1,5 +1,4 @@
-//! The Codex usage source's log side (`src/backends/codex/usage_logs.py`): the rollouts, their records, and the session
-//! ids they register.
+//! The Codex usage source's log side: the rollouts, their records, and the session ids they register.
 //!
 //! Record id: `codex-total:<root session id>:<total input>:<total cached>:<total output>`, one per `token_count` event.
 //! The root is the rollout's first `session_meta` session id, which a whole fork tree shares. A forked copy of an

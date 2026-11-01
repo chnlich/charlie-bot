@@ -1,8 +1,7 @@
-//! The codex usage resolver (`CodexUsageResolver`, `src/backends/codex/codex_usage.py`): one session's context reading
-//! from its rollout.
+//! The codex usage resolver (`CodexUsageResolver`): one session's context reading from its rollout.
 //!
 //! The registry's resolver trait takes the session's metadata and events only. The rollout home comes from the
-//! codex package's registered host. The config and store values the Python resolver reads come from [`UsageHost`],
+//! codex package's registered host. The config and store values the resolver reads come from [`UsageHost`],
 //! retained by the resolver constructed for the usage owner.
 
 use std::collections::HashMap;

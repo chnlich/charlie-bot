@@ -1,5 +1,5 @@
-//! Codex rollout records and the readers they share (`src/backends/codex/codex_usage.py`). Codex writes one JSON line
-//! per record into `<codex home>/sessions/**/rollout-*.jsonl`.
+//! Codex rollout records and the readers they share. Codex writes one JSON line per record into
+//! `<codex home>/sessions/**/rollout-*.jsonl`.
 
 use std::fs::Metadata;
 use std::io;
@@ -48,7 +48,7 @@ type UsageParts = (Value, Value, Option<Map<String, Value>>);
 
 /// The newest usage in one rollout, read backwards from its last line. `None` when no line carries a token count.
 pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<RolloutUsage>> {
-  // An empty file has no mapping, and no line either, as Python's reader finds.
+  // An empty file has no mapping, and no line either.
   let Some(mapping) = fsutil::map_file(path).with_context(|| format!("mapping rollout {}", path.display()))? else {
     return Ok(None);
   };
@@ -133,8 +133,8 @@ fn model_of_event(event: &Map<String, Value>) -> anyhow::Result<Option<String>> 
   Ok(payload.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).map(str::to_string))
 }
 
-/// One line parsed as a record. A blank line and a line that is not JSON read as `None`; the latter is logged, as the
-/// Python reader does. A line that is JSON but not an object is an error, as Python's attribute read on it is.
+/// One line parsed as a record. A blank line and a line that is not JSON read as `None`; the latter is logged. A line
+/// that is JSON but not an object is an error.
 pub fn parse_event_line(line: &[u8], path: &Path, log_event: &str) -> anyhow::Result<Option<Map<String, Value>>> {
   if line.iter().all(u8::is_ascii_whitespace) {
     return Ok(None);

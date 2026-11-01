@@ -1,4 +1,4 @@
-//! The codex command, child environment, and CLI-native one-shot text (`src/backends/codex/codex.py:1-180`).
+//! The codex command, child environment, and CLI-native one-shot text.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -301,7 +301,7 @@ async fn collect(
   Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code(status)))
 }
 
-/// One NDJSON line parsed, or `None` for a blank line or a line that is not JSON (logged, as the Python reader does).
+/// One NDJSON line parsed, or `None` for a blank line or a line that is not JSON (logged).
 fn parse_line(line: &str) -> Option<Value> {
   if line.trim().is_empty() {
     return None;

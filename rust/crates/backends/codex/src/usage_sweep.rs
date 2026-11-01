@@ -1,4 +1,4 @@
-//! Codex's part of the cold-storage sweep (`src/backends/codex/usage_sweep.py`): the rollout files.
+//! Codex's part of the cold-storage sweep: the rollout files.
 //!
 //! A rollout's file name embeds the Codex thread id, which is the backend session id CharlieBot metadata references.
 

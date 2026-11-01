@@ -29,6 +29,11 @@ pub fn fast_json(status: StatusCode, content: &Value) -> Response {
   bytes_response(status, "application/json", Bytes::from(json::fast_json_bytes(content)))
 }
 
+/// `FastJsonResponse` over a body its route already serialized, so a rendered page skips the value tree.
+pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
+  bytes_response(status, "application/json", Bytes::from(body))
+}
+
 /// FastAPI's rendering of `HTTPException(status_code)`: `{"detail": <reason phrase>}`.
 pub fn http_exception(status: StatusCode) -> Response {
   json(status, &json!({ "detail": status.canonical_reason().expect("every raised status has a reason phrase") }))

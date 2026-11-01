@@ -2197,8 +2197,12 @@ fn descendant_ids_until(
     return Err(StoreError::not_found(format!("task {session_id} not found")));
   }
   let children_of = |parent: &str| index.children.get(&Some(parent.to_string())).cloned().unwrap_or_default();
-  let mut output = Vec::new();
   let mut stack = children_of(session_id);
+  // A leaf answers with no descendants, so it never pays for the walk's cycle set and output buffer.
+  if stack.is_empty() {
+    return Ok(if should_stop() { None } else { Some(Vec::new()) });
+  }
+  let mut output = Vec::new();
   let mut seen = HashSet::from([session_id.to_string()]);
   let mut open_count = 0;
   while let Some(next) = stack.pop() {

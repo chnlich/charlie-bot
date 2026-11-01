@@ -1,5 +1,5 @@
-//! The codex backend package (`src/backends/codex/__init__.py`): the backend type, its usage resolver, and its usage
-//! source with the Codex quota account.
+//! The codex backend package: the backend type, its usage resolver, and its usage source with the Codex quota
+//! account.
 
 mod backend;
 pub mod factory;

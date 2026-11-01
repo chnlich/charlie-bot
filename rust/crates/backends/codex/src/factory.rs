@@ -1,4 +1,4 @@
-//! The codex backend factory (`src/backends/codex/factory.py`) and the codex binary lookup (`base.resolve_binary`).
+//! The codex backend factory and the codex binary lookup: the command from PATH, then the user's local bin directory.
 
 use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};

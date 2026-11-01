@@ -1,4 +1,4 @@
-//! Codex token cost in USD (`src/backends/codex/codex_pricing.py`).
+//! Codex token cost in USD.
 
 use serde_json::{Map, Value};
 

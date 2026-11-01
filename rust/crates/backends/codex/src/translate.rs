@@ -1,7 +1,7 @@
-//! The codex event translator: one `codex exec --json` event becomes the runtime's events (`codex.py:180-396`).
+//! The codex event translator: one `codex exec --json` event becomes the runtime's events.
 //!
-//! The translator holds the per-run state Python keeps on the backend: the text each item has emitted so far, so a
-//! cumulative item yields only its new part.
+//! The translator holds the run's state: the text each item has emitted so far, so a cumulative item yields only its
+//! new part.
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
@@ -27,7 +27,7 @@ pub const FILE_WRITE: &str = "file_write";
 const TOOL_ITEM_SPECS: &[(&str, (&str, &str, bool))] =
   &[("command_execution", ("Bash", "command", false)), ("web_search", ("WebSearch", "query", true))];
 
-/// Translates one codex run's events. A fresh translator starts a run, as `_build_command` resets the Python state.
+/// Translates one codex run's events. A fresh translator starts a run.
 pub struct CodexTranslator {
   model: String,
   last_agent_text: HashMap<ItemKey, String>,
@@ -55,7 +55,7 @@ impl CodexTranslator {
     }
   }
 
-  /// Translates one event. An event whose shape the Python translator raises on fails here.
+  /// Translates one event. An event whose shape the translator rejects fails here.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let Some(event) = event.as_object() else {
       bail!("codex event is not a JSON object: {event}");
@@ -396,7 +396,7 @@ fn failure_message(event_type: &str, event: &Map<String, Value>) -> String {
   format!("Codex {event_type} with no message. Full event: {}", full_event(event))
 }
 
-/// `json.dumps(event, default=str)`: the event as the Python logs and messages print it.
+/// `json.dumps(event, default=str)`: the event text the logs and messages carry.
 fn full_event(event: &Map<String, Value>) -> String {
   json_dumps(&Value::Object(event.clone()), &DEFAULT_JSON)
 }

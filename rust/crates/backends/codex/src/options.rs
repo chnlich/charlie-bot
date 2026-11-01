@@ -1,4 +1,4 @@
-//! The codex option fields of a `backends.options[]` entry (`src/backends/codex/options.py`).
+//! The codex option fields of a `backends.options[]` entry.
 
 use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
@@ -6,8 +6,8 @@ use serde_yaml::{Mapping, Value};
 const REASONING_EFFORT: &str = "model_reasoning_effort";
 const AUTO_COMPACT_LIMIT: &str = "model_auto_compact_token_limit";
 
-/// The `codex` option's type-specific fields in `CodexBackend`'s declaration order, each with the value the Python
-/// model holds when an entry omits it. `charliebot config get backends` renders them.
+/// The `codex` option's type-specific fields in `CodexBackend`'s declaration order, each with the default an entry
+/// that omits it takes. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field("model_reasoning_effort", OptionFieldDefault::Null),
   OptionField::field("model_auto_compact_token_limit", OptionFieldDefault::Null),

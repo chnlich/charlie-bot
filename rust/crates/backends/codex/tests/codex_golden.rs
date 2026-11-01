@@ -115,7 +115,7 @@ fn codex_matches_the_package_on_synthetic_inputs() {
   check_resolve(&fx, resolve, &python, &mut failures);
   check_quota(&fx, quota, &python, &mut failures);
   check_cost(cost, &python, &mut failures);
-  assert!(failures.is_empty(), "codex sections differ from the Python package:\n{}", failures.join("\n"));
+  assert!(failures.is_empty(), "codex sections differ from the recorded reference:\n{}", failures.join("\n"));
 }
 
 fn main_module() -> CharlieBotConfig {
@@ -704,7 +704,7 @@ fn without_fetched_at(entry: Option<&Map<String, Value>>) -> Value {
   }
 }
 
-/// The entries of `prepared` that differ from `base` (new or changed), as the Python helper reports them.
+/// The entries of `prepared` that differ from `base` (new or changed).
 fn env_delta(prepared: &Env, base: &Env) -> Value {
   let changed: BTreeMap<&str, &str> = prepared
     .iter()

@@ -12,7 +12,7 @@ test-hooks = []
 # The task-execution stack that this crate's integration tests and `charliebot-improve` run against. Off by default;
 # only test dev-dependencies turn it on, so a production build compiles none of the fake backends, scripts or
 # temporary homes.
-test-fixtures = ["dep:serde_yaml", "dep:tempfile", "dep:tower"]
+test-fixtures = ["charliebot-core/test-support", "dep:serde_yaml", "dep:tempfile", "dep:tower"]
 
 [dependencies]
 anyhow.workspace = true

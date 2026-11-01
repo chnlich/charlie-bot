@@ -160,10 +160,9 @@ const planPanel = (() => {
 
   // The address shape every plan-page URL this panel builds shares: the
   // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
-  // encodeDiffFile), then
-  // the #cbsession= fragment; withPanelMarker appends `&cbpanel=1` inside the
-  // fragment, the marker artifact-comments.js's framed guard reads. urlKind
-  // names the caller in the SESSIONS_ROOT error.
+  // encodeDiffFile), then the #cbsession= fragment. withPanelMarker appends
+  // `&cbpanel=1` inside the fragment, the marker artifact-comments.js's
+  // framed guard reads. urlKind names the caller in the SESSIONS_ROOT error.
   function _planPageUrl(file, sessionId, sessionsRoot, diffFile, urlKind, withPanelMarker) {
     var url = _filesUrl(file, sessionId, sessionsRoot, urlKind);
     if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
@@ -191,7 +190,7 @@ const planPanel = (() => {
     return files ? buildIframeUrl(files.file, sessionId, sessionsRoot, files.diffFile) : null;
   }
 
-  // Standalone URL for the "Open in tab" action — no cbpanel marker: the page
+  // Standalone URL for the "Open in tab" action — no cbpanel marker. The page
   // is not in an iframe, so the comment tray activates via the top-level-page
   // branch of artifact-comments.js and the framed guard is skipped.
   function buildStandaloneUrl(file, sessionId, sessionsRoot, diffFile) {
@@ -446,9 +445,10 @@ const planPanel = (() => {
   // -- Data: single commit point ------------------------------------------
 
   // The only writer of _registry / _loaded / _loadedSessionId. Discards the
-  // write when the session has changed (sid !== current) or when a newer
-  // fetch generation has superseded this one (monotonic guard against stale
-  // completions from a slow/older fetch landing after a newer one).
+  // write when the session has changed (sid !== current), or when a newer
+  // fetch generation has superseded this one. The generation is a monotonic
+  // guard against a stale completion from a slow/older fetch landing after a
+  // newer one.
   function _commitRegistry(sid, data, generation) {
     if (sid !== _currentSessionId()) return false;
     if (generation !== _fetchGeneration) return false;
@@ -505,7 +505,7 @@ const planPanel = (() => {
     // Reuse an in-flight/completed load only when it is for the current
     // session. Session switching is an in-place SPA swap (SESSION_ID changes
     // without a page reload), so a promise/snapshot from the previous session
-    // must not be reused: otherwise the chat embed path would decide
+    // must not be reused. Otherwise the chat embed path would decide
     // registered-vs-not against the previous session's registry and mis-render
     // another session's plan cards (file names like plan_01.html collide).
     if (_loadPromise && _loadPromiseSessionId === sid) return _loadPromise;
@@ -609,7 +609,7 @@ const planPanel = (() => {
 
   function onActiveSessionChanged() {
     // Sole owner of clearing the cached selection / loaded viewer key and
-    // blanking the iframe on a session change; onReconnect() only marks stale
+    // blanking the iframe on a session change. onReconnect() only marks stale
     // on a WS reconnect and leaves session state alone.
     _selectedPlanId = null;
     _selectedVersion = null;

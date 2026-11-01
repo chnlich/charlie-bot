@@ -791,7 +791,7 @@ async fn open_statuses(
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
-  let archived = derived_archived_ids(&features.store).await?.into_iter().collect::<HashSet<_>>();
+  let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
   for (descendant_id, child, child_status) in
     open_statuses(&features.store, descendant_ids(&features.store, session_id).await?, &archived).await?
@@ -858,7 +858,7 @@ pub struct OpenWaitingItem {
 /// Every open session's Waiting on you items, in metadata-listing order (`status.open_waiting_items`). The approval
 /// day view reads the whole home through this, where the status read reads one task tree.
 pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
-  let archived = derived_archived_ids(&features.store).await?.into_iter().collect::<HashSet<_>>();
+  let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
   let metas = tree_read(&features.store, |store| store.load_session_metas(None)).await?;
   let mut rows = Vec::new();
   for meta in metas {
@@ -938,7 +938,7 @@ async fn descendant_ids(store: &Arc<Store>, session_id: &str) -> Result<Vec<Stri
   tree_read(store, move |store| store.descendant_ids(&session_id)).await
 }
 
-async fn derived_archived_ids(store: &Arc<Store>) -> Result<Vec<String>, WebReplyError> {
+async fn derived_archived_ids(store: &Arc<Store>) -> Result<Arc<Vec<String>>, WebReplyError> {
   tree_read(store, |store| store.derived_archived_ids()).await
 }
 

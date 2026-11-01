@@ -154,7 +154,7 @@ struct PageCorpusEntry {
   store: Weak<Store>,
   registry: Weak<Registry>,
   generation: u64,
-  archived: Vec<String>,
+  archived: Arc<Vec<String>>,
   sequence_roots: Arc<HashMap<String, String>>,
   view_roots: Arc<HashMap<String, HashMap<String, String>>>,
   sidebar_generation: u64,
@@ -169,14 +169,16 @@ impl PageCorpusEntry {
     store: &Arc<Store>,
     registry: &Arc<Registry>,
     generation: u64,
-    archived: &[String],
+    archived: &Arc<Vec<String>>,
     roots: &SharedSubtreeRoots,
     sidebar_generation: u64,
   ) -> bool {
     Weak::ptr_eq(&self.store, &Arc::downgrade(store))
       && Weak::ptr_eq(&self.registry, &Arc::downgrade(registry))
       && self.generation == generation
-      && self.archived == archived
+      // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
+      // index holds an equal list in a new allocation, and the value comparison keeps the corpus it answered for.
+      && (Arc::ptr_eq(&self.archived, archived) || self.archived.as_slice() == archived.as_slice())
       && Arc::ptr_eq(&self.sequence_roots, &roots.sequence)
       && Arc::ptr_eq(&self.view_roots, &roots.views)
       && self.sidebar_generation == sidebar_generation
@@ -695,6 +697,14 @@ mod tests {
     let again = active_page_rows(&features.store, &features.registry).unwrap();
     assert!(Arc::ptr_eq(&page.rows, &again.rows), "a repeat read serves the row vector it already built");
     assert!(Arc::ptr_eq(&page.derived, &again.derived), "a repeat read serves the overlays it already resolved");
+
+    // A rebuilt index holds an equal archive list in a new allocation; the page still serves the corpus it built.
+    features.store.invalidate_tree_index();
+    let rebuilt = active_page_rows(&features.store, &features.registry).unwrap();
+    assert!(
+      Arc::ptr_eq(&page.rows, &rebuilt.rows),
+      "a rebuilt index with the same archive ids serves the corpus the previous read built"
+    );
 
     let late = crate::test_support::create_node(&features.store, "corpus-late", None, TaskProfile::Manager).await;
 

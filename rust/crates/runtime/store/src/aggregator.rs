@@ -523,8 +523,8 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }
     event_types::MODEL_FALLBACK_NOTICE => {
       let configured =
-        event.field("configured_model").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
-      let served = join_strings(event.field("served_models"), "served_models")?;
+        event.field(event_types::CONFIGURED_MODEL).filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
+      let served = join_strings(event.field(event_types::SERVED_MODELS), event_types::SERVED_MODELS)?;
       json!({"role": "system", "content": format!("Served by {served} (configured {configured})")})
     }
     event_types::CHILD_REPORT => json!({

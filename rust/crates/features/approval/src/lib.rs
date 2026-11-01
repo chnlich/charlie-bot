@@ -1,4 +1,4 @@
-//! `src/features/approval`: the approval day view (plan 4 v2, task W3). It serves `GET /approval` and the
+//! `src/features/approval`: the approval day view. It serves `GET /approval` and the
 //! `GET /api/approval/day` route that page reads: one Pacific day's ranked T0 queue, login sheet and digest.
 
 mod api;

@@ -1,4 +1,4 @@
-//! `GET /api/approval/day` (plan 4 v2 task W3): one PT day's queue, login sheet and digest as JSON.
+//! `GET /api/approval/day`: one PT day's queue, login sheet and digest as JSON.
 
 use std::collections::HashMap;
 use std::sync::Arc;

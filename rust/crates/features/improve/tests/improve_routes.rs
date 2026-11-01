@@ -1,8 +1,5 @@
 //! The internal improve routes against a synthetic feature context.
 
-#[path = "../../../runtime/tasks/tests/recovery_support.rs"]
-mod recovery_support;
-
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
@@ -18,6 +15,7 @@ use charliebot_registry::context::StartupState;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, store_hooks};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_tasks::test_support::recovery_support;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 

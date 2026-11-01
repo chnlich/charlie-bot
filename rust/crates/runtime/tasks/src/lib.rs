@@ -31,6 +31,11 @@ pub mod worker;
 #[cfg(test)]
 mod test_fixtures;
 
+/// The fixtures that this crate's integration tests and `charliebot-improve` run against. Off by default; only test
+/// dev-dependencies turn the feature on, so a production build carries none of the fake backends or scripts.
+#[cfg(feature = "test-fixtures")]
+pub mod test_support;
+
 use charliebot_registry::{Registry, RegistryError};
 
 /// Register task orchestration routes and the execution startup step.

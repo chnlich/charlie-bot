@@ -30,15 +30,13 @@ impl BackendFactory for AnthropicCompatibleFactory {
       None => NO_AUTH_TOKEN.to_string(),
       Some(credential) => credentials::load_credentials(&cfg.charliebot_home)?.require_api_key(credential)?,
     };
-    if option.model.is_empty() {
-      bail!("backend '{}' has no default model", option.id);
-    }
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let launch = launch_with_kwargs(launch)?;
     let config_dir = launch_config_dir(&launch)?;
     let backend = AnthropicEndpointBackend::new(
       fields.api_base.trim_end_matches('/').to_string(),
       auth_token,
-      option.model.clone(),
+      model,
       Some(fields.context_window),
       fields.effort,
       config_dir,

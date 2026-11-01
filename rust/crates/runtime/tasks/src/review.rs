@@ -102,7 +102,7 @@ pub fn select_reviewer_backend(
   excluded.extend(used_backends.iter().cloned());
   excluded.extend(tried_backends.iter().cloned());
   if let Some(option) = pool.select(cfg, caller, &excluded)? {
-    let model = required_model(&option.model, "backends.pool entry ", &option.id)?;
+    let model = option.required_model("backends.pool entry").map_err(anyhow::Error::msg)?;
     let mut tried = tried_backends.to_vec();
     tried.push(option.id.clone());
     return Ok(Some((option.id, Some(model), tried)));
@@ -152,11 +152,4 @@ fn assistant_event_text(event: &Value) -> Option<String> {
       .filter_map(|block| block.get("text").and_then(Value::as_str))
       .collect(),
   )
-}
-
-fn required_model(model: &str, subject: &str, backend_id: &str) -> anyhow::Result<String> {
-  if model.is_empty() {
-    anyhow::bail!("{subject}'{backend_id}' has no default model");
-  }
-  Ok(model.to_string())
 }

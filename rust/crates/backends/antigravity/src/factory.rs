@@ -1,6 +1,6 @@
 //! The antigravity backend factory, resolving the agy binary from the package's host.
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
@@ -27,9 +27,7 @@ impl BackendFactory for AntigravityFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the antigravity backend type needs its backends.options entry")?;
-    if option.model.is_empty() {
-      bail!("backend '{}' has no default model", option.id);
-    }
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let print_timeout = options::print_timeout(&option.type_fields).map_err(anyhow::Error::msg)?;
     let agy_bin = self
       .host
@@ -38,6 +36,6 @@ impl BackendFactory for AntigravityFactory {
       .into_string()
       .map_err(|path| anyhow::anyhow!("the agy binary path is not valid Unicode: {path:?}"))?;
     let user_local_bin = self.host.user_local_bin().to_string_lossy().into_owned();
-    Ok(Box::new(AntigravityBackend::from_launch(agy_bin, user_local_bin, &option.model, print_timeout, launch)))
+    Ok(Box::new(AntigravityBackend::from_launch(agy_bin, user_local_bin, &model, print_timeout, launch)))
   }
 }

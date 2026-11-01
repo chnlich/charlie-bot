@@ -104,11 +104,7 @@ pub fn resolve_session_default_backend_model(
       .first()
       .ok_or_else(|| value_error("session backend resolution requires a configured backends.options entry"))?
   };
-  let model = if option.model.is_empty() {
-    return Err(value_error(format!("session backend '{}' has no default model", option.id)));
-  } else {
-    option.model.clone()
-  };
+  let model = option.required_model("session backend").map_err(value_error)?;
   Ok((option.id.clone(), Some(model)))
 }
 
@@ -137,13 +133,15 @@ pub async fn resolve_requested_subagent_backend_model(
     let option = cfg
       .get_backend_option(backend_id)
       .ok_or_else(|| value_error(format!("requested backend '{backend_id}' is not in backends.options")))?;
-    return Ok((option.id.clone(), Some(required_model(&option.model, "requested backend ", &option.id)?), false));
+    let model = option.required_model("requested backend").map_err(value_error)?;
+    return Ok((option.id.clone(), Some(model), false));
   }
   if !cfg.backends.pool.is_empty()
     && let Some(caller) = role.pool_caller()
   {
     let option = pool.select(cfg, caller, &[])?.ok_or_else(|| value_error(pool.no_member_message(cfg)))?;
-    return Ok((option.id.clone(), Some(required_model(&option.model, "pool member ", &option.id)?), true));
+    let model = option.required_model("pool member").map_err(value_error)?;
+    return Ok((option.id.clone(), Some(model), true));
   }
   let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;
   Ok((backend_id, model, false))
@@ -169,13 +167,6 @@ pub async fn select_verify_backend(
     tried_backends,
     &HashSet::new(),
   )
-}
-
-fn required_model(model: &str, subject: &str, backend_id: &str) -> anyhow::Result<String> {
-  if model.is_empty() {
-    return Err(value_error(format!("{subject}'{backend_id}' has no default model")));
-  }
-  Ok(model.to_string())
 }
 
 #[cfg(test)]

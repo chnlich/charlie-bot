@@ -264,6 +264,18 @@ pub struct BackendOption {
   pub type_fields: Mapping,
 }
 
+impl BackendOption {
+  /// The option's configured model, or the refusal for an option that leaves it empty.
+  ///
+  /// `subject` names what needs the model, and the refusal reads `<subject> '<id>' has no default model`.
+  pub fn required_model(&self, subject: &str) -> Result<String, String> {
+    if self.model.is_empty() {
+      return Err(format!("{subject} '{}' has no default model", self.id));
+    }
+    Ok(self.model.clone())
+  }
+}
+
 /// `backends.routing:` section: the host command that orders unpinned backend candidates.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -791,6 +803,19 @@ mod tests {
     assert_eq!(cfg.paths.worktree_dir, paths::expanduser("~/worktrees"));
     assert_eq!(cfg.paths.scratch_dir, paths::expanduser("~/scripts"));
     require_backends(&cfg).unwrap();
+  }
+
+  #[test]
+  fn a_backend_option_without_a_model_reports_its_subject_and_id() {
+    let option = BackendOption {
+      id: "opencode".to_string(),
+      label: "OpenCode".to_string(),
+      model: String::new(),
+      prompt_overlay: None,
+      backend_type: "opencode".to_string(),
+      type_fields: Mapping::new(),
+    };
+    assert_eq!(option.required_model("backend").unwrap_err(), "backend 'opencode' has no default model");
   }
 
   #[test]

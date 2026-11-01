@@ -28,10 +28,8 @@ pub async fn create_retry(
       let option = cfg
         .get_backend_option(backend)
         .ok_or_else(|| StoreError::invalid(format!("retry backend '{backend}' is not in backends.options")))?;
-      if option.model.is_empty() {
-        return Err(StoreError::invalid(format!("retry '{}' has no default model", option.id)));
-      }
-      (Some(option.id.clone()), Some(option.model.clone()))
+      let model = option.required_model("retry").map_err(StoreError::invalid)?;
+      (Some(option.id.clone()), Some(model))
     }
     None => (original.backend.clone(), original.model.clone()),
   };

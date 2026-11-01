@@ -1,7 +1,7 @@
 //! The charlie-code backend factory (`src/backends/charlie_code/factory.py`): the option's model and endpoint fields, and
 //! the credential's `api_key`, read in Python's argument order.
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
@@ -29,15 +29,13 @@ impl BackendFactory for CharlieCodeFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the charlie-code backend type needs its backends.options entry")?;
-    if option.model.is_empty() {
-      bail!("backend '{}' has no default model", option.id);
-    }
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let fields = CharlieCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
     let api_key = match fields.credential.as_deref().filter(|section| !section.is_empty()) {
       Some(section) => Some(credentials::load_credentials(&cfg.charliebot_home)?.require_api_key(section)?),
       None => None,
     };
-    let backend = CharlieCodeBackend::from_launch(&self.host, &option.model, fields, api_key, launch)?;
+    let backend = CharlieCodeBackend::from_launch(&self.host, &model, fields, api_key, launch)?;
     Ok(Box::new(backend))
   }
 }

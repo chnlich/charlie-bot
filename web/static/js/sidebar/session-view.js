@@ -811,7 +811,9 @@ function ensureSentinel(container, state) {
   if (!sentinel) {
     sentinel = document.createElement('div');
     sentinel.id = 'load-more-sentinel';
-    sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
+    // The hint sits on the message list's slate-900, where slate-500 holds 3.75:1, under the 4.5:1 floor for
+    // 12 px text. slate-400 holds about 7:1 and stays quieter than the messages above it.
+    sentinel.className = 'flex justify-center py-3 text-xs text-slate-400';
     container.prepend(sentinel);
   }
   sentinel.setAttribute('data-state', state);

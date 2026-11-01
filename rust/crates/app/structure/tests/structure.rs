@@ -853,6 +853,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_claude_code::claude_launch::SESSION_START_HOOK_EVENT`.",
   },
   OwnerRow {
+    name: "cli_binary",
+    owner: "backends/claude_code",
+    hint: "Use `charliebot_claude_code::options::CLI_BINARY_KEY`.",
+  },
+  OwnerRow {
     name: "plans.json",
     owner: "features/artifacts",
     hint: "Read the plan registry through `Registry::plan_registry_reader`, which `features/artifacts` registers.",

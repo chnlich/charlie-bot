@@ -1,6 +1,6 @@
 //! Sidebar contributions (`src/runtime/hooks/sidebar_contributions.py`): what a feature adds to sidebar rows and to
-//! session housekeeping. The session store names no feature; it asks the registered contributions at three moments:
-//! the sidebar probe reads `row_flags` and watches `watched_files`, a fork or an elone calls `copy_on_fork`, and the
+//! session housekeeping. The session store names no feature; it asks the registered contributions at three moments.
+//! The sidebar probe reads `row_flags` and watches `watched_files`, a fork or an elone calls `copy_on_fork`, and the
 //! sidebar listings call `view_member`.
 
 use std::path::Path;

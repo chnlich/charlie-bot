@@ -1,8 +1,8 @@
 //! Live user-message delivery for web manager turns (`src/runtime/midturn_delivery.py`).
 //!
-//! One module owns the serialized stdin writes, the replay acknowledgements and the stdin close of one Run: the
-//! backend writes the Run prompt as the first stream-json user line and keeps stdin open, the dispatcher offers each
-//! pending web user message while the turn runs, the backend's replay of a delivered line becomes a non-rendered
+//! One module owns the serialized stdin writes, the replay acknowledgements and the stdin close of one Run. The
+//! backend writes the Run prompt as the first stream-json user line and keeps stdin open. The dispatcher offers each
+//! pending web user message while the turn runs. The backend's replay of a delivered line becomes a non-rendered
 //! `input_delivered` event, and the first result closes stdin.
 //!
 //! The module is the delivery state both sides share: the agent runtime writes into it, and the task queue reads it.

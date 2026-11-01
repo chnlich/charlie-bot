@@ -9,6 +9,10 @@ publish.workspace = true
 # Test-only hooks over the end-landing retry and the resume follows (`recovery`). Off by default; only the
 # dev-dependency below turns it on, so production builds keep the 30 s retry interval and expose neither set.
 test-hooks = []
+# The task-execution stack that this crate's integration tests and `charliebot-improve` run against. Off by default;
+# only test dev-dependencies turn it on, so a production build compiles none of the fake backends, scripts or
+# temporary homes.
+test-fixtures = ["charliebot-core/test-support", "dep:serde_yaml", "dep:tempfile", "dep:tower"]
 
 [dependencies]
 anyhow.workspace = true
@@ -27,9 +31,12 @@ nix.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = { workspace = true, optional = true }
 sha2.workspace = true
+tempfile = { workspace = true, optional = true }
 time.workspace = true
 tokio.workspace = true
+tower = { workspace = true, optional = true }
 tracing.workspace = true
 uuid.workspace = true
 
@@ -43,10 +50,7 @@ charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-gemini.workspace = true
 charliebot-shell-harness.workspace = true
 charliebot-store = { workspace = true, features = ["write-faults"] }
-charliebot-tasks = { path = ".", features = ["test-hooks"] }
+charliebot-tasks = { path = ".", features = ["test-hooks", "test-fixtures"] }
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 serde.workspace = true
-serde_yaml.workspace = true
-tempfile.workspace = true
-tower.workspace = true

@@ -1,9 +1,3 @@
-#[path = "../../../runtime/tasks/tests/process_guard.rs"]
-#[allow(dead_code)]
-mod process_guard;
-#[path = "../../../runtime/tasks/tests/recovery_support.rs"]
-mod recovery_support;
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -23,8 +17,9 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDate
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
 use charliebot_tasks::dispatch::DispatchExecutor;
 use charliebot_tasks::spawner_backends::{self, SubagentRole};
+use charliebot_tasks::test_support::process_guard;
+use charliebot_tasks::test_support::recovery_support::{self, Scripts, Stack, SyntheticRepo};
 use futures_util::future::BoxFuture;
-use recovery_support::{Scripts, Stack, SyntheticRepo};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};

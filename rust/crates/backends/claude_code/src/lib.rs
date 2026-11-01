@@ -46,7 +46,8 @@ use self::options::option_model;
 use self::usage_logs::ClaudeLogs;
 use self::usage_quota::QuotaHttp;
 
-const PACKAGE: &str = "src.backends.claude_code";
+/// The package label the composition list registers this backend's package under.
+pub const PACKAGE: &str = "src.backends.claude_code";
 
 /// Register cc-claude, its Claude Code usage source, config section, metadata fields, child environment edit, and
 /// reading limits.

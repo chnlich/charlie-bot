@@ -987,11 +987,16 @@ const ENVIRONMENT_HINT: &str = "Name it once, as a const in its owner module (in
 const ROUTE_HINT: &str = "Export the path as a `pub const` from the crate that registers its route, and reference that \
                           const from the other crates. `charliebot_cli_common::route::fill` fills its `{}` parameters.";
 
+const PACKAGE_HINT: &str = "Export the label as `pub const PACKAGE` from the backend crate that registers the package, \
+                            and reference that const from the composition list.";
+
 /// The environment variable names: `CHARLIEBOT_` followed by one or more of `A-Z`, `0-9` and `_`. The route paths: the
-/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`.
+/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`. The backend package labels:
+/// `src.backends.` followed by a backend's directory name.
 const SPELLING_CLASSES: &[SpellingClass] = &[
   SpellingClass { name_of: environment_name, hint: ENVIRONMENT_HINT },
   SpellingClass { name_of: route_name, hint: ROUTE_HINT },
+  SpellingClass { name_of: backend_package_name, hint: PACKAGE_HINT },
 ];
 
 /// A production string literal and where it sits.
@@ -1065,6 +1070,14 @@ fn environment_name(site: &Site) -> Option<String> {
   let spelled =
     !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
   spelled.then(|| name.to_string())
+}
+
+/// The backend package label a literal spells: `src.backends.` followed by a backend's directory name.
+fn backend_package_name(site: &Site) -> Option<String> {
+  let suffix = site.value.strip_prefix("src.backends.")?;
+  let spelled =
+    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+  spelled.then(|| site.value.clone())
 }
 
 /// The route path a literal spells: the part from `/api/` up to the first `?`, with each `{...}` parameter written `{}`,
@@ -2166,6 +2179,45 @@ fn the_route_rule_finds_each_break() {
       .join("\n"),
     ],
     "the route rule fails the path that two crates spell, and passes the prefix arguments"
+  );
+}
+
+/// The backend package rule on a synthetic workspace. The backend crate exports its label, and a composition crate
+/// that references that const passes. A composition crate that spells the label itself fails with each site and the
+/// hint, so the label cannot drift between the two crates.
+#[test]
+fn the_backend_package_rule_finds_each_break() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  let backend_lib = r##"pub const PACKAGE: &str = "src.backends.thing";
+"##;
+  let composer_lib = r##"pub const FROM_THE_BACKEND: &str = thing_crate::PACKAGE;
+pub const SPELLED: &str = "src.backends.thing";
+"##;
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/backends/thing", "crates/app/composer"])),
+      ("crates/backends/thing/Cargo.toml", crate_manifest("thing-crate", &[], &[])),
+      ("crates/backends/thing/src/lib.rs", backend_lib.to_string()),
+      ("crates/app/composer/Cargo.toml", crate_manifest("composer", &[("thing-crate", "../../backends/thing")], &[])),
+      ("crates/app/composer/src/lib.rs", composer_lib.to_string()),
+    ],
+  );
+  let workspace = load_workspace(root);
+
+  assert_eq!(
+    owner_failures(&workspace, &[], SPELLING_CLASSES),
+    vec![
+      [
+        "src.backends.thing: spelled in 2 crates at:",
+        "  crates/app/composer/src/lib.rs:2",
+        "  crates/backends/thing/src/lib.rs:1",
+        PACKAGE_HINT,
+      ]
+      .join("\n"),
+    ],
+    "the package rule fails the label that two crates spell, and passes the const reference"
   );
 }
 

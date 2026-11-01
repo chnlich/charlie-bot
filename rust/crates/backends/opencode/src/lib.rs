@@ -33,9 +33,12 @@ pub use server::{
 };
 pub use usage_logs::USAGE_SOURCE;
 
+/// The package label the composition list registers this backend's package under.
+pub const PACKAGE: &str = "src.backends.opencode";
+
 /// Register the backend type, shared server factory, usage source and snapshot reading limits.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  let host = registration_step("src.backends.opencode", OpenCodeHost::from_process())?;
+  let host = registration_step(PACKAGE, OpenCodeHost::from_process())?;
   register_with_host(registry, host, ServerTimeouts::default())
 }
 
@@ -47,8 +50,7 @@ fn register_with_host(
   register_backend_type(registry, host, timeouts)?;
   register_source(
     registry,
-    home::opencode_db()
-      .map_err(|error| RegistryError { package: "src.backends.opencode", message: error.to_string() })?,
+    home::opencode_db().map_err(|error| RegistryError { package: PACKAGE, message: error.to_string() })?,
     PathBuf::from("/proc"),
   )?;
   registry.reading_limits(SNAPSHOT_READING_KIND, opencode_limits::snapshot_reading_limits)
@@ -81,8 +83,7 @@ fn register_backend_type(
 /// Registers the opencode usage source and attributes the `opencode` backend type to it (`__init__.py:24-30`). The
 /// database is the profile's `opencode_db()`, resolved once here.
 pub fn register_usage_source(registry: &mut Registry) -> Result<(), RegistryError> {
-  let db = home::opencode_db()
-    .map_err(|error| RegistryError { package: "src.backends.opencode", message: error.to_string() })?;
+  let db = home::opencode_db().map_err(|error| RegistryError { package: PACKAGE, message: error.to_string() })?;
   register_source(registry, db, PathBuf::from("/proc"))
 }
 

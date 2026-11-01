@@ -20,7 +20,8 @@ use charliebot_agents::cli_base::CliHost;
 /// The ledger's source value and the usage page's card title for Charlie Code's usage.
 pub const USAGE_SOURCE: &str = "CLC";
 
-const PACKAGE: &str = "src.backends.charlie_code";
+/// The package label the composition list registers this backend's package under.
+pub const PACKAGE: &str = "src.backends.charlie_code";
 
 /// Registers the `charlie-code` type and the CLC usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

@@ -16,6 +16,9 @@ use charliebot_registry::{Registry, RegistryError};
 
 use charliebot_claude_code::claude_lifecycle::ClaudeCliLifecycle;
 
+/// The package label the composition list registers this backend's package under.
+pub const PACKAGE: &str = "src.backends.openai_compatible";
+
 /// Registers the proxy route, the `cc-openai-compatible` type and its usage attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(anthropic_proxy::router, anthropic_proxy::matches)?;

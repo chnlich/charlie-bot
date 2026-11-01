@@ -843,6 +843,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "task.md", owner: "backends/charlie_code", hint: "Use `charliebot_charlie_code::TASK_FILE_NAME`." },
   OwnerRow {
+    name: "PreToolUse",
+    owner: "backends/claude_code",
+    hint: "Use `charliebot_claude_code::claude_launch::PRE_TOOL_USE_HOOK_EVENT`.",
+  },
+  OwnerRow {
+    name: "SessionStart",
+    owner: "backends/claude_code",
+    hint: "Use `charliebot_claude_code::claude_launch::SESSION_START_HOOK_EVENT`.",
+  },
+  OwnerRow {
     name: "plans.json",
     owner: "features/artifacts",
     hint: "Read the plan registry through `Registry::plan_registry_reader`, which `features/artifacts` registers.",
@@ -986,8 +996,9 @@ fn production_sites(workspace: &Workspace) -> Vec<Site> {
 }
 
 /// Whether a site spells `name`. A name with `.`, `_` or `/` matches a literal whose `/`-separated segments hold the
-/// name's segments in sequence. A plain word matches only in a path form: an argument of `.join(..)`, `Path::new(..)`
-/// or `PathBuf::from(..)` equal to it, or a segment of a relative path literal. A literal that holds `/api/` is a route
+/// name's segments in sequence. A name holding an uppercase letter is a protocol identifier, so only a literal equal to
+/// it matches. A plain word matches only in a path form: an argument of `.join(..)`, `Path::new(..)` or
+/// `PathBuf::from(..)` equal to it, or a segment of a relative path literal. A literal that holds `/api/` is a route
 /// path, which its router owns, so it spells no name in any form.
 fn spells(site: &Site, name: &str) -> bool {
   if site.value.contains("/api/") {
@@ -997,6 +1008,9 @@ fn spells(site: &Site, name: &str) -> bool {
     let wanted: Vec<&str> = name.split('/').collect();
     let segments: Vec<&str> = site.value.split('/').collect();
     return segments.windows(wanted.len()).any(|window| window == wanted.as_slice());
+  }
+  if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+    return site.value == name;
   }
   let relative = site.value.contains('/') && !site.value.starts_with('/') && !site.value.contains("://");
   (site.path_arg && site.value == name) || (relative && site.value.split('/').any(|segment| segment == name))
@@ -2160,6 +2174,41 @@ fn the_event_names_of_event_types_are_protected() {
         .to_string()
     ],
     "the owner rule fails the spelled name with its file:line and hint, and passes the unprotected words"
+  );
+}
+
+/// A name holding an uppercase letter on a synthetic workspace. The writer crate fails on a literal equal to the name,
+/// and passes on a longer literal that only holds its letters.
+#[test]
+fn a_camel_case_owner_name_matches_an_exact_literal_only() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/owner", "crates/features/writer"])),
+      ("crates/infra/owner/Cargo.toml", crate_manifest("owner-crate", &[], &[])),
+      ("crates/infra/owner/src/lib.rs", "pub const HOOK_EVENT: &str = \"PreToolUse\";\n".to_string()),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
+      (
+        "crates/features/writer/src/lib.rs",
+        "pub fn event_name() -> &'static str {\n  \"PreToolUse\"\n}\n\n\
+         pub fn longer_name() -> &'static str {\n  \"PreToolUseLater\"\n}\n"
+          .to_string(),
+      ),
+    ],
+  );
+  let workspace = load_workspace(root);
+  let rows = [OwnerRow { name: "PreToolUse", owner: "infra/owner", hint: "Use `owner_crate::HOOK_EVENT`." }];
+
+  assert_eq!(
+    owner_failures(&workspace, &rows, &[]),
+    vec![
+      "PreToolUse: owner infra/owner; spelled outside it at:\n  crates/features/writer/src/lib.rs:2\n\
+       Use `owner_crate::HOOK_EVENT`."
+        .to_string()
+    ],
+    "the owner rule fails the exact literal and passes the longer one"
   );
 }
 

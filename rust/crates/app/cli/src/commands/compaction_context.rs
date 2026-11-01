@@ -16,6 +16,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
@@ -117,7 +118,12 @@ fn run(session: &str, slot: i64) -> Result<(), String> {
 }
 
 fn hook_json(part: &str) -> Value {
-  json!({ "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": part } })
+  json!({
+    "hookSpecificOutput": {
+      "hookEventName": claude_launch::SESSION_START_HOOK_EVENT,
+      "additionalContext": part
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

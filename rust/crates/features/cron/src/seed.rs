@@ -1,5 +1,5 @@
-//! Seed repo-owned default cron tasks into the host's per-job cron files (`src/features/cron/seed.py`). The setup
-//! command (`charliebot setup`) runs [`setup_step`] after the home provisioning, in registration order.
+//! Seed repo-owned default cron tasks into the host's per-job cron files. The setup command (`charliebot setup`)
+//! runs [`setup_step`] after the home provisioning, in registration order.
 
 use std::path::{Path, PathBuf};
 
@@ -109,8 +109,8 @@ pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Re
   Ok(())
 }
 
-/// One default entry's name and the body without it, or the failure Python's `seed_default_cron_tasks` raises for
-/// an entry that is not a mapping or carries no usable `name`.
+/// One default entry's name and the body without it, or the error that names an entry that is not a mapping or
+/// carries no usable `name`.
 fn split_entry(entry: &Value) -> Result<(String, Value), String> {
   let Some(object) = entry.as_object() else {
     return Err(format!("invalid default cron entry (not a mapping): {entry:?}"));
@@ -161,8 +161,6 @@ mod tests {
 
   #[test]
   fn a_real_run_writes_one_host_file_per_default_entry_and_the_rerun_reports_exists() {
-    // Python: tests/test_setup_runner.py seeds through the registered step; the seed idempotence is
-    // tests/test_cron_defaults.py::test_seed_idempotence.
     let repo = repo_with_defaults();
     let home = tempfile::tempdir().expect("a temp home");
     let cfg = cfg(home.path());

@@ -1,4 +1,4 @@
-//! The five scheduled-task routes (`src/features/cron/api.py`).
+//! The five scheduled-task routes: list, create, update, run and delete.
 
 use std::sync::Arc;
 
@@ -395,7 +395,6 @@ mod tests {
 
   #[tokio::test]
   async fn create_update_list_and_delete_use_cron_yaml_files() {
-    // Python: tests/test_cron_backend.py::test_cron_api_persists_and_clears_backend
     let (home, features) = feature_context();
     let prompt = home.path().join("synthetic-prompt.md");
     std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
@@ -441,9 +440,6 @@ mod tests {
 
   #[tokio::test]
   async fn delete_unlinks_the_yaml_and_keeps_the_bound_node_history() {
-    // Python: tests/test_cron_delete.py::test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched
-    // Python: tests/test_cron_delete.py::test_delete_keeps_the_node_dir_and_history
-    // Python: tests/test_cron_auto_bind.py::test_task_delete_leaves_its_node_active
     let (home, features) = feature_context();
     let node = manager(&features, "synthetic-cron-node").await.unwrap();
     features.store.persist_and_broadcast(&node.id, json!({"type": "synthetic_history", "text": "kept"})).await.unwrap();
@@ -478,7 +474,6 @@ mod tests {
 
   #[tokio::test]
   async fn create_refuses_a_backend_missing_from_the_options() {
-    // Python: tests/test_cron_backend.py::test_cron_api_rejects_invalid_backend_on_create
     let (home, features) = feature_context();
     let prompt = home.path().join("synthetic-prompt.md");
     std::fs::write(&prompt, "Synthetic prompt\n").unwrap();
@@ -504,9 +499,6 @@ mod tests {
 
   #[tokio::test]
   async fn manual_handler_run_auto_binds_once_and_records_the_result() {
-    // Python: tests/test_cron_auto_bind.py::test_handler_task_binds_and_records_its_result_on_the_node
-    // Python: tests/test_scheduler_shared_session_blocks.py::test_scheduled_fire_bookkeeping_writes_the_injected_session_blocks
-    // Python: tests/test_scheduler_shared_session_blocks.py::test_scheduled_round_events_reach_shared_read_cache
     let (home, features) = feature_context();
     features.startup.insert(CronScheduler::new(Arc::clone(&features))).unwrap();
     let path = home.path().join("config.d/cron.d/synthetic-handler.yaml");
@@ -537,7 +529,6 @@ mod tests {
 
   #[tokio::test]
   async fn cron_editor_switches_backend_on_the_bound_node_without_creating_a_session() {
-    // Python: tests/test_cron_auto_bind.py::test_cron_editor_backend_change_switches_bound_node_in_place
     let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
     let node = manager(&features, "synthetic-bound-node").await.unwrap();
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
@@ -569,7 +560,6 @@ mod tests {
 
   #[tokio::test]
   async fn cron_editor_refuses_a_busy_backend_switch_before_writing_yaml() {
-    // Python: tests/test_cron_auto_bind.py::test_cron_editor_backend_change_on_busy_node_409s_before_writing
     let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
     let node = manager(&features, "synthetic-busy-bound-node").await.unwrap();
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
@@ -594,7 +584,6 @@ mod tests {
 
   #[tokio::test]
   async fn enabling_a_bound_archived_node_restores_it_with_the_cron_enable_reason() {
-    // Python: tests/test_archive_cron_restore.py::test_cron_editor_enable_restores_the_bound_archived_node
     use charliebot_registry::caller::CallerIdentity;
 
     let (home, features) = feature_context();
@@ -647,7 +636,6 @@ mod tests {
 
   #[tokio::test]
   async fn task_listing_keeps_the_binding_and_mode_fields_used_by_clients() {
-    // Python: tests/test_cron_auto_bind.py::test_task_config_model_still_carries_the_fields_the_lists_read
     let (home, features) = feature_context();
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
     std::fs::write(

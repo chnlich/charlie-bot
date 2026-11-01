@@ -43,6 +43,14 @@
 /* A message bubble clips its overflow, so a message with a table scrolls
    horizontally; a table wider than the bubble keeps every column reachable. */
 .prose-msg:has(table) { overflow-x: auto; }
+/* A chat bubble keeps a readable measure on a wide window. The user bubble takes
+   75% of the message pane and the agent bubble 90%; at 1440 px those shares draw
+   lines of about 104 characters, past the 45-75 a reader follows without losing
+   the place. 37rem, the bubble's 32 px side padding included, leaves about 75
+   characters. A narrow window fills its share before the cap binds, so the phone
+   layout keeps the width it already had. */
+#messages .max-w-\[75\%\] { max-width: min(75%, 37rem); }
+#messages .max-w-\[90\%\] { max-width: min(90%, 37rem); }
 .turn-fold-bar {
   display: flex; align-items: center; justify-content: center; gap: 0.4rem;
   width: 100%; padding: 0.35rem 0.75rem; border: 1px solid rgba(100, 116, 139, 0.35);

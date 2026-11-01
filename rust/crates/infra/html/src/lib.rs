@@ -7,5 +7,5 @@ mod sequence;
 
 pub use entities::{escape, unescape};
 pub use fold::folds_at_open;
-pub use parser::{Event, EventKind, ParseError, Position, StreamEvent, parse, parse_with};
+pub use parser::{Event, EventKind, ParseError, StreamEvent, parse, parse_with};
 pub use sequence::{Opcode, OpcodeTag, opcodes};

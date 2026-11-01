@@ -15,7 +15,7 @@ use charliebot_store::run_records::RUN_METADATA_NAME;
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Map, Value, json};
 
-pub use charliebot_store::sidebar_state::DerivedSidebarMap;
+pub use charliebot_store::sidebar_state::{DerivedSidebarMap, HAS_PENDING_PLAN_APPROVAL, TASK_TREE_ACTIVITY};
 
 static SIDEBAR_SWEEP_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -77,7 +77,7 @@ pub(crate) fn resolve_sidebar_state(
         entry.insert("next_trigger_at".to_string(), Value::Null);
       }
       if include_plan {
-        entry.insert("has_pending_plan_approval".to_string(), Value::Bool(false));
+        entry.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(false));
       }
       derived.insert(meta.id.clone(), Arc::new(entry));
     } else {
@@ -133,7 +133,7 @@ pub(crate) fn resolve_sidebar_state(
   for meta in active {
     let snapshot = charliebot_store::sidebar_state::snapshot_entry(&meta.id).unwrap_or_default();
     let mut entry = Map::new();
-    let activity = snapshot.get("task_tree_activity").and_then(Value::as_array);
+    let activity = snapshot.get(TASK_TREE_ACTIVITY).and_then(Value::as_array);
     if include_running {
       entry.insert(
         "has_running_tasks".to_string(),
@@ -148,8 +148,8 @@ pub(crate) fn resolve_sidebar_state(
     }
     if include_plan {
       entry.insert(
-        "has_pending_plan_approval".to_string(),
-        snapshot.get("has_pending_plan_approval").cloned().unwrap_or(Value::Bool(false)),
+        HAS_PENDING_PLAN_APPROVAL.to_string(),
+        snapshot.get(HAS_PENDING_PLAN_APPROVAL).cloned().unwrap_or(Value::Bool(false)),
       );
     }
     if let Some(work_state) = activity.and_then(|value| value.get(1)) {
@@ -263,7 +263,7 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
   let mut pending_plan_approval = false;
   for contribution in registry.sidebar_contributions() {
     for (name, value) in contribution.row_flags(&session_dir, session_id) {
-      if name == "has_pending_plan_approval" {
+      if name == HAS_PENDING_PLAN_APPROVAL {
         pending_plan_approval |= value;
       }
     }
@@ -272,8 +272,8 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
   let mut snapshot = Map::new();
   snapshot.insert("pending_trigger_count".to_string(), Value::from(pending_count));
   snapshot.insert("next_trigger_at".to_string(), next_trigger.map_or(Value::Null, |value| json!(value.to_str())));
-  snapshot.insert("has_pending_plan_approval".to_string(), Value::Bool(pending_plan_approval));
-  snapshot.insert("task_tree_activity".to_string(), json!([activity.has_running_tasks, activity.work_state]));
+  snapshot.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(pending_plan_approval));
+  snapshot.insert(TASK_TREE_ACTIVITY.to_string(), json!([activity.has_running_tasks, activity.work_state]));
   Ok(snapshot)
 }
 
@@ -379,7 +379,7 @@ mod tests {
     entry.insert("has_pending_trigger".to_string(), Value::Bool(false));
     entry.insert("pending_trigger_count".to_string(), Value::from(0));
     entry.insert("next_trigger_at".to_string(), Value::Null);
-    entry.insert("has_pending_plan_approval".to_string(), Value::Bool(false));
+    entry.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(false));
     assert_eq!(meta.status, SessionStatus::Archived);
     assert_eq!(entry.get("work_state"), None);
   }

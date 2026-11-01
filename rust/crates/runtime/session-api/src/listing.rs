@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, WORK_STATE};
+use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
@@ -650,8 +651,8 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   }
   if projection.include_plan {
     object.insert(
-      "has_pending_plan_approval".to_string(),
-      derived.and_then(|entry| entry.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_PENDING_PLAN_APPROVAL.to_string(),
+      derived.and_then(|entry| entry.get(HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
   object.insert("thinking_since".to_string(), row.thinking_since.clone());

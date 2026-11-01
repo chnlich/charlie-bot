@@ -7,6 +7,7 @@ mod loader;
 mod scheduler;
 pub mod seed;
 mod sequence_controller;
+mod steps;
 #[cfg(test)]
 mod test_support;
 

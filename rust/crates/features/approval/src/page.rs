@@ -1,4 +1,4 @@
-//! `GET /approval` (plan 4 v2 task W3): the approval page, one Pacific day's queue, login sheet and digest. The view
+//! `GET /approval`: the approval page, one Pacific day's queue, login sheet and digest. The view
 //! moves between days through the `date` query, which an absent value answers with today.
 
 use std::collections::HashMap;

@@ -1,23 +1,22 @@
 //! The endpoint, declared context window, optional credential, optional effort, optional executable, request headers
 //! and fixed request body fields of a `cc-anthropic-compatible` entry.
 
-use charliebot_core::config::{API_BASE_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
+use charliebot_core::config::{API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
-const CONTEXT_WINDOW: &str = "context_window";
 const EFFORT: &str = "effort";
 const CLI_BINARY: &str = "cli_binary";
 const HEADERS: &str = "headers";
 const EXTRA_BODY: &str = "extra_body";
-const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW, CREDENTIAL_KEY, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
+const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
 /// them. `cli_binary` has no Python reference: the Python option model refused the field.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
-  OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Required),
+  OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Required),
   OptionField::field(CREDENTIAL_KEY, OptionFieldDefault::Null),
   OptionField::field(EFFORT, OptionFieldDefault::Null),
   OptionField::field(CLI_BINARY, OptionFieldDefault::Null),
@@ -62,7 +61,7 @@ impl CcAnthropicCompatibleOption {
     if api_base.trim_end_matches('/').ends_with("/v1") {
       return Err("cc-anthropic-compatible api_base must be the endpoint root without /v1".to_string());
     }
-    let context_window = match fields.get(CONTEXT_WINDOW) {
+    let context_window = match fields.get(CONTEXT_WINDOW_KEY) {
       None => return Err("cc-anthropic-compatible option context_window is required".to_string()),
       Some(Value::Number(value)) => match value.as_u64() {
         Some(window) if window > 0 => window,

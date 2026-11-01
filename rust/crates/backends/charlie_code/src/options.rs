@@ -1,10 +1,9 @@
 //! The charlie-code option fields (`src/backends/charlie_code/options.py`). Each field carries the bound pydantic checks
 //! for it, and the type refuses any key it does not name.
 
-use charliebot_core::config::{API_BASE_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
+use charliebot_core::config::{API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
-const CONTEXT_WINDOW: &str = "context_window";
 const PROXY_URL: &str = "proxy_url";
 const IMAGE_INPUT: &str = "image_input";
 const STREAM: &str = "stream";
@@ -16,7 +15,7 @@ const TEMPERATURE: &str = "temperature";
 /// the Python model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Null),
-  OptionField::field(CONTEXT_WINDOW, OptionFieldDefault::Null),
+  OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Null),
   OptionField::field(CREDENTIAL_KEY, OptionFieldDefault::Null),
   OptionField::field(PROXY_URL, OptionFieldDefault::Null),
   OptionField::field(IMAGE_INPUT, OptionFieldDefault::Bool(true)),
@@ -26,8 +25,17 @@ pub const SCHEMA: &[OptionField] = &[
   OptionField::float_field(TEMPERATURE, OptionFieldDefault::Null),
 ];
 
-const FIELDS: [&str; 9] =
-  [API_BASE_KEY, CONTEXT_WINDOW, CREDENTIAL_KEY, PROXY_URL, IMAGE_INPUT, STREAM, TIMEOUT_SECONDS, TOP_P, TEMPERATURE];
+const FIELDS: [&str; 9] = [
+  API_BASE_KEY,
+  CONTEXT_WINDOW_KEY,
+  CREDENTIAL_KEY,
+  PROXY_URL,
+  IMAGE_INPUT,
+  STREAM,
+  TIMEOUT_SECONDS,
+  TOP_P,
+  TEMPERATURE,
+];
 
 /// The type-specific fields of one `charlie-code` backend option.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,7 +71,7 @@ impl CharlieCodeOption {
     }
     Ok(Self {
       api_base: optional_text(fields, API_BASE_KEY)?,
-      context_window: optional_positive_int(fields, CONTEXT_WINDOW)?,
+      context_window: optional_positive_int(fields, CONTEXT_WINDOW_KEY)?,
       credential: optional_text(fields, CREDENTIAL_KEY)?,
       proxy_url: optional_text(fields, PROXY_URL)?,
       image_input: flag(fields, IMAGE_INPUT, true)?,

@@ -1,4 +1,5 @@
-//! The parts every `charliebot` subcommand shares (`src/runtime/cli/common.py`).
+//! The shared pieces of every `charliebot` subcommand: argument parsing, session resolution, the
+//! internal-API client, and the JSON error shapes.
 //!
 //! The client contract distinguishes the two failure classes the restart-crossing rule turns on. A
 //! connection that never got established is retried with bounded backoff, because the request

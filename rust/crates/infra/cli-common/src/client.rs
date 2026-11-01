@@ -1,4 +1,5 @@
-//! The restart-crossing call contract (`src/runtime/cli/common.py::_request_with_contract`).
+//! The restart-crossing call contract: retry a connect-phase failure, and never re-issue a sent request
+//! whose response was lost.
 //!
 //! A connect-phase failure retries with bounded exponential backoff inside a total budget. A
 //! sent-but-lost request is never re-issued: the call's readback, when it has one, answers; else
@@ -277,7 +278,7 @@ mod tests {
 
   #[test]
   fn test_connect_never_established_retries_with_backoff_then_exhausts() {
-    // Python: tests/test_cli_restart_contract.py, with the clock injected so no wall time passes.
+    // The clock is injected, so no wall time passes.
     let mut attempts = 0;
     let refused = "[Errno 111] Connection refused".to_string();
     let mut transport = |_request: &WireRequest| -> Result<WireResponse, TransportError> {
@@ -420,9 +421,8 @@ mod tests {
 
   #[test]
   fn test_post_sends_json_body_content_type_and_auth_header_over_the_real_client() {
-    // Python: tests/test_cli_restart_contract.py. One POST with a query and a JSON body over the real
-    // transport. The wire carries the query string, the Content-Type and the body, and no Authorization
-    // header when the call carries no credential.
+    // One POST with a query and a JSON body over the real transport. The wire carries the query string,
+    // the Content-Type and the body, and no Authorization header when the call carries no credential.
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {

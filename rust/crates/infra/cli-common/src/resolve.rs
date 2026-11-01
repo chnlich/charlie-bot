@@ -1,4 +1,4 @@
-//! Session resolution: `src/runtime/cli/common.py::resolve_session_id`.
+//! Session resolution: the server-written variable, the explicit argument, or the working directory.
 
 use std::path::Path;
 

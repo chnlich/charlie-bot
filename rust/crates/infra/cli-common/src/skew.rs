@@ -1,4 +1,4 @@
-//! The version-skew hint (`src/runtime/cli/common.py`, the hint helpers).
+//! The version-skew hint: compare the running server's SHA with the repo's, and tell the caller to restart.
 
 use charliebot_core::git;
 use charliebot_core::repo_root;

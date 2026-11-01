@@ -202,12 +202,23 @@ impl Store {
     scheduled: Option<bool>,
   ) -> StoreResult<MetadataListing> {
     let rows = self.list_session_rows(status, starred, scheduled)?;
+    let sequence_fields = self.sequence_listing_fields(&rows)?;
+    Ok(MetadataListing { rows, sequence_fields })
+  }
+
+  /// The sequence controllers' row fields for a listing of `rows`.
+  ///
+  /// A caller that already holds the rows asks for their fields alone; the ids a controller binds bound the walk, so
+  /// a controller that binds nothing costs no per-row lookup.
+  pub fn sequence_listing_fields(
+    &self,
+    rows: &[Arc<SessionMetadata>],
+  ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
     let ids = match self.sequence_listing.bound_listing_ids() {
       Some(ids) => ids,
       None => rows.iter().map(|meta| meta.id.clone()).collect(),
     };
-    let sequence_fields = self.sequence_listing.listing_fields(&ids, UtcDateTime::now())?;
-    Ok(MetadataListing { rows, sequence_fields })
+    self.sequence_listing.listing_fields(&ids, UtcDateTime::now())
   }
 
   /// List the rows of one listing without asking the sequence controllers for their row fields.

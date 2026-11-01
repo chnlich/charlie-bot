@@ -1,7 +1,7 @@
 //! Session listing projections shared by sidebar routes.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
@@ -133,16 +133,92 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
 
 /// The chat page's sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
 pub struct PageRows {
-  rows: Vec<Arc<SessionMetadata>>,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
   derived: Arc<DerivedSidebarMap>,
   sequence_fields: HashMap<String, Map<String, Value>>,
 }
 
+/// The page corpus one request built, reused while every input that shapes it still holds.
+///
+/// Building the corpus walks every active session: the store filters the corpus, the sidebar resolves each row's
+/// overlay, and the page drops the rows that an owned subtree holds. A repeat page request reads the same corpus, so
+/// the memo answers it from the identities that would move if any of it changed. The listing generation names the
+/// metadata corpus (the store numbers every rebuild, so the same number is the same rows in the same order), the
+/// derived archive ids and the subtree roots name the two filters, the sidebar generation names the overlays, and the
+/// repository identities name the store and registry the corpus came from. Both are held weakly: a dropped store's
+/// corpus never answers another store's request.
+static PAGE_CORPUS_MEMO: LazyLock<Mutex<Option<PageCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
+
+/// One memo entry. The memo holds it by value; only the store and registry it names are weak.
+struct PageCorpusEntry {
+  store: Weak<Store>,
+  registry: Weak<Registry>,
+  generation: u64,
+  archived: Vec<String>,
+  sequence_roots: Arc<HashMap<String, String>>,
+  view_roots: Arc<HashMap<String, HashMap<String, String>>>,
+  sidebar_generation: u64,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+  derived: Arc<DerivedSidebarMap>,
+}
+
+impl PageCorpusEntry {
+  /// Whether this entry was built from the corpus and overlays that `store` and `registry` hold now.
+  fn holds(
+    &self,
+    store: &Arc<Store>,
+    registry: &Arc<Registry>,
+    generation: u64,
+    archived: &[String],
+    roots: &SharedSubtreeRoots,
+    sidebar_generation: u64,
+  ) -> bool {
+    Weak::ptr_eq(&self.store, &Arc::downgrade(store))
+      && Weak::ptr_eq(&self.registry, &Arc::downgrade(registry))
+      && self.generation == generation
+      && self.archived == archived
+      && Arc::ptr_eq(&self.sequence_roots, &roots.sequence)
+      && Arc::ptr_eq(&self.view_roots, &roots.views)
+      && self.sidebar_generation == sidebar_generation
+  }
+}
+
 /// Read the chat page's sidebar corpus without rendering a row.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
-  let ListingCorpus { mut rows, derived, sequence_fields } = active_listing_corpus(store, registry)?;
+  let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
+  let archived = store.derived_archived_ids()?;
   let roots = store.subtree_roots_shared()?;
+  let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
+  let cached = {
+    let memo = PAGE_CORPUS_MEMO.lock().expect("the page corpus memo mutex is not poisoned");
+    memo
+      .as_ref()
+      .filter(|entry| entry.holds(store, registry, generation, &archived, &roots, sidebar_generation))
+      .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.derived)))
+  };
+  if let Some((rows, derived)) = cached {
+    let sequence_fields = store.sequence_listing_fields(&rows)?;
+    return Ok(PageRows { rows, derived, sequence_fields });
+  }
+  let ListingCorpus { mut rows, derived, sequence_fields } = active_listing_corpus(store, registry)?;
   rows.retain(|row| outside_owned_subtrees(row, &roots));
+  let rows = Arc::new(rows);
+  // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
+  // itself can move an input. A build that moved one stores nothing: its overlays were read under the older
+  // generation, and the next request rebuilds them under the newer one and stores them.
+  if charliebot_store::sidebar_state::derived_generation() == sidebar_generation {
+    *PAGE_CORPUS_MEMO.lock().expect("the page corpus memo mutex is not poisoned") = Some(PageCorpusEntry {
+      store: Arc::downgrade(store),
+      registry: Arc::downgrade(registry),
+      generation,
+      archived,
+      sequence_roots: roots.sequence,
+      view_roots: roots.views,
+      sidebar_generation,
+      rows: Arc::clone(&rows),
+      derived: Arc::clone(&derived),
+    });
+  }
   Ok(PageRows { rows, derived, sequence_fields })
 }
 
@@ -187,14 +263,18 @@ struct WholePageText {
 /// fields compare by value. Every other input a row reads from the store (busy state, run backend) moves through a
 /// sidebar dirty mark, which also rebuilds the derived map.
 struct PageTextSource {
-  rows: Vec<Arc<SessionMetadata>>,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
   derived: Arc<DerivedSidebarMap>,
   sequence_fields: HashMap<String, Map<String, Value>>,
 }
 
 impl PageTextSource {
   fn of(page: &PageRows) -> Self {
-    Self { rows: page.rows.clone(), derived: Arc::clone(&page.derived), sequence_fields: page.sequence_fields.clone() }
+    Self {
+      rows: Arc::clone(&page.rows),
+      derived: Arc::clone(&page.derived),
+      sequence_fields: page.sequence_fields.clone(),
+    }
   }
 
   fn holds(&self, page: &PageRows) -> bool {
@@ -252,7 +332,7 @@ pub fn active_page_json_text(
       return Ok(Arc::clone(&whole.text));
     }
   }
-  let inputs = row_inputs(store, &page.rows, &page.derived, &page.sequence_fields, PAGE_PROJECTION)?;
+  let inputs = row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION)?;
   let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
   if let Some(whole) = &state.whole
     && whole.clear_unread.as_deref() == clear_unread
@@ -600,10 +680,35 @@ mod tests {
     assert_eq!(memo.render_calls(), rendered + 1);
   }
 
+  /// A repeat page request serves the corpus the previous one built, and a session created after it joins the next
+  /// page.
+  #[tokio::test]
+  async fn a_repeat_page_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "corpus-first", None, TaskProfile::Manager).await;
+    // The first read probes the new session and moves the sidebar generation, so it stores nothing; the read after it
+    // resolves the overlays with every probe settled.
+    let _ = active_page_rows(&features.store, &features.registry).unwrap();
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    assert_eq!(page.rows.len(), 1);
+
+    let again = active_page_rows(&features.store, &features.registry).unwrap();
+    assert!(Arc::ptr_eq(&page.rows, &again.rows), "a repeat read serves the row vector it already built");
+    assert!(Arc::ptr_eq(&page.derived, &again.derived), "a repeat read serves the overlays it already resolved");
+
+    let late = crate::test_support::create_node(&features.store, "corpus-late", None, TaskProfile::Manager).await;
+
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    assert!(
+      page.rows.iter().any(|row| row.id == late.id),
+      "the page corpus lists the session created after it was read"
+    );
+  }
+
   /// The page corpus over given rows, with the controller fields that a listing supplies for each row.
   fn page_rows_over(rows: Vec<Arc<SessionMetadata>>) -> PageRows {
     let sequence_fields = rows.iter().map(|row| (row.id.clone(), Map::new())).collect();
-    PageRows { rows, derived: Arc::new(DerivedSidebarMap::new()), sequence_fields }
+    PageRows { rows: Arc::new(rows), derived: Arc::new(DerivedSidebarMap::new()), sequence_fields }
   }
 
   /// A row whose controller owns no fields renders the values the row writer fills for that row.
@@ -613,7 +718,7 @@ mod tests {
     let meta = crate::test_support::create_node(&features.store, "no-fields-row", None, TaskProfile::Manager).await;
     let memo = PageRowsMemo::default();
     let page = PageRows {
-      rows: vec![Arc::new(meta)],
+      rows: Arc::new(vec![Arc::new(meta)]),
       derived: Arc::new(DerivedSidebarMap::new()),
       sequence_fields: HashMap::new(),
     };
@@ -685,7 +790,8 @@ mod tests {
 
   /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared.
   fn page_array_text(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> String {
-    let inputs = row_inputs(store, &page.rows, &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
+    let inputs =
+      row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
     let values: Vec<Value> = inputs
       .iter()
       .map(|row| {

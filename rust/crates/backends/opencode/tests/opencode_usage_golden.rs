@@ -1,7 +1,7 @@
 //! The opencode usage source checked against its Python reference. The synthetic stores
-//! are written once to disk. Each step reads one store with the signature the step names: first Rust reads every step,
-//! then Python reads the same files, and each step's records and signature must be equal. No store's main file changes
-//! under either reader.
+//! are written once to disk. Each step reads one store with the signature the step names. First Rust reads every
+//! step, then Python reads the same files. Each step's records and signature must be equal. No store's main file
+//! changes under either reader.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -338,7 +338,7 @@ fn read_matches_the_usage_log_over_synthetic_stores() {
   }
   assert_eq!(main_files(&stores), before, "a read changed a store's main file");
 
-  // The branches the matrix exists for are the ones taken: an absent WAL reads 0:0, the WAL store reads its file, the
+  // The branches the matrix exists for are the ones taken. An absent WAL reads 0:0, the WAL store reads its file, the
   // stored max floors the moved store, and the skipped steps return the stored signature.
   let parts = |index: usize| -> Vec<String> { outcomes[index].0.split(':').map(str::to_string).collect() };
   assert_eq!(parts(0)[2..4], ["0", "0"]);

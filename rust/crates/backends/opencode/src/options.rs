@@ -70,7 +70,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
 }
 
 /// The config keys that the options' `context_limit` and `extra_body` values add, as Python's
-/// `model_overrides_config` builds them:
+/// `model_overrides_config` builds them. The keys are
 /// `{"providers": {provider: {"models": {model: {"limit": {"context": n}, "body": {...}}}}}}`, or an empty map when no
 /// option sets either field. Options for one model must agree on each field they both set; a disagreement fails with
 /// both option ids.

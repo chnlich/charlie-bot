@@ -419,10 +419,10 @@ impl Harness {
 
   /// Wait until the run delivered an event that `matches` accepts.
   ///
-  /// `wait_for_raw_cursor` waits for the cursor to catch up with the raw log, which the relay can write one
-  /// untranslated line at a time; it can return after the first line (for example `session.execution.started`) and
-  /// before the turn's text reaches the sink. Tests that cut the turn and then assert about the delivered events wait
-  /// for the event itself.
+  /// `wait_for_raw_cursor` waits for the cursor to catch up with the raw log. The relay can write that log one
+  /// untranslated line at a time. The wait can therefore return after the first line (for example
+  /// `session.execution.started`) and before the turn's text reaches the sink. Tests that cut the turn and then assert
+  /// about the delivered events wait for the event itself.
   async fn wait_for_events(&self, events: &Arc<Mutex<Vec<Value>>>, matches: impl Fn(&[Value]) -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
       loop {

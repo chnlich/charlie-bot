@@ -1,12 +1,12 @@
 //! A stand-in for the opencode 2.0 binary, for the backend tests.
 //!
-//! `serve --port 0` speaks the shared server's HTTP surface on loopback: the routes the backend calls, one global SSE
-//! stream, and a control route the test uses to inject events, drop the stream, or end the process. `run` prints the
-//! NDJSON lines of a one-shot run.
+//! `serve --port 0` speaks the shared server's HTTP surface on loopback. That surface is the routes the backend
+//! calls, one global SSE stream, and a control route. The test uses that control route to inject events, drop the
+//! stream, or end the process. `run` prints the NDJSON lines of a one-shot run.
 //!
-//! Behaviour comes from the JSON file named by FAKE_OC_SCRIPT: `prompts` maps a prompt's text to a step with `events`
-//! (session events, sessionID filled in), `shells` (running shell commands the session starts) and `hold` (keep the
-//! execution running until an interrupt). `release_status` makes DELETE /api/debug/location answer that status instead
+//! Behaviour comes from the JSON file named by FAKE_OC_SCRIPT. `prompts` maps a prompt's text to a step. A step
+//! carries `events` (session events, sessionID filled in), `shells` (running shell commands the session starts) and
+//! `hold` (keep the execution running until an interrupt). `release_status` makes DELETE /api/debug/location answer that status instead
 //! of 204. `event_subscribe_delay` and `interrupt_event_delay` set the timing of the stream and of interrupt events,
 //! and `run_lines` and `run_exit` script a one-shot run. FAKE_OC_VERSION sets the version that /api/info reports.
 //! Every request is appended to the FAKE_OC_LOG file as one JSON line, tagged with the serving process's pid.
@@ -313,7 +313,7 @@ async fn forward(write: &mut OwnedWriteHalf, events: &mut UnboundedReceiver<Opti
   Ok(())
 }
 
-/// The control route. It answers 204 first, then applies the keys the test sent: `activate` marks a session
+/// The control route. It answers 204 first, then applies the keys the test sent. `activate` marks a session
 /// running, `emit` sends an event, `drop_stream` ends every SSE stream, and `exit` ends the process with that status.
 async fn control(fake: &Arc<Fake>, write: &mut OwnedWriteHalf, body: &Value) -> io::Result<()> {
   assert!(body.is_object(), "a control request carries a JSON object");

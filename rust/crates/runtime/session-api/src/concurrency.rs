@@ -466,8 +466,8 @@ fn bucket_peaks(spans: &[Span], from: OffsetDateTime, to: OffsetDateTime, bucket
   let mut manager = 0u32;
   let mut next = 0usize;
   let mut buckets = Vec::with_capacity(count);
-  for index in 0..count {
-    let start = from + Duration::seconds(bucket_seconds * index as i64);
+  let mut start = from;
+  for _ in 0..count {
     let end = (start + step).min(to);
     // The carried state is a candidate at the bucket's start only when no event sits exactly there.
     let mut best = (events.get(next).map(|event| event.0) != Some(start)).then_some((running, manager, start));
@@ -506,6 +506,8 @@ fn bucket_peaks(spans: &[Span], from: OffsetDateTime, to: OffsetDateTime, bucket
       point: Point { at: start, running: peak_running, manager: peak_manager, worker: peak_running - peak_manager },
       at_max,
     });
+    // Every bucket but the last carries its full step, so the next start is this bucket's end.
+    start = end;
   }
   buckets
 }

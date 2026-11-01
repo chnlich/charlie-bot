@@ -100,7 +100,7 @@ test('child task rows nest under their parent, collapsed by default', () => {
   assert.match(anchorOpenTag(html, 'r1') + rowHtml(html, 'r1'), /data-tree-toggle="r1"[^>]*aria-expanded="false"/);
   assert.doesNotMatch(rowHtml(html, 'w-old'), /data-tree-toggle/);
   // The group count badge counts every rendered row, roots and descendants.
-  assert.match(html, /<span class="text-xs text-slate-500 ml-auto">6<\/span>/);
+  assert.match(html, /<span class="text-xs text-slate-400 ml-auto">6<\/span>/);
 });
 
 test('children order logical sessions before worker leaves, newest first, grandchildren under their parent', () => {
@@ -287,7 +287,7 @@ test('the five-row preview counts root rows only and hides a capped root with it
     assert.equal(anchorOpenTag(html, `w1-${i}`).includes('session-group-limit-extra'), false);
   }
   assert.match(html, /<div class="tree-subtree session-group-limit-extra hidden[^"]*" data-session-group-limit-extra="Work">/);
-  assert.match(html, /<span class="text-xs text-slate-500 ml-auto">10<\/span>/);
+  assert.match(html, /<span class="text-xs text-slate-400 ml-auto">10<\/span>/);
 });
 
 test('four roots with many children stay under the preview cap', () => {
@@ -810,7 +810,7 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
     assert.match(anchorOpenTag(html, t), /sidebarControl\('switchSession', 't/);
   }
   // The group header counts every rendered row, roots and descendants.
-  assert.match(html, /<span class="text-xs text-slate-500 ml-auto">4<\/span>/);
+  assert.match(html, /<span class="text-xs text-slate-400 ml-auto">4<\/span>/);
   assert.deepEqual(anchorIdsInOrder(html), ['cron1', 't1', 't2', 't3']);
   // The grouped render recorded the tree maps itself.
   assert.deepEqual([...context.Sidebar.treeChildIds('cron1')], ['t1', 't2', 't3']);

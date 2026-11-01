@@ -47,25 +47,44 @@ fn is_word_char(character: char) -> bool {
   character.is_alphanumeric() || character == '_'
 }
 
+/// The outcome of one iteration report check. An `Invalid` report carries the fixed reason code its summary and log
+/// line show.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReportValidity {
+  Valid,
+  Invalid(&'static str),
+}
+
+impl ReportValidity {
+  /// Whether the report passed every check.
+  pub fn is_valid(self) -> bool {
+    self == Self::Valid
+  }
+
+  /// The reason code of an invalid report, or `None` when the report is valid.
+  pub fn reason(self) -> Option<&'static str> {
+    match self {
+      Self::Valid => None,
+      Self::Invalid(reason) => Some(reason),
+    }
+  }
+}
+
 /// Judge an iteration's report: valid when it exists, carries its `## Iter <n>` heading, and either added commits or
-/// states an explicit zero-progress verdict. Returns the invalid reason, or `None` when valid.
-pub fn iter_report_validity(
-  report_path: &Path,
-  iteration: i64,
-  commits_added: i64,
-) -> anyhow::Result<(bool, Option<&'static str>)> {
+/// states an explicit zero-progress verdict.
+pub fn iter_report_validity(report_path: &Path, iteration: i64, commits_added: i64) -> anyhow::Result<ReportValidity> {
   if !report_path.exists() {
-    return Ok((false, Some("missing_report")));
+    return Ok(ReportValidity::Invalid("missing_report"));
   }
   let text = std::fs::read_to_string(report_path).with_context(|| format!("read {}", report_path.display()))?;
   let heading = Regex::new(&format!(r"(?m)^## Iter {iteration}\b")).expect("iteration heading expression is valid");
   if !heading.is_match(&text) {
-    return Ok((false, Some("malformed_report")));
+    return Ok(ReportValidity::Invalid("malformed_report"));
   }
   if commits_added > 0 || commits_section_first_none(&text) {
-    return Ok((true, None));
+    return Ok(ReportValidity::Valid);
   }
-  Ok((false, Some("no_commit_no_verdict")))
+  Ok(ReportValidity::Invalid("no_commit_no_verdict"))
 }
 
 /// The fixed one-line placeholder that stands in for an invalid iteration's summary.

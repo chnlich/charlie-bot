@@ -380,6 +380,9 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
       </button>` : '';
 
+    // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1);
+    // slate-500 holds 3.4:1, under the 4.5:1 floor. The chevron and the hover actions are icons, which
+    // the 3:1 non-text floor admits at slate-500.
     html += `<div class="session-group group" data-sgroup-key="${safeKey}">
       <div class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-700/30 rounded-lg select-none"
            data-sgroup-toggle-key="${safeKey}"
@@ -389,7 +392,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         </svg>
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
         ${groupActions}
-        <span class="text-xs text-slate-500 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
+        <span class="text-xs text-slate-400 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
         ${groupRows.map(({session, options: rowOptions}) => renderSessionTree(

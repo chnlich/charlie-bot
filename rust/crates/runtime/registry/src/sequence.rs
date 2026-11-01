@@ -1,6 +1,6 @@
-//! Sequence hooks (`src/runtime/hooks/sequence_controllers.py`): a package that owns durable sequences registers a
-//! controller. The controller owns every run whose sequence kind it declares, and it answers for its sessions in the
-//! listings and in the bindings the runtime asks for.
+//! Sequence hooks: a package that owns durable sequences registers a controller. The controller owns every run whose
+//! sequence kind it declares, and it answers for its sessions in the listings and in the bindings the runtime asks
+//! for.
 //!
 //! The run lifecycle methods of the Python controller (`redrive`, `launch_context`, `after_run`, `recover_run`,
 //! `reconcile_interrupted`) run over the store's run records and task tree through `SequenceTree`.
@@ -182,7 +182,7 @@ pub trait SequenceDispatch: Send + Sync {
   fn wake_parent<'a>(&'a self, parent_id: &'a str, report: ChatEvent) -> BoxFuture<'a, StoreResult<bool>>;
 }
 
-/// A restore's result (`task_completion.py::restore_chain_locked`): the restored ids, topmost first, and one
+/// A restore's result: the restored ids, topmost first, and one
 /// `(node, event, epoch)` announcement per `task_reopened` fact the call wrote. The caller sends each announcement
 /// with its epoch after it releases the control lock.
 pub type RestoreOutcome = (Vec<String>, Vec<(String, ChatEvent, u64)>);
@@ -371,7 +371,7 @@ impl SequenceTree for StoreSequenceTree {
   }
 
   fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
-    // Python hands readers its cached live-facts list by reference (`src/runtime/task_sessions.py:650-662`).
+    // Readers get the store's cached live-facts list by reference, never a copy.
     self.store.load_all_facts_shared_sync(session_id)
   }
 

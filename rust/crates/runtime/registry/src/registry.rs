@@ -547,8 +547,7 @@ pub struct UsageResolverHost {
 /// Constructs a backend type's usage resolver for one usage owner.
 pub type UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn UsageResolver> + Send + Sync>;
 
-/// The keyword arguments the runtime passes to a backend factory (`base.py` launch arguments and the per-type
-/// launch arguments).
+/// The keyword arguments the runtime passes to a backend factory: the shared launch arguments and the per-type ones.
 #[derive(Clone, Debug, Default)]
 pub struct LaunchArgs {
   pub extra_flags: Vec<String>,
@@ -584,8 +583,8 @@ pub enum TransportKind {
   Serve,
 }
 
-/// What a final-stdout backend makes of its finished process (`antigravity_cli.py` `run`). The runner emits `events`,
-/// records `exit_code`, and then fails the run with `guard_error` when it is set.
+/// What a final-stdout backend makes of its finished process. The runner emits `events`, records `exit_code`, and
+/// then fails the run with `guard_error` when it is set.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FinalStdoutOutcome {
   pub events: Vec<Value>,
@@ -618,8 +617,8 @@ pub trait AgentBackend: Send {
   fn midturn_run_id(&self) -> Option<String> {
     None
   }
-  /// Write the run's first stdin payload and keep its stdin open for mid-turn writes (`base.py` `_write_stdin_prompt`).
-  /// `exited` reports the child's exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
+  /// Write the run's first stdin payload and keep its stdin open for mid-turn writes. `exited` reports the child's
+  /// exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
   fn write_stdin_prompt(
     &self,
     _stdin: Box<dyn AsyncWrite + Send + Unpin>,
@@ -628,14 +627,14 @@ pub trait AgentBackend: Send {
   ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
     None
   }
-  /// Handle one translated event before the run's consumer sees it (`base.py` `_on_event`), or `None`.
+  /// Handle one translated event before the run's consumer sees it, or `None`.
   fn on_event<'a>(&'a self, _event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
     None
   }
   fn translator(&self) -> Box<dyn Translate>;
   fn transport(&self) -> TransportKind;
-  /// Checks the run's uploaded files before any process starts (`base.py` `run` ignores them). `Err` ends the run
-  /// with exactly one error event and no process.
+  /// Checks the run's uploaded files before any process starts. The default ignores them. `Err` ends the run with
+  /// exactly one error event and no process.
   fn accept_uploads(&mut self, _uploaded_files: &[Value]) -> Result<(), String> {
     Ok(())
   }
@@ -882,7 +881,7 @@ pub trait BackendLifecycle: Send + Sync {
     Vec::new()
   }
 
-  /// True when `round_notices` can return notices (`launch_loop.py`).
+  /// True when `round_notices` can return notices.
   fn has_round_notices(&self) -> bool {
     false
   }

@@ -233,8 +233,8 @@ mod tests {
     assert!(resolve_caller(&bearer_headers(next_key, None), &features).unwrap().is_operator());
   }
 
-  /// Python: `tests/test_run_token.py::test_a_run_bearer_with_no_configured_key_is_refused_with_401`. Every
-  /// presented bearer reaches the verifier, whose own refusal becomes the 401 detail.
+  /// Every presented bearer reaches the verifier, whose own refusal becomes the 401 detail when no signing key is
+  /// configured.
   #[tokio::test]
   async fn a_run_bearer_with_no_configured_key_is_refused_with_401() {
     let (_home, features) = feature_context(None);

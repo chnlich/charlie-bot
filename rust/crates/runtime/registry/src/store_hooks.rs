@@ -538,7 +538,7 @@ mod tests {
 
   #[tokio::test]
   async fn the_anchor_guard_corrects_an_unauthorized_save_back_to_disk() {
-    // Python: tests/test_session_anchor_guard.py::test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk
+    // A whole-object save built from a stale copy keeps the label that is on disk.
     let (warns, _guard) = capture_events_at(Level::WARN);
     let anchors = LifecycleAnchors { registry: anchor_registry() };
     let disk = anchored_session();
@@ -564,7 +564,7 @@ mod tests {
 
   #[tokio::test]
   async fn the_authorized_channels_still_change_the_anchors() {
-    // Python: tests/test_session_anchor_guard.py::test_authorized_channels_still_change_the_anchors
+    // Every authorized channel changes the anchor it owns.
     let home = tempfile::tempdir().unwrap();
     let registry = anchor_registry();
     let features = features_over(home.path(), Arc::clone(&registry));

@@ -1,6 +1,6 @@
-//! Usage sources (`src/runtime/hooks/usage_source_registration.py` and `usage_sources.py`): where each backend's token
-//! usage is logged. A backend package registers one source and attributes its backend types to it. A source declares
-//! the operations it defines in [`UsageOps`], and the usage package calls only those, as Python's `hasattr` checks do.
+//! Usage sources: where each backend's token usage is logged. A backend package registers one source and attributes
+//! its backend types to it. A source declares the operations it defines in [`UsageOps`], and the usage package calls
+//! only those, as Python's `hasattr` checks do.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

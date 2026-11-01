@@ -1,4 +1,4 @@
-//! The request-time template engine (`src/runtime/templating.py` over Jinja2 as starlette configures it).
+//! The request-time template engine: a minijinja environment with the Jinja2 syntax the templates use.
 //!
 //! The server builds one `Templating` at startup and inserts it into the startup state. A feature reads it with
 //! `startup.require::<Templating>()` and renders a page with `render_page`, as Starlette's `TemplateResponse` does.

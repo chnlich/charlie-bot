@@ -114,23 +114,23 @@ registerWsMessageHandler('backend_switched', (ev) => {
   }
 }, {advancesCursor: false});
 
-registerWsMessageHandler('message', (ev) => _commitMessage(ev.message || {}));
+registerWsMessageHandler('message', (ev) => _commitMessage(ev.message || {}), {advancesCursor: true});
 registerWsMessageHandler('stream', (ev) => {
   const draft = ev.message || {};
   if (draft.content || draft.thinking) showStreaming(draft);
-});
+}, {advancesCursor: true});
 registerWsMessageHandler('master_done', (ev) => {
   if (!ev.still_thinking) {
     stopThinking({preserveSessionIndicator: true});
   }
-});
+}, {advancesCursor: true});
 registerWsMessageHandler('assistant_error', () => {
   hideStreaming();
   stopThinking();
-});
-registerWsMessageHandler('error', () => hideStreaming());
-registerWsMessageHandler('task_delegated', () => refreshSessionStatusNow());
-registerWsMessageHandler('worker_summary', () => refreshSessionStatusNow());
+}, {advancesCursor: true});
+registerWsMessageHandler('error', () => hideStreaming(), {advancesCursor: true});
+registerWsMessageHandler('task_delegated', () => refreshSessionStatusNow(), {advancesCursor: true});
+registerWsMessageHandler('worker_summary', () => refreshSessionStatusNow(), {advancesCursor: true});
 // The usage header is a projection over the full event list, so the forced
 // poll is what updates it — the WebSocket handler must not write the header.
-registerWsMessageHandler('result', () => pollActiveSessionView({force: true}));
+registerWsMessageHandler('result', () => pollActiveSessionView({force: true}), {advancesCursor: true});

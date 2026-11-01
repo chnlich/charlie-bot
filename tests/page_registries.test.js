@@ -108,13 +108,23 @@ test('a session switch keeps a tab that keeps, and returns to chat from one that
 test('a registered message handler runs for its event type after the event cursor advances', () => {
   const {context} = loadWebsocketContext({SESSION_ID: 'session-a'});
   const seen = [];
-  context.registerWsMessageHandler('pkg_event', (ev) => seen.push([ev.payload, context.eventCursor]));
+  context.registerWsMessageHandler(
+    'pkg_event',
+    (ev) => seen.push([ev.payload, context.eventCursor]),
+    {advancesCursor: true},
+  );
 
   context.handleWSEvent({type: 'pkg_event', payload: 'p', event_index: 7}, 'session-a', 0);
 
   assert.deepEqual(seen, [['p', 8]]);
-  assert.throws(() => context.registerWsMessageHandler('pkg_event', () => {}), /Duplicate WebSocket message handler/);
-  assert.throws(() => context.registerWsMessageHandler('', () => {}), /Invalid WebSocket message handler/);
+  assert.throws(
+    () => context.registerWsMessageHandler('pkg_event', () => {}, {advancesCursor: true}),
+    /Duplicate WebSocket message handler/,
+  );
+  assert.throws(
+    () => context.registerWsMessageHandler('', () => {}, {advancesCursor: true}),
+    /Invalid WebSocket message handler/,
+  );
 });
 
 test('registered connect handlers run after opening without sending a cursor frame', () => {

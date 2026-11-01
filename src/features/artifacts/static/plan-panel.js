@@ -778,5 +778,5 @@ registerWsConnectHandler(() => {
   planPanel.invalidate();
   planPanel.onReconnect();
 });
-registerWsMessageHandler('plan_updated', (ev) => planPanel.onPlanUpdated(ev.plan_id));
+registerWsMessageHandler('plan_updated', (ev) => planPanel.onPlanUpdated(ev.plan_id), {advancesCursor: true});
 document.addEventListener('charliebot:active-session-changed', () => planPanel.onActiveSessionChanged());

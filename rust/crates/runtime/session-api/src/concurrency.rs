@@ -186,52 +186,55 @@ const HISTORY_BODY_HEADROOM: usize = 192;
 fn stamp_text(text: &mut [u8; STAMP_CHARS], at: OffsetDateTime) -> &str {
   let at = at.to_offset(UtcOffset::UTC);
   let mut length = 0;
-  write_digits(text, &mut length, at.year() as u32, 4);
+  let year = at.year() as u32;
+  write_pair(text, &mut length, year / 100);
+  write_pair(text, &mut length, year % 100);
   text[length] = b'-';
   length += 1;
-  write_digits(text, &mut length, u8::from(at.month()) as u32, 2);
+  write_pair(text, &mut length, u8::from(at.month()) as u32);
   text[length] = b'-';
   length += 1;
-  write_digits(text, &mut length, at.day() as u32, 2);
+  write_pair(text, &mut length, at.day() as u32);
   text[length] = b'T';
   length += 1;
-  write_digits(text, &mut length, at.hour() as u32, 2);
+  write_pair(text, &mut length, at.hour() as u32);
   text[length] = b':';
   length += 1;
-  write_digits(text, &mut length, at.minute() as u32, 2);
+  write_pair(text, &mut length, at.minute() as u32);
   text[length] = b':';
   length += 1;
-  write_digits(text, &mut length, at.second() as u32, 2);
-  if at.microsecond() != 0 {
+  write_pair(text, &mut length, at.second() as u32);
+  let microsecond = at.microsecond();
+  if microsecond != 0 {
     text[length] = b'.';
     length += 1;
-    write_digits(text, &mut length, at.microsecond(), 6);
+    write_pair(text, &mut length, microsecond / 10_000);
+    write_pair(text, &mut length, (microsecond / 100) % 100);
+    write_pair(text, &mut length, microsecond % 100);
   }
   text[length] = b'Z';
   length += 1;
   std::str::from_utf8(&text[..length]).expect("the stamp's bytes are ASCII digits and separators")
 }
 
-/// Append `value` in decimal to `text` at `length`, zero-padded to `width` digits.
-fn write_digits(text: &mut [u8; STAMP_CHARS], length: &mut usize, value: u32, width: usize) {
-  let mut digits = [0u8; 10];
-  let mut written = 1;
-  let mut rest = value;
-  digits[0] = b'0' + (rest % 10) as u8;
-  rest /= 10;
-  while rest != 0 {
-    digits[written] = b'0' + (rest % 10) as u8;
-    written += 1;
-    rest /= 10;
+/// The two digits of every value 0-99, so a zero-padded field is one lookup.
+const TWO_DIGITS: [[u8; 2]; 100] = {
+  let mut table = [[b'0'; 2]; 100];
+  let mut value = 0;
+  while value < 100 {
+    table[value][0] = b'0' + (value / 10) as u8;
+    table[value][1] = b'0' + (value % 10) as u8;
+    value += 1;
   }
-  for _ in written..width {
-    text[*length] = b'0';
-    *length += 1;
-  }
-  for digit in digits[..written].iter().rev() {
-    text[*length] = *digit;
-    *length += 1;
-  }
+  table
+};
+
+/// Write the two digits of `value` (`0`-`99`) to `text` at `length`.
+fn write_pair(text: &mut [u8; STAMP_CHARS], length: &mut usize, value: u32) {
+  let pair = TWO_DIGITS[(value % 100) as usize];
+  text[*length] = pair[0];
+  text[*length + 1] = pair[1];
+  *length += 2;
 }
 
 impl History {

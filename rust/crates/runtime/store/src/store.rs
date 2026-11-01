@@ -23,7 +23,9 @@ use crate::event_state::EventReadCaches;
 use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
-use crate::metadata::{MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
+use crate::metadata::{
+  CC_SESSION_STARTED_AT, MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime,
+};
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
 use crate::streaming::StreamingManager;
@@ -1265,7 +1267,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "created_at",
         "updated_at",
         "cc_session_id",
-        "cc_session_started_at",
+        CC_SESSION_STARTED_AT,
         "backend",
         "schedule_cron",
         "schedule_enabled",

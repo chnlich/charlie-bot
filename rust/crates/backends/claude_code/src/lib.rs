@@ -87,7 +87,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     charliebot_core::metadata_slot::MetadataSlot {
       owner: "claude_code",
       on: charliebot_core::metadata_slot::MetadataFile::Session,
-      after: Some("cc_session_started_at"),
+      after: Some(charliebot_store::metadata::CC_SESSION_STARTED_AT),
       fields: vec![charliebot_core::metadata_slot::SlotField {
         name: "claude_account",
         default: serde_json::Value::Null,

@@ -37,6 +37,8 @@ pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
 /// row fields read these names from here.
 pub const SCHEDULE_FIELDS: [&str; 6] =
   [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
+/// The session-metadata field holding the instant the session's native Claude Code conversation started.
+pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 
 /// Datetime stored as UTC with Python's Pydantic `Z` and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -618,7 +620,7 @@ impl SessionMetadata {
     push(&mut declared, "created_at", &self.created_at);
     push(&mut declared, "updated_at", &self.updated_at);
     push(&mut declared, "cc_session_id", &self.cc_session_id);
-    push(&mut declared, "cc_session_started_at", &self.cc_session_started_at);
+    push(&mut declared, CC_SESSION_STARTED_AT, &self.cc_session_started_at);
     push(&mut declared, "backend", &self.backend);
     if !exclude_transient {
       push(&mut declared, SCHEDULE_CRON, &self.schedule_cron);

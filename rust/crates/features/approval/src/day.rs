@@ -18,7 +18,7 @@ use charliebot_registry::registry::OpenWaitingRow;
 use jiff::civil::Date;
 use serde_json::{Value, json};
 
-/// A day view that refused: a bad `date` query answers 422, the rest is a failure (`day.DayError`).
+/// A day view that refused: a bad `date` query answers 422, and every other failure is an internal error.
 #[derive(Debug)]
 pub enum DayError {
   Refused(StatusCode, String),
@@ -31,16 +31,16 @@ impl From<anyhow::Error> for DayError {
   }
 }
 
-/// The canonical `YYYY-MM-DD` date the `date` query holds, `None` when the query is absent, and a refusal that names
-/// the expected form otherwise (`day._parse_date_param`).
+/// The canonical `YYYY-MM-DD` date one `date` query value holds. A value that is not such a date is a refusal that
+/// names the expected form.
 pub fn parse_date_param(text: &str) -> Result<Date, DayError> {
   text.parse::<Date>().map_err(|_| {
     DayError::Refused(StatusCode::UNPROCESSABLE_ENTITY, format!("date must be a YYYY-MM-DD PT date, got {text:?}"))
   })
 }
 
-/// The day view as the API answers it and the page renders it (`day.approval_day`). A `None` date is today's
-/// Pacific day. The table read is a server-side read, so a changed table records its change before the view lists it.
+/// The day view as the API answers it and the page renders it. A `None` date is today's Pacific day. The table read
+/// is a server-side read, so a changed table records its change before the view lists it.
 pub async fn approval_day(features: &FeatureContext, date: Option<Date>) -> Result<Value, DayError> {
   let today = pacific::day_of(jiff::Timestamp::now()).map_err(|error| DayError::Failed(error.into()))?;
   let date = date.unwrap_or(today);
@@ -74,8 +74,7 @@ fn row_json(row: &OpenWaitingRow) -> Value {
   })
 }
 
-/// The tier's order in the queue: the T0 items first, the review items after them, everything else last
-/// (`day._tier_group`).
+/// The tier's order in the queue: the T0 items first, the review items after them, and everything else last.
 fn tier_group(tier: Option<&str>) -> u8 {
   match tier {
     Some("t0") => 0,
@@ -84,7 +83,7 @@ fn tier_group(tier: Option<&str>) -> u8 {
   }
 }
 
-/// The rank of a T0 item's rule in the table (`day._rule_rank`): the rank of the rule's consequence test. An
+/// The rank of a T0 item's rule in the table: the rank of the rule's consequence test. An
 /// `out-of-scope:<id>` rule takes the chao-name test's rank, since plan section 3 orders the out-of-scope uses with
 /// the chao-name ones. A rule the table carries no rank of sorts after every ranked rule.
 fn rule_rank(rule: Option<&str>, table: &approval_policy::ApprovalPolicyTable) -> i64 {
@@ -95,8 +94,8 @@ fn rule_rank(rule: Option<&str>, table: &approval_policy::ApprovalPolicyTable) -
   table.consequence_tests.iter().find(|test| test.id == rule).map_or(i64::MAX, |test| test.rank)
 }
 
-/// The queue: every open item once, T0 ranked, then review, then the rest, arrival order within one rank
-/// (`day._queue_rows`). Each T0 row carries its rule's rank; a rule the table carries no rank of reads as null.
+/// The queue: every open item once, T0 ranked, then review, then the rest, arrival order within one rank. Each T0
+/// row carries its rule's rank; a rule the table carries no rank of reads as null.
 fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTable) -> Vec<Value> {
   let mut keyed: Vec<(u8, i64, charliebot_store::metadata::UtcDateTime, Value)> = rows
     .iter()
@@ -116,8 +115,8 @@ fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTa
     .collect()
 }
 
-/// The login sheet (`day._login_sheet_rows`). Today's holds every open user-act item, whatever day judged it, because
-/// the panels list those items only through this sheet. A past day's holds the items whose start time falls in it.
+/// The login sheet: today's holds every open user-act item, whatever day judged it, because the panels list those
+/// items only through this sheet. A past day's holds the items whose start time falls in it.
 fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date) -> Result<Vec<Value>, DayError> {
   let mut sheet = Vec::new();
   for row in rows {
@@ -136,7 +135,7 @@ fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date) -> Result<
 }
 
 /// The day's digest: the day's digest entries and the day's `policy_table_changed` records, one list in arrival
-/// order (`day._digest_rows`). Both stores stamp their records with the same UTC form, so the stamps order as text.
+/// order. Both stores stamp their records with the same UTC form, so the stamps order as text.
 fn digest_rows(home: &std::path::Path, date: Date) -> Result<Vec<Value>, DayError> {
   let day = date_text(date);
   let mut rows: Vec<(String, usize, Value)> = Vec::new();
@@ -160,7 +159,7 @@ fn digest_rows(home: &std::path::Path, date: Date) -> Result<Vec<Value>, DayErro
   Ok(rows.into_iter().map(|(_, _, row)| row).collect())
 }
 
-/// The Pacific day a stored stamp falls in, when the stamp is one (`day._day_text`).
+/// The Pacific day a stored stamp falls in, when the stamp is one.
 fn day_text(stamp: &str) -> Option<String> {
   day_of_stamp(stamp).ok().map(date_text)
 }

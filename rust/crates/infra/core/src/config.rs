@@ -45,6 +45,10 @@ pub const CONTEXT_WINDOW_KEY: &str = "context_window";
 /// traffic through. The option schemas import this name instead of each spelling it.
 pub const PROXY_URL_KEY: &str = "proxy_url";
 
+/// The `extra_body` key of a `backends.options[]` entry: the request-body fields the backend adds to the top level of
+/// every request it sends. The option schemas import this name instead of each spelling it.
+pub const EXTRA_BODY_KEY: &str = "extra_body";
+
 /// Retired keys under `backends:`, replaced by `backends.pool`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 

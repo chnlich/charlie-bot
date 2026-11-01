@@ -882,6 +882,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
            session.",
   },
   OwnerRow { name: "cgroup.procs", owner: "infra/core", hint: "Use `charliebot_core::cgroup::PROCS_FILE_NAME`." },
+  OwnerRow { name: "extra_body", owner: "infra/core", hint: "Use `charliebot_core::config::EXTRA_BODY_KEY`." },
   OwnerRow { name: "data", owner: "runtime/store", hint: "Use `charliebot_store::layout::data_dir`." },
   OwnerRow { name: "runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::runs_dir`." },
   OwnerRow { name: "triggers", owner: "runtime/store", hint: "Use `charliebot_store::layout::triggers_dir`." },

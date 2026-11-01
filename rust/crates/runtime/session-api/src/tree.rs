@@ -6,21 +6,32 @@ use charliebot_core::text_repr;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{Store, StoreError, StoreResult, TaskTreeRow};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 #[derive(Serialize)]
-struct SessionRow {
-  id: String,
-  name: String,
+struct SessionRow<'a> {
+  id: &'a str,
+  name: &'a str,
   profile: charliebot_store::metadata::TaskProfile,
-  task_parent_id: Option<String>,
-  task_state: String,
-  work_state: String,
+  task_parent_id: Option<&'a str>,
+  task_state: &'a str,
+  work_state: &'a str,
   archived: bool,
   child_count: usize,
   open_descendant_count: usize,
   running_descendant_count: usize,
   has_unread: bool,
+}
+
+/// One page rendered straight from the snapshot and the row values, without a JSON value tree in between.
+///
+/// The page carries strings, integers and booleans only, so `serde_json`'s writer produces the bytes the other JSON
+/// routes' orjson formatter produces for them.
+#[derive(Serialize)]
+struct TreePage<'a> {
+  items: Vec<SessionRow<'a>>,
+  next_cursor: Option<String>,
+  tree_revision: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +48,7 @@ pub(crate) fn tree_page(
   include_archived: bool,
   limit: usize,
   cursor: Option<&str>,
-) -> StoreResult<Value> {
+) -> StoreResult<Vec<u8>> {
   let index = store.task_tree_snapshot()?;
   if let Some(parent_id) = parent_id {
     index.meta(parent_id)?;
@@ -62,28 +73,25 @@ pub(crate) fn tree_page(
   )?;
   let mut last = None;
   let mut items = Vec::with_capacity(page.rows.len());
-  for row in page.rows {
+  for row in &page.rows {
     let meta = index.meta(&row.session_id)?;
     last = Some((meta.created_at, meta.id.clone()));
     items.push(session_row(meta, row));
   }
   let next_cursor =
     if page.has_more { last.map(|(created_at, id)| encode_cursor(&revision, created_at, &id)) } else { None };
-  Ok(json!({
-    "items": items,
-    "next_cursor": next_cursor,
-    "tree_revision": revision,
-  }))
+  let page = TreePage { items, next_cursor, tree_revision: &revision };
+  Ok(serde_json::to_vec(&page).expect("a task-tree page serializes into a buffer"))
 }
 
-fn session_row(meta: &SessionMetadata, row: TaskTreeRow) -> SessionRow {
+fn session_row<'a>(meta: &'a SessionMetadata, row: &'a TaskTreeRow) -> SessionRow<'a> {
   SessionRow {
-    id: meta.id.clone(),
-    name: meta.name.clone(),
+    id: &meta.id,
+    name: &meta.name,
     profile: meta.profile,
-    task_parent_id: meta.task_parent_id.clone(),
-    task_state: row.task_state,
-    work_state: row.work_state,
+    task_parent_id: meta.task_parent_id.as_deref(),
+    task_state: &row.task_state,
+    work_state: &row.work_state,
     archived: row.archived,
     child_count: row.child_count,
     open_descendant_count: row.open_descendant_count,
@@ -113,6 +121,7 @@ mod tests {
   use super::*;
   use crate::test_support::{create_node, feature_context};
   use charliebot_store::metadata::TaskProfile;
+  use serde_json::Value;
 
   #[tokio::test]
   async fn a_tree_page_builds_one_revision_index_and_visits_each_row_descendant_once() {
@@ -148,10 +157,10 @@ mod tests {
     features.store.invalidate_tree_index();
 
     let all = tree_page(&features.store, Some(&root.id), true, 100, None).unwrap();
-    let expected = page_ids(&all);
+    let expected = page_ids(&rendered_page(&all));
 
     let activity_calls_before = features.store.task_tree_activity_call_count();
-    let first = tree_page(&features.store, Some(&root.id), true, 2, None).unwrap();
+    let first = rendered_page(&tree_page(&features.store, Some(&root.id), true, 2, None).unwrap());
     assert_eq!(
       features.store.task_tree_activity_call_count() - activity_calls_before,
       3,
@@ -160,9 +169,13 @@ mod tests {
     assert_eq!(page_ids(&first), expected[..2]);
     let cursor = first["next_cursor"].as_str().expect("a further row follows the page").to_string();
 
-    let second = tree_page(&features.store, Some(&root.id), true, 100, Some(&cursor)).unwrap();
+    let second = rendered_page(&tree_page(&features.store, Some(&root.id), true, 100, Some(&cursor)).unwrap());
     assert_eq!(page_ids(&second), expected[2..]);
     assert!(second["next_cursor"].is_null());
+  }
+
+  fn rendered_page(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).expect("a task-tree page renders JSON")
   }
 
   fn page_ids(page: &Value) -> Vec<String> {

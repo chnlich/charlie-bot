@@ -367,7 +367,7 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
   })
   .await;
   match page {
-    Ok(value) => responses::fast_json(StatusCode::OK, &value),
+    Ok(body) => responses::fast_json_rendered(StatusCode::OK, body),
     Err(error) => task_http_error(error),
   }
 }

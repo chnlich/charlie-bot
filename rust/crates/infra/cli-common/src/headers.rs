@@ -1,4 +1,4 @@
-//! The internal-API auth headers (`src/runtime/cli/common.py::internal_api_auth_headers`).
+//! The `Authorization` and caller-session headers on internal-API calls.
 
 use charliebot_core::credentials;
 use charliebot_core::home;

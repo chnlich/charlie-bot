@@ -1,4 +1,5 @@
-//! The CLI's own timeout bounds (`src/infra/timeouts.py`, the CLI entries).
+//! The CLI's own timeout bounds: one internal-API call, the version probe, the git SHA read, and the
+//! connect-retry budget.
 
 use std::time::Duration;
 

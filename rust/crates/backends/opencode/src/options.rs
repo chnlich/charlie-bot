@@ -4,19 +4,18 @@
 use std::collections::HashMap;
 
 use anyhow::bail;
-use charliebot_core::config::{BackendOption, OptionField, OptionFieldDefault};
+use charliebot_core::config::{BackendOption, OptionField, OptionFieldDefault, PROXY_URL_KEY};
 use charliebot_core::text_repr;
 use serde_json::{Map, Value as JsonValue, json};
 use serde_yaml::{Mapping, Value};
 
-const PROXY_URL: &str = "proxy_url";
 const CONTEXT_LIMIT: &str = "context_limit";
 const EXTRA_BODY: &str = "extra_body";
 
 /// The `opencode` option's type-specific fields in `OpencodeBackend`'s declaration order, each with the value the
 /// Python model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
-  OptionField::field(PROXY_URL, OptionFieldDefault::Null),
+  OptionField::field(PROXY_URL_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_LIMIT, OptionFieldDefault::Null),
   OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
 ];
@@ -36,12 +35,12 @@ impl OpenCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(PROXY_URL | CONTEXT_LIMIT | EXTRA_BODY) => {}
+        Some(PROXY_URL_KEY | CONTEXT_LIMIT | EXTRA_BODY) => {}
         Some(name) => return Err(format!("opencode option field {name:?} is not supported")),
         None => return Err(format!("opencode option key must be a string: {key:?}")),
       }
     }
-    let proxy_url = match fields.get(PROXY_URL) {
+    let proxy_url = match fields.get(PROXY_URL_KEY) {
       None | Some(Value::Null) => None,
       Some(Value::String(value)) => Some(value.clone()),
       Some(_) => return Err("opencode option proxy_url must be a string or null".to_string()),

@@ -20,6 +20,7 @@ use anyhow::{Context, bail};
 use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
   PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
@@ -33,7 +34,7 @@ use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use serde_json::{Map, Value, json};
 
 pub use super::claude_accounts::QuotaState;
-use super::claude_accounts::{self, ClaudeAccountState, json_truthy};
+use super::claude_accounts::{self, ClaudeAccountState};
 use super::claude_config::{AccountsConfig, ClaudeAccount};
 use super::login_dirs::{CREDENTIALS_FILE, ClaudeHost};
 
@@ -479,7 +480,7 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
     Some(value) => value.as_object().with_context(|| format!("{}: claudeAiOauth is not an object", path.display()))?,
   };
   let access_token = match oauth.get("accessToken") {
-    Some(value) if json_truthy(value) => {
+    Some(value) if is_truthy(value) => {
       value.as_str().with_context(|| format!("{}: accessToken is not a string", path.display()))?.to_string()
     }
     _ => {
@@ -488,7 +489,7 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
     }
   };
   let refresh_token = match oauth.get("refreshToken") {
-    Some(value) if json_truthy(value) => {
+    Some(value) if is_truthy(value) => {
       Some(value.as_str().with_context(|| format!("{}: refreshToken is not a string", path.display()))?.to_string())
     }
     _ => None,
@@ -673,7 +674,7 @@ pub fn transform_response(raw: &Value, account: &str, quota: &QuotaState) -> any
 fn plan_window(raw: &Map<String, Value>, camel: &str, snake: &str, window_minutes: i64) -> anyhow::Result<Window> {
   let no_bucket = Map::new();
   let bucket = match raw.get(camel).or_else(|| raw.get(snake)) {
-    Some(value) if json_truthy(value) => {
+    Some(value) if is_truthy(value) => {
       value.as_object().with_context(|| format!("the {camel} window is not an object"))?
     }
     _ => &no_bucket,
@@ -738,7 +739,7 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
       warn_limit_shape(quota, account, slot, "missing percent");
     }
     let resets_at = match entry.get("resets_at") {
-      Some(value) if json_truthy(value) => value.clone(),
+      Some(value) if is_truthy(value) => value.clone(),
       _ => json!(""),
     };
     let mut scoped = Map::new();

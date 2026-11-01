@@ -23,7 +23,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
-use charliebot_core::text_repr::value_str;
+use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
@@ -31,7 +31,7 @@ use memchr::memmem;
 use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
-use super::claude_accounts::{ClaudeAccountState, json_truthy};
+use super::claude_accounts::ClaudeAccountState;
 use super::claude_config::AccountsConfig;
 use super::login_dirs::ClaudeHost;
 use super::usage_quota::{QuotaAccounts, QuotaHttp};
@@ -162,7 +162,7 @@ pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Ve
     let Some(Value::Object(usage)) = message.get("usage") else {
       continue;
     };
-    let Some(model) = message.get("model").filter(|model| json_truthy(model)) else {
+    let Some(model) = message.get("model").filter(|model| is_truthy(model)) else {
       continue;
     };
     let model = value_str(model);
@@ -214,7 +214,7 @@ fn parse_marker_line(raw: &[u8], path: &Path) -> anyhow::Result<Option<Map<Strin
 /// chain yields the `uuid` itself.
 fn usage_key(message: &Map<String, Value>, line: &Map<String, Value>) -> String {
   let candidates: [Option<&Value>; 3] = [message.get("id"), line.get("requestId"), line.get("uuid")];
-  match candidates.into_iter().flatten().find(|value| json_truthy(value)) {
+  match candidates.into_iter().flatten().find(|value| is_truthy(value)) {
     Some(value) => value_str(value),
     None => line.get("uuid").map_or_else(|| "None".to_string(), value_str),
   }
@@ -223,7 +223,7 @@ fn usage_key(message: &Map<String, Value>, line: &Map<String, Value>) -> String 
 /// `line.get("timestamp") or ""`.
 fn timestamp_of(line: &Map<String, Value>) -> String {
   match line.get("timestamp") {
-    Some(timestamp) if json_truthy(timestamp) => value_str(timestamp),
+    Some(timestamp) if is_truthy(timestamp) => value_str(timestamp),
     _ => String::new(),
   }
 }
@@ -231,7 +231,7 @@ fn timestamp_of(line: &Map<String, Value>) -> String {
 /// `usage.get(key, 0) or 0`: a missing, null or zero count is 0.
 fn usage_count(usage: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match usage.get(key) {
-    Some(value) if json_truthy(value) => {
+    Some(value) if is_truthy(value) => {
       value.as_i64().with_context(|| format!("usage {key} is not an integer: {value}"))
     }
     _ => Ok(0),

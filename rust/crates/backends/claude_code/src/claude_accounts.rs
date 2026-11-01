@@ -11,6 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::usage;
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
@@ -176,19 +177,7 @@ pub fn credentials_present(account: &claude_config::ClaudeAccount) -> bool {
   let Ok(data) = serde_json::from_str::<Value>(&contents) else {
     return false;
   };
-  data.get("claudeAiOauth").and_then(|oauth| oauth.get("accessToken")).is_some_and(json_truthy)
-}
-
-/// Python truthiness of a JSON value.
-pub fn json_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
+  data.get("claudeAiOauth").and_then(|oauth| oauth.get("accessToken")).is_some_and(is_truthy)
 }
 
 pub fn record_auth_failure(state: &ClaudeAccountState, label: &str, now: Option<UtcDateTime>) {
@@ -302,7 +291,7 @@ pub fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTi
 
 fn panel_scope_matches(window: &Value, family: &str) -> bool {
   let scope = window.get(usage::PANEL_SCOPE_LABEL);
-  if !scope.is_some_and(json_truthy) {
+  if !scope.is_some_and(is_truthy) {
     return true;
   }
   let scope = scope.and_then(Value::as_str).map_or_else(|| scope.unwrap().to_string(), str::to_string).to_lowercase();
@@ -353,7 +342,7 @@ pub fn latest_reading(
   };
   if !live_windows(panel, Some(model), moment)
     .iter()
-    .any(|window| window.get(usage::PANEL_SCOPE_LABEL).is_some_and(json_truthy))
+    .any(|window| window.get(usage::PANEL_SCOPE_LABEL).is_some_and(is_truthy))
   {
     return general;
   }

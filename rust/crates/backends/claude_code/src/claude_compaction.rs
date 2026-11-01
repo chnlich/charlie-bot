@@ -8,6 +8,7 @@ use std::time::Duration as StdDuration;
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{EmitFn, Env};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::run_records::RunKind;
@@ -255,7 +256,7 @@ pub fn judge(
   if returncode != 0 || result.get("is_error").and_then(Value::as_bool) == Some(true) {
     let detail = result
       .get("result")
-      .filter(|value| json_truthy(value))
+      .filter(|value| is_truthy(value))
       .map_or_else(String::new, |value| value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()))
       .trim()
       .chars()
@@ -298,17 +299,6 @@ pub fn judge(
     cache_read_tokens: Some(cache_read_growth(&result, baseline, &models)),
     models,
     post_tokens: None,
-  }
-}
-
-fn json_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
   }
 }
 

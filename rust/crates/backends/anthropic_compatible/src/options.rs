@@ -2,14 +2,15 @@
 //! and fixed request body fields of a `cc-anthropic-compatible` entry.
 
 use charliebot_claude_code::options::{CLI_BINARY_KEY, EFFORT_KEY};
-use charliebot_core::config::{API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
+use charliebot_core::config::{
+  API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EXTRA_BODY_KEY, OptionField, OptionFieldDefault,
+};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
 const HEADERS: &str = "headers";
-const EXTRA_BODY: &str = "extra_body";
 const FIELDS: [&str; 7] =
-  [API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EFFORT_KEY, CLI_BINARY_KEY, HEADERS, EXTRA_BODY];
+  [API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EFFORT_KEY, CLI_BINARY_KEY, HEADERS, EXTRA_BODY_KEY];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
@@ -21,7 +22,7 @@ pub const SCHEMA: &[OptionField] = &[
   OptionField::field(EFFORT_KEY, OptionFieldDefault::Null),
   OptionField::field(CLI_BINARY_KEY, OptionFieldDefault::Null),
   OptionField::field(HEADERS, OptionFieldDefault::EmptyMap),
-  OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
+  OptionField::field(EXTRA_BODY_KEY, OptionFieldDefault::EmptyMap),
 ];
 
 /// The type-specific fields of one Anthropic-compatible backend option.
@@ -103,7 +104,7 @@ impl CcAnthropicCompatibleOption {
       }
       Some(_) => return Err("cc-anthropic-compatible option headers must be a mapping of strings".to_string()),
     };
-    let extra_body = match fields.get(EXTRA_BODY) {
+    let extra_body = match fields.get(EXTRA_BODY_KEY) {
       None => Map::new(),
       Some(Value::Mapping(mapping)) => charliebot_core::config::yaml_mapping_to_json(mapping)
         .map_err(|error| format!("cc-anthropic-compatible option extra_body: {error}"))?,

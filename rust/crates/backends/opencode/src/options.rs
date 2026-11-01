@@ -4,20 +4,19 @@
 use std::collections::HashMap;
 
 use anyhow::bail;
-use charliebot_core::config::{BackendOption, OptionField, OptionFieldDefault, PROXY_URL_KEY};
+use charliebot_core::config::{BackendOption, EXTRA_BODY_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY};
 use charliebot_core::text_repr;
 use serde_json::{Map, Value as JsonValue, json};
 use serde_yaml::{Mapping, Value};
 
 const CONTEXT_LIMIT: &str = "context_limit";
-const EXTRA_BODY: &str = "extra_body";
 
 /// The `opencode` option's type-specific fields in `OpencodeBackend`'s declaration order, each with the value the
 /// Python model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(PROXY_URL_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_LIMIT, OptionFieldDefault::Null),
-  OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
+  OptionField::field(EXTRA_BODY_KEY, OptionFieldDefault::EmptyMap),
 ];
 
 /// The type-specific fields of one opencode backend option.
@@ -35,7 +34,7 @@ impl OpenCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(PROXY_URL_KEY | CONTEXT_LIMIT | EXTRA_BODY) => {}
+        Some(PROXY_URL_KEY | CONTEXT_LIMIT | EXTRA_BODY_KEY) => {}
         Some(name) => return Err(format!("opencode option field {name:?} is not supported")),
         None => return Err(format!("opencode option key must be a string: {key:?}")),
       }
@@ -53,7 +52,7 @@ impl OpenCodeOption {
       },
       Some(_) => return Err("opencode option context_limit must be an integer greater than 0".to_string()),
     };
-    let extra_body = match fields.get(EXTRA_BODY) {
+    let extra_body = match fields.get(EXTRA_BODY_KEY) {
       None => Map::new(),
       Some(Value::Mapping(mapping)) => charliebot_core::config::yaml_mapping_to_json(mapping)
         .map_err(|error| format!("opencode option extra_body: {error}"))?,
@@ -97,7 +96,7 @@ pub fn model_overrides_config(options: &[BackendOption]) -> anyhow::Result<Map<S
     }
     if !fields.extra_body.is_empty() {
       let extra_body = JsonValue::Object(fields.extra_body);
-      declare(&mut declared, &option.id, provider, model, "extra_body", &extra_body)?;
+      declare(&mut declared, &option.id, provider, model, EXTRA_BODY_KEY, &extra_body)?;
       entry.insert("body".to_string(), extra_body);
     }
   }

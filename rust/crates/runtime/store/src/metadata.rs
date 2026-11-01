@@ -39,6 +39,9 @@ pub const SCHEDULE_FIELDS: [&str; 6] =
   [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
 /// The session-metadata field holding the instant the session's native Claude Code conversation started.
 pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
+/// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
+/// import this name instead of each spelling it.
+pub const WORK_STATE: &str = "work_state";
 
 /// Datetime stored as UTC with Python's Pydantic `Z` and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -606,7 +609,7 @@ impl SessionMetadata {
     push(&mut declared, "has_unread", &self.has_unread);
     if !exclude_transient {
       push(&mut declared, "has_running_tasks", &self.has_running_tasks);
-      push(&mut declared, "work_state", &self.work_state);
+      push(&mut declared, WORK_STATE, &self.work_state);
       push(&mut declared, "has_pending_trigger", &self.has_pending_trigger);
       push(&mut declared, "pending_trigger_count", &self.pending_trigger_count);
       push(&mut declared, "next_trigger_at", &self.next_trigger_at);

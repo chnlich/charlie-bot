@@ -24,7 +24,7 @@ use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
-  CC_SESSION_STARTED_AT, MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime,
+  CC_SESSION_STARTED_AT, MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1256,7 +1256,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "status",
         "has_unread",
         "has_running_tasks",
-        "work_state",
+        WORK_STATE,
         "has_pending_trigger",
         "pending_trigger_count",
         "next_trigger_at",

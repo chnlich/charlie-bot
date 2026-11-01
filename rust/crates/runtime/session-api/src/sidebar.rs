@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_registry::Registry;
 use charliebot_store::layout;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, WORK_STATE};
 use charliebot_store::run_records::RUN_METADATA_NAME;
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Map, Value, json};
@@ -153,7 +153,7 @@ pub(crate) fn resolve_sidebar_state(
       );
     }
     if let Some(work_state) = activity.and_then(|value| value.get(1)) {
-      entry.insert("work_state".to_string(), work_state.clone());
+      entry.insert(WORK_STATE.to_string(), work_state.clone());
     }
     derived.insert(meta.id.clone(), Arc::new(entry));
   }

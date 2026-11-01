@@ -21,7 +21,7 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime,
+  EventRef, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime, WORK_STATE,
 };
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
@@ -1909,7 +1909,7 @@ impl Store {
     let mut reads = NodeReads::new(self);
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
     object.insert("task_state".to_string(), Value::String(reads.task_state(session_id)?));
-    object.insert("work_state".to_string(), Value::String(reads.activity(session_id)?.work_state));
+    object.insert(WORK_STATE.to_string(), Value::String(reads.activity(session_id)?.work_state));
     object.insert("archived".to_string(), Value::Bool(reads.archived(&index, session_id, &mut HashMap::new())?));
 
     let mut ancestors = Vec::new();

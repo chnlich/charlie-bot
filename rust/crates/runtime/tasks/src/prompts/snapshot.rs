@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use charliebot_core::text_repr::{JsonStyle, float_repr, json_dumps, str_repr};
+use charliebot_core::text_repr::{self, JsonStyle, json_dumps, str_repr};
 use charliebot_store::control_events::sha256_hex;
 use serde_json::{Map, Value, json};
 
@@ -65,7 +65,7 @@ impl PromptSnapshot {
     if stored_hash.and_then(Value::as_str) != Some(computed_hash.as_str()) {
       return Err(TaskPromptError::new(format!(
         "stored prompt snapshot hash mismatch: recorded {}, content hashes to {}",
-        value_repr(stored_hash),
+        recorded_repr(stored_hash),
         str_repr(&computed_hash)
       )));
     }
@@ -74,7 +74,7 @@ impl PromptSnapshot {
     if !stored_count.is_some_and(|count| equals_count(count, measured)) {
       return Err(TaskPromptError::new(format!(
         "stored prompt snapshot char_count mismatch: recorded {}, content measures {measured}",
-        value_repr(stored_count)
+        recorded_repr(stored_count)
       )));
     }
     for block in &snapshot.blocks {
@@ -236,25 +236,8 @@ fn type_name(value: &Value) -> &'static str {
 }
 
 /// `repr()` of a stored JSON value, as the mismatch messages print a recorded value. A missing key reads as `None`.
-fn value_repr(value: Option<&Value>) -> String {
-  match value {
-    None | Some(Value::Null) => "None".to_string(),
-    Some(Value::Bool(flag)) => if *flag { "True" } else { "False" }.to_string(),
-    Some(Value::Number(number)) if number.is_f64() => float_repr(number.as_f64().unwrap_or_default()),
-    Some(Value::Number(number)) => number.to_string(),
-    Some(Value::String(text)) => str_repr(text),
-    Some(Value::Array(items)) => {
-      format!("[{}]", items.iter().map(|item| value_repr(Some(item))).collect::<Vec<_>>().join(", "))
-    }
-    Some(Value::Object(members)) => format!(
-      "{{{}}}",
-      members
-        .iter()
-        .map(|(key, item)| format!("{}: {}", str_repr(key), value_repr(Some(item))))
-        .collect::<Vec<_>>()
-        .join(", ")
-    ),
-  }
+fn recorded_repr(value: Option<&Value>) -> String {
+  value.map_or_else(|| "None".to_string(), text_repr::value_repr)
 }
 
 /// Python's `recorded != measured` for a stored count: an int, a float equal to it, or True/False as 1/0.

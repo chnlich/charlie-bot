@@ -412,8 +412,8 @@ async fn run_muse_session(
   if reply.get("type").and_then(Value::as_str) == Some("error") || reply.get("error").is_some() {
     let message = match reply.get("message") {
       Some(Value::String(message)) => message.clone(),
-      Some(value) => value_repr(value),
-      None => value_repr(&reply),
+      Some(value) => text_repr::value_repr(value),
+      None => text_repr::value_repr(&reply),
     };
     return Err(TranscriptionError::Rejected(format!("handshake rejected: {message}")));
   }
@@ -697,25 +697,6 @@ fn sorted_object_keys(value: &Value) -> String {
     value.as_object().map(|object| object.keys().map(String::as_str).collect()).unwrap_or_default();
   keys.sort_unstable();
   format!("[{}]", keys.iter().map(|key| text_repr::str_repr(key)).collect::<Vec<_>>().join(", "))
-}
-
-fn value_repr(value: &Value) -> String {
-  match value {
-    Value::Null => "None".to_string(),
-    Value::Bool(true) => "True".to_string(),
-    Value::Bool(false) => "False".to_string(),
-    Value::Number(number) => number.to_string(),
-    Value::String(text) => text_repr::str_repr(text),
-    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
-    Value::Object(values) => format!(
-      "{{{}}}",
-      values
-        .iter()
-        .map(|(key, value)| format!("{}: {}", text_repr::str_repr(key), value_repr(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
-    ),
-  }
 }
 
 fn is_cjk(char: char) -> bool {

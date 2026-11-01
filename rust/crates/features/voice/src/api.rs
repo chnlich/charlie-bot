@@ -16,6 +16,7 @@ use charliebot_compat::routing::post_only;
 use charliebot_compat::{json_loads, responses};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
+use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use serde_json::{Value, json};
 
@@ -190,7 +191,7 @@ fn devices_form_field(raw: Option<&str>) -> Result<Option<Value>, VoiceRequestEr
   if !has_device_keys {
     return Err(VoiceRequestError::bad_request(format!(
       "devices form field must carry exactly {}",
-      value_repr(&json!(DEVICE_FIELDS))
+      text_repr::value_repr(&json!(DEVICE_FIELDS))
     )));
   }
   Ok(Some(parsed))
@@ -266,27 +267,7 @@ fn device_text(value: Option<&Value>) -> String {
     Some(Value::String(text)) => text.clone(),
     Some(Value::Bool(flag)) => flag.to_string(),
     Some(Value::Number(number)) => number.to_string(),
-    Some(container) => value_repr(container),
-  }
-}
-
-/// Python's `repr` of a JSON value, for the containers the log and the error texts show.
-pub(crate) fn value_repr(value: &Value) -> String {
-  match value {
-    Value::Null => "None".to_string(),
-    Value::Bool(true) => "True".to_string(),
-    Value::Bool(false) => "False".to_string(),
-    Value::Number(number) => number.to_string(),
-    Value::String(text) => charliebot_core::text_repr::str_repr(text),
-    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
-    Value::Object(values) => format!(
-      "{{{}}}",
-      values
-        .iter()
-        .map(|(key, value)| format!("{}: {}", charliebot_core::text_repr::str_repr(key), value_repr(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
-    ),
+    Some(container) => text_repr::value_repr(container),
   }
 }
 

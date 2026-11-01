@@ -14,6 +14,7 @@
   const HISTORY_URL = '/api/concurrency/history';
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const CHART_HEIGHT = 150;
+  const PANEL_EDGE_MARGIN = 8;
 
   let range = '7d';
   let pollTimer = null;
@@ -74,10 +75,28 @@
     badge.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
       hideHoverTip();
+      keepPanelInViewport();
       loadHistory();
     } else {
       hidePointTip();
     }
+  }
+
+  // The panel right-aligns to the badge, and on a phone that puts its left edge past the viewport.
+  // Pull it back to the edge margin, so the whole panel stays readable.
+  function keepPanelInViewport() {
+    const panel = byId('concurrency-panel');
+    if (!panel || panel.hidden) return;
+    panel.style.left = '';
+    panel.style.right = '';
+    const rect = panel.getBoundingClientRect();
+    const maxLeft = window.innerWidth - rect.width - PANEL_EDGE_MARGIN;
+    const left = Math.min(Math.max(PANEL_EDGE_MARGIN, rect.left), maxLeft);
+    if (left === rect.left) return;
+    // The panel is absolutely positioned inside the anchor, so the offset is measured from the anchor's box.
+    const anchorLeft = panel.offsetParent ? panel.offsetParent.getBoundingClientRect().left : 0;
+    panel.style.left = `${left - anchorLeft}px`;
+    panel.style.right = 'auto';
   }
 
   function hidePointTip() {

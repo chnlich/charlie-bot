@@ -781,10 +781,16 @@ function mdDiv(text) {
   return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
 }
 
+// The markdown bubbles' time line. The slate-300 tone reads at 6.97:1 on the slate-700
+// bubble and 9.85:1 on a slate-800 card, above the 4.5:1 floor for 10px text and quieter
+// than the message body. A card that keeps its own tone passes an override that clears
+// the same floor.
+const BUBBLE_TIME_CLASS = "text-slate-300";
+
 function renderMessage(msg, sessionId) {
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
-    var cls = colorClass || "text-slate-400/60";
+    var cls = colorClass || BUBBLE_TIME_CLASS;
     return "<div class=\"text-[10px] " + cls + " mt-1\">" + formatBubbleTime(msg.timestamp) + "</div>";
   }
 
@@ -794,7 +800,7 @@ function renderMessage(msg, sessionId) {
   function webReplyTimeRow() {
     var time = msg.timestamp
       ? "<span>" + formatBubbleTime(msg.timestamp) + "</span>" : "";
-    return "<div class=\"text-[10px] text-slate-400/60 mt-1 flex items-center justify-between bubble-time-row\">"
+    return "<div class=\"text-[10px] " + BUBBLE_TIME_CLASS + " mt-1 flex items-center justify-between bubble-time-row\">"
       + time + "</div>";
   }
 
@@ -918,7 +924,7 @@ function renderMessage(msg, sessionId) {
         + "</div>";
     }
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
-      + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + originFooter + "</div></div>";
+      + mdDiv(msg.content) + timeDiv("text-emerald-400") + originFooter + "</div></div>";
   }
   if (msg.role === "plan") {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"

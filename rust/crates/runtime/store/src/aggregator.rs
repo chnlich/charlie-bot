@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::str_methods::take_chars;
+use charliebot_core::text_repr::value_str;
 use serde_json::{Map, Value, json};
 
 use crate::hooks::EventRenderer;
@@ -1059,65 +1060,12 @@ fn parse_int_string(value: &str) -> Option<String> {
   Some(if negative { format!("-{digits}") } else { digits.to_string() })
 }
 
-/// Python's `str(value)`. A string is read in place; other shapes take the owned form that `value_repr` formats.
+/// Python's `str(value)`. A string is read in place; other shapes take the text `text_repr::value_str` renders.
 fn event_str<E: EventFields>(value: &E) -> String {
   match value.as_str_field() {
     Some(text) => text.to_string(),
     None => value_str(&value.to_owned_value()),
   }
-}
-
-fn value_str(value: &Value) -> String {
-  match value {
-    Value::Null => "None".to_string(),
-    Value::Bool(true) => "True".to_string(),
-    Value::Bool(false) => "False".to_string(),
-    Value::String(value) => value.clone(),
-    Value::Number(value) => value.to_string(),
-    Value::Array(_) | Value::Object(_) => value_repr(value),
-  }
-}
-
-fn value_repr(value: &Value) -> String {
-  match value {
-    Value::String(value) => quoted_text(value),
-    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
-    Value::Object(values) => format!(
-      "{{{}}}",
-      values
-        .iter()
-        .map(|(key, value)| format!("{}: {}", quoted_text(key), value_repr(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
-    ),
-    _ => value_str(value),
-  }
-}
-
-fn quoted_text(value: &str) -> String {
-  let quote = if !value.contains('\'') || value.contains('"') { '\'' } else { '"' };
-  let mut repr = String::with_capacity(value.len() + 2);
-  repr.push(quote);
-  for character in value.chars() {
-    match character {
-      '\\' => repr.push_str("\\\\"),
-      '\n' => repr.push_str("\\n"),
-      '\r' => repr.push_str("\\r"),
-      '\t' => repr.push_str("\\t"),
-      '\x08' => repr.push_str("\\x08"),
-      '\x0c' => repr.push_str("\\x0c"),
-      value if value == quote => {
-        repr.push('\\');
-        repr.push(value);
-      }
-      value if value.is_control() && (value as u32) <= 0xff => repr.push_str(&format!("\\x{:02x}", value as u32)),
-      value if value.is_control() && (value as u32) <= 0xffff => repr.push_str(&format!("\\u{:04x}", value as u32)),
-      value if value.is_control() => repr.push_str(&format!("\\U{:08x}", value as u32)),
-      value => repr.push(value),
-    }
-  }
-  repr.push(quote);
-  repr
 }
 
 #[cfg(test)]

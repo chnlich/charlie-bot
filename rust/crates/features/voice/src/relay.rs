@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed, value_repr};
+use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed};
 use crate::archive;
 use crate::audio::{AudioQueue, PREVIEW_QUEUE_SECONDS};
 use crate::config::VoiceSettings;
@@ -429,16 +429,16 @@ fn preview_end_devices(text: &str) -> Result<Option<Value>, String> {
   let Some(devices) = devices.as_object() else {
     return Err(format!(
       "end frame devices must carry exactly {}: {}",
-      value_repr(&json!(DEVICE_FIELDS)),
-      value_repr(devices)
+      text_repr::value_repr(&json!(DEVICE_FIELDS)),
+      text_repr::value_repr(devices)
     ));
   };
   let fields_match = devices.len() == DEVICE_FIELDS.len() && DEVICE_FIELDS.iter().all(|key| devices.contains_key(*key));
   if !fields_match {
     return Err(format!(
       "end frame devices must carry exactly {}: {}",
-      value_repr(&json!(DEVICE_FIELDS)),
-      value_repr(&Value::Object(devices.clone()))
+      text_repr::value_repr(&json!(DEVICE_FIELDS)),
+      text_repr::value_repr(&Value::Object(devices.clone()))
     ));
   }
   Ok(Some(Value::Object(devices.clone())))

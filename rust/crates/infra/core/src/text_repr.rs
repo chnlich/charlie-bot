@@ -241,7 +241,9 @@ pub fn value_str(value: &Value) -> String {
   }
 }
 
-fn value_repr(value: &Value) -> String {
+/// CPython `repr(value)` of a value `json.loads` produced: strings quoted by [`str_repr`], `None` with the
+/// booleans in their Python words, floats by [`float_repr`], and containers with Python's `, ` and `: ` separators.
+pub fn value_repr(value: &Value) -> String {
   match value {
     Value::Null => "None".to_string(),
     Value::Bool(true) => "True".to_string(),

@@ -25,8 +25,8 @@ struct SessionRow<'a> {
 
 /// One page rendered straight from the snapshot and the row values, without a JSON value tree in between.
 ///
-/// The page carries strings, integers and booleans only, so `serde_json`'s writer produces the bytes the other JSON
-/// routes' orjson formatter produces for them.
+/// The page carries strings, integers, booleans and nulls only, and the orjson formatter differs from `serde_json`'s
+/// writer only in float text, so the two writers produce the same bytes for this page.
 #[derive(Serialize)]
 struct TreePage<'a> {
   items: Vec<SessionRow<'a>>,

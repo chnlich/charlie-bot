@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use charliebot_core::home;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::UsageSource;
+use charliebot_registry::usage::{SNAPSHOT_READING_KIND, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 use usage_logs::OpencodeLogs;
 
@@ -51,7 +51,7 @@ fn register_with_host(
       .map_err(|error| RegistryError { package: "src.backends.opencode", message: error.to_string() })?,
     PathBuf::from("/proc"),
   )?;
-  registry.reading_limits("snapshot", opencode_limits::snapshot_reading_limits)
+  registry.reading_limits(SNAPSHOT_READING_KIND, opencode_limits::snapshot_reading_limits)
 }
 
 fn register_backend_type(
@@ -118,7 +118,7 @@ pub(crate) mod tests {
       PathBuf::from("/synthetic/home/opencode/data/opencode/opencode.db"),
       PathBuf::from("/synthetic/proc"),
     )?;
-    registry.reading_limits("snapshot", opencode_limits::snapshot_reading_limits)
+    registry.reading_limits(SNAPSHOT_READING_KIND, opencode_limits::snapshot_reading_limits)
   }
 
   #[test]

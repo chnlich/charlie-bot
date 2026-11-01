@@ -179,41 +179,47 @@ const INSTANT_BYTES: usize = 104;
 /// The body's fixed fields: the range, the two range ends, the bucket width, the first record and the peak.
 const HISTORY_BODY_HEADROOM: usize = 192;
 
-/// Write `at` as `UtcDateTime::to_str` writes it: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`, the fraction only when nonzero.
+/// Write `at` as `UtcDateTime::to_str` writes it, from `length`: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`.
 ///
 /// Every instant the route carries holds a four-digit year: the store parses a timestamp as RFC 3339, whose year is
 /// four digits, and a point is the clock less a lookback.
-fn stamp_text(text: &mut [u8; STAMP_CHARS], at: OffsetDateTime) -> &str {
-  let at = at.to_offset(UtcOffset::UTC);
-  let mut length = 0;
+fn write_stamp(text: &mut [u8], length: &mut usize, at: OffsetDateTime) {
+  let at = if at.offset() == UtcOffset::UTC { at } else { at.to_offset(UtcOffset::UTC) };
   let year = at.year() as u32;
-  write_pair(text, &mut length, year / 100);
-  write_pair(text, &mut length, year % 100);
-  text[length] = b'-';
-  length += 1;
-  write_pair(text, &mut length, u8::from(at.month()) as u32);
-  text[length] = b'-';
-  length += 1;
-  write_pair(text, &mut length, at.day() as u32);
-  text[length] = b'T';
-  length += 1;
-  write_pair(text, &mut length, at.hour() as u32);
-  text[length] = b':';
-  length += 1;
-  write_pair(text, &mut length, at.minute() as u32);
-  text[length] = b':';
-  length += 1;
-  write_pair(text, &mut length, at.second() as u32);
+  write_pair(text, length, year / 100);
+  write_pair(text, length, year % 100);
+  text[*length] = b'-';
+  *length += 1;
+  write_pair(text, length, u8::from(at.month()) as u32);
+  text[*length] = b'-';
+  *length += 1;
+  write_pair(text, length, at.day() as u32);
+  text[*length] = b'T';
+  *length += 1;
+  write_pair(text, length, at.hour() as u32);
+  text[*length] = b':';
+  *length += 1;
+  write_pair(text, length, at.minute() as u32);
+  text[*length] = b':';
+  *length += 1;
+  write_pair(text, length, at.second() as u32);
   let microsecond = at.microsecond();
   if microsecond != 0 {
-    text[length] = b'.';
-    length += 1;
-    write_pair(text, &mut length, microsecond / 10_000);
-    write_pair(text, &mut length, (microsecond / 100) % 100);
-    write_pair(text, &mut length, microsecond % 100);
+    text[*length] = b'.';
+    *length += 1;
+    write_pair(text, length, microsecond / 10_000);
+    write_pair(text, length, (microsecond / 100) % 100);
+    write_pair(text, length, microsecond % 100);
   }
-  text[length] = b'Z';
-  length += 1;
+  text[*length] = b'Z';
+  *length += 1;
+}
+
+/// `at`'s stamp text, as the serializer's reference form needs it.
+#[cfg(test)]
+fn stamp_text(text: &mut [u8; STAMP_CHARS], at: OffsetDateTime) -> &str {
+  let mut length = 0;
+  write_stamp(text, &mut length, at);
   std::str::from_utf8(&text[..length]).expect("the stamp's bytes are ASCII digits and separators")
 }
 
@@ -230,11 +236,18 @@ const TWO_DIGITS: [[u8; 2]; 100] = {
 };
 
 /// Write the two digits of `value` (`0`-`99`) to `text` at `length`.
-fn write_pair(text: &mut [u8; STAMP_CHARS], length: &mut usize, value: u32) {
+fn write_pair(text: &mut [u8], length: &mut usize, value: u32) {
   let pair = TWO_DIGITS[(value % 100) as usize];
   text[*length] = pair[0];
   text[*length + 1] = pair[1];
   *length += 2;
+}
+
+/// Write `source` into `text` at `length`.
+fn write_bytes(text: &mut [u8], length: &mut usize, source: &[u8]) {
+  let end = *length + source.len();
+  text[*length..end].copy_from_slice(source);
+  *length = end;
 }
 
 impl History {
@@ -278,27 +291,43 @@ impl History {
   }
 }
 
-/// Append one chart point or peak as `{"t":<stamp>,"running":N,"manager":N,"worker":N}`.
+/// Append one chart point or peak as `{"t":"<stamp>","running":N,"manager":N,"worker":N}`.
+///
+/// The four fields go into one stack buffer first: appending each constant to the body separately costs a capacity
+/// check and a small copy per field, and a point carries four.
 fn push_instant(body: &mut Vec<u8>, at: OffsetDateTime, running: u32, manager: u32, worker: u32) {
-  body.extend_from_slice(b"{\"t\":\"");
-  push_stamp(body, at);
-  body.extend_from_slice(b"\",\"running\":");
-  push_decimal(body, i64::from(running));
-  body.extend_from_slice(b",\"manager\":");
-  push_decimal(body, i64::from(manager));
-  body.extend_from_slice(b",\"worker\":");
-  push_decimal(body, i64::from(worker));
-  body.push(b'}');
+  let mut instant = [0u8; INSTANT_BYTES];
+  let mut length = 0;
+  write_bytes(&mut instant, &mut length, b"{\"t\":\"");
+  write_stamp(&mut instant, &mut length, at);
+  write_bytes(&mut instant, &mut length, b"\",\"running\":");
+  write_decimal(&mut instant, &mut length, i64::from(running));
+  write_bytes(&mut instant, &mut length, b",\"manager\":");
+  write_decimal(&mut instant, &mut length, i64::from(manager));
+  write_bytes(&mut instant, &mut length, b",\"worker\":");
+  write_decimal(&mut instant, &mut length, i64::from(worker));
+  write_bytes(&mut instant, &mut length, b"}");
+  body.extend_from_slice(&instant[..length]);
 }
 
-/// Append `at`'s stamp text, the bytes `UtcDateTime::to_str` writes.
+/// Append `at`'s stamp text.
 fn push_stamp(body: &mut Vec<u8>, at: OffsetDateTime) {
   let mut text = [0u8; STAMP_CHARS];
-  body.extend_from_slice(stamp_text(&mut text, at).as_bytes());
+  let mut length = 0;
+  write_stamp(&mut text, &mut length, at);
+  body.extend_from_slice(&text[..length]);
 }
 
 /// Append `value` in decimal, as serde_json writes an integer.
 fn push_decimal(body: &mut Vec<u8>, value: i64) {
+  let mut text = [0u8; 20];
+  let mut length = 0;
+  write_decimal(&mut text, &mut length, value);
+  body.extend_from_slice(&text[..length]);
+}
+
+/// Write `value` in decimal at `text`'s `length`, with the sign a negative value needs.
+fn write_decimal(text: &mut [u8], length: &mut usize, value: i64) {
   let mut digits = [0u8; 20];
   let mut index = digits.len();
   let mut rest = value.unsigned_abs();
@@ -314,7 +343,7 @@ fn push_decimal(body: &mut Vec<u8>, value: i64) {
     index -= 1;
     digits[index] = b'-';
   }
-  body.extend_from_slice(&digits[index..]);
+  write_bytes(text, length, &digits[index..]);
 }
 
 /// The run-record scan the last request made, with the inputs that key it.

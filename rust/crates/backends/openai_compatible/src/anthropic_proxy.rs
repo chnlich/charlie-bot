@@ -1,5 +1,5 @@
-//! `POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` (`anthropic_proxy.py:493`): an Anthropic
-//! Messages request answered by an OpenAI-compatible upstream. The upstream call goes through the shared HTTP client.
+//! `POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`: an Anthropic Messages request answered
+//! by an OpenAI-compatible upstream. The upstream call goes through the shared HTTP client.
 
 use std::collections::VecDeque;
 use std::io;
@@ -123,8 +123,8 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
     }
   };
 
-  // The shared client is built on the first proxy request, as Python's httpx client is, so a bad TLS setting fails that
-  // request rather than the server's start.
+  // The shared client is built on the first proxy request, so a bad TLS setting fails that request rather than the
+  // server's start.
   let client = http_client::shared_client().map_err(|error| unhandled("ClientError", format!("{error:#}")))?;
   let mut request = client
     .post(&upstream_url)
@@ -180,8 +180,8 @@ fn stream_response(upstream: reqwest::Response, model: &str, gemini_stream_rules
   sse_response(relay_frames(relay))
 }
 
-/// The SSE body of `events`, with the headers the Python answer carries: axum's `text/event-stream` gains a charset,
-/// and its `no-cache` is dropped.
+/// The SSE body of `events`, with the answer's headers: `text/event-stream` carries a charset, and `no-cache` is
+/// dropped.
 fn sse_response(events: impl Stream<Item = Result<sse::Event, io::Error>> + Send + 'static) -> Response {
   let mut response = Sse::new(events).into_response();
   let headers = response.headers_mut();
@@ -205,7 +205,7 @@ struct Relay {
 }
 
 /// The body's frames: every queued frame, then the failure that ends the body early, then the end. A failure leaves the
-/// body without `message_stop`, as the Python generator's exception does.
+/// body without `message_stop`.
 fn relay_frames(state: Relay) -> impl Stream<Item = Result<sse::Event, io::Error>> {
   stream::unfold(state, |mut relay| async move {
     loop {
@@ -214,7 +214,7 @@ fn relay_frames(state: Relay) -> impl Stream<Item = Result<sse::Event, io::Error
       }
       if let Some(failure) = relay.failure.take() {
         // hyper writes the frames it has been given only when the body waits, so yield once. The frames already
-        // produced then reach the client before the failure closes the connection, as the Python server's writes do.
+        // produced then reach the client before the failure closes the connection.
         tokio::task::yield_now().await;
         return Some((Err(failure), relay));
       }

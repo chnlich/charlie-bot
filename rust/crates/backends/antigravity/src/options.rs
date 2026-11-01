@@ -1,12 +1,12 @@
-//! The antigravity option fields (`src/backends/antigravity/options.py`): `print_timeout`, the `agy --print` turn budget.
+//! The antigravity option fields: `print_timeout`, the `agy --print` turn budget.
 
 use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
 const PRINT_TIMEOUT: &str = "print_timeout";
 
-/// The `antigravity` option's type-specific fields in `AntigravityBackend`'s declaration order, each with the value
-/// the Python model holds when an entry omits it. `charliebot config get backends` renders them.
+/// The `antigravity` option's type-specific fields in `AntigravityBackend`'s declaration order, each with the default
+/// an entry that omits it takes. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[OptionField::field(PRINT_TIMEOUT, OptionFieldDefault::Null)];
 
 /// The `print_timeout` the option sets, or `None` when it sets none. Any other key is refused.

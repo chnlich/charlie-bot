@@ -1,4 +1,4 @@
-//! The antigravity command, child environment and final-output reading (`src/backends/antigravity/antigravity_cli.py`).
+//! The antigravity command, child environment and final-output reading.
 //! `agy --print` writes one JSON envelope to stdout, and the runner hands that stdout over once the process has exited.
 
 use std::path::Path;
@@ -90,8 +90,8 @@ impl AntigravityBackend {
     env
   }
 
-  /// The tail of `run` (`antigravity_cli.py:109-165`): the events that the exit and the envelope make, and the guard
-  /// failure the run ends with, when there is one. A failing guard keeps the exit code the process had.
+  /// The finish of a run: the events that the exit and the envelope make, and the guard failure the run ends with,
+  /// when there is one. A failing guard keeps the exit code the process had.
   fn finish(&self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     let stdout_text = str_methods::strip(stdout);
     if exit_code != 0 {
@@ -243,7 +243,7 @@ fn strip_platform_notifications(text: &str) -> String {
 }
 
 /// The result event of the envelope's usage: the input count, the output count with its thinking tokens, and the cache
-/// reads. The cost is the int 0, as Python's default carries it.
+/// reads. The cost is the int 0, since this backend reports none.
 fn usage_event(fields: &Map<String, Value>) -> anyhow::Result<Value> {
   let empty = Map::new();
   let usage = match fields.get("usage") {

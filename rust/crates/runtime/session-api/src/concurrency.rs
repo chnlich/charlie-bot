@@ -25,7 +25,7 @@ use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreError, StoreResult};
 use serde::Serialize;
 use serde_json::{Value, json};
-use time::{Duration, OffsetDateTime};
+use time::{Duration, OffsetDateTime, UtcOffset};
 
 use crate::route_support::{Query, blocking_store, store_error};
 use crate::sidebar;
@@ -177,7 +177,7 @@ struct Span {
 /// points, and each one holds four keys a map would copy.
 #[derive(Serialize)]
 struct InstantBody {
-  t: String,
+  t: Stamp,
   running: u32,
   manager: u32,
   worker: u32,
@@ -185,7 +185,80 @@ struct InstantBody {
 
 impl InstantBody {
   fn of(at: OffsetDateTime, running: u32, manager: u32, worker: u32) -> Self {
-    Self { t: UtcDateTime::from(at).to_str(), running, manager, worker }
+    Self { t: Stamp(at), running, manager, worker }
+  }
+}
+
+/// An instant whose JSON text is `UtcDateTime::to_str`'s, written without the formatting machinery.
+///
+/// The text is the route's largest single cost: a 7-day series carries 2,016 points, and each `format!` builds its
+/// own `String` through the generic formatter before the serializer copies the digits out again. Writing the digits
+/// into a stack buffer keeps the same bytes and drops both allocations.
+#[derive(Clone, Copy)]
+struct Stamp(OffsetDateTime);
+
+impl Serialize for Stamp {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut text = [0u8; STAMP_CHARS];
+    serializer.serialize_str(stamp_text(&mut text, self.0))
+  }
+}
+
+/// The longest stamp text: `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
+const STAMP_CHARS: usize = 27;
+
+/// Write `at` as `UtcDateTime::to_str` writes it: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`, the fraction only when nonzero.
+///
+/// Every instant the route carries holds a four-digit year: the store parses a timestamp as RFC 3339, whose year is
+/// four digits, and a point is the clock less a lookback.
+fn stamp_text(text: &mut [u8; STAMP_CHARS], at: OffsetDateTime) -> &str {
+  let at = at.to_offset(UtcOffset::UTC);
+  let mut length = 0;
+  write_digits(text, &mut length, at.year() as u32, 4);
+  text[length] = b'-';
+  length += 1;
+  write_digits(text, &mut length, u8::from(at.month()) as u32, 2);
+  text[length] = b'-';
+  length += 1;
+  write_digits(text, &mut length, at.day() as u32, 2);
+  text[length] = b'T';
+  length += 1;
+  write_digits(text, &mut length, at.hour() as u32, 2);
+  text[length] = b':';
+  length += 1;
+  write_digits(text, &mut length, at.minute() as u32, 2);
+  text[length] = b':';
+  length += 1;
+  write_digits(text, &mut length, at.second() as u32, 2);
+  if at.microsecond() != 0 {
+    text[length] = b'.';
+    length += 1;
+    write_digits(text, &mut length, at.microsecond(), 6);
+  }
+  text[length] = b'Z';
+  length += 1;
+  std::str::from_utf8(&text[..length]).expect("the stamp's bytes are ASCII digits and separators")
+}
+
+/// Append `value` in decimal to `text` at `length`, zero-padded to `width` digits.
+fn write_digits(text: &mut [u8; STAMP_CHARS], length: &mut usize, value: u32, width: usize) {
+  let mut digits = [0u8; 10];
+  let mut written = 1;
+  let mut rest = value;
+  digits[0] = b'0' + (rest % 10) as u8;
+  rest /= 10;
+  while rest != 0 {
+    digits[written] = b'0' + (rest % 10) as u8;
+    written += 1;
+    rest /= 10;
+  }
+  for _ in written..width {
+    text[*length] = b'0';
+    *length += 1;
+  }
+  for digit in digits[..written].iter().rev() {
+    text[*length] = *digit;
+    *length += 1;
   }
 }
 
@@ -193,10 +266,10 @@ impl InstantBody {
 #[derive(Serialize)]
 struct HistoryBody {
   range: &'static str,
-  from: String,
-  to: String,
+  from: Stamp,
+  to: Stamp,
   bucket_seconds: i64,
-  first_record_at: Option<String>,
+  first_record_at: Option<Stamp>,
   peak: Option<InstantBody>,
   points: Vec<InstantBody>,
 }
@@ -205,10 +278,10 @@ impl History {
   fn into_body(self) -> Vec<u8> {
     let body = HistoryBody {
       range: self.range,
-      from: UtcDateTime::from(self.from).to_str(),
-      to: UtcDateTime::from(self.to).to_str(),
+      from: Stamp(self.from),
+      to: Stamp(self.to),
       bucket_seconds: self.bucket_seconds,
-      first_record_at: self.first_record_at.map(|at| UtcDateTime::from(at).to_str()),
+      first_record_at: self.first_record_at.map(Stamp),
       peak: self.peak.map(|peak| InstantBody::of(peak.at, peak.running, peak.manager, peak.worker)),
       points: self
         .points
@@ -663,6 +736,22 @@ mod tests {
     let detail = body["detail"].as_str().expect("the refusal names the valid values");
     for range in ["24h", "7d", "all"] {
       assert!(detail.contains(range), "{range} is one of the listed values: {detail}");
+    }
+  }
+
+  /// The route's own stamp text is the store's, fraction and all: the chart's time axis reads these bytes.
+  #[test]
+  fn a_stamp_writes_the_text_the_store_writes_for_an_instant() {
+    for text in [
+      "2026-11-01T07:00:00Z",
+      "2026-11-01T07:00:00.5Z",
+      "2026-02-28T23:59:59.000001Z",
+      "2029-12-31T23:59:59.999999Z",
+      "2030-01-01T00:00:00Z",
+    ] {
+      let instant = at(text);
+      let mut stamp = [0u8; STAMP_CHARS];
+      assert_eq!(stamp_text(&mut stamp, instant), UtcDateTime::from(instant).to_str());
     }
   }
 

@@ -253,8 +253,8 @@ fn write_bytes(text: &mut [u8], length: &mut usize, source: &[u8]) {
 impl History {
   /// Write the response body in the field order and text clients parse.
   ///
-  /// The generic serializer's per-entry dispatch and one intermediate `String` per stamp are the route's largest
-  /// cost on a 2,016-point series, so the fixed field names and the digits go straight into one buffer.
+  /// The generic serializer's per-entry dispatch and its per-field calls are the route's largest cost on a
+  /// 2,016-point series, so the fixed field names and the digits go straight into one buffer.
   fn into_body(self) -> Vec<u8> {
     let mut body = Vec::with_capacity(HISTORY_BODY_HEADROOM + self.points.len() * INSTANT_BYTES);
     body.extend_from_slice(b"{\"range\":\"");
@@ -320,15 +320,18 @@ fn push_stamp(body: &mut Vec<u8>, at: OffsetDateTime) {
 
 /// Append `value` in decimal, as serde_json writes an integer.
 fn push_decimal(body: &mut Vec<u8>, value: i64) {
-  let mut text = [0u8; 20];
+  let mut text = [0u8; DECIMAL_CHARS];
   let mut length = 0;
   write_decimal(&mut text, &mut length, value);
   body.extend_from_slice(&text[..length]);
 }
 
+/// The decimal text's longest form: `-9223372036854775808`.
+const DECIMAL_CHARS: usize = 20;
+
 /// Write `value` in decimal at `text`'s `length`, with the sign a negative value needs.
 fn write_decimal(text: &mut [u8], length: &mut usize, value: i64) {
-  let mut digits = [0u8; 20];
+  let mut digits = [0u8; DECIMAL_CHARS];
   let mut index = digits.len();
   let mut rest = value.unsigned_abs();
   loop {
@@ -643,6 +646,17 @@ mod tests {
         .collect(),
     };
     serde_json::to_vec(&body).expect("a reference history body serializes")
+  }
+
+  /// `write_decimal` renders the whole i64 domain, including the magnitude a positive i64 cannot hold.
+  #[test]
+  fn write_decimal_renders_the_signed_domain() {
+    for value in [0, 7, -7, 300, i64::MAX, i64::MIN] {
+      let mut text = [0u8; DECIMAL_CHARS];
+      let mut length = 0;
+      write_decimal(&mut text, &mut length, value);
+      assert_eq!(std::str::from_utf8(&text[..length]).expect("ASCII digits"), value.to_string());
+    }
   }
 
   /// The direct writer keeps the serializer's bytes, with and without a peak and a first record.

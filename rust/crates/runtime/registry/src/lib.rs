@@ -1,6 +1,6 @@
-//! The plug-in seam of the Rust server: the [`Registry`] that every feature and backend crate fills through
-//! its `register` function, the lifespan steps around the crash-recovery task, and the typed startup state that
-//! steps, services and route handlers share.
+//! The plug-in seam of the Rust server. The [`Registry`] is what every feature and backend crate fills through its
+//! `register` function. The seam also carries the lifespan steps of the crash-recovery task, and the typed startup
+//! state that steps, services and route handlers share.
 //!
 //! The server builds one registry at startup, calling each listed package's `register` in the order of the
 //! composition root (`charliebot_packages`, whose list began as `src/app/registrations.py:16-46`), then shares it

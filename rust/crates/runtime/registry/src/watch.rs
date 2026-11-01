@@ -2,7 +2,7 @@
 //!
 //! A render must notice an edit at its own request: the page a user opens carries the template and asset bytes that
 //! exist when it is built. Reading every served file's `(mtime, size)` per render proves that and costs two statx
-//! calls per served file. An inotify watch answers the same question with one read: the kernel queues an event for
+//! calls per served file. An inotify watch answers the same question with one read. The kernel queues an event for
 //! every write, create, remove, rename or permission change below a watched directory, and a read returns the events
 //! queued before it. A render that reads no event serves the tree state it read before; a render that reads an event
 //! reads the trees again.
@@ -11,13 +11,13 @@
 //! tree state beside the counter it read and reads the trees again when the counter moves.
 //!
 //! A read that drained events registers the watches again from the directories on disk. An event does not say which
-//! directory it created, and an overflowed queue drops events entirely, so a watch added only for the events a read
-//! saw would miss a directory created in a dropped one. Re-registering also follows a symlinked directory to the
+//! directory it created, and an overflowed queue drops events entirely. A watch added only for the events a read saw
+//! would then miss a directory created in a dropped one. Re-registering also follows a symlinked directory to the
 //! target it names now, and finds the nearest existing ancestor of a tree that was removed and recreated.
 //!
 //! A served file read through a symlink is watched at the file's own target, because an edit there raises no event
 //! below the watched directories. A tree the process cannot watch, because the filesystem has no inotify, the watch
-//! limit is spent, or a symlink in it does not resolve, leaves the watch blind: every read then answers a moved
+//! limit is spent, or a symlink in it does not resolve, leaves the watch blind. Every read then answers a moved
 //! counter, so the caller reads the trees again on every render, as a render without a watch does.
 
 use std::ffi::CString;
@@ -94,8 +94,8 @@ impl TreeWatch {
     if !moved {
       return self.revision.load(Ordering::Acquire);
     }
-    // A read that drained events registers every tree again, so a directory the queue reported no event for (a
-    // dropped event, or a moved directory's replacement) is still watched below the revision this read returns.
+    // A read that drained events registers every tree again. A directory the queue reported no event for (a dropped
+    // event, or a moved directory's replacement) is then still watched below the revision this read returns.
     self.register(&mut state);
     self.revision.fetch_add(1, Ordering::AcqRel) + 1
   }
@@ -113,7 +113,7 @@ impl TreeWatch {
   ///
   /// A registered package may name a tree the checkout does not have, and a tree may be a symlink whose target the
   /// next read resolves. In both cases the link or directory that names the tree changes in its parent, which raises
-  /// no event below the target this watch covers; the next read registers the tree as the parent now names it.
+  /// no event below the target this watch covers. The next read registers the tree as the parent now names it.
   fn add_nearest_existing_ancestor(&self, state: &mut WatchState, tree: &Path) {
     for ancestor in tree.ancestors().skip(1) {
       if ancestor.is_dir() {

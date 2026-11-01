@@ -3,8 +3,8 @@
 //! Startup runs in this order, after the home writer fence and the home seeding:
 //!
 //! 1. the pre-recovery steps, in registration order;
-//! 2. the recovery steps, in registration order: each started as a task before the early services start, and awaited
-//!    after them, so no route, trigger or cron fire starts an agent process before they complete;
+//! 2. the recovery steps, in registration order: each starts as a task before the early services start and is awaited
+//!    after them. No route, trigger or cron fire starts an agent process before they complete;
 //! 3. the early services, in registration order;
 //! 4. the trigger step, at most one, after recovery;
 //! 5. the ready services, in registration order.

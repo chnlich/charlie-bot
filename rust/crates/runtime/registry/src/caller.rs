@@ -58,8 +58,8 @@ pub fn resolve_caller(headers: &HeaderMap, features: &FeatureContext) -> Result<
     return Ok(operator_identity(headers));
   }
 
-  // Anything else is run-token use: hand the verifier the configured key (empty when none is set) and fail closed
-  // through its own refusal, so the missing-key sentence has one owner and one 401 detail.
+  // Anything else is run-token use. Hand the verifier the configured key (empty when none is set) and fail closed
+  // through its own refusal. The missing-key sentence then has one owner and one 401 detail.
   let key = key.unwrap_or_default();
   let claims =
     run_token::verify_run_token(bearer, &key).map_err(|error| unauthorized(&format!("invalid run token: {error}")))?;

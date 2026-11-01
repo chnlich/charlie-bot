@@ -4,13 +4,13 @@
 //! `startup.require::<Templating>()` and renders a page with `render_page`, as Starlette's `TemplateResponse` does.
 //!
 //! A render reads each template source's `(mtime, size)` and keeps the last compiled minijinja environment while
-//! that list and the template globals still compare equal, so a repeat render skips compiling the page and its
-//! partials. The served template and static trees carry an inotify watch ([`TreeWatch`]), so the read of that list
-//! and the static files' digests happen only after an event reported a change; a render that drained no event reuses
-//! the list, the digest and the page text it last rendered, which makes a repeat render of an unchanged page one
-//! comparison of its inputs. A template, a page part or a template directory that changes on disk moves the list,
-//! and the next render compiles a fresh environment, so an edit takes effect without a restart as Jinja2's
-//! auto-reload does. The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the
+//! that list and the template globals still compare equal. A repeat render then skips compiling the page and its
+//! partials. The served template and static trees carry an inotify watch ([`TreeWatch`]). The read of that list and
+//! the static files' digests happen only after an event reported a change. A render that drained no event reuses the
+//! list, the digest and the page text it last rendered. A repeat render of an unchanged page is then one comparison
+//! of its inputs. A template, a page part or a template directory that changes on disk moves the list. The next
+//! render then compiles a fresh environment, so an edit takes effect without a restart, as Jinja2's auto-reload
+//! does. The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
 //! `templates/`, in registration order.
 
@@ -83,7 +83,7 @@ struct SourceCache {
 ///
 /// A render compiles the page and every partial it includes into a fresh environment, so a repeat render of an
 /// unchanged page repeats that compile. The environment is kept while the template sources and the globals compare
-/// equal, which serves a repeat render from the compiled templates; a moved source or global rebuilds it, so an edit
+/// equal, which serves a repeat render from the compiled templates. A moved source or global rebuilds it, so an edit
 /// on disk still takes effect at the next render.
 struct RenderCache {
   sources: Arc<Vec<SourceStat>>,
@@ -346,7 +346,7 @@ impl Templating {
     let mut environment = jinja::environment(jinja::file_system_loader(self.directories.clone()));
     let repo_root = self.repo_root.clone();
     let packages = self.packages.clone();
-    // A page part is a template source, so this environment lives only while every source holds its value; a part
+    // A page part is a template source, so this environment lives only while every source holds its value. A part
     // added, removed or moved on disk rebuilds the environment and drops the cache with it.
     let parts_cache: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
     environment.add_function("page_parts", move |slot: String| {
@@ -448,7 +448,7 @@ fn walk_static_tree(
 
 /// One directory of a static tree and its subdirectories, in the order the ignore walker yielded them.
 ///
-/// The walk reads each directory itself instead of building an `ignore` walker for it: the walker's filters,
+/// The walk reads each directory itself instead of building an `ignore` walker for it. The walker's filters,
 /// matchers and path bookkeeping cost more than the handful of files below each served tree. A directory whose
 /// identity is already an ancestor is a symlink loop, so the walk leaves it out instead of entering it forever.
 fn walk_static_directory(
@@ -602,7 +602,7 @@ mod tests {
     assert_eq!(body, "synthetic-label GET /notes?page=2");
   }
 
-  /// A substitution writes the text where the page carries the placeholder, and an absent placeholder fails the
+  /// A substitution writes the text where the page carries the placeholder. An absent placeholder fails the
   /// render instead of serving the page with the placeholder in place of its text.
   #[tokio::test]
   async fn render_page_substitutes_a_placeholder_and_refuses_a_page_without_it() {

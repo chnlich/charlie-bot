@@ -13,12 +13,12 @@ pub struct CliExit {
 }
 
 impl CliExit {
-  /// `exit_usage_error`: `{"error": <message>}` on stderr, exit 2 — argparse-compatible.
+  /// A usage failure: `{"error": <message>}` on stderr, exit 2 — argparse-compatible.
   pub fn usage(message: impl Into<String>) -> CliExit {
     CliExit { code: 2, body: json!({ "error": message.into() }) }
   }
 
-  /// `exit_error`: the failure contract's JSON object, exit 1.
+  /// A general failure: the failure contract's JSON object, exit 1.
   pub fn error(message: impl Into<String>) -> CliExit {
     CliExit { code: 1, body: json!({ "error": message.into() }) }
   }

@@ -5,15 +5,15 @@ use std::path::Path;
 
 use crate::exit::CliExit;
 
-/// `Path.read_text(encoding="utf-8")`: the file's text with Python's text-mode line endings, where `\r\n` and a lone
-/// `\r` read as `\n`.
+/// The file's text with Python's text-mode line endings, where `\r\n` and a lone `\r` read as
+/// `\n` — what `Path.read_text(encoding="utf-8")` returns.
 pub fn read_text_mode(path: &Path) -> Result<String, CliExit> {
   let content = std::fs::read_to_string(path).map_err(|error| CliExit::error(error.to_string()))?;
   Ok(content.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// `read_required_text_file`: a required text file, a usage error on a missing or empty one. The text carries
-/// Python's text-mode line endings (see [`read_text_mode`]).
+/// A required text file, a usage error on a missing or empty one. The text carries Python's
+/// text-mode line endings (see [`read_text_mode`]).
 pub fn read_required_text_file(flag_name: &str, file_path: &str) -> Result<String, CliExit> {
   let path = Path::new(file_path);
   if !path.is_file() {
@@ -26,7 +26,7 @@ pub fn read_required_text_file(flag_name: &str, file_path: &str) -> Result<Strin
   Ok(content)
 }
 
-/// `read_reply_text`: stdin when the arg is `-`, else the file's text.
+/// The reply text: stdin when the arg is `-`, else the file's text.
 pub fn read_reply_text(file_arg: &str) -> Result<String, CliExit> {
   if file_arg == "-" {
     let mut text = String::new();

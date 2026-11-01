@@ -5,8 +5,7 @@ use std::path::Path;
 use clap::Command;
 use clap::error::ErrorKind;
 
-/// `validate_repo_path`: reject a `--repo` value that is not an absolute path or does not exist
-/// as a directory.
+/// Reject a `--repo` value that is not an absolute path or does not exist as a directory.
 ///
 /// Raises the parser's usage error (exit 2) before any network call, so a bad repo path never
 /// reaches the internal API.
@@ -32,7 +31,7 @@ pub fn validate_repo_path(command: &mut Command, repo: &str) {
   }
 }
 
-/// `infer_long_args(true)` over the command and every nested subcommand.
+/// Enable `infer_long_args` on the command and every nested subcommand.
 ///
 /// argparse accepts a unique prefix of a long option (`--task-spec` names `--task-spec-file`), and
 /// nothing in the Python tree turns that off, so agents may pass one. The `clap` parser needs the

@@ -344,8 +344,8 @@ fn parse_codex_timestamp(value: Option<&Value>) -> anyhow::Result<OffsetDateTime
   Ok(parsed.to_offset(UtcOffset::UTC))
 }
 
-/// An ISO 8601 timestamp as a UTC instant, or `None` when it is empty or unparseable. A timestamp without an offset is
-/// read as UTC, as `datetime.fromisoformat` does.
+/// An ISO 8601 timestamp as a UTC instant, or `None` when it is empty or unparseable. A timestamp without an offset
+/// is read as UTC: it is parsed with `+00:00` appended.
 pub fn parse_iso_utc(value: &str) -> Option<OffsetDateTime> {
   if value.is_empty() {
     return None;

@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use charliebot_charlie_code::{API_KEY_ENV, TASK_FILE_NAME, flags};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME, CREDENTIAL_KEY};
+use charliebot_core::config::{API_BASE_KEY, BackendOption, CONFIG_FILENAME, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY};
 use charliebot_core::{credentials, home, paths};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde_json::Value;
@@ -123,12 +123,9 @@ fn text_field(option: &BackendOption, field: &str, config_file: &Path) -> Result
 
 /// The entry's `context_window`, which the review must pass to the child.
 fn context_window_field(option: &BackendOption, config_file: &Path) -> Result<i64, String> {
-  option
-    .type_fields
-    .get("context_window")
-    .and_then(YamlValue::as_i64)
-    .filter(|window| *window > 0)
-    .ok_or_else(|| format!("backend entry {} has no positive context_window in {}", option.id, config_file.display()))
+  option.type_fields.get(CONTEXT_WINDOW_KEY).and_then(YamlValue::as_i64).filter(|window| *window > 0).ok_or_else(|| {
+    format!("backend entry {} has no positive {} in {}", option.id, CONTEXT_WINDOW_KEY, config_file.display())
+  })
 }
 
 /// Whether `name` resolves to an executable file through `PATH`.

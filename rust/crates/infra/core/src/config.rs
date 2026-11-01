@@ -37,6 +37,10 @@ pub const API_BASE_KEY: &str = "api_base";
 /// the entry. The option schemas and the CLI's readers import this name instead of each spelling it.
 pub const CREDENTIAL_KEY: &str = "credential";
 
+/// The `context_window` key of a `backends.options[]` entry: the declared window in tokens. The option schemas and
+/// the CLI's reviewer import this name instead of each spelling it.
+pub const CONTEXT_WINDOW_KEY: &str = "context_window";
+
 /// Retired keys under `backends:`, replaced by `backends.pool`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 

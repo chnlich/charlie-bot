@@ -33,7 +33,8 @@ use serde_json::{Map, Value, json};
 
 use crate::command::{self, ImproveState, LoopStatus};
 use crate::judgment::{
-  ITERATION_SUMMARIES_HEADING, LOOP_FAILURE_ERROR_PREFIX, RUNNER_FALLBACK_REPORT_MARKER, WORKTREE_CREATE_ERROR_PREFIX,
+  ITERATION_SUMMARIES_HEADING, LOOP_FAILURE_ERROR_PREFIX, RUNNER_FALLBACK_REPORT_MARKER, ReportValidity,
+  WORKTREE_CREATE_ERROR_PREFIX,
 };
 use crate::landing;
 
@@ -270,8 +271,7 @@ fn iteration_blocker(
 /// The one iteration's mechanical judgment and the evidence its report carries.
 struct IterationJudgment {
   summary: String,
-  report_valid: bool,
-  invalid_reason: Option<&'static str>,
+  validity: ReportValidity,
   tip: String,
   commits_added: i64,
   report_path: PathBuf,
@@ -646,27 +646,26 @@ async fn judge_iteration(
       .with_context(|| format!("write {}", report_path.display()))?;
     return Ok(IterationJudgment {
       summary: fallback,
-      report_valid: false,
-      invalid_reason: Some("no report file"),
+      validity: ReportValidity::Invalid("no report file"),
       tip: tip_after,
       commits_added,
       report_path,
     });
   }
-  let (report_valid, invalid_reason) = crate::judgment::iter_report_validity(&report_path, iteration, commits_added)?;
-  let summary = if report_valid {
+  let validity = crate::judgment::iter_report_validity(&report_path, iteration, commits_added)?;
+  let summary = if validity.is_valid() {
     take_chars(&std::fs::read_to_string(&report_path).with_context(|| format!("read {}", report_path.display()))?, 500)
   } else {
     crate::judgment::invalid_iteration_summary(
       iteration,
-      invalid_reason.unwrap_or_default(),
+      validity.reason().unwrap_or_default(),
       commits_added,
       tip_before,
       &tip_after,
       &report_path,
     )
   };
-  Ok(IterationJudgment { summary, report_valid, invalid_reason, tip: tip_after, commits_added, report_path })
+  Ok(IterationJudgment { summary, validity, tip: tip_after, commits_added, report_path })
 }
 
 /// The per-iteration progress event: chat visibility only. The parent's input is the child report.
@@ -734,9 +733,9 @@ async fn deliver_iteration_report(
     "[Improve loop {} · iteration {iteration}/{}] report_valid={}",
     spec.loop_id,
     spec.iterations,
-    if judgment.report_valid { "true" } else { "false" }
+    if judgment.validity.is_valid() { "true" } else { "false" }
   );
-  if let Some(reason) = judgment.invalid_reason.filter(|_| !judgment.report_valid) {
+  if let Some(reason) = judgment.validity.reason() {
     header.push_str(&format!(" [invalid: {reason}]"));
   }
   header.push_str(&format!(

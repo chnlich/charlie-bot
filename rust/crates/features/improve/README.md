@@ -22,7 +22,8 @@ failure and selects again on the next iteration.
 - `command::{STATE_FILE, GOAL_FILE, PLAN_FILE, ACTIVE_LOCK_FILE}`
 - `judgment::{ITERATION_SUMMARIES_HEADING, RUNNER_FALLBACK_REPORT_MARKER, WORKTREE_CREATE_ERROR_PREFIX}` and
   `judgment::LOOP_FAILURE_ERROR_PREFIX`
-- `judgment::commits_section_first_none`, `iter_report_validity`, `invalid_iteration_summary` and `summary_text`
+- `judgment::commits_section_first_none`, `iter_report_validity` with `ReportValidity`, `invalid_iteration_summary` and
+  `summary_text`
 - `judgment::extract_iteration_summary_from_events`, `quota_blocker_match`,
   `failed_iteration_judgments_from_events` and `newest_first_event_iter`
 - `landing::commit_delta`, `landing::land_work_branch_after_loop` with `Landing`, and `landing::blocked_loop_summary`

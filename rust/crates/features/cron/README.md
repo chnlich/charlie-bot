@@ -4,21 +4,15 @@ Scheduled cron tasks in `config.d/cron.d`. The crate owns the five `/api/cron/ta
 validation, the 60-second scheduler, scheduled handlers, task bindings and sequence recovery. The step-boundary
 waiters in `boundary.rs` are the leaf module the scheduler and the sequence controller share.
 
-## Public API and Python sources
+## Public API
 
-| Rust item | Python source |
-| --- | --- |
-| `register` | `src/features/cron/__init__.py:5-14` |
-| `config::DEFAULT_TIMEZONE` | `src/features/cron/config.py:14` |
-| `config::StepConfig` | `src/features/cron/config.py:17-37` |
-| `config::ScheduledTaskConfig` and its source/backend validation | `src/features/cron/config.py:73-145` |
-| `config::ScheduledTaskError` | `src/features/cron/config.py:148-160` |
-| `GET /api/cron/tasks` | `src/features/cron/api.py:163-196` |
-| `PUT /api/cron/tasks/{name}` | `src/features/cron/api.py:257-267` |
-| `POST /api/cron/tasks` | `src/features/cron/api.py:270-300` |
-| `POST /api/cron/tasks/{name}/run` | `src/features/cron/api.py:302-327` |
-| `DELETE /api/cron/tasks/{name}` | `src/features/cron/api.py:330-344` |
-| `scheduler` service and 60-second tick | `src/features/cron/scheduler.py:26`, `:49-81`, `:108-152` |
-| Cron sequence binding, stale-anchor wake duties, weekly chat-history recycle and recovery hooks | `src/features/cron/sequence_controller.py:61-208` |
-| Cron startup backend reference check | `src/features/cron/backend_refs.py:7-25` |
-| Scheduled handler registration and lookup | `src/runtime/hooks/scheduled_handlers.py:14-29` |
+- `register`, which adds the routes, the `cron` turn contribution, the session metadata slot, the startup backend
+  reference check, the scheduler service and the sequence owner
+- `GET /api/cron/tasks`, `PUT /api/cron/tasks/{name}`, `POST /api/cron/tasks`, `POST /api/cron/tasks/{name}/run`
+  and `DELETE /api/cron/tasks/{name}`
+- `config::DEFAULT_TIMEZONE`, `config::StepConfig`, `config::ScheduledTaskConfig`, `config::ScheduledTaskError`,
+  `config::validate_task`, `config::task_from_value`, `config::CREATE_MODEL` and `config::UPDATE_MODEL`
+- `seed::SeedReport`, `seed::seed_default_cron_tasks` and `seed::setup_step`
+- the `scheduler` service and its 60-second tick
+- the cron sequence binding, the stale-anchor wake duties, the weekly chat-history recycle and the recovery hooks
+- the scheduled handler registration and lookup

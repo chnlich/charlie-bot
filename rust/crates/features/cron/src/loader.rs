@@ -186,7 +186,8 @@ pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> 
   Ok(snapshot)
 }
 
-/// Load one shared cron snapshot by the same YAML and prompt mtimes Python uses in `src/features/cron/loader.py:436-476`.
+/// Load one shared cron snapshot, rereading it when a cron YAML appears, disappears or changes mtime, or a prompt
+/// file changes mtime or goes missing.
 pub(crate) fn load_snapshot_for_paths(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, bool)> {
   let key = SnapshotKey { directory: directory.to_path_buf(), repo: repo.to_path_buf() };
   let snapshots = SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -568,7 +569,7 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
     return Ok(());
   }
   Err(format!(
-    "backend references must name a backends.options id (id rule: BackendsConfig in src/infra/config.py):\n{}",
+    "backend references must name a backends.options id (id rule: charliebot_core::config::BackendsConfig):\n{}",
     problems.into_iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   ))
 }
@@ -660,9 +661,6 @@ mod tests {
 
   #[test]
   fn prompt_pointers_resolve_and_bad_task_sources_are_isolated() {
-    // Python: tests/test_cron_defaults.py::test_loader_loads_prompt_file_pointer
-    // Python: tests/test_cron_defaults.py::test_loader_rejects_task_without_prompt_file
-    // Python: tests/test_cron_backend.py::test_load_cron_file_loads_prompt_file
     let (home, features) = feature_context();
     let cfg = features.config.get().unwrap();
     let prompt = write_prompt(home.path(), "prompt.md", "Synthetic body\n");
@@ -706,12 +704,6 @@ mod tests {
 
   #[test]
   fn step_source_and_distinct_backend_validation_matches_the_loader() {
-    // Python: tests/test_cron_steps.py::test_load_cron_file_rejects_duplicate_step_names
-    // Python: tests/test_cron_steps.py::test_load_cron_file_rejects_empty_steps
-    // Python: tests/test_cron_steps.py::test_load_cron_file_rejects_step_prompt_source_violation
-    // Python: tests/test_cron_steps.py::test_load_cron_file_rejects_distinct_backend_violations
-    // Python: tests/test_cron_steps.py::test_load_cron_file_accepts_distinct_written_backends
-    // Python: tests/test_cron_steps.py::test_load_cron_file_accepts_unset_backends_with_distinct_backend_from
     let home = tempfile::tempdir().unwrap();
     let first = write_prompt(home.path(), "first.md", "First prompt");
     let second = write_prompt(home.path(), "second.md", "Second prompt");
@@ -767,8 +759,6 @@ mod tests {
 
   #[test]
   fn startup_registration_does_not_seed_cron_files_and_seed_dump_is_stable() {
-    // Python: tests/test_cron_defaults.py::test_startup_never_writes_cron
-    // Python: tests/test_cron_defaults.py::test_seed_idempotence
     let (home, features) = feature_context();
     let cfg = features.config.get().unwrap();
     assert_eq!(std::fs::read_dir(cfg.config_d_dir().join("cron.d")).unwrap().count(), 0);
@@ -786,8 +776,6 @@ mod tests {
 
   #[tokio::test]
   async fn alert_fingerprint_tracks_transitions_and_telegram_failures_stay_local() {
-    // Python: tests/test_cron_alerts.py::test_alert_fires_once_on_transition_recovers_once_and_repeats_nothing
-    // Python: tests/test_cron_alerts.py::test_telegram_failure_is_log_only
     let (home, features) = feature_context();
     let cfg = features.config.get().unwrap();
     let error = |name: &str| crate::config::ScheduledTaskError {
@@ -811,7 +799,6 @@ mod tests {
 
   #[test]
   fn alert_without_an_event_loop_does_not_persist_a_fingerprint() {
-    // Python: tests/test_cron_alerts.py::test_no_event_loop_skips_send_without_persisting
     let (_home, features) = feature_context();
     let cfg = features.config.get().unwrap();
     let error = crate::config::ScheduledTaskError {

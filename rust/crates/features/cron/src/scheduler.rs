@@ -353,7 +353,7 @@ impl CronScheduler {
       let handle = tokio::spawn(async move {
         match executor.launch_and_settle(&leaf_id, &run_id, launch_text.as_deref()).await {
           Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
-            // Python keeps the firing task alive through the sequence chain (`src/features/cron/scheduler.py:413-434`).
+            // A fire with steps keeps its task alive until the step boundary reports the chain settled.
             wait_for_steps_boundary(boundary).await;
             crate::boundary::remove_boundary(&leaf_id, &owner_ref);
           }
@@ -709,7 +709,8 @@ impl CronExpression {
     &self,
     base: chrono::DateTime<Tz>,
   ) -> anyhow::Result<chrono::DateTime<Tz>> {
-    // Match Python's `croniter` field jumps (`src/features/cron/scheduler.py:323-326`) while preserving the Rust port's UTC minute grid.
+    // The next fire is the earliest matching local time on the UTC minute grid. The scan stops at the
+    // `8 * 366 * 24 * 60`-second horizon, about 49 days.
     self.next_after_with_work(base).map(|(next, _)| next)
   }
 
@@ -912,9 +913,6 @@ mod tests {
 
   #[tokio::test]
   async fn tick_binds_disabled_tasks_without_projects_once_and_reuses_the_stable_node() {
-    // Python: tests/test_cron_auto_bind.py::test_task_without_project_lands_ungrouped
-    // Python: tests/test_cron_auto_bind.py::test_disabled_task_and_task_without_prior_cron_session_are_bound_too
-    // Python: tests/test_cron_auto_bind.py::test_recreated_task_reattaches_to_its_original_node
     let (home, features) = feature_context();
     let path = write_task(
       home.path(),
@@ -960,9 +958,6 @@ mod tests {
 
   #[tokio::test]
   async fn scheduler_tick_runs_handlers_and_updates_the_shared_session_views() {
-    // Python: tests/test_cron_auto_bind.py::test_handler_task_binds_and_records_its_result_on_the_node
-    // Python: tests/test_scheduler_shared_session_blocks.py::test_scheduled_fire_bookkeeping_writes_the_injected_session_blocks
-    // Python: tests/test_scheduler_shared_session_blocks.py::test_scheduled_round_events_reach_shared_read_cache
     let (home, features) = feature_context();
     let path = write_task(
       home.path(),
@@ -1014,7 +1009,6 @@ mod tests {
 
   #[tokio::test]
   async fn tick_archives_the_old_active_cron_session_when_it_binds_a_new_node() {
-    // Python: tests/test_cron_auto_bind.py::test_tick_auto_binds_unbound_task_with_active_legacy_cron_session
     let (home, features) = feature_context();
     let mut legacy_extra = Map::new();
     legacy_extra.insert("scheduled_task".to_string(), json!("legacy-task"));
@@ -1068,7 +1062,6 @@ mod tests {
 
   #[tokio::test]
   async fn auto_bind_migration_registers_the_due_fire_leaf_under_its_node() {
-    // Python: tests/test_cron_auto_bind.py::test_due_fire_after_migration_creates_its_leaf_under_the_node
     // The launch below spawns real git, so no worktree test may install its fake git meanwhile.
     let _git_lock = GIT_PROGRAM_LOCK.lock().await;
     let (home, features) = feature_context();
@@ -1337,7 +1330,6 @@ mod tests {
 
   #[tokio::test]
   async fn auto_bind_replays_each_durable_migration_boundary_to_one_node_and_binding() {
-    // Python: tests/test_cron_auto_bind.py::test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_active_cron_session
     for fail_after in ["create", "copy", "write"] {
       let (home, features) = feature_context();
       let task_name = format!("synthetic-replay-{fail_after}");
@@ -1416,7 +1408,6 @@ mod tests {
 
   #[tokio::test]
   async fn scheduler_sweep_archives_a_busy_legacy_cron_session() {
-    // Python: tests/test_cron_auto_bind.py::test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_running_thread
     let (home, features) = feature_context();
     let task_name = "synthetic-sweep-task";
     let node = crate::test_support::manager(&features, "synthetic-sweep-node").await.unwrap();
@@ -1456,7 +1447,6 @@ mod tests {
 
   #[tokio::test]
   async fn edited_yaml_backend_is_aligned_on_the_next_tick_without_rebinding() {
-    // Python: tests/test_cron_auto_bind.py::test_hand_edited_yaml_backend_is_followed_on_the_next_tick
     let (home, features) = crate::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
     let node = crate::test_support::manager(&features, "synthetic-edit-backend-node").await.unwrap();
     let path = write_task(
@@ -1480,7 +1470,6 @@ mod tests {
 
   #[tokio::test]
   async fn scheduler_aligns_a_bound_node_backend_in_place() {
-    // Python: tests/test_cron_backend.py::test_scheduler_aligns_bound_node_backend_in_place
     let (home, features) = crate::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
     let node = crate::test_support::manager(&features, "synthetic-align-backend-node").await.unwrap();
     write_task(
@@ -1497,7 +1486,6 @@ mod tests {
 
   #[tokio::test]
   async fn an_upcoming_occurrence_preserves_last_run_and_does_not_catch_up() {
-    // Python: tests/test_cron_backend.py::test_backend_alignment_preserves_last_run_to_avoid_catchup_fire
     let (home, features) = feature_context();
     let node = crate::test_support::manager(&features, "synthetic-no-catchup-node").await.unwrap();
     let last_run = UtcDateTime::now().to_isoformat_text();
@@ -1539,7 +1527,6 @@ mod tests {
 
   #[tokio::test]
   async fn auto_bind_restores_a_status_archived_node_without_a_task_reopened_fact() {
-    // Python: tests/test_archive_cron_restore.py::test_auto_bind_restore_leaves_the_legacy_status_branch_alone
     let (home, features) = feature_context();
     let task_name = "synthetic-legacy-restore";
     let path =
@@ -1810,9 +1797,6 @@ mod tests {
 
   #[tokio::test]
   async fn a_due_tick_skips_while_the_previous_round_is_in_flight_and_consumes_the_delayed_occurrences() {
-    // Python: tests/test_scheduler_overlap_skip.py::test_at_most_one_round_in_flight
-    // Python: tests/test_scheduler_overlap_skip.py::test_one_skip_consuming_delayed_occurrences
-    // Python: tests/test_scheduler_overlap_skip.py::test_no_fire_on_completion_moment
     let (_home, features) = feature_context();
     let (_path, node) = bound_handler_task(&features, "code-health").await;
     let scheduler = CronScheduler::new(Arc::clone(&features));
@@ -1857,8 +1841,6 @@ mod tests {
 
   #[tokio::test]
   async fn the_scheduled_path_ignores_stuck_disk_state_and_a_manual_run_leaves_the_handle() {
-    // Python: tests/test_scheduler_overlap_skip.py::test_fire_ignores_stuck_running_disk_state
-    // Python: tests/test_scheduler_overlap_skip.py::test_manual_run_is_outside_and_leaves_handle_unchanged
     let (_home, features) = feature_context();
     let (_path, node) = bound_handler_task(&features, "code-health").await;
     let scheduler = CronScheduler::new(Arc::clone(&features));

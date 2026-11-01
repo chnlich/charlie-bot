@@ -1,4 +1,4 @@
-//! The cron step-boundary waiters: one watch channel per waiting scheduler tick (`src/features/cron/scheduler.py`).
+//! The cron step-boundary waiters: one watch channel per waiting scheduler tick.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

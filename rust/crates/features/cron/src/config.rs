@@ -1,9 +1,9 @@
-//! Scheduled-task request and file models (`src/features/cron/config.py`).
+//! Scheduled-task request and file models.
 
 use charliebot_compat::request_body::{BodyModel, Field, FieldType};
 use serde::{Deserialize, Serialize};
 
-/// The Python default for cron task and create-request time zones: the house zone (`config.HOUSE_TIMEZONE`).
+/// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
 pub const DEFAULT_TIMEZONE: &str = charliebot_core::pacific::ZONE;
 
 /// A named step in an ordered scheduled-worker chain.

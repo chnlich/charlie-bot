@@ -102,9 +102,6 @@ mod tests {
 
   #[test]
   fn scheduled_handler_registration_keeps_name_and_lazy_lookup_rules() {
-    // Python: tests/test_scheduled_handlers.py::test_a_second_registration_raises
-    // Python: tests/test_scheduled_handlers.py::test_an_unregistered_name_resolves_to_none
-    // Python: tests/test_scheduled_handlers.py::test_importing_the_scheduler_loads_no_handler_stack
     HANDLER_POLLS.store(0, Ordering::SeqCst);
     let mut registry = Registry::new();
     registry.register_package("test.cron", register).unwrap();

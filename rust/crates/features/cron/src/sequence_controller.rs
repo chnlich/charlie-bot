@@ -193,7 +193,8 @@ fn row_schedule_fields(
   session_ids: &[String],
   now: UtcDateTime,
 ) -> HashMap<String, Map<String, Value>> {
-  // Match Python's sorted ID set, snapshot fingerprint and earliest-fire expiry (`src/features/cron/sequence_controller.py:181-209`).
+  // The row memo stays valid while the snapshot fingerprint and the sorted session ids match
+  // and the earliest fire is ahead.
   let mut ids = session_ids.to_vec();
   ids.sort();
   ids.dedup();
@@ -347,7 +348,7 @@ impl SequenceController for CronSequenceController {
   }
 
   fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
-    // Binding lookups use the same loader snapshot as Python's cached task list (`src/features/cron/cron_sequence.py:94-106`).
+    // A binding lookup reads the same loader snapshot the listing renders.
     let snapshot = self.snapshot_for_listing();
     let names = names_for_binding(&snapshot.tasks, session_id);
     let name = names.first()?.clone();
@@ -705,7 +706,7 @@ fn resolved_backend(
 
 fn distinct_backend_conflict(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<Option<String>> {
   let Some(steps) = task.steps.as_ref() else { return Ok(None) };
-  // Match Python's one-pass name index (`src/features/cron/cron_sequence.py:532-559`).
+  // A duplicated step name resolves to its last position, from this one-pass index.
   let positions = steps.iter().enumerate().map(|(index, step)| (step.name.as_str(), index)).collect::<HashMap<_, _>>();
   for (position, step) in steps.iter().enumerate() {
     let Some(prior_name) = step.distinct_backend_from.as_deref() else { continue };
@@ -922,7 +923,6 @@ mod tests {
 
   #[tokio::test]
   async fn stale_anchor_wake_recycles_chat_events_and_keeps_worker_threads() {
-    // Python: tests/test_cron_auto_bind.py::test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_firing_report
     let (home, features) = feature_context();
     let node = manager(&features, "synthetic-stale-anchor-node").await.unwrap();
     features
@@ -967,7 +967,6 @@ mod tests {
 
   #[tokio::test]
   async fn live_anchor_wake_keeps_its_conversation_and_has_no_prefix() {
-    // Python: tests/test_cron_auto_bind.py::test_bound_node_wake_on_a_live_anchor_carries_no_prefix
     let (_home, features) = feature_context();
     let node = manager(&features, "synthetic-live-anchor-node").await.unwrap();
     features.store.persist_cc_session_id(&node.id, "synthetic-live-native", Some("synthetic")).await.unwrap();
@@ -1101,8 +1100,6 @@ mod tests {
 
   #[tokio::test]
   async fn archiving_a_bound_node_disables_every_task_and_preserves_other_yaml_fields() {
-    // Python: tests/test_cron_auto_bind.py::test_archiving_bound_node_writes_enabled_false
-    // Python: tests/test_archive_cron_restore.py::test_archive_disables_every_task_bound_to_the_node
     let (home, features) = feature_context();
     let node = manager(&features, "synthetic-archive-bound-node").await.unwrap();
     for name in ["synthetic-nightly", "synthetic-weekly"] {

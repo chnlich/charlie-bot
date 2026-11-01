@@ -1,4 +1,4 @@
-//! The required-file reads: a `--file` argument or stdin, with Python's text-mode line endings.
+//! The required-file reads: a `--file` argument or stdin; file reads carry Python's text-mode line endings.
 
 use std::io::Read as _;
 use std::path::Path;

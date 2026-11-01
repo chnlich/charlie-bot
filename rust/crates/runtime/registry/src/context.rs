@@ -8,8 +8,8 @@ pub use crate::startup_stop::StartupStop;
 /// The reader of a session's running-turn input ids.
 type UserEventIdsFn = dyn Fn(&str) -> Vec<String> + Send + Sync;
 
-/// The input event ids that a session's running turn answers, read live from the master queue
-/// (`src/runtime/master_cc_state.py::running_user_event_ids`). The task runtime inserts it at startup.
+/// The input event ids that a session's running turn answers, read live from the master queue. The task runtime
+/// inserts it at startup.
 pub struct RunningTurnInputs {
   user_event_ids: Arc<UserEventIdsFn>,
 }

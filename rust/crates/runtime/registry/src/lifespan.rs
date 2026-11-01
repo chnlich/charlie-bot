@@ -10,10 +10,9 @@
 //! 5. the ready services, in registration order.
 //!
 //! Shutdown stops the ready services in reverse registration order, then the early ones in reverse, then closes the
-//! shared HTTP client and WebSockets. The server releases the home fence and logs `charliebot_shutdown` next
-//! (`server.py:293-310`). On SIGINT and failed bind, it runs let-go steps after that line; on SIGTERM, it skips them and
-//! restores SIGTERM's default disposition and re-raises it (`uvicorn/server.py:322-339`). Normal Python exits cancel
-//! pending tasks after the shutdown line (`asyncio/runners.py:66-75`).
+//! shared HTTP client and WebSockets. The server releases the home fence and logs `charliebot_shutdown` next.
+//! On SIGINT and failed bind, it runs let-go steps after that line; on SIGTERM, it skips them and restores
+//! SIGTERM's default disposition and re-raises it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -425,7 +424,7 @@ mod tests {
     assert!(!charliebot_compat::http_client::close_shared_client(), "the shutdown left the shared HTTP client open");
     let all = TRACE.lock().unwrap().clone();
     let stopped: Vec<&str> = all[started.len()..].iter().map(String::as_str).collect();
-    // Python: server.py:303-310 stops services and clients before logging, without a let-go phase.
+    // Shutdown stops services and clients before logging, without a let-go phase.
     assert_eq!(stopped, ["ready_beta:stop", "ready_alpha:stop", "early_beta:stop", "early_alpha:stop"]);
     lifespan.run_let_go_steps().await.unwrap();
     assert_eq!(TRACE.lock().unwrap().last().map(String::as_str), Some("let_go"));

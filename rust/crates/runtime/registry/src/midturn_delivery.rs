@@ -1,4 +1,4 @@
-//! Live user-message delivery for web manager turns (`src/runtime/midturn_delivery.py`).
+//! Live user-message delivery for web manager turns.
 //!
 //! One module owns the serialized stdin writes, the replay acknowledgements and the stdin close of one Run. The
 //! backend writes the Run prompt as the first stream-json user line and keeps stdin open. The dispatcher offers each

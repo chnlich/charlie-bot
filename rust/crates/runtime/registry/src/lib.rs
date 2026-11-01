@@ -2,10 +2,9 @@
 //! `register` function. The seam also carries the lifespan steps of the crash-recovery task, and the typed startup
 //! state that steps, services and route handlers share.
 //!
-//! The server builds one registry at startup, calling each listed package's `register` in the order of the
-//! composition root (`charliebot_packages`, whose list began as `src/app/registrations.py:16-46`), then shares it
-//! read-only. Each Python hook kind has one
-//! typed registration method and one reader. `rust/docs/registry.md` lists them with their Python sources.
+//! The server builds one registry at startup, calling each listed package's `register` in the composition order
+//! (`charliebot_packages`), then shares it read-only. Each hook kind has one typed registration method and one
+//! reader. `rust/docs/registry.md` lists them.
 
 pub mod backend;
 pub mod caller;

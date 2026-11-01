@@ -15,6 +15,7 @@ pub mod home_init;
 pub mod hot_reload;
 pub mod logging;
 pub mod logline;
+pub mod memo;
 pub mod metadata_slot;
 pub mod pacific;
 pub mod paths;

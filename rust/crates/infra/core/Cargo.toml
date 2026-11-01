@@ -12,6 +12,7 @@ getrandom.workspace = true
 hmac.workspace = true
 jiff.workspace = true
 libc.workspace = true
+lru.workspace = true
 memmap2.workspace = true
 nix.workspace = true
 procfs.workspace = true

@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::git::{self, DIFF_TIMEOUT};
 use crate::manifest::{self, Manifest};
-use crate::memo::BoundedMemo;
+use crate::memo::LockedMemo;
 use crate::params::{self, Params, take};
 use crate::refs::{self, FileStamp, Signature};
 use crate::repos;
@@ -60,8 +60,8 @@ pub(crate) struct GitState {
   config: Arc<HotReload<CharlieBotConfig>>,
   registry: Arc<Registry>,
   pub(crate) diff_cap: usize,
-  pub(crate) manifests: BoundedMemo<ManifestKey, Arc<Manifest>>,
-  pub(crate) branches: BoundedMemo<BranchKey, Arc<Vec<String>>>,
+  pub(crate) manifests: LockedMemo<ManifestKey, Arc<Manifest>>,
+  pub(crate) branches: LockedMemo<BranchKey, Arc<Vec<String>>>,
 }
 
 impl GitState {
@@ -70,8 +70,8 @@ impl GitState {
       config,
       registry,
       diff_cap: DIFF_MAX_BYTES,
-      manifests: BoundedMemo::new(MANIFEST_MEMO_LIMIT),
-      branches: BoundedMemo::new(BRANCH_MEMO_LIMIT),
+      manifests: LockedMemo::new(MANIFEST_MEMO_LIMIT),
+      branches: LockedMemo::new(BRANCH_MEMO_LIMIT),
     }
   }
 }

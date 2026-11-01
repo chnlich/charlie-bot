@@ -13,13 +13,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Context;
 use charliebot_core::fsutil;
+use charliebot_core::memo::BoundedMemo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::layout;
 use crate::metadata::UtcDateTime;
-use crate::read_memos::{BoundedMemo, FileSignature, StatSignatureMemo};
+use crate::read_memos::{FileSignature, StatSignatureMemo};
 
 const TRIGGER_META_MEMO_LIMIT: usize = 1024;
 const TRIGGER_STATE_VERDICT_LIMIT: usize = 1024;

@@ -6,7 +6,7 @@ use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
 
 use crate::exit::CliExit;
 
-/// `constants.CALLER_SESSION_HEADER`: the calling session on internal-API calls. One spelling everywhere.
+/// The calling session on internal-API calls. One spelling everywhere.
 pub const CALLER_SESSION_HEADER: &str = "X-CharlieBot-Caller-Session";
 
 /// The `Authorization` and caller-session headers for one internal-API call.
@@ -45,8 +45,8 @@ fn caller_session() -> Option<String> {
   std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty())
 }
 
-/// `configured_access_key()`: the `charliebot.access_key` credential, or `None` when unset. A
-/// credentials file that does not load is an error, as Python's `get_credentials()` raises it.
+/// The `charliebot.access_key` credential, or `None` when unset. A credentials file that does not
+/// load is an error.
 fn access_key() -> Result<Option<String>, CliExit> {
   let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let credentials = credentials::load_credentials(&home).map_err(|error| CliExit::error(error.0))?;

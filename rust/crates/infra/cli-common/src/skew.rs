@@ -9,8 +9,8 @@ use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 /// The version route `app/server` mounts. The skew probe sends its `GET` to the running server.
 pub const VERSION_PATH: &str = "/api/internal/version";
 
-/// `compose_version_skew_hint`: a hint when the server and the repo sit at different SHAs, `None`
-/// when either SHA is missing (a best-effort fetch failed) or when they match.
+/// A restart hint when the server and the repo sit at different SHAs, and `None` when either SHA
+/// is missing (a best-effort fetch failed) or when they match.
 pub fn compose_version_skew_hint(
   server_sha: Option<&str>,
   started_at: Option<&str>,
@@ -29,8 +29,8 @@ pub fn compose_version_skew_hint(
   Some(format!("server running {server_sha}{started_clause}, repo at {local_sha} — server restart may be required"))
 }
 
-/// `_maybe_version_skew_hint`: gather the server and local SHAs and compose the hint. Every
-/// failure while gathering means no hint, so the CLI error path never raises from the hint.
+/// Gather the server and local SHAs and compose the restart hint. Every failure while gathering
+/// means no hint, so the CLI error path never raises from the hint.
 pub fn version_skew_hint(
   base_url: &str,
   headers: &[(String, String)],
@@ -41,8 +41,8 @@ pub fn version_skew_hint(
   compose_version_skew_hint(server_sha.as_deref(), started_at.as_deref(), local_sha.as_deref())
 }
 
-/// `_best_effort_server_version`: `GET /api/internal/version` under the skew timeout; a connect
-/// failure, a lost response, a non-2xx status or a non-JSON body all read as no version.
+/// The server's SHA and start time, from `GET /api/internal/version` under the skew timeout. A
+/// connect failure, a lost response, a non-2xx status or a non-JSON body all read as no version.
 fn best_effort_server_version(
   base_url: &str,
   headers: &[(String, String)],

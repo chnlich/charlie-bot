@@ -28,9 +28,9 @@ pub struct Resolved {
   pub note: Option<String>,
 }
 
-/// `resolve_session_id`: the server-written variable wins; an explicit `--session` must agree with
-/// it and a mismatch exits 2 naming both. Without the variable, `--session` or a cwd whose parent
-/// is the sessions directory supplies the id — both given, they must agree; neither, exit 2.
+/// The resolved session id: the server-written variable wins; an explicit `--session` must agree
+/// with it and a mismatch exits 2 naming both. Without the variable, `--session` or a cwd whose
+/// parent is the sessions directory supplies the id — both given, they must agree; neither, exit 2.
 pub fn resolve_session_id(sources: SessionSources<'_>) -> Result<Resolved, CliExit> {
   let cwd_session = cwd_session(sources.cwd, sources.sessions_dir);
 

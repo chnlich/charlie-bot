@@ -64,7 +64,7 @@ pub struct ApiCall<'a> {
   pub rejection_exit_codes: &'a [(u16, i32)],
 }
 
-/// `_request_with_contract`: issue one internal-API call and return its parsed JSON response.
+/// Issue one internal-API call and return its parsed JSON response.
 pub fn call_api(
   mut call: ApiCall<'_>,
   ctx: &CallContext,
@@ -122,7 +122,7 @@ pub fn call_api(
   }
 }
 
-/// `"unknown"` for a call that may mutate, `"none"` for a read-only GET.
+/// The sent-but-lost effect word: `"unknown"` for a call that may mutate, `"none"` for a read-only GET.
 fn unknown_effect(method: Method) -> &'static str {
   match method {
     Method::Get => "none",
@@ -145,8 +145,8 @@ fn build_url(base_url: &str, endpoint: &str, params: Option<&[(String, String)]>
   }
 }
 
-/// `_exit_server_rejection`: the `detail` when the body carries one, else `HTTP <status> <reason>`;
-/// the version-skew hint when a skew shows; the command's mapped exit code.
+/// The exit for a server rejection: the `detail` when the body carries one, else
+/// `HTTP <status> <reason>`; the version-skew hint when a skew shows; the command's mapped exit code.
 fn rejection_exit(
   response: &WireResponse,
   ctx: &CallContext,
@@ -170,7 +170,7 @@ fn rejection_exit(
   CliExit::contract(Value::Object(error), exit_code)
 }
 
-/// `post_internal_api` on the process transport: base URL and auth headers read per call.
+/// One POST on the process transport: base URL and auth headers read per call.
 pub fn post(
   endpoint: &str,
   payload: Value,
@@ -204,7 +204,7 @@ pub fn patch(
   })
 }
 
-/// `get_api` on the process transport: a read-only call, so the sent-but-lost effect is `"none"`.
+/// One read-only GET on the process transport, so the sent-but-lost effect is `"none"`.
 pub fn get(endpoint: &str, params: Option<Vec<(String, String)>>) -> Result<Value, CliExit> {
   run_call(ApiCall {
     method: Method::Get,

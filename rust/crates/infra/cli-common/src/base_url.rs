@@ -9,9 +9,9 @@ use serde_yaml::{Mapping, Value};
 
 use crate::exit::CliExit;
 
-/// `_internal_base_url`: `http://localhost:<server.port>`, the port read from `config.yaml` each
-/// time. No port cache: Python's `cache/cli_base_url.json` is keyed on a Python source file and has
-/// no Rust meaning.
+/// The internal-API base URL, `http://localhost:<server.port>`, with the port read from
+/// `config.yaml` each time. No port cache: Python's `cache/cli_base_url.json` is keyed on a Python
+/// source file and has no Rust meaning.
 pub fn internal_base_url() -> Result<String, CliExit> {
   let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let port = server_port(&home)?;

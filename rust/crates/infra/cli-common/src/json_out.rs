@@ -1,13 +1,13 @@
-//! `print_json`: the one home of the CLI's JSON encoding.
+//! The one home of the CLI's JSON encoding.
 
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::Value;
 
-/// `json.dumps(value, ensure_ascii=False, indent=None)`: one line, `", "` between items.
+/// One line, `", "` between items: the style `json.dumps(value, ensure_ascii=False, indent=None)` writes.
 const ONE_LINE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// `json.dumps(value, ensure_ascii=False, indent=N)`: an indent block, `","` between items.
+/// An indent block, `","` between items: the style `json.dumps(value, ensure_ascii=False, indent=N)` writes.
 const INDENTED: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 

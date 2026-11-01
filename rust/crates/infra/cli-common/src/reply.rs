@@ -9,7 +9,7 @@ use crate::files;
 use crate::json_out;
 use crate::resolve;
 
-/// `post_reply`: the body is the resolved `session_id` and the `text`, then `extra`'s keys when given.
+/// Post one reply: the body is the resolved `session_id` and the `text`, then `extra`'s keys when given.
 pub fn post_reply(
   endpoint: &str,
   session: Option<&str>,

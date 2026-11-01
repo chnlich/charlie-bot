@@ -75,15 +75,19 @@
 .turn-row-tag-worker { background: rgba(5, 150, 105, 0.3); color: #6ee7b7; }
 .turn-row-tag-turn { background: rgba(100, 116, 139, 0.3); color: #cbd5e1; }
 .turn-row-title { color: #cbd5e1; }
-.turn-row-conclusion:not(:empty)::before { content: "\2192\00a0"; color: #64748b; }
-.turn-row-meta { font-family: 'Fira Code', ui-monospace, monospace; font-size: 0.65rem; color: #64748b; }
+/* The fold row's secondary tone: the conclusion arrow and the steps/time meta
+   read beside the title. #64748b rendered 3.75:1 on the row's #0f172a
+   background, under the 4.5:1 floor for text this small; #94a3b8 renders
+   6.96:1, the tone the row's own label already uses. */
+.turn-row-conclusion:not(:empty)::before { content: "\2192\00a0"; color: #94a3b8; }
+.turn-row-meta { font-family: 'Fira Code', ui-monospace, monospace; font-size: 0.65rem; color: #94a3b8; }
 .turn-row-meta > span:not(:empty) ~ span:not(:empty)::before { content: " \00b7 "; }
 @media (max-width: 820px) {
   .turn-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .turn-row-conclusion { display: none; }
 }
 .turn-collapse {
-  font-size: 0.6875rem; color: #64748b; white-space: nowrap;
+  font-size: 0.6875rem; color: #94a3b8; white-space: nowrap;
   padding: 0 0.25rem; transition: color 0.15s;
 }
 /* Window placeholder: an unready turn entering the window during active

@@ -41,6 +41,10 @@ pub const CREDENTIAL_KEY: &str = "credential";
 /// the CLI's reviewer import this name instead of each spelling it.
 pub const CONTEXT_WINDOW_KEY: &str = "context_window";
 
+/// The `proxy_url` key of a `backends.options[]` entry: the proxy the backend's child process routes its outbound
+/// traffic through. The option schemas import this name instead of each spelling it.
+pub const PROXY_URL_KEY: &str = "proxy_url";
+
 /// Retired keys under `backends:`, replaced by `backends.pool`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 

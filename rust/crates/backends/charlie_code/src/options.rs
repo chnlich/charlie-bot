@@ -1,10 +1,11 @@
 //! The charlie-code option fields (`src/backends/charlie_code/options.py`). Each field carries the bound pydantic checks
 //! for it, and the type refuses any key it does not name.
 
-use charliebot_core::config::{API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
+use charliebot_core::config::{
+  API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY,
+};
 use serde_yaml::{Mapping, Value};
 
-const PROXY_URL: &str = "proxy_url";
 const IMAGE_INPUT: &str = "image_input";
 const STREAM: &str = "stream";
 const TIMEOUT_SECONDS: &str = "timeout_seconds";
@@ -17,7 +18,7 @@ pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Null),
   OptionField::field(CREDENTIAL_KEY, OptionFieldDefault::Null),
-  OptionField::field(PROXY_URL, OptionFieldDefault::Null),
+  OptionField::field(PROXY_URL_KEY, OptionFieldDefault::Null),
   OptionField::field(IMAGE_INPUT, OptionFieldDefault::Bool(true)),
   OptionField::field(STREAM, OptionFieldDefault::Bool(true)),
   OptionField::field(TIMEOUT_SECONDS, OptionFieldDefault::Null),
@@ -29,7 +30,7 @@ const FIELDS: [&str; 9] = [
   API_BASE_KEY,
   CONTEXT_WINDOW_KEY,
   CREDENTIAL_KEY,
-  PROXY_URL,
+  PROXY_URL_KEY,
   IMAGE_INPUT,
   STREAM,
   TIMEOUT_SECONDS,
@@ -73,7 +74,7 @@ impl CharlieCodeOption {
       api_base: optional_text(fields, API_BASE_KEY)?,
       context_window: optional_positive_int(fields, CONTEXT_WINDOW_KEY)?,
       credential: optional_text(fields, CREDENTIAL_KEY)?,
-      proxy_url: optional_text(fields, PROXY_URL)?,
+      proxy_url: optional_text(fields, PROXY_URL_KEY)?,
       image_input: flag(fields, IMAGE_INPUT, true)?,
       stream: flag(fields, STREAM, true)?,
       timeout_seconds: optional_positive_int(fields, TIMEOUT_SECONDS)?,

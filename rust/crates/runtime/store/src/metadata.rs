@@ -21,6 +21,23 @@ use crate::{StoreError, StoreResult};
 const MODEL_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
+/// The session-metadata field holding the cron expression of the task bound to the session.
+pub const SCHEDULE_CRON: &str = "schedule_cron";
+/// The session-metadata field saying whether the bound task's schedule runs.
+pub const SCHEDULE_ENABLED: &str = "schedule_enabled";
+/// The session-metadata field holding the bound task's next fire time.
+pub const SCHEDULE_NEXT_RUN: &str = "schedule_next_run";
+/// The session-metadata field holding the timezone the bound task's cron expression is read in.
+pub const SCHEDULE_TIMEZONE: &str = "schedule_timezone";
+/// The session-metadata field holding the project the bound task's schedule runs in.
+pub const SCHEDULE_PROJECT: &str = "schedule_project";
+/// The session-metadata field saying whether a failed bound-task run is allowed.
+pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
+/// Every schedule field name of a session, in the order session metadata writes them. The session listing and the cron
+/// row fields read these names from here.
+pub const SCHEDULE_FIELDS: [&str; 6] =
+  [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
+
 /// Datetime stored as UTC with Python's Pydantic `Z` and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UtcDateTime(OffsetDateTime);
@@ -604,12 +621,12 @@ impl SessionMetadata {
     push(&mut declared, "cc_session_started_at", &self.cc_session_started_at);
     push(&mut declared, "backend", &self.backend);
     if !exclude_transient {
-      push(&mut declared, "schedule_cron", &self.schedule_cron);
-      push(&mut declared, "schedule_enabled", &self.schedule_enabled);
-      push(&mut declared, "schedule_next_run", &self.schedule_next_run);
-      push(&mut declared, "schedule_timezone", &self.schedule_timezone);
-      push(&mut declared, "schedule_project", &self.schedule_project);
-      push(&mut declared, "schedule_allow_failure", &self.schedule_allow_failure);
+      push(&mut declared, SCHEDULE_CRON, &self.schedule_cron);
+      push(&mut declared, SCHEDULE_ENABLED, &self.schedule_enabled);
+      push(&mut declared, SCHEDULE_NEXT_RUN, &self.schedule_next_run);
+      push(&mut declared, SCHEDULE_TIMEZONE, &self.schedule_timezone);
+      push(&mut declared, SCHEDULE_PROJECT, &self.schedule_project);
+      push(&mut declared, SCHEDULE_ALLOW_FAILURE, &self.schedule_allow_failure);
     }
     push(&mut declared, "parent_session_id", &self.parent_session_id);
     push(&mut declared, "successor_session_id", &self.successor_session_id);

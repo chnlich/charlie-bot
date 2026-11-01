@@ -13,7 +13,10 @@ use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceBinding, SequenceController, SequenceTree};
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::StoreResult;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{
+  SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SessionMetadata,
+  UtcDateTime,
+};
 use charliebot_store::run_records::{self, RunKind, RunRecord, SequenceRef};
 use chrono::{Datelike, TimeZone, Utc};
 use futures_util::future::BoxFuture;
@@ -218,10 +221,10 @@ fn row_schedule_fields(
     let Some(task) = bound_tasks.get(session_id.as_str()).copied() else { continue };
     let mut fields = Map::new();
     fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));
-    fields.insert("schedule_cron".to_string(), Value::String(task.cron.clone()));
-    fields.insert("schedule_timezone".to_string(), Value::String(task.timezone.clone()));
-    fields.insert("schedule_enabled".to_string(), Value::Bool(task.enabled));
-    fields.insert("schedule_allow_failure".to_string(), Value::Bool(task.allow_failure));
+    fields.insert(SCHEDULE_CRON.to_string(), Value::String(task.cron.clone()));
+    fields.insert(SCHEDULE_TIMEZONE.to_string(), Value::String(task.timezone.clone()));
+    fields.insert(SCHEDULE_ENABLED.to_string(), Value::Bool(task.enabled));
+    fields.insert(SCHEDULE_ALLOW_FAILURE.to_string(), Value::Bool(task.allow_failure));
     match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
       Ok(next) => {
         earliest_next_fire = Some(earliest_next_fire.map_or_else(
@@ -230,7 +233,7 @@ fn row_schedule_fields(
             earliest.min(UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"))
           },
         ));
-        fields.insert("schedule_next_run".to_string(), Value::String(next));
+        fields.insert(SCHEDULE_NEXT_RUN.to_string(), Value::String(next));
       }
       Err(error) => tracing::error!(task = %task.name, error = %error, "cron_listing_next_run_failed"),
     }

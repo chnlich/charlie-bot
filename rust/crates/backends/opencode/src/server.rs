@@ -623,7 +623,7 @@ impl OpenCodeServer {
     let process = process?;
     // The event reader records why the stream ended after giving the process its exit grace, so that reason already
     // carries the exit code when the process died. When the server loses its stream while running, the stop that
-    // follows also reaps the process; preferring the raw exit status here would report that kill instead of the loss.
+    // follows also reaps the process. Preferring the raw exit status here would report that kill instead of the loss.
     if let Some(reason) = stream_reason {
       return Some(reason);
     }

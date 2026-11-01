@@ -20,7 +20,7 @@
     .badge-task_delegated { background: #581c87; color: #e9d5ff; }
     .badge-worker_summary { background: #4c1d95; color: #ddd6fe; }
     .badge-assistant_error { background: #7f1d1d; color: #fca5a5; }
-    .badge-ping      { background: #1e293b; color: #64748b; }
+    .badge-ping      { background: #1e293b; color: #94a3b8; }
     .badge-default   { background: #1e293b; color: #94a3b8; }
 
     .event-row { border-bottom: 1px solid #1e293b; }
@@ -30,6 +30,12 @@
     /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the
        page; ordinary words keep their shape and the line breaks at the spaces between them. */
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+    /* The page's secondary text reads in the slate-400 tone. The row index and time drew slate-600,
+       2.36:1 on the slate-900 row; the header's labels drew slate-500, 3.42:1 on slate-850, and
+       the filter's placeholder drew slate-600 on slate-800, 1.93:1. slate-400 renders 6.96:1,
+       6.34:1 and 5.71:1 on those backgrounds, above the 4.5:1 floor for 12px text. The type
+       badges keep their own colours, with every one of them at or above that floor. */
 
     /* A phone cannot fit these two rows at their desktop width. The header gives
        the title a row of its own so a whole session name shows, and keeps the
@@ -65,33 +71,33 @@
       </a>
       <div class="events-back-sep h-4 w-px bg-slate-700"></div>
       <h1 class="text-sm font-semibold text-slate-200 truncate flex-1">
-        <span class="text-slate-500 mr-1">Events:</span>{{ session.name }}
+        <span class="text-slate-400 mr-1">Events:</span>{{ session.name }}
       </h1>
       <a href="{{ events_url }}" download aria-label="Download JSONL"
-         class="events-download flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
+         class="events-download flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
         </svg>
         <span class="events-download-label">Download JSONL</span>
       </a>
-      <span id="event-count" class="text-xs text-slate-500"></span>
+      <span id="event-count" class="text-xs text-slate-400"></span>
       {% include 'partials/concurrency_badge.html' %}
     </header>
 
     <!-- Filter bar -->
     <div class="events-filter border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900">
-      <label class="text-xs text-slate-500">Filter by type:</label>
+      <label class="text-xs text-slate-400">Filter by type:</label>
       <input id="type-filter"
              type="text"
              placeholder="e.g. user, assistant, result …"
-             class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 text-slate-300 placeholder-slate-600 w-48">
+             class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 text-slate-300 placeholder-slate-400 w-48">
       <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
         <input id="expand-all" type="checkbox" class="accent-blue-500">
         Expand all
       </label>
       <button onclick="clearFilter()"
-              class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+              class="text-xs text-slate-400 hover:text-slate-300 transition-colors">Clear</button>
     </div>
   </div>
 
@@ -233,9 +239,9 @@
 
         row.innerHTML = `
           <div class="flex items-center gap-2 min-w-0">
-            <span class="text-xs font-mono text-slate-600 w-8 flex-shrink-0 text-right">${idx + 1}</span>
+            <span class="text-xs font-mono text-slate-400 w-8 flex-shrink-0 text-right">${idx + 1}</span>
             <span class="text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
-            ${time ? `<span class="text-xs text-slate-600 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
+            ${time ? `<span class="text-xs text-slate-400 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
             <span class="event-preview text-xs text-slate-400 truncate"></span>
           </div>
           <div class="json-body ${expandAll ? '' : 'hidden'} mt-2 ml-10">

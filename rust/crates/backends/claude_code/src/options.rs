@@ -3,12 +3,20 @@
 use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
+/// The `effort` key of a `backends.options[]` entry: the Claude Code `--effort` level. The Anthropic-compatible
+/// backend launches `claude` too and reads the same field, so both backends import this name.
+pub const EFFORT_KEY: &str = "effort";
+
+/// The `cli_binary` key of a `backends.options[]` entry: the executable that replaces `claude`. The
+/// Anthropic-compatible backend replaces `claude` the same way, so both backends import this name.
+pub const CLI_BINARY_KEY: &str = "cli_binary";
+
 /// The `cc-claude` option's type-specific fields in `CcClaudeBackend`'s declaration order, each with the value the
 /// Python model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
-  OptionField::field("effort", OptionFieldDefault::Null),
+  OptionField::field(EFFORT_KEY, OptionFieldDefault::Null),
   OptionField::field("fast_mode", OptionFieldDefault::Bool(false)),
-  OptionField::field("cli_binary", OptionFieldDefault::Null),
+  OptionField::field(CLI_BINARY_KEY, OptionFieldDefault::Null),
   OptionField::field("account_pool", OptionFieldDefault::Null),
 ];
 
@@ -19,7 +27,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
       return Err(format!("cc-claude option key must be a string: {key:?}"));
     };
     match name {
-      "effort" | "cli_binary" | "account_pool" => {
+      EFFORT_KEY | CLI_BINARY_KEY | "account_pool" => {
         if !matches!(value, Value::Null | Value::String(_)) {
           return Err(format!("cc-claude option {name} must be a string or null"));
         }

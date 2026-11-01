@@ -1,15 +1,15 @@
 //! The endpoint, declared context window, optional credential, optional effort, optional executable, request headers
 //! and fixed request body fields of a `cc-anthropic-compatible` entry.
 
+use charliebot_claude_code::options::{CLI_BINARY_KEY, EFFORT_KEY};
 use charliebot_core::config::{API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
-const EFFORT: &str = "effort";
-const CLI_BINARY: &str = "cli_binary";
 const HEADERS: &str = "headers";
 const EXTRA_BODY: &str = "extra_body";
-const FIELDS: [&str; 7] = [API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EFFORT, CLI_BINARY, HEADERS, EXTRA_BODY];
+const FIELDS: [&str; 7] =
+  [API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EFFORT_KEY, CLI_BINARY_KEY, HEADERS, EXTRA_BODY];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
@@ -18,8 +18,8 @@ pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Required),
   OptionField::field(CREDENTIAL_KEY, OptionFieldDefault::Null),
-  OptionField::field(EFFORT, OptionFieldDefault::Null),
-  OptionField::field(CLI_BINARY, OptionFieldDefault::Null),
+  OptionField::field(EFFORT_KEY, OptionFieldDefault::Null),
+  OptionField::field(CLI_BINARY_KEY, OptionFieldDefault::Null),
   OptionField::field(HEADERS, OptionFieldDefault::EmptyMap),
   OptionField::field(EXTRA_BODY, OptionFieldDefault::EmptyMap),
 ];
@@ -76,12 +76,12 @@ impl CcAnthropicCompatibleOption {
       Some(Value::String(credential)) => Some(credential.clone()),
       Some(_) => return Err("cc-anthropic-compatible option credential must be a string or null".to_string()),
     };
-    let effort = match fields.get(EFFORT) {
+    let effort = match fields.get(EFFORT_KEY) {
       None | Some(Value::Null) => None,
       Some(Value::String(effort)) => Some(effort.clone()),
       Some(_) => return Err("cc-anthropic-compatible option effort must be a string or null".to_string()),
     };
-    let cli_binary = match fields.get(CLI_BINARY) {
+    let cli_binary = match fields.get(CLI_BINARY_KEY) {
       None | Some(Value::Null) => None,
       Some(Value::String(cli_binary)) => Some(cli_binary.clone()),
       Some(_) => return Err("cc-anthropic-compatible option cli_binary must be a string or null".to_string()),

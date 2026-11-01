@@ -267,6 +267,9 @@ async fn run_task(State(features): State<Arc<FeatureContext>>, Path(name): Path<
     Err(scheduler::RunError::Missing(name)) => {
       detail(StatusCode::NOT_FOUND, format!("No scheduled task named '{name}'"))
     }
+    Err(scheduler::RunError::RoundInFlight { task, round }) => {
+      detail(StatusCode::CONFLICT, format!("scheduled task '{task}' has a round still running in session '{round}'"))
+    }
     Err(scheduler::RunError::Failed(error)) => responses::internal_error("RuntimeError", error),
   }
 }

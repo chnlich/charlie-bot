@@ -9,9 +9,10 @@ use charliebot_core::event_types;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceExecutor;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
+use charliebot_store::CompactValue;
 use charliebot_store::control_events::ACTOR_SYSTEM;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, TaskSpec, UtcDateTime};
-use charliebot_store::run_records::{RunKind, RunRecord, SequenceRef};
+use charliebot_store::run_records::{HostBoot, RunDisplayState, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, TaskCaller};
 use chrono::{Datelike, LocalResult, Offset};
 use futures_util::future::BoxFuture;
@@ -19,21 +20,21 @@ use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
 use crate::config::ScheduledTaskConfig;
-use crate::loader;
+use crate::{loader, steps};
 
 const TICK_SECONDS: u64 = 60;
 const AUTO_BIND_PREFIX: &str = "scheduled-node:";
 
-/// The shared scheduler runtime installed after recovery finishes.
+/// The shared scheduler runtime installed after recovery finishes. It keeps no per-round state: whether a round is in
+/// flight is read from the persisted runs (`round_in_flight`).
 #[derive(Clone)]
 pub struct CronScheduler {
   features: Arc<FeatureContext>,
-  handles: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl CronScheduler {
   pub(super) fn new(features: Arc<FeatureContext>) -> Self {
-    Self { features, handles: Arc::new(Mutex::new(HashMap::new())) }
+    Self { features }
   }
 
   async fn loop_forever(&self) {
@@ -226,16 +227,7 @@ impl CronScheduler {
     if due > now {
       return Ok(());
     }
-    let running_handle = {
-      self
-        .handles
-        .lock()
-        .expect("cron handle mutex is not poisoned")
-        .get(&task.name)
-        .filter(|handle| !handle.is_finished())
-        .map(|handle| handle.id().to_string())
-    };
-    if let Some(handle_id) = running_handle {
+    if let Some(round) = self.round_in_flight(task, cfg)? {
       let now_text = isoformat_text(&now)?;
       update_cron_slots(
         &self.features,
@@ -252,7 +244,7 @@ impl CronScheduler {
             "type": event_types::SCHEDULED_RUN_SKIPPED,
             "task": task.name,
             "skipped_at": now_text,
-            "reason": format!("previous round still running ({handle_id})"),
+            "reason": format!("previous round still running ({round})"),
           }),
         )
         .await?;
@@ -350,7 +342,7 @@ impl CronScheduler {
       let owner_ref = firing_ref(&task, &firing);
       let step_count = task.steps.as_ref().map_or(0, Vec::len);
       let boundary = crate::boundary::subscribe_boundary(&leaf_id, &owner_ref);
-      let handle = tokio::spawn(async move {
+      tokio::spawn(async move {
         match executor.launch_and_settle(&leaf_id, &run_id, launch_text.as_deref()).await {
           Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
             // A fire with steps keeps its task alive until the step boundary reports the chain settled.
@@ -364,7 +356,6 @@ impl CronScheduler {
           }
         }
       });
-      self.handles.lock().expect("cron handle mutex is not poisoned").insert(task.name.clone(), handle);
     } else {
       executor.launch(&leaf.id, &run.id, launch_text.as_deref()).await?;
     }
@@ -404,7 +395,7 @@ impl CronScheduler {
       task.prompt.as_deref()
     };
     let goal = if steps { format!("{} steps", task.name) } else { task.prompt.clone().unwrap_or_default() };
-    let request_id = format!("{}:leaf", firing_ref(task, firing));
+    let request_id = round_request_id(task, firing);
     let leaf = self
       .features
       .store
@@ -513,11 +504,63 @@ impl CronScheduler {
     update_cron_slots(&self.features, session_id, json!({"last_run_status": status})).await
   }
 
+  /// The worker session of a round this scheduler started for `task`, while that round is still in flight.
+  ///
+  /// A due tick and a manual fire both ask this. The rounds are the worker sessions bound under the task's node
+  /// whose creation fact names the task.
+  fn round_in_flight(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<Option<String>> {
+    let Some(node_id) = task.session_id.as_deref() else { return Ok(None) };
+    for leaf_id in self.features.store.child_ids(node_id)? {
+      if self.leaf_has_live_run(&leaf_id, task, cfg)? && self.round_task_of(&leaf_id)?.as_deref() == Some(&task.name) {
+        return Ok(Some(leaf_id));
+      }
+    }
+    Ok(None)
+  }
+
+  /// Whether a worker session's runs keep a round in flight: a run is running or queued, or its steps chain awaits
+  /// the next step. A withheld run is neither, so a run that never launched does not block the task.
+  fn leaf_has_live_run(
+    &self,
+    leaf_id: &str,
+    task: &ScheduledTaskConfig,
+    cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<bool> {
+    let store = &self.features.store;
+    let runs = store.list_run_records_sync(leaf_id)?;
+    let node = store.node_state(leaf_id)?;
+    let mut boot = HostBoot::default();
+    for run in &runs {
+      if matches!(node.display_state(run, &mut boot)?, RunDisplayState::Running | RunDisplayState::Queued) {
+        return Ok(true);
+      }
+    }
+    let facts = store.run_facts(leaf_id)?;
+    Ok(store.task_state(leaf_id)? == "open" && steps::steps_chain_awaits_next_step(task, cfg, &runs, &facts)?)
+  }
+
+  /// The task a worker session was created for, read from its creation fact. `None` for a session no round created.
+  fn round_task_of(&self, session_id: &str) -> anyhow::Result<Option<String>> {
+    let events = self.features.store.load_all_facts(session_id)?;
+    let created =
+      events.iter().find(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CREATED));
+    Ok(
+      created
+        .and_then(|event| event.get("request_id"))
+        .and_then(CompactValue::as_str)
+        .and_then(round_request_task)
+        .map(str::to_string),
+    )
+  }
+
   async fn run_now(&self, name: &str) -> Result<TaskRunResult, RunError> {
     let cfg = self.features.config.get().map_err(|error| RunError::Failed(error.to_string()))?;
     let snapshot = loader::load_snapshot(&self.features, &cfg).map_err(|error| RunError::Failed(error.to_string()))?;
     let task =
       snapshot.tasks.into_iter().find(|task| task.name == name).ok_or_else(|| RunError::Missing(name.to_string()))?;
+    if let Some(round) = self.round_in_flight(&task, &cfg).map_err(|error| RunError::Failed(format!("{error:#}")))? {
+      return Err(RunError::RoundInFlight { task: name.to_string(), round });
+    }
     self
       .execute_task(task, None, false, cfg.as_ref().clone(), chrono::Utc::now())
       .await
@@ -539,6 +582,8 @@ pub enum RunError {
   Unavailable,
   /// No valid task by this name exists.
   Missing(String),
+  /// A round of the task is still in flight; `round` names its worker session.
+  RoundInFlight { task: String, round: String },
   /// The task fire failed visibly.
   Failed(String),
 }
@@ -627,6 +672,18 @@ pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConf
 
 fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
   format!("cron:{}:{firing}", task.name)
+}
+
+/// The request id of the worker session a round creates. The creation fact stores it, so `round_task_of` reads it back.
+fn round_request_id(task: &ScheduledTaskConfig, firing: &str) -> String {
+  format!("{}:leaf", firing_ref(task, firing))
+}
+
+/// The task name in a round's request id, or `None` for any other request id. A task name has no colon, so the name
+/// ends at the first colon after the `cron:` prefix.
+fn round_request_task(request_id: &str) -> Option<&str> {
+  let firing = request_id.strip_prefix("cron:")?.strip_suffix(":leaf")?;
+  firing.split_once(':').map(|(name, _)| name)
 }
 
 async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<crate::boundary::BoundaryNotice>) {
@@ -859,7 +916,7 @@ mod tests {
   use charliebot_registry::context::FeatureContext;
   use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
-  use charliebot_store::run_records::{RunKind, RunRecord};
+  use charliebot_store::run_records::{HostBoot, RunDisplayState, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use charliebot_store::{CreateTask, TaskCaller};
   use charliebot_tasks::git::git_worktree_dir_name;
   use chrono::{TimeZone, Timelike, Utc};
@@ -870,7 +927,7 @@ mod tests {
 
   use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig};
-  use crate::test_support::{FakeGit, GIT_PROGRAM_LOCK, ProcessGroupGuard, feature_context, manager};
+  use crate::test_support::{FakeGit, GIT_PROGRAM_LOCK, HELD_ROUND_GOAL, ProcessGroupGuard, feature_context, manager};
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
     let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
@@ -1773,14 +1830,96 @@ mod tests {
     Utc.with_ymd_and_hms(2026, 6, 1, 0, minute, second).unwrap()
   }
 
-  /// A live in-flight round for `task_name`, completed by dropping the returned sender.
-  fn insert_pending_handle(scheduler: &CronScheduler, task_name: &str) -> tokio::sync::oneshot::Sender<()> {
-    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    let handle = tokio::spawn(async move {
-      let _ = rx.await;
-    });
-    scheduler.handles.lock().expect("cron handle mutex is not poisoned").insert(task_name.to_string(), handle);
-    tx
+  /// A worker task bound to a fresh manager node, ticking every minute. Its rounds hold their process open.
+  async fn held_worker_task(features: &Arc<FeatureContext>, name: &str) -> (std::path::PathBuf, SessionMetadata) {
+    let node = manager(features, &format!("{name}-node")).await.unwrap();
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let prompt = home.join(format!("{name}-prompt.md"));
+    std::fs::write(&prompt, format!("{HELD_ROUND_GOAL}\n")).unwrap();
+    let path = write_task(
+      &home,
+      name,
+      &json!({
+        "cron": "* * * * *", "prompt_file": prompt, "mode": "worker", "enabled": true,
+        "timezone": "UTC", "session_id": node.id, "backend": "synthetic",
+      }),
+    );
+    (path, node)
+  }
+
+  /// The number of rounds a node has started, each one a worker session bound under it.
+  fn round_count(features: &FeatureContext, node_id: &str) -> usize {
+    features.store.child_ids(node_id).unwrap().len()
+  }
+
+  /// Wait until a round under `node_id` has a running run, then return its session and run. The run's process joins
+  /// `processes`, so the test ends even when it fails before `end_round`.
+  async fn wait_for_running_round(
+    features: &Arc<FeatureContext>,
+    processes: &mut ProcessGroupGuard,
+    node_id: &str,
+  ) -> (String, RunRecord) {
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+      loop {
+        for leaf_id in features.store.child_ids(node_id).unwrap() {
+          for run in features.store.list_run_records_sync(&leaf_id).unwrap() {
+            let node = features.store.node_state(&leaf_id).unwrap();
+            if matches!(node.display_state(&run, &mut HostBoot::default()).unwrap(), RunDisplayState::Running) {
+              processes.track(run.pid.expect("a running run has a process"));
+              return (leaf_id, run);
+            }
+          }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await;
+    match outcome {
+      Ok(round) => round,
+      Err(_) => panic!("a round reaches a running run; rounds: {}", round_states(features, node_id)),
+    }
+  }
+
+  /// Each run under `node_id`'s rounds with its display state and process, for a failure message.
+  fn round_states(features: &Arc<FeatureContext>, node_id: &str) -> String {
+    let mut states = Vec::new();
+    for leaf_id in features.store.child_ids(node_id).unwrap() {
+      let node = features.store.node_state(&leaf_id).unwrap();
+      for run in features.store.list_run_records_sync(&leaf_id).unwrap() {
+        let state = node.display_state(&run, &mut HostBoot::default());
+        states.push(format!("{leaf_id}/{} pid={:?} state={state:?}", run.id, run.pid));
+      }
+    }
+    format!("{states:?}")
+  }
+
+  /// Kill a held round's process and wait until its run has a terminal fact.
+  async fn end_round(features: &Arc<FeatureContext>, leaf_id: &str, run: &RunRecord) {
+    let pid = run.pid.expect("a running round has a process");
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+      loop {
+        let facts = features.store.load_all_facts(leaf_id).unwrap();
+        if charliebot_store::run_records::terminal_outcome(&facts, &run.id).unwrap().is_some() {
+          return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the ended round reaches a terminal fact");
+  }
+
+  fn skipped_events(features: &FeatureContext, session_id: &str) -> Vec<CompactValue> {
+    features
+      .store
+      .load_chat_events_sync(session_id)
+      .unwrap()
+      .into_iter()
+      .filter(|event| {
+        event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::SCHEDULED_RUN_SKIPPED)
+      })
+      .collect()
   }
 
   fn handler_results(features: &FeatureContext, session_id: &str) -> usize {
@@ -1798,56 +1937,164 @@ mod tests {
   #[tokio::test]
   async fn a_due_tick_skips_while_the_previous_round_is_in_flight_and_consumes_the_delayed_occurrences() {
     let (_home, features) = feature_context();
-    let (_path, node) = bound_handler_task(&features, "code-health").await;
+    install_execution(&features).await;
+    let (_path, node) = held_worker_task(&features, "code-health").await;
+    let mut processes = ProcessGroupGuard::new();
     let scheduler = CronScheduler::new(Arc::clone(&features));
     scheduler.tick_at(utc_at(0, 30)).await.unwrap();
-    assert_eq!(handler_results(&features, &node.id), 1);
+    let (first_round, first_run) = wait_for_running_round(&features, &mut processes, &node.id).await;
 
-    let pending = insert_pending_handle(&scheduler, "code-health");
-
-    // Several due ticks arrived while the first round was still pending: one judgment at 00:04 consumes the
-    // occurrences 00:01-00:04, no second round joins the pending one.
+    // Several due ticks arrived while the first round was still running: one judgment at 00:04 consumes the
+    // occurrences 00:01-00:04, no second round joins the running one.
     scheduler.tick_at(utc_at(4, 0)).await.unwrap();
-    let events = features.store.load_chat_events_sync(&node.id).unwrap();
-    let skips: Vec<&CompactValue> = events
-      .iter()
-      .filter(|event| {
-        event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::SCHEDULED_RUN_SKIPPED)
-      })
-      .collect();
-    assert_eq!(skips.len(), 1, "{events:?}");
+    let skips = skipped_events(&features, &node.id);
+    assert_eq!(skips.len(), 1, "{skips:?}");
     assert_eq!(skips[0].get("task").and_then(CompactValue::as_str), Some("code-health"));
     let reason = skips[0].get("reason").and_then(CompactValue::as_str).unwrap();
     assert!(reason.starts_with("previous round still running"), "{reason}");
-    assert_eq!(handler_results(&features, &node.id), 1, "the pending round was never joined by a second one");
+    assert_eq!(round_count(&features, &node.id), 1, "the running round was never joined by a second one");
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
     assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("skipped"));
     assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
 
-    // The pending round finishes; a mid-minute tick is not on the cron grid, so nothing fires there and the
-    // anchor stays where the skip left it. The next fire lands on 00:05, the next occurrence from the anchor.
-    drop(pending);
-    tokio::task::yield_now().await;
+    // The running round ends; a mid-minute tick is not on the cron grid, so nothing fires there and the anchor stays
+    // where the skip left it. The next fire lands on 00:05, the next occurrence from the anchor.
+    end_round(&features, &first_round, &first_run).await;
     scheduler.tick_at(utc_at(2, 30)).await.unwrap();
-    assert_eq!(handler_results(&features, &node.id), 1, "no fire at the completion moment");
+    assert_eq!(round_count(&features, &node.id), 1, "no fire at the completion moment");
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
     assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
     scheduler.tick_at(utc_at(5, 0)).await.unwrap();
-    assert_eq!(handler_results(&features, &node.id), 2);
+    assert_eq!(round_count(&features, &node.id), 2);
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
-    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
     assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:05:00+00:00"));
+    let (second_round, second_run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    end_round(&features, &second_round, &second_run).await;
   }
 
   #[tokio::test]
-  async fn the_scheduled_path_ignores_stuck_disk_state_and_a_manual_run_leaves_the_handle() {
+  async fn a_round_in_flight_in_persisted_state_skips_a_due_tick_on_a_fresh_scheduler() {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
+    let (_path, node) = held_worker_task(&features, "code-health").await;
+    let mut processes = ProcessGroupGuard::new();
+    CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
+    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+
+    // A restart gives the new scheduler no state of its own: the running round is still in flight in its runs.
+    let restarted = CronScheduler::new(Arc::clone(&features));
+    restarted.tick_at(utc_at(4, 0)).await.unwrap();
+    let skips = skipped_events(&features, &node.id);
+    assert_eq!(skips.len(), 1, "{skips:?}");
+    assert_eq!(round_count(&features, &node.id), 1, "the restarted scheduler started no second round");
+    end_round(&features, &round, &run).await;
+  }
+
+  #[tokio::test]
+  async fn a_scheduled_round_refuses_a_manual_fire_and_starts_no_run() {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
+    let (_path, node) = held_worker_task(&features, "code-health").await;
+    let mut processes = ProcessGroupGuard::new();
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
+    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+
+    let Err(super::RunError::RoundInFlight { task, round: refused }) = scheduler.run_now("code-health").await else {
+      panic!("a manual fire with a round in flight is refused");
+    };
+    assert_eq!(task, "code-health");
+    assert_eq!(refused, round);
+    assert_eq!(round_count(&features, &node.id), 1, "the refused fire started no round");
+    assert_eq!(features.store.list_run_records_sync(&round).unwrap().len(), 1);
+    end_round(&features, &round, &run).await;
+  }
+
+  #[tokio::test]
+  async fn a_manual_round_keeps_the_due_tick_from_starting_a_second_one() {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
+    let (_path, node) = held_worker_task(&features, "code-health").await;
+    let mut processes = ProcessGroupGuard::new();
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    match scheduler.run_now("code-health").await {
+      Ok(_) => {}
+      Err(super::RunError::Failed(message)) => panic!("the manual fire failed: {message}"),
+      Err(_) => panic!("the manual fire was refused"),
+    }
+    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+
+    // The next occurrence after the manual fire is due two minutes later.
+    scheduler.tick_at(chrono::Utc::now() + chrono::Duration::minutes(2)).await.unwrap();
+    assert_eq!(skipped_events(&features, &node.id).len(), 1);
+    assert_eq!(round_count(&features, &node.id), 1, "the due tick started no second round");
+    end_round(&features, &round, &run).await;
+  }
+
+  #[tokio::test]
+  async fn a_steps_round_stays_in_flight_until_its_chain_settles() {
+    let (_home, features) = feature_context();
+    install_execution(&features).await;
+    let cfg = (*features.config.get().unwrap()).clone();
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    let firing = "2026-06-01T00:00:00+00:00";
+    let steps_task = |node_id: &str| {
+      let mut task = worker_task("synthetic-steps-in-flight", node_id, None);
+      task.prompt = None;
+      task.steps = Some(vec![
+        StepConfig {
+          name: "select".to_string(),
+          prompt_file: None,
+          prompt: Some("Select candidates.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+        StepConfig {
+          name: "review".to_string(),
+          prompt_file: None,
+          prompt: Some("Review the diff.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+      ]);
+      task
+    };
+    // Step 0 is registered and not yet launched: a queued run keeps the round in flight.
+    let node = manager(&features, "synthetic-steps-passed-node").await.unwrap();
+    let task = steps_task(&node.id);
+    let (leaf, step0, _, _) =
+      scheduler.register_fire_work(&task, &node, firing, "synthetic", None, &cfg).await.unwrap();
+    assert_eq!(scheduler.round_in_flight(&task, &cfg).unwrap(), Some(leaf.id.clone()));
+
+    // Step 0 passed with exit 0 and step 1 is not registered yet: the chain awaits its next step, so the round is
+    // still in flight in the gap between the two steps.
+    let guard = features.store.control_lock().await;
+    let passed = RunOutcome { exit_code: Some(0), ..RunOutcome::new(RunOutcomeKind::Success) };
+    features.store.record_finish_locked(&guard, &leaf.id, &step0.id, passed).await.unwrap();
+    drop(guard);
+    assert_eq!(scheduler.round_in_flight(&task, &cfg).unwrap(), Some(leaf.id.clone()));
+
+    // A failed step 0 settles the chain with a report, so its round is no longer in flight.
+    let failed_node = manager(&features, "synthetic-steps-failed-node").await.unwrap();
+    let failed_task = steps_task(&failed_node.id);
+    let (failed_leaf, failed_step0, _, _) =
+      scheduler.register_fire_work(&failed_task, &failed_node, firing, "synthetic", None, &cfg).await.unwrap();
+    let guard = features.store.control_lock().await;
+    let failed = RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) };
+    features.store.record_finish_locked(&guard, &failed_leaf.id, &failed_step0.id, failed).await.unwrap();
+    drop(guard);
+    assert_eq!(scheduler.round_in_flight(&failed_task, &cfg).unwrap(), None);
+  }
+
+  #[tokio::test]
+  async fn the_due_fire_ignores_stuck_disk_state_and_a_manual_run_starts_with_no_round_in_flight() {
     let (_home, features) = feature_context();
     let (_path, node) = bound_handler_task(&features, "code-health").await;
     let scheduler = CronScheduler::new(Arc::clone(&features));
     scheduler.tick_at(utc_at(0, 30)).await.unwrap();
 
     // Stuck on-disk signals: a thread record whose status says running with a pid that no longer exists, and
-    // node bookkeeping stuck at running. No handle is in flight, so the due fire proceeds.
+    // node bookkeeping stuck at running. No round is in flight, so the due fire proceeds.
     let thread_path = features.store.thread_metadata_path(&node.id, "stuck-thread");
     std::fs::create_dir_all(thread_path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -1877,24 +2124,12 @@ mod tests {
     scheduler.tick_at(utc_at(1, 0)).await.unwrap();
     assert_eq!(handler_results(&features, &node.id), 2, "the due fire proceeds past the running disk state");
 
-    // A manual run executes while a handle is in flight and leaves the recorded handle untouched: manual
-    // rounds neither block nor are blocked.
-    let pending = insert_pending_handle(&scheduler, "code-health");
-    let recorded_id =
-      scheduler.handles.lock().expect("cron handle mutex is not poisoned").get("code-health").map(|handle| handle.id());
+    // A manual run with no round in flight starts and records its handler result.
     match scheduler.run_now("code-health").await {
       Ok(_) => {}
       Err(super::RunError::Failed(message)) => panic!("the manual run failed: {message}"),
       Err(_) => panic!("the manual run failed"),
     }
     assert_eq!(handler_results(&features, &node.id), 3);
-    let after = scheduler
-      .handles
-      .lock()
-      .expect("cron handle mutex is not poisoned")
-      .get("code-health")
-      .map(|handle| (handle.id(), handle.is_finished()));
-    assert_eq!(after, recorded_id.map(|id| (id, false)), "the manual run left the recorded handle unchanged");
-    drop(pending);
   }
 }

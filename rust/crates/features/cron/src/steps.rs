@@ -1,8 +1,12 @@
-//! The backend resolution and conflict check of a steps firing, which the sequence controller applies to each step.
+//! The backend resolution and the next-step judgment of a steps firing.
+//!
+//! The sequence controller starts each step with these functions, and the scheduler reads the next-step judgment to
+//! decide whether a round is still in flight. Neither caller is imported by this module.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_store::run_records::{RunFacts, RunOutcomeKind, RunRecord};
 
 use crate::config::ScheduledTaskConfig;
 
@@ -57,4 +61,31 @@ pub(crate) fn distinct_backend_conflict(
     let _ = position;
   }
   Ok(None)
+}
+
+/// Whether a steps firing has a next step still to start, read from its persisted runs.
+///
+/// The answer is true when no step run is pending, the last step passed with exit 0, and a later step exists. This
+/// mirrors the next-step branch of `reconcile_bound_firing`, which starts that step. A conflicting backend makes that
+/// branch report and stop instead, so the answer is false for it.
+pub(crate) fn steps_chain_awaits_next_step(
+  task: &ScheduledTaskConfig,
+  cfg: &CharlieBotConfig,
+  runs: &[RunRecord],
+  facts: &RunFacts,
+) -> anyhow::Result<bool> {
+  let Some(steps) = task.steps.as_ref().filter(|steps| !steps.is_empty()) else { return Ok(false) };
+  let mut by_position = BTreeMap::new();
+  for run in runs {
+    if let Some(sequence) = run.sequence_ref.as_ref().filter(|sequence| sequence.kind == "cron_steps") {
+      by_position.insert(sequence.position as usize, run);
+    }
+  }
+  let Some((&last_position, last_run)) = by_position.last_key_value() else { return Ok(false) };
+  if by_position.values().any(|run| !facts.has_terminal_fact(&run.id)) {
+    return Ok(false);
+  }
+  let passed =
+    matches!(facts.terminal_outcome(&last_run.id)?, Some(RunOutcomeKind::Success)) && last_run.exit_code == Some(0);
+  Ok(passed && last_position + 1 < steps.len() && distinct_backend_conflict(task, cfg)?.is_none())
 }

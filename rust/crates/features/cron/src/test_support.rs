@@ -94,6 +94,10 @@ fn register_test_handler(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.scheduled_handler("synthetic_handler", |_features| Box::pin(async { Ok("synthetic result".to_string()) }))
 }
 
+/// The goal of a task whose rounds stay running until the test ends them. The synthetic backend holds a launch that
+/// carries this text open with `sleep`; every other launch prints a result and exits.
+pub const HELD_ROUND_GOAL: &str = "Synthetic held round";
+
 struct TestBackendFactory;
 
 impl BackendFactory for TestBackendFactory {
@@ -118,7 +122,10 @@ impl AgentBackend for TestBackend {
     Ok(())
   }
 
-  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
+    if prompt.contains(HELD_ROUND_GOAL) {
+      return Ok(vec!["/bin/sh".to_string(), "-c".to_string(), "exec sleep 600".to_string()]);
+    }
     Ok(vec![
       "/bin/sh".to_string(),
       "-c".to_string(),

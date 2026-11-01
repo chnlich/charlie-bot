@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cgfs::{Cgroup, EntryKind, Hierarchy, LeafSpec};
 use charliebot_core::cgroup::{
-  AGENTS_SLICE, SESSION_CGROUP_OOM_SCORE_ADJ, agents_slice_dir, session_cgroup_name, session_cgroup_path,
-  session_slice_dirs,
+  AGENTS_SLICE, PROCS_FILE_NAME, SESSION_CGROUP_OOM_SCORE_ADJ, agents_slice_dir, session_cgroup_name,
+  session_cgroup_path, session_slice_dirs,
 };
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::StartupStop;
@@ -219,7 +219,7 @@ pub fn prepare_session_cgroup(
 /// Move a spawned process into its cgroup and set its OOM priority; failures match the Python warnings and do not fail
 /// the spawn.
 pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
-  let path = cgroup.path.join("cgroup.procs");
+  let path = cgroup.path.join(PROCS_FILE_NAME);
   if let Err(error) = attach_pid(&cgroup.path, pid) {
     tracing::warn!(target: "charliebot_agents", pid, path = %path.display(), error = %error, "session_cgroup_move_failed");
   }

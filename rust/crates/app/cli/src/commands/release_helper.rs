@@ -920,7 +920,7 @@ fn cgroup_clean(args: &[String]) -> Result<i32, String> {
   if !directory.is_dir() {
     return Ok(0);
   }
-  let procs = directory.join("cgroup.procs");
+  let procs = directory.join(cgroup::PROCS_FILE_NAME);
   for pid in cgroup_pids(&procs)? {
     if !environ_has(pid, tree) {
       continue;

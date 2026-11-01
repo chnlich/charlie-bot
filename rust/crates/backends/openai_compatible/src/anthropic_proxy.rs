@@ -173,8 +173,7 @@ fn stream_response(upstream: reqwest::Response, model: &str, gemini_stream_rules
     translator,
     frames: VecDeque::new(),
     failure: None,
-    reading: true,
-    done: false,
+    state: RelayState::Reading,
   };
   relay.queue(relay.translator.start_events());
   sse_response(relay_frames(relay))
@@ -199,9 +198,19 @@ struct Relay {
   frames: VecDeque<sse::Event>,
   /// The failure that ends the body, sent after the frames queued before it.
   failure: Option<io::Error>,
-  /// Whether the upstream still has lines to read. `[DONE]` and the upstream's end both clear it.
-  reading: bool,
-  done: bool,
+  /// How far the body has got.
+  state: RelayState,
+}
+
+/// How far one streamed answer has got.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RelayState {
+  /// The upstream still has lines to read. `[DONE]` and the upstream's end both leave this state.
+  Reading,
+  /// The reading ended; the translator's closing events still have to queue.
+  Finishing,
+  /// Nothing follows the queued frames but the end.
+  Done,
 }
 
 /// The body's frames: every queued frame, then the failure that ends the body early, then the end. A failure leaves the
@@ -218,7 +227,7 @@ fn relay_frames(state: Relay) -> impl Stream<Item = Result<sse::Event, io::Error
         tokio::task::yield_now().await;
         return Some((Err(failure), relay));
       }
-      if relay.done {
+      if relay.state == RelayState::Done {
         return None;
       }
       relay.advance().await;
@@ -237,23 +246,23 @@ impl Relay {
     if let Err((kind, message)) = self.step().await {
       tracing::error!(error = %kind, detail = %message, "Exception in ASGI application");
       self.failure = Some(io::Error::other(message));
-      self.done = true;
+      self.state = RelayState::Done;
     }
   }
 
-  /// Reads the upstream's next chunk and handles its complete lines, or finishes the message once the upstream is done.
+  /// Reads the upstream's next chunk and handles its complete lines, or finishes the message once the reading ended.
   async fn step(&mut self) -> Result<(), (String, String)> {
-    if !self.reading {
+    if self.state != RelayState::Reading {
       let events = self.translator.finish_events().map_err(fault_failure)?;
       self.queue(events);
-      self.done = true;
+      self.state = RelayState::Done;
       return Ok(());
     }
     match self.upstream.chunk().await.map_err(|error| ("RequestError".to_string(), error.to_string()))? {
       Some(chunk) => {
         for line in self.framer.push(&chunk) {
           self.handle_line(&line)?;
-          if !self.reading {
+          if self.state != RelayState::Reading {
             break;
           }
         }
@@ -262,7 +271,7 @@ impl Relay {
         if let Some(tail) = std::mem::take(&mut self.framer).finish() {
           self.handle_line(&tail)?;
         }
-        self.reading = false;
+        self.state = RelayState::Finishing;
       }
     }
     Ok(())
@@ -275,7 +284,7 @@ impl Relay {
     };
     let raw = trim_space(raw);
     if raw == b"[DONE]" {
-      self.reading = false;
+      self.state = RelayState::Finishing;
       return Ok(());
     }
     if raw.is_empty() {

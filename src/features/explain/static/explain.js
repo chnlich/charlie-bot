@@ -266,7 +266,11 @@ const toggleExplainPanelTracked = Chat.registerSeparatorPanel({
 });
 // Explain (btw-style) state change for one round: repaint the button from the
 // frame; a frame carries no body, so an open panel re-fetches the single entry.
-registerWsMessageHandler('explain_status', (ev) => updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend));
+registerWsMessageHandler(
+  'explain_status',
+  (ev) => updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend),
+  {advancesCursor: true},
+);
 document.addEventListener('charliebot:session-data-load', (event) => loadExplainStatuses(event.detail));
 
 const GLOBALS = {

@@ -9,7 +9,7 @@ mod translate;
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::{Registry, RegistryError};
+use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
 
@@ -17,9 +17,7 @@ const PACKAGE: &str = "src.backends.gemini";
 
 /// Registers the `gemini` type and the two legacy credential keys. The registration names no usage source.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  let host =
-    CliHost::from_process().map_err(|error| RegistryError { package: PACKAGE, message: format!("{error:#}") })?;
-  register_with_host(registry, host)
+  register_with_host(registry, registration_step(PACKAGE, CliHost::from_process())?)
 }
 
 /// [`register`] over an explicit host.

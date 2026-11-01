@@ -51,6 +51,12 @@ impl fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
+/// One `register` step's result, a failure reported as `package`'s with the whole anyhow chain as the message. A step
+/// that fails outside the registry — reading the host, opening a database — reaches the startup error this way.
+pub fn registration_step<T>(package: &'static str, step: anyhow::Result<T>) -> Result<T, RegistryError> {
+  step.map_err(|error| RegistryError { package, message: format!("{error:#}") })
+}
+
 /// One registration and the package that made it.
 struct Entry<T> {
   key: &'static str,
@@ -1993,6 +1999,17 @@ mod tests {
 
   fn websocket_zeta(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.websocket("/ws/test/*", websocket_handler)
+  }
+
+  /// A failed step reads as the package's failure, with every context frame of the chain in the message.
+  #[test]
+  fn a_failed_step_names_the_package_and_the_whole_chain() {
+    use anyhow::Context;
+
+    let step: anyhow::Result<()> = Err(anyhow::anyhow!("HOME must be set")).context("reading the host");
+    let error = registration_step("src.backends.example", step).unwrap_err();
+    assert_eq!(error.package, "src.backends.example");
+    assert_eq!(error.message, "reading the host: HOME must be set");
   }
 
   #[test]

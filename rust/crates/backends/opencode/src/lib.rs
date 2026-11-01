@@ -22,7 +22,7 @@ use std::sync::Arc;
 use charliebot_core::home;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
-use charliebot_registry::{Registry, RegistryError};
+use charliebot_registry::{Registry, RegistryError, registration_step};
 use usage_logs::OpencodeLogs;
 
 use self::backend::{OpenCodeFactory, OpenCodeLifecycle};
@@ -35,8 +35,7 @@ pub use usage_logs::USAGE_SOURCE;
 
 /// Register the backend type, shared server factory, usage source and snapshot reading limits.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  let host = OpenCodeHost::from_process()
-    .map_err(|error| RegistryError { package: "src.backends.opencode", message: format!("{error:#}") })?;
+  let host = registration_step("src.backends.opencode", OpenCodeHost::from_process())?;
   register_with_host(registry, host, ServerTimeouts::default())
 }
 

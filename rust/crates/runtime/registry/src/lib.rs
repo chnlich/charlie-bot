@@ -27,5 +27,5 @@ mod watch;
 pub mod wiring;
 
 pub use context::{FeatureContext, RunningTurnInputs, StartupState, StartupStop, StateError};
-pub use registry::{RegisterFn, Registry, RegistryError};
+pub use registry::{RegisterFn, Registry, RegistryError, registration_step};
 pub use wiring::{WebSocketHandler, WebSocketMatch, WebSocketRequest};

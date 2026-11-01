@@ -24,7 +24,9 @@
   .card .head { display:flex; align-items:center; justify-content:space-between; gap:8px }
   .card .nm { font-size:14px; font-weight:600 }
   .card .desc { font-size:12.5px; color:var(--mut) }
-  .card .tgt { font-size:11.5px; font-family:var(--mono); color:var(--mut2);
+  /* The route line and the footnote carry the body muted tone: --mut2 renders 3.70:1 on the white card and
+     3.38:1 on the page background, under the 4.5:1 floor for text this small; --mut renders 5.77:1 and 5.28:1. */
+  .card .tgt { font-size:11.5px; font-family:var(--mono); color:var(--mut);
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
   .badge { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; font-size:11px;
     font-weight:700; letter-spacing:.04em; text-transform:uppercase;
@@ -32,7 +34,7 @@
   .badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor }
   .badge-up { color:var(--up-fg); background:var(--up-bg); border-color:var(--up-bd) }
   .badge-down { color:var(--down-fg); background:var(--down-bg); border-color:var(--down-bd) }
-  .foot { color:var(--mut2); font-size:12.5px; margin-top:26px; max-width:82ch; line-height:1.6 }
+  .foot { color:var(--mut); font-size:12.5px; margin-top:26px; max-width:82ch; line-height:1.6 }
   ul.foot { margin-top:6px; padding-left:1.4em }
   @media (max-width:760px) { body { padding:18px 14px 30px } }
 </style>

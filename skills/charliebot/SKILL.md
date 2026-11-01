@@ -418,7 +418,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 - A newly added cron task first fires on its next occurrence after one full tick: the scheduler looks back a single tick from load, so a new daily expression starts the following day.
 - Cron config lives one job per file under `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
 - The cron timezone is fixed in the config model, API, and UI: pin `America/Los_Angeles` explicitly for local tasks. Reread `config.d/cron.d/` at implementation time — concurrent sessions may mutate it.
-- Run a scheduled task once now with `POST /api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat event. An unknown task name answers 404.
+- Run a scheduled task once now with `POST /api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat event. An unknown task name answers 404. A task whose round is still in flight answers 409 and starts nothing.
 
 ## Improve Loop Control
 

@@ -104,6 +104,13 @@ The stored body is the request without `name`, without an empty `backend`, and w
 
 Side effects: creates `config.d/cron.d/` when absent and writes `<name>.yaml`.
 
+## Rounds in flight
+
+A round is the worker session that the scheduler creates for one firing of a task that runs a worker, steps included. A `master` task and a handler task create no round. A task has a round in flight while one of its rounds has a run that is running or queued, or while the round's steps chain has a next step to start. A withheld run is not in flight. The judgment reads the persisted runs, so it holds after a server restart.
+
+- A due tick for a task with a round in flight records `scheduled_run_skipped` with reason `previous round still running (<session id>)`, sets `last_run_status` to `skipped`, and sets `last_scheduled_run` to the tick time. The tick starts no run.
+- A manual fire of a task with a round in flight starts no run and answers 409 (see `POST /api/cron/tasks/{name}/run`).
+
 ## `POST /api/cron/tasks/{name}/run`
 
 - Handler: `src/features/cron/api.py:300`.
@@ -114,9 +121,10 @@ Side effects: creates `config.d/cron.d/` when absent and writes `<name>.yaml`.
 |---|---|---|
 | 503 | The scheduler service is not running (`app.state.scheduler` unset) | `{"detail":"Scheduler not available"}` |
 | 404 | No task with that name | `{"detail":"No scheduled task named '<name>'"}` |
+| 409 | A round of the task is in flight (see Rounds in flight) | `{"detail":"scheduled task '<name>' has a round still running in session '<session id>'"}` |
 | 202 | Started | `{"type":"task_triggered","task":"<name>","session_id":"<node id>","thread_id":<string or null>}` |
 
-Side effects: the scheduler runs the task once through the same path as a cron fire (`scheduler.run_task_now`). An agent task starts an agent run on its node and delivers its completion report to the node. A handler task runs its handler and records a `handler_result` event. The route writes no chat event of its own.
+Side effects: the scheduler runs the task once through the same path as a cron fire (`scheduler.run_task_now`), unless a round of the task is in flight. An agent task starts an agent run on its node and delivers its completion report to the node. A handler task runs its handler and records a `handler_result` event. The route writes no chat event of its own.
 
 ## `DELETE /api/cron/tasks/{name}`
 

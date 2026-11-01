@@ -5,11 +5,14 @@
 //!
 //! A render reads each template source's `(mtime, size)` and keeps the last compiled minijinja environment while
 //! that list and the template globals still compare equal, so a repeat render skips compiling the page and its
-//! partials. A template, a page part or a template directory that changes on disk moves the list, and the next
-//! render compiles a fresh environment, so an edit takes effect without a restart as Jinja2's auto-reload does.
-//! The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the registry's template
-//! globals and `page_parts` added. The search path is `web/templates`, then each page package's `templates/`, in
-//! registration order.
+//! partials. The served template and static trees carry an inotify watch ([`TreeWatch`]), so the read of that list
+//! and the static files' digests happen only after an event reported a change; a render that drained no event reuses
+//! the list, the digest and the page text it last rendered, which makes a repeat render of an unchanged page one
+//! comparison of its inputs. A template, a page part or a template directory that changes on disk moves the list,
+//! and the next render compiles a fresh environment, so an edit takes effect without a restart as Jinja2's
+//! auto-reload does. The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the
+//! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
+//! `templates/`, in registration order.
 
 use std::collections::HashMap;
 use std::fs;
@@ -31,9 +34,13 @@ use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
 use crate::pages::{self, package_directory};
+use crate::watch::TreeWatch;
 
 /// A zero-argument template global: the name and the value the call returns.
 pub type TemplateGlobal = (&'static str, Value);
+
+/// One served source file: its path as a URL path, `mtime_ns` and size.
+type SourceStat = (String, i64, u64);
 
 /// The template engine of one repository checkout.
 pub struct Templating {
@@ -47,15 +54,29 @@ pub struct Templating {
   /// `git_version()`, computed at the first render that asks for it.
   git_version: OnceLock<String>,
   asset_digest: Mutex<AssetDigestState>,
+  /// The template source list and the watch revision it read.
+  sources: Mutex<Option<SourceCache>>,
   /// The last compiled environment, kept while its template sources and globals still hold their value.
   render_cache: Mutex<Option<RenderCache>>,
+  /// The page text one render built and the inputs it built from.
+  render_memo: Mutex<Option<RenderMemo>>,
+  /// The watch whose revision says whether the template and static trees moved.
+  watch: TreeWatch,
 }
 
 #[derive(Default)]
 struct AssetDigestState {
-  signature: Vec<(String, i64, u64)>,
+  /// The watch revision the digest was built at; `None` before the first build.
+  revision: Option<u64>,
+  signature: Vec<SourceStat>,
   digests: HashMap<String, [u8; 20]>,
   digest: String,
+}
+
+/// Each template source's `(rel path, mtime_ns, size)`, and the watch revision the walk saw them at.
+struct SourceCache {
+  revision: u64,
+  sources: Arc<Vec<SourceStat>>,
 }
 
 /// One compiled template environment and the inputs it was compiled from.
@@ -65,10 +86,23 @@ struct AssetDigestState {
 /// equal, which serves a repeat render from the compiled templates; a moved source or global rebuilds it, so an edit
 /// on disk still takes effect at the next render.
 struct RenderCache {
-  /// Each template source's `(rel path, mtime_ns, size)` under the search directories, sorted.
-  sources: Vec<(String, i64, u64)>,
+  sources: Arc<Vec<SourceStat>>,
   globals: Vec<TemplateGlobal>,
   environment: Arc<Environment<'static>>,
+}
+
+/// The text one render of one template with one context produced, and the watch revision it rendered at.
+///
+/// A page request renders the template into its finished body and compares that body with the one it served last.
+/// The render is deterministic in the template sources, the globals and the context, so a repeat request whose
+/// inputs compare equal serves this text and skips the engine. A moved tree moves the revision, and a moved context
+/// or global compares unequal, so both render again.
+struct RenderMemo {
+  revision: u64,
+  name: String,
+  globals: Vec<TemplateGlobal>,
+  context: serde_json::Value,
+  html: String,
 }
 
 impl Templating {
@@ -76,6 +110,9 @@ impl Templating {
   pub fn new(repo_root: &Path, packages: &[&'static str]) -> Templating {
     let mut directories = vec![repo_root.join("web").join("templates")];
     directories.extend(packages.iter().map(|package| package_directory(repo_root, package).join("templates")));
+    let mut trees = directories.clone();
+    trees.push(repo_root.join("web").join("static"));
+    trees.extend(packages.iter().map(|package| package_directory(repo_root, package).join("static")));
     Templating {
       repo_root: repo_root.to_path_buf(),
       packages: packages.to_vec(),
@@ -83,7 +120,10 @@ impl Templating {
       names_checked: AtomicBool::new(false),
       git_version: OnceLock::new(),
       asset_digest: Mutex::new(AssetDigestState::default()),
+      sources: Mutex::new(None),
       render_cache: Mutex::new(None),
+      render_memo: Mutex::new(None),
+      watch: TreeWatch::new(&trees),
     }
   }
 
@@ -111,11 +151,18 @@ impl Templating {
   /// `_asset_tree_digest`: sha1 over each served static file's URL path and content sha1, in path
   /// order, as 12 hex digits. A file whose `(mtime_ns, size)` has not moved keeps its memoized sha1.
   fn asset_tree_digest(&self) -> io::Result<String> {
+    let revision = self.watch.revision();
+    {
+      let state = self.asset_digest.lock().expect("the asset digest lock is never poisoned");
+      if state.revision == Some(revision) {
+        return Ok(state.digest.clone());
+      }
+    }
     let static_root = self.repo_root.join("web").join("static");
     if !static_root.is_dir() {
       return Ok(String::new());
     }
-    let mut pairs: Vec<(String, i64, u64)> = Vec::new();
+    let mut pairs: Vec<SourceStat> = Vec::new();
     let mut paths: HashMap<String, PathBuf> = HashMap::new();
     walk_static_tree(&static_root, "", &mut pairs, &mut paths)?;
     for package in &self.packages {
@@ -128,6 +175,7 @@ impl Templating {
     pairs.sort();
     let mut state = self.asset_digest.lock().expect("the asset digest lock is never poisoned");
     if state.signature == pairs {
+      state.revision = Some(revision);
       return Ok(state.digest.clone());
     }
     let old_stats: HashMap<&str, (i64, u64)> =
@@ -147,7 +195,7 @@ impl Templating {
     }
     let value: String =
       combined.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..12].to_string();
-    *state = AssetDigestState { signature: pairs, digests, digest: value.clone() };
+    *state = AssetDigestState { revision: Some(revision), signature: pairs, digests, digest: value.clone() };
     Ok(value)
   }
 
@@ -219,24 +267,41 @@ impl Templating {
       .as_object_mut()
       .expect("a page context is a JSON object")
       .insert("request".to_string(), request_context(request));
-    self.render(name, &context, globals)
+    let revision = self.watch.revision();
+    {
+      let memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
+      if let Some(entry) = memo.as_ref()
+        && entry.revision == revision
+        && entry.name == name
+        && entry.globals == globals
+        && entry.context == context
+      {
+        return Ok(entry.html.clone());
+      }
+    }
+    let html = self.render(name, &context, globals.clone(), revision)?;
+    *self.render_memo.lock().expect("the render memo mutex is not poisoned") =
+      Some(RenderMemo { revision, name: name.to_string(), globals, context, html: html.clone() });
+    Ok(html)
   }
 
-  /// Render template `name` with `context` and the zero-argument `globals`.
+  /// Render template `name` with `context` and the zero-argument `globals`, at watch revision `revision`.
   fn render(
     &self,
     name: &str,
     context: &serde_json::Value,
     globals: Vec<TemplateGlobal>,
+    revision: u64,
   ) -> Result<String, RenderError> {
     if !self.names_checked.load(Ordering::Acquire) {
       assert_unique_template_names(&self.directories).map_err(RenderError::DuplicateName)?;
       self.names_checked.store(true, Ordering::Release);
     }
-    let sources = self.template_sources()?;
+    let sources = self.template_sources(revision)?;
     let environment = {
       let mut cache = self.render_cache.lock().expect("the render cache mutex is not poisoned");
-      let reused = cache.as_ref().is_some_and(|entry| entry.sources == sources && entry.globals == globals);
+      let reused =
+        cache.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.sources, &sources) && entry.globals == globals);
       if !reused {
         *cache =
           Some(RenderCache { sources, globals: globals.clone(), environment: Arc::new(self.environment(globals)) });
@@ -247,12 +312,22 @@ impl Templating {
     template.render(Value::from_serialize(context)).map_err(RenderError::Template)
   }
 
-  /// The `(rel path, mtime_ns, size)` of every template source under the search directories, sorted.
+  /// The `(rel path, mtime_ns, size)` of every template source under the search directories, sorted, as the walk
+  /// at watch revision `revision` saw them.
   ///
   /// A render reads a template through the loader and a page part through `page_parts`, and both live under a search
   /// directory. A source that moved changes this list, so a compiled environment that read the old bytes never
-  /// answers a render that would read the new ones.
-  fn template_sources(&self) -> Result<Vec<(String, i64, u64)>, RenderError> {
+  /// answers a render that would read the new ones. While the revision holds, the list the last walk read is the
+  /// list a walk would read now.
+  fn template_sources(&self, revision: u64) -> Result<Arc<Vec<SourceStat>>, RenderError> {
+    {
+      let cache = self.sources.lock().expect("the template sources mutex is not poisoned");
+      if let Some(cache) = cache.as_ref()
+        && cache.revision == revision
+      {
+        return Ok(Arc::clone(&cache.sources));
+      }
+    }
     let mut sources = Vec::new();
     for directory in &self.directories {
       let mut paths = HashMap::new();
@@ -261,6 +336,9 @@ impl Templating {
       sources.extend(entries);
     }
     sources.sort();
+    let sources = Arc::new(sources);
+    *self.sources.lock().expect("the template sources mutex is not poisoned") =
+      Some(SourceCache { revision, sources: Arc::clone(&sources) });
     Ok(sources)
   }
 
@@ -361,7 +439,7 @@ fn filesystem_walk(directory: &Path, follow_links: bool) -> WalkBuilder {
 fn walk_static_tree(
   directory: &Path,
   prefix: &str,
-  pairs: &mut Vec<(String, i64, u64)>,
+  pairs: &mut Vec<SourceStat>,
   paths: &mut HashMap<String, PathBuf>,
 ) -> io::Result<()> {
   let mut ancestors = Vec::new();
@@ -377,7 +455,7 @@ fn walk_static_directory(
   directory: &Path,
   relative: &Path,
   prefix: &str,
-  pairs: &mut Vec<(String, i64, u64)>,
+  pairs: &mut Vec<SourceStat>,
   paths: &mut HashMap<String, PathBuf>,
   ancestors: &mut Vec<(u64, u64)>,
 ) -> io::Result<()> {
@@ -650,6 +728,11 @@ mod tests {
     let expected: String = combined.finalize()[..6].iter().map(|byte| format!("{byte:02x}")).collect();
     let version = templating.static_asset_version().unwrap();
     assert_eq!(version.rsplit_once('-').unwrap().1, expected);
+
+    // A file written after the first digest moves the version, so the next render sees a static edit.
+    fs::write(static_root.join("later.js"), "delta").unwrap();
+    let changed = templating.static_asset_version().unwrap();
+    assert_ne!(changed.rsplit_once('-').unwrap().1, expected);
   }
 
   #[test]

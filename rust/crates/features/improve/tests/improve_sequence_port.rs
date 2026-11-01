@@ -296,7 +296,6 @@ fn run_events_of(harness: &LoopHarness, run_id: &str) -> anyhow::Result<Vec<Valu
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_two_iterations_stay_one_child_with_ordered_runs
 async fn two_iterations_use_one_child_and_keep_their_run_order() -> anyhow::Result<()> {
   let harness = LoopHarness::new(
     &[],
@@ -322,7 +321,6 @@ async fn two_iterations_use_one_child_and_keep_their_run_order() -> anyhow::Resu
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_live_goal_change_affects_next_iteration
 async fn the_second_iteration_reads_the_live_goal_file() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let gate = home.path().join("release-first-iteration");
@@ -376,7 +374,6 @@ async fn the_second_iteration_reads_the_live_goal_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_pooled_iteration_launches_on_the_selected_pool_account
 async fn each_pooled_iteration_run_records_the_selected_backend() -> anyhow::Result<()> {
   let harness = LoopHarness::new(
     &["account-main"],
@@ -398,7 +395,6 @@ async fn each_pooled_iteration_run_records_the_selected_backend() -> anyhow::Res
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
 async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&["quota"], &[], Vec::new()).await?;
 
@@ -428,7 +424,6 @@ async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_a_quota_failed_iteration_cools_its_member_and_the_next_runs_on_the_next_member
 async fn a_cooling_pool_member_is_followed_by_the_next_member() -> anyhow::Result<()> {
   let harness =
     LoopHarness::new(&["quota", "next"], &[], vec![recovery_support::result_script("second words")]).await?;
@@ -461,7 +456,6 @@ async fn a_cooling_pool_member_is_followed_by_the_next_member() -> anyhow::Resul
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_the_loop_blocks_only_when_every_member_is_cooling
 async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() -> anyhow::Result<()> {
   let quota_error = json!({"type": "error", "message": "Budget has been exceeded!"});
   let harness = LoopHarness::new(&["fake"], &[], vec![event_script(&quota_error, 1)]).await?;
@@ -480,7 +474,6 @@ async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() 
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_three_iterations_deliver_three_reports_and_wake_the_parent_four_times
 async fn three_iterations_deliver_reports_and_wake_the_parent_four_times() -> anyhow::Result<()> {
   let harness = LoopHarness::new(
     &[],
@@ -519,7 +512,6 @@ async fn three_iterations_deliver_reports_and_wake_the_parent_four_times() -> an
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_iteration_report_header_carries_the_judgment
 async fn an_iteration_report_carries_the_mechanical_header_and_fallback_file() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], vec![recovery_support::result_script("worker words")]).await?;
 
@@ -539,7 +531,6 @@ async fn an_iteration_report_carries_the_mechanical_header_and_fallback_file() -
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_failed_iteration_still_delivers_its_report_and_continues
 async fn a_non_quota_failed_iteration_is_reported_and_the_loop_continues() -> anyhow::Result<()> {
   let failed = json!({"type": "result", "subtype": "success", "result": "the build broke", "is_error": true});
   let harness =
@@ -564,7 +555,6 @@ async fn a_non_quota_failed_iteration_is_reported_and_the_loop_continues() -> an
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody
 async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], vec![recovery_support::result_script("first words")]).await?;
 
@@ -602,7 +592,6 @@ async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_improve_controller_preserves_base_lookups_and_skips_recovery
 async fn improve_controller_keeps_base_registry_lookups_and_skips_run_replay() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
   let controller = harness
@@ -649,7 +638,6 @@ async fn improve_controller_keeps_base_registry_lookups_and_skips_run_replay() -
 }
 
 #[tokio::test]
-// Python: tests/test_internal_delegate_takeoff.py::test_improve_child_records_the_resolved_backend
 async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Result<()> {
   let explicit = LoopHarness::new(&["fake"], &["other"], Vec::new()).await?;
   let (backend, model, from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
@@ -705,7 +693,6 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_legacy_state_without_end_error_loads_and_reports_clean
 async fn recovery_loads_a_legacy_failed_state_without_end_error() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
   let loop_id = harness.state.loop_id;
@@ -763,7 +750,6 @@ fn install_git_script(script: &str) -> GitOverrideGuard {
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_ff_push_rejection_reports_the_landing_error_and_the_pushed_branch
 async fn a_rejected_fast_forward_names_the_branch_that_was_pushed() {
   let _lock = GIT_OVERRIDE_LOCK.lock().await;
   let _override = install_git_script(
@@ -785,7 +771,6 @@ async fn a_rejected_fast_forward_names_the_branch_that_was_pushed() {
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_both_landing_pushes_failing_names_the_branch_push_error
 async fn two_rejected_landing_pushes_name_the_branch_push_error() {
   let _lock = GIT_OVERRIDE_LOCK.lock().await;
   let script = "case \"$2\" in *:*) printf '%s\\n' 'rejected: non-fast-forward' >&2 ;; *) printf '%s\\n' 'auth expired' >&2 ;; esac; exit 1";
@@ -805,7 +790,6 @@ async fn two_rejected_landing_pushes_name_the_branch_push_error() {
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_best_effort_branch_push_failure_is_reported_without_merge_back
 async fn a_best_effort_branch_push_failure_is_reported_without_merge_back() {
   let _lock = GIT_OVERRIDE_LOCK.lock().await;
   let _override = install_git_script("printf '%s\\n' 'auth expired' >&2; exit 1");

@@ -1,13 +1,12 @@
-//! Landing the work branch after a loop, and the iteration's commit delta
-//! (`src/features/improve/improve_command.py:303-330`, `:370-423`, `:423-432`).
+//! Landing the work branch after a loop, and the iteration's commit delta.
 
 use std::path::Path;
 
 use charliebot_tasks::git;
 use serde_json::{Value, json};
 
-/// The tip after an iteration and the commits it added over `tip_before` (`_worktree_commit_delta`). A failed count
-/// leaves the commit count at zero, as the Python helper does.
+/// The tip after an iteration and the commits it added over `tip_before`. A failed count leaves the commit count at
+/// zero.
 pub async fn commit_delta(wt_path: &Path, tip_before: &str) -> (String, i64) {
   let tip_after = git::git_rev_parse(wt_path, "HEAD").await.unwrap_or_default();
   let mut commits_added = 0;

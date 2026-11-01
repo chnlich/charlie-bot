@@ -1,4 +1,4 @@
-//! The internal improve routes behind `charliebot improve` and `charliebot improve-stop` (`src/features/improve/api.py`).
+//! The internal improve routes behind `charliebot improve` and `charliebot improve-stop`.
 
 use std::fmt::Display;
 use std::sync::Arc;
@@ -42,7 +42,8 @@ const IMPROVE_BODY: BodyModel = BodyModel::required(IMPROVE_FIELDS).forbid_extra
 const IMPROVE_STOP_FIELDS: &[Field] = &[Field::required("session_id", FieldType::String)];
 const IMPROVE_STOP_BODY: BodyModel = BodyModel::required(IMPROVE_STOP_FIELDS).forbid_extra();
 
-/// The validated body of `POST /api/internal/improve`, with Python's defaults.
+/// The validated body of `POST /api/internal/improve`. An absent `iterations` reads as 3, an absent `merge_back` as
+/// false, and the other optional fields as `None`.
 #[derive(Deserialize)]
 struct ImproveRequest {
   session_id: String,

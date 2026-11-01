@@ -1,5 +1,4 @@
-//! The internal improve routes against a synthetic feature context, ported from `tests/test_cli_improve.py` and
-//! `tests/test_task_sequences.py`.
+//! The internal improve routes against a synthetic feature context.
 
 #[path = "../../../runtime/tasks/tests/recovery_support.rs"]
 mod recovery_support;
@@ -126,7 +125,6 @@ async fn post(features: &Arc<FeatureContext>, path: &str, body: Value) -> (Statu
 }
 
 #[tokio::test]
-// Python: tests/test_cli_improve.py::test_improve_endpoint_returns_404_for_missing_session
 async fn start_for_a_missing_session_is_not_found() {
   let (_home, features) = feature_context();
 
@@ -137,8 +135,6 @@ async fn start_for_a_missing_session_is_not_found() {
 }
 
 #[tokio::test]
-// Python: tests/test_task_sequences.py::test_improve_without_authorization_is_forbidden_not_a_server_error
-// Python: tests/test_internal_delegate_takeoff.py::test_improve_stays_blocked_without_takeoff
 async fn start_without_a_user_request_is_forbidden() {
   let (_home, features) = feature_context();
   add_manager(&features);
@@ -154,7 +150,6 @@ async fn start_without_a_user_request_is_forbidden() {
 }
 
 #[tokio::test]
-// Python: tests/test_cli_improve.py::test_improve_endpoint_returns_400_for_invalid_backend
 async fn start_with_an_unknown_backend_is_a_bad_request_and_reserves_nothing() {
   let (_home, features) = feature_context();
   add_manager(&features);
@@ -170,7 +165,6 @@ async fn start_with_an_unknown_backend_is_a_bad_request_and_reserves_nothing() {
 }
 
 #[tokio::test]
-// Python: tests/test_cli_improve.py::test_improve_endpoint_returns_409_for_running_loop
 async fn starting_a_second_loop_returns_conflict_with_the_running_loop_id() {
   let (_home, features) = feature_context_with_config(Some(
     "backends:\n  options:\n    - id: claude-fable\n      label: Synthetic Claude\n      type: cc-claude\n      model: claude-fable-model\n",
@@ -205,7 +199,6 @@ async fn starting_a_second_loop_returns_conflict_with_the_running_loop_id() {
 }
 
 #[tokio::test]
-// Python: tests/test_cli_improve.py::test_improve_stop_endpoint_404_for_missing_session
 async fn stop_for_a_missing_session_is_not_found() {
   let (_home, features) = feature_context();
 
@@ -216,7 +209,6 @@ async fn stop_for_a_missing_session_is_not_found() {
 }
 
 #[tokio::test]
-// Python: tests/test_cli_improve.py::test_improve_stop_endpoint_409_without_running_loop
 async fn stop_without_a_running_loop_is_a_conflict() {
   let (_home, features) = feature_context();
   add_manager(&features);
@@ -228,7 +220,6 @@ async fn stop_without_a_running_loop_is_a_conflict() {
 }
 
 #[tokio::test]
-// Python: tests/test_cli_improve.py::test_improve_stop_endpoint_marks_loop_stopped
 async fn stop_marks_the_running_loop_stopped() {
   let (_home, features) = feature_context();
   add_manager(&features);

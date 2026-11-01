@@ -1,5 +1,4 @@
-//! The mechanical judgments over an iteration: report validity, the summary text, and the quota blocker
-//! (`src/features/improve/improve_command.py:250-287`, `:333-357`, `:494-583`).
+//! The mechanical judgments over an iteration: report validity, the summary text, and the quota blocker.
 
 use std::path::Path;
 
@@ -228,8 +227,8 @@ fn event_text(event: &Value) -> String {
   parts.join("\n")
 }
 
-/// The iteration log's candidate events, newest first. Python uses the same bounded head proof before parsing a line
-/// (`src/infra/ndjson.py:404-468` and `src/features/improve/improve_command.py:575-587`).
+/// The iteration log's candidate events, newest first. The walk is `charliebot_store::run_records::NewestFirstEvents`,
+/// which skips a line unparsed when its first bytes prove a type these judgments do not read.
 pub fn newest_first_event_iter(events_path: &Path) -> anyhow::Result<impl Iterator<Item = Value>> {
   newest_first_judgment_inputs(events_path, &CANDIDATE_TYPES)
 }

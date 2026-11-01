@@ -1,5 +1,4 @@
-//! The v2 improve loop: one worker child task, iteration Runs, one final report
-//! (`src/features/improve/improve_sequence.py`).
+//! The v2 improve loop: one worker child task, iteration Runs, one final report.
 //!
 //! The loop keeps its state under `sessions/<id>/loops/<loop_id>/` (`goal.md`, re-read at every iteration, the optional
 //! `plan.md`, and `state.json`). Each iteration is one Run on the loop's worker child, `kind = iteration`, with
@@ -119,9 +118,8 @@ pub async fn create_improve_child(
     group: None,
     session_id: None,
   };
-  // Python passes the plain string "operator", which `_create_actor_for` does not take as an operator identity, so the
-  // creation fact's actor is "agent". The agent caller records that actor too. Its runtime gate passes here, because
-  // the route has checked the manager's authorization and the child's parent is that manager.
+  // The creation fact's actor is "agent": the task is created through the agent caller, whose runtime gate passes
+  // here because the route has checked the manager's authorization and the child's parent is that manager.
   store.create_task(request, TaskCaller::Agent { session_id: session_id.to_string() }, Map::new()).await
 }
 

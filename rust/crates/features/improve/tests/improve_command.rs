@@ -1,4 +1,4 @@
-//! The improve loop's durable state and report-reading judgments, ported from `tests/test_improve_command.py`.
+//! The improve loop's durable state and report-reading judgments.
 
 use std::path::Path;
 
@@ -34,7 +34,6 @@ fn assistant_text(text: &str) -> Value {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_reserve_loop_state_raises_when_session_already_has_running_loop
 fn a_second_reservation_names_the_running_loop() {
   let home = tempfile::tempdir().expect("temporary home");
   let cfg = config(home.path());
@@ -53,7 +52,6 @@ fn a_second_reservation_names_the_running_loop() {
 }
 
 #[test]
-// Python: tests/test_cli_improve.py::test_session_takes_a_new_loop_after_stop
 fn a_stopped_loop_releases_its_lock_for_a_new_loop_id() {
   let home = tempfile::tempdir().expect("temporary home");
   let cfg = config(home.path());
@@ -74,7 +72,6 @@ fn a_stopped_loop_releases_its_lock_for_a_new_loop_id() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_quota_blocker_reason_ignores_allowed_rate_limit_event
 fn an_allowed_rate_limit_event_is_no_blocker() {
   let events =
     [json!({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}})];
@@ -86,7 +83,6 @@ fn an_allowed_rate_limit_event_is_no_blocker() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_quota_blocker_reason_scans_newest_first
 fn the_newest_quota_match_names_the_blocker() {
   // Newest first: the error event is the newer of the two, so its match wins over the older rejection.
   let events = [
@@ -104,7 +100,6 @@ fn the_newest_quota_match_names_the_blocker() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_quota_blocker_match_reads_the_launch_error_events_quota_flag
 fn a_refused_launch_names_its_quota_cause_by_flag() {
   let event = json!({"type": "error", "message": "no login can take this run", "quota_exhausted": true});
 
@@ -114,7 +109,6 @@ fn a_refused_launch_names_its_quota_cause_by_flag() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_quota_blocker_match_leaves_a_false_flag_to_the_text_patterns
 fn a_false_quota_flag_leaves_the_relay_limit_refusal_unjudged() {
   let event = json!({
     "type": "error",
@@ -128,7 +122,6 @@ fn a_false_quota_flag_leaves_the_relay_limit_refusal_unjudged() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_quota_blocker_match_judges_an_error_event_without_the_flag_by_text
 fn an_unflagged_error_event_is_judged_by_its_text() {
   let event = json!({"type": "error", "message": "Provider rejected the request: insufficient quota."});
 
@@ -138,7 +131,6 @@ fn an_unflagged_error_event_is_judged_by_its_text() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_extract_iteration_summary_prefers_newest_result_or_assistant
 fn the_newest_summary_wins_whichever_kind_carries_it() {
   // Newest first: the assistant text is newer than the result, so its words are the summary.
   let events = [assistant_text("newest words"), json!({"type": "result", "result": "older result text"})];
@@ -150,7 +142,6 @@ fn the_newest_summary_wins_whichever_kind_carries_it() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_newest_first_events_prefiltered_parity
 fn the_candidate_prefilter_keeps_the_judgments_inputs() {
   // Over a log with both writer shapes, a giant tool_result line, a type-less line, blank and malformed lines, the
   // newest-first walk keeps the candidate types and the type-less line. The kept lines arrive in newest-first order.
@@ -182,7 +173,6 @@ fn the_candidate_prefilter_keeps_the_judgments_inputs() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_reserve_loop_state_writes_goal_file
 fn reservation_writes_the_live_goal_and_keeps_the_snapshot_in_state() {
   let home = tempfile::tempdir().expect("temporary home");
   let cfg = config(home.path());
@@ -198,7 +188,6 @@ fn reservation_writes_the_live_goal_and_keeps_the_snapshot_in_state() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_reserve_loop_state_writes_optional_plan_file
 fn reservation_writes_the_plan_only_when_given() {
   let home = tempfile::tempdir().expect("temporary home");
   let cfg = config(home.path());
@@ -216,7 +205,6 @@ fn reservation_writes_the_plan_only_when_given() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_read_loop_goal_raises_when_missing
 fn a_missing_goal_file_fails_without_a_fallback() {
   let home = tempfile::tempdir().expect("temporary home");
   let loop_dir = home.path().join("loops").join("1");
@@ -228,7 +216,6 @@ fn a_missing_goal_file_fails_without_a_fallback() {
 }
 
 #[test]
-// Python: tests/test_improve_command.py::test_read_loop_plan_returns_none_when_missing
 fn a_missing_plan_file_reads_as_none() {
   let home = tempfile::tempdir().expect("temporary home");
   let loop_dir = home.path().join("loops").join("1");

@@ -1,5 +1,5 @@
 //! The loop's durable state: `sessions/<id>/loops/` with the active lock, one directory per loop, its state file and its
-//! live goal and plan. The Python original is `src/features/improve/improve_command.py:33-242`, `:435-487`.
+//! live goal and plan.
 
 use std::fmt;
 use std::io;

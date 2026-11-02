@@ -1,5 +1,8 @@
 //! The lifecycle loop shared by manager turns and task runs.
 
+use std::env;
+use std::path::PathBuf;
+
 use anyhow::Result;
 pub use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_registry::Registry;
@@ -101,8 +104,26 @@ pub fn build_child_env(
   if let Some(session_id) = session_id {
     values.insert(SESSION_ID_ENV.to_string(), session_id.to_string());
   }
-  values.extend(overlay.clone());
+  apply_overlay(&mut values, overlay);
   values
+}
+
+/// Adds the per-run overlay to a child environment. Each name replaces its value, except PATH: an overlay PATH entry
+/// that the child lacks goes first, so the entries that the package edits put in front keep their order.
+fn apply_overlay(values: &mut Env, overlay: &Env) {
+  for (name, value) in overlay {
+    if name != "PATH" {
+      values.insert(name.clone(), value.clone());
+      continue;
+    }
+    let current: Vec<PathBuf> = env::split_paths(values.get("PATH").map_or("", String::as_str))
+      .filter(|entry| !entry.as_os_str().is_empty())
+      .collect();
+    let added: Vec<PathBuf> =
+      env::split_paths(value).filter(|entry| !entry.as_os_str().is_empty() && !current.contains(entry)).collect();
+    let joined = env::join_paths(added.into_iter().chain(current)).expect("a PATH entry holds no path separator");
+    values.insert(name.clone(), joined.into_string().expect("a PATH entry is valid Unicode"));
+  }
 }
 
 /// True when the lifecycle can produce notices from a completed round.
@@ -136,5 +157,15 @@ mod tests {
     assert_eq!(result["CHILD_EDIT"], "1");
     assert_eq!(result["KEPT"], "yes");
     assert!(inherited.contains_key("CLAUDECODE"));
+  }
+
+  #[test]
+  fn an_overlay_path_entry_the_child_lacks_goes_first_and_the_edited_order_stays() {
+    let mut values = Env::from([("PATH".to_string(), "/guard:/server-bin:/usr/bin".to_string())]);
+    let overlay = Env::from([("PATH".to_string(), "/stash:/server-bin:/usr/bin".to_string())]);
+
+    apply_overlay(&mut values, &overlay);
+
+    assert_eq!(values["PATH"], "/stash:/guard:/server-bin:/usr/bin");
   }
 }

@@ -93,12 +93,15 @@ pub enum SourceRef {
   PlanVersion(String),
 }
 
-/// A row's provenance: the session, its link, and the event or plan version inside it.
+/// A row's provenance: the session, its link, and the event or plan version inside it. A row that comes
+/// from one comment of a numbered comment batch carries that comment's number in `comment_item`; rows from
+/// other sources carry none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
   pub session_id: String,
   pub url: String,
   pub reference: SourceRef,
+  pub comment_item: Option<u64>,
 }
 
 /// One choice precedent.
@@ -420,7 +423,7 @@ fn parse_options(value: Option<&Value>) -> Result<Vec<String>, FieldError> {
 
 fn parse_source(value: Option<&Value>) -> Result<Source, FieldError> {
   let object = value.and_then(Value::as_object).ok_or_else(|| FieldError::new("source", "expected an object"))?;
-  reject_unknown(object, &["session_id", "url", "event_id", "plan_version"])
+  reject_unknown(object, &["session_id", "url", "event_id", "plan_version", "comment_item"])
     .map_err(|error| FieldError::new(format!("source.{}", error.field), error.detail))?;
   let session_id = required_string(object, "session_id")
     .map_err(|error| FieldError::new(format!("source.{}", error.field), error.detail))?;
@@ -428,6 +431,7 @@ fn parse_source(value: Option<&Value>) -> Result<Source, FieldError> {
     required_string(object, "url").map_err(|error| FieldError::new(format!("source.{}", error.field), error.detail))?;
   let event_id = optional_reference(object, "event_id")?;
   let plan_version = optional_reference(object, "plan_version")?;
+  let comment_item = optional_comment_item(object)?;
   let reference = match (event_id, plan_version) {
     (Some(event_id), None) => SourceRef::Event(event_id),
     (None, Some(plan_version)) => SourceRef::PlanVersion(plan_version),
@@ -438,7 +442,7 @@ fn parse_source(value: Option<&Value>) -> Result<Source, FieldError> {
       return Err(FieldError::new("source.event_id", "a source names event_id or plan_version"));
     }
   };
-  Ok(Source { session_id, url, reference })
+  Ok(Source { session_id, url, reference, comment_item })
 }
 
 fn optional_reference(object: &Map<String, Value>, field: &str) -> Result<Option<String>, FieldError> {
@@ -447,6 +451,17 @@ fn optional_reference(object: &Map<String, Value>, field: &str) -> Result<Option
     Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.clone())),
     Some(Value::String(_)) => Err(FieldError::new(format!("source.{field}"), "expected a non-empty string")),
     Some(_) => Err(FieldError::new(format!("source.{field}"), "expected a string")),
+  }
+}
+
+fn optional_comment_item(object: &Map<String, Value>) -> Result<Option<u64>, FieldError> {
+  match object.get("comment_item") {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::Number(number)) => number
+      .as_u64()
+      .map(Some)
+      .ok_or_else(|| FieldError::new("source.comment_item", "expected a non-negative whole number")),
+    Some(_) => Err(FieldError::new("source.comment_item", "expected a number")),
   }
 }
 
@@ -474,6 +489,7 @@ pub fn row_value(row: &Row) -> Value {
       source.insert("plan_version".to_string(), json!(plan_version));
     }
   }
+  source.insert("comment_item".to_string(), json!(row.source.comment_item));
   let mut value = Map::new();
   value.insert("type".to_string(), json!("row"));
   value.insert("id".to_string(), json!(row.id));
@@ -510,8 +526,10 @@ pub fn mark_value(mark: &Mark) -> Value {
 
 /// Append a row from its JSON value under the store lock, assigning the next `T<n>` id and returning it.
 ///
-/// The call refuses a row whose source reference and `chosen` repeat an existing row, naming that row, and a row
-/// whose `supersedes` names no existing row.
+/// The call refuses a row whose source reference, comment item and `chosen` repeat an existing row, naming that
+/// row, and a row whose `supersedes` names no existing row. Two comment items of one source event are separate
+/// decisions, so their rows both land even when they choose the same text; an item number never equals an absent
+/// one, so a row that now records its item can land beside an older row of the same event that records none.
 pub fn add_row(taste_dir: &Path, value: &Value) -> anyhow::Result<String> {
   let mut row = parse_input_row(value)?;
   ensure_dir(taste_dir)?;
@@ -548,7 +566,10 @@ pub fn add_mark(taste_dir: &Path, row_id: &str, status: MarkStatus) -> anyhow::R
 }
 
 fn duplicates(existing: &Row, row: &Row) -> bool {
-  if existing.chosen != row.chosen || existing.source.session_id != row.source.session_id {
+  if existing.chosen != row.chosen
+    || existing.source.session_id != row.source.session_id
+    || existing.source.comment_item != row.source.comment_item
+  {
     return false;
   }
   match (&existing.source.reference, &row.source.reference) {
@@ -664,6 +685,42 @@ mod tests {
     let error = add_row(dir.path(), &row).expect_err("the same source and chosen is refused");
     let message = error.to_string();
     assert!(message.contains("duplicate of T1"), "{message}");
+  }
+
+  #[test]
+  fn two_comment_items_of_one_event_both_land_and_a_rerun_of_one_is_refused() {
+    let dir = empty_dir();
+    let mut first = valid_row("work/code-review", "evt-1", "2026-10-16T12:00:00+00:00");
+    first["source"]["comment_item"] = json!(3);
+    let mut second = first.clone();
+    second["source"]["comment_item"] = json!(5);
+    assert_eq!(add_row(dir.path(), &first).unwrap(), "T1");
+    assert_eq!(add_row(dir.path(), &second).unwrap(), "T2", "a different comment item is another decision");
+    let error = add_row(dir.path(), &first).expect_err("the same event and item is refused");
+    assert!(error.to_string().contains("duplicate of T1"), "{error}");
+
+    let store = load_store(dir.path()).unwrap();
+    let items: Vec<Option<u64>> = store.rows().map(|row| row.source.comment_item).collect();
+    assert_eq!(items, [Some(3), Some(5)]);
+  }
+
+  #[test]
+  fn a_row_with_a_comment_item_lands_beside_an_older_row_of_the_same_event_without_one() {
+    let dir = empty_dir();
+    add_row(dir.path(), &valid_row("work/code-review", "evt-1", "2026-10-16T12:00:00+00:00")).unwrap();
+    let mut numbered = valid_row("work/code-review", "evt-1", "2026-10-16T12:00:00+00:00");
+    numbered["situation"] = json!("another item of the same batch");
+    numbered["source"]["comment_item"] = json!(5);
+    assert_eq!(add_row(dir.path(), &numbered).unwrap(), "T2");
+  }
+
+  #[test]
+  fn a_non_numeric_comment_item_is_refused() {
+    let dir = empty_dir();
+    let mut row = valid_row("work/code-review", "evt-1", "2026-10-16T12:00:00+00:00");
+    row["source"]["comment_item"] = json!("3");
+    let error = add_row(dir.path(), &row).expect_err("a comment item is a number");
+    assert!(error.to_string().contains("source.comment_item"), "{error}");
   }
 
   #[test]

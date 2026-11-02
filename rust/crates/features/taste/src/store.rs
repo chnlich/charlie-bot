@@ -214,18 +214,28 @@ impl Store {
 
   /// The rows of `domain` that were active at `moment`: decided earlier, and no superseding row decided by then.
   ///
-  /// This is the replay's as-of view. Marks carry no decision time, so they do not enter it; the caller excludes the
+  /// This is the replay's as-of view. A cover carries no decision time, so a covered row stays in the view. A retracted
+  /// row read its source wrong, so no moment makes it a precedent; the view leaves it out. The caller excludes the
   /// held-out row by its own decision time.
   pub fn rows_as_of(&self, domain: &str, moment: OffsetDateTime) -> Vec<&Row> {
     let decided_before =
       |row: &Row| OffsetDateTime::parse(&row.decided_at, &Rfc3339).is_ok_and(|decided| decided < moment);
     let superseded_by_then: BTreeSet<&str> =
       self.rows().filter(|row| decided_before(row)).filter_map(|row| row.supersedes.as_deref()).collect();
+    let retracted: BTreeSet<&str> = self
+      .records
+      .iter()
+      .filter_map(|record| match record {
+        Record::Mark(Mark { row, status: MarkStatus::Retracted(_) }) => Some(row.as_str()),
+        Record::Mark(_) | Record::Row(_) => None,
+      })
+      .collect();
     self
       .rows()
       .filter(|row| row.domain == domain)
       .filter(|row| decided_before(row))
       .filter(|row| !superseded_by_then.contains(row.id.as_str()))
+      .filter(|row| !retracted.contains(row.id.as_str()))
       .collect()
   }
 }
@@ -498,7 +508,7 @@ pub fn mark_value(mark: &Mark) -> Value {
   Value::Object(value)
 }
 
-/// Append a row from its JSON value, assigning the next `T<n>` id under the store lock, and print-worthy id back.
+/// Append a row from its JSON value under the store lock, assigning the next `T<n>` id and returning it.
 ///
 /// The call refuses a row whose source reference and `chosen` repeat an existing row, naming that row, and a row
 /// whose `supersedes` names no existing row.
@@ -725,5 +735,9 @@ mod tests {
     let later = OffsetDateTime::parse("2026-03-01T12:00:00+00:00", &Rfc3339).unwrap();
     let now: Vec<&str> = store.rows_as_of("work/code-review", later).iter().map(|row| row.id.as_str()).collect();
     assert_eq!(now, ["T2"]);
+
+    add_mark(dir.path(), "T2", MarkStatus::Retracted("misread source".into())).unwrap();
+    let retracted = load_store(dir.path()).unwrap();
+    assert!(retracted.rows_as_of("work/code-review", later).is_empty(), "a retracted row is no precedent");
   }
 }

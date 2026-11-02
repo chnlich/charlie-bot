@@ -811,7 +811,8 @@ mod tests {
       settings,
       concat!(
         r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
-        r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}]}]},""#,
+        r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
+        r#",{"type":"command","command":"charliebot scan-guard"}]}]},""#,
         r#"fastMode":true}"#
       )
     );
@@ -858,7 +859,10 @@ mod tests {
       settings["hooks"]["PreToolUse"],
       serde_json::json!([{
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+        "hooks": [
+          {"type": "command", "command": "charliebot wait-guard"},
+          {"type": "command", "command": "charliebot scan-guard"}
+        ]
       }])
     );
   }
@@ -867,7 +871,10 @@ mod tests {
   fn headless_settings_install_wait_guard_except_for_scheduled_steps() {
     let expected = serde_json::json!([{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+      "hooks": [
+        {"type": "command", "command": "charliebot wait-guard"},
+        {"type": "command", "command": "charliebot scan-guard"}
+      ]
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
       let settings = claude_launch::headless_claude_settings(run_kind, Some("manager-session")).unwrap();
@@ -1205,7 +1212,8 @@ mod tests {
         "--settings",
         concat!(
           r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
-          r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}]}]}}"#
+          r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
+          r#",{"type":"command","command":"charliebot scan-guard"}]}]}}"#
         ),
       ]
     );

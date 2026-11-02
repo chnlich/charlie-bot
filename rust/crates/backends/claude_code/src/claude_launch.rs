@@ -19,7 +19,8 @@ pub const SYNC_CLAUDE_AI_SKILLS_SETTINGS_KEY: &str = "syncClaudeAiSkills";
 pub const DISABLE_BUNDLED_SKILLS_SETTINGS_KEY: &str = "disableBundledSkills";
 pub const FAST_MODE_SETTINGS_KEY: &str = "fastMode";
 
-/// The PreToolUse hook event: the backend registers `charliebot wait-guard` under it, and the CLI's answer must name it.
+/// The PreToolUse hook event: the backend registers `charliebot wait-guard` and `charliebot scan-guard` under it, and
+/// the CLI's answer must name it.
 pub const PRE_TOOL_USE_HOOK_EVENT: &str = "PreToolUse";
 /// The SessionStart hook event: the backend registers `charliebot compaction-context` under it, and the CLI's answer
 /// names it.
@@ -65,13 +66,16 @@ pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> 
   settings
 }
 
-fn add_wait_guard_hook(settings: &mut Map<String, Value>) {
+fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>) {
   let hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
   hooks.as_object_mut().expect("Claude hook settings are an object").insert(
     PRE_TOOL_USE_HOOK_EVENT.to_string(),
     json!([{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+      "hooks": [
+        {"type": "command", "command": "charliebot wait-guard"},
+        {"type": "command", "command": "charliebot scan-guard"}
+      ]
     }]),
   );
 }
@@ -110,7 +114,9 @@ fn headless_claude_settings_for(
   }
   if use_wait_guard {
     match run_kind {
-      RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => add_wait_guard_hook(&mut settings),
+      RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => {
+        add_pre_tool_use_hooks(&mut settings)
+      }
       RunKind::ScheduledStep => {}
     }
   }

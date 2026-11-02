@@ -14,7 +14,7 @@
         "--model",
         "claude-fable-5-1",
         "--settings",
-        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"}]}]}}"
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"},{\"type\":\"command\",\"command\":\"charliebot scan-guard\"}]}]}}"
       ],
       "env_delta": {
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
@@ -42,7 +42,7 @@
         "--model",
         "claude-opus-4-8",
         "--settings",
-        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"}]}]},\"fastMode\":true}",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"},{\"type\":\"command\",\"command\":\"charliebot scan-guard\"}]}]},\"fastMode\":true}",
         "--resume",
         "session-001"
       ],
@@ -74,7 +74,7 @@
         "--model",
         "claude-sonnet-4-5",
         "--settings",
-        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"}]}]}}",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"},{\"type\":\"command\",\"command\":\"charliebot scan-guard\"}]}]}}",
         "--append-system-prompt-file",
         "$RUN/harness_instructions.md"
       ],
@@ -106,7 +106,7 @@
         "--effort",
         "high",
         "--settings",
-        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"}]}]}}",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"},{\"type\":\"command\",\"command\":\"charliebot scan-guard\"}]}]}}",
         "--extra-option",
         "value with spaces"
       ],
@@ -137,7 +137,7 @@
         "--model",
         "claude-fable-5-1",
         "--settings",
-        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"}]}]}}"
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"charliebot wait-guard\"},{\"type\":\"command\",\"command\":\"charliebot scan-guard\"}]}]}}"
       ],
       "env_delta": {
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",

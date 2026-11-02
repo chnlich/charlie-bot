@@ -102,7 +102,7 @@ where
         let chunk_offset = read_to;
         read_to += count as u64;
         let mut start = 0;
-        // `base.py:470-502` scans a mapped line view; borrow complete chunk lines here and buffer only cross-chunk lines.
+        // Scan a mapped line view: borrow complete chunk lines here and buffer only cross-chunk lines.
         for index in memchr_iter(b'\n', &bytes[..count]) {
           let segment = &bytes[start..index];
           line_length = line_length.saturating_add(segment.len() as u64);
@@ -131,8 +131,7 @@ where
                   clamp_event_timestamp(&mut translated, event_mtime);
                 }
                 let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
-                // A delivered input starts a same-process second turn: its result re-arms the post-result clock
-                // (`base.py` resets `saw_result` on every INPUT_DELIVERED event).
+                // A delivered input starts a same-process second turn: its result re-arms the post-result clock.
                 let is_input_delivered =
                   translated.get("type").and_then(Value::as_str) == Some(charliebot_core::event_types::INPUT_DELIVERED);
                 handle_event(translated).await?;
@@ -219,7 +218,7 @@ async fn file_metadata(file: &tokio::fs::File) -> io::Result<std::fs::Metadata> 
 fn event_file_metadata(file: &tokio::fs::File) -> io::Result<std::fs::Metadata> {
   #[cfg(test)]
   FOLLOW_EVENT_METADATA_CALLS.with(|count| count.set(count.get() + 1));
-  // `base.py:518` fstats each valid event; keep that timestamp point without Tokio's blocking-pool metadata hop.
+  // Each valid event is fstat'ed; keep that timestamp point without Tokio's blocking-pool metadata hop.
   // SAFETY: the Tokio file owns this stable descriptor for the borrow; ManuallyDrop prevents a second close.
   let borrowed = ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(file.as_raw_fd()) });
   borrowed.metadata()

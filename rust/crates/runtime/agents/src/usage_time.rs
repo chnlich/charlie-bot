@@ -1,4 +1,4 @@
-//! Timestamp text of the usage sources, in the form Python's `datetime` writes it.
+//! Timestamp text of the usage sources, in the form the sources write it.
 
 use anyhow::Context;
 use charliebot_core::timefmt;

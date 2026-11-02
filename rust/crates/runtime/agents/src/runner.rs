@@ -62,7 +62,7 @@ pub struct RunRequest {
 }
 
 impl RunRequest {
-  /// Construct a request with Python's post-result and cleanup timeouts.
+  /// Construct a request with the default post-result and cleanup timeouts.
   pub fn new(
     prompt: String,
     cwd: PathBuf,
@@ -91,9 +91,9 @@ impl RunRequest {
 
   /// Keep the spawned child stopped until `on_spawn` has recorded its process identity.
   ///
-  /// Python has no such gate: `base.py:919-933` runs `on_spawn` while the child runs. Without the gate, a crash in
-  /// that window leaves an agent that acts with no recorded identity, and the recovery relaunch then starts a second
-  /// one beside it. With the gate the child cannot act before its identity is durable. The test
+  /// Without the gate, the child runs while `on_spawn` records its identity. A crash in that window leaves an agent
+  /// that acts with no recorded identity, and the recovery relaunch then starts a second one beside it. With the gate
+  /// the child cannot act before its identity is durable. The test
   /// `gated_child_waits_until_spawn_callback_finishes` fails without the gate.
   pub fn gate_child_until_on_spawn(&mut self) {
     self.child_waits_for_spawn_callback = true;
@@ -364,7 +364,7 @@ impl AgentRunner {
     Ok(RunOutcome { exit_code, stderr_text, cgroup_exit_report, hang_diagnostics })
   }
 
-  /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
+  /// The final-stdout transport: stdout is piped and teed to `stdout.log`, stderr streams
   /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
   async fn run_serve(
     &self,
@@ -759,8 +759,7 @@ pub async fn capture_process_diagnostics(pid: u32) -> Value {
   Value::Object(diagnostics)
 }
 
-/// The `bash -c` command of each field. The strings match `_capture_proc_diagnostics` (`base.py:107-110`) byte for
-/// byte, and each one's `2>&1` is part of the string.
+/// The `bash -c` command of each field. The strings are fixed text, and each one's `2>&1` is part of the string.
 fn diagnostic_commands(pid: u32, pgid: i64) -> [(&'static str, String); 4] {
   [
     ("process_tree", format!("ps --forest -o pid,pgid,stat,etime,wchan,cmd -g {pgid} 2>&1")),
@@ -775,15 +774,15 @@ async fn capture_command(pid: u32, key: &str, program: &str, args: &[String]) ->
   let error = match tokio::time::timeout(DIAGNOSTIC_CAPTURE_TIMEOUT, read_merged_output(program, args)).await {
     Ok(Ok(bytes)) => return Value::String(String::from_utf8_lossy(&bytes).into_owned()),
     Ok(Err(error)) => error.to_string(),
-    // Python's `asyncio.wait_for` raises a `TimeoutError` with no text, and the field records that empty text.
+    // A timeout carries no text, and the field records that empty text.
     Err(_) => String::new(),
   };
   tracing::warn!(target: "charliebot_agents", pid, key, error = %error, "hang_diagnostics_capture_failed");
   Value::String(format!("<capture failed: {error}>"))
 }
 
-/// Reads the child's stdout and stderr from one pipe, so the bytes come back in write order as Python's
-/// `stderr=STDOUT` returns them. The exit status is not part of the field.
+/// Reads the child's stdout and stderr from one pipe, so the bytes come back in write order.
+/// The exit status is not part of the field.
 async fn read_merged_output(program: &str, args: &[String]) -> std::io::Result<Vec<u8>> {
   let (reader, writer) = std::io::pipe()?;
   let stderr = writer.try_clone()?;

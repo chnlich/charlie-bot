@@ -31,7 +31,7 @@ charliebot-antigravity.workspace = true
 charliebot-charlie-code.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-codex.workspace = true
-# `json_loads_golden` compares the crate's Python-json parity against the shared form.
+# `json_loads_golden` checks `charliebot-compat`'s JSON loader against the recorded `json.loads` outputs.
 charliebot-compat.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-gemini.workspace = true

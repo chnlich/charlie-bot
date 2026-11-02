@@ -1,4 +1,4 @@
-//! Process-group shutdown follows the Python TERM-then-KILL grace period.
+//! Process-group shutdown follows a TERM-then-KILL grace period.
 
 use std::future::Future;
 use std::time::Duration;
@@ -83,7 +83,7 @@ where
   result
 }
 
-/// Convert an exit status to Python's integer convention, including negative signal numbers.
+/// Convert an exit status to an integer, with a negative signal number for a signal death.
 pub fn exit_code(status: std::process::ExitStatus) -> i32 {
   use std::os::unix::process::ExitStatusExt;
 

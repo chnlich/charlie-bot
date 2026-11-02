@@ -58,7 +58,7 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// Replace the server's process environment with its agent environment, as `server.py:582` does, and return that
+/// Replace the server's process environment with its agent environment, and return that
 /// environment as the typed snapshot. `main` calls this before any thread starts and before the config load. Every
 /// child process copies the process environment, so the web terminal's tmux server and the usage panel's
 /// `claude --version` probe inherit the agent environment too.
@@ -77,7 +77,7 @@ pub fn replace_process_environment(server_bin_dir: &Path) -> anyhow::Result<Agen
 }
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
-/// limits are logged as they are, as Python's startup does; each spawn applies them as well.
+/// limits are logged as they are; each spawn applies them as well.
 pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) -> anyhow::Result<()> {
   run_session_cgroup_startup_inner(base_dir, sessions_dir, server, None)
 }
@@ -313,7 +313,7 @@ mod tests {
 
   #[test]
   fn runtime_cgroup_startup_sweeps_the_injected_base_at_zero_and_negative_limits() {
-    // Python starts with each of these and sweeps the same way, so none of them refuses the start.
+    // Each of these starts and sweeps the same way, so none of them refuses the start.
     for (memory, swap, tasks) in [(0, 0, 4096), (-1, 0, 4096), (12288, -1, 4096), (12288, 0, -1)] {
       let base = tempfile::tempdir().unwrap();
       let home = tempfile::tempdir().unwrap();

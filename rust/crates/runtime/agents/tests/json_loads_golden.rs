@@ -1,8 +1,8 @@
 //! `charliebot_compat::json_loads` against recorded `json.loads` outputs over one deterministic corpus.
 //!
-//! The fixture records what `json.loads` returned at its base commit. The port must give the same outcome
-//! class and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The corpus
-//! must reach every message the JSON decoder and scanner raise.
+//! The fixture records what `json.loads` returned when it was recorded. The loader must give the same outcome
+//! class and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The
+//! corpus must reach every message the JSON decoder and scanner raise.
 
 use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
-/// The messages `json.loads` raises, with the C scanner's wording (`_json.c`). The decoder's two `repr` forms, `Invalid
-/// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by `json/decoder.py`'s pure-Python
-/// scanner, which `json.loads` does not use, so no input reaches them through it.
+/// The messages a JSON decode raises, in the C scanner's wording. The decoder's two `repr` forms, `Invalid
+/// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by the pure scanner, which the
+/// decode path does not use, so no input reaches them.
 const REQUIRED_MESSAGES: [&str; 12] = [
   "Expecting value",
   "Expecting property name enclosed in double quotes",

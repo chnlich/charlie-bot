@@ -1,5 +1,4 @@
-//! Child setup follows the launch sequence in `src/runtime/agent_process/_vfkspawn.c:54-76` and
-//! `src/runtime/agent_process/base.py:996-1013`: session and parent-death setup precede exec, and raw-log nice/cgroup
+//! Child setup: session and parent-death setup precede exec, and raw-log nice/cgroup
 //! limits are applied parent-side after the exec handshake.
 //!
 //! Children with a parent-death signal spawn on one dedicated thread that lives for the process lifetime.
@@ -336,8 +335,8 @@ impl PreparedSpawn {
       })
       .collect::<io::Result<Vec<_>>>()?;
     let program = spec.program.as_os_str().as_bytes();
-    // The non-vfork Python path delegates command lookup to Popen's PATH search. Prepare those candidates here so
-    // the CLONE_VM child can stay syscall-only instead of calling execvpe (`src/runtime/agent_process/spawn.py:177-190`).
+    // The non-vfork path delegates command lookup to a PATH search. Prepare those candidates here so
+    // the CLONE_VM child can stay syscall-only instead of calling execvpe.
     let exec_paths = if program.contains(&b'/') {
       vec![c_string(program)?]
     } else {

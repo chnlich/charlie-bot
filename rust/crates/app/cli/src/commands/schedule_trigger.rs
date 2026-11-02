@@ -1,9 +1,9 @@
-//! `charliebot schedule-trigger` (`src/runtime/cli/schedule_trigger.py`): register a wake that fires when the watched
+//! `charliebot schedule-trigger`: register a wake that fires when the watched
 //! targets finish or `--max-wait` elapses, or start `--cmd` detached and register the wake on its wrapper.
 //!
 //! Exit codes: 0 registered; 2 usage error, a 422 refusal or a failed readback check; 3 the ssh start failed or the
 //! remote PID did not parse (nothing registered); 1 the client contract. Under `--cmd` every failed registration exits
-//! 2 after the started wrapper is killed, as the Python CLI does.
+//! 2 after the started wrapper is killed.
 
 use std::ffi::OsString;
 use std::fs;
@@ -29,20 +29,20 @@ use crate::launcher::{self, Launch, LaunchError};
 
 const ENDPOINT: &str = triggers::SCHEDULE_TRIGGER_PATH;
 
-/// `constants.MAX_TRIGGER_MESSAGE_CHARS`: the short-label limit on `--message`.
+/// The short-label limit on `--message`.
 const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
 
-/// Exit code for a refused or unverified registration: argparse's usage-error code, as the 422 mapping uses.
+/// Exit code for a refused or unverified registration: the usage-error code, as the 422 mapping uses.
 const EXIT_VERIFY_REJECTED: i32 = 2;
 
 /// Exit code when the `--cmd` start over ssh failed or the remote PID did not parse.
 const EXIT_SSH_FAILED: i32 = 3;
 
-/// `json.dumps(record, separators=(",", ":"))`: the launch record's bytes, with the default ASCII escapes.
+/// The launch record's bytes: compact separators, ASCII escapes.
 const LAUNCH_RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
-/// One `--watch` target, shaped as the Python parser's dict: the key order here is the order on the wire.
+/// One `--watch` target: the key order here is the order on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum WatchSpec {
   LocalPid { pid: i64 },
@@ -113,7 +113,7 @@ impl TriggerKey {
     };
     let mut candidates = Vec::new();
     for (path, _) in files {
-      // A file that cannot be read or parsed is skipped, as the Python readback skips it.
+      // A file that cannot be read or parsed is skipped.
       let Ok(stored) = trigger_files::read_trigger_value(&path) else { continue };
       if stored.get("status").and_then(Value::as_str) != Some("pending") {
         continue;
@@ -132,7 +132,7 @@ impl TriggerKey {
         candidates.push(stored);
       }
     }
-    // The newest by `created_at`, the stored string compared as Python compares it.
+    // The newest by `created_at`, comparing the stored string.
     let newest = candidates
       .iter()
       .filter_map(|stored| Some((stored.get("created_at")?.as_str()?, stored)))
@@ -167,7 +167,7 @@ impl Args {
   }
 }
 
-/// The argument parser: argparse's unique long-option prefixes, and the last value of a repeated flag.
+/// The argument parser: unique long-option prefixes, and the last value of a repeated flag.
 fn command() -> Command {
   with_infer_long_args(
     Command::new("schedule-trigger")
@@ -232,7 +232,7 @@ fn command() -> Command {
 }
 
 /// Parse the schedule-trigger arguments and run the registration. Parser errors print and exit on their own
-/// (argparse-compatible: usage error 2).
+/// (a usage error exits 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let argv = std::iter::once(OsString::from("charliebot schedule-trigger")).chain(args.iter().cloned());
   let matches = match command().try_get_matches_from(argv) {

@@ -1,9 +1,8 @@
 //! Pins the five thread-rule sentences that a manager turn of a Slack or Discord thread session carries.
 //!
-//! The sentences sit in `prompts/thread_session.md` and `prompts/thread_reply_format.md`. The golden prompt test
-//! compares Rust with Python, so a sentence deleted from the prompts changes both sides and still passes there. This
-//! test assembles the turn from the real checkout and the server's registry, so a deleted sentence, or a thread
-//! package missing from the registry, fails it.
+//! The sentences sit in `prompts/thread_session.md` and `prompts/thread_reply_format.md`. This test assembles the
+//! turn from the real checkout and the server's registry, so a deleted sentence, or a thread package missing from
+//! the registry, fails it.
 
 use std::path::{Path, PathBuf};
 

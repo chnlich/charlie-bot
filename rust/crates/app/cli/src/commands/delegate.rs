@@ -1,4 +1,4 @@
-//! The task delegation command from src/runtime/cli/delegate.py.
+//! The task delegation command.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;

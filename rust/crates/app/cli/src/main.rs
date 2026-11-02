@@ -1,8 +1,8 @@
-//! The `charliebot` CLI dispatcher (`src/app/main.py`).
+//! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 28 subcommands with callers. No argument, `-h` or `--help` prints the
-//! usage block and exits 0; an unknown name exits 2; a name this port has not reached yet prints
-//! the not-ported JSON error and exits 1 — it never calls the Python CLI.
+//! The vocabulary is the 29 subcommands with callers. No argument, `-h` or `--help` prints the
+//! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
+//! the not-ported JSON error and exits 1.
 
 mod commands;
 mod host;
@@ -15,8 +15,8 @@ use std::process::exit;
 use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::json_out;
 
-/// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
-/// caller; the caller-less names the Python CLI lists are unknown names here.
+/// The subcommand vocabulary, sorted: every registered command with a
+/// caller. A caller-less name is an unknown name here.
 const COMMANDS: [&str; 29] = [
   "artifact",
   "compaction-context",

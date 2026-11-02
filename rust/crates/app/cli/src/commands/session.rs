@@ -1,4 +1,4 @@
-//! The `session` verbs (`src/runtime/cli/session.py`): create, tree, retry, archive, acknowledge,
+//! The `session` verbs: create, tree, retry, archive, acknowledge,
 //! cancel, reparent, send, dialog.
 //!
 //! `create` builds session metadata only (no first message); with `--parent` it becomes the v2
@@ -33,18 +33,18 @@ use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
-/// Exit code when the server refuses the send (over-limit message): mirrors argparse's
-/// usage-error exit code, matching schedule-trigger's 422 mapping.
+/// Exit code when the server refuses the send (over-limit message): the usage-error exit code,
+/// matching schedule-trigger's 422 mapping.
 const EXIT_SEND_REFUSED: i32 = 2;
 
 /// The events endpoint's clamp; the fewest requests a full dialog history admits.
 const DIALOG_PAGE_LIMIT: i64 = 200;
 
-/// `constants.SESSION_PAGE_LIMIT_*`: the bounds the tree parser and the runs paging share.
+/// The bounds the tree parser and the runs paging share.
 const SESSION_PAGE_LIMIT_DEFAULT: i64 = 100;
 const SESSION_PAGE_LIMIT_MAX: i64 = 500;
 
-/// `json.dumps(..., ensure_ascii=False)` with every other option at its default.
+/// The response body style: raw UTF-8, `, ` between items, `: ` after keys, no indent.
 const JSON_ENSURE_ASCII_FALSE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
@@ -221,8 +221,8 @@ struct DialogArgs {
   turns: Option<i64>,
 }
 
-/// Parse the session arguments and run one verb. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2).
+/// Parse the session arguments and run one verb. Parser errors print and exit on their own: help
+/// exits 0, a usage error exits 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = send_source_group(with_infer_long_args(SessionCli::command()));
   let argv = std::iter::once(OsString::from("charliebot session")).chain(args.iter().cloned());
@@ -245,8 +245,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   }
 }
 
-/// The `send` source is argparse's required mutually exclusive group: `--message` or `--file`,
-/// exactly one.
+/// The `send` source group: `--message` or `--file`, exactly one.
 fn send_source_group(command: clap::Command) -> clap::Command {
   let mut command = command;
   if let Some(send) = command.find_subcommand_mut("send") {
@@ -485,7 +484,7 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
     (Some(message), _) => message.clone(),
     (None, Some(file)) => files::read_required_text_file("--file", file)?,
     (None, None) => {
-      // The clap source group makes one of the two required; the branch mirrors the Python verb's.
+      // The clap source group makes one of the two required; the branch mirrors it.
       return Err(CliExit::usage("one of --message or --file is required"));
     }
   };
@@ -656,7 +655,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
         continue;
       }
       let Some(block) = format_message_block(message) else { continue };
-      // Python re-takes the header's anchor while the first block's event index is None.
+      // The header's anchor is re-taken while the first block's event index is None.
       if first.as_ref().is_none_or(|(_, _, event_index)| event_index.is_null()) {
         first = Some((*page_start, position, message.get("event_index").cloned().unwrap_or(Value::Null)));
       }

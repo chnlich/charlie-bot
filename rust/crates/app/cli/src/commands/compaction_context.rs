@@ -1,4 +1,4 @@
-//! The Claude SessionStart compaction hook (`src/runtime/cli/compaction_context.py`).
+//! The Claude SessionStart compaction hook.
 //!
 //! `compaction-context --session SID --slot N` re-attaches the skills a manager session read
 //! before Claude compacted: it scans `sessions/<sid>/data/chat_events.jsonl` for Skill, Read and
@@ -9,8 +9,7 @@
 //! A failure (unreadable log, invalid event JSON, unreadable skill) prints the error line and
 //! exits 1; a slot past the last part prints only the stderr line.
 //!
-//! The repository's `skills/` directory comes from `CHARLIEBOT_REPO_ROOT`, the Rust stand-in for
-//! Python's package-location-derived `constants.REPO_ROOT`.
+//! The repository's `skills/` directory comes from `CHARLIEBOT_REPO_ROOT`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -32,10 +31,10 @@ use clap::{CommandFactory, FromArgMatches, Parser};
 use fancy_regex::Regex;
 use serde_json::{Value, json};
 
-/// `_MAX_PART_CHARS`: one hook part holds at most this many characters.
+/// One hook part holds at most this many characters.
 const MAX_PART_CHARS: usize = 9000;
 
-/// `_MAX_PARTS`: the hook accepts slots 1..=6, and the split yields at most six parts.
+/// The hook accepts slots 1..=6, and the split yields at most six parts.
 const MAX_PARTS: usize = 6;
 
 #[derive(Parser)]
@@ -69,8 +68,8 @@ struct SkillText {
   text: String,
 }
 
-/// Parse the arguments and run one slot. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2).
+/// Parse the arguments and run one slot. Parser errors print and exit on their own: help exits 0,
+/// a usage error exits 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(CompactionContextCli::command());
   let argv = std::iter::once(OsString::from("charliebot compaction-context")).chain(args.iter().cloned());
@@ -131,11 +130,11 @@ fn hook_json(part: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
-  // Python's file iteration hands json.loads each physical line with its terminator, so the JSON
-  // error positions see the same string here (`Terminated` keeps it).
-  // Python's `latest` dict keeps a name's first position and overwrites its value on a later read.
-  // Reads from one event share a key, and the stable sort keeps dict order for them, so a `Vec`
-  // in first-seen order is the same answer; a `HashMap` would reorder them from run to run.
+  // Each physical line keeps its terminator (`LineRule::Terminated`), so a JSON error position
+  // counts the same bytes the log line holds.
+  // A name's first position is kept and a later read overwrites its value. Reads from one event
+  // share a key, and the stable sort keeps their order, so a `Vec` in first-seen order gives the
+  // same answer; a `HashMap` would reorder them from run to run.
   let mut latest: Vec<SkillRead> = Vec::new();
   let lines =
     chat_events::read_lines(events_path, LineRule::Terminated).map_err(|error| log_read_error(events_path, error))?;
@@ -224,7 +223,7 @@ fn named_path(directory: &str) -> String {
   format!("{directory}/SKILL.md")
 }
 
-/// Python `left or right` over two optional JSON values.
+/// The truthy `left` value, otherwise `right`, over two optional JSON values.
 fn or_value<'a>(left: Option<&'a Value>, right: Option<&'a Value>) -> Option<&'a Value> {
   match left {
     Some(value) if is_truthy(value) => Some(value),
@@ -232,7 +231,7 @@ fn or_value<'a>(left: Option<&'a Value>, right: Option<&'a Value>) -> Option<&'a
   }
 }
 
-/// `PurePosixPath(text.replace("\\", "/")).name`: the final path component.
+/// The final path component, with `\` read as `/`.
 fn posix_name(text: &str) -> String {
   let replaced = text.replace('\\', "/");
   replaced.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string()
@@ -285,8 +284,8 @@ fn command_cwd(command: &str) -> Option<PathBuf> {
   if Path::new(&expanded).is_absolute() { Some(PathBuf::from(expanded)) } else { None }
 }
 
-/// `os.path.expandvars`: `$NAME` and `${NAME}` become the environment value, an unset or malformed
-/// reference stays as written.
+/// `$NAME` and `${NAME}` become the environment value, and an unset or malformed reference stays
+/// as written.
 fn expandvars(text: &str) -> String {
   let mut out = String::with_capacity(text.len());
   let mut rest = text;
@@ -330,7 +329,7 @@ fn decode_utf8(bytes: &[u8]) -> Result<String, String> {
   std::str::from_utf8(bytes).map(str::to_string).map_err(|error| utf8_error(bytes, &error))
 }
 
-/// Python universal newlines: `open` translates `\r\n` and `\r` to `\n`.
+/// Universal newlines: `\r\n` and `\r` become `\n`.
 fn newlines(text: &str) -> String {
   if !text.contains('\r') {
     return text.to_string();
@@ -351,12 +350,12 @@ fn newlines(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Python-shaped error text
+// Error text: the OS error string and the JSON parser's message.
 // ---------------------------------------------------------------------------
 
-/// `str(OSError)` with a filename: `[Errno N] <strerror>: '<path>'`. The delete paths of
-/// `gc-trash` are the one place Rust cannot carry Python's inner filename; here the failing path
-/// is always the one the command opened.
+/// An OS error with a filename: `[Errno N] <strerror>: '<path>'`. Rust's `io::Error` carries no
+/// filename, so `os_error` is the one place the failing path is supplied; here it is always the one
+/// the command opened.
 fn os_error(path: &str, error: &std::io::Error) -> String {
   match error.raw_os_error() {
     Some(errno) => {
@@ -368,7 +367,7 @@ fn os_error(path: &str, error: &std::io::Error) -> String {
   }
 }
 
-/// The error text of a chat log that could not be read, in the words Python gives for the same failure.
+/// The error text of a chat log that could not be read: the OS error sentence with the failing path.
 fn log_read_error(events_path: &Path, error: LogReadError) -> String {
   match error {
     LogReadError::Io(error) | LogReadError::Line { error, .. } => os_error(&paths::display(events_path), &error),
@@ -397,10 +396,10 @@ fn is_utf8_start_byte(byte: u8) -> bool {
   matches!(byte, 0x00..=0x7f | 0xc2..=0xdf | 0xe0..=0xef | 0xf0..=0xf4)
 }
 
-/// `str(json.JSONDecodeError)` for one log line, from serde's message. Both scanners point at the
-/// offending byte: serde's 1-based column is CPython's column, and CPython's `char` is the byte's
-/// character index. The EOF classes shift one column: CPython's scanner stops after consuming the
-/// whole input, serde reports the last byte it read.
+/// The JSON parser's error message for one log line, from serde's message. Both scanners point at
+/// the offending byte: serde's 1-based column becomes the message's column, and the message's
+/// `char` index is the byte's character index. The EOF classes shift one column: this scanner
+/// stops after consuming the whole input, serde reports the last byte it read.
 fn json_error(line: &str, error: &serde_json::Error) -> String {
   let message = error.to_string();
   let Some((text, location)) = message.rsplit_once(" at line ") else { return message };
@@ -413,8 +412,8 @@ fn json_error(line: &str, error: &serde_json::Error) -> String {
     return format!("Expecting value: line {line_number} column {} (char {char_index})", column + 1);
   }
   if text == "expected ident" {
-    // A word where CPython expects a value: serde consumed the literal's first byte, CPython's
-    // scanner stops on it.
+    // A word where a value belongs: serde consumed the literal's first byte, and this scanner
+    // stops on it.
     let char_index = char_index_of_byte(line, column - 2);
     return format!("Expecting value: line {line_number} column {} (char {char_index})", column - 1);
   }
@@ -442,9 +441,9 @@ fn char_index_of_byte(text: &str, byte_index: usize) -> usize {
 // ISO timestamps
 // ---------------------------------------------------------------------------
 
-/// `datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))` reduced to the instant the value
-/// names, in microseconds since the epoch. The accepted grammar is CPython 3.14's for calendar
-/// dates; week dates and ordinal dates are refused here.
+/// An ISO 8601 timestamp, with `Z` read as `+00:00`, reduced to the instant the value names, in
+/// microseconds since the epoch. The accepted grammar covers calendar dates; week dates and
+/// ordinal dates are refused here.
 fn parse_iso_moment(raw: &str) -> Result<i64, String> {
   let text = raw.replace('Z', "+00:00");
   let invalid = || format!("Invalid isoformat string: {}", str_repr(&text));
@@ -577,7 +576,7 @@ fn take_two_digits(text: &str) -> Option<(i64, &str)> {
   Some((text[..2].parse().ok()?, &text[2..]))
 }
 
-/// One `[.,]<digits>` fraction, truncated to microseconds as CPython's parser does.
+/// One `[.,]<digits>` fraction, truncated to microseconds.
 fn take_fraction(text: &str) -> Option<(i64, &str)> {
   let digits_text = &text[1..];
   let end = digits_text.bytes().position(|byte| !byte.is_ascii_digit()).unwrap_or(digits_text.len());
@@ -617,7 +616,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
   era * 146097 + day_of_era - 719468
 }
 
-/// `repr(datetime.timedelta(seconds=N))` for the offset range error.
+/// The `datetime.timedelta(...)` text for the offset range error.
 fn timedelta_repr(total_seconds: i64, micros: u32) -> String {
   let days = total_seconds.div_euclid(86400);
   let seconds = total_seconds.rem_euclid(86400);
@@ -677,7 +676,7 @@ fn resolved_skill_path(read: &SkillRead, home: &Path, repo: &Path) -> Option<Pat
   None
 }
 
-/// `pathlib.Path.is_file()`: every error reads as "not a file".
+/// Whether the path is a regular file: every error reads as "not a file".
 fn is_file(path: &Path) -> bool {
   std::fs::metadata(path).map(|metadata| metadata.is_file()).unwrap_or(false)
 }
@@ -693,7 +692,7 @@ fn skill_block(skill: &SkillText) -> String {
   if body.ends_with('\n') { body } else { format!("{body}\n") }
 }
 
-/// Python `str.splitlines(keepends=True)` over the ten boundaries CPython splits on.
+/// Split text at the ten line boundaries, keeping each terminator.
 fn splitlines_keepends(text: &str) -> Vec<&str> {
   let mut lines = Vec::new();
   let mut start = 0;
@@ -716,9 +715,9 @@ fn splitlines_keepends(text: &str) -> Vec<&str> {
   lines
 }
 
-/// `_partition`: the header lines plus every skill's block, packed greedily into at most
-/// `MAX_PARTS` parts of at most `MAX_PART_CHARS` characters, split only at line ends. `None` when
-/// a line does not fit a part.
+/// The header lines plus every skill's block, packed greedily into at most `MAX_PARTS` parts of at
+/// most `MAX_PART_CHARS` characters, split only at line ends. `None` when a line does not fit a
+/// part.
 fn partition(skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String>> {
   if skills.is_empty() && omitted.is_empty() {
     return Some(Vec::new());
@@ -754,9 +753,9 @@ fn partition(skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String
   Some(parts)
 }
 
-/// `_context_parts`: the greedy fit, then the last included skills drop out until the remainder
-/// packs. The name and path list overflowing the first part is a hard error, as in Python.
-/// `_context_parts`'s answer: the parts, the skills they re-attach, and the skills left out.
+/// The greedy fit, then the last included skills drop out until the remainder packs. The name and
+/// path list overflowing the first part is a hard error.
+/// The answer: the parts, the skills they re-attach, and the skills left out.
 type ContextParts = (Vec<String>, Vec<SkillText>, Vec<SkillText>);
 
 fn context_parts(skills: &[SkillText]) -> Result<ContextParts, String> {
@@ -785,7 +784,7 @@ fn context_parts(skills: &[SkillText]) -> Result<ContextParts, String> {
 mod tests {
   use super::*;
 
-  /// The events one tool call carries, the shape `tests/test_compaction_context.py` writes.
+  /// The events one tool call carries.
   fn tool_event(timestamp: &str, name: &str, tool_input: Value) -> Value {
     json!({
       "type": "assistant",

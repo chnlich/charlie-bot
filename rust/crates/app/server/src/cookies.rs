@@ -1,17 +1,17 @@
-//! `http.cookies.SimpleCookie().load(header)` (CPython 3.14), reduced to reading one cookie's value.
+//! Reading one cookie's value from a `Cookie` header.
 //!
-//! The auth gate reads the access-key cookie through `SimpleCookie`, whose parse rules decide which
-//! headers carry the cookie at all: a malformed segment ends parsing, a reserved attribute before any
-//! cookie or a value-less non-flag attribute discards the whole header, and an illegal cookie name
-//! raises `CookieError`. Each of those outcomes means "no cookie" to the gate, so this module returns
-//! the value only when CPython's jar would hold it.
+//! The auth gate reads the access-key cookie through this parser, whose rules decide which headers
+//! carry the cookie at all: a malformed segment ends parsing, a reserved attribute before any cookie
+//! or a value-less non-flag attribute discards the whole header, and an illegal cookie name is an
+//! error. Each of those outcomes means "no cookie" to the gate, so this module returns the value
+//! only when the jar holds it.
 
 use std::sync::LazyLock;
 
 use regex::Regex;
 
-/// `http.cookies._CookiePattern` with `re.ASCII` classes spelled out (`\w` = `[A-Za-z0-9_]`, `\s` =
-/// `[ \t\n\r\x0B\x0C]`), applied at the start of the remaining text as `re.match` applies it.
+/// The cookie pattern: ASCII character classes (`\w` = `[A-Za-z0-9_]`, `\s` = `[ \t\n\r\x0B\x0C]`),
+/// anchored at the start of the remaining text.
 static COOKIE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
   let space = r"[ \t\n\r\x0B\x0C]";
   let key_chars = r"A-Za-z0-9_!#%&'~`><@,:/$*+\-.^|)(?}{=";
@@ -22,19 +22,19 @@ static COOKIE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(&pattern).expect("the cookie pattern compiles")
 });
 
-/// `Morsel._reserved`: attribute names that attach to the preceding cookie.
+/// Attribute names that attach to the preceding cookie.
 const RESERVED: &[&str] =
   &["expires", "path", "comment", "domain", "max-age", "secure", "httponly", "version", "samesite", "partitioned"];
 
-/// `Morsel._flags`: reserved attributes that may appear without a value.
+/// Reserved attributes that may appear without a value.
 const FLAGS: &[&str] = &["secure", "httponly", "partitioned"];
 
-/// `http.cookies._LegalChars`: the characters a cookie name may hold.
+/// The characters a cookie name may hold.
 fn is_legal_key(key: &str) -> bool {
   !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~:".contains(&b))
 }
 
-/// `SimpleCookie` raised `CookieError` while applying the parsed header.
+/// A header the parser rejects as invalid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CookieError(pub String);
 
@@ -43,10 +43,10 @@ enum Item {
   Cookie(String, String),
 }
 
-/// The value of cookie `name` in a `Cookie` header, as `SimpleCookie().load(header)[name].value` reads it.
+/// The value of cookie `name` in a `Cookie` header.
 ///
-/// `Ok(None)` when the jar holds no such cookie, including a header CPython discards as invalid;
-/// `Err` when loading raises `CookieError`.
+/// `Ok(None)` when no such cookie is present, including a header the parser discards as invalid;
+/// `Err` when the header is rejected.
 pub fn cookie_value(header: &str, name: &str) -> Result<Option<String>, CookieError> {
   let mut items = Vec::new();
   let mut morsel_seen = false;
@@ -98,7 +98,7 @@ pub fn cookie_value(header: &str, name: &str) -> Result<Option<String>, CookieEr
   Ok(found)
 }
 
-/// `http.cookies._unquote`: strip one pair of double quotes and decode `\ooo` and `\x` escapes.
+/// Strip one pair of double quotes and decode `\ooo` and `\x` escapes.
 fn unquote(value: &str) -> String {
   if value.chars().count() < 2 || !value.starts_with('"') || !value.ends_with('"') {
     return value.to_string();

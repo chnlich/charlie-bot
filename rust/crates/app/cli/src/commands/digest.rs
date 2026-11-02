@@ -1,4 +1,4 @@
-//! The `digest` command (`src/runtime/cli/digest.py`): record one approval digest entry.
+//! The `digest` command: record one approval digest entry.
 //!
 //! ```text
 //! charliebot digest add --policy <policy id | t2> --step <text> --undo <text> [--scope-check <text>] [--link <url>]
@@ -53,8 +53,8 @@ enum DigestVerb {
   },
 }
 
-/// Parse the digest arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
-/// help 0, usage error 2).
+/// Parse the digest arguments and run one verb. Parser errors print and exit on their own: help
+/// exits 0, a usage error exits 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(DigestCli::command());
   let argv = std::iter::once(OsString::from("charliebot digest")).chain(args.iter().cloned());

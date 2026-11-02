@@ -1,8 +1,8 @@
-//! The application: the route families under the Python app's middleware stack.
+//! The application: the route families under the server's middleware stack.
 //!
-//! Outermost first: the decoded-path rewrite (so routing sees `scope["path"]`), the WebSocket gate
-//! (uvicorn's protocol switch, outside every HTTP middleware), the request log, the panic catcher
-//! (`ServerErrorMiddleware`), the auth gate, transport gzip, then the router.
+//! Outermost first: the decoded-path rewrite (so routing sees the decoded path), the WebSocket gate
+//! (the protocol switch, outside every HTTP middleware), the request log, the panic catcher,
+//! the auth gate, transport gzip, then the router.
 
 use std::any::Any;
 use std::sync::Arc;

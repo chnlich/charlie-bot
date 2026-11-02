@@ -1336,7 +1336,7 @@ impl FunctionRecord {
 }
 
 /// The codec of a call by its callee path. A serde decoder or encoder is named through `serde_json` or `serde_yaml`,
-/// a Python-style decoder through `json_loads`, and a bare name, or a method name, counts as the name alone.
+/// a text decoder through `json_loads`, and a bare name, or a method name, counts as the name alone.
 fn codec_of_call(path: &[String]) -> Option<Codec> {
   let last = path.last()?.as_str();
   let serde = path.iter().any(|segment| segment == "serde_json" || segment == "serde_yaml");

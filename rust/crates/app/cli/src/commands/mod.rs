@@ -1,4 +1,4 @@
-//! The runtime-owned subcommands, one module file each so a later port task replaces one file.
+//! The runtime-owned subcommands, one module file each.
 
 pub mod compaction_context;
 pub mod config;

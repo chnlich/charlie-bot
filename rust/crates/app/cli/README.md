@@ -1,11 +1,9 @@
 # charliebot CLI
 
 The Rust `charliebot` binary: the dispatcher over the caller-bearing subcommands plus the
-runtime-owned ones (`src/commands/<name>.rs`, one file per subcommand so a later port task
-replaces one file). The shared client contract — base URL, auth headers, the retry/readback
-split, JSON output, session resolution — lives in `charliebot-cli-common`
-(`rust/crates/infra/cli-common`). This is the only CLI codebase; the Python CLI it replaced is
-gone.
+runtime-owned ones (`src/commands/<name>.rs`, one file per subcommand). The shared client contract — base URL, auth
+headers, the retry/readback split, JSON output, session resolution — lives in `charliebot-cli-common`
+(`rust/crates/infra/cli-common`). This is the only CLI codebase.
 
 ## Golden cases
 
@@ -18,8 +16,8 @@ strings become the temp root, stub port and canonical checkout root; `{root}` al
 scripted responses. A file content of the form `{file:<checkout-relative path>}` reads that file from
 the checkout, so a case can use a shipped prompt or genre template. Recorded requests replace the
 temp root with `{root}`. `{uuid4}` and `{timestamp}` in `expect` match values of those shapes. Cases
-with `parser_generated: true` compare the exit code only. The golden harness filters the Python
-backend-pool console lines the cases were recorded with. A stub agent CLI runs from the case's temp
+with `parser_generated: true` compare the exit code only. The golden harness filters the log
+console lines the cases were recorded with. A stub agent CLI runs from the case's temp
 `bin/` directory, so no test starts a real one.
 
 Each CLI process runs with a cleared environment, a temp `CHARLIEBOT_HOME` and a 20 s timeout; the
@@ -33,5 +31,4 @@ From `rust/`:
 cargo-slot.sh test -p charliebot-cli --test golden
 ```
 
-The cases replay against the built binary; the Python CLI that recorded them is deleted, so the
-expectations stay as committed history.
+The cases replay against the built binary; the expectations stay as committed history.

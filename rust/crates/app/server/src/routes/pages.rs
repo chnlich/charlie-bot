@@ -1,4 +1,4 @@
-//! The chat page, home page and per-session events viewer (`src/app/pages.py`).
+//! The chat page, home page and per-session events viewer.
 
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -205,7 +205,7 @@ fn chat_page(
             pending_draft = bootstrap.pending_draft;
             event_count = bootstrap.event_count;
             bootstrap_text = Some(bootstrap.text);
-            // As Python's index: the active row is marked read only when its bootstrap loaded; a failed load keeps
+            // The active row is marked read only when its bootstrap loaded; a failed load keeps
             // the unread mark.
             clear_unread = Some(session_id.to_string());
           }
@@ -220,7 +220,7 @@ fn chat_page(
     }
   }
 
-  // As Python's index: a page opened without a session redirects to the first row before any row renders.
+  // A page opened without a session redirects to the first row before any row renders.
   let redirect_to_first = session.is_none();
   let listing_result = (|| -> StoreResult<PageListing> {
     if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {

@@ -1,7 +1,7 @@
-//! The decoded request path: the ASGI `scope["path"]` that every Python routing and auth decision reads.
+//! The decoded request path: the path every routing and auth decision reads.
 //!
-//! uvicorn percent-decodes the raw path as UTF-8 with replacement characters, and starlette matches
-//! routes against that decoded text, so `/api/auth/%73tatus` is `/api/auth/status`. The outermost
+//! Percent-decoding reads the raw path as UTF-8 with replacement characters, and routes match
+//! against that decoded text, so `/api/auth/%73tatus` is `/api/auth/status`. The outermost
 //! layer records the decoded path as a [`RoutePath`] extension and rewrites the URI so axum's router
 //! matches the same text: the decoded path re-encoded with only the bytes a URI path cannot carry.
 

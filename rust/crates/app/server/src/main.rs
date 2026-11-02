@@ -1,20 +1,18 @@
-//! `charliebot-server`: the CharlieBot HTTP server (`server.py`).
+//! `charliebot-server`: the CharlieBot HTTP server.
 //!
-//! Startup follows `server.main` then the lifespan: replace the process environment with the agent environment before
-//! any thread starts, build the registry from the composition root, load and check the config, take the home writer
-//! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture the build identity,
-//! initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the
-//! configured host and port. SIGINT and SIGTERM are installed before startup. A boot stop waits for the current safe
-//! point, stops started services, closes shared clients, releases the fence and logs `charliebot_shutdown` with
-//! `boot=true`. After `server_ready`, a stop signal drains requests for up to five seconds, stops services, closes
-//! shared clients, releases the fence and logs `charliebot_shutdown` (`server.py:293-310`). SIGTERM then restores its
-//! default disposition and raises SIGTERM without let-go steps. SIGINT runs let-go steps after the log and returns 0.
-//! A failed bind runs let-go steps after the log and returns 1 (`uvicorn/server.py:179-182`). Uvicorn re-raises SIGTERM;
-//! normal Python exits cancel tasks and Uvicorn catches KeyboardInterrupt (`uvicorn/server.py:322-339`,
-//! `uvicorn/main.py:607-608`, `asyncio/runners.py:66-75`).
+//! Startup: replace the process environment with the agent environment before any thread starts, build the registry
+//! from the composition root, load and check the config, take the home writer fence (another holder exits 3 after
+//! logging `server_startup_refused_home_writer_fence`), capture the build identity, initialize the home, log
+//! `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the configured host and
+//! port. SIGINT and SIGTERM are installed before startup. A boot stop waits for the current safe point, stops started
+//! services, closes shared clients, releases the fence and logs `charliebot_shutdown` with `boot=true`. After
+//! `server_ready`, a stop signal drains requests for up to five seconds, stops services, closes shared clients,
+//! releases the fence and logs `charliebot_shutdown`. SIGTERM then restores its default disposition and raises SIGTERM
+//! without let-go steps. SIGINT runs let-go steps after the log and returns 0. A failed bind runs let-go steps after
+//! the log and returns 1.
 //!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
-//! page packages and `configs/` the server serves; the Python server derives the same root from its own file location.
+//! page packages and `configs/` the server serves.
 
 mod app;
 mod auth;
@@ -52,13 +50,13 @@ use crate::connection::ConnectionInfo;
 use crate::state::AppState;
 use crate::state::StaticMount;
 
-/// `timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT`: how long in-flight requests get after a stop signal.
+/// How long in-flight requests get after a stop signal.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-/// A config or environment error (Python's `main` raising).
+/// A config or environment error.
 const EXIT_CONFIG: u8 = 1;
 /// An unsupported command-line argument.
 const EXIT_USAGE: u8 = 2;
-/// A lifespan startup failure (uvicorn's "Application startup failed").
+/// A lifespan startup failure.
 const EXIT_STARTUP: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,7 +299,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   if !startup_stop.mark_ready() {
     return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
   }
-  // Python logs `server_ready` after starting its ready-phase services and yields straight after (`server.py:285-291`).
+  // `server_ready` is logged after the ready-phase services start.
   // The host_auth poller's 300 ms startup tail keeps its first state read after this line while preserving the stop
   // check: a boot stopped before readiness does not emit `server_ready`.
   // The boot's storage reads ride on the same line, so a slow boot states in one place what its disk wait cost.
@@ -419,7 +417,7 @@ async fn stop_lifespan(lifespan: &mut Lifespan) -> CloseTimings {
   shutdown.closes
 }
 
-/// The `charliebot_shutdown` line: the total shutdown time and Python's service and shared-client timings.
+/// The `charliebot_shutdown` line: the total shutdown time and the service and shared-client timings.
 fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bool) {
   if during_boot {
     tracing::info!(
@@ -431,7 +429,7 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
       merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
       scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
       slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
-      // Python stops `usage_tally`; Rust has no `usage_tally` service.
+      // There is no `usage_tally` service, so its timing is zero.
       usage_tally_ms = 0,
       http_client_ms = round_ms(closes.http_client),
       ws_close_ms = round_ms(closes.ws_close),
@@ -446,7 +444,7 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
       merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
       scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
       slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
-      // Python stops `usage_tally`; Rust has no `usage_tally` service.
+      // There is no `usage_tally` service, so its timing is zero.
       usage_tally_ms = 0,
       http_client_ms = round_ms(closes.http_client),
       ws_close_ms = round_ms(closes.ws_close),
@@ -459,7 +457,7 @@ fn step_elapsed(step_closes: &[StepTiming], name: &'static str) -> Duration {
   step_closes.iter().find(|step| step.name == name).map_or(Duration::ZERO, |step| step.elapsed)
 }
 
-/// uvicorn's `capture_signals` exit: restore the default disposition and raise the stop signal again.
+/// The signal exit: restore the default disposition and raise the stop signal again.
 fn exit_by_signal(received: Signal) -> ExitCode {
   // SAFETY: SIG_DFL installs no handler code, so no handler can run concurrently with the change.
   unsafe { nix::sys::signal::signal(received, SigHandler::SigDfl) }.expect("restoring a default disposition succeeds");
@@ -512,7 +510,7 @@ fn load_inputs(registry: &Arc<Registry>, repo_root: &RepoRoot) -> Result<StatePa
   Ok(parts)
 }
 
-/// uvicorn's `bind_socket`: an IPv6 socket when the host holds a `:`, IPv4 otherwise.
+/// An IPv6 socket when the host holds a `:`, IPv4 otherwise.
 async fn bind(host: &str, port: u16) -> Result<TcpListener, String> {
   let address = if host.contains(':') {
     let ip: IpAddr = host.parse().map_err(|error| format!("server.host {host:?} is not an IPv6 address: {error}"))?;
@@ -529,7 +527,7 @@ async fn bind(host: &str, port: u16) -> Result<TcpListener, String> {
     .map_err(|error| format!("error while attempting to bind on address {address}: {error}"))
 }
 
-/// Python's `round(seconds * 1000)` of a duration: milliseconds, half to even.
+/// Milliseconds of a duration, rounded half to even.
 fn round_ms(duration: Duration) -> u64 {
   (duration.as_secs_f64() * 1000.0).round_ties_even() as u64
 }
@@ -596,7 +594,6 @@ mod tests {
   }
 
   #[test]
-  // Python: server.py:293-310.
   fn shutdown_line_has_fields_and_each_close_is_numeric() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let _capture = charliebot_core::test_support::install_events(Arc::new(Capture(Arc::clone(&events))));

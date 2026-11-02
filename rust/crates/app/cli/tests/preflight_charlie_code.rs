@@ -1,5 +1,5 @@
-//! The `preflight-charlie-code` command (the Python inside `scripts/preflight-charlie-code.sh`), against a
-//! scratch home: every failure line keeps its Python wording and exit 1, and a healthy option prints the
+//! The `preflight-charlie-code` command, against a
+//! scratch home: every failure line keeps its wording and exit 1, and a healthy option prints the
 //! `OK:` line and exits 0.
 
 use std::io::{Read, Write};
@@ -136,7 +136,7 @@ fn a_missing_binary_names_the_install_guidance() {
   let run = run_preflight(&sandbox, &home, "synthetic-cc");
 
   assert_eq!(run.code, 1, "{}", run.describe());
-  // Python's line carries the bare install command, without the `reinstall charlie-code` prefix its
+  // The `binary-missing` line carries the bare install command, without the `reinstall charlie-code` prefix the
   // `binary-broken` line has.
   assert_eq!(
     run.stderr,

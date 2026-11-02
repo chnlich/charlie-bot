@@ -2,7 +2,7 @@
 //!
 //! `request` reads `feishu.user_access_token` inside this process, sends one HTTP request and prints
 //! the response body. A 401 or an expired-token code refreshes the token, writes both new tokens to
-//! `credentials.yaml` and retries once. `consent-url` and `exchange-code` port the skill's
+//! `credentials.yaml` and retries once. `consent-url` and `exchange-code` run the skill's
 //! re-authorization steps. No command or output carries a token.
 
 use std::ffi::OsString;

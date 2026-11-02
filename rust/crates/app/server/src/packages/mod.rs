@@ -22,7 +22,6 @@ mod tests {
 
   #[test]
   fn the_listed_packages_render_the_five_chat_lines() {
-    // Python: tests/test_scheduled_handlers.py::test_the_packages_register_the_built_in_handlers (lines 43-45)
     let registry = Arc::new(registry().expect("the listed packages register"));
     let hooks = store_hooks(Arc::clone(&registry));
     let renderers =
@@ -47,7 +46,6 @@ mod tests {
 
   #[test]
   fn test_feature_registers_cli_and_scheduled_handler() {
-    // Python: tests/test_disk_sweep.py::test_feature_registers_cli_and_scheduled_handler
     let registry = registry().expect("the listed packages register");
     assert!(registry.scheduled_handler_named("disk_sweep").is_some());
   }

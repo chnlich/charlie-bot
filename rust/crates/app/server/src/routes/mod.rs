@@ -1,9 +1,9 @@
 //! The route families and the one list that mounts them.
 //!
 //! Each family is a module with its axum routes and a path matcher. The matcher answers whether a
-//! path falls under one of the family's routes, which the trailing-slash redirect consults the way
-//! starlette's router tries the slash-toggled path against every route. WebSocket upgrades never reach
-//! these routes: [`websockets::gate`] answers them first.
+//! path falls under one of the family's routes, which the trailing-slash redirect consults against
+//! every route. WebSocket upgrades never reach these routes: [`websockets::gate`] answers them
+//! first.
 
 pub mod family;
 pub mod pages;
@@ -25,10 +25,10 @@ use crate::request_path;
 use crate::state::AppState;
 use family::Family;
 
-/// Every route family, in the Python app's route order.
+/// Every route family, in route order.
 pub const FAMILIES: &[Family] = &[pages::FAMILY, system::FAMILY, STATIC_FAMILY];
 
-/// The `/static` family: each page package's `static/`, then `web/static` (`app.mount` in Python). Its serving falls
+/// The `/static` family: each page package's `static/`, then `web/static`. Its serving falls
 /// through to this module's not-found answer, so the family lives here beside it.
 pub(crate) const STATIC_FAMILY: Family = Family {
   routes: static_routes,
@@ -62,7 +62,7 @@ pub fn router() -> Router<Arc<AppState>> {
   FAMILIES.iter().fold(Router::new(), |router, family| router.merge((family.routes)())).fallback(not_found)
 }
 
-/// starlette's router when no route matches: a 307 to the slash-toggled path when that path matches
+/// The not-found answer: a 307 to the slash-toggled path when that path matches
 /// a route, else 404. The routes are the route families and the registered routers.
 pub async fn not_found(State(state): State<Arc<AppState>>, request: Request) -> Response {
   let path = request_path::of(&request);
@@ -77,7 +77,7 @@ pub async fn not_found(State(state): State<Arc<AppState>>, request: Request) -> 
   responses::http_exception(StatusCode::NOT_FOUND)
 }
 
-/// starlette `URL(scope=...)` with the path replaced: the `Host` header when present, else the
+/// The redirect URL with the path replaced: the `Host` header when present, else the
 /// socket's own address; the query string carries over.
 fn redirect_url(request: &Request, path: &str) -> String {
   let host =

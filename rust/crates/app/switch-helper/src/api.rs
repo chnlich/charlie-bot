@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::common::{USAGE, exact, exit_with, failed, read_json};
 
-/// `json-field BODY NAME`: the top-level field's value as Python's `print` writes it.
+/// `json-field BODY NAME`: the top-level field's value as plain text.
 pub fn json_field(args: &[OsString]) -> Result<(), CliExit> {
   let [body, name] = exact::<2>(args)?;
   let document = read_json(Path::new(&body)).map_err(failed)?;
@@ -167,7 +167,7 @@ pub fn delegation_body(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The delegate request body, in the field order the switch's Python wrote.
+/// The delegate request body, in the field order the switch sends.
 fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
   let body = json!({
     "session_id": session,

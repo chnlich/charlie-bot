@@ -24,12 +24,12 @@ pub(crate) fn exact<const N: usize>(args: &[OsString]) -> Result<[String; N], Cl
   values.try_into().map_err(|_| CliExit::usage(USAGE))
 }
 
-/// The failure of a helper's work: a broken file or a bad record exits 1, as Python's uncaught exception does.
+/// The failure of a helper's work: a broken file or a bad record exits 1.
 pub(crate) fn failed(error: impl std::fmt::Display) -> CliExit {
   CliExit::error(error.to_string())
 }
 
-/// Python's `repr(value)` for a value `json` parsed: strings are quoted, `None` prints bare.
+/// A value's repr: strings are quoted, and a null prints bare.
 pub(crate) fn value_repr(value: &Value) -> String {
   match value {
     Value::String(text) => text_repr::str_repr(text),
@@ -43,7 +43,7 @@ pub(crate) fn exit_with(code: i32) -> ! {
   std::process::exit(code)
 }
 
-/// One JSON document, as Python's `json.load` reads it.
+/// One JSON document parsed from a file.
 pub(crate) fn read_json(path: &Path) -> anyhow::Result<Value> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))

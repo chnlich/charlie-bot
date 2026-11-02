@@ -1,4 +1,4 @@
-//! The `setup` command, against a scratch home: the tests of `tests/test_setup_runner.py`. The runner calls each
+//! The `setup` command, against a scratch home. The runner calls each
 //! registered step in registration order with the dry-run flag, and the packages register the cron seed before
 //! the Claude Code check.
 
@@ -131,7 +131,7 @@ fn an_unreadable_default_prompt_fails_the_setup_before_any_write() {
   assert!(!home.join("config.d").exists(), "no partial write happened");
 }
 
-/// The committed defaults seed byte-identical host files to the Python seed's `yaml_utils.save_yaml` output.
+/// The committed defaults seed host files byte-identical to the recorded output.
 #[test]
 fn the_seeded_host_files_match_the_recorded_bytes() {
   let sandbox = Sandbox::new();

@@ -1,4 +1,4 @@
-//! The detached-process launcher (`src/runtime/cli/launcher.py`): one wrapper per start, on this host or over ssh.
+//! The detached-process launcher: one wrapper per start, on this host or over ssh.
 //!
 //! Every start runs the wrapper `(CMD); echo $? > EXIT_FILE` under `bash -lc`, with stdin from /dev/null and stdout
 //! and stderr going to the launch's log file. The watched PID is the wrapper itself: the local child's PID, or the
@@ -25,7 +25,7 @@ use time::macros::format_description;
 /// The remote side of one launch stages its log, exit file and PID file under this directory, named by launch id.
 pub const REMOTE_RUNS_DIR: &str = "/tmp/charliebot_runs";
 
-/// `timeouts.SSH_LAUNCH_TIMEOUT`: the bound on one ssh start and on one remote kill.
+/// The bound on one ssh start and on one remote kill.
 const SSH_LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The time part of a launch id: `%Y%m%dT%H%M%S` of the UTC start.
@@ -45,7 +45,7 @@ pub struct Launch {
 pub enum LaunchError {
   /// The ssh start failed or its output held no PID: the CLI exits 3 and registers nothing.
   Ssh(String),
-  /// A local file, spawn or ssh-setup failure: the CLI exits 1, as an uncaught Python exception does.
+  /// A local file, spawn or ssh-setup failure: the CLI exits 1.
   Io(String),
 }
 
@@ -58,7 +58,7 @@ pub fn mint_launch_id(started_at: OffsetDateTime) -> String {
   format!("{stamp}-{hex}")
 }
 
-/// `shlex.quote`: the text unchanged when every character is safe for the shell, else single-quoted.
+/// The text unchanged when every character is safe for the shell, else single-quoted.
 pub fn shell_quote(text: &str) -> String {
   if text.is_empty() {
     return "''".to_string();
@@ -218,7 +218,7 @@ fn join_text(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<String> {
   Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Python's `returncode`: the exit code, or the negated signal number when a signal ended the process.
+/// The exit code, or the negated signal number when a signal ended the process.
 fn return_code(status: ExitStatus) -> i32 {
   status.code().or_else(|| status.signal().map(|signal| -signal)).expect("an exit status has a code or a signal")
 }

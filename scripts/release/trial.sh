@@ -26,7 +26,8 @@
 #
 # --serve options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two
 # commits under one root share no tree; --seed-home <dir> copies each session directory of <dir> into the trial home
-# before the server starts, and the trial keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the
+# before the server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree mock home), and the
+# trial keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the
 # server in the caller's cgroup, which must already cap memory, and skips the scope probe and the scope start and stop.
 # Every check reads the release under test through the charliebot beside <server binary>: its
 # `charliebot release-helper` verbs parse the responses, the logs and the sessions this script gathers.
@@ -930,7 +931,8 @@ http_post() {
 }
 
 # copy_seed_sessions copies each session directory of SEED_HOME into the trial home. A copy, not a link: the server
-# appends to the event logs it serves, and the seed must stay as generated for the next run.
+# appends to the event logs it serves, and the seed must stay as generated for the next run. A seed's boot marker goes
+# where the task-tree walk reads it, so the walk compares the copied file times with the seed's marker.
 copy_seed_sessions() {
   local entry
   mkdir -m 700 -p "$SESSIONS_DIR" || return 1
@@ -938,6 +940,10 @@ copy_seed_sessions() {
     [[ -d $entry ]] || continue
     cp -a -- "${entry%/}" "$SESSIONS_DIR/" || return 1
   done
+  if [[ -f $SEED_HOME/boot_recovery.json ]]; then
+    mkdir -m 700 -p "$TRIAL_CB_HOME/state" || return 1
+    cp -a -- "$SEED_HOME/boot_recovery.json" "$TRIAL_CB_HOME/state/boot_recovery.json" || return 1
+  fi
 }
 
 start_server() {

@@ -92,6 +92,20 @@ pub fn parse(line: &str) -> Option<Row> {
   if line.starts_with('{') { parse_json(line) } else { parse_text(line) }
 }
 
+/// The level word of a line in either form, or `None` when the line carries none. A JSON line names its level in its
+/// `level` field, and a text line writes it in the bracketed column.
+pub fn level(line: &str) -> Option<String> {
+  let line = line.trim();
+  if line.starts_with('{') {
+    let object: Map<String, Value> = serde_json::from_str(line).ok()?;
+    return object.get("level").and_then(Value::as_str).map(str::to_string);
+  }
+  let rest = strip_stamp(line)?;
+  let (inside, _) = rest.strip_prefix('[')?.split_once(']')?;
+  let word = inside.trim_end();
+  LEVELS.iter().find(|(_, known)| *known == word).map(|(_, known)| (*known).to_string())
+}
+
 /// The text of a value as a line holds it: quoted when `needs_quotes` says so.
 fn written(text: &str) -> String {
   if needs_quotes(text) { text_repr::str_repr(text) } else { text.to_string() }
@@ -274,6 +288,16 @@ mod tests {
       all.extend(frontier.iter().cloned());
     }
     all
+  }
+
+  #[test]
+  fn a_line_names_its_level_in_either_form() {
+    assert_eq!(level(TIME).as_deref(), None);
+    assert_eq!(level("2026-10-29 07:11:32.244Z [error    ] server_ready").as_deref(), Some("error"));
+    assert_eq!(level("2026-10-29 07:11:32.244Z [warning  ] server_ready").as_deref(), Some("warning"));
+    assert_eq!(level(r#"{"event":"server_ready","level":"error"}"#).as_deref(), Some("error"));
+    assert_eq!(level(r#"{"event":"server_ready"}"#), None);
+    assert_eq!(level("2026-10-29 07:11:32 [error    ] server_ready"), None);
   }
 
   #[test]

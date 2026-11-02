@@ -917,10 +917,12 @@ pub struct OpenWaitingItem {
 /// approval day view reads the whole home through this, where the status read reads one task tree.
 pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
   let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
-  let metas = tree_read(&features.store, |store| store.load_session_metas(None)).await?;
+  // The read takes the corpus the listing memo holds instead of a copy of it: the approval day view reads this on
+  // every page load, and copying one row per session of the home cost more than the rest of the view together.
+  let (metas, _) = tree_read(&features.store, |store| store.load_session_metas_snapshot_versioned(None)).await?;
   let mut rows = Vec::new();
-  for meta in metas {
-    let Some(status) = stored_status(&meta)? else { continue };
+  for meta in metas.iter() {
+    let Some(status) = stored_status(meta)? else { continue };
     if status.waiting.is_empty() {
       continue;
     }

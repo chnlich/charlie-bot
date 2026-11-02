@@ -33,6 +33,17 @@ pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
 /// The stderr a one-shot keeps for its error message; later bytes are read and dropped.
 const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
 
+/// The scan-guard `PreToolUse` hook for a streaming run's Bash calls, given on the command line. The run passes
+/// `--dangerously-bypass-hook-trust` with it, because the hook is charlie-bot's own command and the run already
+/// bypasses approvals, so the hook runs without a review stop.
+fn scan_guard_hook_args() -> [String; 3] {
+  [
+    "--config".to_string(),
+    r#"hooks.PreToolUse=[{matcher="Bash",hooks=[{type="command",command="charliebot scan-guard"}]}]"#.to_string(),
+    "--dangerously-bypass-hook-trust".to_string(),
+  ]
+}
+
 /// The `codex exec --json` backend of one launch.
 pub struct CodexBackend {
   model: String,
@@ -134,6 +145,7 @@ impl CodexBackend {
   pub fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = self.exec_command_head();
     command.extend(self.instructions_config_args()?);
+    command.extend(scan_guard_hook_args());
     if let Some(session_id) = &self.resume_session_id {
       command.insert(2, "resume".to_string());
       command.push(session_id.clone());
@@ -149,10 +161,9 @@ impl CodexBackend {
     env
   }
 
-  /// `codex exec --json` with the configured model and effort, for one prompt and no tools.
-  ///
-  /// Codex has no system-prompt flag, so the system prompt is framed into the prompt. The text is the assistant
-  /// messages of the agent_message items. A structured error event, a nonzero exit or an empty answer fails the call.
+  /// `codex exec --json` with the configured model and effort, for one prompt and no tools. Codex has no system-prompt
+  /// flag, so the system prompt is framed into the prompt. The text is the assistant messages of the agent_message
+  /// items. A structured error event, a nonzero exit or an empty answer fails the call.
   async fn run_one_shot(
     &self,
     base_env: &Env,

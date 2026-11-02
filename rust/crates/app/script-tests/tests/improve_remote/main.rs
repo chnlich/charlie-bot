@@ -911,3 +911,190 @@ fn the_runner_builds_the_round_tools_with_its_own_cargo_home_and_tmpdir_and_the_
   let clone = world.remote_home.join("improve/runner/charlie-bot");
   assert_eq!(world.git(&clone, &["remote", "get-url", "origin"]), origin_text, "the runner cloned another origin");
 }
+
+#[test]
+fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it() {
+  let world = World::new();
+  // The commit both rounds need carries a rust/ directory, as the build's `cd` needs, and sits on
+  // an origin the runner can clone from.
+  fs::create_dir_all(world.repo.join("rust")).expect("the rust directory");
+  fs::write(world.repo.join("rust/Cargo.toml"), "[workspace]\n").expect("the workspace file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "synthetic build commit"]);
+  let commit = world.git(&world.repo, &["rev-parse", "HEAD"]);
+  let origin = world.sandbox.dir("remotes/build/charlie-bot.git");
+  let origin_text = origin.display().to_string();
+  world.git(&world.repo, &["clone", "-q", "--bare", ".", &origin_text]);
+  let cargo_log = world.sandbox.root().join("cargo-builds.log");
+  let cargo_env = world.sandbox.root().join("cargo-env.txt");
+  fs::write(
+    world.remote_home.join("improve/home/credentials.yaml"),
+    "synthetic-gateway:\n  api_key: synthetic-token\n",
+  )
+  .expect("the round's credentials file");
+  // The round home keeps the pattern file of the previous round, as the host's does, so both
+  // runners' copies take the in-place path instead of racing on a fresh file.
+  fs::write(world.remote_home.join("improve/home/skills_leak_patterns.local.txt"), "").expect("the pattern file");
+
+  // Two directions start in the same second, and both need the commit that the runner bin lacks.
+  // Each direction brings its own clone, whose origin the other direction's runner can fetch, and
+  // its own launch directory, records and TMPDIR.
+  let mut commands = Vec::new();
+  for (index, direction) in [DIRECTION, "ux"].into_iter().enumerate() {
+    let bare = world.sandbox.dir(&format!("remotes/{index}/charlie-bot.git"));
+    let bare_text = bare.display().to_string();
+    world.git(&world.repo, &["clone", "-q", "--bare", ".", &bare_text]);
+    let round_root = world.remote_home.join("improve").join(direction);
+    let clone = round_root.join("charlie-bot");
+    if direction == DIRECTION {
+      // The fixture clone's origin names no fetchable repository, and the other direction's
+      // runner fetches in this clone, so the origin becomes the local bare one.
+      world.git(&clone, &["remote", "set-url", "origin", &bare_text]);
+    } else {
+      fs::create_dir_all(&round_root).expect("the ux round root");
+      world.git(&round_root, &["clone", "-q", &bare_text, "charlie-bot"]);
+      world.git(&clone, &["config", "core.hooksPath", "dev/git-hooks"]);
+    }
+    let launch_id = format!("20261102T090000Z-1-40{index}");
+    let launch = world.remote_home.join("improve/launch").join(&launch_id);
+    fs::create_dir_all(&launch).expect("the launch directory");
+    harness::copy_file(&harness::repo_root().join("dev/improve/remote-runner.sh"), &launch.join("remote-runner.sh"));
+    for name in ["args", "env", "paths"] {
+      fs::write(launch.join(name), "").expect(name);
+    }
+    fs::write(launch.join("origin"), format!("{origin_text}\n")).expect("the launch origin");
+    fs::write(launch.join("skills_leak_patterns.local.txt"), "fictionalmarker\n").expect("the leak patterns");
+    fs::create_dir_all(format!("/tmp/improve-{direction}-tmp")).expect("the round's TMPDIR");
+    let records = world.sandbox.dir(&format!("records-{direction}"));
+    let mut env = harness::Env::new();
+    env.insert("HOME".to_string(), world.remote_home.display().to_string());
+    env.insert(
+      "PATH".to_string(),
+      format!("{}:/usr/local/bin:/usr/bin:/bin", world.remote_home.join(".local/bin").display()),
+    );
+    env.insert("FAKE_CLAUDE_ARGV".to_string(), records.join("claude-argv.txt").display().to_string());
+    env.insert("FAKE_CLAUDE_ENV".to_string(), records.join("claude-env.txt").display().to_string());
+    env.insert("FAKE_SYSTEMCTL_LOG".to_string(), world.systemctl_log.display().to_string());
+    env.insert("FAKE_SYSTEMD_RUN_LOG".to_string(), world.systemd_run_log.display().to_string());
+    env.insert("FAKE_SCOPE_STOPPED".to_string(), world.scope_stopped.display().to_string());
+    env.insert("FAKE_CARGO_ENV".to_string(), cargo_env.display().to_string());
+    env.insert("FAKE_CARGO_LOG".to_string(), cargo_log.display().to_string());
+    // The build runs long enough that the second runner arrives while the first one holds the
+    // work, as two burst starts do on the host.
+    env.insert("FAKE_CARGO_SLEEP".to_string(), "2".to_string());
+    env.insert("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string());
+    env.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
+    let mut command = harness::command("bash", &env);
+    command.arg(launch.join("remote-runner.sh")).args([&launch_id, direction, &commit]);
+    commands.push(command);
+  }
+
+  let runs: Vec<harness::Run> = std::thread::scope(|scope| {
+    commands
+      .iter_mut()
+      .map(|command| scope.spawn(move || harness::run(command)))
+      .collect::<Vec<_>>()
+      .into_iter()
+      .map(|handle| handle.join().expect("the runner thread"))
+      .collect()
+  });
+
+  for run in &runs {
+    assert_eq!(run.code, 0, "{}", run.describe());
+  }
+  let builds = fs::read_to_string(&cargo_log).unwrap_or_default();
+  assert_eq!(builds.lines().count(), 1, "the runners built the commit more than once");
+  let runner_bin = world.remote_home.join("improve/runner/bin");
+  for tool in ["charliebot", "improve-sandbox", "mock-home"] {
+    assert!(runner_bin.join(format!("{tool}-{commit}")).is_file(), "the runners did not install {tool}");
+    assert_eq!(
+      fs::read_link(runner_bin.join(tool)).expect("the runner's tool link"),
+      std::path::PathBuf::from(format!("{tool}-{commit}")),
+      "a round's {tool} link names another commit"
+    );
+  }
+  for (direction, run) in std::iter::zip([DIRECTION, "ux"], &runs) {
+    let ran = world.sandbox.dir(&format!("records-{direction}")).join("claude-argv.txt");
+    assert!(ran.is_file(), "the {direction} round did not run the tools of the commit:\n{}", run.describe());
+  }
+}
+
+#[test]
+fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read() {
+  let world = World::new();
+  let clone = world.other_direction_clone("ux");
+  // The committed change rides a topic branch, as a round's branch does.
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
+  fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic topic"]);
+  // The origin's main moves ahead, so the runner's fetch has a ref to write, as a live host's does.
+  world.git(&clone, &["switch", "-q", "main"]);
+  fs::write(clone.join("advanced.md"), "later\n").expect("the main commit's file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "advance main"]);
+  world.git(&clone, &["push", "-q", "origin", "main"]);
+  world.git(&clone, &["switch", "-q", "improve/ux/topic"]);
+  // The uncommitted change sits in the checkout; the untracked file has no git entry at all.
+  fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
+  fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
+  // The clone's own origin/main stays behind, so the fetch updates it, and a concurrent writer
+  // holds the ref lock while it does.
+  let behind = world.git(&clone, &["rev-parse", "HEAD~1"]);
+  world.git(&clone, &["update-ref", "refs/remotes/origin/main", &behind]);
+  fs::create_dir_all(clone.join(".git/refs/remotes/origin")).expect("the ref directory");
+  fs::write(clone.join(".git/refs/remotes/origin/main.lock"), "").expect("the ref lock");
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  for changed in ["committed.md", "base.md", "untracked.md"] {
+    assert!(
+      list.lines().any(|line| line == changed),
+      "the in-flight list misses the {changed} change of the ux clone:\n{list}"
+    );
+  }
+  assert!(
+    !clone.join(".git/FETCH_HEAD").exists(),
+    "the runner wrote the clone's shared FETCH_HEAD:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
+  let world = World::new();
+  // The origin's main moves ahead of the checkout's tracking ref, so the script's fetch has a ref
+  // to write, as a live host's does.
+  fs::write(world.repo.join("advanced.md"), "later\n").expect("the main commit's file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "advance main"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  world.git(&world.repo, &["update-ref", "refs/remotes/origin/main", &world.commit]);
+  world.git(&world.repo, &["reset", "-q", "--hard", &world.commit]);
+  // A worktree branch whose work origin/main does not hold, as a live line's checkout is.
+  let checkout = world.sandbox.root().join("locked-checkout");
+  world.git(&world.repo, &["branch", "charliebot/locked"]);
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "charliebot/locked"]);
+  fs::write(checkout.join("locked.md"), "topic\n").expect("the topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic locked topic"]);
+  fs::write(checkout.join("dirty.md"), "uncommitted\n").expect("the uncommitted change");
+  // The lock a concurrent fetch of this checkout holds while it writes the shared tracking ref.
+  fs::create_dir_all(world.repo.join(".git/refs/remotes/origin")).expect("the ref directory");
+  fs::write(world.repo.join(".git/refs/remotes/origin/main.lock"), "").expect("the ref lock");
+  let fetch_head = world.repo.join(".git/FETCH_HEAD");
+  fs::remove_file(&fetch_head).expect("remove the setup fetch's FETCH_HEAD");
+
+  let mut command = harness::command("bash", &world.env());
+  // The launcher runs the script out of its checkout, so this run does too.
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["locked.md", "dirty.md"] {
+    assert!(run.stdout.lines().any(|line| line == listed), "the in-flight list misses {listed}:\n{}", run.describe());
+  }
+  assert!(!fetch_head.exists(), "the launcher's in-flight list wrote the shared FETCH_HEAD");
+}

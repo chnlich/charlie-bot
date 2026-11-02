@@ -187,18 +187,19 @@ rewrite_command() {
 # the merge base also counts. inflight-files.sh reads this repository's worktrees by the same rules.
 commits_landed() {
   local root=$1
-  local merge_base=$2
-  local branch=$3
+  local main_ref=$2
+  local merge_base=$3
+  local branch=$4
   local sign sha subject
   local -A main_subjects=()
   while IFS= read -r subject; do
     main_subjects["$subject"]=1
-  done < <(git -C "$root" log --format=%s "$merge_base..origin/main")
+  done < <(git -C "$root" log --format=%s "$merge_base..$main_ref")
   while read -r sign sha subject; do
     if [[ $sign == + && -z ${main_subjects[$subject]:-} ]]; then
       return 1
     fi
-  done < <(git -C "$root" cherry -v origin/main "$branch")
+  done < <(git -C "$root" cherry -v "$main_ref" "$branch")
   return 0
 }
 
@@ -210,8 +211,9 @@ commits_landed() {
 # carries the branch's own change.
 versions_landed() {
   local root=$1
-  local merge_base=$2
-  local branch=$3
+  local main_ref=$2
+  local merge_base=$3
+  local branch=$4
   local meta path version entry
   local -A main_versions=()
   local -a paths=()
@@ -228,7 +230,7 @@ versions_landed() {
     read -r _ _ _ version _ <<<"$meta"
     main_versions["$path"$'\t'"$version"]=1
   done < <(git --literal-pathspecs -C "$root" log --format= --raw --no-renames --no-abbrev \
-    "$merge_base..origin/main" -- "${paths[@]}" | grep '^:')
+    "$merge_base..$main_ref" -- "${paths[@]}" | grep '^:')
   for entry in "${branch_versions[@]}"; do
     if [[ -z ${main_versions[$entry]:-} ]]; then
       return 1
@@ -239,14 +241,16 @@ versions_landed() {
 
 # Whether a branch carries a change that origin/main does not already contain.
 #
-# The branch has landed when its commits or its versions are on origin/main. Both checks read
-# origin/main, so a stale origin/main would make merged work look live; this is why the fetch above
-# comes first.
+# The branch has landed when its commits or its versions are on origin/main. Both checks read the
+# fetched ref, so a stale fetch would make merged work look live; this is why the fetch comes
+# before any branch is compared.
 branch_is_in_flight() {
   local root=$1
-  local merge_base=$2
-  local branch=$3
-  if commits_landed "$root" "$merge_base" "$branch" || versions_landed "$root" "$merge_base" "$branch"; then
+  local main_ref=$2
+  local merge_base=$3
+  local branch=$4
+  if commits_landed "$root" "$main_ref" "$merge_base" "$branch" ||
+    versions_landed "$root" "$main_ref" "$merge_base" "$branch"; then
     return 1
   fi
   return 0
@@ -256,31 +260,28 @@ branch_is_in_flight() {
 # launcher computed there cannot see their work, and two directions pick topics in rust/. Every
 # file that those clones change therefore joins the round's list before the clone check: each
 # branch's committed work when origin/main does not already contain it, plus the uncommitted and
-# untracked paths of the checkout. Each clone's origin/main is fetched first, so a stale ref cannot
-# make merged work look live, and a branch without a merge base is skipped with a note. The
-# runner's own checkout is no direction's clone and contributes nothing.
+# untracked paths of the checkout. The directions start in a burst after a release, so two runners
+# read one clone at once, and a clone's own origin/main is a ref its owner fetches too: this runner
+# fetches into the ref its direction owns, writes no shared FETCH_HEAD, and compares against that
+# ref, so the clones' refs/remotes/origin/main stay with their owners. A branch without a merge
+# base is skipped with a note. The runner's own checkout is no direction's clone and contributes
+# nothing.
 other_inflight_files() {
-  local clone other branch merge_base attempt
+  local clone other branch merge_base main_ref origin_url
+  main_ref="refs/improve/inflight/$direction"
   for clone in "$HOME_DIR"/improve/*/charlie-bot; do
     [[ -d $clone ]] || continue
     [[ $clone == "$RUNNER_ROOT/charlie-bot" ]] && continue
     other=$(basename -- "$(dirname -- "$clone")")
     [[ $other == "$direction" ]] && continue
-    # Every direction's round fetches every other clone, so two fetches of one clone can race on
-    # refs/remotes/origin/main and one fails with `cannot lock ref`. Three attempts, a second apart,
-    # let the fetch read the moved ref; the last failure stops the round.
-    for attempt in 1 2 3; do
-      if git -C "$clone" fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main; then
-        break
-      fi
-      (( attempt < 3 )) || fail 1 "cannot fetch origin/main in $clone"
-      printf '%s retrying the fetch of origin/main in %s, attempt %s of 3\n' \
-        "$STDERR_PREFIX" "$clone" $((attempt + 1)) >&2
-      sleep 1
-    done
+    # The fetch names the URL instead of the remote, because a named remote's fetch also updates
+    # the remote's tracking ref, and that update is the shared write this fetch must not make.
+    origin_url=$(git -C "$clone" remote get-url origin) || fail 1 "cannot read the origin of $clone"
+    git -C "$clone" fetch --quiet --no-tags --no-write-fetch-head "$origin_url" \
+      +refs/heads/main:"$main_ref" || fail 1 "cannot fetch origin/main in $clone"
     while IFS= read -r branch; do
-      if merge_base=$(git -C "$clone" merge-base origin/main "$branch" 2>/dev/null); then
-        if branch_is_in_flight "$clone" "$merge_base" "$branch"; then
+      if merge_base=$(git -C "$clone" merge-base "$main_ref" "$branch" 2>/dev/null); then
+        if branch_is_in_flight "$clone" "$main_ref" "$merge_base" "$branch"; then
           git -C "$clone" diff --name-only --no-renames "$merge_base" "$branch" || :
         fi
       else
@@ -348,6 +349,12 @@ round_is_live() {
 # checkout the runner owns. Their build inputs are the runner's own too: CARGO_HOME, TMPDIR, and the
 # origin that the launcher sent from the runtime clone. No round's write allow-list covers any of
 # them, so a round cannot change the code that runs outside its boundary.
+#
+# The directions start in a burst after a release, so two rounds can need the same missing commit at
+# once. Every write below -- the clone, its fetch and checkout, the cargo build, the target
+# directory, the installed tools and their links -- runs under one lock per runner root, whose
+# holder's exit releases it. The check for the tools runs again after the wait, so the round whose
+# commit the holder already built skips the build.
 ensure_cli() {
   local commit=$1
   local bin_dir="$RUNNER_ROOT/bin"
@@ -356,7 +363,10 @@ ensure_cli() {
   local cli="$bin_dir/charliebot-$commit"
   local sandbox="$bin_dir/improve-sandbox-$commit"
   local mock_home="$bin_dir/mock-home-$commit"
-  local origin
+  local origin lock_fd
+  mkdir -p -- "$RUNNER_ROOT"
+  exec {lock_fd}>>"$RUNNER_ROOT/build.lock"
+  flock "$lock_fd" || fail 1 "cannot lock the runner's build state: $RUNNER_ROOT/build.lock"
   mkdir -p -- "$bin_dir" "$RUNNER_ROOT/cargo-home" "$RUNNER_ROOT/tmp"
   if [[ ! -x $cli || ! -x $sandbox || ! -x $mock_home ]]; then
     if [[ ! -d $checkout/.git ]]; then
@@ -381,6 +391,7 @@ ensure_cli() {
   ln -sfn -- "charliebot-$commit" "$bin_dir/charliebot"
   ln -sfn -- "improve-sandbox-$commit" "$bin_dir/improve-sandbox"
   ln -sfn -- "mock-home-$commit" "$bin_dir/mock-home"
+  flock -u "$lock_fd"
 }
 
 # Empty TMPDIR. A killed round leaves large copies there, and this round owns the directory: the

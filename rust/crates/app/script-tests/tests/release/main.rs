@@ -777,7 +777,8 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
   assert_eq!(run.code, 0, "{}", run.describe());
   let config = fs::read_to_string(&copied).expect("the trial config");
   assert!(config.contains("\n  enable_session_cpu_weight: false\n"), "{config}");
-  assert!(config.contains("\n  enable_session_io_weight: true\n"), "{config}");
+  // The server's default, the value the trial's server starts with.
+  assert!(config.contains("\n  enable_session_io_weight: false\n"), "{config}");
 }
 
 #[test]

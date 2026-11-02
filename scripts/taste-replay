@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Replay the taste table: ask a model to re-choose each held-out precedent, with and without the table.
+
+Condition A gives only the situation and the options. Condition B adds the domain's rows that were active at the
+held-out row's decision time: an earlier `decided_at`, and no row decided by then supersedes it. The held-out row is
+never shown, so a match measures agreement, not copying.
+
+Every call is tool-less and runs in a fresh empty directory, so the model sees only the prompt. The model is the
+manager default backend's model, `backends.options[0].model` in `$CHARLIEBOT_HOME/config.yaml`.
+
+Usage: scripts/taste-replay <output-dir>
+"""
+
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+DISALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Agent"
+CALL_TIMEOUT_SECONDS = 300
+
+ISOLATION = (
+    "Each call runs tool-less (--disallowed-tools Bash,Read,Write,Edit,Glob,Grep,Agent) with "
+    "--no-session-persistence in a fresh empty directory, and the model sees only the prompt."
+)
+AS_OF_RULE = (
+    "Condition B adds the held-out row's domain rows whose decided_at is earlier than the held-out row's and that "
+    "no row decided before that moment supersedes."
+)
+
+SYSTEM_PROMPT = (
+    "You are helping reproduce a user's past choice. Read the question and answer with exactly one option, copied "
+    "verbatim. Do not explain, do not add punctuation, and do not name a different option."
+)
+
+
+def die(message: str) -> None:
+    print(f"taste-replay: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def home_dir() -> Path:
+    return Path(os.environ.get("CHARLIEBOT_HOME") or Path.home() / ".charliebot").expanduser()
+
+
+def cli_path() -> str:
+    explicit = os.environ.get("CHARLIEBOT_BIN")
+    if explicit:
+        return explicit
+    releases = Path(os.environ.get("CHARLIEBOT_RELEASES_DIR") or Path.home() / "charliebot-releases").expanduser()
+    current = releases / "current" / "charliebot"
+    if not current.exists():
+        die(f"no release CLI at {current}; install one with scripts/release.sh <sha>")
+    return str(current)
+
+
+def run_cli(cli: str, home: Path, args: list[str]) -> str:
+    environment = dict(os.environ)
+    environment["CHARLIEBOT_HOME"] = str(home)
+    completed = subprocess.run([cli, *args], capture_output=True, text=True, env=environment)
+    if completed.returncode != 0:
+        die(f"`{cli} {' '.join(args)}` failed: {completed.stderr.strip()}")
+    return completed.stdout
+
+
+def read_model(config_path: Path) -> str:
+    if not config_path.is_file():
+        die(f"missing config file {config_path}")
+    in_backends = False
+    in_options = False
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("backends:"):
+            in_backends = True
+            continue
+        if in_backends and line.startswith("  options:"):
+            in_options = True
+            continue
+        if in_options:
+            if line and not line.startswith("  "):
+                break
+            match = re.match(r"^    model:\s*(\S+)", line)
+            if match:
+                return match.group(1).strip("'\"")
+    die(f"no backends.options[0].model in {config_path}")
+
+
+def domains(cli: str, home: Path) -> list[str]:
+    # The index header's sentences carry spaces; a domain name carries none.
+    return [line for line in run_cli(cli, home, ["taste", "index"]).splitlines() if line and " " not in line]
+
+
+def query(cli: str, home: Path, domain: str, as_of: str | None) -> list[dict]:
+    args = ["taste", "query", "--domain", domain, "--json"]
+    if as_of is not None:
+        args.extend(["--as-of", as_of])
+    return [json.loads(line) for line in run_cli(cli, home, args).splitlines() if line.strip()]
+
+
+def empty_call_dir() -> Path:
+    return Path(tempfile.mkdtemp(prefix="taste-replay-"))
+
+
+def preflight(claude: str) -> None:
+    call_dir = empty_call_dir()
+    try:
+        completed = subprocess.run(
+            [claude, "-p", "--max-turns", "1", "Reply with the single word OK."],
+            cwd=call_dir,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=CALL_TIMEOUT_SECONDS,
+        )
+    finally:
+        shutil.rmtree(call_dir, ignore_errors=True)
+    if completed.returncode != 0:
+        die(f"preflight model call failed (login check): {completed.stderr.strip()}")
+    if not completed.stdout.strip():
+        die("preflight model call returned no text; the login check failed")
+
+
+def ask(claude: str, model: str, prompt: str) -> str:
+    call_dir = empty_call_dir()
+    try:
+        completed = subprocess.run(
+            [
+                claude,
+                "-p",
+                "--output-format",
+                "text",
+                "--no-session-persistence",
+                "--model",
+                model,
+                "--system-prompt",
+                SYSTEM_PROMPT,
+                "--disallowed-tools",
+                DISALLOWED_TOOLS,
+            ],
+            cwd=call_dir,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=CALL_TIMEOUT_SECONDS,
+        )
+    finally:
+        shutil.rmtree(call_dir, ignore_errors=True)
+    if completed.returncode != 0:
+        die(f"model call failed: {completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
+def base_prompt(row: dict) -> str:
+    option_lines = "\n".join(f"- {option}" for option in row["options"])
+    return (
+        f"Situation: {row['situation']}\n\n"
+        f"Options:\n{option_lines}\n\n"
+        "Which option did the user choose? Reply with exactly one option, copied verbatim."
+    )
+
+
+def context_prompt(row: dict, context_rows: list[dict]) -> str:
+    lines = []
+    for context in context_rows:
+        options = " | ".join(context["options"]) if context["options"] else "(no options recorded)"
+        lines.append(
+            f"- {context['situation']}\n"
+            f"  options: {options}\n"
+            f"  the user chose: {context['chosen']}\n"
+            f"  reason: {context['reason']}"
+        )
+    earlier = "\n".join(lines)
+    return f"{base_prompt(row)}\n\nEarlier choices by the user in this domain:\n{earlier}\n"
+
+
+def normalized(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().strip("\"'“”「」").lower()
+
+
+def answer_matches(answer: str, row: dict) -> bool:
+    first_line = next((line for line in answer.splitlines() if line.strip()), "")
+    stripped = re.sub(r"^\s*(?:\d+[.)]|[-*])\s*", "", first_line)
+    return normalized(stripped) == normalized(row["chosen"])
+
+
+def rate(matches: int, total: int) -> dict:
+    return {"matches": matches, "total": total, "rate": round(matches / total, 4) if total else 0.0}
+
+
+def summarize(answers: list[dict]) -> dict:
+    return {condition: rate(*count_matches(answers, condition)) for condition in ("A", "B")}
+
+
+def count_matches(answers: list[dict], condition: str) -> tuple[int, int]:
+    selected = [answer for answer in answers if answer["condition"] == condition]
+    return sum(1 for answer in selected if answer["match"]), len(selected)
+
+
+def render_page(results: dict) -> str:
+    def row_cells(condition: str) -> str:
+        stats = results["conditions"][condition]
+        return f"<td>{stats['matches']}/{stats['total']}</td><td>{stats['rate']:.1%}</td>"
+
+    domain_rows = []
+    for domain, stats in sorted(results["domains"].items()):
+        domain_rows.append(
+            f"<tr><td>{html.escape(domain)}</td><td>{stats['rows']}</td>"
+            f"<td>{stats['A']['matches']}/{stats['A']['total']}</td><td>{stats['A']['rate']:.1%}</td>"
+            f"<td>{stats['B']['matches']}/{stats['B']['total']}</td><td>{stats['B']['rate']:.1%}</td></tr>"
+        )
+    mismatches = []
+    for answer in results["answers"]:
+        if answer["match"]:
+            continue
+        mismatches.append(
+            f"<tr><td>{html.escape(answer['row'])}</td><td>{html.escape(answer['domain'])}</td>"
+            f"<td>{html.escape(answer['condition'])}</td><td>{html.escape(answer['chosen'])}</td>"
+            f"<td><pre>{html.escape(answer['answer'])}</pre></td></tr>"
+        )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Taste replay</title>
+<style>
+  body {{ font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; color: #1b2430; }}
+  table {{ border-collapse: collapse; margin: 12px 0; }}
+  th, td {{ border: 1px solid #d9dfe6; padding: 6px 10px; text-align: left; vertical-align: top; }}
+  th {{ background: #eef1f5; }}
+  pre {{ margin: 0; white-space: pre-wrap; }}
+  .note {{ color: #5b6774; max-width: 900px; }}
+</style>
+</head>
+<body>
+<h1>Taste replay</h1>
+<p class="note">Model: <code>{html.escape(results['model'])}</code> (the manager default backend's model,
+<code>backends.options[0]</code>). Rows replayed: {results['rows']}.</p>
+<table>
+<tr><th>Condition</th><th>Matches</th><th>Agreement</th></tr>
+<tr><td>A: situation and options only</td>{row_cells('A')}</tr>
+<tr><td>B: A plus the rows active at the decision time</td>{row_cells('B')}</tr>
+</table>
+<p class="note">{html.escape(results['isolation'])}<br>{html.escape(results['as_of_rule'])}</p>
+<h2>By domain</h2>
+<table>
+<tr><th>Domain</th><th>Rows</th><th>A matches</th><th>A agreement</th><th>B matches</th><th>B agreement</th></tr>
+{''.join(domain_rows)}
+</table>
+<h2>Mismatches</h2>
+<table>
+<tr><th>Row</th><th>Domain</th><th>Condition</th><th>Chosen</th><th>Model answer</th></tr>
+{''.join(mismatches) if mismatches else '<tr><td colspan="5">none</td></tr>'}
+</table>
+</body>
+</html>
+"""
+
+
+def main() -> None:
+    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+        die("usage: scripts/taste-replay <output-dir>")
+    output_dir = Path(sys.argv[1]).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    home = home_dir()
+    cli = cli_path()
+    model = read_model(home / "config.yaml")
+    claude = shutil.which("claude")
+    if not claude:
+        die("missing `claude` on PATH")
+
+    print("taste-replay: preflight model call", file=sys.stderr)
+    preflight(claude)
+
+    table_domains = domains(cli, home)
+    if not table_domains:
+        die("the taste table has no active row to replay")
+
+    answers: list[dict] = []
+    per_domain: dict[str, list[dict]] = {}
+    for domain in table_domains:
+        held_out = [row for row in query(cli, home, domain, None) if len(row["options"]) >= 2]
+        if not held_out:
+            continue
+        per_domain[domain] = held_out
+        for row in held_out:
+            for condition, prompt in (
+                ("A", base_prompt(row)),
+                ("B", context_prompt(row, query(cli, home, domain, row["decided_at"]))),
+            ):
+                print(f"taste-replay: {row['id']} condition {condition}", file=sys.stderr)
+                answer = ask(claude, model, prompt)
+                answers.append(
+                    {
+                        "row": row["id"],
+                        "domain": domain,
+                        "condition": condition,
+                        "chosen": row["chosen"],
+                        "answer": answer,
+                        "match": answer_matches(answer, row),
+                    }
+                )
+
+    results = {
+        "model": model,
+        "model_source": f"backends.options[0].model in {home / 'config.yaml'}",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "isolation": ISOLATION,
+        "as_of_rule": AS_OF_RULE,
+        "rows": sum(len(rows) for rows in per_domain.values()),
+        "conditions": summarize(answers),
+        "domains": {
+            domain: {
+                "rows": len(rows),
+                "A": rate(*count_matches([answer for answer in answers if answer["domain"] == domain], "A")),
+                "B": rate(*count_matches([answer for answer in answers if answer["domain"] == domain], "B")),
+            }
+            for domain, rows in per_domain.items()
+        },
+        "answers": answers,
+    }
+    if results["rows"] == 0:
+        die("no active row has two or more options to replay")
+
+    (output_dir / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "results.html").write_text(render_page(results), encoding="utf-8")
+    a = results["conditions"]["A"]
+    b = results["conditions"]["B"]
+    print(
+        f"taste-replay: {results['rows']} rows; A {a['matches']}/{a['total']} ({a['rate']:.1%}), "
+        f"B {b['matches']}/{b['total']} ({b['rate']:.1%}); wrote {output_dir / 'results.html'}"
+    )
+
+
+if __name__ == "__main__":
+    main()

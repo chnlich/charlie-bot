@@ -34,7 +34,8 @@
 # its session.
 #
 # Environment: CHARLIEBOT_REPO_ROOT is the runtime clone this switch moves; unset means the script's parent
-# directory, which only holds when the script sits inside the clone. CHARLIEBOT_HOME (default ~/.charliebot),
+# directory, which only holds when the script sits inside the clone. A copy outside a checkout refuses an unset
+# variable before any step. CHARLIEBOT_HOME (default ~/.charliebot),
 # CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
 # server, where the production pane runs). CHARLIEBOT_SWITCH_CTRL_C_WAIT_S, CHARLIEBOT_SWITCH_STOP_WAIT_S and
@@ -58,7 +59,14 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The clone this switch moves comes from the input, so a copy outside the clone runs it. Without the variable the
-# script's parent directory is the clone.
+# script's parent directory is the clone, and that default holds only when the script sits inside a checkout. The
+# checkout is the script's grandparent: a git directory, or the guide and the Rust workspace of an exported tree.
+if [ -z "${CHARLIEBOT_REPO_ROOT:-}" ] && [ ! -e "$SCRIPT_DIR/../.git" ] \
+  && { [ ! -f "$SCRIPT_DIR/../AGENTS.md" ] || [ ! -f "$SCRIPT_DIR/../rust/Cargo.toml" ]; }; then
+  echo "switch-server.sh: CHARLIEBOT_REPO_ROOT is unset and the script is not inside a charlie-bot checkout:" \
+    "$SCRIPT_DIR" >&2
+  exit 1
+fi
 REPO_ROOT="${CHARLIEBOT_REPO_ROOT:-$SCRIPT_DIR/..}"
 [ -d "$REPO_ROOT" ] || {
   echo "switch-server.sh: CHARLIEBOT_REPO_ROOT is not a directory: $REPO_ROOT" >&2

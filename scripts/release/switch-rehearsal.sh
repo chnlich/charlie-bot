@@ -449,7 +449,7 @@ run_switch() {
   local label=$1 rc start_ms end_ms switch_log
   shift
   start_ms=$(date +%s%3N)
-  "$SWITCH_SCRIPT" "$@" > "$TREE/$label.out" 2>&1
+  CHARLIEBOT_REPO_ROOT="$REPO" "$SWITCH_SCRIPT" "$@" > "$TREE/$label.out" 2>&1
   rc=$?
   copy_redacted_file "$TREE/$label.out" "$EVIDENCE/$label.out" || return 1
   end_ms=$(date +%s%3N)

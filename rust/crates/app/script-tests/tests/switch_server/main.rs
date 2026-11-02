@@ -72,6 +72,32 @@ fn first_line_port(run: &Run) -> u16 {
   run.stdout.lines().next().expect("the port line").parse().expect("a port")
 }
 
+// ---- the runtime clone from the input -------------------------------------------------------------------------------
+
+#[test]
+fn test_an_outside_copy_without_the_repo_root_refuses_before_any_step() {
+  let sandbox = Sandbox::new();
+  let outside = sandbox.dir("outside");
+  let script = outside.join("switch-server.sh");
+  harness::copy_file(&harness::repo_root().join("scripts/switch-server.sh"), &script);
+  let releases = sandbox.root().join("releases");
+  let logs = sandbox.root().join("logs");
+  let mut env = sandbox.env();
+  env.remove("CHARLIEBOT_REPO_ROOT");
+  env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
+  env.insert("CHARLIEBOT_LOG_DIR".to_string(), logs.display().to_string());
+
+  let mut command = harness::command("bash", &env);
+  command.arg(&script).args(["rust", &"a".repeat(40)]);
+  let run = harness::run(&mut command);
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  let output = format!("{}{}", run.stdout, run.stderr);
+  assert!(output.contains("CHARLIEBOT_REPO_ROOT"), "{}", run.describe());
+  assert!(!releases.join("current").exists(), "the release root was touched: {}", run.describe());
+  assert!(!logs.exists(), "the log directory was created before the refusal: {}", run.describe());
+}
+
 // ---- live backend switch directions ---------------------------------------------------------------------------------
 
 #[test]

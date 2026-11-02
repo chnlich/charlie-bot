@@ -9,6 +9,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use charliebot_agents::backend_pool::BackendPool;
@@ -18,6 +19,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::{Env, LaunchArgs};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_tasks::autonamer;
+use regex::Regex;
 use serde::Deserialize;
 
 use crate::lessons::LessonCandidate;
@@ -126,8 +128,9 @@ pub fn evaluate_response(candidates: &[LessonCandidate], answer: &str) -> Result
           "known_pattern names no candidate heading, and the scan found no candidate".to_string(),
         ));
       }
-      let reference = raw.lessons_ref.as_deref().map(cited_heading).unwrap_or_default();
-      let Some(candidate) = candidates.iter().find(|candidate| candidate.heading == reference) else {
+      let reference = raw.lessons_ref.as_deref().map(comparable_heading).unwrap_or_default();
+      let Some(candidate) = candidates.iter().find(|candidate| comparable_heading(&candidate.heading) == reference)
+      else {
         return Err(JudgeError::Assertion(format!(
           "lessons_ref {:?} is not a candidate heading; the candidates are {}",
           raw.lessons_ref.as_deref().unwrap_or_default(),
@@ -141,13 +144,21 @@ pub fn evaluate_response(candidates: &[LessonCandidate], answer: &str) -> Result
   Ok(Judgement { verdict: raw.verdict, why: raw.why, lessons_ref, fix_scope: raw.fix_scope })
 }
 
-/// The heading a `lessons_ref` cites, with the markdown decoration a model copies around it removed. The reference
-/// still has to name a candidate: this undoes `###`, backticks, quotes and asterisks, not a different string.
-fn cited_heading(reference: &str) -> &str {
-  let text = reference.trim();
+/// The comparable text of a heading: the leading date or date-plus-session prefix and the markdown decoration a
+/// model copies around it removed. The rest must match exactly.
+fn comparable_heading(heading: &str) -> String {
+  let text = heading.trim();
   let text = text.strip_prefix("###").unwrap_or(text).trim_start();
-  text.trim_matches(['`', '"', '\'', '*']).trim()
+  let text = text.replace('`', "");
+  let text = text.trim_matches(['"', '\'', '*']).trim();
+  LEADING_DATE.replace(text, "").trim().to_string()
 }
+
+/// A heading's leading date, with an optional `(session …)` part and an optional separator after it.
+static LEADING_DATE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"^\d{4}-\d{2}-\d{2}\b(?:\s*\(session\s+[^)]*\))?\s*(?:—|–|-|:)?\s*")
+    .expect("the leading-date expression is valid")
+});
 
 fn headings(candidates: &[LessonCandidate]) -> String {
   let listed: Vec<String> = candidates.iter().map(|candidate| format!("{:?}", candidate.heading)).collect();
@@ -344,6 +355,50 @@ mod tests {
     .to_string();
     let judgement = evaluate_response(&candidates(&["2026-11-01 — scope guard"]), &answer).unwrap();
     assert_eq!(judgement.lessons_ref.as_deref(), Some("2026-11-01 — scope guard"));
+  }
+
+  #[test]
+  fn a_citation_may_omit_a_leading_date_and_backticks() {
+    let candidate = "2026-09-09 — `charliebot delegate` rejects a local base branch that is ahead of its remote; pin \
+                     the base with the full commit sha (session 67af29dd)";
+    let answer = serde_json::json!({
+      "why": "it matches",
+      "verdict": "known_pattern",
+      "lessons_ref": "charliebot delegate rejects a local base branch that is ahead of its remote; pin the base with \
+                      the full commit sha (session 67af29dd)",
+      "fix_scope": "",
+    })
+    .to_string();
+    let judgement = evaluate_response(&candidates(&[candidate]), &answer).unwrap();
+    assert_eq!(judgement.lessons_ref.as_deref(), Some(candidate));
+  }
+
+  #[test]
+  fn a_citation_may_omit_a_leading_date_and_session_prefix() {
+    let candidate = "2026-10-22 (session 28f1df1f-b557-5c1f-b4a3-d5fd12fccc50) — Seven parallel DeepSeek Flash \
+                     audits over the flash service's concurrency cap";
+    let answer = serde_json::json!({
+      "why": "it matches",
+      "verdict": "known_pattern",
+      "lessons_ref": "Seven parallel DeepSeek Flash audits over the flash service's concurrency cap",
+      "fix_scope": "",
+    })
+    .to_string();
+    let judgement = evaluate_response(&candidates(&[candidate]), &answer).unwrap();
+    assert_eq!(judgement.lessons_ref.as_deref(), Some(candidate));
+  }
+
+  #[test]
+  fn a_citation_that_changes_one_word_still_fails() {
+    let answer = serde_json::json!({
+      "why": "it matches",
+      "verdict": "known_pattern",
+      "lessons_ref": "2026-11-01 — scope guards",
+      "fix_scope": "",
+    })
+    .to_string();
+    let error = evaluate_response(&candidates(&["2026-11-01 — scope guard"]), &answer).unwrap_err();
+    assert!(matches!(error, JudgeError::Assertion(_)), "{error}");
   }
 
   #[test]

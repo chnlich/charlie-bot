@@ -95,6 +95,52 @@ static SECRET_HEX: LazyLock<Regex> =
 static HTTP_STATUS: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\b[45]\d\d\b").expect("the http-status expression is valid"));
 
+/// A log line's level. Only an ERROR line names a cause when the text carries levels at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogLevel {
+  Error,
+  Other,
+}
+
+static LEVEL_FIELD: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(?i)\blevel=(trace|debug|info|warn|warning|error)\b").expect("the log-level field expression is valid")
+});
+static LEVEL_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(^|\s)(TRACE|DEBUG|INFO|WARN|WARNING|ERROR)(\s|$)").expect("the log-level token expression is valid")
+});
+
+/// The level of one log line, or `None` when the line carries none.
+fn line_level(line: &str) -> Option<LogLevel> {
+  if let Some(captures) = LEVEL_FIELD.captures(line) {
+    let level = captures.get(1).expect("the level is captured").as_str();
+    return Some(if level.eq_ignore_ascii_case("error") { LogLevel::Error } else { LogLevel::Other });
+  }
+  let captures = LEVEL_TOKEN.captures(line)?;
+  let level = captures.get(2).expect("the level is captured").as_str();
+  Some(if level == "ERROR" { LogLevel::Error } else { LogLevel::Other })
+}
+
+/// The cause material of one error text: the text itself when no line carries a log level, or its ERROR-level lines.
+/// A log dump with no ERROR line has no cause material, so extraction continues to an older error event.
+fn cause_material(text: &str) -> Option<String> {
+  let mut leveled = false;
+  let mut errors = Vec::new();
+  for line in text.lines() {
+    match line_level(line) {
+      Some(LogLevel::Error) => {
+        leveled = true;
+        errors.push(line);
+      }
+      Some(LogLevel::Other) => leveled = true,
+      None => {}
+    }
+  }
+  if !leveled {
+    return Some(text.to_string());
+  }
+  if errors.is_empty() { None } else { Some(errors.join("\n")) }
+}
+
 /// One ordered cause pattern. `whole_text` makes the pattern's hit name the whole cleaned text, as the Python
 /// inventory does for the classes whose matched fragment is too narrow to identify the failure; `whole_line` names the
 /// line the hit sits on, for a class whose match is a single word.
@@ -282,17 +328,23 @@ fn containing_line(text: &str, start: usize, end: usize) -> &str {
 
 /// The cause of one run, from its error-event contents in file order, its stderr tail and its terminal reason.
 pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Option<&str>) -> ExtractedCause {
-  let error_cleans: Vec<String> = error_texts.iter().map(|text| clean(text)).filter(|text| !text.is_empty()).collect();
-  for text in error_cleans.iter().rev() {
+  let error_materials: Vec<String> = error_texts
+    .iter()
+    .map(|text| clean(text))
+    .filter(|text| !text.is_empty())
+    .filter_map(|text| cause_material(&text))
+    .collect();
+  for text in error_materials.iter().rev() {
     if let Some(line) = match_cause(text) {
       return ExtractedCause::Cause { line, anchor: anchor(text) };
     }
   }
   let stderr_clean = clean(stderr);
-  if !stderr_clean.is_empty()
-    && let Some(line) = match_cause(&stderr_clean)
+  let stderr_material = cause_material(&stderr_clean).unwrap_or_default();
+  if !stderr_material.is_empty()
+    && let Some(line) = match_cause(&stderr_material)
   {
-    return ExtractedCause::Cause { line, anchor: anchor(&stderr_clean) };
+    return ExtractedCause::Cause { line, anchor: anchor(&stderr_material) };
   }
   let mut combined = error_texts.join("\n");
   combined.push('\n');
@@ -300,11 +352,11 @@ pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Op
   if banner_only(&combined) {
     return ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, anchor: anchor(combined.trim()) };
   }
-  if let Some(text) = error_cleans.last() {
+  if let Some(text) = error_materials.last() {
     return ExtractedCause::Cause { line: text.clone(), anchor: anchor(text) };
   }
-  if !stderr_clean.is_empty() {
-    return ExtractedCause::Cause { line: stderr_clean.clone(), anchor: anchor(&stderr_clean) };
+  if !stderr_material.is_empty() {
+    return ExtractedCause::Cause { line: stderr_material.clone(), anchor: anchor(&stderr_material) };
   }
   if let Some(reason) = terminal_reason {
     let line = format!("terminal_reason={reason}");
@@ -361,6 +413,16 @@ mod tests {
       "run:work:5:the previous round still runs: unit improve-ux.scope exists"
     );
     assert!(matches!(first, ExtractedCause::Cause { .. }));
+  }
+
+  #[test]
+  fn a_log_dump_with_no_error_line_yields_to_the_older_error_line() {
+    let info = "timestamp=2026-10-18T09:05:08.980Z level=INFO run=568bf1ce message=stream providerID=opencode \
+                modelID=deepseek-v4.1-flash-free session.id=ses_eb1cc31f3ffez6qkkXU1c8k14m small=false";
+    let failure = "OpenCode backend failed: OpenCode SSE stream carried no session progress";
+    let cause = extract_run_cause(&[failure, info], "", None);
+    assert_eq!(cause, ExtractedCause::Cause { line: failure.to_string(), anchor: failure.to_string() });
+    assert_eq!(run_signature("review", Some(-15), "synthetic-backend", &cause), format!("run:review:-15:{failure}"));
   }
 
   #[test]

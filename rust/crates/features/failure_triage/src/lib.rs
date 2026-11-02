@@ -1,17 +1,18 @@
 //! `src.features.failure_triage`: the stateless half of CharlieBot failure triage.
 //!
 //! A scan reads a time window of failed runs and error-level server log lines, groups them by signature, decides
-//! no-cause records in code, retrieves candidate LESSONS entries and judges each remaining signature with one small
-//! model one-shot. `charliebot triage scan --dry-run` prints one verdict per signature and writes nothing.
+//! no-cause records and archived signatures in code, retrieves candidate LESSONS entries and judges each remaining
+//! signature with one small model one-shot. `charliebot triage scan` prints the window and one verdict per signature,
+//! and writes nothing. A `--cron` scan derives its window from the bound session's fires.
 //!
-//! This half registers no route and no service. The ledger, the hourly cron handler and the pass-on to a triage
-//! session belong to the later task that waits for the ledger state machine's approval.
+//! This half registers no route and no service.
 
 mod collect;
 mod judge;
 mod lessons;
 mod scan;
 mod signature;
+mod window;
 
 pub use collect::{
   CollectedSignature, DEFAULT_LOG_DIR, LOG_DIR_ENV, ScanOptions, Source, collect, log_dir_from_environment,
@@ -21,8 +22,9 @@ pub use judge::{
   NativeOneShotError, Verdict, evaluate_response, judge_signature, native_one_shot_text, system_prompt, user_prompt,
 };
 pub use lessons::{CANDIDATE_LIMIT, LESSONS_FILE_NAME, LessonCandidate, LessonIndex};
-pub use scan::{JUDGE_CONCURRENCY, NO_CAUSE_FIX_SCOPE, RowVerdict, ScanRow, ledger_path, preflight, scan};
+pub use scan::{JUDGE_CONCURRENCY, NO_CAUSE_FIX_SCOPE, RowVerdict, ScanRow, preflight, scan};
 pub use signature::{ExtractedCause, NoCauseShape, extract_run_cause, log_signature, normalize, run_signature};
+pub use window::{Window, cron_window};
 
 use charliebot_registry::{Registry, RegistryError};
 

@@ -44,6 +44,8 @@ struct Entry {
   /// The line number of the `## ` heading, from 1.
   start_line: usize,
   heading: String,
+  /// The entry's body, up to the next heading.
+  body: String,
   snippet: String,
 }
 
@@ -58,7 +60,8 @@ impl LessonIndex {
       let line_number = index + 1;
       if let Some(rest) = line.strip_prefix("## ") {
         if let Some((start_line, heading)) = heading.take() {
-          entries.push(Entry { start_line, heading, snippet: snippet(&body) });
+          let snippet = snippet(&body);
+          entries.push(Entry { start_line, heading, snippet, body: std::mem::take(&mut body) });
         }
         heading = Some((line_number, rest.trim().to_string()));
         body.clear();
@@ -68,9 +71,23 @@ impl LessonIndex {
       }
     }
     if let Some((start_line, heading)) = heading.take() {
-      entries.push(Entry { start_line, heading, snippet: snippet(&body) });
+      let snippet = snippet(&body);
+      entries.push(Entry { start_line, heading, snippet, body });
     }
     Ok(LessonIndex { file: path.to_path_buf(), entries })
+  }
+
+  /// The heading of the entry whose text holds `signature` verbatim. A signature archived this way needs no judge
+  /// call.
+  pub fn archive_heading(&self, signature: &str) -> Option<String> {
+    if signature.is_empty() {
+      return None;
+    }
+    self
+      .entries
+      .iter()
+      .find(|entry| entry.heading.contains(signature) || entry.body.contains(signature))
+      .map(|entry| entry.heading.clone())
   }
 
   /// The top three entries that match distinct tokens of `cause_line`.
@@ -204,5 +221,16 @@ Nothing here matches the scope guard.
     let (_root, index) = index();
     let candidates = index.retrieve("zzzz-unmatched-token").unwrap();
     assert!(candidates.is_empty());
+  }
+
+  #[test]
+  fn an_entry_that_quotes_a_signature_verbatim_archives_it() {
+    let signature = "run:work:5:the previous round still runs: unit improve-ux.scope exists";
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(LESSONS_FILE_NAME);
+    std::fs::write(&path, format!("## 2026-11-02 — archived\n\nChao declined the fix for `{signature}`.\n")).unwrap();
+    let index = LessonIndex::load(&path).unwrap();
+    assert_eq!(index.archive_heading(signature).as_deref(), Some("2026-11-02 — archived"));
+    assert_eq!(index.archive_heading("run:work:5:the previous round still runs: unit improve-ux.scopa exists"), None);
   }
 }

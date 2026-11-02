@@ -75,6 +75,12 @@ impl ScanOptions {
     }
     Ok(ScanOptions { home, log_dir, since, until })
   }
+
+  /// Build the window from the two latest fires of `task` in the bound session's chat log.
+  pub fn for_cron(home: PathBuf, log_dir: PathBuf, session_id: &str, task: &str) -> Result<ScanOptions> {
+    let window = crate::window::cron_window(&home, session_id, task)?;
+    Ok(ScanOptions { home, log_dir, since: window.since, until: window.until })
+  }
 }
 
 /// Where a signature came from.
@@ -521,6 +527,14 @@ mod tests {
     file.write_all(chat_events.as_bytes()).unwrap();
     let modified: SystemTime = Timestamp::from_str("2026-10-25T12:00:00Z").unwrap().into();
     File::options().write(true).open(run_dir.join(RUN_METADATA_NAME)).unwrap().set_modified(modified).unwrap();
+  }
+
+  #[test]
+  fn a_window_whose_start_is_not_earlier_than_its_end_is_refused() {
+    let error =
+      ScanOptions::new(PathBuf::new(), PathBuf::new(), Some("2026-11-02T00:00:00Z"), Some("2026-11-02T00:00:00Z"))
+        .unwrap_err();
+    assert!(error.contains("earlier"), "{error}");
   }
 
   #[test]

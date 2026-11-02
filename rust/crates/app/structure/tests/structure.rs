@@ -929,6 +929,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",
   },
+  OwnerRow { name: "round_ratings", owner: "runtime/store", hint: "Use `charliebot_store::metadata::ROUND_RATINGS`." },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
   OwnerRow { name: "has_unread", owner: "runtime/store", hint: "Use `charliebot_store::metadata::HAS_UNREAD`." },
   OwnerRow {

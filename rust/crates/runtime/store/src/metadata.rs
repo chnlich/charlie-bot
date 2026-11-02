@@ -50,6 +50,8 @@ pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
 /// The session-metadata field holding the next instant a waiting trigger fires.
 pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
+/// The session-metadata field holding each rated round's feedback, keyed by the rated event's id.
+pub const ROUND_RATINGS: &str = "round_ratings";
 
 /// Datetime stored as UTC with a `Z` suffix and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -642,7 +644,7 @@ impl SessionMetadata {
     push(&mut declared, "native_prompt_hash", &self.native_prompt_hash);
     push(&mut declared, "native_backend", &self.native_backend);
     push(&mut declared, "native_model", &self.native_model);
-    push(&mut declared, "round_ratings", &self.round_ratings);
+    push(&mut declared, ROUND_RATINGS, &self.round_ratings);
     push(&mut declared, "group", &self.group);
     push(&mut declared, "archive_offset", &self.archive_offset);
     finish_metadata(declared, &self.extra, slots, MetadataFile::Session)

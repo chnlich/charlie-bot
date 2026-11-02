@@ -198,7 +198,7 @@ fn round_ratings(session_dir: &Path) -> anyhow::Result<Vec<Rating>> {
     return Ok(Vec::new());
   }
   let value = metadata::read_metadata_value(&path).map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
-  let Some(ratings) = value.get("round_ratings").and_then(Value::as_object) else {
+  let Some(ratings) = value.get(metadata::ROUND_RATINGS).and_then(Value::as_object) else {
     return Ok(Vec::new());
   };
   Ok(

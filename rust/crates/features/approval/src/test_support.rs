@@ -38,7 +38,6 @@ standing_policies:
 enable_ask_tier_refusal: false
 ";
 
-/// Writes `text` as the home's approval policy table.
 /// A derived-item reader with no derived items: the approval tests hold no host waits.
 fn register_no_derived_waiting(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
   registry.derived_waiting_items(no_derived_waiting)
@@ -48,6 +47,7 @@ fn no_derived_waiting(_features: &FeatureContext) -> BoxFuture<'_, anyhow::Resul
   Box::pin(async { Ok(Vec::new()) })
 }
 
+/// Writes `text` as the home's approval policy table.
 pub fn write_approval_policy_table(home: &Path, text: &str) {
   let path = home.join(TABLE_RELATIVE_PATH);
   fs::create_dir_all(path.parent().expect("the table path has a parent")).expect("config.d");

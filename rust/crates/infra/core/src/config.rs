@@ -217,12 +217,23 @@ pub struct ServerConfig {
   /// delegated io there: a host sets this true when io appears in the slice's `cgroup.controllers`.
   #[serde(default = "default_switch_off")]
   pub enable_session_io_weight: bool,
+  /// Agent runs carry the local work guard: a compile or test run on this host is refused and names the build host.
+  /// false sets none of the guard's variables.
+  #[serde(default = "default_switch_on")]
+  pub enable_local_work_guard: bool,
   #[serde(default = "default_min_free_disk_gib")]
   pub min_free_disk_gib: i64,
   /// The address a person reaches this server at, e.g. `https://<host>.<tailnet>:18498`. It has no default: a guessed
   /// address would send links to the wrong place, so an unset value stays unset until the host sets it.
   #[serde(default)]
   pub public_url: Option<String>,
+  /// The ssh alias of the build host that `tools/remote-run` sends runs to. Required while the local work guard is on:
+  /// a refused agent is told to run on this host, so the value must exist.
+  #[serde(default)]
+  pub remote_run_host: Option<String>,
+  /// The runner's state directory on the build host, relative to its home. Unset keeps the runner's own default.
+  #[serde(default)]
+  pub remote_run_remote_base: Option<String>,
 }
 
 // The schema defaults of `ServerConfig`.
@@ -606,8 +617,11 @@ fn default_server() -> ServerConfig {
     session_tasks_max: default_session_tasks_max(),
     enable_session_cpu_weight: default_switch_on(),
     enable_session_io_weight: default_switch_off(),
+    enable_local_work_guard: default_switch_on(),
     min_free_disk_gib: default_min_free_disk_gib(),
     public_url: None,
+    remote_run_host: None,
+    remote_run_remote_base: None,
   }
 }
 
@@ -836,6 +850,9 @@ mod tests {
     assert_eq!(cfg.server.session_memory_max_mb, 12288);
     assert!(cfg.server.enable_session_cpu_weight);
     assert!(!cfg.server.enable_session_io_weight);
+    assert!(cfg.server.enable_local_work_guard);
+    assert_eq!(cfg.server.remote_run_host, None);
+    assert_eq!(cfg.server.remote_run_remote_base, None);
     assert_eq!(cfg.backends.pool, vec!["claude-fable".to_string()]);
     let option = cfg.get_backend_option("claude-fable").unwrap();
     assert_eq!(
@@ -858,6 +875,18 @@ mod tests {
     let home = home_with("server:\n  enable_session_io_weight: true\nvoice: {}\n");
     let cfg = load(&home).unwrap();
     assert!(cfg.server.enable_session_io_weight);
+  }
+
+  #[test]
+  fn the_local_work_guard_switch_and_runner_keys_parse_from_the_server_section() {
+    let home = home_with(
+      "server:\n  enable_local_work_guard: false\n  remote_run_host: build-host\n  remote_run_remote_base: \
+       scripts/remote-run\nvoice: {}\n",
+    );
+    let cfg = load(&home).unwrap();
+    assert!(!cfg.server.enable_local_work_guard);
+    assert_eq!(cfg.server.remote_run_host.as_deref(), Some("build-host"));
+    assert_eq!(cfg.server.remote_run_remote_base.as_deref(), Some("scripts/remote-run"));
   }
 
   #[test]

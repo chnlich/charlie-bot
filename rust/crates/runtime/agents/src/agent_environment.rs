@@ -340,6 +340,9 @@ mod tests {
         min_free_disk_gib: 10,
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
+        enable_local_work_guard: false,
+        remote_run_host: None,
+        remote_run_remote_base: None,
       };
 
       run_session_cgroup_startup(base.path(), &sessions, &server).unwrap();

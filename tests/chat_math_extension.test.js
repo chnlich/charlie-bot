@@ -9,7 +9,7 @@ const { loadRenderer } = require('./marked_renderer_harness');
 // the actual rendering. The cases pin the bracket classes and the
 // dollar/bracket skip guards. The chat parser and the wrap pre-render driver
 // (src/features/artifacts/prerender_math.js) share web/static/js/math-scanner.js,
-// so one case list covers both scanners.
+// so these cases pin the scanner's behavior for both.
 
 // The harness loads the page's real marked build from the CDN (the same URL the
 // index page loads) with markdown-renderer.js registered on it, so these parses

@@ -11,10 +11,11 @@
 //
 // The delimiter scan is web/static/js/math-scanner.js's mathSpan — the same
 // scanner the chat markdown extension tokenizes with, so the chat parse and
-// this driver scan one case list. This driver adds the protected-range walk
-// (which regions the scan never enters) and the katex.renderToString call;
-// tests/chat_math_extension.test.js pins the chat parse and
-// rust/crates/features/artifacts/src/cli/wrap.rs runs this driver end to end.
+// this driver find the same delimiters. This driver adds the protected-range
+// walk (which regions the scan never enters) and the katex.renderToString call;
+// tests/chat_math_extension.test.js pins the scanner's cases through the chat
+// parse, and rust/crates/features/artifacts/src/cli/wrap.rs runs this driver
+// end to end.
 
 const fs = require('node:fs');
 const { mathSpan } = require('../../../web/static/js/math-scanner.js');

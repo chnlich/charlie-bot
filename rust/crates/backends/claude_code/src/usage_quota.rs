@@ -1,4 +1,4 @@
-//! Claude Code's quota accounts for the quota panel (`src/backends/claude_code/usage_quota.py`).
+//! Claude Code's quota accounts for the quota panel.
 //!
 //! One account reads one login directory's usage from the Anthropic OAuth usage endpoint. The accounts are the default
 //! login directory (label `main`) followed by the `accounts.claude` pool. Every derivation reads the live config, and an
@@ -437,7 +437,7 @@ fn derive_login_dirs(host: &ClaudeHost, pool: &[(String, String)]) -> anyhow::Re
   Ok(logins)
 }
 
-/// `os.path.abspath`: the path joined to the working directory when it is relative, with `.` and `..` resolved
+/// The path made absolute: joined to the working directory when it is relative, with `.` and `..` resolved
 /// lexically.
 fn abspath(path: &Path) -> anyhow::Result<PathBuf> {
   let joined = if path.is_absolute() {
@@ -499,7 +499,7 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
   Ok(Some(Credentials { access_token, refresh_token }))
 }
 
-/// The status error text returned by Python's `httpx.Response.raise_for_status`.
+/// The error for a non-success status: its class, the code and reason, the URL, and the MDN page for the code.
 fn raise_for_status(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
   let status = response.status();
   let category = match status.as_u16() {
@@ -670,7 +670,8 @@ pub fn transform_response(raw: &Value, account: &str, quota: &QuotaState) -> any
   Ok(usage)
 }
 
-/// One plan window, read from `raw.get(camel, raw.get(snake)) or {}`.
+/// One plan window, read from the `camel` key, or from `snake` when `camel` is absent. A falsy value reads as an
+/// empty object.
 fn plan_window(raw: &Map<String, Value>, camel: &str, snake: &str, window_minutes: i64) -> anyhow::Result<Window> {
   let no_bucket = Map::new();
   let bucket = match raw.get(camel).or_else(|| raw.get(snake)) {

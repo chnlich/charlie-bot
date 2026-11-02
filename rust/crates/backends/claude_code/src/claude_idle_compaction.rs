@@ -227,7 +227,7 @@ impl IdleCompaction {
   }
 
   /// Cancel a pending timer and wait for a running compaction without cancelling that compaction. A compaction that
-  /// ended with an error fails this turn with that error, as the shielded await in Python re-raises it.
+  /// ended with an error fails this turn with that error.
   pub async fn settle_for_turn(&self, session_id: &str) -> anyhow::Result<()> {
     self.disarm(session_id);
     let Some(mut done) = self
@@ -426,7 +426,7 @@ pub fn arm_for_round(ctx: IdleArmContext<'_>) -> BoxFuture<'_, anyhow::Result<()
       let current_cfg = inspect_features.config.get().context("loading config.yaml for idle Claude compaction")?;
       let (context_tokens, last_request_at) = inspect_context_state(&metadata)?;
       let compacted_after_request = if let Some(last_request_at) = last_request_at {
-        // Python scans its cached history in asyncio.to_thread (claude_idle_compaction.py:176-195).
+        // The scan of the cached history runs in `block_in_place`, so its blocking reads do not stall other tasks.
         let store = Arc::clone(&inspect_features.store);
         let session_id = inspect_session_id.clone();
         tokio::task::block_in_place(move || {
@@ -793,7 +793,7 @@ mod tests {
     panic!("synthetic compaction panic")
   }
 
-  // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
+  // The running entry is removed before the outcome is sent, even when the run panics.
   #[tokio::test]
   async fn a_failed_compaction_fails_the_turn_that_waits_and_the_next_turn_starts() {
     let idle = IdleCompaction::new();
@@ -820,7 +820,7 @@ mod tests {
     idle.settle_for_turn(SESSION_ID).await.unwrap();
   }
 
-  // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
+  // The running entry is removed before the outcome is sent, even when the run panics.
   #[tokio::test]
   async fn a_panicking_compaction_fails_the_turn_that_waits_and_leaves_no_running_entry() {
     let idle = IdleCompaction::new();
@@ -911,7 +911,6 @@ mod tests {
     assert_eq!(env.get("CLAUDE_CONFIG_DIR").unwrap(), &default_dir.to_string_lossy());
   }
 
-  // Python: tests/test_claude_idle_compaction.py:211 (the hook assertions of the argv-equality test).
   #[test]
   fn the_idle_argv_installs_the_compaction_context_hook() {
     let root = tempfile::tempdir().unwrap();

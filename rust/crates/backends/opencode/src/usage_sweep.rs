@@ -1,5 +1,5 @@
-//! opencode's part of the cold-storage sweep (`src/backends/opencode/usage_sweep.py`): no deletion and no category. The
-//! sweep runs a manual vacuum that refuses past live writers, and reports the store's freelist.
+//! opencode's part of the cold-storage sweep: no deletion and no category. The sweep runs a manual vacuum that refuses
+//! past live writers, and reports the store's freelist.
 //!
 //! The 2.0 store is never deleted from: its `event` table stays empty in use, and `event_sequence` feeds live writes.
 //! The usage log reads `session_message`, which the sweep never touches.
@@ -225,8 +225,7 @@ mod tests {
 
   #[test]
   fn default_sweep_never_vacuums() {
-    // tests/test_storage_cool.py::test_default_sweep_never_vacuums: VACUUM is opt-in, so force without vacuum has no
-    // effect, and a dry run vacuums nothing either.
+    // VACUUM is opt-in, so force without vacuum has no effect, and a dry run vacuums nothing either.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     store_with_freelist(&db);
@@ -241,8 +240,7 @@ mod tests {
 
   #[test]
   fn sweep_deletes_no_opencode_row_in_any_mode() {
-    // tests/test_storage_cool.py::test_sweep_deletes_no_opencode_row_in_any_mode: the store keeps every row, in a
-    // plain sweep and in a forced vacuum alike.
+    // The store keeps every row, in a plain sweep and in a forced vacuum alike.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     create_store(
@@ -277,8 +275,8 @@ mod tests {
 
   #[test]
   fn vacuum_refuses_past_a_live_writer_without_force() {
-    // tests/test_storage_cool.py::test_vacuum_refuses_past_a_live_writer_without_force: a vacuum with a live writer
-    // is refused and touches nothing; with force it runs. The writer count skips this process's own entry.
+    // A vacuum with a live writer is refused and touches nothing; with force it runs. The writer count skips this
+    // process's own entry.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     store_with_freelist(&db);

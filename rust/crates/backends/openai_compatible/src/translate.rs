@@ -79,7 +79,7 @@ pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -
   Ok(Value::Object(converted))
 }
 
-/// `str(payload.get(key, missing))` for a member that may be absent.
+/// The text of a member that may be absent: `missing` when it is absent, else the member's text.
 fn value_str(value: Option<&Value>, missing: &str) -> String {
   value.map_or_else(|| missing.to_string(), text_repr::value_str)
 }
@@ -304,7 +304,7 @@ pub fn usage_from_openai(usage: Option<&Value>) -> ValueResult<Value> {
   }))
 }
 
-/// `f"msg_{uuid.uuid4().hex}"`: the id Python gives a message the upstream did not name.
+/// The id of a message the upstream did not name: `msg_` and a random UUID in simple (hex) form.
 pub fn new_message_id() -> String {
   format!("msg_{}", Uuid::new_v4().simple())
 }

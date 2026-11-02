@@ -1,4 +1,4 @@
-//! Python value semantics the codex port reads: `str.splitlines` and truthiness, each from its one owner.
+//! The value helpers the codex code reads: `splitlines` and `truthy`, each re-exported from its one owner.
 
 use std::sync::LazyLock;
 
@@ -7,15 +7,15 @@ use serde_json::{Map, Value};
 pub use charliebot_agents::cli_base::truthy;
 pub use charliebot_core::str_methods::splitlines;
 
-/// The empty object a missing `x.get(key, {})` falls back to.
+/// The empty object a missing key falls back to.
 static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
 
-/// The empty object a missing `x.get(key, {})` falls back to.
+/// The empty object a missing key falls back to.
 pub fn empty_object() -> &'static Map<String, Value> {
   &EMPTY_OBJECT
 }
 
-/// `value.get(key)` of a Python dict where a missing or falsy value reads as absent: `value.get(key) or {}`.
+/// The object under `key`: a missing or falsy value reads as an empty object, and any other non-object is an error.
 pub fn object_or_empty<'a>(map: &'a Map<String, Value>, key: &str) -> anyhow::Result<&'a Map<String, Value>> {
   match map.get(key) {
     None => Ok(&EMPTY_OBJECT),
@@ -25,7 +25,7 @@ pub fn object_or_empty<'a>(map: &'a Map<String, Value>, key: &str) -> anyhow::Re
   }
 }
 
-/// A count field read the way Python's `value.get(key) or 0` reads it: absent or falsy is 0, an integer is itself.
+/// A count field: absent or falsy is 0, an integer is itself, and anything else is an error.
 pub fn count_or_zero(map: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match map.get(key) {
     None => Ok(0),

@@ -1,7 +1,7 @@
-//! The opencode usage source checked against its Python reference. The synthetic stores
+//! The opencode usage source checked against its recorded reference output. The synthetic stores
 //! are written once to disk. Each step reads one store with the signature the step names. First Rust reads every
-//! step, then Python reads the same files. Each step's records and signature must be equal. No store's main file
-//! changes under either reader.
+//! step, then the recorded output is compared with it. Each step's records and signature must be equal. No store's
+//! main file changes under the Rust read.
 
 use std::collections::BTreeMap;
 use std::fs;

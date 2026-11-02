@@ -76,7 +76,7 @@ fn headless_command(run_kind: RunKind) -> Vec<String> {
 }
 
 /// The `--disallowed-tools` value the headless command carries, for the setup check
-/// (`setup_check::setup_step`); the errors name the flag the way Python's check did over `BASE_COMMAND`.
+/// (`setup_check::setup_step`); the errors name the flag and `BASE_COMMAND` in their text.
 pub fn base_disallowed_tools() -> Result<String, String> {
   let command = headless_command(RunKind::Work);
   let index = command
@@ -1087,8 +1087,7 @@ mod tests {
     for name in CLAUDE_MODEL_ENV_NAMES {
       assert_eq!(env[name], "synthetic/model-1");
     }
-    // Stronger than the Python case: an inherited headers variable must not survive the preparation either,
-    // so the test is red before the gateway strip lands.
+    // The headers variable is stripped too: an inherited one must not survive the preparation.
     assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
   }
 

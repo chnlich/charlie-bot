@@ -26,7 +26,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
   parse(fields).map(|_| ())
 }
 
-/// Parses the codex fields. A key that is not a codex field fails, as the pydantic model's `extra="forbid"` does.
+/// Parses the codex fields. A key that is not a codex field fails.
 pub fn parse(fields: &Mapping) -> Result<CodexOptions, String> {
   let mut options = CodexOptions::default();
   for (key, value) in fields {

@@ -1,6 +1,6 @@
-//! The Claude Code usage source checked against its Python reference: the transcript
-//! read, the usage-panel transform, and the cold-storage sweep. Each side runs on synthetic inputs under its own
-//! temporary root, and the two results must be equal.
+//! The Claude Code usage source checked against its recorded reference output: the transcript
+//! read, the usage-panel transform, and the cold-storage sweep. The Rust side runs on synthetic inputs under its own
+//! temporary root, and its results must equal the recorded ones.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;

@@ -1,4 +1,4 @@
-//! The Claude Code side of live user-message delivery for web manager turns (`src/runtime/midturn_delivery.py`).
+//! The Claude Code side of live user-message delivery for web manager turns.
 //!
 //! The delivery state — the serialized stdin writes, the replay acknowledgements and the stdin close — lives in the
 //! runtime (`charliebot_registry::midturn_delivery`), which both this backend and the task queue use. This module

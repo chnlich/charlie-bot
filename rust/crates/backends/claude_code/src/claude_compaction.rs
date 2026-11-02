@@ -262,7 +262,7 @@ pub fn judge(
       .chars()
       .take(200)
       .collect::<String>();
-    // The fallback applies to the stripped text, so a blank result reads as no result, as claude_compaction.py does.
+    // The fallback applies to the stripped text, so a blank result reads as no result.
     let detail = if detail.is_empty() { "run reported an error".to_string() } else { detail };
     return CompactionOutcome {
       ok: false,

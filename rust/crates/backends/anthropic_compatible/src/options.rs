@@ -14,7 +14,7 @@ const FIELDS: [&str; 7] =
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
-/// them. `cli_binary` has no Python reference: the Python option model refused the field.
+/// them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Required),

@@ -1,17 +1,18 @@
-//! The Python semantics the proxy's translations rest on: truthiness, `dict.get`, iteration, subscripts, and the
-//! exception each misuse raises. A translation runs over whatever JSON the client sent, so each operation here
-//! answers what the same operation answers on the value `json.loads` produced.
+//! The value operations the proxy's translations use: truthiness, key lookup, iteration, subscripts, and the error
+//! each misuse raises. A translation runs over whatever JSON the client sent, so each operation answers on a value
+//! that `charliebot_compat::json_loads` produced, and each error carries the text the route reports.
 
 use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::text_repr::{JsonStyle, is_truthy};
 use serde_json::{Map, Value};
 
-/// `json.dumps(value, separators=(",", ":"))` with the default `ensure_ascii`: characters above `~` are escaped.
+/// Compact JSON with ASCII output: `,` and `:` separators, and every character outside the range from space to `~`
+/// escaped.
 pub const COMPACT_ASCII_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
-/// The exception a translation raises. A `ValueError` is answered with a status and its text; any other exception is
-/// an unhandled one, which answers 500 and names its class.
+/// The fault a translation raises. A value error is answered with a status and its text; any other fault is
+/// unhandled, which answers 500 and names its kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
   Value(String),
@@ -28,7 +29,7 @@ pub fn raised<T>(kind: &'static str, message: impl Into<String>) -> ValueResult<
   Err(Fault::Raised { kind, message: message.into() })
 }
 
-/// The class name of a value as `json.loads` makes it.
+/// The class name of a value in error messages: `NoneType`, `bool`, `float`, `int`, `str`, `list` or `dict`.
 pub fn type_name(value: &Value) -> &'static str {
   match value {
     Value::Null => "NoneType",
@@ -41,7 +42,8 @@ pub fn type_name(value: &Value) -> &'static str {
   }
 }
 
-/// `value.get(key)` on a dict: `None` for a missing key, and a present `null` is `Some(Null)`.
+/// The member `key` of an object: `None` for a missing key, and a present `null` is `Some(Null)`. Any other value
+/// is an error.
 pub fn get<'a>(value: &'a Value, key: &str) -> ValueResult<Option<&'a Value>> {
   match value {
     Value::Object(members) => Ok(members.get(key)),
@@ -49,12 +51,12 @@ pub fn get<'a>(value: &'a Value, key: &str) -> ValueResult<Option<&'a Value>> {
   }
 }
 
-/// `value.get(key) or {}`: the member when it is truthy, else an empty dict. Used where Python writes `or {}`.
+/// The member `key` when it is truthy, else an empty object. Used where a translation reads an optional object.
 pub fn get_or_empty(value: &Value, key: &str) -> ValueResult<Value> {
   Ok(get(value, key)?.filter(|member| is_truthy(member)).cloned().unwrap_or_else(|| Value::Object(Map::new())))
 }
 
-/// `for item in value`: a list yields its items, a dict its keys, a str its characters, and other values raise.
+/// The items of a value: a list yields its items, an object its keys, a string its characters, and other values raise.
 pub fn iterate(value: &Value) -> ValueResult<Vec<Value>> {
   match value {
     Value::Array(items) => Ok(items.clone()),
@@ -64,7 +66,7 @@ pub fn iterate(value: &Value) -> ValueResult<Vec<Value>> {
   }
 }
 
-/// `iterate(value)` for a member that may be absent: `value or []`, so a missing or falsy member iterates nothing.
+/// The items of a member that may be absent: a missing or falsy member has none.
 pub fn iterate_member(members: Option<&Value>) -> ValueResult<Vec<Value>> {
   match members.filter(|member| is_truthy(member)) {
     Some(member) => iterate(member),
@@ -88,7 +90,7 @@ pub fn first_item(value: &Value) -> ValueResult<Value> {
   }
 }
 
-/// `_require_dict(value, label)`: the value as a dict, or a `ValueError` naming `label`.
+/// The value as an object, or a value error that names `label`.
 pub fn require_dict<'a>(value: &'a Value, label: &str) -> ValueResult<&'a Map<String, Value>> {
   match value {
     Value::Object(members) => Ok(members),
@@ -96,12 +98,12 @@ pub fn require_dict<'a>(value: &'a Value, label: &str) -> ValueResult<&'a Map<St
   }
 }
 
-/// `json.loads(text)` on a str, with the exception a load failure raises.
+/// Parses JSON text, with the fault a load failure raises.
 pub fn loads_text(text: &str) -> ValueResult<Value> {
   json_loads::loads_text(text).map_err(fault_of_load)
 }
 
-/// `json.loads(body)` on bytes, with the exception a load failure raises.
+/// Parses JSON bytes, with the fault a load failure raises.
 pub fn loads_bytes(body: &[u8]) -> ValueResult<Value> {
   json_loads::loads(body).map_err(fault_of_load)
 }

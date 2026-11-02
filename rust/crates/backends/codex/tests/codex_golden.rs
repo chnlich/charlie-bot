@@ -1,5 +1,5 @@
-//! Cross-implementation checks of the codex package against the recorded output. The
-//! Rust port runs the same synthetic inputs, and the test fails with every section that differs.
+//! Checks of the codex package against the recorded output. The
+//! Rust code runs the same synthetic inputs, and the test fails with every section that differs.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through the registry factory (96 cases), and the
 //! environment cases (4). One stream of translated events reaches every item handler. The usage records come from one

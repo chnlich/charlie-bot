@@ -1,4 +1,4 @@
-//! The opencode session protocol (`src/backends/opencode/opencode.py`).
+//! The opencode session protocol.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -199,7 +199,7 @@ impl AgentBackend for OpenCodeBackend {
   }
 }
 
-/// The OpenCode factory (`src/backends/opencode/factory.py`).
+/// The OpenCode factory.
 pub struct OpenCodeFactory {
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
@@ -998,8 +998,8 @@ struct OpenCodeOneShotRequest {
   timeout: Option<Duration>,
 }
 
-/// The one-shot XDG root, matching Python's `charliebot-opencode-oneshot-*` mkdtemp in
-/// src/backends/opencode/opencode.py; removing it is the Drop of the returned TempDir.
+/// The one-shot XDG root, a temporary directory named `charliebot-opencode-oneshot-*`. Removing it is the Drop of the
+/// returned TempDir.
 fn oneshot_root() -> anyhow::Result<tempfile::TempDir> {
   Ok(tempfile::Builder::new().prefix("charliebot-opencode-oneshot-").tempdir()?)
 }

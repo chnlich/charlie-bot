@@ -1,4 +1,4 @@
-//! The opencode timeouts and snapshot context reserve (`src/backends/opencode/opencode_limits.py`).
+//! The opencode timeouts and snapshot context reserve.
 
 use std::time::Duration;
 

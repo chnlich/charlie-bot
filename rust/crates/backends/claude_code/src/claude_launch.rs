@@ -28,7 +28,7 @@ pub const SESSION_START_HOOK_EVENT: &str = "SessionStart";
 pub const HEADLESS_FORWARDED_ENV: [&str; 4] =
   [AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV, AUTO_COMPACT_WINDOW_ENV, SIMPLE_SYSTEM_PROMPT_ENV];
 
-/// The declared Claude window for a run kind at the Python baseline.
+/// The declared Claude window for a run kind: every run kind declares `AUTO_COMPACT_DEFAULT`.
 pub fn declared_window_by_run_kind(run_kind: RunKind) -> u64 {
   match run_kind {
     RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration | RunKind::ScheduledStep => {
@@ -37,7 +37,8 @@ pub fn declared_window_by_run_kind(run_kind: RunKind) -> u64 {
   }
 }
 
-/// Quote *value* the way Python's `shlex.quote` does, for the hook command line.
+/// Quote *value* for a POSIX shell: safe characters pass through bare, and any other value, the empty one included,
+/// is single-quoted.
 fn shlex_quote(value: &str) -> String {
   if value.is_empty() {
     return "''".to_string();

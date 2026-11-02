@@ -1,5 +1,4 @@
-//! The opencode backend package (`src/backends/opencode/__init__.py`): its shared server, session backend, usage source
-//! and snapshot reading limits.
+//! The opencode backend package: its shared server, session backend, usage source and snapshot reading limits.
 
 pub(crate) mod backend;
 mod opencode_limits;
@@ -80,8 +79,8 @@ fn register_backend_type(
   registry.option_schema("opencode", options::SCHEMA)
 }
 
-/// Registers the opencode usage source and attributes the `opencode` backend type to it (`__init__.py:24-30`). The
-/// database is the profile's `opencode_db()`, resolved once here.
+/// Registers the opencode usage source and attributes the `opencode` backend type to it. The database is the
+/// profile's `opencode_db()`, resolved once here.
 pub fn register_usage_source(registry: &mut Registry) -> Result<(), RegistryError> {
   let db = home::opencode_db().map_err(|error| RegistryError { package: PACKAGE, message: error.to_string() })?;
   register_source(registry, db, PathBuf::from("/proc"))
@@ -183,8 +182,8 @@ pub(crate) mod tests {
 
   #[test]
   fn registration_matches_the_usage_source() {
-    // tests/test_usage_sources.py: the name, id prefixes and run_logs_only of the opencode source, and the attribution
-    // of the opencode backend type (`src/backends/opencode/__init__.py:24-30`).
+    // The name, id prefixes and run_logs_only of the opencode source, and the attribution of the
+    // opencode backend type.
     let mut registry = Registry::new();
     registry.register_package("src.backends.opencode", register_synthetic).unwrap();
 

@@ -1,9 +1,10 @@
 //! The judge: one small-model one-shot per signature, over the light backends of `backends.pool`.
 //!
 //! The judge runs only through a backend's native one-shot path, which starts no tools. A backend without that path
-//! is not a judge candidate, and the judge never falls back to the tool-capable one-shot. Each call has a thirty-second
-//! cap, a failed call rotates to the next light backend, and an answer that breaks the contract fails only its own
-//! signature. The same function serves this CLI and the server-side handler the later task adds.
+//! is not a judge candidate, and the judge never falls back to the tool-capable one-shot. It takes its candidates from
+//! the process's shared pool rotation, as the autonamer does, so it holds no order or cooldown of its own. Each call
+//! has a thirty-second cap, a failed call rotates to the next light backend, and an answer that breaks the contract
+//! fails only its own signature. The same function serves this CLI and the server-side handler the later task adds.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -16,6 +17,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{Env, LaunchArgs};
 use charliebot_store::metadata::UtcDateTime;
+use charliebot_tasks::autonamer;
 use serde::Deserialize;
 
 use crate::lessons::LessonCandidate;
@@ -160,8 +162,6 @@ pub struct JudgeBackends<'a> {
   pub base_env: &'a Env,
   pub pool: Arc<BackendPool>,
   pub timeout: Duration,
-  /// The backend that answered last. A batch tries it first, so a slow pool member costs one signature, not each.
-  preferred: std::sync::Mutex<Option<String>>,
 }
 
 impl<'a> JudgeBackends<'a> {
@@ -172,72 +172,38 @@ impl<'a> JudgeBackends<'a> {
     base_env: &'a Env,
     pool: Arc<BackendPool>,
   ) -> JudgeBackends<'a> {
-    JudgeBackends { cfg, registry, base_env, pool, timeout: JUDGE_TIMEOUT, preferred: std::sync::Mutex::new(None) }
-  }
-
-  fn preferred(&self) -> Option<String> {
-    self.preferred.lock().expect("the judge preference lock is not poisoned").clone()
-  }
-
-  fn note_preference(&self, backend_id: &str) {
-    *self.preferred.lock().expect("the judge preference lock is not poisoned") = Some(backend_id.to_string());
-  }
-
-  fn clear_preference(&self) {
-    *self.preferred.lock().expect("the judge preference lock is not poisoned") = None;
+    JudgeBackends { cfg, registry, base_env, pool, timeout: JUDGE_TIMEOUT }
   }
 }
 
-/// The pool members in the order one signature tries them: the backend that answered last first, then the members the
-/// pool has not set aside, then the cooled ones. Cooling only moves a member back, so a signature whose first choices
-/// are all slow still reaches a call instead of failing with no backend.
-fn candidate_options(backends: &JudgeBackends<'_>) -> Result<Vec<BackendOption>, JudgeError> {
-  let preferred = backends.preferred();
-  let mut options = Vec::with_capacity(backends.cfg.backends.pool.len());
-  for member in &backends.cfg.backends.pool {
-    let option = backends
-      .cfg
-      .get_backend_option(member)
-      .ok_or_else(|| JudgeError::Call(format!("backends.pool entry backend '{member}' is not in backends.options")))?;
-    options.push(option.clone());
-  }
-  options.sort_by_key(|option| (is_cooling(backends, &option.id), Some(option.id.as_str()) != preferred.as_deref()));
-  Ok(options)
+/// The pool members one signature tries, in the process's shared rotation order. The same iterator serves the
+/// autonamer, so judge calls advance one rotation position and honour one cooldown table.
+fn light_backends<'a>(backends: &'a JudgeBackends<'_>) -> impl Iterator<Item = anyhow::Result<BackendOption>> + 'a {
+  autonamer::iter_light_backends(backends.cfg, Arc::clone(&backends.pool))
 }
 
-/// Judge one signature over the light backends of the pool. The backend that answered last is tried first; a call
-/// failure rotates to the next backend, and a contract failure ends this signature at once. A timed-out backend moves
-/// to the back of the rotation for [`JUDGE_COOLDOWN`], so a hung pool member costs one signature instead of every
-/// signature.
+/// Judge one signature over the light backends of the pool: a call failure rotates to the next member, and a contract
+/// failure ends this signature at once. A timed-out member goes into the pool's shared cooldown for
+/// [`JUDGE_COOLDOWN`], so a hung member costs one signature instead of every signature.
 pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -> Result<Judgement, JudgeError> {
   let system = system_prompt();
   let prompt = user_prompt(input);
   let mut last_error = None;
-  for option in candidate_options(backends)? {
+  for option in light_backends(backends) {
+    let option = option.map_err(|error| JudgeError::Call(format!("{error:#}")))?;
     match attempt(backends, &option, &prompt, system, input).await {
-      Ok(judgement) => {
-        backends.note_preference(&option.id);
-        return Ok(judgement);
-      }
+      Ok(judgement) => return Ok(judgement),
       Err(JudgeError::Assertion(message)) => return Err(JudgeError::Assertion(message)),
       Err(error) => {
-        if let JudgeError::Timeout(_) = error {
+        if matches!(error, JudgeError::Timeout(_)) {
           let until = UtcDateTime::now().into_inner() + JUDGE_COOLDOWN;
           backends.pool.cool(&option.id, Some(UtcDateTime::from(until)));
-        }
-        if backends.preferred().as_deref() == Some(option.id.as_str()) {
-          backends.clear_preference();
         }
         last_error = Some(error);
       }
     }
   }
-  Err(last_error.unwrap_or_else(|| JudgeError::Call("backends.pool is empty".to_string())))
-}
-
-/// Whether the pool already set this backend aside.
-fn is_cooling(backends: &JudgeBackends<'_>, backend_id: &str) -> bool {
-  backends.pool.cooling_until(backend_id).is_some_and(|until| until > UtcDateTime::now().into_inner())
+  Err(last_error.unwrap_or_else(|| JudgeError::Call(backends.pool.no_member_message(backends.cfg))))
 }
 
 /// One backend's attempt: build it, run its native one-shot, and read the answer.
@@ -432,34 +398,62 @@ mod tests {
         worktree_dir: "/synthetic".to_string(),
         scratch_dir: "/synthetic".to_string(),
       },
-      backends: BackendsConfig { pool: ids.iter().map(|id| (*id).to_string()).collect(), routing: None, options },
+      backends: BackendsConfig {
+        pool: ids.iter().map(|id| (*id).to_string()).collect(),
+        routing: None,
+        strong: None,
+        options,
+      },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       sections: Sections::default(),
     }
   }
 
-  #[test]
-  fn a_pool_that_is_all_cooling_still_offers_every_member_with_the_answerer_first() {
-    let config = config_with_pool(&["alpha", "beta", "gamma"]);
+  fn judge_input() -> JudgeInput {
+    JudgeInput {
+      signature: "run:work:1:synthetic cause".to_string(),
+      kind: "work".to_string(),
+      error_text: "synthetic cause".to_string(),
+      candidates: Vec::new(),
+    }
+  }
+
+  #[tokio::test]
+  async fn a_judge_call_tries_the_shared_pool_rotation_order() {
+    let config = config_with_pool(&["alpha", "beta"]);
     let env = env();
     let pool = Arc::new(BackendPool::default());
-    pool.cool("alpha", None);
-    pool.cool("beta", None);
     let backends = JudgeBackends {
       cfg: &config,
       registry: Arc::new(Registry::new()),
       base_env: &env,
-      pool,
+      pool: Arc::clone(&pool),
       timeout: JUDGE_TIMEOUT,
-      preferred: std::sync::Mutex::new(Some("gamma".to_string())),
     };
-    let ids: Vec<String> = candidate_options(&backends).unwrap().into_iter().map(|option| option.id).collect();
-    assert_eq!(ids, vec!["gamma", "alpha", "beta"]);
+    // Another shared caller takes the first slot, so the judge must try beta before alpha. No "synthetic" type is
+    // registered, so each build fails and the last error names the last member tried: alpha only under the shared
+    // rotation order, beta under the pool's own declaration order.
+    assert_eq!(pool.select(&config, "light_oneshot", &[]).unwrap().unwrap().id, "alpha");
+    let error = judge_signature(&backends, &judge_input()).await.unwrap_err().to_string();
+    assert!(error.contains("backend alpha"), "{error}");
+  }
 
-    *backends.preferred.lock().unwrap() = Some("beta".to_string());
-    let ids: Vec<String> = candidate_options(&backends).unwrap().into_iter().map(|option| option.id).collect();
-    assert_eq!(ids, vec!["gamma", "beta", "alpha"]);
+  #[test]
+  fn a_member_cooling_in_the_shared_pool_is_skipped() {
+    let config = config_with_pool(&["alpha", "beta"]);
+    let env = env();
+    let pool = Arc::new(BackendPool::default());
+    pool.cool("alpha", None);
+    let backends = JudgeBackends {
+      cfg: &config,
+      registry: Arc::new(Registry::new()),
+      base_env: &env,
+      pool: Arc::clone(&pool),
+      timeout: JUDGE_TIMEOUT,
+    };
+    let offered: Vec<String> = light_backends(&backends).map(|option| option.unwrap().id).collect();
+    assert_eq!(offered, vec!["beta"]);
   }
 
   struct ScriptedBackend {

@@ -90,7 +90,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
       Some(_) => return false,
     }
     // `since` and `since_exact` are written by the server; an item stored before they existed carries neither, so a
-    // null reads as absent, as the model's exclude-if-None fields do.
+    // null reads as absent, the same as a key the item leaves out.
     match item.get("since") {
       None => {}
       Some(Value::Null) => {

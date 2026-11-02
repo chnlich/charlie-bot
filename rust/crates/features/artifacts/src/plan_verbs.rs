@@ -405,8 +405,8 @@ fn require_open_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbErro
   Ok(index)
 }
 
-/// The index of the plan with this id. The scan stops at the first match, and a plan that is not a dict fails the scan
-/// before it.
+/// The index of the plan with this id. The scan stops at the first match, and a plan that is not a JSON object fails
+/// the scan before it.
 fn require_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbError> {
   for (index, plan) in plans.iter().enumerate() {
     if plan_map(plan)?.get("id") == Some(plan_id) {
@@ -514,7 +514,7 @@ fn id_of(plan: &Map<String, Value>) -> Result<&Value, VerbError> {
   plan.get("id").ok_or_else(|| key_error("id"))
 }
 
-/// The registry's plans list. A top level that is not a dict, or a registry without a list of plans,
+/// The registry's plans list. A top level that is not a JSON object, or a registry without a list of plans,
 /// fails the lookup, so the verb answers 500.
 fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
@@ -539,7 +539,8 @@ fn plans_of_mut(registry: &mut Value) -> Result<&mut Vec<Value>, VerbError> {
   }
 }
 
-/// A plan or a version as a dict. A value that is not one fails the `.get` or the subscript the verbs make on it.
+/// A plan or a version as a JSON object. A value that is not one fails the `.get` or the subscript the verbs make
+/// on it.
 fn plan_map(plan: &Value) -> Result<&Map<String, Value>, VerbError> {
   plan.as_object().ok_or_else(|| attribute_error(plan))
 }

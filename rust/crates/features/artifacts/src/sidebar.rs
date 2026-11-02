@@ -155,8 +155,8 @@ fn plan_references(data: &Value, parent_dir: &Path) -> anyhow::Result<Vec<Refere
   Ok(references)
 }
 
-/// The entries of a registry list as `for item in value` yields them. An absent list is empty. A dict or a string
-/// yields keys or characters, which have no `get` for the reads that follow, so only an empty one is an empty list.
+/// The entries of a registry list: an array's elements. An absent list is empty, and so is an empty object or string.
+/// A non-empty object or string fails, since its keys or characters have no `get` for the reads that follow.
 fn registry_list(value: Option<&Value>) -> anyhow::Result<&[Value]> {
   match value {
     None => Ok(&[]),

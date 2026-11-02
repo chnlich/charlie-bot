@@ -141,7 +141,7 @@ fn modified_minute(seconds: f64) -> Result<String, ListingError> {
   ))
 }
 
-/// `html.escape(text)` with `quote=True`: the five characters that end an attribute value or a text node.
+/// Escapes `&`, `<`, `>`, `"` and `'`: the five characters that end an attribute value or a text node.
 fn escape(text: &str) -> String {
   html_escape::encode_quoted_attribute(text).into_owned()
 }

@@ -165,7 +165,7 @@ fn seed_if_missing(path: &Path, content: &str) -> anyhow::Result<()> {
   fs::write(path, content).with_context(|| format!("write {}", path.display()))
 }
 
-/// `mkdir(exist_ok=True)`: an existing directory is fine, and an existing file at the path is an error.
+/// Creates the directory. An existing directory is fine, and an existing file at the path is an error.
 fn make_dir(path: &Path) -> anyhow::Result<()> {
   match fs::create_dir(path) {
     Ok(()) => Ok(()),

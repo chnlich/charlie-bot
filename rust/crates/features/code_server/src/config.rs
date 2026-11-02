@@ -124,8 +124,8 @@ fn parse_int(text: &str) -> Option<i64> {
   Some(sign * magnitude)
 }
 
-/// `pathlib.PurePosixPath(text)` as text: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path
-/// is `.`.
+/// `text` normalized as a POSIX path: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path is
+/// `.`.
 pub(crate) fn pathlib_text(text: &str) -> String {
   let body: Vec<&str> = text.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
   match (text.starts_with('/'), body.is_empty()) {

@@ -264,8 +264,8 @@ pub(crate) fn registry_text(registry: &Value) -> String {
 const REGISTRY_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
-/// The items a registry list iterates as. A dict yields its keys and a string its characters. A
-/// number, `null` or a boolean is not iterable, which raises `TypeError` out of the read.
+/// The items a registry list yields: an array's elements, an object's keys, a string's characters. A number, `null`
+/// or a boolean fails the read with a `TypeError`.
 fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
   match value {
     Value::Array(items) => Ok(items.clone()),
@@ -275,7 +275,7 @@ fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
   }
 }
 
-/// The `plan_id` of an error entry: the plan's raw `id` when the plan is a dict that has one.
+/// The `plan_id` of an error entry: the plan's raw `id` when the plan is a JSON object that has one.
 fn plan_id_of(plan: &Value) -> Value {
   match plan {
     Value::Object(plan) => plan.get("id").cloned().unwrap_or(Value::Null),

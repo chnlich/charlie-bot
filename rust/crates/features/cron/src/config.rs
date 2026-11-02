@@ -152,7 +152,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("mode", FieldType::NullableLiteral(&["master", "worker"])),
 ];
 
-/// The HTTP create-field model, with Pydantic's default extra-key ignore behavior.
+/// The HTTP create-field model; unknown extra keys are ignored.
 pub const CREATE_MODEL: BodyModel = BodyModel::required(CREATE_FIELDS);
 
 /// The patch body model; omitted and nullable values remain distinguishable in the validated object.

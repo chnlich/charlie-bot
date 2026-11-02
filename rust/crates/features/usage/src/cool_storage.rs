@@ -159,7 +159,7 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
 /// The one cold rule: archived, and idle at least `MIN_IDLE_DAYS`. A field that is
 /// missing or unusable never qualifies.
 fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
-  // `str(status)` equals "archived" only for that string, so a status of any other JSON type never qualifies.
+  // A status of any JSON type other than the string never qualifies.
   if !matches!(meta.get("status"), Some(Value::String(status)) if *status == SESSION_ARCHIVED) {
     return false;
   }
@@ -244,7 +244,7 @@ fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBu
     if !is_real_dir(&run_dir) {
       continue;
     }
-    // A record that is not a JSON object references nothing, as `isinstance(meta, dict)` skips it.
+    // A record that is not a JSON object references nothing.
     let Some(Value::Object(meta)) =
       read_metadata(&run_dir.join(RUN_METADATA_NAME), "storage_cool_run_meta_read_failed")?
     else {

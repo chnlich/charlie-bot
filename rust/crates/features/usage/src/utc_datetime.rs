@@ -12,7 +12,7 @@
 
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
-/// The instant `text` names, or None where `fromisoformat` raises `ValueError`.
+/// The instant `text` names, or None where the grammar refuses.
 pub(crate) fn parse(text: &str) -> Option<OffsetDateTime> {
   if !text.is_ascii() {
     return None;
@@ -55,7 +55,7 @@ fn calendar_date(text: &[u8]) -> Option<Date> {
 }
 
 /// The clock fields of a time, and the offset it names: the offset starts at the first `-`, else the first `+`, else
-/// at the `Z` that must end the text (`_parse_isoformat_time`).
+/// at the `Z` that must end the text.
 fn time_and_offset(text: &[u8]) -> Option<(ClockFields, Option<UtcOffset>)> {
   let marker = b"-+Z".iter().find_map(|sign| text.iter().position(|byte| byte == sign));
   match marker {

@@ -82,7 +82,7 @@ fn read_document(path: &Path) -> Result<Value, String> {
   serde_yaml::from_str(text).map_err(|error| error.to_string())
 }
 
-/// `str(OSError)`: `[Errno 13] Permission denied: '<path>'`.
+/// The failure text: `[Errno 13] Permission denied: '<path>'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
   let path = text_repr::str_repr(&paths::display(path));
   match error.raw_os_error() {
@@ -91,7 +91,7 @@ fn os_error_text(error: &io::Error, path: &Path) -> String {
   }
 }
 
-/// `str(UnicodeDecodeError)` for UTF-8: the first byte that cannot start or continue a sequence, and the reason.
+/// The decode-failure text: the first byte that cannot start or continue a sequence, and the reason.
 fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   let position = error.valid_up_to();
   let byte = bytes[position];
@@ -105,7 +105,7 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {position}: {reason}")
 }
 
-/// `int(text)` for a port: surrounding whitespace, an optional sign, and digits with single underscores between them.
+/// A port literal: surrounding whitespace, an optional sign, and digits with single underscores between them.
 /// A value beyond the i64 range reads as not an integer here.
 fn parse_int(text: &str) -> Option<i64> {
   let text = text.trim();

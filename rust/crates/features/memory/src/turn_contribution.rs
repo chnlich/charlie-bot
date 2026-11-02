@@ -11,14 +11,14 @@ use charliebot_store::metadata::SessionMetadata;
 use crate::memory::{self, MemorySelection};
 use crate::store_root;
 
-/// The run kinds whose managed instructions are the manager contract . Every other kind
+/// The run kinds whose managed instructions are the manager contract. Every other kind
 /// takes the worker audience.
 const MANAGER_KINDS: &[&str] = &["manager_turn"];
 
-/// The scope of a memory source 
+/// The scope of a memory source.
 const SCOPE_MEMORY: &str = "memory";
 
-/// The memory package's turn contribution 
+/// The memory package's turn contribution.
 pub struct MemoryTurn;
 
 impl TurnContribution for MemoryTurn {
@@ -56,8 +56,7 @@ fn repo_basename(meta: &SessionMetadata) -> &str {
   }
 }
 
-/// The selection's segments as ordered rule segments, each source with scope `memory`
-
+/// The selection's segments as ordered rule segments, each source with scope `memory`.
 fn rule_segments(selection: &MemorySelection) -> Vec<RuleSegment> {
   selection
     .segments

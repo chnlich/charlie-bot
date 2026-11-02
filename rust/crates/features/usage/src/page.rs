@@ -33,7 +33,7 @@ const TEMPLATE: &str = "token_usage.html";
 /// The template's series colours, `--series-1` to `--series-5`: one per usage source.
 const SERIES_COUNT: usize = 5;
 
-/// `json.dumps({"rows": ...}, ensure_ascii=False)`: the payload the page's script reads its rows from.
+/// The rows payload the page's script reads its rows from.
 const PAYLOAD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 

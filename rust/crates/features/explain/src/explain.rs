@@ -34,7 +34,7 @@ const RESULTS_FILE: &str = "explain_results.json";
 const NO_ROUND_TEXT_ERROR: &str = "This round has no explainable answer text.";
 const REAPED_ERROR: &str = "interrupted: server restarted";
 const EMPTY_ANSWER_ERROR: &str = "backend returned an empty explanation";
-/// `str(TimeoutError())` is empty, so the class name is the error text.
+/// The timeout's own message is empty, so the error text is the class name.
 const TIMEOUT_ERROR: &str = "TimeoutError";
 
 /// The check-and-register critical section of `request_explain`: two racing requests on one divider register one

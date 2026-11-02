@@ -332,7 +332,7 @@ pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
   Ok(item.expect("a valid waiting item has text"))
 }
 
-/// `json.dumps({...}, sort_keys=True, ensure_ascii=False)`: the item payload that the digest covers.
+/// The item payload the digest covers: JSON with the keys sorted and non-ASCII text literal.
 const ITEM_DIGEST_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
@@ -478,7 +478,7 @@ fn nullable_text(value: &Value, loc: &str, problems: &mut Vec<Problem>) -> Optio
   }
 }
 
-/// `list[WaitingItem]` for a present `waiting` value: each item validated, invalid items reported with their index.
+/// The `waiting` list: each item validated, invalid items reported with their index.
 fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem> {
   let Value::Array(items) = value else {
     problems.push(Problem { loc: "waiting".to_string(), msg: NOT_A_LIST });
@@ -491,7 +491,7 @@ fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem>
     .collect()
 }
 
-/// `list[RemainingItem]` for a present `remaining` value: each item validated, invalid items reported with their
+/// The `remaining` list: each item validated, invalid items reported with their
 /// index.
 fn remaining_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<RemainingItem> {
   let Value::Array(items) = value else {
@@ -611,7 +611,7 @@ fn optional_item_string(
   }
 }
 
-/// A nested Pydantic location, including the root model's empty location.
+/// A nested validation location, including the root's empty location.
 fn nested_loc(prefix: &str, field: &str) -> String {
   if prefix.is_empty() { field.to_string() } else { format!("{prefix}.{field}") }
 }

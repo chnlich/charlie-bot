@@ -52,7 +52,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   };
   let mut children = Vec::new();
   for entry in entries {
-    // `except OSError: continue`: a child that cannot be stat-ed is skipped, not reported.
+    // A child that cannot be stat-ed is skipped, not reported.
     let Ok(metadata) = fs::metadata(entry.path()) else { continue };
     let name =
       entry.file_name().into_string().map_err(|name| failed("UnicodeEncodeError", format!("{name:?} is not UTF-8")))?;

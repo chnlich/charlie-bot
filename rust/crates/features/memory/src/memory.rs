@@ -60,14 +60,14 @@ fn format_error(message: String) -> anyhow::Error {
   MemoryFormatError(message).into()
 }
 
-/// One vocabulary line: its topic name and whether the topic is resident 
+/// One vocabulary line: its topic name and whether the topic is resident.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Topic {
   pub name: String,
   pub resident: bool,
 }
 
-/// One parsed entry file . A header field the file leaves out is `None`; validation rejects those.
+/// One parsed entry file. A header field the file leaves out is `None`; validation rejects those.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
   pub path: PathBuf,
@@ -90,7 +90,7 @@ impl Entry {
   }
 }
 
-/// One loaded store: the memory dir, the topics vocabulary and the parsed entries 
+/// One loaded store: the memory dir, the topics vocabulary and the parsed entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {
   pub memory_dir: PathBuf,
@@ -98,7 +98,7 @@ pub struct Store {
   pub entries: Vec<Entry>,
 }
 
-/// One selected entry's provenance and contribution . `delivery` is `full` or `index`.
+/// One selected entry's provenance and contribution. `delivery` is `full` or `index`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryEntrySource {
   pub source_ref: String,
@@ -114,7 +114,7 @@ pub struct MemorySegment {
   pub sources: Vec<MemoryEntrySource>,
 }
 
-/// The memory that one audience's selection produced . `usage_line` rides only on worker
+/// The memory that one audience's selection produced. `usage_line` rides only on worker
 /// selections, and `text` is the segments joined, or `None` when there are none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemorySelection {
@@ -129,7 +129,7 @@ pub struct MemorySelection {
 /// same directory exits 128.
 static ENSURE_STORE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Creates the store scaffold under `memory_dir`, idempotently . It runs `git init` when `.git`
+/// Creates the store scaffold under `memory_dir`, idempotently. It runs `git init` when `.git`
 /// is absent, seeds `topics` and `.gitignore` only when missing, and creates `entries/` and `staging/`.
 pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
   let _guard = ENSURE_STORE_LOCK.lock().expect("the memory store lock was poisoned by an earlier ensure_store");
@@ -174,7 +174,7 @@ fn make_dir(path: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// Loads the topics vocabulary and every entry, failing on the first violation . It runs
+/// Loads the topics vocabulary and every entry, failing on the first violation. It runs
 /// [`ensure_store`] first, so a missing store loads as the empty store with the seeded vocabulary.
 pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   ensure_store(memory_dir)?;
@@ -196,13 +196,13 @@ fn read_text(path: &Path) -> anyhow::Result<String> {
   Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// Parses one entry file 
+/// Parses one entry file.
 pub fn parse_entry(path: &Path) -> anyhow::Result<Entry> {
   let text = read_text(path)?;
   Ok(parse_entry_text(&text, path)?)
 }
 
-/// Parses one entry file's text . Only the first header block is parsed; the body is the rest,
+/// Parses one entry file's text. Only the first header block is parsed; the body is the rest,
 /// so it may hold `---` lines. Structure only: `load_store` checks the semantic rules.
 pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFormatError> {
   let location = entry_path.display();
@@ -380,7 +380,7 @@ fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String
   violations
 }
 
-/// The sorted entry files: each `*.md` directly under a directory of `entries/` 
+/// The sorted entry files: each `*.md` directly under a directory of `entries/`.
 fn iter_entry_files(memory_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   let entries_dir = memory_dir.join(ENTRIES_DIRNAME);
   if !entries_dir.is_dir() {
@@ -418,24 +418,24 @@ fn index_line(entry: &Entry) -> String {
   format!("{} · {}", entry.id(), entry.title)
 }
 
-/// Whether the entry's audience header names `audience` . An entry without an audience
+/// Whether the entry's audience header names `audience`. An entry without an audience
 /// header admits nobody.
 pub fn audience_allows(entry: &Entry, audience: &str) -> bool {
   entry.audience.as_ref().is_some_and(|audiences| audiences.iter().any(|element| element == audience))
 }
 
-/// The store's canonical entry order, `(topic, slug)` 
+/// The store's canonical entry order, `(topic, slug)`.
 pub fn entry_order_key(entry: &Entry) -> (Option<&str>, &str) {
   (entry.topic.as_deref(), entry.slug.as_str())
 }
 
-/// The names of the store's resident topics 
+/// The names of the store's resident topics.
 pub fn resident_topic_names(store: &Store) -> BTreeSet<&str> {
   store.topics.values().filter(|topic| topic.resident).map(|topic| topic.name.as_str()).collect()
 }
 
 /// The master selection: the full text of entries in resident topics, then the index lines of the other master
-/// entries. `None` when the audience has no entry 
+/// entries. `None` when the audience has no entry.
 pub fn select_master_memory(memory_dir: &Path) -> anyhow::Result<Option<MemorySelection>> {
   let store = load_store(memory_dir)?;
   let residents = resident_topic_names(&store);
@@ -455,7 +455,7 @@ pub fn select_master_memory(memory_dir: &Path) -> anyhow::Result<Option<MemorySe
 }
 
 /// The worker selection for `repo_basename`: the full text of worker entries whose topic is that repo, then the index
-/// lines of the other worker entries, then the usage line 
+/// lines of the other worker entries, then the usage line.
 pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::Result<MemorySelection> {
   let store = load_store(memory_dir)?;
   let mut full = Vec::new();
@@ -470,7 +470,7 @@ pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::R
   Ok(selection_from_parts("worker", Some(repo_basename.to_string()), full, index, Some(WORKER_USAGE_LINE)))
 }
 
-/// The selection's segments, full then index, each sorted by [`entry_order_key`] 
+/// The selection's segments, full then index, each sorted by [`entry_order_key`].
 fn selection_from_parts(
   audience: &'static str,
   repo_basename: Option<String>,

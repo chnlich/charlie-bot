@@ -32,7 +32,7 @@ pub const STATE_FILENAME: &str = "host_auth.json";
 /// The state file's object, with its keys in file order.
 pub type State = Map<String, Value>;
 
-/// `json.dumps(state, ensure_ascii=False, indent=2) + "\n"`: the layout `write_json_atomically` gives the state file.
+/// The state file's layout: JSON with two-space indent, non-ASCII text literal and a trailing newline, written atomically.
 const STATE_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 

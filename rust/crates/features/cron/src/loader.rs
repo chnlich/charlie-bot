@@ -667,7 +667,7 @@ mod tests {
     write_task(&cfg, "valid", &json!({"cron":"0 8 * * *", "prompt_file":prompt}));
     write_task(&cfg, "inline", &json!({"cron":"0 8 * * *", "prompt":"inline body"}));
     write_task(&cfg, "missing", &json!({"cron":"0 8 * * *"}));
-    write_task(&cfg, "bad-mode", &json!({"cron":"0 8 * * *", "prompt":"body", "mode":"boss"}));
+    write_task(&cfg, "bad-mode", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"boss"}));
 
     let snapshot = load_snapshot(&features, &cfg).unwrap();
 
@@ -682,6 +682,7 @@ mod tests {
       |name: &str| snapshot.errors.iter().find(|error| error.name == name).expect("the task's error").error.as_str();
     assert!(error_of("inline").contains("inline 'prompt'"));
     assert!(error_of("missing").contains("prompt_file"));
+    assert!(error_of("bad-mode").contains("boss"), "the unknown mode is refused: {}", error_of("bad-mode"));
   }
 
   #[test]

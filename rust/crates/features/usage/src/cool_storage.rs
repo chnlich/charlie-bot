@@ -58,7 +58,7 @@ pub fn run_handler(context: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::R
   .boxed()
 }
 
-/// One real sweep at `now` (`storage_cool.run_cool_sweep`). Returns the categories in report order: the raw transport
+/// One real sweep at `now`. Returns the categories in report order: the raw transport
 /// files, then each source's categories in registration order.
 pub fn run_cool_sweep(
   cfg: Arc<CharlieBotConfig>,
@@ -156,14 +156,14 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
   Ok(facts)
 }
 
-/// The one cold rule (`storage_cool.is_cold_session`): archived, and idle at least `MIN_IDLE_DAYS`. A field that is
+/// The one cold rule: archived, and idle at least `MIN_IDLE_DAYS`. A field that is
 /// missing or unusable never qualifies.
 fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
   // `str(status)` equals "archived" only for that string, so a status of any other JSON type never qualifies.
   if !matches!(meta.get("status"), Some(Value::String(status)) if *status == SESSION_ARCHIVED) {
     return false;
   }
-  // `if not raw_updated` drops the falsy values before `str()` reads the rest.
+  // The falsy values drop before the text read takes the rest.
   let Some(raw_updated) = meta.get("updated_at").filter(|value| text_repr::is_truthy(value)) else {
     return false;
   };
@@ -273,7 +273,7 @@ fn is_transport_name(path: &Path) -> bool {
 }
 
 /// One directory's entries, sorted. A failed listing logs and yields None, so one unreadable directory never stops the
-/// run (`usage_sources.sorted_scan`).
+/// run.
 fn sorted_scan(root: &Path) -> Option<Vec<PathBuf>> {
   let listing = fs::read_dir(root)
     .and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<Result<Vec<_>, _>>());
@@ -304,7 +304,7 @@ fn is_real_dir(path: &Path) -> bool {
   fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
-/// The raw-transport category: files deleted, and their bytes (`usage_sources.SweepCounter` with the `files` unit).
+/// The raw-transport category: files deleted, and their bytes, counted with the `files` unit.
 #[derive(Default)]
 struct TransportCounter {
   count: u64,

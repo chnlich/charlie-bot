@@ -27,7 +27,7 @@ const BACKUP_SUFFIX: &str = ".tar.gz";
 pub(crate) const DAILY_THRESHOLD: i64 = 3;
 pub(crate) const WEEKLY_THRESHOLD: i64 = 15;
 
-/// The state directory being backed up: this profile's home (`config.charliebot_home_dir`).
+/// The state directory being backed up: this profile's home (`charliebot_core::home::charliebot_home_dir`).
 pub fn charliebot_dir() -> anyhow::Result<PathBuf> {
   Ok(charliebot_core::home::charliebot_home_dir()?)
 }

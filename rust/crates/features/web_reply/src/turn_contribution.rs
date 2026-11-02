@@ -20,11 +20,11 @@ use serde_json::{Value, json};
 
 use crate::{audit, reply};
 
-/// The run kind that takes the manager contract (`task_prompts.MANAGER_KINDS`).
+/// The run kind that takes the manager contract 
 const MANAGER_KIND: &str = "manager_turn";
-/// The scope of a rule segment's sources (`task_prompts.SCOPE_BASE`).
+/// The scope of a rule segment's sources 
 const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment (`task_prompts.DELIVERY_FULL`).
+/// The delivery of a full text segment 
 const DELIVERY_FULL: &str = "full";
 
 /// The web-reply turn contribution.

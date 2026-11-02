@@ -107,8 +107,8 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
   }
 }
 
-/// `FileResponse` for a regular file. Starlette's `FileResponse` answers only the `Range` headers, so the conditional
-/// headers that `StaticFiles` reads are removed first; the static answer would otherwise send a 304 for them. The
+/// The file answer for a regular file. It honors only the `Range` headers, so the conditional
+/// headers the static views read are removed first; the static answer would otherwise send a 304 for them. The
 /// static root is `/`, so the answer serves the resolved path wherever it lies.
 fn answer_file(fs_path: &FsPath, method: &Method, headers: &HeaderMap) -> Response {
   let Some(route_path) = fs_path.to_str() else {

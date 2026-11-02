@@ -1,4 +1,4 @@
-//! The boot backfill both chat channels run once the crash-recovery step has had its chance (`backfill.run_backfill`).
+//! The boot backfill both chat channels run once the crash-recovery step has had its chance.
 
 use std::future::Future;
 

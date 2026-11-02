@@ -30,16 +30,16 @@ use crate::plan_links::{self, PlanLinks};
 use crate::reply;
 pub use crate::reply::WebReplyError;
 
-/// The owner the web reply package registers its metadata under (`status.OWNER`).
+/// The owner the web reply package registers its metadata under.
 pub const OWNER: &str = WEB_REPLY;
 
 /// The metadata field that holds the status, under the owner.
 const STATUS_FIELD: &str = WEB_STATUS;
 
-/// The status items in the order a set lists them and the status line names them (`status.ITEMS`).
+/// The status items in the order a set lists them and the status line names them.
 const ITEMS: [&str; 4] = ["goal", "now", "waiting", "remaining"];
 
-/// The label of each item in the event's content (`status.LABELS`).
+/// The label of each item in the event's content.
 fn label(item: &str) -> &'static str {
   match item {
     "goal" => "Goal",
@@ -52,7 +52,7 @@ fn label(item: &str) -> &'static str {
 /// The non-persisted frame an ancestor's page receives when a descendant sets its status (`SUBTREE_NOTICE_TYPE`).
 const SUBTREE_NOTICE_TYPE: &str = "web_status_subtree";
 
-/// The pydantic messages a status file can break, as `StatusPatch` and `WaitingItem` raise them.
+/// The validation messages a status file can break, as the `StatusPatch` and `WaitingItem` readers raise them.
 const MUST_NOT_BE_BLANK: &str = "Value error, must not be blank";
 const NOT_A_STRING: &str = "Input should be a valid string";
 const NOT_A_LIST: &str = "Input should be a valid list";
@@ -63,15 +63,15 @@ const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
 const NOW_BUDGET_CHARS: usize = 200;
 const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
 const ITEM_SHA256: &str = "item_sha256";
-/// The item fields that only the server writes; a set file carries neither (`status._refuse_server_fields`).
+/// The item fields that only the server writes; a set file carries neither.
 const SERVER_WRITTEN_ITEM_FIELDS: [&str; 4] = ["since", "since_exact", "tier", "rule"];
-/// The pydantic message a since field that is not a datetime raises.
+/// The message a since field that is not a datetime raises.
 const NOT_A_DATETIME: &str = "Input should be a valid datetime";
-/// The pydantic message a since_exact field that is not a boolean raises.
+/// The message a since_exact field that is not a boolean raises.
 const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 
 /// The session status: Goal, Now, Waiting on you and Remaining, and the time the last set stored them
-/// (`metadata.WebStatus`). A status without Remaining serializes without either Remaining key.
+/// A status without Remaining serializes without either Remaining key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebStatus {
   goal: Option<String>,
@@ -115,13 +115,13 @@ impl StatusPatch {
   }
 }
 
-/// One validation failure: the location pydantic reports (`waiting.0.text`) and its message.
+/// One validation failure: the location the reader reports (`waiting.0.text`) and its message.
 struct Problem {
   loc: String,
   msg: &'static str,
 }
 
-/// The status a session stores, or `None` before its first set (`status._stored`).
+/// The status a session stores, or `None` before its first set.
 fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyError> {
   match meta.extra.get(STATUS_FIELD) {
     None | Some(Value::Null) => Ok(None),
@@ -157,7 +157,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   };
   refuse_server_fields(&fields)?;
   let mut problems = Vec::new();
-  // pydantic validates the fields in declaration order, each with its nested errors, then the object's extra keys.
+  // The fields validate in declaration order, each with its nested errors, then the object's extra keys.
   let goal = fields.get("goal").map(|value| nullable_text(value, "goal", &mut problems));
   let now = fields.get("now").map(|value| nullable_text(value, "now", &mut problems));
   let waiting = fields.get("waiting").map(|value| waiting_items(value, &mut problems));
@@ -182,7 +182,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   Ok(patch)
 }
 
-/// Refuse a set file that names a field only the server writes (`status._refuse_server_fields`): the status's
+/// Refuse a set file that names a field only the server writes: the status's
 /// `remaining_updated_at`, or a waiting item's `since` and `since_exact`. Only a list `waiting` is examined, and only
 /// its object items.
 fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError> {
@@ -209,7 +209,7 @@ fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError
   Ok(())
 }
 
-/// The status's waiting items with `since` and `since_exact` filled in (`status.effective_waiting`).
+/// The status's waiting items with `since` and `since_exact` filled in.
 ///
 /// An item stored before the fields existed has no start time of its own; the status's `updated_at` is the lower
 /// bound, so the item reads with `since_exact` false.
@@ -228,8 +228,7 @@ fn effective_waiting(status: &WebStatus) -> Vec<WaitingItem> {
     .collect()
 }
 
-/// The status as the API and the CLI return it, with each waiting item's start time filled in
-/// (`status.status_payload`).
+/// The status as the API and the CLI return it, with each waiting item's start time filled in.
 fn status_payload(status: &WebStatus) -> Value {
   let mut payload = payload_of(status);
   payload["waiting"] = serde_json::to_value(effective_waiting(status)).expect("waiting items serialize to JSON");
@@ -237,7 +236,7 @@ fn status_payload(status: &WebStatus) -> Value {
 }
 
 /// Refuse `items` when any of their links names an older version of a registered plan or a closed plan, before the
-/// cold read runs; return the lookup the since pairing then uses (`status._require_current_plan_links`).
+/// cold read runs; return the lookup the since pairing then uses.
 fn require_current_plan_links(
   features: &FeatureContext,
   items: &[WaitingItem],
@@ -252,7 +251,7 @@ fn require_current_plan_links(
   Ok(links)
 }
 
-/// The new items with each one's start time kept from the stored item it continues (`status._assign_since`).
+/// The new items with each one's start time kept from the stored item it continues.
 ///
 /// An item whose text equals a stored item's text keeps that item's time. The remaining items pair in order within
 /// groups of one link target: a registered plan lineage, another link, or no link at all.
@@ -302,7 +301,7 @@ fn assign_since(
 }
 
 /// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches
-/// (`status._assign_tiers`). An item whose check predates the tier keeps neither field.
+/// An item whose check predates the tier keeps neither field.
 fn assign_tiers(
   items: Vec<WaitingItem>,
   ask_tiers: &HashMap<String, (String, Option<String>)>,
@@ -319,7 +318,7 @@ fn assign_tiers(
     .collect()
 }
 
-/// One `WaitingItem` parsed with the `item` model's refusal (`status.parse_item`).
+/// One `WaitingItem` parsed with the `item` model's refusal.
 pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
   let mut problems = Vec::new();
   let item = waiting_item(raw, "", &mut problems);
@@ -351,8 +350,7 @@ fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
   Ok(charliebot_store::control_events::sha256_bytes_hex(&bytes))
 }
 
-/// The tier and rule each `web_ask_check` event gave its item digest, the latest event per digest winning
-/// (`status._read_ask_tiers`). A check recorded before the tier existed contributes no entry.
+/// The tier and rule each `web_ask_check` event gave its item digest, the latest event per digest winning. A check recorded before the tier existed contributes no entry.
 async fn read_ask_tiers(
   features: &FeatureContext,
   session_id: &str,
@@ -372,8 +370,7 @@ async fn read_ask_tiers(
   Ok(tiers)
 }
 
-/// The table as the server reads it, with a changed read recording its `policy_table_changed` record
-/// (`status._load_approval_policy`).
+/// The table as the server reads it, with a changed read recording its `policy_table_changed` record.
 fn load_approval_policy(
   features: &FeatureContext,
 ) -> Result<charliebot_core::approval_policy::LoadedTable, WebReplyError> {
@@ -405,7 +402,7 @@ fn unread_items(items: &[WaitingItem], read_digests: &HashSet<String>) -> Result
     .collect()
 }
 
-/// Record one cold read of `raw_item` and return its digest (`status.record_ask_check`). The answer's last line
+/// Record one cold read of `raw_item` and return its digest. The answer's last line
 /// tiers the item against the approval policy table; an answer without a parsable tier line records nothing.
 pub async fn record_ask_check(
   features: &FeatureContext,
@@ -841,7 +838,7 @@ fn payload_of(status: &WebStatus) -> Value {
   serde_json::to_value(status).expect("a web status serializes to JSON")
 }
 
-/// One open session's Waiting on you item with the session that holds it (`status.OpenWaitingItem`). The start time
+/// One open session's Waiting on you item with the session that holds it. The start time
 /// is resolved, as the status read resolves it.
 #[derive(Clone, Debug, Serialize)]
 pub struct OpenWaitingItem {
@@ -855,7 +852,7 @@ pub struct OpenWaitingItem {
   pub since: UtcDateTime,
 }
 
-/// Every open session's Waiting on you items, in metadata-listing order (`status.open_waiting_items`). The approval
+/// Every open session's Waiting on you items, in metadata-listing order. The approval
 /// day view reads the whole home through this, where the status read reads one task tree.
 pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
   let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
@@ -888,7 +885,7 @@ pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWai
   Ok(rows)
 }
 
-/// The registry's reader for every open session's Waiting on you items (`registry.OpenWaitingItemsFn`), which the
+/// The registry's reader for every open session's Waiting on you items (`charliebot_registry::OpenWaitingItemsFn`), which the
 /// approval view looks up on the registry instead of importing this feature.
 pub fn open_waiting_rows<'a>(
   features: &'a FeatureContext,

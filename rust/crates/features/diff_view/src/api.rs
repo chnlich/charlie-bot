@@ -314,7 +314,7 @@ fn io_error(error: io::Error) -> Response {
   responses::internal_error("OSError", error.to_string())
 }
 
-/// Runs blocking file work off the event loop, as `asyncio.to_thread` does for the listing and the scan.
+/// Runs blocking file work off the event loop, for the listing and the scan.
 async fn blocking<T, F>(work: F) -> Result<T, Response>
 where
   F: FnOnce() -> Result<T, Response> + Send + 'static,

@@ -79,7 +79,7 @@ pub fn seed_default_cron_tasks(
   Ok(report)
 }
 
-/// Seed the default cron tasks, then list the effective scheduled tasks (`seed.setup_step`).
+/// Seed the default cron tasks, then list the effective scheduled tasks.
 pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Result<(), String> {
   println!("==> Seeding default cron tasks");
   // Per-task created/exists for repo-default cron entries, keyed on whether the

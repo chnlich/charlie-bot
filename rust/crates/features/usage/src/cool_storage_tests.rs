@@ -489,11 +489,11 @@ fn summary_line_lists_each_category_then_the_total_in_gib() {
 #[test]
 fn cold_rule_reads_updated_at_and_status() {
   let now = now();
-  // `models.parse_utc_datetime` reads a date-only or naive value as UTC, and `str()` of an integer gives its digits.
+  // The parser reads a date-only or naive value as UTC, and an integer binds as its digit text.
   assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": "2026-08-05"})), now));
   assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": "2026-08-05T12:00:00"})), now));
   assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": 20_260_805})), now));
-  // A falsy updated_at, a float whose str() is not a date, and a status other than the string qualify for nothing.
+  // A falsy updated_at, a float whose text is not a date, and a status other than the string qualify for nothing.
   assert!(!is_cold_session(&meta(json!({"status": "archived", "updated_at": 0})), now));
   assert!(!is_cold_session(&meta(json!({"status": "archived", "updated_at": 20_260_805.0})), now));
   assert!(!is_cold_session(&meta(json!({"status": ["archived"], "updated_at": OLD})), now));

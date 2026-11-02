@@ -5,7 +5,7 @@
 //! Public API:
 //! - `ThreadPlatform`: the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
 //!   derive the marker keys from `name`.
-//! - `IdOrdering` (`ThreadPlatform.id_key`): text order for Slack ts strings, integer order for Discord snowflakes.
+//! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes.
 //! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
 //!   platform face of the entries.
 //! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
@@ -58,9 +58,9 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-/// The scope of a rule segment's sources (`task_prompts.SCOPE_BASE`).
+/// The scope of a rule segment's sources.
 const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment (`task_prompts.DELIVERY_FULL`).
+/// The delivery of a full text segment 
 const DELIVERY_FULL: &str = "full";
 /// The page-delivery sentence every platform's contract line carries: the reply path posts the text as written and
 /// refuses a file-server link (`LINKED_PAGES_LINE`).
@@ -82,7 +82,7 @@ const REPLY_BUDGET_CHARS: usize = 500;
 const FOLLOW_QUIET_SECONDS: i64 = 10;
 /// A follow chain never runs past this cap from its first message (`_FOLLOW_CHAIN_CAP_SECONDS`).
 const FOLLOW_CHAIN_CAP_SECONDS: i64 = 300;
-/// The house timezone of session display names (`config.HOUSE_TIMEZONE`).
+/// The house timezone of session display names.
 const HOUSE_TIMEZONE: Tz = chrono_tz::America::Los_Angeles;
 /// The notice a lost summon's thread receives (`_LOST_SUMMON_NOTICE`).
 const LOST_SUMMON_NOTICE: &str = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。";
@@ -158,12 +158,12 @@ impl ThreadPlatform {
   }
 }
 
-/// How a platform orders its message ids (`ThreadPlatform.id_key`).
+/// How a platform orders its message ids (`ThreadPlatform::id_key`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdOrdering {
   /// Slack's dotted ts strings, ordered as text (`str`).
   Text,
-  /// Discord's snowflakes, ordered as unsigned integers (`discord_client.snowflake_key`).
+  /// Discord's snowflakes, ordered as unsigned integers 
   Snowflake,
 }
 
@@ -273,7 +273,7 @@ pub trait ThreadAdapter: Send + Sync {
   fn log_fields(&self, address: &Value) -> Value;
 }
 
-/// The detail of a refusal: a plain text, or the structured 412 payload (`ThreadReplyError.detail`).
+/// The detail of a refusal: a plain text, or the structured 412 payload of `ThreadReplyError`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ThreadDetail {
   Text(String),
@@ -1723,7 +1723,7 @@ pub fn operator_only_note(links: &[String]) -> Option<String> {
   Some(format!("Application-route links stay as written; the operator alone can open them: {}", links.join(", ")))
 }
 
-/// The sessions' chat events in log order, read on a worker thread as `asyncio.to_thread` does.
+/// The sessions' chat events in log order, read on a worker thread.
 async fn load_chat_events(
   features: &FeatureContext,
   session_id: &str,
@@ -1743,7 +1743,7 @@ where
   Ok(joined.map_err(ThreadReplyError::failure)??)
 }
 
-/// Run `future` as its own task; a failure logs `background_task_failed` (`tasks.create_logged_task`).
+/// Run `future` as its own task; a failure logs `background_task_failed` 
 pub(crate) fn spawn_logged<E, F>(name: String, future: F) -> JoinHandle<()>
 where
   E: Display,

@@ -1,4 +1,4 @@
-//! The Discord part of the thread reply contract (`discord_listener.thread_contract_part`): the platform line and the read
+//! The Discord part of the thread reply contract : the platform line and the read
 //! sentences. The shared contract joins it with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
@@ -12,7 +12,7 @@ pub const READ_COMMAND: &str = "charliebot discord read";
 /// The trigger-label prefix of a session's armed thread-follow record (`_FOLLOW_TRIGGER_PREFIX`).
 pub const FOLLOW_TRIGGER_PREFIX: &str = "discord-thread-follow";
 
-/// The Discord platform as the shared contract reads it (`discord_listener.DISCORD`).
+/// The Discord platform as the shared contract reads it 
 pub const DISCORD: ThreadPlatform = ThreadPlatform {
   name: "discord",
   display_name: "Discord",

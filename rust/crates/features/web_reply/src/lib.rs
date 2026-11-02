@@ -114,7 +114,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
 }
 
 /// The web reply routes, with the feature context as their state. The reply and dialog paths have one method each; the
-/// status path answers POST and GET, and Starlette's 405 names the first route of the path, which is the POST route.
+/// status path answers POST and GET, and the 405 body names the first route of the path, which is the POST route.
 fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/internal/web/reply", post_only(api::post_reply))

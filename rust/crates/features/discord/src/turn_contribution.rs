@@ -17,7 +17,7 @@ use crate::event_types::DISCORD_REPLY;
 use crate::metadata::discord_origin;
 use crate::thread_contract::thread_contract_part;
 
-/// The run kind that takes the manager contract (`task_prompts.MANAGER_KINDS`).
+/// The run kind that takes the manager contract 
 const MANAGER_KIND: &str = "manager_turn";
 
 /// The Discord turn contribution.

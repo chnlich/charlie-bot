@@ -21,7 +21,7 @@ use charliebot_tasks::prompts::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// `json.dumps(value, ensure_ascii=False)` with the default separators and insertion order.
+/// The default JSON style: non-ASCII unescaped, the default separators, and insertion order.
 const DEFAULT_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 const HASH_STYLE: JsonStyle =

@@ -43,7 +43,7 @@ pub struct CliHost {
 }
 
 impl CliHost {
-  /// The host of the running server. HOME must be set, as `Path.home()` needs it.
+  /// The host of the running server. HOME must be set.
   pub fn from_process() -> anyhow::Result<Self> {
     let home = std::env::var_os("HOME").context("HOME must be set for the CLI backend types")?;
     let path = match std::env::var("PATH") {
@@ -65,7 +65,7 @@ impl CliHost {
   }
 }
 
-/// `Path.home() / ".local" / "bin"`: the directory the child PATH gains, and a binary's fallback directory.
+/// The home's `.local/bin`: the directory the child PATH gains, and a binary's fallback directory.
 pub fn user_local_bin(home: &Path) -> PathBuf {
   home.join(".local").join("bin")
 }
@@ -161,7 +161,7 @@ pub fn truthy(value: &Value) -> bool {
   }
 }
 
-/// The string field `key` of a JSON object, or `default` when the object lacks it (`ev.get(key, default)`).
+/// The string field `key` of a JSON object, or `default` when the object lacks it.
 pub fn str_field<'a>(fields: &'a Map<String, Value>, key: &str, default: &'a str) -> anyhow::Result<&'a str> {
   match fields.get(key) {
     None => Ok(default),

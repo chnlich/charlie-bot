@@ -8,8 +8,7 @@ use charliebot_compat::{responses, validation};
 use charliebot_store::{StoreError, StoreResult};
 use serde_json::json;
 
-/// Run a handler's store work on the blocking pool, so a slow
-/// read holds no async worker.
+/// Run a handler's store work on the blocking pool, so a slow read holds no async worker.
 pub(crate) async fn blocking_store<T, F>(work: F) -> StoreResult<T>
 where
   T: Send + 'static,
@@ -19,7 +18,7 @@ where
 }
 
 /// The store error as the route's JSON response: the mapped status when the error carries one, else the
-/// `RuntimeError` internal error that the handlers raise.
+/// internal error response, which reports `RuntimeError`.
 pub(crate) fn store_error(error: StoreError) -> Response {
   if let Some(status) = error.status_code().and_then(|code| StatusCode::from_u16(code).ok()) {
     return responses::json(status, &json!({"detail": error.to_string()}));

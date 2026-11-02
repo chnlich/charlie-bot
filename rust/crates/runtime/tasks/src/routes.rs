@@ -1792,8 +1792,7 @@ mod tests {
     assert_eq!(body["detail"][1]["type"], "string_type");
     assert_eq!(body["detail"][1]["loc"], json!(["body", "uploaded_files", 0, "filename"]));
 
-    // A non-list uploaded_files reports list_type at the field
-    // (the list check runs before the items).
+    // A non-list uploaded_files reports list_type at the field: the list check runs before the items.
     assert_validation(
       send_operator(
         &router,
@@ -1807,8 +1806,8 @@ mod tests {
     )
     .await;
 
-    // A non-object item reports model_attributes_type at its index, with no trailing field
-    // (each list item is validated as the model).
+    // A non-object item reports model_attributes_type at its index, with no trailing field: each list item is
+    // validated as the model.
     assert_validation(
       send_operator(
         &router,
@@ -2063,7 +2062,7 @@ mod tests {
       json!(["body", "extra"]),
     )
     .await;
-    // pydantic reports the field error and the extra key together, fields first.
+    // The body validator reports the field error and the extra key together, fields first.
     let response =
       send_operator(&router, path, br#"{"request_id":1,"run_id":"x","extra":true}"#.to_vec(), Some("application/json"))
         .await;
@@ -2146,7 +2145,7 @@ mod tests {
       json!(["body", "extra"]),
     )
     .await;
-    // pydantic reports the field error and the extra key together, fields first.
+    // The body validator reports the field error and the extra key together, fields first.
     let response =
       send_operator(&router, path, br#"{"request_id":1,"extra":true}"#.to_vec(), Some("application/json")).await;
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);

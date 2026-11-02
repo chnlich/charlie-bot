@@ -743,12 +743,12 @@ pub async fn git_create_worktree(
   Ok(resolution)
 }
 
-/// `os.path.lexists`: true also for a broken symlink.
+/// Whether the path exists, counting a broken symlink.
 fn lexists(path: &Path) -> bool {
   path.symlink_metadata().is_ok()
 }
 
-/// A non-strict `Path.resolve`: canonicalize when the path exists, else absolutize it.
+/// A non-strict resolve: canonicalize when the path exists, else absolutize it.
 fn resolve_path(path: &Path) -> PathBuf {
   path.canonicalize().unwrap_or_else(|_| {
     if path.is_absolute() {

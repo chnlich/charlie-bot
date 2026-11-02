@@ -404,9 +404,8 @@ impl Registry {
   /// Register a backend type's `backends.options[]` field schema: its type-specific fields in declaration order,
   /// with the value each holds when the entry omits it.
   ///
-  /// `charliebot config get backends` renders an option from this schema, so the output carries the same
-  /// fields and defaults as the type's pydantic model. A backend package registers its own schema next to
-  /// its [`Registry::backend_type`] registration.
+  /// `charliebot config get backends` renders an option from this schema. A backend package registers its own
+  /// schema next to its [`Registry::backend_type`] registration.
   pub fn option_schema(
     &mut self,
     backend_type: &'static str,

@@ -862,7 +862,7 @@ fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() 
   })
 }
 
-/// (the boot half): a terminal run whose end metadata is empty is repaired from its raw log's last write, once.
+/// The boot half: a terminal run whose end metadata is empty is repaired from its raw log's last write, once.
 #[tokio::test]
 async fn boot_reconcile_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
@@ -2891,13 +2891,13 @@ async fn a_boot_marker_with_a_bad_timestamp_reads_as_absent() -> anyhow::Result<
 
 #[tokio::test]
 async fn a_boot_marker_with_a_non_string_timestamp_reads_as_absent() -> anyhow::Result<()> {
-  // The TypeError that the marker reader raises for a non-string timestamp.
+  // The marker reader reports a TypeError for a non-string timestamp.
   assert_unreadable_boot_marker_reads_as_absent(br#"{"pass_started_at": 5}"#, "TypeError").await
 }
 
 #[tokio::test]
 async fn a_boot_marker_that_is_not_utf8_reads_as_absent() -> anyhow::Result<()> {
-  // The UnicodeDecodeError that the marker reader raises before parsing.
+  // The UnicodeDecodeError the marker reader reports before parsing.
   assert_unreadable_boot_marker_reads_as_absent(b"\xff\xfe{}", "UnicodeDecodeError").await
 }
 

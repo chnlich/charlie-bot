@@ -1,4 +1,4 @@
-//! The delegation route's gate, backend choice, and child record, and the
+//! The delegation route's gate, backend choice, and child record, plus the
 //! session-message relay that the same router serves. Each case drives `routes::routes` through `post_delegate` (or
 //! `post_delegate_as` for a run token, `post_internal` for the relay) on a synthetic task tree.
 //!
@@ -514,8 +514,7 @@ async fn repo_scoped_types_take_repo_and_base_together() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// Omitting
-/// `repo_path` and `base_branch` together is a valid repo-less delegation for each of the three types.
+/// Omitting `repo_path` and `base_branch` together is a valid repo-less delegation for each of the three types.
 #[tokio::test]
 async fn repo_less_request_passes_the_schema_gate() -> anyhow::Result<()> {
   let scripts = Scripts::new((0..3).map(|n| result_script(&format!("done {n}"))).collect());
@@ -627,9 +626,9 @@ async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// (partial): the requested backend stays on the child record, its first work run, and the next work run the dispatcher
+/// The requested backend stays on the child record, its first work run, and the next work run the dispatcher
 /// reserves.
-/// The review half (a review on a pool member other than the work run's backend) is not ported: the review spawn
+/// The review half (a review on a pool member other than the work run's backend) is not covered: the review spawn
 /// is private to the task execution adapter.
 #[tokio::test]
 async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyhow::Result<()> {
@@ -889,8 +888,7 @@ async fn cold_read_delegation_with_a_repo_field_gets_400() -> anyhow::Result<()>
   Ok(())
 }
 
-/// A cold-read delegation without its
-/// `cold_read` spec is refused with 400.
+/// A cold-read delegation without its `cold_read` spec is refused with 400.
 #[tokio::test]
 async fn cold_read_delegation_requires_cold_read() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -969,8 +967,8 @@ async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// A relay admits one
-/// `agent_message` into the target, carrying the sender's identity, and dispatch starts the target's turn with it.
+/// A relay admits one `agent_message` into the target, carrying the sender's identity, and dispatch starts the
+/// target's turn with it.
 #[tokio::test]
 async fn session_message_relay_admits_and_dispatches_a_task_input() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("status received")]);

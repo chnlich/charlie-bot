@@ -415,8 +415,8 @@ fn spec(id: &'static str, stdout: String, stderr: &'static str, exit: i32, resum
   FinishSpec { id, stdout, stderr, exit, resume }
 }
 
-/// The fake `agy` runs. A non-string `response` and a non-object `usage` are left out: the recorded reference raises
-/// TypeError or AttributeError on them, and the Rust port reports a named envelope guard instead.
+/// The fake `agy` runs. A non-string `response` and a non-object `usage` are left out: the Rust code reports a
+/// named envelope guard for them instead.
 fn finish_specs() -> Vec<FinishSpec> {
   vec![
     spec(

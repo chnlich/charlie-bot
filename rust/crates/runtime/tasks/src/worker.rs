@@ -986,7 +986,7 @@ fn clamp_ts(clamp_to: Option<OffsetDateTime>) -> String {
   }
 }
 
-/// `json.dumps(diagnostics, indent=2)`: the file the hang diagnostics are written as.
+/// The JSON the hang diagnostics are written as: two-space indentation, non-ASCII escaped.
 fn hang_diagnostics_json(diagnostics: &Value) -> String {
   let style =
     JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };

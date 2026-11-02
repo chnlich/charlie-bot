@@ -26,7 +26,7 @@ const SYSTEM_SECTION: &str = "system_prompt";
 const QUESTIONS_SECTION: &str = "questions";
 const ASK_SYSTEM_SECTION: &str = "ask_system_prompt";
 const ASK_QUESTIONS_SECTION: &str = "ask_questions";
-/// `json.dumps(item, ensure_ascii=False, indent=2)`: the item JSON an ask probe carries.
+/// The item JSON an ask probe carries: non-ASCII characters unescaped, two-space indentation.
 const ITEM_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 /// The placeholder in the questions that the trigger message replaces.

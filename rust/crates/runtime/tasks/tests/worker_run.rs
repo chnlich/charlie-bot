@@ -1,7 +1,7 @@
 //! The worker-run cases over the task-execution stack: a worker Run launches through
 //! the adapter, its process is a `/bin/sh` script, and its delivery chain runs on the real store.
 //!
-//! The review spawn and follow-up of an implement Run run for real (the review chain is ported). The work and verify
+//! The review spawn and follow-up of an implement Run run for real. The work and verify
 //! launches are asserted here; the review launch itself, iteration and scheduled-step launches stay with their
 //! owners' test files.
 
@@ -1182,7 +1182,7 @@ async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result
   Ok(())
 }
 
-/// , over an empty pool: the cc-claude option runs on no account, so its launch carries no `claude_account` and runs on
+/// Over an empty pool: the cc-claude option runs on no account, so its launch carries no `claude_account` and runs on
 /// the default login.
 #[tokio::test]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> anyhow::Result<()> {
@@ -1199,7 +1199,7 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> a
   Ok(())
 }
 
-/// , over a non-Claude backend: the launch carries no `claude_account` either.
+/// Over a non-Claude backend: the launch carries no `claude_account` either.
 #[tokio::test]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("done")]);
@@ -1613,25 +1613,25 @@ async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> any
   Ok(())
 }
 
-/// , over an implement task.
+/// A quota failure on an implement task's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_an_implement_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::Implement).await
 }
 
-/// , over a quick edit.
+/// A quota failure on a quick edit's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_a_quick_edit_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::QuickEdit).await
 }
 
-/// , over a script run.
+/// A quota failure on a script run's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_a_script_run_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::ScriptRun).await
 }
 
-/// , over a verify task.
+/// A quota failure on a verify task's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_a_verify_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::Verify).await

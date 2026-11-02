@@ -2148,9 +2148,9 @@ impl TaskExecutionAdapter {
     self.queue.session_callbacks(Arc::clone(&self.features), tree_activity)
   }
 
-  /// The finish recorder both manager-turn paths hand the master queue: it records the run's evidence,
-  /// lands the terminal fact with the observed exit, and
-  /// dispatches the node's pending inputs. It records the observation before persisting `master_done` and
+  /// The finish recorder both manager-turn paths hand the master queue: it records the run's evidence, lands the
+  /// terminal fact with the observed exit, and dispatches the node's pending inputs. It records the observation
+  /// before persisting `master_done` and
   /// `run_finished` under the control lock. `ended_at` is the drain rule's end time for a turn that ended unseen; None
   /// keeps the observed write time.
   pub fn manager_finish_recorder(

@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use super::{PromptSource, RuleSegment, TaskPromptError};
 
-/// `json.dumps({"blocks": ...}, sort_keys=True, ensure_ascii=False)`: the canonical text the prompt hash covers.
+/// The canonical text the prompt hash covers: sorted keys, non-ASCII unescaped, and the default separators.
 const HASH_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
@@ -147,7 +147,7 @@ pub fn assemble_snapshot(segments: &[RuleSegment]) -> PromptSnapshot {
   PromptSnapshot { blocks }
 }
 
-/// Parses the stored blocks. A missing key reports the key quoted, as a `KeyError` message does, and a value of the
+/// Parses the stored blocks. A missing key reports the key quoted, and a value of the
 /// wrong shape names its type.
 fn parse_blocks(data: &Value) -> Result<Vec<PromptBlock>, String> {
   let blocks = subscript(data, "blocks")?;
@@ -235,7 +235,8 @@ fn type_name(value: &Value) -> &'static str {
   }
 }
 
-/// `repr()` of a stored JSON value, as the mismatch messages print a recorded value. A missing key reads as `None`.
+/// The text a stored JSON value renders as, which the mismatch messages print for a recorded value. A missing key
+/// reads as `None`.
 fn recorded_repr(value: Option<&Value>) -> String {
   value.map_or_else(|| "None".to_string(), text_repr::value_repr)
 }

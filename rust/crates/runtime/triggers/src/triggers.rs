@@ -1403,8 +1403,8 @@ fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
   })
 }
 
-/// A validated integer field as the 64-bit field it is stored in. The validator reads any integer up to `u64::MAX`, as
-/// pydantic reads any `int`; a value past `i64::MAX` has no stored form.
+/// A validated integer field as the 64-bit field it is stored in. The validator reads any integer up to `u64::MAX`;
+/// a value past `i64::MAX` has no stored form.
 fn integer_field(value: &Value, field: &str) -> anyhow::Result<i64> {
   value[field].as_i64().ok_or_else(|| anyhow!("{field} {} is past the 64-bit integer range", value[field]))
 }
@@ -2597,7 +2597,7 @@ mod tests {
     assert_eq!(body["detail"][0]["loc"], json!(["body", "delay_seconds"]));
   }
 
-  /// Assert every `detail` entry's `type` and `loc`, in pydantic's order.
+  /// Assert every `detail` entry's `type` and `loc`, in field order.
   async fn assert_validation_detail(response: Response, expected: &[(&str, Value)]) {
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = response_json(response).await;

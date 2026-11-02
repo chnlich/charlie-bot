@@ -537,8 +537,8 @@ fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
   Ok(())
 }
 
-/// The `*.html` names under `directory` as `Path.rglob` finds them: symlinked directories are not entered, and an
-/// unreadable entry is skipped as `rglob` skips it.
+/// The `*.html` names under `directory` as a recursive walk finds them: symlinked directories are not entered, and
+/// an unreadable entry is skipped.
 fn collect_html_names(directory: &Path, names: &mut Vec<String>) {
   for entry in filesystem_walk(directory, false).build() {
     let entry = match entry {

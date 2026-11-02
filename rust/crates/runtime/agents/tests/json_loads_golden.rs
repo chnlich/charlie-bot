@@ -1,8 +1,8 @@
-//! `charliebot_compat::json_loads` against recorded `json.loads` outputs over one deterministic corpus.
+//! `charliebot_compat::json_loads` against recorded decoder outputs over one deterministic corpus.
 //!
-//! The fixture records what `json.loads` returned when it was recorded. The loader must give the same outcome
-//! class and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The
-//! corpus must reach every message the JSON decoder and scanner raise.
+//! The fixture records the outcome the reference decoder gave when it was recorded. The loader must give the same
+//! outcome class and, for an error, the same message text, and for a value the same JSON rendering. The corpus must
+//! reach every message the JSON decoder and scanner raise.
 
 use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
@@ -28,7 +28,7 @@ const REQUIRED_MESSAGES: [&str; 12] = [
   "Unexpected UTF-8 BOM (decode using utf-8-sig)",
 ];
 
-/// The `UnicodeDecodeError` reasons a body that is not UTF-8 (or not its detected wide codec) can give.
+/// The decode-error reasons a body that is not UTF-8 (or not its detected wide codec) can give.
 const REQUIRED_CODEC_REASONS: [&str; 5] = [
   "invalid start byte",
   "invalid continuation byte",
@@ -107,7 +107,7 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
   (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect()
 }
 
-/// The outputs `json.loads` recorded for the deterministic input corpus.
+/// The recorded outputs for the deterministic input corpus.
 fn recorded_reference() -> Vec<Value> {
   let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");

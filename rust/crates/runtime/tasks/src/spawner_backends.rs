@@ -9,7 +9,7 @@ use charliebot_store::Store;
 use charliebot_store::StoreError;
 use charliebot_store::metadata::{SessionMetadata, TaskType};
 
-/// Backend-resolution input errors that the improve route exposes as Python ValueError.
+/// Backend-resolution input errors that the improve route answers as bad requests.
 #[derive(Debug)]
 pub struct BackendResolutionValueError(String);
 

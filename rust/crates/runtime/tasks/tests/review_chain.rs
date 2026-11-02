@@ -340,7 +340,6 @@ async fn claim_context_prompt(claims: &[Option<&str>]) -> anyhow::Result<String>
   Ok(fs::read_to_string(stack.store().run_dir(&worker.id, &review_run.id).join("launch_prompt.md"))?)
 }
 
-// Python: tests/test_review_context_extraction.py::test_codex_style_falls_back_to_assistant_text
 #[tokio::test]
 async fn review_context_falls_back_to_assistant_text() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -356,7 +355,6 @@ async fn review_context_falls_back_to_assistant_text() -> anyhow::Result<()> {
   Ok(())
 }
 
-// Python: tests/test_review_context_extraction.py::test_result_text_is_the_worker_summary
 #[tokio::test]
 async fn review_context_uses_result_text_as_worker_summary() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -366,7 +364,6 @@ async fn review_context_uses_result_text_as_worker_summary() -> anyhow::Result<(
   Ok(())
 }
 
-// Python: tests/test_review_context_extraction.py::test_worker_summary_prefers_newest_assistant_over_older_result
 #[tokio::test]
 async fn review_context_prefers_the_newest_assistant_summary() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -382,7 +379,6 @@ async fn review_context_prefers_the_newest_assistant_summary() -> anyhow::Result
   Ok(())
 }
 
-// Python: tests/test_review_context_extraction.py::test_worker_summary_skips_malformed_tail_lines
 #[tokio::test]
 async fn review_context_skips_malformed_tail_lines() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -395,7 +391,6 @@ async fn review_context_skips_malformed_tail_lines() -> anyhow::Result<()> {
   Ok(())
 }
 
-// Python: tests/test_backend_pool.py::test_reviewer_avoids_every_member_the_worker_node_used
 #[tokio::test]
 async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<()> {
   let stack = Stack::start_with(
@@ -411,7 +406,6 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
   Ok(())
 }
 
-// Python: tests/test_backend_pool.py::test_reviewer_never_falls_back_to_a_member_the_worker_node_used
 #[tokio::test]
 async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow::Result<()> {
   let stack = Stack::start_with(
@@ -440,7 +434,6 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
   Ok(())
 }
 
-// Python: tests/test_backend_pool.py::test_a_check_without_used_members_keeps_the_session_backend_fallback
 #[tokio::test]
 async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyhow::Result<()> {
   let stack = Stack::start_with(
@@ -459,7 +452,6 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
   Ok(())
 }
 
-// Python: tests/test_backend_pool.py::test_an_empty_pool_runs_the_check_on_the_workers_backend
 #[tokio::test]
 async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Result<()> {
   let stack = Stack::start_with(vec![script_option("fake", "exit 0")], Vec::new()).await?;
@@ -483,7 +475,6 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_repo_review_context_carries_the_delegated_spec
 #[tokio::test]
 async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -514,7 +505,6 @@ async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> 
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_repo_review_context_refuses_a_task_with_an_empty_goal
 #[tokio::test]
 async fn repo_review_context_refuses_a_task_with_an_empty_goal() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -545,7 +535,6 @@ async fn repo_review_context_refuses_a_task_with_an_empty_goal() -> anyhow::Resu
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_review_context_without_claimed_inputs_goes_from_spec_to_summary
 #[tokio::test]
 async fn review_context_without_claimed_inputs_goes_from_spec_to_summary() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -569,7 +558,6 @@ async fn review_context_without_claimed_inputs_goes_from_spec_to_summary() -> an
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_review_contexts_list_the_agent_message_the_second_run_claimed
 #[tokio::test]
 async fn review_context_lists_the_message_claimed_by_the_second_work_run() -> anyhow::Result<()> {
   let prompt = claim_context_prompt(&[None, Some("Second run's delegated instruction.")]).await?;
@@ -581,7 +569,6 @@ async fn review_context_lists_the_message_claimed_by_the_second_work_run() -> an
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_review_context_lists_each_runs_claimed_messages_in_claim_order
 #[tokio::test]
 async fn review_context_lists_claimed_messages_in_work_run_order() -> anyhow::Result<()> {
   let prompt = claim_context_prompt(&[Some("First claimed instruction."), Some("Second claimed instruction.")]).await?;
@@ -593,7 +580,7 @@ async fn review_context_lists_claimed_messages_in_work_run_order() -> anyhow::Re
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_worker_run_kinds_deliver_snapshot_bytes_and_task_context (review launch)
+// The review launch delivers snapshot bytes and task context.
 #[tokio::test]
 async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -635,7 +622,6 @@ async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow:
 /// The reviewer follows the worker's route and skips the backend that ran the work.
 #[tokio::test]
 async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:422-447.
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
     vec![
@@ -680,7 +666,6 @@ async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Re
 /// A route whose only member is the worker's backend leaves the reviewer to today's pool selection.
 #[tokio::test]
 async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:450.
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
     vec![script_option("fake", &result_script("worker done")), script_option("fake2", &result_script("pool reviewer"))],
@@ -712,8 +697,6 @@ async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyh
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_implement_delivery_requires_review_and_real_landing
-// Python: tests/test_worker_pause_continuation.py::test_delivery_without_pending_wake_behaves_as_today
 #[tokio::test]
 async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -752,7 +735,6 @@ async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_repo_less_implement_delivers_after_review_passes
 #[tokio::test]
 async fn repo_less_implement_delivers_after_review_passes() -> anyhow::Result<()> {
   let stack = Stack::start_with(
@@ -794,7 +776,6 @@ async fn repo_less_implement_delivers_after_review_passes() -> anyhow::Result<()
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_repo_less_implement_review_failure_takes_the_failure_report
 #[tokio::test]
 async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow::Result<()> {
   let stack = Stack::start_with(
@@ -819,7 +800,6 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_a_successful_worker_with_no_available_reviewer_reports_blocked
 #[tokio::test]
 async fn successful_worker_with_no_available_reviewer_reports_blocked() -> anyhow::Result<()> {
   let stack =
@@ -840,7 +820,6 @@ async fn successful_worker_with_no_available_reviewer_reports_blocked() -> anyho
   Ok(())
 }
 
-// Python: tests/test_task_execution.py::test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_open
 #[tokio::test]
 async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -890,8 +869,6 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   Ok(())
 }
 
-// Python: tests/test_review_path_dispatch.py::test_input_admitted_during_a_review_pauses_the_merge_and_continues_the_review
-// Python: tests/test_worker_pause_continuation.py::test_review_continuation_runs_on_the_paused_reviews_backend_and_model
 #[tokio::test]
 async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -991,9 +968,6 @@ async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Re
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_input_admitted_during_a_work_run_pauses_it_the_same_way
-// Python: tests/test_worker_pause_continuation.py::test_work_continuation_keeps_the_node_default_backend_and_model
-// Python: tests/test_worker_pause_continuation.py::test_native_session_id_reads_the_claude_system_init_event
 #[tokio::test]
 async fn input_during_work_pauses_and_continues_the_node_backend_conversation() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
@@ -1054,7 +1028,6 @@ async fn input_during_work_pauses_and_continues_the_node_backend_conversation() 
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation
 #[tokio::test]
 async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1130,7 +1103,6 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_continuation_on_an_unchanged_backend_names_a_missing_native_id
 #[tokio::test]
 async fn work_continuation_without_native_id_starts_a_fresh_context() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
@@ -1185,7 +1157,6 @@ async fn work_continuation_without_native_id_starts_a_fresh_context() -> anyhow:
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_implement_work_run_with_pending_trigger_pauses_then_continues_and_delivers
 #[tokio::test]
 async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1263,7 +1234,6 @@ async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers(
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_failed_run_with_pending_trigger_reports_failure_as_today
 #[tokio::test]
 async fn failed_work_with_pending_trigger_still_reports_and_keeps_the_task_open() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1290,7 +1260,6 @@ async fn failed_work_with_pending_trigger_still_reports_and_keeps_the_task_open(
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_non_implement_work_run_with_pending_trigger_skips_auto_complete
 #[tokio::test]
 async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1358,7 +1327,6 @@ async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() 
   Ok(())
 }
 
-// Python: tests/test_git_stash_guard.py::test_worker_and_review_runs_put_the_guard_first_on_path
 #[tokio::test]
 async fn worker_and_review_runs_put_the_guard_first_on_path() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1392,7 +1360,6 @@ async fn worker_and_review_runs_put_the_guard_first_on_path() -> anyhow::Result<
   Ok(())
 }
 
-// Python: tests/test_review_landing_target.py::test_commit_published_only_on_origin_base_closes_the_reviewed_task
 #[tokio::test]
 async fn commit_published_only_on_origin_base_closes_the_reviewed_task() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1446,7 +1413,6 @@ async fn commit_published_only_on_origin_base_closes_the_reviewed_task() -> anyh
   Ok(())
 }
 
-// Python: tests/test_review_landing_target.py::test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason
 #[tokio::test]
 async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1494,7 +1460,6 @@ async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> any
   Ok(())
 }
 
-// Python: tests/test_review_landing_target.py:143
 #[tokio::test]
 async fn review_without_closing_words_reports_its_verdict_unknown() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1542,7 +1507,6 @@ async fn review_without_closing_words_reports_its_verdict_unknown() -> anyhow::R
   Ok(())
 }
 
-// Python: tests/test_review_landing_target.py::test_blocked_child_report_reaches_the_manager_turn_with_its_summary
 #[tokio::test]
 async fn blocked_child_report_carries_landing_summary_to_parent_history() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1590,7 +1554,6 @@ async fn blocked_child_report_carries_landing_summary_to_parent_history() -> any
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_review_with_pending_trigger_pauses_merge_and_continues_the_review
 #[tokio::test]
 async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
@@ -1672,7 +1635,6 @@ async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> 
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_failed_review_continuation_reports_failure_to_the_parent
 #[tokio::test]
 async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
@@ -1743,7 +1705,6 @@ async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Resul
   Ok(())
 }
 
-// Python: tests/test_worker_pause_continuation.py::test_review_continuation_refuses_a_reviewer_backend_no_longer_configured
 #[tokio::test]
 async fn review_continuation_fails_when_its_backend_is_removed() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;

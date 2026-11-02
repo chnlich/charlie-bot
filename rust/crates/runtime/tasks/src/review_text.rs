@@ -1,5 +1,5 @@
-//! Review prompt text: the reviewer's managed rules, the numbered git steps, and the context lines
-//! (`src/runtime/review.py:17-168`). The event-log reads and reviewer selection stay with the review chain.
+//! Review prompt text: the reviewer's managed rules, the numbered git steps, and the context lines.
+//! The event-log reads and reviewer selection stay with the review chain.
 //!
 //! The stable judgment rules are one constant each, so the managed rules and the numbered steps quote the same text.
 //! The volatile steps (the worktree, the branch and the base) render per run, and the launch path keeps them out of

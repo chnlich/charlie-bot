@@ -772,7 +772,7 @@ fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageReq
 }
 
 /// The agent relay behind `charliebot session send`: one `agent_message` admitted into the target session, then
-/// dispatched (`src/runtime/api/internal.py` `session_message`). An over-limit message is refused before any lookup.
+/// dispatched. An over-limit message is refused before any lookup.
 async fn session_message(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -1012,7 +1012,7 @@ async fn cancel_run(
   )
 }
 
-/// The POST /api/sessions/{session_id}/archive body model (`src/infra/models.py::ArchiveTaskRequest`).
+/// The POST /api/sessions/{session_id}/archive body model.
 const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::optional("summary", FieldType::String),
@@ -1021,20 +1021,20 @@ const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::optional(ARCHIVE_NON_CHILD_FIELD, FieldType::Boolean),
 ]);
 
-/// The POST /api/sessions/{session_id}/cancel body model (`src/infra/models.py::CancelTaskRequest`).
+/// The POST /api/sessions/{session_id}/cancel body model.
 const CANCEL_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::required("reason", FieldType::String),
 ]);
 
-/// The task-inputs/acknowledge body model (`src/infra/models.py::AcknowledgeTaskInputsRequest`).
+/// The task-inputs/acknowledge body model.
 const ACKNOWLEDGE_TASK_INPUTS_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::required("input_ids", FieldType::StringList),
   Field::optional("note", FieldType::String),
 ]);
 
-/// Read the body first, then the session and caller dependencies, as FastAPI resolves a body-bearing route.
+/// Read the body first, then the session and caller dependencies.
 #[allow(clippy::result_large_err)]
 async fn body_session_caller(
   features: &Arc<FeatureContext>,
@@ -1357,7 +1357,7 @@ mod tests {
     }
   }
 
-  /// Assert the 202 body Python returns for a valid chat message when no executor launches a run.
+  /// Assert the 202 body returned for a valid chat message when no executor launches a run.
   async fn assert_accepted(response: Response) {
     let status = response.status();
     let body = response_json(response).await;
@@ -1509,7 +1509,7 @@ mod tests {
   async fn task_routes_refuse_head_and_put_and_serve_post() {
     let (_home, features) = feature_context();
     let router = routes(&features);
-    // Python: src/runtime/api/sessions.py:1747-1823 resolves the session dependency before the caller, so
+    // The session dependency resolves before the caller, so
     // the four completion routes answer 404 for an unknown session before any credential check.
     let route_cases = [
       ("/api/chat/synthetic-session/message", r#"{"content":"synthetic message"}"#, StatusCode::NOT_FOUND),
@@ -1555,7 +1555,7 @@ mod tests {
       assert_eq!(post.status(), expected_status, "POST {path} must reach its handler");
     }
 
-    // The removed close route is absent, as Python's archive-only contract leaves it.
+    // The removed close route is absent.
     let removed =
       send(&router, Method::POST, "/api/sessions/synthetic-session/complete", r#"{"request_id":"gone"}"#).await;
     assert_eq!(removed.status(), StatusCode::NOT_FOUND);
@@ -1576,7 +1576,6 @@ mod tests {
 
   #[tokio::test]
   async fn delegate_field_contract_and_unknown_session_match_recorded() {
-    // Python: tests/test_task_execution.py::test_delegate_creates_one_child_and_replays_are_stable.
     let (_home, features) = feature_context();
     let router = routes(&features);
     let missing_cold_read = send_operator(
@@ -1609,7 +1608,6 @@ mod tests {
 
   #[tokio::test]
   async fn delegate_checks_the_runtime_gate_before_creating_a_child() {
-    // Python: tests/test_task_manager_authorization.py::test_implementation_blocked_until_real_user_authorizes_then_delegates_from_depth.
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-manager").await;
     let before_children = features.store.child_ids("synthetic-manager").unwrap();
@@ -1739,9 +1737,9 @@ mod tests {
 
   #[tokio::test]
   async fn send_message_model_reads_valid_utf16_and_defaulted_fields() {
-    // Python: src/runtime/api/chat.py:48-80 answers 202 for a valid body; without an executor the
+    // A valid body answers 202; without an executor the
     // dispatch records "execution adapters register in the next stage"
-    // (src/runtime/session_dispatch.py:430-502), so the body carries launch false with that reason.
+    // so the body carries launch false with that reason.
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-session").await;
     install_dispatcher(&features);
@@ -1751,12 +1749,12 @@ mod tests {
     let response = send_operator(&router, path, valid.as_bytes().to_vec(), Some("application/json")).await;
     assert_accepted(response).await;
 
-    // Python: src/infra/models.py:635 defaults uploaded_files to an empty list when the key is absent.
+    // An absent uploaded_files key defaults to an empty list.
     let utf16 = utf16le_json(r#"{"content":"synthetic UTF-16 message","request_id":"synthetic-send-2"}"#);
     let response = send_operator(&router, path, utf16, Some("application/json")).await;
     assert_accepted(response).await;
 
-    // Python: SendMessageRequest ignores extra keys (pydantic's default extra behavior).
+    // Extra keys in the body are ignored.
     let response = send_operator(
       &router,
       path,
@@ -1766,7 +1764,7 @@ mod tests {
     .await;
     assert_accepted(response).await;
 
-    // Python: src/infra/models.py:635 accepts two files, and UploadedFileRef ignores an item's extra keys.
+    // Two files are accepted, and an uploaded file ignores its extra keys.
     let two_files = r#"{"content":"synthetic message","request_id":"synthetic-send-4","uploaded_files":[{"filename":"first.txt","path":"/tmp/first.txt","size":2},{"filename":"second.txt","path":"/tmp/second.txt","unknown":1}]}"#;
     let response = send_operator(&router, path, two_files.as_bytes().to_vec(), Some("application/json")).await;
     assert_accepted(response).await;
@@ -1774,8 +1772,7 @@ mod tests {
 
   #[tokio::test]
   async fn send_message_reports_every_uploaded_file_error_with_the_content_error() {
-    // Python: src/infra/models.py:630-640 validates content and each uploaded_files item in declaration
-    // order, so a wrong content and a bad item give two errors in one 422 body.
+    // Fields are validated in declaration order, so a wrong content and a bad item give two errors in one 422 body.
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-session").await;
     let router = routes(&features);
@@ -1795,8 +1792,8 @@ mod tests {
     assert_eq!(body["detail"][1]["type"], "string_type");
     assert_eq!(body["detail"][1]["loc"], json!(["body", "uploaded_files", 0, "filename"]));
 
-    // Python: a non-list uploaded_files reports list_type at the field
-    // (pydantic's list check runs before the items).
+    // A non-list uploaded_files reports list_type at the field
+    // (the list check runs before the items).
     assert_validation(
       send_operator(
         &router,
@@ -1810,8 +1807,8 @@ mod tests {
     )
     .await;
 
-    // Python: a non-object item reports model_attributes_type at its index, with no trailing field
-    // (FastAPI validates each list item as the model).
+    // A non-object item reports model_attributes_type at its index, with no trailing field
+    // (each list item is validated as the model).
     assert_validation(
       send_operator(
         &router,
@@ -1825,7 +1822,7 @@ mod tests {
     )
     .await;
 
-    // Python: UploadedFileRef requires path (src/infra/models.py:631-633).
+    // An uploaded file requires path.
     assert_validation(
       send_operator(
         &router,

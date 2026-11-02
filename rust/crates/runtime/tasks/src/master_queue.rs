@@ -323,8 +323,8 @@ impl MasterQueue {
     Ok(())
   }
 
-  /// Drain the session's queue, then retire this consumer. A queue that is empty after a turn ends the consumer, as
-  /// Python's `_session_consumer` does, so the busy interval closes when the last turn finishes.
+  /// Drain the session's queue, then retire this consumer. A queue that is empty after a turn ends the consumer, so the
+  /// busy interval closes when the last turn finishes.
   async fn session_consumer(self: Arc<Self>, session_id: String, cancel: watch::Receiver<bool>) {
     let mut last_cc_session_id: Option<String> = None;
     let mut last_account_label: Option<String> = None;
@@ -568,7 +568,7 @@ pub fn session_callbacks(
   queue.session_callbacks(features, task_tree_activity)
 }
 
-/// Arm the session's idle compaction when a round ends on any exit, as Python's after_round does in a finally.
+/// Arm the session's idle compaction when a round ends on any exit.
 async fn arm_idle_after_round(
   queue: &Arc<MasterQueue>,
   item: &WorkItem,
@@ -673,9 +673,8 @@ impl RunTracking for MasterQueue {
 
   /// Append one acknowledged input id to the running session's binding (`running_user_event_ids`).
   ///
-  /// Python's `_current_items` holds the live `_WorkItem`, so `midturn_delivery.record_ack`'s append is visible to a
-  /// web reply posted while the turn runs. This queue stores the ids by value, so the ack reaches the reader through
-  /// this method as well as through the item.
+  /// `midturn_delivery.record_ack`'s append is visible to a web reply posted while the turn runs. This queue stores
+  /// the ids by value, so the ack reaches the reader through this method as well as through the item.
   fn append_running_user_event_id(&self, session_id: &str, input_id: &str) {
     let mut state = self.state.lock().expect("master queue mutex is not poisoned");
     if let Some(ids) = state.current_items.get_mut(session_id)
@@ -751,7 +750,7 @@ async fn persist_shared_account_label(
   persist: Option<&PersistAccountLabelFn>,
 ) -> anyhow::Result<Option<PersistedAccountLabel>> {
   let metadata = session_meta.lock().expect("work item metadata mutex is not poisoned").clone();
-  // The label's keeper is the first lifecycle that reads one, as in Python's account_keeper.
+  // The label's keeper is the first lifecycle that reads one.
   let label = lifecycles.iter().find_map(|lifecycle| lifecycle.account_label(&metadata));
   let Some(label) = label.filter(|label| !label.is_empty()) else {
     return Ok(None);
@@ -1326,7 +1325,6 @@ mod tests {
     .unwrap();
   }
 
-  // Python: tests/test_claude_idle_compaction.py:280.
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn a_turn_queued_before_the_trigger_registers_makes_it_skip() {
     let root = tempfile::tempdir().unwrap();
@@ -1362,7 +1360,6 @@ mod tests {
     assert!(!claude_idle_compaction::IdleCompaction::shared().is_running(&meta.id));
   }
 
-  // Python: tests/test_claude_idle_compaction.py:309.
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn the_trigger_path_starts_one_idle_run_on_the_sessions_own_command_line() {
     let root = tempfile::tempdir().unwrap();
@@ -1411,7 +1408,6 @@ mod tests {
     assert!(!claude_idle_compaction::IdleCompaction::shared().is_running(&meta.id));
   }
 
-  // Python: tests/test_claude_idle_compaction.py:341.
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn an_unpooled_session_uses_its_default_login_directory() {
     let root = tempfile::tempdir().unwrap();
@@ -1455,7 +1451,6 @@ mod tests {
     panic!("synthetic compaction panic")
   }
 
-  // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn a_panicking_idle_run_leaves_no_running_entry_and_no_start_reservation() {
     let root = tempfile::tempdir().unwrap();

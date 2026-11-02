@@ -1,5 +1,5 @@
-//! The managed instruction snapshot: ordered blocks, the prompt hash, and the measured length (`PromptBlock`,
-//! `PromptSnapshot` and `assemble_snapshot` in `src/runtime/task_prompts.py:116-202` and `:403-433`).
+//! The managed instruction snapshot: ordered blocks, the prompt hash, and the measured length
+//! (`PromptBlock`, `PromptSnapshot` and `assemble_snapshot`).
 
 use std::collections::HashMap;
 
@@ -147,8 +147,8 @@ pub fn assemble_snapshot(segments: &[RuleSegment]) -> PromptSnapshot {
   PromptSnapshot { blocks }
 }
 
-/// Parses the stored blocks. A missing key reads as Python's `KeyError` text, and a value of the wrong shape names
-/// its type.
+/// Parses the stored blocks. A missing key reports the key quoted, as a `KeyError` message does, and a value of the
+/// wrong shape names its type.
 fn parse_blocks(data: &Value) -> Result<Vec<PromptBlock>, String> {
   let blocks = subscript(data, "blocks")?;
   let items = blocks.as_array().ok_or_else(|| not_iterable(blocks))?;
@@ -201,7 +201,7 @@ fn parse_source(value: &Value) -> Result<PromptSource, String> {
   })
 }
 
-/// `value[key]` as Python subscripts a stored JSON value: a dict by key, and the other types' own TypeError text.
+/// Looks up *key* in a stored JSON value: an object by key, and each other type with its own error text.
 fn subscript<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
   match value {
     Value::Object(members) => members.get(key).ok_or_else(|| format!("'{key}'")),
@@ -222,7 +222,7 @@ fn not_iterable(value: &Value) -> String {
   format!("'{}' object is not iterable", type_name(value))
 }
 
-/// The Python type name of a stored JSON value.
+/// The type name a stored JSON value reports in its error text.
 fn type_name(value: &Value) -> &'static str {
   match value {
     Value::Null => "NoneType",
@@ -240,7 +240,7 @@ fn recorded_repr(value: Option<&Value>) -> String {
   value.map_or_else(|| "None".to_string(), text_repr::value_repr)
 }
 
-/// Python's `recorded != measured` for a stored count: an int, a float equal to it, or True/False as 1/0.
+/// Whether a stored count equals the measured count: an integer, a float equal to it, or `true` or `false` as 1 or 0.
 fn equals_count(value: &Value, measured: usize) -> bool {
   match value {
     Value::Number(number) if number.is_f64() => number.as_f64() == Some(measured as f64),
@@ -298,9 +298,8 @@ mod tests {
   }
 
   /// The hash is the SHA-256 of the exact canonical bytes and every stored snapshot rechecks it, so the canonical
-  /// text is pinned here byte for byte. The expected values are CPython's
-  /// `json.dumps(payload, sort_keys=True, ensure_ascii=False)` (`src/runtime/task_prompts.py:153-154`), which leaves
-  /// non-ASCII and DEL raw, escapes the control set, and sorts keys at every level.
+  /// text is pinned here byte for byte. The expected values sort keys at every level, leave non-ASCII and DEL raw,
+  /// and escape the control set.
   #[test]
   fn prompt_hash_pins_the_canonical_bytes() {
     let snapshot = assemble_snapshot(&[

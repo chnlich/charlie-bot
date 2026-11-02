@@ -1,5 +1,4 @@
-//! The one managed-instruction assembly every agent run draws from (`src/runtime/task_prompts.py`, and the tree
-//! assembly of `src/runtime/task_execution.py:279-378`).
+//! The one managed-instruction assembly every agent run draws from.
 //!
 //! A run's managed instructions are an ordered list of blocks:
 //!
@@ -61,8 +60,8 @@ pub const WORKER_KINDS: [&str; 4] = ["work", "review", "iteration", "scheduled_s
 /// The bounded number of coherence passes the launch-time recheck runs (`_COHERENCE_PASSES`).
 pub const COHERENCE_PASSES: usize = 3;
 
-/// The weighted-character limit of one inter-agent message (`src/infra/constants.py`, `MAX_AGENT_MESSAGE_WEIGHTED_CHARS`),
-/// filled into the manager contract's `{{agent_message_limit}}` token.
+/// The weighted-character limit of one inter-agent message, filled into the manager contract's
+/// `{{agent_message_limit}}` token.
 pub const MAX_AGENT_MESSAGE_WEIGHTED_CHARS: usize = 2000;
 
 /// The host supplement under the home (`CharlieBotConfig.claude_md_file`).

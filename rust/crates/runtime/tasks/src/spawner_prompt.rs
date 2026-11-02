@@ -1,5 +1,5 @@
 //! Worker and verify prompt support: the marker-section template reader, token substitution, and the per-task-type
-//! workflow section selection (`src/runtime/spawner_prompt.py`).
+//! workflow section selection.
 //!
 //! A template splits on its `<!-- section: <id> -->` marker lines. Every call reads the file again, so an edit takes
 //! effect on the next launch. A missing file or section fails with the path and the likely cause; there is no
@@ -28,8 +28,8 @@ pub type Tokens = Vec<(&'static str, String)>;
 /// The section that holds the repo-less source-files rule (`REPO_LESS_SOURCE_FILES_SECTION`).
 pub const REPO_LESS_SOURCE_FILES_SECTION: &str = "task_spec_source_files_repo_less";
 
-/// A failed template or source read, shaped as the Python exception it replaces: `Path.read_text` raises either an
-/// `OSError` or a `UnicodeDecodeError`.
+/// A failed template or source read. A read raises either an `OSError` or a `UnicodeDecodeError`; the class name and
+/// the text this type reports match that error.
 #[derive(Debug)]
 pub enum TextReadError {
   Io(io::Error),
@@ -37,7 +37,7 @@ pub enum TextReadError {
 }
 
 impl TextReadError {
-  /// The name of the Python exception class this failure raises (`type(error).__name__`).
+  /// The name of the exception class this failure raises.
   pub fn class_name(&self) -> &'static str {
     match self {
       Self::Io(error) => match error.kind() {
@@ -51,12 +51,12 @@ impl TextReadError {
     }
   }
 
-  /// The text of the Python exception, `str(error)`, for a read of `path`.
+  /// The text of the exception for a read of `path`.
   pub fn error_text(&self, path: &Path) -> String {
     match self {
       Self::Io(error) => match error.raw_os_error() {
         Some(errno) => {
-          // Rust's Display appends " (os error N)" to the strerror text that CPython's OSError shows.
+          // Rust's Display appends " (os error N)" to the strerror text, so the suffix is stripped here.
           let rendered = error.to_string();
           let strerror = rendered.strip_suffix(&format!(" (os error {errno})")).unwrap_or(&rendered);
           format!("[Errno {errno}] {strerror}: {}", str_repr(&path.display().to_string()))
@@ -77,7 +77,7 @@ pub fn read_text(path: &Path) -> Result<String, TextReadError> {
   Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// The text of CPython's `UnicodeDecodeError` for the bad bytes of a UTF-8 decode.
+/// The text of a `UnicodeDecodeError` for the bad bytes of a UTF-8 decode.
 fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
   let start = error.valid_up_to();
   let (end, reason) = match error.error_len() {
@@ -136,7 +136,7 @@ pub fn workflow_prompt_sections(task_type: TaskType) -> Option<&'static [&'stati
 
 /// Whether a reviewer run follows a successful work run (`reviewer_run_follows`). A node without a task record is an
 /// implement node, and a record whose task type is implement gets a reviewer; every other task takes the
-/// non-implement branch (`src/runtime/task_execution.py:2190`). The harness assembly reads the same decision, so a
+/// non-implement branch. The harness assembly reads the same decision, so a
 /// harness cannot promise a reviewer that the after-run branch will not spawn.
 pub fn reviewer_run_follows(task: Option<&TaskSpec>) -> bool {
   task.is_none_or(|task| task.task_type == Some(TaskType::Implement))
@@ -177,7 +177,7 @@ pub fn workflow_rule_section_ids(task: Option<&TaskSpec>, repo_less: bool) -> an
   Ok(sections)
 }
 
-/// Every section `load_worker_prompt_sections` requires, in the order Python lists them (`_REQUIRED_WORKER_PROMPT_SECTIONS`).
+/// Every section the worker prompt requires, in the order listed here.
 fn required_worker_sections() -> Vec<&'static str> {
   let workflow = [TaskType::Implement, TaskType::QuickEdit, TaskType::ScriptRun]
     .into_iter()
@@ -242,7 +242,7 @@ pub fn load_marker_sections(
 }
 
 /// The sections of a template text: each marker line opens a section that runs to the next marker. A later section
-/// with the same id replaces an earlier one, as a Python dict does.
+/// with the same id replaces an earlier one.
 fn split_sections(text: &str) -> HashMap<String, String> {
   let mut sections = HashMap::new();
   let mut current: Option<String> = None;
@@ -266,7 +266,7 @@ fn split_sections(text: &str) -> HashMap<String, String> {
   sections
 }
 
-/// The id a marker line names. A line too short to hold both markers names the empty id, as Python's slice does.
+/// The id a marker line names. A line too short to hold both markers names the empty id.
 fn marker_id(line: &str) -> &str {
   let end = line.len().saturating_sub(SECTION_MARKER_SUFFIX.len()).max(SECTION_MARKER_PREFIX.len());
   &line[SECTION_MARKER_PREFIX.len()..end]
@@ -305,8 +305,7 @@ pub fn verify_contract_tokens(repo: &Path) -> anyhow::Result<Tokens> {
   ])
 }
 
-/// The `Path.resolve()` behavior used by Python: canonicalize existing path components, while retaining a missing
-/// leaf as an absolute path.
+/// Canonicalize existing path components, while retaining a missing leaf as an absolute path.
 fn resolve_path(path: &Path) -> io::Result<std::path::PathBuf> {
   match fs::canonicalize(path) {
     Ok(path) => Ok(path),

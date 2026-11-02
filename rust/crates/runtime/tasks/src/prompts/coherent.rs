@@ -1,4 +1,4 @@
-//! The launch-time coherent snapshot over the task tree (`src/runtime/task_execution.py:279-378`).
+//! The launch-time coherent snapshot over the task tree.
 //!
 //! The ancestor chain and the refs are captured under the control lock. The templates, the supplements, the overlay and
 //! the memory are read outside it. Before a pass settles, the chain is captured again and the sources are assembled
@@ -114,8 +114,8 @@ pub async fn assemble_coherent_snapshot(
   )
 }
 
-/// The launch path's coherent snapshot, offloading each blocking source read as Python does with `asyncio.to_thread`
-/// (`src/runtime/task_execution.py:355-365`). The API preview keeps its borrowed environment and existing path.
+/// The launch path's coherent snapshot, offloading each blocking source read to a blocking thread.
+/// The API preview keeps its borrowed environment and existing path.
 pub async fn assemble_coherent_snapshot_for_launch(
   store: &Store,
   cfg: Arc<CharlieBotConfig>,

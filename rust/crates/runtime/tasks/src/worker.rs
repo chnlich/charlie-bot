@@ -1,4 +1,4 @@
-//! The task-run process manager (`src/runtime/worker.py`). A task run's process is placed through the backend lifecycle,
+//! The task-run process manager. A task run's process is placed through the backend lifecycle,
 //! relayed when the lifecycle asks, and each of its events is persisted to the run's events log and broadcast on the
 //! thread's channel. The terminal events close the run.
 
@@ -47,17 +47,17 @@ use crate::run_support::{
 
 /// The stash-guard `git` wrapper directory, under the checkout. It rides first on every child's PATH.
 const GIT_STASH_GUARD_DIR: &str = "src/runtime/git_stash_guard";
-/// The instructions file of a task run, kept beside its events log (`src/runtime/runs.py:52`).
+/// The instructions file of a task run, kept beside its events log.
 pub const HARNESS_INSTRUCTIONS_NAME: &str = "harness_instructions.md";
-/// The diagnostics file of a run whose process outlives its result (`worker.py` `_emit_terminal_events`).
+/// The diagnostics file of a run whose process outlives its result.
 pub const HANG_DIAGNOSTICS_NAME: &str = "hang_diagnostics.json";
-/// The silence after which the follow reports a run with no output (`src/infra/timeouts.py:167`).
+/// The silence after which the follow reports a run with no output.
 const NO_OUTPUT_REPORT_THRESHOLD: Duration = Duration::from_secs(2 * 60 * 60);
-/// How many characters of a stderr tail the warning log carries (`worker.py` `_emit_terminal_events`).
+/// How many characters of a stderr tail the warning log carries.
 const STDERR_LOG_CHARS: usize = 500;
-/// The quota message of an error event that carries none (`worker.py` `_process_event`).
+/// The quota message of an error event that carries none.
 const QUOTA_MESSAGE_FALLBACK: &str = "Quota exhausted";
-/// The failover message of an error event that carries none (`worker.py` `_process_event`).
+/// The failover message of an error event that carries none.
 const TEMPORARY_MESSAGE_FALLBACK: &str = "Backend temporarily unavailable";
 
 /// Receives the session-level notices of a run, such as the login-required event (`Worker.on_session_event`).
@@ -87,7 +87,7 @@ impl std::fmt::Display for QuotaExhaustedError {
 
 impl std::error::Error for QuotaExhaustedError {}
 
-/// The inputs of one task run's worker (`worker.py` `Worker.__init__`).
+/// The inputs of one task run's worker.
 pub struct WorkerSpec {
   /// The task node. The run writes its `pid` and `pid_start` when the process spawns.
   pub thread: ThreadMetadata,
@@ -357,7 +357,7 @@ impl Worker {
       exit_code
     };
     // The follow ends with a live process only on the post-result timeout, so a live process here outlived its result.
-    // Its diagnostics are captured before its group is killed (`worker.py` `resume`).
+    // Its diagnostics are captured before its group is killed.
     let hang_diagnostics = if is_alive() {
       let pid = self.thread.lock().expect("thread metadata mutex is not poisoned").pid;
       let pid = pid.context("a live resumed run has no recorded pid")?;
@@ -915,8 +915,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
   Ok(terminate_now)
 }
 
-/// Synthesizes the context event that a compaction notice of the process implies, and persists it
-/// (`streaming.py` `handle_compaction_events`).
+/// Synthesizes the context event that a compaction notice of the process implies, and persists it.
 async fn handle_compaction_events(sink: &RunSink, event: &Value) -> anyhow::Result<()> {
   if event.get("type").and_then(Value::as_str) != Some(ET::SYSTEM) {
     return Ok(());
@@ -978,7 +977,7 @@ fn fill_timestamp(event: &mut Value) {
 }
 
 /// The timestamp of a synthesized event: now, capped at the run's end so every event stays at or before the raw log's
-/// final mtime (`worker.py` `_clamp_ts`).
+/// final mtime.
 fn clamp_ts(clamp_to: Option<OffsetDateTime>) -> String {
   let now = OffsetDateTime::now_utc();
   match clamp_to {

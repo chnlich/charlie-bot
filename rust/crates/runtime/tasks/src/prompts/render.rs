@@ -1,5 +1,5 @@
-//! The task and input context a launch renders from the same maintained template sections as the managed rules
-//! (`src/runtime/task_prompts.py:477-575`). Its text is the launch's own evidence and never enters the instruction hash.
+//! The task and input context a launch renders from the same maintained template sections as the managed rules.
+//! Its text is the launch's own evidence and never enters the instruction hash.
 
 use std::path::Path;
 

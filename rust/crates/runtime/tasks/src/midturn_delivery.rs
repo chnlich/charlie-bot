@@ -1,4 +1,4 @@
-//! The dispatcher half of live user-message delivery for web manager turns (`src/runtime/midturn_delivery.py`).
+//! The dispatcher half of live user-message delivery for web manager turns.
 //!
 //! The delivery state itself — the serialized stdin writes, the replay acknowledgements and the stdin close — lives in
 //! the runtime (`charliebot_registry::midturn_delivery`), which the Claude Code backend writes into. This module
@@ -61,8 +61,7 @@ pub async fn offer(
 /// Add one replayed user id to the live manager item's web-reply binding (`midturn_delivery.record_ack`).
 ///
 /// The manager queue carries the running ids by value, so an acknowledged input joins both the item and the queue's
-/// binding. A reply posted while the turn runs reads the queue (`running_user_event_ids`), as it reads the live item
-/// in Python.
+/// binding. A reply posted while the turn runs reads the queue (`running_user_event_ids`).
 pub fn record_ack(
   tracking: &dyn RunTracking,
   session_id: &str,
@@ -85,8 +84,8 @@ pub fn record_ack(
   Ok(())
 }
 
-/// The three fields of a raw transport line that the echo scan reads. The map visitor keeps the last duplicate key,
-/// matching Python's JSON decoder, and ignores unrelated fields without constructing their values.
+/// The three fields of a raw transport line that the echo scan reads. The map visitor keeps the last duplicate key
+/// and ignores unrelated fields without constructing their values.
 struct ReplayLine {
   kind: Option<Value>,
   is_replay: Option<Value>,
@@ -155,8 +154,7 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
     loop {
       line.clear();
       raw_lines.read_until(b'\n', &mut line).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
-      // Only complete lines count, like the byte-wise read the Python scan does: a line without its newline ends the
-      // scan of this leg.
+      // Only complete lines count: a line without its newline ends the scan of this leg.
       let Some(complete) = line.strip_suffix(b"\n") else {
         break;
       };
@@ -179,7 +177,7 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
   Ok(echoed)
 }
 
-/// The dispatcher operation that binds replay evidence to a Run (`_Dispatcher` in Python's `midturn_delivery`).
+/// The dispatcher operation that binds replay evidence to a Run.
 pub trait ClaimEchoedInputs: Send + Sync {
   /// Append the still-pending USER events that the launched manager Run echoed.
   fn claim_echoed_user_inputs<'a>(
@@ -301,7 +299,6 @@ mod tests {
     }
   }
 
-  // Python: tests/test_claude_code_backend.py::test_midturn_offer_writes_only_web_user_messages_and_stops_at_result
   #[tokio::test]
   async fn midturn_offer_writes_only_web_user_messages_and_stops_at_result() {
     let home = tempfile::tempdir().unwrap();

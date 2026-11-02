@@ -1,5 +1,4 @@
-//! The historical run context: one run's stored snapshot and its pinned evidence references
-//! (`get_run_context` in `src/runtime/api/sessions.py`).
+//! The historical run context: one run's stored snapshot and its pinned evidence references.
 
 use std::fmt;
 use std::path::Path;
@@ -12,7 +11,7 @@ use serde_json::{Value, json};
 use super::PromptSnapshot;
 use crate::spawner_prompt::read_text;
 
-/// A failed context read: the HTTP status the route answers with, and the detail text Python's `HTTPException` carries.
+/// A failed context read: the HTTP status the route answers with, and its detail text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextReadError {
   pub status: u16,

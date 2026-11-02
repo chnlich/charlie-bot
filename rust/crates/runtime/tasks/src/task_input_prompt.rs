@@ -1,4 +1,4 @@
-//! Compose the text and uploads for one task Run's durable input events (`src/runtime/task_input_prompt.py`).
+//! Compose the text and uploads for one task Run's durable input events.
 //!
 //! Live mid-turn delivery and the next Run share this composer, so a delivered message and a queued message read the
 //! same.

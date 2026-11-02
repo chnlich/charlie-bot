@@ -1,4 +1,4 @@
-//! The managed-instruction snapshots of the recorded Python golden matrix match byte for byte.
+//! The managed-instruction snapshots of the recorded golden matrix match byte for byte.
 
 use std::fs;
 use std::path::{Path, PathBuf};

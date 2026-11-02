@@ -1,7 +1,7 @@
-//! The verify-result trailer: the one authority for the `RESULT:` line a verify report ends with
-//! (`src/runtime/verify_trailer.py`). The verify prompt shows it.
+//! The verify-result trailer: the one authority for the `RESULT:` line a verify report ends with.
+//! The verify prompt shows it.
 
-/// The trailer pattern (`VERIFY_RESULT_TRAILER_RE.pattern`).
+/// The trailer as a regular expression, in source form.
 pub const VERIFY_RESULT_TRAILER_PATTERN: &str = r"RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \([0-9]+ approval\))";
 
 /// The trailer as the verify prompt names it: the pattern in backticks (`VERIFY_RESULT_TRAILER_EXPECTED`).

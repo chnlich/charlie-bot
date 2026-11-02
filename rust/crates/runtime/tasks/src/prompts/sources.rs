@@ -1,6 +1,5 @@
 //! The managed rule sources: the templates, the host supplement, the model overlay, the turn contributions and the local
-//! rule bodies, each read fresh, and the per-kind rule segments built from them (`src/runtime/task_prompts.py:218-270`,
-//! `:278-395` and `:436-463`).
+//! rule bodies, each read fresh, and the per-kind rule segments built from them.
 
 use std::fs;
 use std::io;
@@ -49,7 +48,7 @@ pub struct OverlayError {
 }
 
 impl OverlayError {
-  /// The Python exception class the read raised, by name (`type(error).__name__`).
+  /// The exception class the read raised, by name.
   pub fn class_name(&self) -> &'static str {
     self.cause.class_name()
   }

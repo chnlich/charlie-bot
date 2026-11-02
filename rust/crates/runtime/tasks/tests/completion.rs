@@ -211,7 +211,6 @@ fn synthetic_git_repo(path: &Path) -> String {
 
 #[tokio::test]
 async fn three_level_delivery_closes_workers_and_keeps_project_open() {
-  // Python: tests/test_task_completion.py::test_three_level_delivery_closes_workers_and_keeps_project_open.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
@@ -288,7 +287,6 @@ async fn three_level_delivery_closes_workers_and_keeps_project_open() {
 
 #[tokio::test]
 async fn operator_archive_of_child_delivers_one_report_and_wakes_parent() {
-  // Python: tests/test_archive_unify.py::test_operator_archive_of_child_delivers_one_report_and_wakes_parent.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
@@ -340,7 +338,6 @@ async fn operator_archive_of_child_delivers_one_report_and_wakes_parent() {
 
 #[tokio::test]
 async fn archived_parent_keeps_child_archive_report_as_history_without_waking() {
-  // Python: tests/test_archive_unify.py::test_archived_parent_keeps_child_archive_report_as_history_without_waking.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
@@ -399,7 +396,6 @@ async fn archived_parent_keeps_child_archive_report_as_history_without_waking() 
 
 #[tokio::test]
 async fn preexisting_close_request_closes_as_archived_and_reports_to_parent() {
-  // Python: tests/test_task_completion.py::test_preexisting_close_request_closes_as_archived_and_reports_to_parent.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
@@ -451,7 +447,6 @@ async fn preexisting_close_request_closes_as_archived_and_reports_to_parent() {
 
 #[tokio::test]
 async fn implement_completion_requires_review_and_landing_evidence() {
-  // Python: tests/test_task_completion.py::test_implement_completion_requires_review_and_landing_evidence.
   let h = CompletionHarness::new();
   let temp = tempfile::tempdir().unwrap();
   let repo = temp.path().join("repo");
@@ -509,7 +504,6 @@ async fn implement_completion_requires_review_and_landing_evidence() {
 
 #[tokio::test]
 async fn worker_automatic_close_with_forged_landing_ref_stays_open() {
-  // Python: tests/test_task_execution.py::test_worker_automatic_close_with_forged_landing_ref_stays_open.
   let h = CompletionHarness::new();
   let temp = tempfile::tempdir().unwrap();
   let repo = temp.path().join("repo");
@@ -563,7 +557,6 @@ async fn worker_automatic_close_with_forged_landing_ref_stays_open() {
 
 #[tokio::test]
 async fn own_run_request_naming_a_foreign_run_is_refused_and_not_saved() {
-  // Python: tests/test_task_completion.py::test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved.
   let h = CompletionHarness::new();
   let task = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
   let foreign = h.base.create_task("foreign", None, TaskProfile::Worker, "Foreign").await;
@@ -589,7 +582,6 @@ async fn own_run_request_naming_a_foreign_run_is_refused_and_not_saved() {
 
 #[tokio::test]
 async fn own_run_request_with_an_open_child_is_refused_and_not_saved() {
-  // Python: tests/test_task_completion.py::test_own_run_request_with_an_open_child_is_refused_and_not_saved.
   let h = CompletionHarness::new();
   let task = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
   let child = h.base.create_task("child", Some(&task.id), TaskProfile::Worker, "Child").await;
@@ -612,7 +604,6 @@ async fn own_run_request_with_an_open_child_is_refused_and_not_saved() {
 
 #[tokio::test]
 async fn saved_request_blocked_after_its_run_wakes_the_requester_once() {
-  // Python: tests/test_task_completion.py::test_saved_request_blocked_after_its_run_wakes_the_requester_once.
   let h = CompletionHarness::new();
   let task = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
   h.register_record(live_run(&task.id, "owner-run", RunKind::ManagerTurn)).await;
@@ -650,7 +641,6 @@ async fn saved_request_blocked_after_its_run_wakes_the_requester_once() {
 
 #[tokio::test]
 async fn agent_cancels_only_its_own_direct_child() {
-  // Python: tests/test_task_completion.py::test_agent_cancels_only_its_own_direct_child.
   let h = CompletionHarness::new();
   let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
   let child = h.base.create_task("child", Some(&parent.id), TaskProfile::Worker, "Child").await;
@@ -668,7 +658,6 @@ async fn agent_cancels_only_its_own_direct_child() {
 
 #[tokio::test]
 async fn worker_cancel_stops_queued_runs_and_keeps_manager_and_sequence_blockers() {
-  // Python: tests/test_task_completion.py::test_cancel_stops_a_queued_worker_run_without_launching_it.
   let h = CompletionHarness::new();
   let caller = CallerIdentity::Operator { session_id: None };
   let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
@@ -703,7 +692,6 @@ async fn worker_cancel_stops_queued_runs_and_keeps_manager_and_sequence_blockers
 
 #[tokio::test]
 async fn cancel_by_the_manager_parent_records_close_and_child_report() {
-  // Python: tests/test_task_completion.py::test_cancel_by_the_manager_parent_records_close_and_child_report.
   let h = CompletionHarness::new();
   let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
   let child = h.base.create_task("child", Some(&parent.id), TaskProfile::Worker, "Child").await;
@@ -860,7 +848,6 @@ async fn agent_archive_of_a_subtree_with_an_unfinished_run_refuses_like_the_oper
 
 #[tokio::test]
 async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
-  // Python: tests/test_task_manager_authorization.py::test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor.
   // Its three cases: a task with no earlier run, one whose earlier run succeeded, and one whose earlier run failed.
   for previous_outcome in [None, Some(RunOutcomeKind::Success), Some(RunOutcomeKind::Failed)] {
     let h = CompletionHarness::new();
@@ -961,7 +948,6 @@ async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
 
 #[tokio::test]
 async fn agent_manager_child_creation_replays_without_takeoff() {
-  // Python: tests/test_task_manager_authorization.py::test_manager_child_creation_needs_no_takeoff_and_replays_stably.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let caller = TaskCaller::Agent { session_id: root.id.clone() };
@@ -985,7 +971,6 @@ async fn agent_manager_child_creation_replays_without_takeoff() {
 
 #[tokio::test]
 async fn implementation_gate_uses_only_real_user_input_across_manager_depth() {
-  // Python: tests/test_task_manager_authorization.py::test_implementation_blocked_until_real_user_authorizes_then_delegates_from_depth.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h
@@ -1058,7 +1043,6 @@ async fn implementation_gate_uses_only_real_user_input_across_manager_depth() {
 
 #[tokio::test]
 async fn queued_retry_launch_skips_reauthorization_and_verify_is_exempt() {
-  // Python: tests/test_task_manager_authorization.py::test_queued_retry_launches_without_reauthorizing_and_verify_exemption.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   h.dispatcher
@@ -1183,7 +1167,6 @@ async fn queued_retry_launch_skips_reauthorization_and_verify_is_exempt() {
 
 #[tokio::test]
 async fn profile_changing_agent_create_replay_keeps_the_original_product() {
-  // Python: tests/test_task_manager_authorization.py::test_profile_changing_replay_never_bypasses_authorization.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let caller = TaskCaller::Agent { session_id: root.id.clone() };
@@ -1242,7 +1225,7 @@ async fn profile_changing_agent_create_replay_keeps_the_original_product() {
 
 #[tokio::test]
 async fn acknowledgement_replays_and_refuses_unknown_inputs() {
-  // Python: tests/test_session_dispatch.py::test_complete_cancel_reopen_routes_and_scope (acknowledgement contract).
+  // The acknowledgement contract.
   let h = CompletionHarness::new();
   let task = h.base.create_task("ack", None, TaskProfile::Worker, "Ack").await;
   let input = h
@@ -1277,9 +1260,6 @@ async fn acknowledgement_replays_and_refuses_unknown_inputs() {
 
 #[tokio::test]
 async fn sequence_completion_requires_proven_run_and_empty_delivery_is_cancelled() {
-  // Python: tests/test_task_completion.py::test_close_sequence_child_completed_on_proven_run_evidence.
-  // Python: tests/test_task_completion.py::test_close_sequence_child_completed_without_a_successful_run_closes_cancelled.
-  // Python: tests/test_task_sequences.py::test_merge_back_with_only_failed_iterations_closes_cancelled_with_completed_report.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let proven = h.base.create_task("proven", Some(&root.id), TaskProfile::Worker, "Proven").await;
@@ -1344,10 +1324,7 @@ async fn sequence_completion_requires_proven_run_and_empty_delivery_is_cancelled
 
 #[tokio::test]
 async fn sequence_noncompleted_outcomes_record_evidence_as_content() {
-  // Python: tests/test_task_completion.py::test_close_sequence_child_non_completed_outcomes_record_evidence_as_content (blocked, failed, cancelled cases).
-  // Python: tests/test_task_sequences.py::test_controller_exception_closes_the_child_failed.
-  // Python: tests/test_task_sequences.py::test_worktree_failure_closes_the_child_failed.
-  // Python: tests/test_task_sequences.py::test_improve_stop_mid_iteration_closes_after_the_controller_ends.
+  // Blocked, failed and cancelled outcomes each record their evidence as content.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   for (index, outcome) in ["blocked", "failed", "cancelled"].into_iter().enumerate() {
@@ -1389,8 +1366,6 @@ async fn sequence_noncompleted_outcomes_record_evidence_as_content() {
 
 #[tokio::test]
 async fn sequence_close_blocks_only_on_execution_not_pending_input() {
-  // Python: tests/test_task_completion.py::test_close_sequence_child_blocks_on_execution_only.
-  // Python: tests/test_task_sequences.py::test_withheld_iteration_launch_closes_the_child_blocked.
   let h = CompletionHarness::new();
   let task = h.base.create_task("sequence", None, TaskProfile::Worker, "Sequence").await;
   register_run(&h.base, &task.id, "run-queued").await;
@@ -1415,8 +1390,6 @@ async fn sequence_close_blocks_only_on_execution_not_pending_input() {
 
 #[tokio::test]
 async fn synthetic_sequence_controller_closes_after_its_live_iteration_finishes() {
-  // Python: tests/test_task_sequences.py::test_controller_exception_while_an_iteration_runs_closes_after_its_finish.
-  // Python: tests/test_task_sequences.py::test_improve_stop_mid_iteration_closes_after_the_controller_ends.
   let h = CompletionHarness::new();
   let task = h.base.create_task("sequence-live", None, TaskProfile::Worker, "Sequence").await;
   h.register_record(iteration_run(&task.id, "iteration-run")).await;
@@ -1450,9 +1423,6 @@ async fn synthetic_sequence_controller_closes_after_its_live_iteration_finishes(
 
 #[tokio::test]
 async fn sequence_close_replays_races_repeats_and_post_reopen_calls() {
-  // Python: tests/test_task_completion.py::test_close_sequence_child_replays_raced_repeated_and_post_reopen_calls.
-  // Python: tests/test_task_sequences.py::test_raced_close_step_calls_land_one_close_and_one_report.
-  // Python: tests/test_task_sequences.py::test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h.base.create_task("child", Some(&root.id), TaskProfile::Worker, "Child").await;
@@ -1523,7 +1493,6 @@ async fn sequence_close_replays_races_repeats_and_post_reopen_calls() {
 
 #[tokio::test]
 async fn recovered_sequence_close_report_takes_the_sequence_outcome() {
-  // Python: tests/test_task_completion.py::test_recovered_sequence_close_report_takes_the_sequence_outcome.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h.base.create_task("child", Some(&root.id), TaskProfile::Worker, "Child").await;
@@ -1557,7 +1526,6 @@ async fn recovered_sequence_close_report_takes_the_sequence_outcome() {
 
 #[tokio::test]
 async fn close_clears_candidates_and_reopen_opens_a_fresh_boundary() {
-  // Python: tests/test_archive_unify.py::test_close_clears_candidates_and_reopen_opens_a_fresh_boundary.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   h.dispatcher
@@ -1585,7 +1553,6 @@ async fn close_clears_candidates_and_reopen_opens_a_fresh_boundary() {
 
 #[tokio::test]
 async fn restore_brings_archived_ancestor_chain_and_leaves_siblings() {
-  // Python: tests/test_archive_unify.py::test_restore_brings_the_archived_ancestor_chain_and_leaves_the_rest.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let middle = h.base.create_task("middle", Some(&root.id), TaskProfile::Manager, "Middle").await;
@@ -1616,7 +1583,6 @@ async fn restore_brings_archived_ancestor_chain_and_leaves_siblings() {
 
 #[tokio::test]
 async fn restore_of_open_node_is_noop_and_operator_only() {
-  // Python: tests/test_archive_unify.py::test_restore_of_an_open_node_is_a_no_op_and_operator_only.
   let h = CompletionHarness::new();
   let task = h.base.create_task("open", None, TaskProfile::Worker, "Open").await;
   assert_eq!(
@@ -1634,9 +1600,6 @@ async fn restore_of_open_node_is_noop_and_operator_only() {
 
 #[tokio::test]
 async fn user_message_restores_archived_chain_and_becomes_its_only_pending_input() {
-  // Python: tests/test_archive_unify.py::test_user_message_restores_and_is_the_rounds_only_input.
-  // Python: tests/test_archive_unify.py::test_user_message_announces_every_restored_node.
-  // Python: tests/test_archive_unify.py::test_agent_message_to_an_archived_node_is_refused_with_the_archived_sentence.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let middle = h.base.create_task("middle", Some(&root.id), TaskProfile::Manager, "Middle").await;
@@ -1692,7 +1655,6 @@ async fn user_message_restores_archived_chain_and_becomes_its_only_pending_input
 
 #[tokio::test]
 async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input() {
-  // Python: tests/test_archive_api.py::test_user_message_restores_through_the_chat_route_and_agent_is_409.
   let h = CompletionHarness::new();
   fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
     .expect("synthetic credentials are written to test home");
@@ -1757,7 +1719,6 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
 
 #[tokio::test]
 async fn archive_cancel_reopen_routes_and_scope() {
-  // Python: tests/test_session_dispatch.py::test_archive_cancel_reopen_routes_and_scope.
   let h = CompletionHarness::new();
   fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
     .expect("synthetic credentials are written to test home");
@@ -1854,7 +1815,6 @@ async fn archive_cancel_reopen_routes_and_scope() {
 
 #[tokio::test]
 async fn unarchive_route_restores_the_chain_and_reports_the_ids() {
-  // Python: tests/test_archive_api.py::test_unarchive_route_restores_the_chain_and_reports_the_ids.
   let h = CompletionHarness::new();
   let archived_root = h.base.create_task("archived-root", None, TaskProfile::Manager, "Archived root").await;
   let archived_branch =
@@ -1881,7 +1841,6 @@ async fn unarchive_route_restores_the_chain_and_reports_the_ids() {
 
 #[tokio::test]
 async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_only() {
-  // Python: tests/test_task_manager_authorization.py::test_agent_cancels_only_its_own_direct_child_over_http.
   let h = CompletionHarness::new();
   fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
     .expect("synthetic credentials are written to test home");
@@ -1957,7 +1916,6 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
 
 #[tokio::test]
 async fn agent_cancel_route_stops_a_live_worker_and_returns_its_outcome() {
-  // Python: tests/test_task_manager_authorization.py::test_agent_run_token_cancels_live_worker_over_http.
   let h = CompletionHarness::new();
   fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
     .expect("synthetic credentials are written to test home");

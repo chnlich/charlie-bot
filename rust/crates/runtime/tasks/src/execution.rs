@@ -87,8 +87,7 @@ pub(crate) struct LaunchState {
   let_go: bool,
 }
 
-/// The end-landing retry's cadence: the first round runs at once and later rounds every interval, with no round limit
-/// (`task_execution.py`, `RUN_END_LANDING_RETRY_INTERVAL_SECONDS`).
+/// The end-landing retry's cadence: the first round runs at once and later rounds every interval, with no round limit.
 pub const RUN_END_LANDING_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 /// The process-local state of the recovery: the resume follows this process drives, and the nodes that run an
@@ -451,12 +450,10 @@ impl TaskExecutionAdapter {
     state.tasks.insert(key, task);
   }
 
-  /// Cancel every launch task at the server's let-go, as `asyncio.run` cancels the tasks left at exit
-  /// (`asyncio/runners.py:66-75`), and wait for each to end. The cancel passes every `except Exception` of the launch
-  /// (`task_execution.py:719`, `:861`, `:1488`), so it lands no terminal fact, and a started agent keeps running
-  /// (`agent_process/base.py:994-1012`). The next boot then launches a run that has no process and re-attaches one that
-  /// has (`task_execution._reconcile_node`). A launch that finished before the cancel keeps its own result. The first
-  /// panicked launch task is returned after every task has ended.
+  /// Cancel every launch task at the server's let-go and wait for each to end. A cancelled launch runs none of its
+  /// failure paths, so it lands no terminal fact, and a started agent keeps running. The next boot then launches a run
+  /// that has no process and re-attaches one that has (`recovery::reconcile_node`). A launch that finished before the
+  /// cancel keeps its own result. The first panicked launch task is returned after every task has ended.
   pub(crate) async fn let_go_launches(&self) -> anyhow::Result<()> {
     let tasks = {
       let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
@@ -711,7 +708,7 @@ impl TaskExecutionAdapter {
     } else if let Some(sequence_ref) = &run.sequence_ref {
       let step = format!("the launch context of run {run_id}");
       let Some(controller) = self.owning_controller(&sequence_ref.kind, &step)? else {
-        // Python raises TaskInvalidError here (`task_execution.py:1390-1394`), before any process starts.
+        // The run fails here, before any process starts.
         return Err(
           SequenceRunWithoutControllerError {
             message: format!(
@@ -1426,7 +1423,7 @@ impl TaskExecutionAdapter {
     if let Some(sequence_ref) = &run.sequence_ref {
       let step = format!("the after-run duty for run {}", run.id);
       let Some(controller) = self.owning_controller(&sequence_ref.kind, &step)? else {
-        // A Run whose owning package is gone only logs its finish (`task_execution.py:2168-2176`).
+        // A Run whose owning package is gone only logs its finish.
         tracing::warn!(
           target: "charliebot_tasks",
           session_id,
@@ -2151,8 +2148,8 @@ impl TaskExecutionAdapter {
     self.queue.session_callbacks(Arc::clone(&self.features), tree_activity)
   }
 
-  /// The finish recorder both manager-turn paths hand the master queue (`task_execution.py:1203`,
-  /// `_manager_finish_recorder`): it records the run's evidence, lands the terminal fact with the observed exit, and
+  /// The finish recorder both manager-turn paths hand the master queue: it records the run's evidence,
+  /// lands the terminal fact with the observed exit, and
   /// dispatches the node's pending inputs. It records the observation before persisting `master_done` and
   /// `run_finished` under the control lock. `ended_at` is the drain rule's end time for a turn that ended unseen; None
   /// keeps the observed write time.
@@ -2713,8 +2710,8 @@ fn manager_run_record(session_id: &str, run_id: &str, backend: &str, model: Opti
   }
 }
 
-/// The class name a launch failure's evidence carries (`type(exc).__name__`): the Python class of a Rust error type that
-/// has one, and otherwise the class the call site names.
+/// The error class a launch failure's evidence records. `BaseBranchResolutionError` and `TaskInvalidError` are
+/// fixed for their Rust error types; any other failure records the class the call site names.
 fn launch_error_class(error: &anyhow::Error, call_site: &'static str) -> &'static str {
   if error.downcast_ref::<crate::git::BaseBranchResolutionError>().is_some() {
     return "BaseBranchResolutionError";
@@ -3113,7 +3110,7 @@ mod tests {
       .await
       .expect("the running turn reaches its refusal callback");
     assert_eq!(inputs.user_event_ids(session_id), ["input-first", "input-second"]);
-    // A mid-turn delivery joins the running binding: Python's `_current_items` holds the live item, so `record_ack`'s
+    // A mid-turn delivery joins the running binding, which holds the live item, so `record_ack`'s
     // append reaches a web reply posted while the turn runs.
     let mut acked = vec!["input-first".to_string(), "input-second".to_string()];
     crate::midturn_delivery::record_ack(

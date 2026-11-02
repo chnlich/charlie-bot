@@ -261,10 +261,11 @@ struct FindSegment {
 }
 
 fn find_segments(shell: &str) -> Result<Vec<FindSegment>, String> {
+  let text = without_prose(shell);
   let mut segments = Vec::new();
-  for word in find_word_pattern().find_iter(shell) {
+  for word in find_word_pattern().find_iter(&text) {
     let word = word.map_err(parse_error)?;
-    let rest = &shell[word.end()..];
+    let rest = &text[word.end()..];
     let region = find_region_pattern().find(rest).map_err(parse_error)?.map_or("", |region| region.as_str());
     let args = region.split(['|', '&']).next().unwrap_or("");
     let mut roots = Vec::new();
@@ -294,30 +295,37 @@ fn walks_store_root(segment: &FindSegment) -> Result<bool, String> {
 
 /// Whether a reader command's glob names run logs: one process that reads the run logs of every session.
 fn reads_run_logs_by_glob(shell: &str) -> Result<bool, String> {
-  let text = prose_pattern().replace_all(shell, |captures: &Captures<'_>| {
-    let whole = captures.get(0).expect("group 0 is the whole match").as_str();
-    let inner = captures.get(1).map_or("", |inner| inner.as_str());
-    if inner.contains(|character: char| character.is_whitespace() || ";&|()<>".contains(character)) {
-      " ".to_string()
-    } else {
-      whole.to_string()
-    }
-  });
+  let text = without_prose(shell);
   for segment in command_segment_pattern().find_iter(&text) {
     let segment = segment.map_err(parse_error)?;
     if !is_reader_segment(segment.as_str()) {
       continue;
     }
-    let reaches = segment
+    for token in segment
       .as_str()
       .split(|character: char| character.is_whitespace() || ";&|()<>`".contains(character))
       .filter(|token| !token.is_empty())
-      .any(|token| reaches_run_logs(&strip_quotes(token)));
-    if reaches {
-      return Ok(true);
+    {
+      if reaches_run_logs(&strip_quotes(token))? {
+        return Ok(true);
+      }
     }
   }
   Ok(false)
+}
+
+/// The shell text with each double-quoted run of prose replaced by a space: a quoted string holding a space or a
+/// separator is not one shell argument. A string holding a command substitution or backtick stays, because that is
+/// shell.
+fn without_prose(shell: &str) -> String {
+  prose_pattern()
+    .replace_all(shell, |captures: &Captures<'_>| {
+      let whole = captures.get(0).expect("group 0 is the whole match").as_str();
+      let inner = captures.get(1).map_or("", |inner| inner.as_str());
+      let prose = inner.contains(|character: char| character.is_whitespace() || ";&|()<>".contains(character));
+      if prose && !inner.contains("$(") && !inner.contains('`') { " ".to_string() } else { whole.to_string() }
+    })
+    .into_owned()
 }
 
 /// A command segment whose first word, after its wrappers and options, is a reader.
@@ -339,31 +347,41 @@ fn is_option_or_count(word: &str) -> bool {
   !digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit())
 }
 
-/// Whether one glob token reaches the run logs of more than one session. A session wildcard is a path component with a
-/// wildcard that is not the last one. Under `data/runs/`, the run id must be a wildcard too, and the token reaches run
-/// logs when it names the run directory itself or a run-log file, but not `metadata.json`. A literal run id is one
-/// session's run, a single lookup. Elsewhere under a session wildcard, a name that is a run-log name counts.
-fn reaches_run_logs(token: &str) -> bool {
+/// Whether one glob token spans every session and reaches run logs. The token must start at the session store, and
+/// the session directory just under it must be a wildcard: a literal session id is one session's lookup. Under
+/// `data/runs/` the run id must be a wildcard too, and the token reaches run logs when it names the run directory
+/// itself or a run-log file, but not `metadata.json`. Elsewhere under the session wildcard, a name that is a run-log
+/// name counts.
+fn reaches_run_logs(token: &str) -> Result<bool, String> {
   if token.starts_with('!') {
-    return false;
+    return Ok(false);
   }
-  let parts: Vec<&str> = token.split('/').collect();
-  for index in 0..parts.len().saturating_sub(1) {
-    if !is_wild(parts[index]) {
-      continue;
-    }
-    if parts.get(index + 1..index + 3) == Some(&["data", "runs"][..]) {
-      let rest = &parts[index + 3..];
-      let run_directory_glob = rest.first().is_some_and(|first| is_wild(first));
-      let names_run_log = rest.len() == 1 || rest.last().is_some_and(|last| is_run_log_glob(last));
-      if run_directory_glob && rest.last() != Some(&METADATA_FILE_NAME) && names_run_log {
-        return true;
-      }
-    } else if is_run_log_glob(parts[parts.len() - 1]) {
-      return true;
-    }
+  let Some(under_store) = store_remainder(token)? else {
+    return Ok(false);
+  };
+  let parts: Vec<&str> = under_store.split('/').collect();
+  let Some((&session, under_session)) = parts.split_first() else {
+    return Ok(false);
+  };
+  if !is_wild(session) {
+    return Ok(false);
   }
-  false
+  if under_session.starts_with(&["data", "runs"]) {
+    let rest = &under_session[2..];
+    let run_directory_glob = rest.first().is_some_and(|first| is_wild(first));
+    let names_run_log = rest.len() == 1 || rest.last().is_some_and(|last| is_run_log_glob(last));
+    return Ok(run_directory_glob && rest.last() != Some(&METADATA_FILE_NAME) && names_run_log);
+  }
+  Ok(parts.last().is_some_and(|last| is_run_log_glob(last)))
+}
+
+/// The part of a token under the session store: what follows `sessions/`, or `None` when the token is not in the
+/// store at all.
+fn store_remainder(token: &str) -> Result<Option<&str>, String> {
+  let Some(prefix) = store_prefix_pattern()?.find(token).map_err(parse_error)? else {
+    return Ok(None);
+  };
+  Ok(Some(token[prefix.end()..].trim_start_matches('/')))
 }
 
 fn is_wild(component: &str) -> bool {
@@ -501,6 +519,15 @@ fn store_root_pattern() -> Result<&'static Regex, String> {
   static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
   PATTERN
     .get_or_init(|| Regex::new(&format!("^(?:{})$", store_or_parent_token()?)).map_err(parse_error))
+    .as_ref()
+    .map_err(Clone::clone)
+}
+
+/// The session store at the start of a token, leaving what follows `sessions/`.
+fn store_prefix_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN
+    .get_or_init(|| Regex::new(&format!("^(?:{})(?:/|$)", store_token()?)).map_err(parse_error))
     .as_ref()
     .map_err(Clone::clone)
 }
@@ -694,6 +721,11 @@ mod tests {
       format!("find {}/.charliebot/sessions -maxdepth 2 -name X", home()),
       format!("cat {}/.charliebot/sessions/*/data/runs/*/metadata.json", home()),
       format!("cat {}/.charliebot/sessions/*/data/runs/abc123/events.jsonl", home()),
+      // A glob outside the store, and one that names one session, does not span every session.
+      format!("cat {}/.claude/projects/*/*.jsonl", home()),
+      format!("cat {}/.charliebot/sessions/abc/data/runs/*/events.jsonl", home()),
+      // A double-quoted run of prose holding a path is not shell, so its `find` is not a walk.
+      format!(r#"echo "find {}/.charliebot/sessions and replace""#, home()),
     ];
     for command in commands {
       assert!(scan_forms(&command, &home()).unwrap().is_empty(), "{command}");

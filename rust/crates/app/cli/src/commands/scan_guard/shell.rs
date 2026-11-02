@@ -87,7 +87,7 @@ fn resolve_word(bare: &str, current: &str, store_root: &Regex) -> Result<Option<
   if bare.starts_with('*') && !bare.starts_with("*/") {
     return Ok(None);
   }
-  if bare.starts_with(['~', '$', '/']) {
+  if bare.starts_with(['~', '/']) || (bare.starts_with('$') && bare.contains('/')) {
     return Ok(Some(bare.to_string()));
   }
   let joined = join_path(current, bare);
@@ -217,5 +217,13 @@ mod tests {
     assert_eq!(resolved, "cd .. && find /home/a/.charliebot/sessions -name X");
     let resolved = resolve_paths("find ../../../ -name X", "/home/a/b/c", &store_root).unwrap();
     assert_eq!(resolved, "find /home -name X");
+  }
+
+  #[test]
+  fn a_variable_word_keeps_the_quotes_around_it() {
+    let store_root = Regex::new(r"^/home/a/\.charliebot/sessions$").expect("test pattern is valid");
+    let resolved =
+      resolve_paths(r#"echo "== $f"; find . -name X"#, "/home/a/.charliebot/sessions", &store_root).unwrap();
+    assert_eq!(resolved, r#"echo "== $f"; find /home/a/.charliebot/sessions -name X"#);
   }
 }

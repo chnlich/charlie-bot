@@ -2,8 +2,7 @@
 //!
 //! A run's record names its error material in three places: the `error` events of its `events.jsonl`, the end of its
 //! `agent.stderr.log`, and the `terminal_reason` of its `result` event. Extraction picks the first cause the ordered
-//! pattern list finds, in the ported order of the failure inventory's `extract_signatures.py`. A record that fits one
-//! of the closed no-cause shapes has no cause to judge.
+//! `PATTERNS` list in this file finds. A record that fits one of the closed no-cause shapes has no cause to judge.
 
 use std::sync::LazyLock;
 

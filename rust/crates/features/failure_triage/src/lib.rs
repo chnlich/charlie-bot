@@ -28,7 +28,7 @@ pub use window::{Window, cron_window};
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register` (`web/features/failure_triage/__init__.py`): this half contributes no route and no service.
+/// `register`: this half contributes no route and no service.
 pub fn register(_registry: &mut Registry) -> Result<(), RegistryError> {
   Ok(())
 }

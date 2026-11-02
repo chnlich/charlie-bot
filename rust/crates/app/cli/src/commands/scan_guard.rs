@@ -34,9 +34,39 @@ const RUN_LOG_EXAMPLES: [&str; 4] = [RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw.n
 
 /// The commands that read a file's text, for the glob rule: a glob given to one of them reads every file it names.
 const READERS: &[&str] = &[
-  "grep", "egrep", "fgrep", "rg", "ag", "ack", "cat", "head", "tail", "jq", "sed", "awk", "less", "more", "wc", "sort",
-  "uniq", "cut", "tr", "xargs", "python3", "python", "node", "zcat", "strings", "diff", "cmp", "nl", "tac", "od", "xxd",
-  "sha256sum", "md5sum",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "ag",
+  "ack",
+  "cat",
+  "head",
+  "tail",
+  "jq",
+  "sed",
+  "awk",
+  "less",
+  "more",
+  "wc",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  "xargs",
+  "python3",
+  "python",
+  "node",
+  "zcat",
+  "strings",
+  "diff",
+  "cmp",
+  "nl",
+  "tac",
+  "od",
+  "xxd",
+  "sha256sum",
+  "md5sum",
 ];
 
 /// The wrappers a reader may follow, which the glob rule skips.
@@ -507,9 +537,8 @@ fn command_segment_pattern() -> &'static Regex {
 /// A file-name filter with its value: an exclusion (`-g '!...'`) matches none, so it names no glob.
 fn glob_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
-  PATTERN.get_or_init(|| {
-    Regex::new(r#"(?:-g|--glob|--include)[ =]['"]?(?!!)([^'" ]+)"#).expect("glob pattern is valid")
-  })
+  PATTERN
+    .get_or_init(|| Regex::new(r#"(?:-g|--glob|--include)[ =]['"]?(?!!)([^'" ]+)"#).expect("glob pattern is valid"))
 }
 
 #[cfg(test)]

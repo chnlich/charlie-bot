@@ -1,4 +1,4 @@
-//! Plan-registry lookup for a Waiting on you item's file links (`src/features/web_reply/plan_links.py`).
+//! Plan-registry lookup for a Waiting on you item's file links.
 //!
 //! A link to a registered plan version names its plan lineage and version. The check refuses a link to a version
 //! below the lineage's newest version or to a closed lineage. The since pairing groups items of one lineage together,
@@ -235,17 +235,17 @@ impl PlanLinks {
   }
 }
 
-/// The link's host file, as `file_urls.host_file` returns it; a malformed link fails as Python's urlsplit does.
+/// The link's host file, as `file_urls::host_file` returns it; a malformed link fails with its message.
 fn host_path(link: Option<&str>) -> Result<Option<PathBuf>, WebReplyError> {
   file_urls::host_file(link).map_err(|message| WebReplyError::Failed(anyhow!("{message}")))
 }
 
-/// The `file` string of one plan-registry version row; a version without one fails as Python's indexing does.
+/// The `file` string of one plan-registry version row; `None` when the row has none.
 fn version_file(version: &Value) -> Option<String> {
   version.get("file").and_then(Value::as_str).map(str::to_string)
 }
 
-/// The `v` integer of one plan-registry version row; a version without one fails as Python's indexing does.
+/// The `v` integer of one plan-registry version row; a version without one fails the read.
 fn version_number(version: &Value) -> Result<i64, WebReplyError> {
   version
     .get("v")

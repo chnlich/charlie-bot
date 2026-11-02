@@ -1,4 +1,4 @@
-//! The web-reply package's turn contribution (`src/features/web_reply/turn_contribution.py`). It carries the reply
+//! The web-reply package's turn contribution. It carries the reply
 //! rules in a web session's manager runs, runs the round-end audit after a turn that answers a user, renders the
 //! `web_reply`, `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for web
 //! sessions.
@@ -98,7 +98,7 @@ impl TurnContribution for WebReplyTurnContribution {
   }
 }
 
-/// A prompts doc read as `read_text(encoding="utf-8").strip()` reads it: universal newlines, then Python's strip. A
+/// A prompts doc read as UTF-8 text: universal newlines, then both-sided whitespace trimmed. A
 /// missing or unreadable doc fails.
 fn rules_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;

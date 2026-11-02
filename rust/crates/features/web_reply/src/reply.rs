@@ -1,4 +1,4 @@
-//! The web reply record and the web-session test (`src/features/web_reply/reply.py`): the refusals, the `answer_ids`
+//! The web reply record and the web-session test: the refusals, the `answer_ids`
 //! binding, the For-you layer and the readback. The round-end audit that nudges and notices over these records is in
 //! `audit.rs`.
 //!
@@ -480,7 +480,7 @@ pub async fn post_web_reply_with_request_id(
       event["id"] = json!(charliebot_store::control_events::stable_request_event_id(session_id, request_id));
       event["request_id"] = json!(request_id);
     }
-    // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
+    // Release the shared snapshot before append; the store appends into the cached list.
     // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
     drop(events);
     features.store.append_chat_event(session_id, event).await?
@@ -617,7 +617,7 @@ mod tests {
     assert_eq!(replies(&home, &sid).len(), 2);
   }
 
-  // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback
+  // The replay readback pins the stored visible count, not the label count.
   #[tokio::test]
   async fn markdown_link_reply_replay_returns_the_stored_visible_count() {
     let home = Home::new();
@@ -801,8 +801,7 @@ mod tests {
     }
   }
 
-  // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback
-  // Python: tests/test_web_reply.py::test_a_bare_url_counts_in_full_in_a_web_reply
+  // A markdown link counts as its label, and a bare URL counts in full in the reply.
   #[tokio::test]
   async fn a_markdown_link_counts_as_its_label_and_a_bare_url_counts_in_full() {
     let home = Home::new();

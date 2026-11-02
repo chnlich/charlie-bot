@@ -1,4 +1,4 @@
-//! The `web` verbs (`src/features/web_reply/cli.py`): record a web reply, print the For-you layer, and set, confirm or
+//! The `web` verbs: record a web reply, print the For-you layer, and set, confirm or
 //! show the session status.
 //!
 //! `status set` runs the fork assertions of each unread item's linked page, then cold-reads each unread Waiting on you

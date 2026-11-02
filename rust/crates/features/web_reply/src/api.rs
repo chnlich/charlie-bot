@@ -1,7 +1,7 @@
-//! The internal web routes (`src/features/web_reply/api.py`) behind `charliebot web reply`, `charliebot web dialog` and
+//! The internal web routes behind `charliebot web reply`, `charliebot web dialog` and
 //! `charliebot web status`.
 //!
-//! FastAPI validates the body or the query before the handler runs, so a malformed request answers 422 whatever the
+//! The body or the query is validated before the handler runs, so a malformed request answers 422 whatever the
 //! session is. A refusal of the handler answers its status with `{"detail": ...}`.
 
 use std::collections::HashMap;

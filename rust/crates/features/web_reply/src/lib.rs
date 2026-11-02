@@ -28,7 +28,7 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 use turn_contribution::WebReplyTurnContribution;
 
-/// `register` (`src/features/web_reply/__init__.py`): the `/api/internal` router, then the turn contribution, then the
+/// `register`: the `/api/internal` router, then the turn contribution, then the
 /// web-reply status field of each session.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;

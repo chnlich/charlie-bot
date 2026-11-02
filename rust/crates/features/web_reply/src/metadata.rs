@@ -1,4 +1,4 @@
-//! The web reply package's item models (`src/features/web_reply/metadata.py`): the Waiting on you item that the status
+//! The web reply package's item models: the Waiting on you item that the status
 //! and the plan links read, and the Remaining milestone that the status lists.
 
 use charliebot_store::metadata::UtcDateTime;

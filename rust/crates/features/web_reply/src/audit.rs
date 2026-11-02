@@ -1,4 +1,4 @@
-//! The round-end audit of a web session (`src/features/web_reply/audit.py`): the status reminder, the reply nudge and
+//! The round-end audit of a web session: the status reminder, the reply nudge and
 //! the reply notice.
 //!
 //! The status reminder covers every finished turn of an open task, background turns included. A turn that ran
@@ -98,8 +98,8 @@ pub async fn audit_turn(
 }
 
 /// Audit one finished turn's web reply alone: a nudge for each unanswered user message, then a notice for each nudge
-/// that went unanswered (`audit.audit_reply`). The production hook audits the turn through [`audit_turn`]; the tests
-/// drive this reply-only step directly, as Python's tests drive `audit.audit_reply`.
+/// that went unanswered. The production hook audits the turn through [`audit_turn`]; the tests
+/// drive this reply-only step directly.
 #[cfg(test)]
 pub async fn audit_reply(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<()> {
   let input_ids = features.store.master_done_input_event_ids(done);

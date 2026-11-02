@@ -1,8 +1,8 @@
-//! The WAV reader of Python's `wave` module, as the upload route uses it.
+//! The WAV reader the upload route uses.
 //!
-//! A body is accepted where `wave.open` accepts it: a RIFF/WAVE container whose `fmt ` chunk precedes its `data`
+//! A body is accepted when it is a RIFF/WAVE container whose `fmt ` chunk precedes its `data`
 //! chunk, with PCM or extensible PCM samples. Frames are the data chunk's bytes up to its declared size, cut to whole
-//! frames, as `readframes(getnframes())` returns them.
+//! frames.
 
 const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;

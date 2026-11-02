@@ -1,4 +1,4 @@
-//! A web session's status (`src/features/web_reply/status.py`): the Goal, Now, Waiting on you and Remaining items
+//! A web session's status: the Goal, Now, Waiting on you and Remaining items
 //! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
 //! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded; the
 //! read tiers the item against the approval policy table, and with the table's refusal switch on a set refuses an
@@ -131,12 +131,12 @@ fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyEr
   }
 }
 
-/// CPython's `JSONDecodeError.msg`: the message without the `: line L column C (char P)` that the error text adds.
+/// The JSON error's message without the `: line L column C (char P)` suffix the error text adds.
 fn json_message(error_text: &str) -> &str {
   error_text.rsplit_once(": line ").map_or(error_text, |(msg, _)| msg)
 }
 
-/// The patch that the JSON `text` holds (`status.parse_patch`). A refusal is a 422 whose detail an agent reads.
+/// The patch that the JSON `text` holds. A refusal is a 422 whose detail an agent reads.
 pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   let raw = match json_loads::loads_text(text) {
     Ok(raw) => raw,
@@ -916,7 +916,7 @@ pub fn open_waiting_rows<'a>(
   })
 }
 
-/// The task-tree reads run off the runtime's worker threads, as the Python tree reads run in `asyncio.to_thread`.
+/// The task-tree reads run off the runtime's worker threads, never on the async worker.
 async fn tree_read<T, F>(store: &Arc<Store>, read: F) -> Result<T, WebReplyError>
 where
   T: Send + 'static,

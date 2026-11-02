@@ -574,7 +574,7 @@ mod tests {
 
   const INSTRUCTIONS: &str = "Which class of work is this?";
   const ROUTINE_RULE: &str = "Routine work: fixes, tests and short actions.";
-  const CONTEXT_RULE: &str = "Context work: a first read, an understanding or a design.";
+  const CONTEXT_RULE: &str = "Context class: a first read, an understanding or a design.";
   const DESIGN_RULE: &str = "Design work: a new mechanism across modules.";
   const STRONG: [&str; 2] = ["strong-alpha", "strong-beta"];
   const POOL: &str = "pool-gamma";
@@ -820,7 +820,7 @@ mod tests {
   }
 
   #[test]
-  fn context_work_answers_the_session_backend_at_the_probability_jev_gave_it() {
+  fn context_class_answers_the_session_backend_at_the_probability_jev_gave_it() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());

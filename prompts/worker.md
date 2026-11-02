@@ -81,10 +81,6 @@ and your changes land directly on the host paths the task names.
 - If the task spec and source files conflict, stop and report the conflict instead of inventing a merged requirement.
 - Source Files entries are read-only references into the base checkout. Make every edit inside your assigned worktree via repo-relative paths; writing to any path outside your worktree is forbidden.
 
-<!-- section: user_decisions -->
-## User Decisions
-Your conclusion rests on the user's decisions. Before you conclude, search the user's messages in your parent session and in earlier sessions on the same subject for decisions on your question. Name each decision your conclusion relies on with its session id, and report each spec fact that a user message contradicts.
-
 <!-- section: task -->
 ## Task
 {{description}}

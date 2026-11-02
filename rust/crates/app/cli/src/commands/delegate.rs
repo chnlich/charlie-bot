@@ -27,9 +27,6 @@ const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
   ## Reviewer Checklist - concrete checks beyond "tests passed".
   ## Out of Scope - things the worker must not change.
 
-  A context-work spec carries a ## Requester Words section: the words that asked the question, and each earlier user decision the task rests on, each quoted verbatim with its session id and event kind (user, agent, scheduled or thread). charliebot delegate checks each quote against the events of that kind in that session.
-  - 「<verbatim>」 (session <36-char session id>, <user|agent|scheduled|thread>)
-
   --repo and --base-branch: give both, or omit both for a repo-less implement, quick-edit, or
   script-run task. verify forbids both.
   --keep-worktree 1 keeps the worktree after the worker exits and the reviewer merges; pass it when
@@ -46,32 +43,31 @@ Task types (--task-type):
   script-run: the worktree (repo-less: the Run directory) is a sandbox to run scripts, submit jobs, or query state; the worker must not modify tracked files or commit; no reviewer, no merge.
   verify: a repo-less read-only plan verifier; no worktree, reviewer, or merge.
 
-Context work (--context-work):
+Requester Words (## Requester Words):
 
-  Context work is a first read of unfamiliar material, an understanding, a design draft, or a diagnosis. Pass --context-work 1 for context work; the server runs it on backends.strong. Pass 0 for every other task, verify included.
+  This section is optional. A spec for a first read of unfamiliar material, a diagnosis of an
+  unexplained failure, an explanation of a mechanism or a cause (an explain or debugging page
+  included), an understanding page, or a design or plan draft (a new plan version that changes the
+  design included) carries it: the words that asked the question, and each earlier user decision the
+  task rests on, each quoted verbatim with its session id and event kind (user, agent, scheduled or
+  thread). charliebot delegate checks each quote against the events of that kind in that session; a
+  spec without the section is accepted.
+  - 「<verbatim>」 (session <36-char session id>, <user|agent|scheduled|thread>)
 
 Backend selection (--backend):
 
-  Pass --backend only when the user or the line's goal names a backend. Omitted: context work takes
-  backends.strong; implement, quick-edit, and script-run take the next backends.pool member that is
-  not cooling, or inherit the session backend when the pool is empty; a worker out of quota continues
-  on the next member in the same worktree. Verify routes to the next member that differs from the
-  session backend. An explicit --backend replaces that routing for every task type, verify included,
-  and is never failed over; backends.strong is never failed over either. The resolved backend runs
+  Pass --backend only when the user or the line's goal names a backend. Omitted, the router that
+  backends.routing configures chooses the backend of implement, quick-edit, script-run, and verify;
+  when routing is unset or the router gives no answer, implement, quick-edit, and script-run take
+  the next backends.pool member that is not cooling, or inherit the session backend when the pool
+  is empty, and verify takes the next member that differs from the session backend. A worker out of
+  quota continues on the next member in the same worktree. An explicit --backend replaces that
+  routing for every task type, verify included, and is never failed over. The resolved backend runs
   every work Run of the worker session.
 "#;
 
-const LONG_OPTIONS: [&str; 9] = [
-  "session",
-  "repo",
-  "task-spec-file",
-  "base-branch",
-  "backend",
-  "keep-worktree",
-  "context-work",
-  "request-id",
-  "task-type",
-];
+const LONG_OPTIONS: [&str; 8] =
+  ["session", "repo", "task-spec-file", "base-branch", "backend", "keep-worktree", "request-id", "task-type"];
 
 const TASK_SPEC_REQUIRED_HEADINGS: [&str; 6] =
   ["Goal", "Source Files", "Required Behavior", "Acceptance Tests", "Reviewer Checklist", "Out of Scope"];
@@ -94,8 +90,6 @@ struct DelegateCli {
   backend: Option<String>,
   #[arg(long, required = true, value_parser = clap::value_parser!(i32).range(0..=1), help = "0 or 1 (rule in the epilog)")]
   keep_worktree: i32,
-  #[arg(long, required = true, value_parser = clap::value_parser!(i32).range(0..=1), help = "0 or 1 (rule in the epilog)")]
-  context_work: i32,
   #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)")]
   request_id: Option<String>,
   #[arg(long, value_enum, default_value = "implement", help = "Task profile (rules in the epilog)")]
@@ -152,9 +146,6 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if let Err(message) = validate_repo_and_branch(cli.task_type, cli.repo.as_deref(), cli.base_branch.as_deref()) {
     parser_error(&mut command, ErrorKind::ValueValidation, message);
   }
-  if let Err(message) = validate_context_work(cli.task_type, cli.context_work) {
-    parser_error(&mut command, ErrorKind::ValueValidation, message);
-  }
   if cli.task_type != TaskType::Verify
     && let Some(repo) = &cli.repo
   {
@@ -165,10 +156,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let task_spec = files::read_required_text_file("--task-spec-file", &cli.task_spec_file)?;
   validate_task_spec_markdown(&task_spec)?;
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  let context_work = cli.context_work == 1;
-  if context_work {
-    validate_requester_words(&task_spec, &home)?;
-  }
+  validate_requester_words(&task_spec, &home)?;
 
   let keep_worktree = cli.keep_worktree == 1;
   let mut invocation = Map::new();
@@ -178,14 +166,12 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(cli.task_spec_file));
   invocation.insert(task_routes::DELEGATE_REVIEWER_CONTEXT_FILE_FIELD.to_string(), Value::Null);
   invocation.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
-  invocation.insert(task_routes::DELEGATE_CONTEXT_WORK_FIELD.to_string(), json!(context_work));
   invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), optional_string(&cli.backend));
 
   let mut payload = Map::new();
   payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
   payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(task_spec));
   payload.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
-  payload.insert(task_routes::DELEGATE_CONTEXT_WORK_FIELD.to_string(), json!(context_work));
   payload.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
   payload.insert(event_types::DELEGATE_INVOCATION.to_string(), Value::Object(invocation));
   if let Some(base_branch) = &cli.base_branch {
@@ -338,14 +324,7 @@ fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
   Ok(())
 }
 
-fn validate_context_work(task_type: TaskType, context_work: i32) -> Result<(), String> {
-  if context_work == 1 && task_type == TaskType::Verify {
-    return Err("--context-work 1 is forbidden when --task-type verify".to_string());
-  }
-  Ok(())
-}
-
-/// The heading of the section that a context-work spec carries.
+/// The heading of the optional section that a requester-words spec carries.
 const REQUESTER_WORDS_HEADING: &str = "Requester Words";
 
 /// The event kinds a requester quote names. Each kind matches the chat-log events it stands for: a user message is a
@@ -405,13 +384,13 @@ fn parse_requester_line(line: &str) -> Option<(&str, &str, &str)> {
   Some((quote, session_id, kind))
 }
 
-/// Check every quote of the `## Requester Words` section against the events of its named kind in its named session.
-/// One refusal lists every quote that fails.
+/// Check every quote of a `## Requester Words` section against the events of its named kind in its named session.
+/// A spec without the section is accepted. One refusal lists every quote that fails.
 fn validate_requester_words(task_spec: &str, home: &Path) -> Result<(), CliExit> {
   let lines: Vec<&str> = task_spec.lines().collect();
-  let start = lines.iter().position(|line| is_heading(line, REQUESTER_WORDS_HEADING)).ok_or_else(|| {
-    CliExit::usage(format!("task spec missing the ## {REQUESTER_WORDS_HEADING} section that --context-work 1 requires"))
-  })?;
+  let Some(start) = lines.iter().position(|line| is_heading(line, REQUESTER_WORDS_HEADING)) else {
+    return Ok(());
+  };
   let mut quotes = Vec::new();
   for line in lines.iter().skip(start + 1).take_while(|line| !is_next_heading(line)).map(|line| line.trim()) {
     if line.is_empty() {
@@ -532,12 +511,13 @@ mod tests {
       "--base-branch",
       "--backend",
       "--keep-worktree",
-      "--context-work",
       "--request-id",
       "--task-type",
     ] {
       assert!(help.contains(name), "{name} is missing from help");
     }
+    assert!(!help.contains("--context-work"), "--context-work is still named in help");
+    assert!(help.contains("Requester Words"), "Requester Words is missing from help");
     for choice in ["implement", "quick-edit", "script-run", "verify"] {
       assert!(help.contains(choice), "{choice} is missing from help");
     }
@@ -551,6 +531,14 @@ mod tests {
     ] {
       assert!(help.contains(section), "{section} is missing from help");
     }
+  }
+
+  #[test]
+  fn the_context_work_flag_is_unknown() {
+    let args = ["--context-work", "0"].map(OsString::from);
+    let (known, unknown) = partition_arguments(&args);
+    assert!(known.is_empty(), "{known:?}");
+    assert_eq!(unknown, ["--context-work", "0"]);
   }
 
   #[test]

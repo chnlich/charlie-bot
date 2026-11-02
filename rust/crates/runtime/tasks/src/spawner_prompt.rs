@@ -208,7 +208,6 @@ fn required_worker_sections() -> Vec<&'static str> {
     "task",
     "iteration_reports",
     "worktree_persistence",
-    "user_decisions",
     "memory",
   ]);
   let mut seen = HashSet::new();

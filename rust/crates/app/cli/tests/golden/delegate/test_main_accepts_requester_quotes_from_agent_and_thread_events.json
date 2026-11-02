@@ -6,9 +6,7 @@
     "--task-spec-file",
     "{root}/task_spec.md",
     "--keep-worktree",
-    "0",
-    "--context-work",
-    "1"
+    "0"
   ],
   "cwd": "{root}",
   "files": {
@@ -43,7 +41,6 @@
           "session_id": "s1",
           "description": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n\n## Requester Words\n- 「synthetic agent summary of the widget」 (session 11111111-2222-4333-8444-555555555555, agent)\n- 「synthetic thread message about the widget」 (session 11111111-2222-4333-8444-555555555555, thread)\n- 「synthetic user request about the widget」 (session 11111111-2222-4333-8444-555555555555, user)\n",
           "keep_worktree": false,
-          "context_work": true,
           "task_type": "implement",
           "delegate_invocation": {
             "task_type": "implement",
@@ -52,7 +49,6 @@
             "task_spec_file": "{root}/task_spec.md",
             "reviewer_context_file": null,
             "keep_worktree": false,
-            "context_work": true,
             "backend": null
           }
         }

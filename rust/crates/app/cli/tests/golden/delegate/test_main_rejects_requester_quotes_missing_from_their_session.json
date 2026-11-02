@@ -6,9 +6,7 @@
     "--task-spec-file",
     "{root}/task_spec.md",
     "--keep-worktree",
-    "0",
-    "--context-work",
-    "1"
+    "0"
   ],
   "cwd": "{root}",
   "files": {

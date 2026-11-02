@@ -13,8 +13,6 @@
     "--task-type",
     "bogus",
     "--keep-worktree",
-    "0",
-    "--context-work",
     "0"
   ],
   "cwd": "{root}",

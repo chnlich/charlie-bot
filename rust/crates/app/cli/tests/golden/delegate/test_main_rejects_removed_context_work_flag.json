@@ -1,4 +1,5 @@
 {
+  "python_test": "test_main_rejects_removed_context_work_flag",
   "argv": [
     "delegate",
     "--session",
@@ -8,7 +9,7 @@
     "--keep-worktree",
     "0",
     "--context-work",
-    "1"
+    "0"
   ],
   "cwd": "{root}",
   "files": {
@@ -16,9 +17,9 @@
     "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
   },
   "responses": [],
+  "parser_generated": true,
   "expect": {
     "stdout": "",
-    "stderr": "{\"error\": \"task spec missing the ## Requester Words section that --context-work 1 requires\"}\n",
     "exit": 2,
     "requests": []
   }

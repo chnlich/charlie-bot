@@ -457,12 +457,7 @@ mod tests {
         worktree_dir: "/synthetic".to_string(),
         scratch_dir: "/synthetic".to_string(),
       },
-      backends: BackendsConfig {
-        pool: ids.iter().map(|id| (*id).to_string()).collect(),
-        routing: None,
-        strong: None,
-        options,
-      },
+      backends: BackendsConfig { pool: ids.iter().map(|id| (*id).to_string()).collect(), routing: None, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),

@@ -220,7 +220,6 @@ mod tests {
       backends: BackendsConfig {
         pool: Vec::new(),
         routing: None,
-        strong: None,
         options: vec![BackendOption {
           id: "synthetic".to_string(),
           label: "synthetic".to_string(),

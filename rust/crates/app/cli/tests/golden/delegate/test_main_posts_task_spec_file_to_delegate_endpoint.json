@@ -12,8 +12,6 @@
     "--backend",
     "codex-o3",
     "--keep-worktree",
-    "0",
-    "--context-work",
     "0"
   ],
   "cwd": "{root}",
@@ -49,7 +47,6 @@
           "session_id": "s1",
           "description": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
           "keep_worktree": false,
-          "context_work": false,
           "task_type": "implement",
           "delegate_invocation": {
             "task_type": "implement",
@@ -58,7 +55,6 @@
             "task_spec_file": "{root}/task_spec.md",
             "reviewer_context_file": null,
             "keep_worktree": false,
-            "context_work": false,
             "backend": "codex-o3"
           },
           "base_branch": "main",

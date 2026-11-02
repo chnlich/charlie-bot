@@ -14,8 +14,6 @@
     "--description",
     "task",
     "--keep-worktree",
-    "0",
-    "--context-work",
     "0"
   ],
   "cwd": "{root}",

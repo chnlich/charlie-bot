@@ -535,7 +535,6 @@ pub fn config(home: &Path) -> CharlieBotConfig {
     backends: BackendsConfig {
       pool: vec![BACKEND_ID.to_string()],
       routing: None,
-      strong: None,
       options: vec![BackendOption {
         id: BACKEND_ID.to_string(),
         label: "Synthetic".to_string(),

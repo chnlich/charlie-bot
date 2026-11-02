@@ -204,11 +204,6 @@ fn worker_kind_rule_segments(
     let ids = spawner_prompt::workflow_rule_section_ids(task, repo_less)?;
     let workflow = sections_text(repo, "worker.md", &ids)?;
     segments.push(segment(format!("{worker}\n{workflow}"), vec![base_source(spawner_prompt::WORKER_PROMPT_PATH)]));
-    // Only a context-work worker gets the decisions rule; every other worker's contract stays as it was.
-    if task.is_some_and(|task| task.context_work) {
-      let decisions = sections_text(repo, "worker.md", &["user_decisions"])?;
-      segments.push(segment(decisions, vec![base_source(spawner_prompt::WORKER_PROMPT_PATH)]));
-    }
   }
   Ok(segments)
 }

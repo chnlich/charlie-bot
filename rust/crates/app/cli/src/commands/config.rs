@@ -242,7 +242,7 @@ fn backends_json(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Value, S
     Some(routing) => json!({ "command": routing.command }),
   };
   let options = backends.options.iter().map(|option| option_json(option, registry)).collect::<Result<Vec<_>, _>>()?;
-  Ok(json!({ "pool": backends.pool, "routing": routing, "strong": backends.strong, "options": options }))
+  Ok(json!({ "pool": backends.pool, "routing": routing, "options": options }))
 }
 
 fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, String> {
@@ -318,7 +318,7 @@ mod tests {
     let expected_text = recorded(include_str!("../../tests/fixtures/config_get/backends_golden.txt"));
     let expected: Value = serde_json::from_str(expected_text.trim_end()).expect("the recorded Python line is JSON");
     assert_eq!(printed, expected);
-    for key in ["pool", "routing", "strong", "options"] {
+    for key in ["pool", "routing", "options"] {
       assert!(printed.get(key).is_some(), "backends output lacks {key}");
     }
   }

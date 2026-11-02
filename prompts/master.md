@@ -242,7 +242,7 @@ A lead keeps only coordination state and small material in its context: each lat
 - An approval judges the plan itself, so a worker summary cannot replace that read.
 - When you need large material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
   The worker's report then replaces the material in your context.
-- Declare each read handed to a worker by the context-work definition in `charliebot delegate --help`.
+- A read handed to a worker is one of the `## Requester Words` kinds of work in `charliebot delegate --help`: carry that section, and the CLI checks each quote.
 - Large material is a read that does not fit the turn's remaining total.
 - When a capped read cuts off a part that you need, treat that part as large material.
   That part then reaches you in the worker's report.

@@ -1,4 +1,4 @@
-//! The `discord:` config section (`src/features/discord/config.py`): the account map of the summon entrypoint.
+//! The `discord:` config section: the account map of the summon entrypoint.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

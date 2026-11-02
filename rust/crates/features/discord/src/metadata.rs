@@ -1,4 +1,4 @@
-//! The Discord fields of a session (`src/features/discord/metadata.py`).
+//! The Discord fields of a session.
 
 use anyhow::Context;
 use charliebot_store::metadata::SessionMetadata;

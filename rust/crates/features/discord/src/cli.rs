@@ -1,4 +1,4 @@
-//! The `discord` verbs (`src/features/discord/cli.py`): reply on a session's own Discord thread, read thread messages,
+//! The `discord` verbs: reply on a session's own Discord thread, read thread messages,
 //! and check the bot's setup.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `read`

@@ -1,4 +1,4 @@
-//! The Discord server-side commands (`src/features/discord/discord_commands.py`) behind `charliebot discord read` and
+//! The Discord server-side commands behind `charliebot discord read` and
 //! `charliebot discord check`. A read pages the thread through the bot client, prepends the thread's starter when it
 //! lives in the parent channel, acks the unread messages it returns (Discord has no separate ack verb, so the read is
 //! the ack), and flags the pending summon's mention with `summon: true`. A linked channel is read without any mark.
@@ -85,7 +85,7 @@ fn discord_failure(error: anyhow::Error) -> ThreadReplyError {
   }
 }
 
-/// The session's chat events in log order, read on a worker thread as `asyncio.to_thread` does.
+/// The session's chat events in log order, read on the blocking pool.
 async fn load_chat_events(bot: &Bot, session_id: &str) -> Result<Vec<ChatEvent>, ThreadReplyError> {
   let store = Arc::clone(&bot.features.store);
   let session_id = session_id.to_string();

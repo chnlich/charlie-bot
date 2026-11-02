@@ -60,12 +60,12 @@ impl TurnContribution for DiscordTurnContribution {
   }
 }
 
-/// `_discord_reply_message`: the chat line of a `discord_reply` event.
+/// The chat line of a `discord_reply` event.
 fn discord_reply_message(event: &Value) -> Value {
   json!({"role": "system", "content": format!("Posted to Discord: {}", content_text(event))})
 }
 
-/// The event's `content` as Python text, or `""` when the event has none (`event.get("content", "")`).
+/// The event's `content` as text, or `""` when the event has none.
 fn content_text(event: &Value) -> String {
   event.get("content").map(text_repr::value_str).unwrap_or_default()
 }

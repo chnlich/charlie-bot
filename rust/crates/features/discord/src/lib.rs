@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 use service::DiscordService;
 use turn_contribution::DiscordTurnContribution;
 
-/// Register in Python package order, omitting its Python-only `discord` CLI command.
+/// `register`: the service, the routes and the package's other registrations, in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.service(Arc::new(DiscordService::default()))?;
   registry.router(api::routes, api::matches)?;

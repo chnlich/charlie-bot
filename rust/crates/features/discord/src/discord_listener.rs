@@ -1,4 +1,4 @@
-//! The Discord side of the shared thread entrypoint (`src/features/discord/discord_listener.py`): the gateway listener,
+//! The Discord side of the shared thread entrypoint: the gateway listener,
 //! summon handler, `DISCORD` platform and `DiscordThreadAdapter` the shared thread core works through.
 
 use std::collections::BTreeMap;

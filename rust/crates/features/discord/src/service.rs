@@ -1,4 +1,4 @@
-//! The Discord gateway service and `service.py`'s configuration gate.
+//! The Discord gateway service and its configuration gate.
 
 use charliebot_chat_threads::channel_service::ChannelService;
 use charliebot_core::credentials::{CredentialValue, Credentials};

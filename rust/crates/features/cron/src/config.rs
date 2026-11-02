@@ -21,6 +21,15 @@ pub struct StepConfig {
   pub distinct_backend_from: Option<String>,
 }
 
+/// How a bound task's round reaches its session: admitted to the bound manager (`Master`), or started as the
+/// task's own worker run (`Worker`). An absent `mode` starts worker work.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskMode {
+  Master,
+  Worker,
+}
+
 /// A complete scheduled task after prompt pointers have been resolved.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +53,7 @@ pub struct ScheduledTaskConfig {
   #[serde(default)]
   pub session_id: Option<String>,
   #[serde(default)]
-  pub mode: Option<String>,
+  pub mode: Option<TaskMode>,
   #[serde(default)]
   pub prompt: Option<String>,
   #[serde(default)]
@@ -64,9 +73,6 @@ pub struct ScheduledTaskError {
 
 /// Validate the source, mode and sequence invariants shared with the YAML loader.
 pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
-  if task.mode.as_deref().is_some_and(|mode| !matches!(mode, "master" | "worker")) {
-    return Err("mode must be 'master' or 'worker'".to_string());
-  }
   let source_count = usize::from(task.prompt.as_ref().is_some_and(|value| !value.is_empty()))
     + usize::from(task.steps.as_ref().is_some_and(|value| !value.is_empty()))
     + usize::from(task.handler.as_ref().is_some_and(|value| !value.is_empty()));
@@ -76,7 +82,7 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   if task.mode.is_some() && task.session_id.as_deref().unwrap_or_default().is_empty() {
     return Err("'mode' requires 'session_id' (mode selects how a bound task fires)".to_string());
   }
-  if task.mode.as_deref() == Some("master") {
+  if task.mode == Some(TaskMode::Master) {
     if task.prompt.as_deref().unwrap_or_default().is_empty() {
       return Err("mode 'master' requires a prompt source ('prompt' or 'prompt_file')".to_string());
     }

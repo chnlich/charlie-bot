@@ -19,7 +19,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-use crate::config::ScheduledTaskConfig;
+use crate::config::{ScheduledTaskConfig, TaskMode};
 use crate::{loader, steps};
 
 const TICK_SECONDS: u64 = 60;
@@ -279,7 +279,7 @@ impl CronScheduler {
       Some(value) => value,
       None => UtcDateTime::now().to_isoformat_text(),
     };
-    if task.mode.as_deref() == Some("master") {
+    if task.mode == Some(TaskMode::Master) {
       let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
       let input_id = firing_ref(&task, &firing);
       dispatcher
@@ -477,7 +477,7 @@ impl CronScheduler {
     if self.features.store.task_state(session_id)? != "open" {
       anyhow::bail!("scheduled task '{}' bound task {session_id} is archived", task.name);
     }
-    if task.mode.as_deref() == Some("master") && meta.profile != TaskProfile::Manager {
+    if task.mode == Some(TaskMode::Master) && meta.profile != TaskProfile::Manager {
       anyhow::bail!("scheduled task '{}' (mode master) binds task {session_id}, which is not a manager", task.name);
     }
     Ok(meta)
@@ -926,7 +926,7 @@ mod tests {
   use std::sync::Arc;
 
   use super::{CronExpression, CronScheduler, isoformat_text};
-  use crate::config::{ScheduledTaskConfig, StepConfig};
+  use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{FakeGit, GIT_PROGRAM_LOCK, HELD_ROUND_GOAL, ProcessGroupGuard, feature_context, manager};
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
@@ -1253,7 +1253,7 @@ mod tests {
       project: None,
       allow_failure: false,
       session_id: Some(parent.id.clone()),
-      mode: Some("worker".to_string()),
+      mode: Some(TaskMode::Worker),
       prompt: None,
       handler: None,
       steps: Some(vec![
@@ -1638,7 +1638,7 @@ mod tests {
       project: None,
       allow_failure: false,
       session_id: Some(node_id.to_string()),
-      mode: Some("worker".to_string()),
+      mode: Some(TaskMode::Worker),
       prompt: Some("Synthetic scheduled work".to_string()),
       handler: None,
       steps: None,

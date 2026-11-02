@@ -44,7 +44,7 @@
    horizontally; a table wider than the bubble keeps every column reachable. */
 .prose-msg:has(table) { overflow-x: auto; }
 /* A chat bubble keeps a readable measure on a wide window. The user bubble takes
-   75% of the message pane and the agent bubble 90%; at 1440 px those shares draw
+   75% of the message pane and the agent bubble 90%. At 1440 px those shares draw
    lines of about 104 characters, past the 45-75 a reader follows without losing
    the place. 37rem, the bubble's 32 px side padding included, leaves about 75
    characters. A narrow window fills its share before the cap binds, so the phone
@@ -109,7 +109,7 @@
 }
 .turn-spacer { pointer-events: none; }
 /* The height model's spacer heights are the exact layout extent of the rows
-   the spacers stand for; a space-y-3 margin on the spacer itself would add
+   the spacers stand for. A space-y-3 margin on the spacer itself would add
    height no row owns. */
 #messages > .turn-spacer { margin-top: 0; }
 /* The turn engine is the scroll-anchoring authority; Chrome's own scroll
@@ -147,9 +147,9 @@
 body.resizing { cursor: col-resize; user-select: none; }
 /* The new-session backend selector shows its selected label whole. The template's inline max-width: 110px
    sits three pixels under the width the label needs, so the native select cuts the word ("Release trial"
-   renders "Release tria"), and only an important rule beats an inline style. The selector is the sidebar
-   row's one statement of where a new session will run, so the cap becomes a share of the row instead: at
-   55% the selector takes its own 113px at the default sidebar width and the New Session button beside it
+   renders "Release tria"). Only an important rule beats an inline style. The selector is the sidebar
+   row's one statement of where a new session will run. The cap becomes a share of the row instead: at
+   55% the selector takes its own 113px at the default sidebar width. The New Session button beside it
    keeps the rest. */
 #new-session-backend { max-width: 55% !important; }
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
@@ -236,10 +236,10 @@ body.resizing { cursor: col-resize; user-select: none; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
   /* Header on phones: the menu and the session name keep the first row, so the
-     name shows its topic and number instead of the first few characters; the
+     name shows its topic and number instead of the first few characters. The
      bounded backend badge, Compact and the concurrency badge share the second
-     row, and the tabs and the events link share the third, the link at its
-     right end. */
+     row. The tabs and the events link share the third, the link at its right
+     end. */
   main > header { flex-wrap: wrap; }
   main > header > .flex-1.min-w-0 { flex-basis: calc(100% - 2.5rem); }
   #backend-badge, #compact-btn, main > header > .cb-slot { order: 1; }
@@ -270,28 +270,28 @@ body.resizing { cursor: col-resize; user-select: none; }
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
 /* Session-row action buttons, the hover reveal: at rest a row's buttons sit
-   out of flow at the row's right end, so the name and the second-line spans
-   reach the row's right edge and no width is reserved for actions. On hover
+   out of flow at the row's right end. The name and the second-line spans then
+   reach the row's right edge, and no width is reserved for actions. On hover
    they stack over the text end on an opaque cover matching the hovered row,
    so revealing them reflows nothing. Buttons forced visible via !opacity-100
    — the current session's actions and a starred row's solid star — keep
-   their place at rest, so the name truncates before them; the same class
+   their place at rest, so the name truncates before them. The same class
    flips are all the star toggle and the highlight move paint with (no list
    repaint).
    Geometry: a button's icon slot is 22px (p-1 around its 14px glyph), the
-   row's flex gap is 8px and its horizontal padding 12px, so one stack pitch
-   is 30px; a hover-revealed box stretches over the row's full height and its
-   flex centering keeps that slot vertically centered in it, while a pinned
-   box of the current row sits on the name line. The offsets run from the
+   row's flex gap is 8px and its horizontal padding 12px. One stack pitch is
+   30px. A hover-revealed box stretches over the row's full height, and its
+   flex centering keeps that slot vertically centered in it. A pinned box of
+   the current row sits on the name line. The offsets run from the
    row's padding edge right-to-left in reverse DOM order; nth-last-of-type
    keeps non-button trailing spans (the archived tree's active tag) out of
    the count. */
 .session-row { position: relative; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Each out-of-flow button stretches over the row's full height (top to
-   bottom of the row box), its own flex keeping the icon slot vertically
-   centered, so the hovered cover is one continuous block from the row's top
-   edge to its bottom edge -- no sliver of the name or the second line shows
+   bottom of the row box), and its own flex keeps the icon slot vertically
+   centered. So the hovered cover is one continuous block from the row's top
+   edge to its bottom edge. No sliver of the name or the second line shows
    above or below the buttons. The rule skips the static !opacity-100 pins:
    top/bottom would be inert on their static boxes, but the flex flip would
    change their in-flow layout. */
@@ -315,8 +315,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The current session pins every action it draws, and two adjacent pinned
    buttons tell its row from a starred row's lone pinned star. Those actions
    leave the flow with the plain stack from the row's right edge, so the text
-   column spans the row: the name reserves the stack and the row's gap while
-   the time line keeps the full width, which leaves a short row's backend
+   column spans the row. The name reserves the stack and the row's gap, while
+   the time line keeps the full width. That leaves a short row's backend
    label whole. An archived row draws three actions and reserves one pitch
    less. A hover guard keeps a touch row off this padding, because there the
    one gear stays in the flow. */
@@ -343,23 +343,24 @@ body.resizing { cursor: col-resize; user-select: none; }
   }
 }
 /* Scope the reveal to the hovered row: the buttons' Tailwind group-hover
-   class rides every ancestor carrying the `group` class, and each group
+   class rides every ancestor carrying the `group` class. Each group
    section wrapper (groups.js's <div class="session-group group">) carries
-   one, so hovering anything inside a group section would set every row's
+   one. So hovering anything inside a group section would set every row's
    out-of-flow buttons in it to opacity 1, painted over those rows' text
    without their hover cover. This reset out-specifies that class (it adds
    the element), so a row's buttons reveal only while the row itself is
-   hovered; the !opacity-100 pins above are exempt, and the touch block
+   hovered. The !opacity-100 pins above are exempt, and the touch block
    below re-wins through its ID selectors. */
 .session-row:not(:hover) > button:not(.\!opacity-100) { opacity: 0; }
 /* Hover: the revealed buttons cover the text end with the hovered row's own
-   composite — the sidebar panel (slate-850) under the row's hover tint — as
-   a color layer plus image so the browser blends it exactly like the row
-   behind; each button's shadow fills the 8px flex gap to its right, keeping
-   the strip continuous, and the boxes span the row's full height, so the
-   cover runs from the row's top edge to its bottom edge and no text sliver
-   shows above or below it. The transitions ride the row's transition-colors
-   beat (they replace the buttons' transition-opacity, opacity included). */
+   composite. That composite is the sidebar panel (slate-850) under the row's
+   hover tint, given as a color layer plus image. So the browser blends it
+   exactly like the row behind. Each button's shadow fills the 8px flex gap
+   to its right, keeping the strip continuous. The boxes span the row's full
+   height, so the cover runs from the row's top edge to its bottom edge. No
+   text sliver shows above or below it. The transitions ride the row's
+   transition-colors beat (they replace the buttons' transition-opacity,
+   opacity included). */
 .session-row > button {
   transition: opacity 0.15s, background-color 0.15s, box-shadow 0.15s;
 }
@@ -371,17 +372,17 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 /* Touch (hover: none): the hover reveal cannot exist, so every row and named
    group header keeps its menu entry always visible, full opacity and
-   tappable, and the other direct actions hide behind that entry's menu. A
-   row with a Settings gear (normal, archived -- the current session
-   included) shows the gear alone, plus a starred row's solid star ahead of
-   it as a read-only indicator; the gear's menu (openSessionRowMenu /
+   tappable. The other direct actions hide behind that entry's menu. A row
+   with a Settings gear (normal, archived -- the current session included)
+   shows the gear alone. A starred row also shows its solid star ahead of it,
+   as a read-only indicator. The gear's menu (openSessionRowMenu /
    openArchivedRowMenu build the touch lists) carries the hidden actions. A
    row without a gear keeps its one action: a worker row's Archive, an
    archived-tree context row's Star. Worker-thread rows and the (No group)
    header render no buttons and stay bare. The 44px touch boxes ride negative
    margins -- outer size back at the button's desktop box -- so the row and
-   header heights stay put, and the desktop hover cover background is
-   explicitly off (a tap's sticky hover must not paint it). */
+   header heights stay put. The desktop hover cover background is explicitly
+   off, because a tap's sticky hover must not paint it. */
 @media (hover: none) {
   #session-list .session-row > button { display: none; background: none; box-shadow: none; }
   #session-list .session-row > [title="Settings"] {

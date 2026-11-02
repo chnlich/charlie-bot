@@ -343,7 +343,7 @@ async fn worker_kinds_get_their_applicable_contracts() {
     let snapshot = harness.snapshot_for(&tree.worker1, kind).await;
     assert!(has_ref(&snapshot, "prompts/task_base.md"), "{kind}");
     if kind == "review" {
-      assert!(has_ref(&snapshot, "src/runtime/review.py:review_rules_text"), "{kind}");
+      assert!(has_ref(&snapshot, "rust/crates/runtime/tasks/src/review_text.rs:review_rules_text"), "{kind}");
     } else {
       assert!(has_ref(&snapshot, "prompts/worker.md"), "{kind}");
     }

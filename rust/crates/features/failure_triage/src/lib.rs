@@ -1,0 +1,46 @@
+//! `src.features.failure_triage`: the stateless half of CharlieBot failure triage.
+//!
+//! A scan reads a time window of failed runs and error-level server log lines, groups them by signature, decides
+//! no-cause records in code, retrieves candidate LESSONS entries and judges each remaining signature with one small
+//! model one-shot. `charliebot triage scan --dry-run` prints one verdict per signature and writes nothing.
+//!
+//! This half registers no route and no service. The ledger, the hourly cron handler and the pass-on to a triage
+//! session belong to the later task that waits for the ledger state machine's approval.
+
+mod collect;
+mod judge;
+mod lessons;
+mod scan;
+mod signature;
+
+pub use collect::{
+  CollectedSignature, DEFAULT_LOG_DIR, LOG_DIR_ENV, ScanOptions, Source, collect, log_dir_from_environment,
+};
+pub use judge::{
+  BackendJudge, JUDGE_COOLDOWN, JUDGE_TIMEOUT, JudgeBackends, JudgeError, JudgeInput, JudgeRunner, Judgement,
+  NativeOneShotError, Verdict, evaluate_response, judge_signature, native_one_shot_text, system_prompt, user_prompt,
+};
+pub use lessons::{CANDIDATE_LIMIT, LESSONS_FILE_NAME, LessonCandidate, LessonIndex};
+pub use scan::{JUDGE_CONCURRENCY, NO_CAUSE_FIX_SCOPE, RowVerdict, ScanRow, ledger_path, preflight, scan};
+pub use signature::{ExtractedCause, NoCauseShape, extract_run_cause, log_signature, normalize, run_signature};
+
+use charliebot_registry::{Registry, RegistryError};
+
+/// `register` (`src/features/failure_triage/__init__.py`): this half contributes no route and no service.
+pub fn register(_registry: &mut Registry) -> Result<(), RegistryError> {
+  Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn register_adds_no_router_and_no_service() {
+    let mut registry = Registry::new();
+    registry.register_package("src.features.failure_triage", register).expect("the package registers");
+    assert!(registry.routers().is_empty());
+    assert!(registry.services_in(charliebot_registry::wiring::Phase::Early).is_empty());
+    assert!(registry.services_in(charliebot_registry::wiring::Phase::Ready).is_empty());
+  }
+}

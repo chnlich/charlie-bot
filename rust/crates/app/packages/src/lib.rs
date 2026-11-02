@@ -37,6 +37,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),
   ("src.features.explain", charliebot_explain::register),
+  ("src.features.failure_triage", charliebot_failure_triage::register),
   ("src.features.improve", charliebot_improve::register),
   ("src.features.memory", charliebot_memory::register),
   ("src.features.taste", charliebot_taste::register),

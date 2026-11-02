@@ -19,6 +19,7 @@ page_packages	src.features.approval	src.features.approval
 page_packages	src.features.host_auth	src.features.host_auth
 page_packages	src.features.diff_view	src.features.diff_view
 page_packages	src.features.explain	src.features.explain
+page_packages	src.features.failure_triage	src.features.failure_triage
 page_packages	src.features.improve	src.features.improve
 page_packages	src.features.memory	src.features.memory
 page_packages	src.features.taste	src.features.taste

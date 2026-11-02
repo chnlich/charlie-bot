@@ -1,4 +1,4 @@
-//! The artifacts package's sidebar contribution (`src/features/artifacts/sidebar.py`): the pending-approval flag of a row,
+//! The artifacts package's sidebar contribution: the pending-approval flag of a row,
 //! and the plan registry a fork carries over.
 
 use std::collections::HashSet;
@@ -38,7 +38,7 @@ impl SidebarContribution for ArtifactsSidebar {
 fn pending_plan_approval(plans_path: &Path, session_id: &str) -> bool {
   let read = match plans::read_plans_tolerant(plans_path, session_id) {
     Ok(read) => read,
-    // Python's probe raises here. A row contribution cannot fail, so the escape is logged and the row gets no flag.
+    // A row contribution cannot fail, so the escape is logged and the row gets no flag.
     Err(error) => {
       tracing::error!(session_id, error = %error, "plan_registry_read_failed");
       return false;
@@ -168,7 +168,7 @@ fn registry_list(value: Option<&Value>) -> anyhow::Result<&[Value]> {
   }
 }
 
-/// The members of a registry entry that Python reads with `.get`. Any other type has no `get`.
+/// The members of a registry entry read with `.get`. Any other type has no `.get`.
 fn attribute_dict(value: &Value) -> anyhow::Result<&Map<String, Value>> {
   match value {
     Value::Object(members) => Ok(members),
@@ -176,12 +176,12 @@ fn attribute_dict(value: &Value) -> anyhow::Result<&Map<String, Value>> {
   }
 }
 
-/// `ver["file"] = file` for the version a reference names.
+/// Sets the `file` of the version a reference names.
 fn set_version_file(data: &mut Value, reference: &Reference, file: &str) {
   data["plans"][reference.plan_index]["versions"][reference.version_index]["file"] = Value::String(file.to_string());
 }
 
-/// `shutil.copy2(source, destination)`: the content, the permission bits, and the access and modification times.
+/// Copies the content, the permission bits, and the access and modification times.
 fn copy2(source: &Path, destination: &Path) -> io::Result<()> {
   fs::copy(source, destination)?;
   let metadata = fs::metadata(source)?;
@@ -189,7 +189,7 @@ fn copy2(source: &Path, destination: &Path) -> io::Result<()> {
   fs::OpenOptions::new().write(true).open(destination)?.set_times(times)
 }
 
-/// Python's truth value of a JSON value that `json.loads` produced.
+/// The truth value of a JSON value: null, false, zero, and an empty string, list or map are falsy.
 fn is_truthy(value: &Value) -> bool {
   match value {
     Value::Null => false,
@@ -201,7 +201,7 @@ fn is_truthy(value: &Value) -> bool {
   }
 }
 
-/// `Path.as_posix()`.
+/// The path with `/` separators.
 fn posix(path: &Path) -> String {
   path.to_string_lossy().into_owned()
 }

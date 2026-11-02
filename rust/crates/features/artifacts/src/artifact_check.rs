@@ -39,8 +39,7 @@ const TRACKER_ID_NEARBY: &str = user_text_checks::TRACKER_ID_NEARBY;
 const SESSION_LINKED: &str = user_text_checks::SESSION_LINKED;
 const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 
-/// The registered genres in the order the parser states them. Python's `constants.ARTIFACT_GENRES` lists the first
-/// five; `waiting` exists only here.
+/// The registered genres in the order the parser states them; `waiting` exists only here.
 pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
 
 const GOAL_WEIGHTED_BUDGET: usize = 240;
@@ -286,7 +285,7 @@ pub struct AssertionOutcome {
 struct Element {
   tag: String,
   classes: HashSet<String>,
-  /// Every attribute's raw value; a bare attribute is `None`, as Python's parser reports it.
+  /// Every attribute's raw value; a bare attribute is `None`.
   attrs: HashMap<String, Option<String>>,
   parent: Option<usize>,
   children: Vec<Child>,
@@ -999,8 +998,8 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
   }
 }
 
-/// The inner error is a renderer failure, which Python reports as a failed assertion. Any other error,
-/// such as a probe that cannot be written, propagates as Python's `OSError` does.
+/// The inner error is a renderer failure; the check reports it as a failed assertion. Any other error,
+/// such as a probe that cannot be written, propagates and fails the check run.
 fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<Result<i32, String>> {
   let probe = artifact
     .parent()
@@ -1762,7 +1761,7 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates the fork assertions, so those outcomes have no recorded Python counterpart to compare
+      // The fixture predates the fork assertions, so those outcomes have no recorded counterpart to compare
       // with.
       let actual = outcomes
         .iter()
@@ -2381,7 +2380,7 @@ mod tests {
     assert_eq!(failures, [SECTIONS_NUMBERED, FOOT_PRESENT].into_iter().collect());
   }
 
-  /// `tests/core/test_artifact_check.py::_genre_doc`: the genre template's `<style>` block verbatim plus `body`.
+  /// A page in the genre's template: the `<style>` block verbatim plus `body`.
   fn genre_doc(genre: &str, body: &str) -> String {
     let template = fs::read_to_string(repo_root().join("prompts").join(genre_template(genre))).unwrap();
     let start = template.find("<style>").expect("the template carries a style block");
@@ -2389,7 +2388,7 @@ mod tests {
     format!("<html><head>{}</head><body>{body}</body></html>", &template[start..end])
   }
 
-  /// `tests/core/test_artifact_check.py::_sitrep_ok_doc`: a sitrep page that passes every sitrep assertion.
+  /// A sitrep page that passes every sitrep assertion.
   fn sitrep_ok_doc() -> String {
     genre_doc(
       "sitrep",
@@ -2411,7 +2410,7 @@ mod tests {
     "<tbody><tr><td>10</td><td>0.002378</td></tr></tbody></table>",
   );
 
-  /// `tests/core/test_artifact_check.py::_sitrep_run_doc`: the sitrep page with a measured table and `variable_block`.
+  /// The sitrep page with a measured table and `variable_block`.
   fn sitrep_run_doc(variable_block: &str) -> String {
     sitrep_ok_doc().replace(
       r#"<p>Done. <span class="src">s</span></p>"#,

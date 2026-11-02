@@ -1,4 +1,4 @@
-//! The `charliebot artifact` verbs (`src/features/artifacts/cli.py`).
+//! The `charliebot artifact` verbs.
 //!
 //! `check` runs a genre's mechanical assertions, prints one line per outcome, and — once every assertion passed and
 //! `--assertions-only` was not given — runs the cold read. The cold read follows the session's profile: a manager
@@ -92,7 +92,7 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let cli = ArtifactCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   match cli.command {
     ArtifactCommand::Check(args) => match check(&args, host)? {
-      // The assertion lines print before a later failure, as Python's per-line prints do.
+      // The assertion lines print before a later failure.
       CheckOutcome::Failed { stdout, exit } => {
         print!("{stdout}");
         flush_stdout()?;
@@ -376,7 +376,7 @@ mod tests {
 
   #[test]
   fn test_cli_assertions_only_passes_a_page_over_the_height_target() {
-    // Python: tests/core/test_artifact_check.py. The fake Chrome is the chrome-stub helper; its measured height is
+    // The fake Chrome is the chrome-stub helper; its measured height is
     // injected, as `test_support::plan_session` does, so no renderer runs.
     let home = tempfile::tempdir().unwrap();
     let chrome = crate::test_support::chrome_program(home.path(), json!([{"exit": 0}]));

@@ -1,4 +1,4 @@
-//! The plan routes (`src/features/artifacts/api.py`): `GET /api/sessions/{session_id}/plans`, the session's plan registry
+//! The plan routes: `GET /api/sessions/{session_id}/plans`, the session's plan registry
 //! with derived states and read errors, and the internal `plan/present`, `plan/amend`, `plan/approve` and `plan/close`
 //! verbs that `charliebot plan` calls.
 

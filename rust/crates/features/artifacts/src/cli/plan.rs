@@ -1,4 +1,4 @@
-//! The `charliebot plan` verbs (`src/features/artifacts/plan_cli.py`): present, amend, approve, close, diff, list.
+//! The `charliebot plan` verbs: present, amend, approve, close, diff, list.
 //!
 //! Every registering verb resolves the session, posts to `/api/internal/plan/<verb>` with a readback that answers a
 //! sent-but-lost call from the session's own plan registry, and adds the verb's next-step reminder. `diff` and `list`

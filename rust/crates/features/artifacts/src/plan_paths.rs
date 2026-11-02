@@ -1,4 +1,4 @@
-//! Shared path handling for per-session plan artifacts (`src/features/artifacts/plan_paths.py`).
+//! Shared path handling for per-session plan artifacts.
 
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use charliebot_core::paths;
 
-/// Python's `Path.exists()`: a missing path, or one whose parent is not a directory, is absent. Any other failure to
+/// Whether a path exists. A missing path, or one whose parent is not a directory, is absent. Any other failure to
 /// stat the path is an error.
 pub fn exists(path: &Path) -> io::Result<bool> {
   match fs::metadata(path) {

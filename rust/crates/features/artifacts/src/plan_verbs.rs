@@ -1,4 +1,4 @@
-//! The plan verbs `present`, `amend`, `approve` and `close` (`src/features/artifacts/plans.py`, `PlanRegistryManager`).
+//! The plan verbs `present`, `amend`, `approve` and `close`.
 //! Each verb changes one session's `plans.json` under the session's lock: it loads the registry, changes the plans, saves
 //! the registry and marks the sidebar dirty, then broadcasts `plan_updated` after the lock is released. `present` and
 //! `amend` also check the page with the plan assertion set before they bind it. The reads and the projection belong to
@@ -22,13 +22,14 @@ use crate::plans::{self, LoadFailure, PLANS_FILE};
 /// How a verb fails, as its route answers it.
 #[derive(Debug)]
 pub(crate) enum VerbError {
-  /// A `ValueError` of the verb: `deps.bad_request` answers 400 with the message as `detail`.
+  /// A refusal of the verb: the route answers 400 with the message as `detail`.
   Refused(String),
-  /// An exception that is not a `ValueError`: the unhandled-exception 500. The kind names the Python class.
+  /// An exception that is not a `ValueError`: the unhandled-exception 500. The kind names the exception class the
+  /// route reports.
   Failed { kind: &'static str, detail: String },
 }
 
-/// The per-session locks of the verbs (`PlanRegistryManager._locks`). A session's lock is made by its first verb and kept.
+/// The per-session locks of the verbs. A session's lock is made by its first verb and kept.
 #[derive(Default)]
 pub(crate) struct SessionLocks {
   locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -207,13 +208,13 @@ async fn read_registry(path: PathBuf) -> Result<Value, VerbError> {
   blocking(move || load(&path)).await
 }
 
-/// `_save` on the blocking pool, with the lock still held by the caller.
+/// Saves on the blocking pool, with the lock still held by the caller.
 async fn write_registry(path: PathBuf, session_id: String, registry: Value) -> Result<(), VerbError> {
   blocking(move || save(&path, &session_id, &registry)).await
 }
 
-/// `_load`: the raw registry of a session, unknown keys included. An absent file reads as no plans. Bytes that do not
-/// decode are the `ValueError` the verb answers 400 with; a file that cannot be read escapes as the 500 Python raises.
+/// The raw registry of a session, unknown keys included. An absent file reads as no plans. Bytes that do not
+/// decode are the `ValueError` the verb answers 400 with; a file that cannot be read escapes as the 500.
 fn load(path: &Path) -> Result<Value, VerbError> {
   if !plan_paths::exists(path).map_err(|error| escaped(plans::os_escape(&error, path)))? {
     return Ok(json!({"plans": []}));
@@ -404,8 +405,8 @@ fn require_open_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbErro
   Ok(index)
 }
 
-/// `require_plan(plans, plan_id)`: the index of the plan with this id. The scan stops at the first match, as Python's
-/// `next` does, and a plan that is not a dict fails the scan before it.
+/// The index of the plan with this id. The scan stops at the first match, and a plan that is not a dict fails the scan
+/// before it.
 fn require_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbError> {
   for (index, plan) in plans.iter().enumerate() {
     if plan_map(plan)?.get("id") == Some(plan_id) {
@@ -436,7 +437,7 @@ fn candidate_ids(plans: &[Value], candidates: &[usize]) -> Result<String, VerbEr
   Ok(ids.join(", "))
 }
 
-/// `plan["versions"][-1]["v"]`: the number of the latest version. An empty list is the IndexError Python raises.
+/// The number of the latest version. An empty list is the `IndexError` the verb reports.
 fn latest_version_number(plan: &Map<String, Value>) -> Result<Value, VerbError> {
   let latest = versions_of(plan)?
     .last()
@@ -444,8 +445,8 @@ fn latest_version_number(plan: &Map<String, Value>) -> Result<Value, VerbError> 
   plan_map(latest)?.get("v").cloned().ok_or_else(|| key_error("v"))
 }
 
-/// `max((p["id"] for p in plans), default=0) + 1`: the id a new lineage takes. Plan ids are integers, as the verbs write
-/// them. Another type fails the comparison Python's `max` makes, and the verb answers 500.
+/// The id a new lineage takes: one more than the largest plan id, or 1 with no plans. Plan ids are integers, as the
+/// verbs write them. Another type fails the largest-id scan, and the verb answers 500.
 fn next_plan_id(plans: &[Value]) -> Result<Value, VerbError> {
   let largest =
     max_integer(plans.iter().map(|plan| -> Result<i64, VerbError> { integer_of(id_of(plan_map(plan)?)?) }))?;
@@ -458,7 +459,7 @@ fn next_plan_id(plans: &[Value]) -> Result<Value, VerbError> {
   Ok(json!(next))
 }
 
-/// `max(ver["v"] for ver in versions) + 1`: the number of the next version. Python's `max` of an empty list is the ValueError
+/// The number of the next version: one more than the largest version number. An empty list is the `ValueError`
 /// the verb answers 400 with.
 fn next_version_number(versions: &[Value]) -> Result<Value, VerbError> {
   let largest = max_integer(versions.iter().map(|version| -> Result<i64, VerbError> {
@@ -471,7 +472,7 @@ fn next_version_number(versions: &[Value]) -> Result<Value, VerbError> {
   Ok(json!(next))
 }
 
-/// The largest of `values` as Python's `max` finds it, or `None` for no values. The first failing value stops the scan.
+/// The largest of `values`, or `None` for no values. The first failing value stops the scan.
 fn max_integer(values: impl Iterator<Item = Result<i64, VerbError>>) -> Result<Option<i64>, VerbError> {
   let mut largest = None;
   for value in values {
@@ -481,7 +482,7 @@ fn max_integer(values: impl Iterator<Item = Result<i64, VerbError>>) -> Result<O
   Ok(largest)
 }
 
-/// An integer field of the registry. A value of another type fails the comparison Python makes with it.
+/// An integer field of the registry. A value of another type fails the check the verb answers 500 with.
 fn integer_of(value: &Value) -> Result<i64, VerbError> {
   value.as_i64().ok_or_else(|| type_error(format!("expected an integer, got {}", plans::type_name(value))))
 }
@@ -494,12 +495,12 @@ fn versions_of(plan: &Map<String, Value>) -> Result<&Vec<Value>, VerbError> {
   }
 }
 
-/// `plan.get(key) is None`: a missing key and a null value both read as None.
+/// A missing key and a null value both read as absent.
 fn absent(plan: &Map<String, Value>, key: &str) -> bool {
   plan.get(key).is_none_or(Value::is_null)
 }
 
-/// `plan['closed']['as']!r`: the close mode a closed plan names, in Python's repr.
+/// The close mode a closed plan names, in the registry's repr form (`value_repr`).
 fn closed_as_repr(plan: &Map<String, Value>) -> Result<String, VerbError> {
   let closed = plan.get("closed").unwrap_or(&Value::Null);
   let Value::Object(closed) = closed else {
@@ -508,13 +509,13 @@ fn closed_as_repr(plan: &Map<String, Value>) -> Result<String, VerbError> {
   Ok(plans::value_repr(closed.get("as").ok_or_else(|| key_error("as"))?))
 }
 
-/// `plan["id"]`: the plan's id, which a plan without one lacks.
+/// The plan's id, which a plan without one lacks.
 fn id_of(plan: &Map<String, Value>) -> Result<&Value, VerbError> {
   plan.get("id").ok_or_else(|| key_error("id"))
 }
 
-/// `data["plans"]`: the registry's plans list. A top level that is not a dict, or a registry without a list of plans,
-/// fails the lookup Python makes, so the verb answers 500.
+/// The registry's plans list. A top level that is not a dict, or a registry without a list of plans,
+/// fails the lookup, so the verb answers 500.
 fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
     return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(registry))));
@@ -526,7 +527,7 @@ fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
   }
 }
 
-/// `data["plans"]` as a list to change.
+/// The registry's plans list, as a list to change.
 fn plans_of_mut(registry: &mut Value) -> Result<&mut Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
     return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(registry))));
@@ -538,7 +539,7 @@ fn plans_of_mut(registry: &mut Value) -> Result<&mut Vec<Value>, VerbError> {
   }
 }
 
-/// A plan or a version as a dict. A value that is not one fails the `.get` or the subscript Python makes on it.
+/// A plan or a version as a dict. A value that is not one fails the `.get` or the subscript the verbs make on it.
 fn plan_map(plan: &Value) -> Result<&Map<String, Value>, VerbError> {
   plan.as_object().ok_or_else(|| attribute_error(plan))
 }

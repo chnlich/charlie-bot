@@ -157,7 +157,7 @@ async fn browser_login_start(
   }
 }
 
-/// `fastapi.HTTPException(status_code, detail=...)`: its JSON body.
+/// The error body of a status-coded answer: a JSON object whose `detail` holds the message.
 fn detail(status: StatusCode, detail: String) -> Response {
   responses::fast_json(status, &json!({ "detail": detail }))
 }
@@ -175,7 +175,7 @@ async fn manual_round(_slot: RoundSlot) {
   }
 }
 
-/// `RedirectResponse(location, status_code=303)`: an empty body, its length and its location.
+/// A 303 redirect to `location`: an empty body, its length and its location.
 fn see_other_to(location: &str) -> Response {
   Response::builder()
     .status(StatusCode::SEE_OTHER)

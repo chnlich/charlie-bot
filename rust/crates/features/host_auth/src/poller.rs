@@ -49,7 +49,7 @@ impl Service for HostAuthPoller {
         Err(error) => return Err(error.into()),
       }
       tracing::info!("host_auth_poller_stopped");
-      // Python's `stop_service` also ends every live browser login after the poller stops.
+      // Also end every live browser login after the poller stops.
       browser_login::stop_all().await;
       Ok(())
     })

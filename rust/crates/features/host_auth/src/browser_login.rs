@@ -1,5 +1,4 @@
-//! `src/features/host_auth/browser_login.py`: one click starts one login process, shows its approval link, and holds
-//! it to an outcome.
+//! Browser login: one click starts one login process, shows its approval link, and holds it to an outcome.
 //!
 //! Vocabulary:
 //!
@@ -153,8 +152,8 @@ impl AttemptCore {
     }
   }
 
-  /// `_kill` from outside the driver: signal the recorded pid. An unsignalable pid is a child the driver's own
-  /// wait already reaped.
+  /// Signal the recorded pid from outside the driver. An unsignalable pid is a child the driver's own wait already
+  /// reaped.
   fn kill_child(&mut self) {
     if let Some(pid) = self.child_pid.take() {
       // SAFETY: a signal send touches only the kernel's process table.
@@ -311,7 +310,7 @@ pub async fn stop_all() {
   }
 }
 
-/// `_drive`: run one attempt from its start to its recorded outcome. A driver whose run fails ends the attempt too.
+/// Run one attempt from its start to its recorded outcome. A driver whose run fails ends the attempt too.
 async fn drive(core: Arc<Mutex<AttemptCore>>) {
   if let Err(error) = run_attempt(&core).await {
     let login = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
@@ -320,12 +319,12 @@ async fn drive(core: Arc<Mutex<AttemptCore>>) {
   }
 }
 
-/// `_run`: spawn the login, read its output for the approval link, and hold the attempt to its outcome.
+/// Spawn the login, read its output for the approval link, and hold the attempt to its outcome.
 async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   let login_command = core.lock().expect("the attempt record lock is never poisoned").login.login_command.clone();
   let mut child = match spawn(&login_command) {
     Ok(child) => child,
-    // `OSError` in Python: an executable that is missing or not runnable.
+    // An executable that is missing or not runnable.
     Err(error) => {
       fail_start(core, format!("could not start the login command: {error}"));
       return Ok(());
@@ -365,7 +364,7 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   hold(core, &mut child, &mut stdout).await
 }
 
-/// `_read_until_match`: the approval link from the first matching output line; `None` when the output ends first.
+/// The approval link from the first matching output line; `None` when the output ends first.
 async fn read_until_link(
   core: &Arc<Mutex<AttemptCore>>,
   stdout: &mut BufReader<ChildStdout>,
@@ -379,7 +378,7 @@ async fn read_until_link(
   Ok(None)
 }
 
-/// `_hold`: read the login's output to its end and wait for it to exit, within the hold limit; then read back.
+/// Read the login's output to its end and wait for it to exit, within the hold limit; then read back.
 async fn hold(
   core: &Arc<Mutex<AttemptCore>>,
   child: &mut Child,
@@ -416,7 +415,7 @@ async fn hold(
   read_back(core).await
 }
 
-/// `_drain_and_wait`: read the output to its end, then take the exit code.
+/// Read the output to its end, then take the exit code.
 async fn drain_and_wait(
   core: &Arc<Mutex<AttemptCore>>,
   child: &mut Child,
@@ -426,7 +425,7 @@ async fn drain_and_wait(
   Ok(exit_code(child.wait().await?))
 }
 
-/// `_read_back`: run the readback command and record APPROVED or READBACK_FAILED on its exit.
+/// Run the readback command and record APPROVED or READBACK_FAILED on its exit.
 async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   core.lock().expect("the attempt record lock is never poisoned").phase = Phase::ReadingBack;
   let readback_command = core.lock().expect("the attempt record lock is never poisoned").login.readback_command.clone();
@@ -454,7 +453,7 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   Ok(())
 }
 
-/// `_read_line`: the next output line, appended to the attempt's tail; `None` once the output has ended.
+/// The next output line, appended to the attempt's tail; `None` once the output has ended.
 async fn read_line(core: &Arc<Mutex<AttemptCore>>, stdout: &mut BufReader<ChildStdout>) -> io::Result<Option<String>> {
   let mut raw = Vec::new();
   if stdout.read_until(b'\n', &mut raw).await? == 0 {
@@ -472,12 +471,12 @@ async fn read_line(core: &Arc<Mutex<AttemptCore>>, stdout: &mut BufReader<ChildS
   Ok(Some(line))
 }
 
-/// `_spawn`: start *argv* without a shell, in the server's environment, with stdin on /dev/null and output merged.
+/// Start *argv* without a shell, in the server's environment, with stdin on /dev/null and output merged.
 fn spawn(argv: &[String]) -> io::Result<Child> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
   let mut command = tokio::process::Command::new(program);
   command.args(arguments).stdin(Stdio::null()).stdout(Stdio::piped());
-  // `stderr=STDOUT` in Python: the child's own stderr writes into the same pipe as its stdout.
+  // The child's own stderr writes into the same pipe as its stdout (`2>&1`).
   // SAFETY: `dup2` is async-signal-safe, and the closure runs between fork and exec with nothing else to touch.
   unsafe {
     command.pre_exec(|| {
@@ -490,7 +489,7 @@ fn spawn(argv: &[String]) -> io::Result<Child> {
   command.spawn()
 }
 
-/// `_finish_capture`: wait for a captured child: `(exit code, output)`. Past the limit it is killed, and its output
+/// Wait for a captured child: `(exit code, output)`. Past the limit it is killed, and its output
 /// drained to the pipe's end.
 async fn finish_capture(mut child: Child, limit: Duration) -> io::Result<(i32, String)> {
   let mut stdout = child.stdout.take().expect("the captured child pipes its merged output");
@@ -513,14 +512,14 @@ fn exit_code(status: ExitStatus) -> i32 {
   status.code().or(status.signal().map(|signal| -signal)).expect("an exit status has a code or a signal")
 }
 
-/// `_failure_text`: the 502 body: the exit code, then the last output lines.
+/// The 502 body: the exit code, then the last output lines.
 fn failure_text(exit_code: i32, output: &VecDeque<String>) -> String {
   let mut lines = vec![format!("exit {exit_code}")];
   lines.extend(output.iter().rev().take(START_FAILURE_TAIL_LINES).rev().cloned());
   lines.join("\n")
 }
 
-/// `_fail_start`: record a start failure and fail the clicks waiting on the link with *body*.
+/// Record a start failure and fail the clicks waiting on the link with *body*.
 fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
   let (name, login_exit) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");
@@ -532,7 +531,7 @@ fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
   let _ = core.lock().expect("the attempt record lock is never poisoned").link.send(LinkState::Failed(body));
 }
 
-/// `_abandon`: end an attempt whose driver failed mid-run, so that no live slot or waiting click is left behind.
+/// End an attempt whose driver failed mid-run, so that no live slot or waiting click is left behind.
 fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   let phase = core.lock().expect("the attempt record lock is never poisoned").phase;
   match phase {
@@ -542,7 +541,7 @@ fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   }
 }
 
-/// `_end`: record *outcome*, kill the live child if one runs, and release the login's live slot.
+/// Record *outcome*, kill the live child if one runs, and release the login's live slot.
 ///
 /// An attempt that already ended keeps its record: a newer click ends a live attempt as REPLACED, and the replaced
 /// process's own exit then has nothing left to record.

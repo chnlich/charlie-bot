@@ -1,4 +1,4 @@
-//! The `host_auth:` config section (`src/features/host_auth/config.py`): the browser logins the login page offers.
+//! The `host_auth:` config section: the browser logins the login page offers.
 //!
 //! A login is a command that prints a device-approval link, plus a readback command that exits 0 while the login is
 //! valid. The operator's host config names them; the repo ships none.
@@ -47,7 +47,7 @@ fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
-/// Parse the section and check the field rules the pydantic model carries in Python.
+/// Parse the section and check the field rules its entries carry.
 fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
   let settings: HostAuthConfig = serde_yaml::from_value(raw.clone()).map_err(|error| format!("host_auth: {error}"))?;
   validate(&settings).map_err(|error| format!("host_auth: {error}"))?;

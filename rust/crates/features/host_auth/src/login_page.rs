@@ -1,5 +1,5 @@
-//! The browser-login page's template context (`src/features/host_auth/api.py` `_login_rows` and its views): one row
-//! per configured login, built from the attempt in progress or the last attempt that ended.
+//! The browser-login page's template context: one row per configured login, built from the attempt in progress
+//! or the last attempt that ended.
 
 use std::collections::HashMap;
 
@@ -29,7 +29,7 @@ pub fn context(logins: &[BrowserLoginConfig], readbacks: &HashMap<String, (i32, 
   }))
 }
 
-/// `_login_rows`: one row per login: its attempt in progress, else its last ended attempt and this load's readback.
+/// One row per login: its attempt in progress, else its last ended attempt and this load's readback.
 /// A login that went live while this load's readback ran shows no readback.
 fn row(
   login: &BrowserLoginConfig,
@@ -47,7 +47,7 @@ fn row(
   }))
 }
 
-/// `_live_view`: the attempt in progress as the template reads it.
+/// The attempt in progress as the template reads it.
 fn live_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   Ok(json!({
     "user_code": attempt.user_code(),
@@ -57,7 +57,7 @@ fn live_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   }))
 }
 
-/// `_last_view`: the last ended attempt; only the two outcomes that ran a readback carry its output.
+/// The last ended attempt; only the two outcomes that ran a readback carry its output.
 fn last_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   let outcome = attempt.outcome.context("an ended attempt records its outcome")?;
   let shows_readback = matches!(outcome, Outcome::Approved | Outcome::ReadbackFailed);
@@ -70,7 +70,7 @@ fn last_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   }))
 }
 
-/// `_readback_view`: the page-load readback, trimmed to the characters the page shows.
+/// The page-load readback, trimmed to the characters the page shows.
 fn readback_view(result: &(i32, String)) -> Value {
   let shown: String = result.1.trim().chars().take(READBACK_SHOWN_CHARS).collect();
   json!({ "exit": result.0, "output": shown })

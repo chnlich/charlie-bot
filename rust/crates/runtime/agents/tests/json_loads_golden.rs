@@ -1,10 +1,10 @@
-//! `charliebot_compat::json_loads` against recorded decoder outputs over one deterministic corpus.
+//! `charliebot_core::json_loads` against recorded decoder outputs over one deterministic corpus.
 //!
 //! The fixture records the outcome the reference decoder gave when it was recorded. The loader must give the same
 //! outcome class and, for an error, the same message text, and for a value the same JSON rendering. The corpus must
 //! reach every message the JSON decoder and scanner raise.
 
-use charliebot_compat::json_loads::{self, LoadError};
+use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
 use serde_json::{Value, json};
 

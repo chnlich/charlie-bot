@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::Context as _;
-use charliebot_compat::json_loads;
+use charliebot_core::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;

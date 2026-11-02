@@ -60,7 +60,8 @@ use charliebot_core::text_repr;
 use http::{HeaderMap, StatusCode, header};
 use serde_json::{Map, Number, Value, json};
 
-use crate::json_loads::{self, LoadFailure};
+use charliebot_core::json_loads::{self, LoadFailure};
+
 use crate::{responses, validation};
 
 /// The result of the body read: no bytes, parsed JSON, or untouched bytes.

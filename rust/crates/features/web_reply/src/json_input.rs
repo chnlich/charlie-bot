@@ -3,7 +3,7 @@
 
 /// Replace each JSON number, `NaN` or infinity token with zero, preserving the input's JSON shape.
 ///
-/// Callers use this only after `charliebot_compat::json_loads` has validated the entire document and reported a value
+/// Callers use this only after `charliebot_core::json_loads` has validated the entire document and reported a value
 /// it cannot represent. The exact numeric value is unused by these routes; the typed reader only needs to see a number
 /// there so a wrong-typed field still reports its type error.
 pub fn replace_unrepresentable_numbers(text: &str) -> String {

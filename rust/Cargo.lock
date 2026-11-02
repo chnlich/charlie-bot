@@ -1251,7 +1251,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-shell-harness",

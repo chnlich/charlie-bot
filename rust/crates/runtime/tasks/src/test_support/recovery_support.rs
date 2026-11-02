@@ -394,6 +394,8 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       session_swap_max_mb: 0,
       session_tasks_max: 0,
       min_free_disk_gib,
+      enable_session_cpu_weight: true,
+      enable_session_io_weight: true,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),

@@ -15,8 +15,8 @@ use charliebot_core::cgroup::{
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::StartupStop;
 
-/// The session cgroup placement of one spawn: the delegated cgroup base and the caps copied from the server
-/// configuration.
+/// The session cgroup placement of one spawn: the delegated cgroup base and the caps and switches copied from the
+/// server configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionCgroupConfig {
   /// Delegated cgroup directory that holds the session cgroups.
@@ -24,22 +24,38 @@ pub struct SessionCgroupConfig {
   pub memory_max_mb: i64,
   pub swap_max_mb: i64,
   pub tasks_max: i64,
+  /// Session cgroups carry a cpu weight of `SESSION_WEIGHT`; `server.enable_session_cpu_weight` turns this off.
+  pub enable_cpu_weight: bool,
+  /// Session cgroups carry an io weight of `SESSION_WEIGHT`; `server.enable_session_io_weight` turns this off.
+  pub enable_io_weight: bool,
 }
 
+/// The cpu and io weight of each session cgroup: the cgroup-v2 default, so competing sessions split evenly.
+pub const SESSION_WEIGHT: u64 = 100;
+
 impl SessionCgroupConfig {
-  /// The caps of the server configuration `cfg`, under this user's delegated cgroup base.
+  /// The caps and switches of the server configuration `cfg`, under this user's delegated cgroup base.
   pub fn from_config(cfg: &CharlieBotConfig) -> Self {
     Self {
       base_dir: charliebot_core::cgroup::system_cgroup_base_dir(),
       memory_max_mb: cfg.server.session_memory_max_mb,
       swap_max_mb: cfg.server.session_swap_max_mb,
       tasks_max: cfg.server.session_tasks_max,
+      enable_cpu_weight: cfg.server.enable_session_cpu_weight,
+      enable_io_weight: cfg.server.enable_session_io_weight,
     }
   }
 
   /// A placement with cgroup control off: a zero memory cap starts no session cgroup, so no directory is read.
   pub fn disabled() -> Self {
-    Self { base_dir: PathBuf::new(), memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 }
+    Self {
+      base_dir: PathBuf::new(),
+      memory_max_mb: 0,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    }
   }
 }
 
@@ -63,13 +79,8 @@ impl SessionCgroup {
 
 /// Create or refresh the session's cgroup under the agents' slice, returning the cgroup directory. A missing or
 /// unwritable slice is an error that names the slice: an unbounded spawn is the failure this guard exists to prevent.
-pub fn ensure_session_cgroup(
-  base_dir: &Path,
-  session_id: &str,
-  memory_max_mb: i64,
-  swap_max_mb: i64,
-  tasks_max: i64,
-) -> io::Result<PathBuf> {
+pub fn ensure_session_cgroup(config: &SessionCgroupConfig, session_id: &str) -> io::Result<PathBuf> {
+  let base_dir = &config.base_dir;
   let slice = agents_slice_dir(base_dir);
   if !slice.is_dir() || !is_writable(&slice) {
     return Err(io::Error::other(format!(
@@ -83,11 +94,20 @@ pub fn ensure_session_cgroup(
   let slice_cgroup = hierarchy.at_path(relative(base_dir, &slice)?)?;
   // systemd enables a slice's controllers for the units inside it only, and a session cgroup is no unit: without this
   // its limit files would not exist.
-  slice_cgroup.enable_subtree_control(&["memory".to_string(), "pids".to_string()]).map_err(|error| {
+  let mut desired: Vec<String> = vec!["memory".to_string(), "pids".to_string()];
+  slice_cgroup.enable_subtree_control(&desired).map_err(|error| {
     io::Error::other(format!(
       "session cgroup slice {AGENTS_SLICE} cannot enable memory and pids for its children: {error}"
     ))
   })?;
+  // Each weight controller joins the enablement command through its own call, so a refusal names the one that failed;
+  // the kernel takes a repeated `+controller` as a no-op, so the refresh path of an existing session stays valid.
+  if config.enable_cpu_weight {
+    enable_weight_controller(&slice_cgroup, &mut desired, "cpu", "server.enable_session_cpu_weight")?;
+  }
+  if config.enable_io_weight {
+    enable_weight_controller(&slice_cgroup, &mut desired, "io", "server.enable_session_io_weight")?;
+  }
   let path = session_cgroup_path(&slice, session_id);
   let leaf = slice_cgroup.child(OsStr::new(&session_cgroup_name(session_id)))?;
   let created = !path.exists();
@@ -95,9 +115,9 @@ pub fn ensure_session_cgroup(
     io::Error::other(format!("session cgroup slice {AGENTS_SLICE} cannot hold {}: {error}", path.display()))
   })?;
   let limits = [
-    ("memory.max", (memory_max_mb * 1024 * 1024).to_string()),
-    ("memory.swap.max", (swap_max_mb * 1024 * 1024).to_string()),
-    ("pids.max", if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() }),
+    ("memory.max", (config.memory_max_mb * 1024 * 1024).to_string()),
+    ("memory.swap.max", (config.swap_max_mb * 1024 * 1024).to_string()),
+    ("pids.max", if config.tasks_max > 0 { config.tasks_max.to_string() } else { "max".to_string() }),
   ];
   for (file, value) in limits {
     leaf.control(file)?.write(value).map_err(|error| {
@@ -107,17 +127,62 @@ pub fn ensure_session_cgroup(
       ))
     })?;
   }
+  // `io.weight` names its target: `default` is the cgroup-wide weight the kernel divides per device.
+  let weights = [
+    ("cpu.weight", config.enable_cpu_weight.then(|| SESSION_WEIGHT.to_string())),
+    ("io.weight", config.enable_io_weight.then(|| format!("default {SESSION_WEIGHT}"))),
+  ];
+  for (file, value) in weights {
+    let Some(value) = value else { continue };
+    leaf.control(file)?.write(value).map_err(|error| {
+      let controller = file.split_once('.').map_or(file, |(name, _)| name);
+      io::Error::other(format!(
+        "session cgroup slice {AGENTS_SLICE} cannot take the weight file {file} in {}: {error}; set {} = false to \
+         turn the {controller} weight off",
+        path.display(),
+        weight_switch(controller)
+      ))
+    })?;
+  }
   if created {
     tracing::info!(
       target: "charliebot_agents",
       path = %path.display(),
-      memory_max_mb,
-      swap_max_mb,
-      tasks_max,
+      memory_max_mb = config.memory_max_mb,
+      swap_max_mb = config.swap_max_mb,
+      tasks_max = config.tasks_max,
+      cpu_weight = config.enable_cpu_weight,
+      io_weight = config.enable_io_weight,
       "session_cgroup_created"
     );
   }
   Ok(path)
+}
+
+/// Enable `controller` for the slice's children, joining the controllers already enabled. A refusal is an error that
+/// names the controller, the slice and the switch that turns the controller's weight off.
+fn enable_weight_controller(
+  slice_cgroup: &Cgroup,
+  desired: &mut Vec<String>,
+  controller: &str,
+  switch: &str,
+) -> io::Result<()> {
+  desired.push(controller.to_string());
+  slice_cgroup.enable_subtree_control(desired).map_err(|error| {
+    io::Error::other(format!(
+      "session cgroup slice {AGENTS_SLICE} cannot enable {controller} for its children: {error}; set {switch} = \
+       false to turn the {controller} weight off"
+    ))
+  })
+}
+
+/// The switch of the server configuration that turns the `controller` weight off, for the error texts.
+fn weight_switch(controller: &str) -> &'static str {
+  match controller {
+    "cpu" => "server.enable_session_cpu_weight",
+    "io" => "server.enable_session_io_weight",
+    other => unreachable!("no weight switch for the controller {other}"),
+  }
 }
 
 /// Open `path` as a cgroup hierarchy root, which a delegated subtree is.
@@ -211,8 +276,7 @@ pub fn prepare_session_cgroup(
     Some(session_id) if !session_id.is_empty() && config.memory_max_mb > 0 => session_id,
     _ => return Ok(None),
   };
-  let path =
-    ensure_session_cgroup(&config.base_dir, session_id, config.memory_max_mb, config.swap_max_mb, config.tasks_max)?;
+  let path = ensure_session_cgroup(config, session_id)?;
   Ok(Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb: config.memory_max_mb }))
 }
 
@@ -333,7 +397,14 @@ fn home_session_cgroup_names(
 
 /// The one startup line that states whether session cgroup control is on. A memory limit of zero or below turns it off.
 /// The agents' slice that is missing or unwritable is a warning, because every spawn with a session then fails.
-pub fn log_session_cgroup_startup(base_dir: &Path, memory_max_mb: i64, swap_max_mb: i64, tasks_max: i64) {
+pub fn log_session_cgroup_startup(
+  base_dir: &Path,
+  memory_max_mb: i64,
+  swap_max_mb: i64,
+  tasks_max: i64,
+  enable_cpu_weight: bool,
+  enable_io_weight: bool,
+) {
   if memory_max_mb <= 0 {
     tracing::info!(target: "charliebot_agents", reason = "server.session_memory_max_mb is 0", "session_cgroup_disabled");
     return;
@@ -347,7 +418,15 @@ pub fn log_session_cgroup_startup(base_dir: &Path, memory_max_mb: i64, swap_max_
     tracing::warn!(target: "charliebot_agents", reason = %format!("{} not writable by this user; spawns with a session fail", slice.display()), "session_cgroup_unavailable");
     return;
   }
-  tracing::info!(target: "charliebot_agents", memory_max_mb, swap_max_mb, tasks_max, "session_cgroup_enabled");
+  tracing::info!(
+    target: "charliebot_agents",
+    memory_max_mb,
+    swap_max_mb,
+    tasks_max,
+    cpu_weight = enable_cpu_weight,
+    io_weight = enable_io_weight,
+    "session_cgroup_enabled"
+  );
 }
 
 #[cfg(test)]
@@ -379,20 +458,44 @@ mod tests {
     leaf_slice(root, slice).join(session_cgroup_name(SESSION_ID))
   }
 
-  /// A leaf as the kernel publishes one: the core control files and the limit files the spawn writes.
+  /// A leaf as the kernel publishes one: the core control files, the limit files the spawn writes and the weight
+  /// files the controllers publish.
   fn fake_leaf(root: &Path, slice: &str) -> PathBuf {
     let leaf = leaf_path(root, slice);
     fs::create_dir_all(&leaf).unwrap();
-    for name in
-      ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
-    {
+    for name in [
+      "cgroup.procs",
+      "cgroup.threads",
+      "cgroup.subtree_control",
+      "memory.max",
+      "memory.swap.max",
+      "pids.max",
+      "cpu.weight",
+      "io.weight",
+    ] {
       fs::write(leaf.join(name), "").unwrap();
     }
     leaf
   }
 
   fn cgroup_config(base_dir: &Path, memory_max_mb: i64) -> SessionCgroupConfig {
-    SessionCgroupConfig { base_dir: base_dir.to_path_buf(), memory_max_mb, swap_max_mb: 32, tasks_max: 4096 }
+    cgroup_config_with(base_dir, memory_max_mb, true, true)
+  }
+
+  fn cgroup_config_with(
+    base_dir: &Path,
+    memory_max_mb: i64,
+    enable_cpu_weight: bool,
+    enable_io_weight: bool,
+  ) -> SessionCgroupConfig {
+    SessionCgroupConfig {
+      base_dir: base_dir.to_path_buf(),
+      memory_max_mb,
+      swap_max_mb: 32,
+      tasks_max: 4096,
+      enable_cpu_weight,
+      enable_io_weight,
+    }
   }
 
   #[test]
@@ -410,18 +513,73 @@ mod tests {
   }
 
   #[test]
-  fn ensure_session_cgroup_creates_with_limit_files_under_the_agents_slice() {
+  fn ensure_session_cgroup_creates_with_limit_and_weight_files_under_the_agents_slice() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path = ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 4096).unwrap();
+    let path = ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID).unwrap();
     assert_eq!(path, leaf_path(root.path(), AGENTS_SLICE));
     assert_eq!(
       fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
-      "+memory +pids\n"
+      "+memory +pids +cpu +io\n"
     );
     assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), format!("{}\n", 64 * 1024 * 1024));
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), format!("{}\n", 32 * 1024 * 1024));
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "4096\n");
+    assert_eq!(fs::read_to_string(path.join("cpu.weight")).unwrap(), format!("{}\n", SESSION_WEIGHT));
+    assert_eq!(fs::read_to_string(path.join("io.weight")).unwrap(), format!("default {}\n", SESSION_WEIGHT));
+  }
+
+  #[test]
+  fn a_switched_off_weight_enables_no_controller_and_writes_no_weight() {
+    let root = fake_slices();
+    fake_leaf(root.path(), AGENTS_SLICE);
+    let path = ensure_session_cgroup(&cgroup_config_with(root.path(), 64, false, false), SESSION_ID).unwrap();
+    assert_eq!(
+      fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
+      "+memory +pids\n"
+    );
+    assert_eq!(fs::read_to_string(path.join("cpu.weight")).unwrap(), "");
+    assert_eq!(fs::read_to_string(path.join("io.weight")).unwrap(), "");
+  }
+
+  #[test]
+  fn a_failing_weight_enable_names_the_controller_the_slice_and_the_switch() {
+    // A directory where the control file belongs makes the write fail, as a refused controller does on cgroupfs.
+    let root = fake_slices();
+    let control = leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control");
+    fs::remove_file(&control).unwrap();
+    fs::create_dir(&control).unwrap();
+    let hierarchy = open_hierarchy(root.path()).unwrap();
+    let slice_cgroup = hierarchy.at_path(format!("{CHARLIEBOT_SLICE}/{AGENTS_SLICE}")).unwrap();
+    let mut desired = vec!["memory".to_string(), "pids".to_string()];
+    let result = enable_weight_controller(&slice_cgroup, &mut desired, "io", "server.enable_session_io_weight");
+    assert!(
+      matches!(
+        &result,
+        Err(error) if error.to_string().contains(AGENTS_SLICE)
+          && error.to_string().contains("cannot enable io for its children")
+          && error.to_string().contains("server.enable_session_io_weight")
+      ),
+      "a refused io enablement must name the controller, the slice and the switch, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn a_failing_weight_write_names_the_controller_the_slice_and_the_switch() {
+    let root = fake_slices();
+    let leaf = fake_leaf(root.path(), AGENTS_SLICE);
+    fs::remove_file(leaf.join("io.weight")).unwrap();
+    fs::create_dir(leaf.join("io.weight")).unwrap();
+    let result = ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID);
+    assert!(
+      matches!(
+        &result,
+        Err(error) if error.to_string().contains(AGENTS_SLICE)
+          && error.to_string().contains("io.weight")
+          && error.to_string().contains("server.enable_session_io_weight")
+      ),
+      "a refused io weight write must name the controller, the slice and the switch, got {result:?}"
+    );
   }
 
   #[test]
@@ -431,7 +589,7 @@ mod tests {
     let control = leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control");
     fs::remove_file(&control).unwrap();
     fs::create_dir(&control).unwrap();
-    let result = ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 4096);
+    let result = ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID);
     assert!(
       matches!(
         &result,
@@ -446,16 +604,16 @@ mod tests {
   fn ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path = ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 50).unwrap();
+    let path = ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID).unwrap();
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50\n");
-    assert_eq!(ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 0).unwrap(), path);
+    assert_eq!(ensure_session_cgroup(&cgroup_config_with(root.path(), 64, false, true), SESSION_ID).unwrap(), path);
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 
   #[test]
   fn ensure_session_cgroup_names_the_missing_slice() {
     let root = tempfile::tempdir().unwrap();
-    let result = ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 4096);
+    let result = ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID);
     assert!(
       matches!(&result, Err(error) if error.to_string().contains(AGENTS_SLICE)),
       "a missing slice must fail the spawn and name the slice, got {result:?}"
@@ -467,7 +625,7 @@ mod tests {
     let root = fake_slices();
     let agents = leaf_slice(root.path(), AGENTS_SLICE);
     fs::set_permissions(&agents, Permissions::from_mode(0o500)).unwrap();
-    let result = ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 4096);
+    let result = ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID);
     fs::set_permissions(&agents, Permissions::from_mode(0o755)).unwrap();
     assert!(
       matches!(&result, Err(error) if error.to_string().contains(AGENTS_SLICE)),
@@ -503,11 +661,18 @@ mod tests {
   fn cleanup_removes_only_an_empty_session_group() {
     let root = fake_slices();
     let path = fake_leaf(root.path(), AGENTS_SLICE);
-    ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, 50).unwrap();
+    ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID).unwrap();
     // The kernel drops a cgroup's control files with the directory; the fake tree must lose them first.
-    for name in
-      ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
-    {
+    for name in [
+      "cgroup.procs",
+      "cgroup.threads",
+      "cgroup.subtree_control",
+      "memory.max",
+      "memory.swap.max",
+      "pids.max",
+      "cpu.weight",
+      "io.weight",
+    ] {
       fs::remove_file(path.join(name)).unwrap();
     }
     assert!(cleanup_session_cgroup(root.path(), SESSION_ID));
@@ -528,7 +693,7 @@ mod tests {
     // so the test checks the bytes that the refusal depends on.
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path = ensure_session_cgroup(root.path(), SESSION_ID, 64, -32, 50).unwrap();
+    let path = ensure_session_cgroup(&cgroup_config_with(root.path(), 64, true, false), SESSION_ID).unwrap();
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), "-33554432\n");
   }
 
@@ -536,7 +701,7 @@ mod tests {
   fn negative_task_limit_writes_no_task_cap() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path = ensure_session_cgroup(root.path(), SESSION_ID, 64, 32, -1).unwrap();
+    let path = ensure_session_cgroup(&cgroup_config_with(root.path(), 64, true, false), SESSION_ID).unwrap();
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 }

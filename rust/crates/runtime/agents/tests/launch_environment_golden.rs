@@ -205,6 +205,8 @@ fn main_config() -> CharlieBotConfig {
       session_swap_max_mb: 0,
       session_tasks_max: 4096,
       min_free_disk_gib: 10,
+      enable_session_cpu_weight: true,
+      enable_session_io_weight: true,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),

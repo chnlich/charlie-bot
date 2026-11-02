@@ -115,6 +115,8 @@ mod tests {
         session_swap_max_mb: 0,
         session_tasks_max: 0,
         min_free_disk_gib: 0,
+        enable_session_cpu_weight: true,
+        enable_session_io_weight: true,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),

@@ -24,7 +24,7 @@ fn fixture(root: &Path) -> PathBuf {
 }
 
 fn cgroup_config(base: &Path) -> SessionCgroupConfig {
-  SessionCgroupConfig { base_dir: base.to_path_buf(), memory_max_mb: 64, swap_max_mb: 0, tasks_max: 64 }
+  SessionCgroupConfig { base_dir: base.to_path_buf(), memory_max_mb: 64, swap_max_mb: 0, tasks_max: 64, ..SessionCgroupConfig::disabled() }
 }
 
 /// Empty the child session's cgroup in the agents' slice, with the `cgroup.procs` the kernel supplies to a real cgroup.

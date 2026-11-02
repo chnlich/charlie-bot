@@ -93,6 +93,8 @@ fn run_session_cgroup_startup_inner(
     server.session_memory_max_mb,
     server.session_swap_max_mb,
     server.session_tasks_max,
+    server.enable_session_cpu_weight,
+    server.enable_session_io_weight,
   );
   if let Some(stop) = stop {
     cgroup::sweep_stale_session_cgroups_until_stopped(base_dir, sessions_dir, stop)?;
@@ -335,6 +337,8 @@ mod tests {
         session_swap_max_mb: swap,
         session_tasks_max: tasks,
         min_free_disk_gib: 10,
+        enable_session_cpu_weight: true,
+        enable_session_io_weight: true,
       };
 
       run_session_cgroup_startup(base.path(), &sessions, &server).unwrap();

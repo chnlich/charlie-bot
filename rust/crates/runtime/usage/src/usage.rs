@@ -15,8 +15,23 @@ use charliebot_store::{ChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
-const READING_RESOLVED: &str = "resolved";
 const FACTS_MEMO_CAP: usize = 8;
+
+/// The tier a fold last read its context from.
+///
+/// Each reading event sets the kind it produced, and the fold resolves through that kind.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ReadingKind {
+  /// No reading event has arrived yet, so the fold reports null context values.
+  #[default]
+  Unset,
+  /// Claude assistant usage, where a later compaction's post-token count wins.
+  Claude,
+  /// A context snapshot carried by a result event.
+  Snapshot,
+  /// A reading the backend already resolved into context fields.
+  Resolved,
+}
 
 #[derive(Clone, Default)]
 struct UsageFold {
@@ -25,7 +40,7 @@ struct UsageFold {
   post_compact_tokens: Option<i64>,
   model_windows: Map<String, Value>,
   snapshot: Option<Value>,
-  reading_kind: String,
+  reading_kind: ReadingKind,
   reading: Option<Value>,
   total_cost: f64,
   unknown_cost: bool,
@@ -45,7 +60,7 @@ impl UsageFold {
       match event_type {
         Some(event_types::ASSISTANT) => self.feed_assistant(*event)?,
         Some(event_types::SYSTEM) => self.feed_system(*event)?,
-        Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == CLAUDE_READING_KIND => {
+        Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == ReadingKind::Claude => {
           self.feed_compaction_metadata(*event)?;
         }
         Some(event_types::RESULT) => self.feed_result(*event)?,
@@ -73,19 +88,19 @@ impl UsageFold {
       self.chosen_prompt_tokens = tokens;
       self.chosen_model = message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
       self.post_compact_tokens = None;
-      self.reading_kind = CLAUDE_READING_KIND.to_string();
+      self.reading_kind = ReadingKind::Claude;
     }
     Ok(())
   }
 
   fn feed_system<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
     match event.field("subtype").and_then(EventFields::as_str_field) {
-      Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == CLAUDE_READING_KIND => {
+      Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == ReadingKind::Claude => {
         self.feed_compaction_metadata(event)?;
       }
       Some(event_types::CONTEXT_READING) => {
         if let Some(reading) = event.field(event_types::CONTEXT_READING).filter(|value| is_truthy(*value)) {
-          self.reading_kind = READING_RESOLVED.to_string();
+          self.reading_kind = ReadingKind::Resolved;
           self.reading = Some(reading.to_owned_value());
         }
       }
@@ -118,7 +133,7 @@ impl UsageFold {
     }
     if let Some(snapshot) = event.field(event_types::CONTEXT_SNAPSHOT).filter(|value| value.is_object()) {
       self.snapshot = Some(snapshot.to_owned_value());
-      self.reading_kind = SNAPSHOT_READING_KIND.to_string();
+      self.reading_kind = ReadingKind::Snapshot;
     }
     match event.field(event_types::RESULT_TOTAL_COST_USD) {
       Some(value) if value.is_null() => self.unknown_cost = true,
@@ -323,11 +338,11 @@ fn resolve_fold_tier(
     return Ok(None);
   }
   let cost = fold.cost();
-  let usage = match fold.reading_kind.as_str() {
-    CLAUDE_READING_KIND => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
-    SNAPSHOT_READING_KIND => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
-    READING_RESOLVED => Some(resolve_reading(fold, cost)),
-    _ => Some(json!({
+  let usage = match fold.reading_kind {
+    ReadingKind::Claude => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
+    ReadingKind::Snapshot => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
+    ReadingKind::Resolved => Some(resolve_reading(fold, cost)),
+    ReadingKind::Unset => Some(json!({
       (event_types::CONTEXT_TOKENS): null,
       (event_types::CONTEXT_FULL): null,
       (event_types::CONTEXT_COMPACT_AT): null,

@@ -346,8 +346,8 @@ enum WalkEntry {
 
 /// The threads one batch of the walk's per-session reads may split across.
 ///
-/// The skip checks and the absence proofs each read only their own session's files, before any node pass writes, so
-/// each batch splits across the available cores. On the 7,160-session mock home sixteen threads
+/// The skip checks, the absence proofs and the history parses each read only their own session's files, before any
+/// node pass writes, so each batch splits across the available cores. On the 7,160-session mock home sixteen threads
 /// left the absence-proof scan at about the walk's fixed per-session cost, so more threads gained nothing.
 const WALK_WORKERS: usize = 16;
 /// The batch size below which a batch runs on the calling thread.
@@ -360,8 +360,8 @@ const WALK_PARALLEL_MIN_ITEMS: usize = 64;
 /// controllers mark their interrupted state first.
 ///
 /// A pass that runs to its end logs `task_tree_recovery_phases`, the milliseconds of each phase in run order: the
-/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the node passes and the
-/// marker write.
+/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the history parses, the
+/// node passes and the marker write.
 pub async fn reconcile_task_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
@@ -452,12 +452,39 @@ pub async fn reconcile_task_tree(
     return Ok(counters);
   };
   let absence_proofs_ms = phase_ms();
-  for (candidate, no_node) in candidates.into_iter().zip(no_nodes) {
+  // Each node pass begins by folding its whole live log, and parsing and folding that log is most of the pass. The
+  // parses read only their own session's files, so they run in parallel here, and each pass starts from its parse and
+  // fold installed as the cached history. An install checks the log's identity, so a log that a pass appended to after
+  // its parse is read and folded again by its own pass.
+  let pass_nodes: Vec<(String, bool)> = candidates
+    .iter()
+    .zip(&no_nodes)
+    .map(|(candidate, no_node)| (candidate.session_id.clone(), matches!(no_node, Ok(false))))
+    .collect();
+  let parse_features = Arc::clone(features);
+  let (_, parsed_histories) = blocking_batch(pass_nodes, &stop, move |(session_id, takes_pass)| {
+    takes_pass.then(|| parse_features.store.parse_live_history(session_id))
+  })
+  .await?;
+  let Some(parsed_histories) = parsed_histories else {
+    return Ok(counters);
+  };
+  let history_parses_ms = phase_ms();
+  for ((candidate, no_node), parsed) in candidates.into_iter().zip(no_nodes).zip(parsed_histories) {
     if stop.is_cancelled() {
       return Ok(counters);
     }
     let session_id = candidate.session_id;
     let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
+    // A parse that failed or changed under its read leaves the cache cold. The pass then reads the log under its session
+    // lock and fails the node on an error that persists.
+    let installed = parsed.map(|parsed| match parsed? {
+      Some(parsed) => features.store.install_live_history(&session_id, parsed),
+      None => Ok(false),
+    });
+    if let Some(Err(error)) = installed {
+      tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_history_parse_failed");
+    }
     let result = match no_node {
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
       Ok(false) => {
@@ -492,6 +519,7 @@ pub async fn reconcile_task_tree(
     listing_ms,
     skip_checks_ms,
     absence_proofs_ms,
+    history_parses_ms,
     node_passes_ms,
     marker_ms,
     "task_tree_recovery_phases"

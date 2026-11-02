@@ -663,6 +663,36 @@ impl Store {
     Ok(Some(facts))
   }
 
+  /// Memoize the facts of a whole live list folded outside the store, as [`Store::node_facts_of`] memoizes its first
+  /// fold of that list. The caller has just made `live` the session's cached list at `generation`, and the session holds
+  /// no archived events.
+  pub(crate) fn seed_node_facts(
+    &self,
+    session_id: &str,
+    generation: u64,
+    list_identity: Arc<()>,
+    live: &Arc<Vec<SharedChatEvent>>,
+    facts: NodeFacts,
+    runs: RunFacts,
+  ) {
+    self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
+    self.history_work.folded_events.fetch_add(live.len() as u64, Ordering::Relaxed);
+    self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
+      identity: Arc::clone(&list_identity),
+      events: Arc::clone(live),
+      covered: live.len(),
+      facts: Arc::new(runs),
+    });
+    let entry = CachedNodeFacts {
+      key: NodeFactsKey::Cached { generation, covered: live.len() },
+      list_identity,
+      archived: 0,
+      covered: live.len(),
+      facts: Arc::new(facts),
+    };
+    self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(session_id.to_string(), entry);
+  }
+
   /// Keep a node's folded task facts past recovery eviction, keyed by the file identity they cover.
   pub(crate) fn seal_node_facts(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity)>) {
     let Some((generation, covered, identity)) = evicted else { return };
@@ -2481,6 +2511,17 @@ fn fold_node_facts_from(
     }
   }
   Ok(!should_stop())
+}
+
+/// The node and run facts of a session with no archived events, folded from its whole live list as the first fold of
+/// [`Store::node_facts_of`] folds them.
+pub(crate) fn fold_live_history(live: &[SharedChatEvent]) -> StoreResult<(NodeFacts, RunFacts)> {
+  let mut facts = NodeFacts::default();
+  let mut runs = RunFacts::default();
+  if !live.is_empty() {
+    fold_node_facts_from(&mut facts, live, 0, &mut || false, Some(&mut runs))?;
+  }
+  Ok((facts, runs))
 }
 
 fn observe_run_facts(

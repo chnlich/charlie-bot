@@ -15,6 +15,7 @@ pub mod message_events;
 pub mod message_utils;
 pub mod metadata;
 mod ndjson;
+mod parse_ahead;
 pub mod projection;
 mod read_memos;
 mod run_facts;
@@ -45,6 +46,7 @@ pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEvent, 
 pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
 pub use listing::{ArchivedPage, MetadataListing, RawMetadata, SharedSubtreeRoots};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
+pub use parse_ahead::ParsedLiveHistory;
 pub use projection::MessageProjection;
 pub use run_records::{
   RetryRunFields, RunBlocker, RunDisplayState, RunFacts, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage,

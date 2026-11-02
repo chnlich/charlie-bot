@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::io::{self, BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_core::logline;
 use charliebot_shell_harness::copy_file;
+use nix::sched::{CpuSet, sched_getaffinity, sched_setaffinity};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
@@ -86,7 +87,35 @@ fn test_server_binary(root: &Path) -> PathBuf {
   server
 }
 
-fn start_server(root: &Path, home: &Path, gate_recovery: bool) -> (ServerChild, Receiver<io::Result<String>>) {
+/// The CPUs a test server may run on.
+#[derive(Clone, Copy)]
+enum Cpus {
+  All,
+  /// The first CPU the test itself may run on. The walk then runs every batch on its own thread, so its length follows
+  /// the fixture and not the host's core count.
+  One,
+}
+
+/// Restricts the command's process to one CPU the test may run on.
+fn pin_to_one_cpu(command: &mut Command) {
+  let allowed = sched_getaffinity(Pid::from_raw(0)).expect("the test reads its CPU affinity");
+  let cpu = (0..CpuSet::count())
+    .find(|&cpu| allowed.is_set(cpu).expect("the CPU index is within the set"))
+    .expect("the test may run on at least one CPU");
+  let mut one = CpuSet::new();
+  one.set(cpu).expect("the CPU index is within the set");
+  // SAFETY: the hook makes one system call and allocates nothing, so it is safe between fork and exec.
+  unsafe {
+    command.pre_exec(move || sched_setaffinity(Pid::from_raw(0), &one).map_err(io::Error::from));
+  }
+}
+
+fn start_server(
+  root: &Path,
+  home: &Path,
+  gate_recovery: bool,
+  cpus: Cpus,
+) -> (ServerChild, Receiver<io::Result<String>>) {
   let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
   let mut command = Command::new(test_server_binary(root));
   command
@@ -101,6 +130,9 @@ fn start_server(root: &Path, home: &Path, gate_recovery: bool) -> (ServerChild, 
     .stderr(Stdio::null());
   if gate_recovery {
     command.env("CHARLIEBOT_TEST_TASK_RECOVERY_DELAY_MS", RECOVERY_GATE_MS);
+  }
+  if let Cpus::One = cpus {
+    pin_to_one_cpu(&mut command);
   }
   let mut child = ServerChild(command.spawn().expect("the server process starts"));
   let stdout = child.0.stdout.take().expect("the server stdout is piped");
@@ -194,7 +226,7 @@ fn drain_logs(receiver: &Receiver<io::Result<String>>, lines: &mut Vec<String>) 
 fn assert_boot_signal(signal_to_send: Signal) {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
   let home = prepare_home(temporary.path(), 0);
-  let (mut server, receiver) = start_server(temporary.path(), &home, true);
+  let (mut server, receiver) = start_server(temporary.path(), &home, true, Cpus::All);
   let mut lines = wait_for_event(&mut server, &receiver, "task_tree_recovery_test_gate", Duration::from_secs(20));
   assert!(
     lines.iter().any(|line| field_of(line, "delay_ms").as_deref() == Some(RECOVERY_GATE_MS)),
@@ -221,7 +253,7 @@ fn assert_boot_signal(signal_to_send: Signal) {
     signal => panic!("unexpected test signal {signal}"),
   }
 
-  let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false);
+  let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false, Cpus::All);
   let mut restarted_lines =
     wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(30));
   assert!(
@@ -258,7 +290,7 @@ fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
   let port = occupied.local_addr().expect("the occupied address").port();
   let home = prepare_home(temporary.path(), port);
 
-  let (mut server, receiver) = start_server(temporary.path(), &home, false);
+  let (mut server, receiver) = start_server(temporary.path(), &home, false, Cpus::All);
   let mut lines = wait_for_event(&mut server, &receiver, "bind_failed", Duration::from_secs(30));
   let line = lines.last().expect("the bind failure line");
   let row = logline::parse(line).expect("the bind failure line is a log line");
@@ -272,10 +304,10 @@ fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
   assert_eq!(status.code(), Some(1), "{status:?}");
 }
 
-/// Task-tree nodes the boot pass walks, and the chat events each node carries. The walk takes at least `WALK_MIN_MS`,
-/// so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type), which lengthens
-/// the walk without a directory per node. A release build walks an event about six times faster than a debug build, so
-/// its nodes carry five times the events.
+/// Task-tree nodes the boot pass walks, and the chat events each node carries. On one CPU the walk takes at least
+/// `WALK_MIN_MS`, so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type),
+/// which lengthens the walk without a directory per node. A release build walks an event about six times faster than a
+/// debug build, so its nodes carry five times the events.
 const WALK_SESSIONS: usize = 200;
 const WALK_EVENTS: usize = if cfg!(debug_assertions) { 4_800 } else { 24_000 };
 const WALK_MIN_MS: u64 = 2_000;
@@ -339,14 +371,16 @@ fn assert_segments_cover_ready(lines: &[String]) {
   );
 }
 
-/// SIGTERM during a real node walk. Neither boot sets the delay gate, so the walk's own stop checks end it.
+/// SIGTERM during a real node walk. Neither boot sets the delay gate, so the walk's own stop checks end it. Both boots
+/// run on one CPU, where the walk's length follows the fixture; on many cores its parallel reads end it in a fraction of
+/// `WALK_MIN_MS`.
 #[test]
 fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
   let home = prepare_home(temporary.path(), 0);
   write_sessions(&home, WALK_SESSIONS);
 
-  let (mut server, receiver) = start_server(temporary.path(), &home, false);
+  let (mut server, receiver) = start_server(temporary.path(), &home, false, Cpus::One);
   let mut lines = wait_for_event(&mut server, &receiver, "task_tree_recovery_walk_started", Duration::from_secs(20));
   send_signal(&server, Signal::SIGTERM);
   let (status, elapsed) = wait_for_exit(&mut server, &receiver, &mut lines, BOOT_STOP_TIMEOUT);
@@ -369,7 +403,7 @@ fn sigterm_stops_the_node_walk_without_the_delay_gate() {
     "the shutdown line marks a boot stop: {shutdowns:?}"
   );
 
-  let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false);
+  let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false, Cpus::One);
   let mut restarted_lines =
     wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(60));
   let walk_ms = recovery_elapsed_ms(&restarted_lines);

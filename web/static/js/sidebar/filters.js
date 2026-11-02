@@ -162,38 +162,50 @@ let searchDebounceTimer = null;
 // one, and a response carries the generation it was fetched under, so a slow
 // earlier query cannot repaint the rows of a newer one.
 let searchGeneration = 0;
-
-// The list's text from the first keystroke until that query's own response
-// lands. The previous query's rows answer other text, so leaving them under the
-// new text reads as a search that does nothing. A content search over a
-// production session home takes long enough to see.
-function showSearchNote(text) {
-  const nav = document.getElementById('session-list');
-  if (nav) nav.innerHTML = renderEmptyNote(text);
-}
+// The query whose rows the list holds, '' while it holds another view or a
+// note. A same-text call is a refresh: the WebSocket handlers refetch the open
+// query when a session or task tree changes, and that refresh keeps the rows
+// the reader is on.
+let shownSearchQuery = '';
+// Whether the list holds a search note instead of rows.
+let searchPending = false;
 
 function handleSidebarSearch(query) {
   clearTimeout(searchDebounceTimer);
   const pills = document.querySelector('.filter-pill')?.parentElement;
   const generation = ++searchGeneration;
-  if (query.trim()) {
+  const text = query.trim();
+  if (text) {
     // Hide filter pills while searching
     if (pills) pills.style.display = 'none';
-    showSearchNote('Searching…');
+    if (text !== shownSearchQuery) {
+      // The rows answer other text, so they go before this request starts. A
+      // content search over a production session home takes long enough to
+      // see, and rows that contradict the box read as a search doing nothing.
+      renderSearchNote('Searching…');
+      shownSearchQuery = '';
+      searchPending = true;
+    }
     searchDebounceTimer = setTimeout(() => {
-      fetch('/api/sessions/search?q=' + encodeURIComponent(query.trim()))
+      fetch('/api/sessions/search?q=' + encodeURIComponent(text))
         .then(res => res.json())
         .then(sessions => {
           if (generation !== searchGeneration) return;
+          shownSearchQuery = text;
+          searchPending = false;
           renderSessionList(sessions, 'search');
         })
         .catch(err => {
           if (generation !== searchGeneration) return;
           console.error('Search failed:', err);
-          showSearchNote('Search failed; try again.');
+          // A failed refresh keeps the rows already on screen; only a search
+          // that has no rows yet replaces its note with the failure.
+          if (searchPending) renderSearchNote('Search failed; try again.');
         });
     }, 300);
   } else {
+    shownSearchQuery = '';
+    searchPending = false;
     // Restore filter pills and current filter
     if (pills) pills.style.display = '';
     switchSidebarFilter(currentFilter);

@@ -293,6 +293,15 @@ function renderEmptyNote(text) {
   return `<p class="text-slate-400 text-sm px-3 py-2">${text}</p>`;
 }
 
+// The search overlay's pending and failure notes. They are search paints too,
+// so they set the same marker a result paint does, and the Workspace badge
+// repaint keeps its rows off this view.
+function renderSearchNote(text) {
+  searchListPainted = true;
+  const nav = document.getElementById('session-list');
+  if (nav) nav.innerHTML = renderEmptyNote(text);
+}
+
 // Every sidebar render path rebuilds rows in place from a session list, so the
 // unread map must be refolded from that same list or unread badges go stale.
 function resyncSessionUnread(sessions) {
@@ -778,6 +787,7 @@ const GLOBALS = {
   registerSessionMenuItems,
   registerGroupMenuItem,
   renderEmptyNote,
+  renderSearchNote,
   paintWorkspaceBadges,
   resetGroupLimitState,
   toggleSessionGroupLimit,

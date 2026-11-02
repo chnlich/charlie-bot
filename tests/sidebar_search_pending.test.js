@@ -65,3 +65,32 @@ test('a failed search leaves a note rather than the previous rows', async () => 
   assert.deepEqual(rowIds(nav.innerHTML), []);
   assert.ok(nav.innerHTML.length > 0, 'the failure shows in place of the list');
 });
+
+test('a refresh of the shown query keeps its rows until the response lands', async () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+
+  context.handleSidebarSearch('same');
+  pending[0].resolve({json: async () => [makeSessionMeta('same')]});
+  await flush();
+  assert.deepEqual(rowIds(nav.innerHTML), ['same']);
+
+  // The WebSocket handlers refetch the open query; that refresh keeps the rows.
+  context.handleSidebarSearch('same');
+  assert.deepEqual(rowIds(nav.innerHTML), ['same'], 'a same-query refresh does not blank the list');
+  pending[1].resolve({json: async () => [makeSessionMeta('same')]});
+  await flush();
+  assert.deepEqual(rowIds(nav.innerHTML), ['same']);
+});
+
+test('a workspace badge repaint does not replace the pending note', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  deferredFetches(context);
+  context.renderSessionList([makeSessionMeta('old')], 'all');
+
+  context.handleSidebarSearch('new');
+  context.paintWorkspaceBadges('<span id="badge"></span>');
+
+  assert.doesNotMatch(nav.innerHTML, /id="badge"/);
+  assert.deepEqual(rowIds(nav.innerHTML), [], 'the badge repaint leaves the search note in place');
+});

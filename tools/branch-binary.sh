@@ -9,8 +9,9 @@
 # $HOME/.cache/charliebot-branch-binaries/<branch>; a later call for the same branch replaces the earlier
 # download), verifies the checksums and prints the local absolute paths of the CLI and server binaries.
 #
-# GitHub dispatches a workflow only when the workflow file is on the default branch, so the ci.yml change
-# must be on main before the first use on a branch.
+# The dispatched ref's workflow file must itself carry the workflow_dispatch trigger: a branch whose ci.yml
+# predates this change fails at dispatch with HTTP 422, which the script propagates. The trigger does not need
+# to be on the default branch first.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

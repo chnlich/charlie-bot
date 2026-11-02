@@ -53,7 +53,12 @@ fn render(features: &FeatureContext, view: DayView, request: &Parts) -> Result<R
   let date_text = view.date.to_string();
   let previous = day.checked_sub(Span::new().days(1)).map_err(|error| ("ValueError".to_string(), error.to_string()))?;
   let next = day.checked_add(Span::new().days(1)).map_err(|error| ("ValueError".to_string(), error.to_string()))?;
+  let templating =
+    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+  // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
+  let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
   let context = json!({
+    "static_asset_version": asset_version,
     "ctx": {
       "date": date_text,
       "previous": previous.to_string(),
@@ -64,8 +69,6 @@ fn render(features: &FeatureContext, view: DayView, request: &Parts) -> Result<R
       "digest": view.body["digest"],
     },
   });
-  let templating =
-    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
   templating
     .render_page(features, TEMPLATE, &context, request)
     .map_err(|error| (error.kind().to_string(), error.to_string()))

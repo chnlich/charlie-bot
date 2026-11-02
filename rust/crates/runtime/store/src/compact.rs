@@ -1,14 +1,15 @@
-//! A parsed JSON value whose object keys are interned across the process and whose objects and
-//! arrays are stored without growth slack.
+//! A parsed JSON value whose object keys are interned and whose objects and arrays are stored without growth slack.
 //!
 //! `serde_json::Value` gives every parsed chat event a fresh `String` per object key inside an
 //! `IndexMap` with hash-table and entry-vector slack. That representation is the measured gap against a plain
 //! `Value` map. This module keeps the JSON semantics: insertion order, the three `serde_json::Number` forms, and
-//! mapping-style access. It shares each distinct key once and stores each object as one exact-fit
-//! `Box<[ObjectEntry]>`.
+//! mapping-style access. It stores each object as one exact-fit `Box<[ObjectEntry]>` and shares each distinct key:
+//! across the process for a value built alone ([`intern_key`]), and across one file for a whole-file parse
+//! ([`ParseKeys`]).
 
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
@@ -110,17 +111,63 @@ impl From<Value> for CompactValue {
   }
 }
 
+/// Where a parse takes each object key from.
+pub(crate) trait KeySource {
+  /// The key for `name`.
+  fn key(&self, name: &str) -> Key;
+}
+
+/// The process-wide key table of [`intern_key`].
+struct ProcessKeys;
+
+impl KeySource for ProcessKeys {
+  fn key(&self, name: &str) -> Key {
+    intern_key(name)
+  }
+}
+
+/// One parse's own key table: each distinct key allocates once per parse, and no parse shares a key with another.
+///
+/// The keys of the process table are shared by every thread, so threads that parse at once wait on its lock and on the
+/// keys' shared reference counts. A whole-file parse holds only keys of its own and so runs in parallel with others.
+/// Its keys are not in the process table: a key compares by name, so a value holding such a key equals one holding the
+/// process key of the same name.
+#[derive(Default)]
+pub(crate) struct ParseKeys(RefCell<HashMap<Box<str>, Key>>);
+
+impl KeySource for ParseKeys {
+  fn key(&self, name: &str) -> Key {
+    if let Some(key) = self.0.borrow().get(name) {
+      return Arc::clone(key);
+    }
+    let key = Arc::new(KeyName(name.into()));
+    self.0.borrow_mut().insert(name.into(), Arc::clone(&key));
+    key
+  }
+}
+
 /// Deserializes straight from the parser's bytes: one pass, no `serde_json::Value` intermediate.
 ///
-/// The visitor below builds the compact form as the parser scans, interning each object key once and
-/// sizing every container from the parser's hint. The accepted grammar and the resulting values are
-/// serde_json's own, so a document this impl accepts is exactly one
-/// `from_value(serde_json::from_str(..))` would have produced.
+/// The visitor of [`ValueSeed`] builds the compact form as the parser scans, taking each object key from the
+/// process-wide table and sizing every container from the parser's hint. The accepted grammar and the resulting values
+/// are serde_json's own, so a document this impl accepts is exactly one `from_value(serde_json::from_str(..))` would
+/// have produced.
 impl<'de> serde::Deserialize<'de> for CompactValue {
   fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-    struct CompactVisitor;
+    serde::de::DeserializeSeed::deserialize(ValueSeed(&ProcessKeys), deserializer)
+  }
+}
 
-    impl<'de> serde::de::Visitor<'de> for CompactVisitor {
+/// The seed of one value whose object keys come from `K`.
+pub(crate) struct ValueSeed<'k, K>(pub(crate) &'k K);
+
+impl<'de, K: KeySource> serde::de::DeserializeSeed<'de> for ValueSeed<'_, K> {
+  type Value = CompactValue;
+
+  fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+    struct CompactVisitor<'k, K>(&'k K);
+
+    impl<'de, K: KeySource> serde::de::Visitor<'de> for CompactVisitor<'_, K> {
       type Value = CompactValue;
 
       fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -153,7 +200,7 @@ impl<'de> serde::Deserialize<'de> for CompactValue {
 
       fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
         let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-        while let Some(item) = seq.next_element::<Self::Value>()? {
+        while let Some(item) = seq.next_element_seed(ValueSeed(self.0))? {
           items.push(item);
         }
         Ok(Self::Value::Array(items.into_boxed_slice()))
@@ -161,8 +208,8 @@ impl<'de> serde::Deserialize<'de> for CompactValue {
 
       fn visit_map<A: serde::de::MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
         let mut entries: Vec<ObjectEntry> = Vec::with_capacity(access.size_hint().unwrap_or(0));
-        while let Some(key) = access.next_key_seed(KeySeed)? {
-          let value = access.next_value::<Self::Value>()?;
+        while let Some(key) = access.next_key_seed(KeySeed(self.0))? {
+          let value = access.next_value_seed(ValueSeed(self.0))?;
           // A repeated key keeps its first position and takes the last value, as serde_json's map
           // insert does.
           match entries.iter_mut().find(|entry| entry.key == key) {
@@ -174,21 +221,21 @@ impl<'de> serde::Deserialize<'de> for CompactValue {
       }
     }
 
-    deserializer.deserialize_any(CompactVisitor)
+    deserializer.deserialize_any(CompactVisitor(self.0))
   }
 }
 
-/// The map key's seed: interns the name as the parser scans, so a repeated key never allocates its
+/// The map key's seed: takes the key as the parser scans, so a repeated key never allocates its
 /// name twice (most keys repeat across a log's events).
-struct KeySeed;
+struct KeySeed<'k, K>(&'k K);
 
-impl<'de> serde::de::DeserializeSeed<'de> for KeySeed {
+impl<'de, K: KeySource> serde::de::DeserializeSeed<'de> for KeySeed<'_, K> {
   type Value = Key;
 
   fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-    struct KeyVisitor;
+    struct KeyVisitor<'k, K>(&'k K);
 
-    impl<'de> serde::de::Visitor<'de> for KeyVisitor {
+    impl<'de, K: KeySource> serde::de::Visitor<'de> for KeyVisitor<'_, K> {
       type Value = Key;
 
       fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -196,11 +243,11 @@ impl<'de> serde::de::DeserializeSeed<'de> for KeySeed {
       }
 
       fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(intern_key(value))
+        Ok(self.0.key(value))
       }
     }
 
-    deserializer.deserialize_str(KeyVisitor)
+    deserializer.deserialize_str(KeyVisitor(self.0))
   }
 }
 

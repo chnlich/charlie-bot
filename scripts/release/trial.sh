@@ -24,6 +24,14 @@
 # A serve server runs with session cgroups off (session_memory_max_mb 0) and starts no agent, so it needs no writable
 # agents slice; its tmux socket must keep its path under 108 bytes, the sun_path size with the final NUL.
 #
+# The release trial installs the commit's slice units before its server starts: scripts/install-slice-units.sh reads
+# them from the commit object and reloads the user manager. Those units go into the live user unit directory, so a trial
+# that stops after the install leaves them installed while the live server keeps running; the restore step is in that
+# script's header. --serve starts its server with session cgroups off and so installs nothing. The trial config carries
+# the live config's weight switches, server.enable_session_cpu_weight and server.enable_session_io_weight, read by
+# `release-helper backend-option`; an absent switch takes the server's default. CHARLIEBOT_TRIAL_CGROUP_ROOT replaces
+# /sys/fs/cgroup, the root the agents slice path is built on, so the tests point it at a sandbox.
+#
 # --serve options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two
 # commits under one root share no tree; --seed-home <dir> copies each session directory of <dir> into the trial home
 # before the server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree mock home), and the
@@ -42,11 +50,14 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SOURCE_REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+readonly SLICE_INSTALL="$SOURCE_REPO/scripts/install-slice-units.sh"
 readonly LIVE_HOME="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 # The trial exports HOME for its own tree; the evidence parent is resolved before that.
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
 readonly EVIDENCE_PARENT="${CHARLIEBOT_RELEASE_RUN_DIR:-$LOG_ROOT/trial-manual-$(date -u +%Y%m%dT%H%M%SZ)}"
-readonly CGROUP_BASE="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/charliebot.slice/charliebot-agents.slice"
+readonly CGROUP_ROOT="${CHARLIEBOT_TRIAL_CGROUP_ROOT:-/sys/fs/cgroup}"
+readonly USER_SERVICE_CGROUP="$CGROUP_ROOT/user.slice/user-$(id -u).slice/user@$(id -u).service"
+readonly CGROUP_BASE="$USER_SERVICE_CGROUP/charliebot.slice/charliebot-agents.slice"
 readonly PORT_MIN=18650
 readonly PORT_MAX=18669
 # The trial server's git calls run at production-repository speed. A wrapper first on that server's PATH only (see
@@ -246,17 +257,22 @@ REAL_GIT=/usr/bin/git
 # the entry names one, the trial copies that section's key from the live credentials into the trial home and redacts
 # it from saved logs; when it names none, the endpoint needs no client-side key, so the trial home's backend entry has
 # no credential field and its credentials file carries no backend section.
+#
+# The same read gives the two session-weight switches, so the trial's server starts with the switches the live server
+# runs with. An absent switch comes back at its default.
 LIVE_BACKEND="$("$TRIAL_CLI" release-helper backend-option "$LIVE_HOME/config.yaml")" \
   || preflight_fail "the live config has a backends.options entry with api_base"
 TRIAL_API_BASE="$(sed -n 1p <<<"$LIVE_BACKEND")"
 TRIAL_CREDENTIAL="$(sed -n 2p <<<"$LIVE_BACKEND")"
+CPU_WEIGHT_SWITCH="$(sed -n 3p <<<"$LIVE_BACKEND")"
+IO_WEIGHT_SWITCH="$(sed -n 4p <<<"$LIVE_BACKEND")"
 BACKEND_KEY=
 if [[ -n $TRIAL_CREDENTIAL ]]; then
   if ! BACKEND_KEY=$("$TRIAL_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$TRIAL_CREDENTIAL"); then
     preflight_fail "the live credentials file holds api_key for $TRIAL_CREDENTIAL"
   fi
 fi
-readonly TRIAL_API_BASE TRIAL_CREDENTIAL
+readonly TRIAL_API_BASE TRIAL_CREDENTIAL CPU_WEIGHT_SWITCH IO_WEIGHT_SWITCH
 
 # A serve run starts no agent, so its server needs no writable agents slice.
 if (( SERVE_MODE == 0 )) && [[ ! -d $CGROUP_BASE || ! -w $CGROUP_BASE ]]; then
@@ -376,6 +392,8 @@ server:
   session_swap_max_mb: 0
   session_tasks_max: 256
   min_free_disk_gib: 0
+  enable_session_cpu_weight: $CPU_WEIGHT_SWITCH
+  enable_session_io_weight: $IO_WEIGHT_SWITCH
 paths:
   workspace_dirs:
     - $WORKSPACE
@@ -407,6 +425,15 @@ fi
 if ! git -C "$SOURCE_REPO" archive "$COMMIT" | tar -x -C "$REPO_ROOT"; then
   printf 'trial setup failed: git archive extraction for %s\n' "$COMMIT" >&2
   exit 1
+fi
+
+# The install runs before HOME moves to the trial's tree, so its default unit directory is the live user's. Only the
+# standard trial installs: a --serve server starts with session cgroups off and needs no weight controller.
+if (( SERVE_MODE == 0 )); then
+  if ! "$SLICE_INSTALL" "$SOURCE_REPO" "$COMMIT"; then
+    printf 'trial setup failed: install the slice units of %s\n' "$COMMIT" >&2
+    exit 1
+  fi
 fi
 
 export HOME="$TRIAL_HOME"

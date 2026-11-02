@@ -15,6 +15,16 @@
 # credentials, releases and approval policy table. The table is the stand-in that trial.sh's home also copies from
 # scripts/release/standin-approval-policy.yaml: the release under test refuses a home without one.
 #
+# Before each server start and each switch, the rehearsal installs the slice units of the commit that the start or
+# switch brings up, through scripts/install-slice-units.sh (a copy beside the switch copy). The old commit's units go
+# in before the old server starts, the new commit's before the switch to it, and the old commit's again before the
+# switch back: the launcher's preflight compares the live slice with the checkout's units, and the switch's
+# weight-controller check reads the controllers before the switch installs anything. The units go into the live user
+# unit directory, CHARLIEBOT_SYSTEMD_USER_DIR, which defaults to the live user's $HOME/.config/systemd/user and is
+# resolved before HOME moves into the rehearsal tree. A rehearsal that stops part way leaves the last installed commit's
+# units in place while the live server keeps running on its own release; the restore step is in that script's header.
+# The rehearsal home's config carries the live weight switches, read the way the trial reads them.
+#
 # Before each switch the rehearsal seeds one live run, because a live switch always has one: the manager turn that
 # requested it. The seed is a manager-turn record whose process is a sleep the new server re-attaches by its recorded
 # pid, so the preflight reads a real live run's backend registration from both builds and records it for the readback.
@@ -119,12 +129,14 @@ LIVE_BACKEND="$("$NEW_CLI" release-helper backend-option "$LIVE_HOME/config.yaml
   || preflight_fail "the live config has a backends.options entry with api_base"
 BACKEND_API_BASE="$(sed -n 1p <<<"$LIVE_BACKEND")"
 BACKEND_CREDENTIAL="$(sed -n 2p <<<"$LIVE_BACKEND")"
+CPU_WEIGHT_SWITCH="$(sed -n 3p <<<"$LIVE_BACKEND")"
+IO_WEIGHT_SWITCH="$(sed -n 4p <<<"$LIVE_BACKEND")"
 BACKEND_KEY=
 if [ -n "$BACKEND_CREDENTIAL" ]; then
   BACKEND_KEY="$("$NEW_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$BACKEND_CREDENTIAL")" \
     || preflight_fail "the live credentials file holds api_key for $BACKEND_CREDENTIAL"
 fi
-readonly BACKEND_API_BASE BACKEND_CREDENTIAL
+readonly BACKEND_API_BASE BACKEND_CREDENTIAL CPU_WEIGHT_SWITCH IO_WEIGHT_SWITCH
 
 PORT="$("$NEW_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX")" \
   || preflight_fail "a free 127.0.0.1 port exists in $PORT_MIN-$PORT_MAX"
@@ -146,6 +158,8 @@ readonly AUTH_CONFIG="$TREE/auth.curl"
 readonly SESSIONS_DIR="$CB_HOME/sessions"
 readonly SWITCH_DIR="$TREE/.cutover-switch"
 readonly SWITCH_SCRIPT="$SWITCH_DIR/switch-server.sh"
+readonly SLICE_SOURCE="$SOURCE_REPO/scripts/install-slice-units.sh"
+readonly SLICE_INSTALL="$SWITCH_DIR/install-slice-units.sh"
 
 helper() { "$NEW_CLI" release-helper "$@"; }
 
@@ -263,9 +277,10 @@ git -C "$REPO" checkout -q -B main "$OLD_COMMIT" || preflight_fail "check out th
 
 # The switch under test runs from .cutover-switch/ outside the checkout, as a first live switch runs it before the
 # checkout itself carries the new script.
-mkdir -m 700 "$SWITCH_DIR" && cp "$SWITCH_SOURCE" "$SWITCH_SCRIPT" && chmod 700 "$SWITCH_SCRIPT" \
-  || preflight_fail "copy $SWITCH_SOURCE to $SWITCH_SCRIPT"
-log "SWITCH SCRIPT copied to $SWITCH_SCRIPT"
+mkdir -m 700 "$SWITCH_DIR" && cp "$SWITCH_SOURCE" "$SWITCH_SCRIPT" && cp "$SLICE_SOURCE" "$SLICE_INSTALL" \
+  && chmod 700 "$SWITCH_SCRIPT" "$SLICE_INSTALL" \
+  || preflight_fail "copy $SWITCH_SOURCE and $SLICE_SOURCE to $SWITCH_DIR"
+log "SWITCH SCRIPT copied to $SWITCH_SCRIPT, with its slice install at $SLICE_INSTALL"
 
 # The isolated releases: a copy of the old release and the new release, both verified, with current on the old one.
 mkdir -m 700 "$RELEASES/$OLD_COMMIT" "$RELEASES/$NEW_COMMIT"
@@ -297,6 +312,8 @@ server:
   session_swap_max_mb: 0
   session_tasks_max: 256
   min_free_disk_gib: 0
+  enable_session_cpu_weight: $CPU_WEIGHT_SWITCH
+  enable_session_io_weight: $IO_WEIGHT_SWITCH
 paths:
   workspace_dirs:
     - $WORKSPACE
@@ -322,6 +339,10 @@ chmod 600 "$CB_HOME/config.yaml"
 mkdir -m 700 -p "$CB_HOME/config.d/approval.d" \
   && cp "$SOURCE_REPO/scripts/release/standin-approval-policy.yaml" "$CB_HOME/config.d/approval.d/policy.yaml" \
   || preflight_fail "copy the stand-in approval policy table into $CB_HOME/config.d/approval.d"
+
+# The live user unit directory the installs and the switch write into. HOME moves into the tree below, so the directory
+# is resolved first, and the environment carries it to every install and switch.
+export CHARLIEBOT_SYSTEMD_USER_DIR="${CHARLIEBOT_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 
 # The environment every switch and server reads: the tree's home, releases and logs, and a private tmux server.
 export HOME="$TRIAL_HOME"
@@ -359,6 +380,12 @@ http_post() {  # http_post PATH BODY OUTPUT: prints the status
 fail_step() {
   log "FAILED: $*"
   exit 1
+}
+
+# install_units COMMIT: installs COMMIT's slice units into the live unit directory before a server of COMMIT starts or a
+# switch to it.
+install_units() {
+  "$SLICE_INSTALL" "$REPO" "$1" || fail_step "install the slice units of $1"
 }
 
 # seed_live_run: opens a session on the running server and records one live manager-turn run in it. The run's process
@@ -465,6 +492,7 @@ run_switch() {
   return "$rc"
 }
 
+install_units "$OLD_COMMIT"
 start_old || fail_step "the old release did not reach server_ready"
 check_head start "$OLD_COMMIT"
 PORT_PID="$(helper listener-pid "$PORT" "$TREE")"
@@ -473,6 +501,7 @@ expect_version start "$OLD_COMMIT"
 log "STEP start: $(serving_impl) serves $PORT"
 
 seed_live_run
+install_units "$NEW_COMMIT"
 run_switch step1-new rust "$NEW_COMMIT" || fail_step "step 1: the switch to $NEW_COMMIT exited $?"
 check_head step1 "$NEW_COMMIT"
 [ "$(readlink "$RELEASES/current")" = "$NEW_COMMIT" ] || fail_step "step 1: current is not $NEW_COMMIT"
@@ -482,6 +511,7 @@ PORT_PID="$(helper listener-pid "$PORT" "$TREE")"
 log "STEP 1: new release serves $PORT; checkout HEAD $(git -C "$REPO" rev-parse --short HEAD)"
 
 seed_live_run
+install_units "$OLD_COMMIT"
 run_switch step2-old rust "$OLD_COMMIT" || fail_step "step 2: the switch back to $OLD_COMMIT exited $?"
 check_head step2 "$OLD_COMMIT"
 [ "$(readlink "$RELEASES/current")" = "$OLD_COMMIT" ] || fail_step "step 2: current is not $OLD_COMMIT"

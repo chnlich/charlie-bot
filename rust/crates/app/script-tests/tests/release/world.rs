@@ -60,9 +60,24 @@ impl World {
     let artifact = sandbox.dir("artifact");
     let home = sandbox.dir("home");
     harness::copy_file(&harness::repo_root().join("scripts/release.sh"), &scripts.join("release.sh"));
+    // The units stage installs the commit's units, read from this repository's commit object.
+    harness::copy_file(
+      &harness::repo_root().join("scripts/install-slice-units.sh"),
+      &scripts.join("install-slice-units.sh"),
+    );
+    let systemd = scripts.join("systemd");
+    fs::create_dir_all(&systemd).expect("the unit directory");
+    for unit in fs::read_dir(harness::repo_root().join("scripts/systemd")).expect("the unit files") {
+      let unit = unit.expect("a unit file");
+      harness::copy_file(&unit.path(), &systemd.join(unit.file_name()));
+    }
     fs::write(repo.join("README.md"), "release test\n").expect("the README");
+    // The user manager is never touched: its reload lands in the unit-calls log beside the sandbox.
+    sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$UNIT_CALLS\"\n");
 
     let mut env = sandbox.env();
+    env.insert("UNIT_CALLS".to_string(), sandbox.root().join("unit-calls.log").display().to_string());
+    env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("user-units").display().to_string());
     for (name, value) in GIT_IDENTITY {
       env.insert(name.to_string(), value.to_string());
     }

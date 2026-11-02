@@ -12,6 +12,10 @@
 #
 # The stages run in order:
 #   download   gh downloads the charliebot-server-<commit> artifact, and sha256sum -c passes on both binaries;
+#   units      scripts/install-slice-units.sh installs the commit's slice units and reloads the user manager, so the
+#              trial and the rehearsal run against the units the release runs with. A release that stops after this
+#              stage leaves the new units installed while the live server keeps running; the restore step is in that
+#              script's header;
 #   trial      scripts/release/trial.sh runs the trial on the downloaded binary;
 #   rehearsal  scripts/release/switch-rehearsal.sh switches an isolated checkout from the release that current
 #              selects to this one and back;
@@ -33,6 +37,7 @@ readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
 readonly TRIAL_CMD="${CHARLIEBOT_RELEASE_TRIAL:-$REPO_ROOT/scripts/release/trial.sh}"
 readonly REHEARSAL_CMD="${CHARLIEBOT_RELEASE_REHEARSAL:-$REPO_ROOT/scripts/release/switch-rehearsal.sh}"
+readonly SLICE_INSTALL="$REPO_ROOT/scripts/install-slice-units.sh"
 readonly ARTIFACT_NAME_PREFIX="charliebot-server-"
 
 usage() {
@@ -111,6 +116,10 @@ stage_download() {
   (cd "$ARTIFACT_DIR" && sha256sum -c sha256sums.txt)
 }
 
+stage_units() {
+  "$SLICE_INSTALL" "$REPO_ROOT" "$COMMIT"
+}
+
 stage_trial() {
   "$TRIAL_CMD" "$COMMIT" "$ARTIFACT_DIR/charliebot-server"
 }
@@ -150,6 +159,7 @@ stage_install() {
 }
 
 run_stage download stage_download
+run_stage units stage_units
 run_stage trial stage_trial
 run_stage rehearsal stage_rehearsal
 run_stage install stage_install

@@ -192,6 +192,27 @@ fn test_a_passing_run_installs_both_binaries_and_leaves_current() {
   assert!(run.stdout.contains(&format!("scripts/switch-server.sh rust {}", world.on_main)), "{}", run.describe());
 }
 
+#[test]
+fn test_a_release_installs_the_commits_units_before_its_trial_and_its_rehearsal() {
+  let mut world = World::new();
+  world.sandbox.stub("record-trial", "printf 'trial\\n' >> \"$UNIT_CALLS\"\n");
+  world.sandbox.stub("record-rehearsal", "printf 'rehearsal\\n' >> \"$UNIT_CALLS\"\n");
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("record-trial").display().to_string());
+  world
+    .env
+    .insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), world.bin().join("record-rehearsal").display().to_string());
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let calls = recorded_calls(&world.sandbox.root().join("unit-calls.log"));
+  assert_eq!(calls, "--user daemon-reload\ntrial\nrehearsal\n", "{}", run.describe());
+  let installed =
+    fs::read_to_string(world.sandbox.root().join("user-units/charliebot-agents.slice")).expect("the installed unit");
+  let committed = committed_text(&world.env, &world.repo, &world.on_main, "scripts/systemd/charliebot-agents.slice");
+  assert_eq!(installed, committed);
+}
+
 // ---- the moved helpers' own checks ----------------------------------------------------------------------------------
 
 /// A text log whose sweep removed two names, both of them sessions under the home.
@@ -477,6 +498,64 @@ fn test_trial_preflight_reads_the_live_key_when_the_endpoint_names_a_credential(
   assert!(!run.stderr.contains("the live credentials file holds api_key"), "{}", run.describe());
 }
 
+/// The trial runs that pick a port of the trial range run one at a time: each one picks a free port, so two runs could
+/// pick the same one.
+static TRIAL_RUNS: Mutex<()> = Mutex::new(());
+
+/// The text of one file as `commit` stores it.
+fn committed_text(env: &Env, cwd: &Path, commit: &str, path: &str) -> String {
+  let mut command = harness::command("git", env);
+  command.arg("-C").arg(cwd).arg("show").arg(format!("{commit}:{path}"));
+  let run = harness::run(&mut command);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  run.stdout
+}
+
+#[test]
+fn test_trial_installs_the_commits_units_and_reloads_before_its_server_starts() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("charlie-code", "exit 0\n");
+  sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$UNIT_CALLS\"\n");
+  let uid = u32::from(nix::unistd::getuid());
+  let cgroup_root = sandbox.dir("cgroup-root");
+  fs::create_dir_all(
+    cgroup_root
+      .join(format!("user.slice/user-{uid}.slice/user@{uid}.service/charliebot.slice/charliebot-agents.slice")),
+  )
+  .expect("the agents slice");
+  let units = sandbox.dir("user-units");
+  let calls = sandbox.root().join("unit-calls.log");
+  let home = live_home(&sandbox, false);
+  let release = sandbox.dir("release");
+  symlink(harness::built_binary("charliebot"), release.join("charliebot")).expect("the CLI link");
+  // A server that exits at once: the run stops at its startup check, which follows the install.
+  symlink("/bin/true", release.join("charliebot-server")).expect("the server link");
+
+  let mut env = live_env(&sandbox, &home);
+  env.insert("UNIT_CALLS".to_string(), calls.display().to_string());
+  env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), units.display().to_string());
+  env.insert("CHARLIEBOT_TRIAL_CGROUP_ROOT".to_string(), cgroup_root.display().to_string());
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let commit = git(&env, &harness::repo_root(), &["rev-parse", "HEAD"]);
+  let mut command = harness::command("bash", &env);
+  command
+    .arg(harness::repo_root().join("scripts/release/trial.sh"))
+    .arg(&commit)
+    .arg(release.join("charliebot-server"));
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let installed = fs::read_to_string(units.join("charliebot-agents.slice")).expect("the installed unit");
+  assert_eq!(
+    installed,
+    committed_text(&env, &harness::repo_root(), &commit, "scripts/systemd/charliebot-agents.slice")
+  );
+  assert_eq!(recorded_calls(&calls), "--user daemon-reload\n", "{}", run.describe());
+  let installed_at = run.stdout.find("install-slice-units:").expect("the install reported");
+  let startup_at = run.stdout.find("Startup").expect("the trial reported its startup");
+  assert!(installed_at < startup_at, "the install ran after the startup check: {}", run.describe());
+}
+
 #[test]
 fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
   let sandbox = Sandbox::new();
@@ -565,10 +644,6 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
 
 // ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
 
-/// The serve trials run one at a time: each one picks a free port of the trial's range, so two starts could pick the
-/// same port.
-static SERVE_TRIALS: Mutex<()> = Mutex::new(());
-
 /// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
 /// each other, a live home with one backend option, and a stub charlie-code. The trial's tree and evidence stay under
 /// the sandbox.
@@ -644,7 +719,7 @@ impl ServeWorld {
   /// Runs one serve trial: the tree root and `seed` as --tree-root and --seed-home, then `command` once the server
   /// answers. The command reads the seed path from MOCK_HOME_SEED.
   fn serve(&self, tree_root: &Path, seed: &Path, command: &[&str]) -> Run {
-    let _serial = SERVE_TRIALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut trial = harness::command("bash", &self.env);
     trial
       .env("MOCK_HOME_SEED", seed)
@@ -682,6 +757,27 @@ fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(run.stdout.contains("check passed: 30 sessions"), "{}", run.describe());
   assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+#[test]
+fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_its_default() {
+  let world = ServeWorld::new();
+  // The live config switches the cpu weight off and leaves the io weight absent.
+  let live_config = PathBuf::from(world.env.get("CHARLIEBOT_HOME").expect("the live home")).join("config.yaml");
+  let backends = fs::read_to_string(&live_config).expect("the live config");
+  fs::write(&live_config, format!("server:\n  enable_session_cpu_weight: false\n{backends}")).expect("the live config");
+  let seed = world.seed_home("seed", "2");
+  let tree_root = world.sandbox.dir("tree-root");
+  let copied = world.sandbox.root().join("trial-config.yaml");
+  let copied_text = copied.display().to_string();
+
+  let run =
+    world.serve(&tree_root, &seed, &["sh", "-c", "cp \"$CHARLIEBOT_HOME/config.yaml\" \"$1\"", "sh", &copied_text]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let config = fs::read_to_string(&copied).expect("the trial config");
+  assert!(config.contains("\n  enable_session_cpu_weight: false\n"), "{config}");
+  assert!(config.contains("\n  enable_session_io_weight: true\n"), "{config}");
 }
 
 #[test]

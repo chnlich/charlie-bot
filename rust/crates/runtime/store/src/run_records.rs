@@ -77,7 +77,7 @@ pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std
 // bytes, its two decodes — the strict one, which fails a line that is not one JSON value, and the skip contract,
 // which drops such a line — and the newest-first walk of a log.
 
-/// One persisted event as its log line: compact UTF-8 JSON and a newline (`worker.py` `_event_line`).
+/// One persisted event as its log line: compact UTF-8 JSON and a newline.
 pub fn event_line(event: &Value) -> Vec<u8> {
   let mut line = serde_json::to_vec(event).expect("a JSON value serializes");
   line.push(b'\n');
@@ -91,8 +91,8 @@ pub fn decode_event_line(line: &str) -> Result<Value, serde_json::Error> {
 }
 
 /// Decode one run event line under the skip contract: a blank line and a line that is not JSON give `None`, and a
-/// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse, as `src/infra/ndjson.py`
-/// `parse_ndjson_line` repairs it. A final partial line decodes like any other line.
+/// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse. A final partial line decodes like any
+/// other line.
 pub fn parse_event_line(raw: &[u8]) -> Option<Value> {
   if raw.is_empty() || raw.iter().all(u8::is_ascii_whitespace) {
     return None;
@@ -161,10 +161,8 @@ pub fn visit_events_from_end<T>(
 }
 
 /// The events of one run event log, newest first, read through one read-only mapping. Only a provable mismatch in
-/// the first 256 bytes skips a line without parsing it, matching Python's `iter_ndjson_events_from_end` and
-/// `type_line_filter` (`src/infra/ndjson.py:404-547`). Each line's start is one backward `memrchr` from the
-/// previous line's start, so a walk that stops at a line leaves the older bytes unscanned, as Python's mmap walk
-/// does.
+/// the first 256 bytes skips a line without parsing it. Each line's start is one backward `memrchr` from the
+/// previous line's start, so a walk that stops at a line leaves the older bytes unscanned.
 pub struct NewestFirstEvents<'k> {
   map: Option<Mmap>,
   end: usize,
@@ -1404,9 +1402,8 @@ pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> Stor
   }
 }
 
-/// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. The pure
-/// fact scan behind the stop checks of `RunStore.stop_requested` (`runs.py::stop_requested_in_events`); the task tree
-/// reads the same facts through it.
+/// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. This is
+/// the pure fact scan behind the stop checks; the task tree reads the same facts through it.
 pub fn stop_requested_in_events<T: AsRef<ChatEvent>>(events: &[T], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
     let event = event.as_ref();
@@ -1470,7 +1467,6 @@ mod tests {
   use super::*;
   use std::fs;
 
-  // Python: tests/test_worker_event_line.py::test_event_line_round_trips_the_event
   #[test]
   fn test_event_line_round_trips_the_event() {
     let event = json!({

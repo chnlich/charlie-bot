@@ -8,12 +8,9 @@ use charliebot_core::memo::BoundedMemo;
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::read_memos::StatSignatureMemo;
 
-// Match src/infra/ndjson.py:_COUNT_MEMO_LIMIT and its (mtime_ns, size) signatures.
 pub(crate) const EVENT_COUNT_MEMO_LIMIT: usize = 64;
 pub(crate) const EVENT_TAIL_MEMO_LIMIT: usize = 64;
-// Match src/runtime/chat_events.py:_ARCHIVE_MEMO_LIMIT for both archive memos.
 pub(crate) const ARCHIVE_MEMO_LIMIT: usize = 16;
-// Match src/runtime/chat_events.py:_LIVE_RANGE_MEMO_LIMIT and _WALK_BYTE_BUDGET.
 pub(crate) const LIVE_RANGE_MEMO_LIMIT: usize = 4;
 pub(crate) const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 pub(crate) const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;

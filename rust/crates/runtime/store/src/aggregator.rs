@@ -1144,7 +1144,7 @@ mod tests {
 
   #[test]
   fn parity_fixture_matches_frames_for_chat_logs_and_synthetic_sequences() {
-    // Python: src/runtime/message_aggregator.py:539-559 includes the nullable route on every delegation card.
+    // Every delegation card in the parity fixture includes the nullable route.
     let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/message_aggregator.json")).unwrap();
     let renderers = parity_renderers();
 
@@ -1359,7 +1359,7 @@ mod tests {
 
   #[test]
   fn task_delegated_message_exposes_metadata_without_full_description_body() {
-    // Python: src/runtime/message_aggregator.py:539-559 carries the event route onto the delegation card.
+    // The event route rides the delegation card.
     let mut aggregator = MessageAggregator::new(0, true);
     let long_description = "## Goal\nDo a long task spec that belongs in Workers.";
     let invocation = json!({
@@ -1408,7 +1408,7 @@ mod tests {
 
   #[test]
   fn quota_failover_renders_the_backend_and_recovery_time() {
-    // Python: src/runtime/message_aggregator.py:367-375 renders the same recovery line.
+    // The recovery line names the backend and the time it recovers.
     let mut aggregator = MessageAggregator::new(0, true);
     let deltas = aggregator
       .feed(&json!({

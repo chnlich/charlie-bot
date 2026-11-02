@@ -78,8 +78,8 @@ impl Store {
 
   /// Read the immutable metadata corpus and its generation without cloning its rows.
   ///
-  /// Search holds the same listing snapshot across its query memo and borrows only the matching rows, as Python's
-  /// `load_session_metas` does while its list identity remains current (`src/runtime/session_search.py:266-295`).
+  /// Search holds the same listing snapshot across its query memo and borrows only the matching rows while the
+  /// list identity remains current.
   pub fn load_session_metas_snapshot_versioned(
     &self,
     status: Option<SessionStatus>,
@@ -156,10 +156,9 @@ impl Store {
 
   /// The sessions directory's entry names, from the memo when the root signature still matches.
   ///
-  /// The key is the sessions root's `(mtime_ns, size)` and nothing else, as `_session_dir_names` keys
-  /// `session_store.py`'s `_dir_names_memo`: a create or delete moves the signature, so an unchanged signature proves
-  /// the name list unchanged and no time bound is needed. A hit costs one stat instead of a scandir plus one
-  /// `file_type` per entry, which the production copy pays about 6,000 times per listing walk.
+  /// The key is the sessions root's `(mtime_ns, size)` and nothing else: a create or delete moves the signature, so
+  /// an unchanged signature proves the name list unchanged and no time bound is needed. A hit costs one stat instead
+  /// of a scandir plus one `file_type` per entry, which the production copy pays about 6,000 times per listing walk.
   fn session_dir_names(
     &self,
     root: &std::path::Path,
@@ -296,9 +295,9 @@ impl Store {
 
   /// Return both cached subtree maps for the memoized metadata corpus they were built from.
   ///
-  /// This follows Python's `session_listing.py:139-164` memo key: reuse both maps while the cached metadata list
-  /// remains the same, and rebuild after a metadata cache identity or directory membership changes. The corpus is
-  /// shared with the listing memo rather than copied, so a hit costs one stat and two `Arc` clones.
+  /// The memo key reuses both maps while the cached metadata list remains the same, and rebuilds after a metadata
+  /// cache identity or directory membership changes. The corpus is shared with the listing memo rather than copied,
+  /// so a hit costs one stat and two `Arc` clones.
   pub fn subtree_roots_shared(&self) -> StoreResult<SharedSubtreeRoots> {
     let (rows, _) = self.load_session_metas_snapshot_versioned(None)?;
     let mut cached = self.subtree_roots_cache.lock().expect("subtree roots cache mutex is not poisoned");
@@ -683,8 +682,8 @@ mod tests {
     assert_eq!(names(&store).len(), 3);
   }
 
-  /// The sessions directory's name list is memoized on the root's signature, as `session_store.py`'s
-  /// `_dir_names_memo` is: a write that moves the listings revision re-walks the rows but not the directory.
+  /// The sessions directory's name list is memoized on the root's signature: a write that moves the listings
+  /// revision re-walks the rows but not the directory.
   #[tokio::test]
   async fn a_listing_walk_re_reads_the_directory_only_after_the_root_signature_moves() {
     let home = tempfile::tempdir().unwrap();
@@ -735,8 +734,7 @@ mod tests {
     assert_eq!(ids(&store), ["alpha", "beta"], "a store write refreshes the corpus the order memo keys on");
   }
 
-  /// Python's `load_session_metas` serves its memoized rows read-only on a hit
-  /// (`src/runtime/session_store.py:316-330`), so a listing clones no metadata. The Rust corpus must hand out
+  /// A memo hit serves its memoized rows read-only, so a listing clones no metadata. The corpus must hand out
   /// the same `Arc` rows on a hit, or every sidebar listing pays a full per-row copy again.
   #[test]
   fn a_listing_memo_hit_hands_out_the_memoized_rows_without_copying_them() {
@@ -786,9 +784,7 @@ mod tests {
     assert!(Arc::ptr_eq(&snapshot.metadata_snapshot, &corpus), "a rebuild keys on the memoized corpus, not a copy");
   }
 
-  /// `test_sessions_batch_metadata_read.py::test_batch_output_matches_sequential_get_session_for_mixed_fixture`:
-  /// the listing skips the malformed file while a single-session read keeps Python's behavior and
-  /// fails loudly with the file's path.
+  /// The listing skips the malformed file while a single-session read fails loudly with the file's path.
   #[tokio::test]
   async fn listing_skips_a_malformed_metadata_file_and_a_single_session_read_fails_loudly() {
     let home = tempfile::tempdir().unwrap();
@@ -823,8 +819,7 @@ mod tests {
     assert_eq!(raw, [("good-a".to_string(), "good-a".to_string()), ("good-b".to_string(), "good-b".to_string())]);
   }
 
-  /// `test_sessions_batch_metadata_read.py::test_metadata_without_profile_names_the_file_and_restore_command`:
-  /// a single-session read of a profile-less metadata file fails loudly, naming the file and restore command.
+  /// A single-session read of a profile-less metadata file fails loudly, naming the file and restore command.
   #[tokio::test]
   async fn a_metadata_file_without_a_profile_fails_loudly_naming_the_file_and_restore_command() {
     let home = tempfile::tempdir().unwrap();
@@ -839,7 +834,7 @@ mod tests {
     assert!(error.contains("git worktree add <dir> e2f27b133"), "{error}");
   }
 
-  /// `test_archived_pagination.py::test_keyset_pages_walk_newest_first`.
+  /// The archived keyset pages walk newest first.
   #[test]
   fn archived_keyset_pages_walk_newest_first() {
     let home = tempfile::tempdir().unwrap();
@@ -871,7 +866,7 @@ mod tests {
     assert_eq!(third.next_before_id, None);
   }
 
-  /// `test_archived_pagination.py::test_bad_cursor_fails_loudly`.
+  /// A bad archive cursor fails loudly.
   #[test]
   fn archived_page_cursor_fails_loudly() {
     let home = tempfile::tempdir().unwrap();
@@ -885,8 +880,7 @@ mod tests {
     assert!(error.to_string().contains("both or neither"), "{error}");
   }
 
-  /// `test_sessions_status_scope.py::test_status_returns_exactly_the_requested_ids`, at the store
-  /// level: each status listing returns exactly that status's sessions.
+  /// Each status listing returns exactly that status's sessions.
   #[test]
   fn status_listings_return_exactly_the_requested_status() {
     let home = tempfile::tempdir().unwrap();
@@ -907,9 +901,8 @@ mod tests {
     assert_eq!(store.list_group_names().unwrap(), ["Alpha", "Beta"]);
   }
 
-  /// `test_session_archive_empty.py::test_archive_non_empty_session_keeps_files_and_marks_archived`
-  /// at store level: archiving a session with events keeps its directory and event log, and the
-  /// session lists as archived.
+  /// Archiving a session with events keeps its directory and event log, and the session lists as
+  /// archived.
   #[tokio::test]
   async fn archiving_a_session_with_events_keeps_its_files_and_lists_it_as_archived() {
     let home = tempfile::tempdir().unwrap();
@@ -929,10 +922,8 @@ mod tests {
     assert_eq!(archived_ids, ["non-empty"]);
   }
 
-  /// `test_sessions_batch_metadata_read.py`:
-  /// `test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_lists_and_refuses_a_new_run`
-  /// at store level: a session pinned to a backend the config no longer defines still loads, lists,
-  /// and reads its events. The refusal of a new run belongs to the backend resolver.
+  /// A session pinned to a backend the config no longer defines still loads, lists, and reads its
+  /// events. The refusal of a new run belongs to the backend resolver.
   #[tokio::test]
   async fn a_session_pinned_to_an_undefined_backend_still_loads_lists_and_reads_its_events() {
     let home = tempfile::tempdir().unwrap();

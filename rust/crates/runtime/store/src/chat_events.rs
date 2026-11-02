@@ -18,8 +18,7 @@ use crate::{StoreError, StoreResult};
 const INVALID_UTF8_MESSAGE: &str = "stream did not contain valid UTF-8";
 
 /// Whether a file name in a session's `data/archives/` directory is a chat-events archive, matching
-/// Python's `src/runtime/chat_events.py:47` `ARCHIVE_FILE_GLOB` (`chat_events.*.jsonl`): a bare
-/// `chat_events.jsonl` carries the live log's name, not an archive's.
+/// `chat_events.*.jsonl`: a bare `chat_events.jsonl` carries the live log's name, not an archive's.
 pub fn is_chat_events_archive(file_name: &str) -> bool {
   file_name.strip_prefix("chat_events.").and_then(|rest| rest.strip_suffix(".jsonl")).is_some()
 }

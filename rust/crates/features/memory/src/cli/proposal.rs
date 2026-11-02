@@ -332,7 +332,7 @@ fn caller_path(path: &Path) -> ProposalResult<PathBuf> {
 }
 
 /// The text of `<rev>:<path>`, or `None` when the revision holds no such file. Git's output is read with universal
-/// newlines, as the Python CLI reads it.
+/// newlines.
 fn rev_text(memory_dir: &Path, rev: &str, path: &str) -> ProposalResult<Option<String>> {
   let listing = run_git(memory_dir, &["ls-tree", rev, "--", path])?;
   if !listing.success {

@@ -1,4 +1,4 @@
-//! The memory package's turn contribution (`src/features/memory/turn_contribution.py`): the applicable memory joins a
+//! The memory package's turn contribution: the applicable memory joins a
 //! run's managed instructions.
 
 use anyhow::Result;

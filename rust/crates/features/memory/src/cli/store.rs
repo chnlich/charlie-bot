@@ -213,7 +213,7 @@ mod tests {
 
   #[test]
   fn test_lint_reports_a_missing_topics_file_without_creating_the_scaffold() {
-    // `tests/test_memory_store.py::test_lint_reports_a_missing_topics_file_without_creating_the_scaffold`.
+    // The lint refuses a missing topics file without creating the scaffold.
     let directory = tempfile::tempdir().unwrap();
     let memory_dir = directory.path().join("bare");
     fs::create_dir(&memory_dir).unwrap();

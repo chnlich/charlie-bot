@@ -1,4 +1,4 @@
-//! The memory store's root (`src/features/memory/store_root.py`): one derivation for the run instructions and the diff
+//! The memory store's root: one derivation for the run instructions and the diff
 //! view.
 
 use std::path::PathBuf;

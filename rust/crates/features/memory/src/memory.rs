@@ -1,6 +1,6 @@
-//! The labeled-entry memory store's server half (`src/features/memory/memory.py`): the entry grammar (format v2), the
+//! The labeled-entry memory store's server half: the entry grammar (format v2), the
 //! topics vocabulary, `ensure_store`, `load_store`, and the audience selections a run's instructions take. The `memory`
-//! CLI, its lint and `memory_proposal.py` stay in Python.
+//! CLI and its lint live in this crate's `cli` module.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -44,7 +44,7 @@ const KNOWN_FIELDS: &[&str] = &["scope", "topic", "audience", "title"];
 const SCOPES: &[&str] = &["user", "host"];
 const AUDIENCE_ELEMENTS: &[&str] = &["master", "worker"];
 
-/// A store file violates the entry or topic grammar. The text is the message of Python's `MemoryFormatError`.
+/// A store file violates the entry or topic grammar. The text is the refusal message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryFormatError(pub String);
 
@@ -190,7 +190,7 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   Ok(Store { memory_dir: memory_dir.to_path_buf(), topics, entries })
 }
 
-/// Reads a text file the way Python's `Path.read_text` does: universal newlines turn `\r\n` and a lone `\r` into `\n`.
+/// Reads a text file with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
 fn read_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
@@ -341,7 +341,7 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
   Ok(topics)
 }
 
-/// The semantic violations of one entry against the vocabulary, in the order Python reports them (`_validate_entry`).
+/// The semantic violations of one entry against the vocabulary, in the order the validator reports them.
 /// Empty when the entry is valid.
 fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String> {
   let topic_label = entry.topic.as_deref().unwrap_or("?");

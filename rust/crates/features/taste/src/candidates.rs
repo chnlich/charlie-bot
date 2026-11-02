@@ -74,6 +74,7 @@ pub struct Candidate {
   pub session_id: String,
   pub reference: SourceRef,
   pub timestamp: String,
+  /// A note's predecessor Trade-off lines; `None` when the predecessor page is gone. Other sources carry none.
   pub trade_off_options: Option<Vec<String>>,
 }
 
@@ -100,8 +101,8 @@ impl Candidate {
     }
     value.insert("timestamp".to_string(), json!(self.timestamp));
     value.insert("url".to_string(), json!(self.url()));
-    if let Some(options) = &self.trade_off_options {
-      value.insert("trade_off_options".to_string(), json!(options));
+    if self.source == CandidateSource::Notes {
+      value.insert("trade_off_options".to_string(), json!(self.trade_off_options));
     }
     Value::Object(value)
   }
@@ -357,7 +358,10 @@ where
       let previous = number.checked_sub(1).and_then(|previous| {
         versions.iter().find(|candidate| candidate.get("v").and_then(Value::as_u64) == Some(previous))
       });
-      let trade_off_options = previous.and_then(|previous| predecessor_page(session_dir, previous)).unwrap_or_default();
+      let trade_off_options = match previous {
+        Some(previous) => predecessor_options(session_dir, previous)?,
+        None => Some(Vec::new()),
+      };
       candidates.push(Candidate {
         source: CandidateSource::Notes,
         text: note.to_string(),
@@ -365,7 +369,7 @@ where
         session_id: session_id.to_string(),
         reference: SourceRef::PlanVersion(format!("{plan_id}/v{number}")),
         timestamp: decided_at.format(&Rfc3339).context("format a plan version timestamp")?,
-        trade_off_options: Some(trade_off_options),
+        trade_off_options,
       });
     }
   }
@@ -380,10 +384,18 @@ fn plan_id(plan: &Value) -> Option<String> {
   }
 }
 
-fn predecessor_page(session_dir: &Path, version: &Value) -> Option<Vec<String>> {
-  let relative = version.get("file")?.as_str()?;
-  let html = std::fs::read_to_string(session_dir.join(relative)).ok()?;
-  Some(trade_off_lines(&html))
+/// The predecessor page's Trade-off lines. `None` when the page is no longer in the session directory.
+fn predecessor_options(session_dir: &Path, version: &Value) -> anyhow::Result<Option<Vec<String>>> {
+  let relative = version
+    .get("file")
+    .and_then(Value::as_str)
+    .with_context(|| format!("{}: a plan version names no file", session_dir.display()))?;
+  let path = session_dir.join(relative);
+  match std::fs::read_to_string(&path) {
+    Ok(html) => Ok(Some(trade_off_lines(&html))),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+  }
 }
 
 fn latest_reply_before(web_replies: &[(OffsetDateTime, String)], moment: OffsetDateTime) -> Option<String> {
@@ -410,7 +422,8 @@ pub fn trade_off_lines(html: &str) -> Vec<String> {
 }
 
 fn trade_offs_section(html: &str) -> Option<&str> {
-  let lowered = html.to_lowercase();
+  // ASCII case folding keeps `lowered` offsets equal to `html` offsets; every marker searched for is ASCII.
+  let lowered = html.to_ascii_lowercase();
   let heading = lowered.find("trade-offs")?;
   let heading_start = lowered[..heading].rfind("<h2")?;
   let body_start = lowered[heading_start..].find("</h2>")? + heading_start + "</h2>".len();
@@ -473,6 +486,15 @@ mod tests {
       trade_off_lines(html),
       ["1Ship the MVP?", "「MVP only」: smaller", "「All of it」: larger", "Recommend: MVP",]
     );
+  }
+
+  #[test]
+  fn trade_off_lines_keep_their_offsets_past_a_character_that_lowercases_to_more_bytes() {
+    // `İ` lowercases to three bytes, so a search over the lowered page would point one byte past the page's own
+    // `</h2>` and split the Chinese character that follows it.
+    let html =
+      "<p>İ</p><h2><span class=\"n\">5</span> Trade-offs</h2>结论<div><p class=\"q\">范围？</p></div><h2>其他</h2>";
+    assert_eq!(trade_off_lines(html), ["范围？"]);
   }
 }
 
@@ -586,5 +608,16 @@ mod fixture_tests {
     let candidates = collect(&sessions, since(), &comments, &read_plans).unwrap();
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].source, CandidateSource::Comments);
+  }
+
+  #[test]
+  fn a_note_whose_predecessor_page_is_gone_reports_its_options_as_unknown() {
+    let (_temp, sessions) = fixture();
+    fs::remove_file(sessions.join(SESSION).join("artifacts/plan_01.html")).unwrap();
+    let notes: BTreeSet<CandidateSource> = [CandidateSource::Notes].into_iter().collect();
+    let candidates = collect(&sessions, since(), &notes, &read_plans).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].trade_off_options, None);
+    assert!(candidates[0].to_value()["trade_off_options"].is_null());
   }
 }

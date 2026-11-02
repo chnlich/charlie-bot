@@ -243,7 +243,8 @@ fn preflight_reads_a_unit_file_whose_last_line_has_no_newline() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
   let unit_file = launcher.parent().expect("the scripts directory").join("systemd/charliebot-agents.slice");
-  fs::write(&unit_file, "[Slice]\nMemoryMax=80%\nMemorySwapMax=0").expect("write the unterminated unit file");
+  fs::write(&unit_file, "[Slice]\nMemoryMax=80%\nMemorySwapMax=0\nCPUWeight=100\nIOWeight=100")
+    .expect("write the unterminated unit file");
   sandbox.install_systemd_stubs();
   let run = run_preflight(&launcher, &sandbox.env());
 
@@ -291,6 +292,62 @@ fn preflight_rejects_a_missing_required_unit_limit() {
 
   assert_ne!(run.code, 0, "{}", run.describe());
   assert!(run.stderr.contains("charliebot-agents.slice unit file has no finite MemoryMax"));
+}
+
+#[test]
+fn preflight_rejects_a_cpu_weight_that_differs_from_its_unit_file() {
+  let sandbox = Sandbox::new();
+  let launcher = stash_launcher(&sandbox);
+  sandbox.install_systemd_stubs();
+  let mut env = sandbox.env();
+  env.insert("SYSTEMCTL_CPU_WEIGHT".to_string(), "200".to_string());
+  let run = run_preflight(&launcher, &env);
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("charliebot-agents.slice CPUWeight is '200', unit file says '100'"), "{}", run.stderr);
+}
+
+#[test]
+fn preflight_rejects_an_io_weight_that_differs_from_its_unit_file() {
+  let sandbox = Sandbox::new();
+  let launcher = stash_launcher(&sandbox);
+  let unit_file = launcher.parent().expect("the scripts directory").join("systemd/charliebot-agents.slice");
+  replace_text(&unit_file, "IOWeight=100", "IOWeight=200");
+  sandbox.install_systemd_stubs();
+  let run = run_preflight(&launcher, &sandbox.env());
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("charliebot-agents.slice IOWeight is '100', unit file says '200'"), "{}", run.stderr);
+}
+
+#[test]
+fn preflight_rejects_a_unit_file_without_a_required_weight() {
+  let sandbox = Sandbox::new();
+  let launcher = stash_launcher(&sandbox);
+  let unit_file = launcher.parent().expect("the scripts directory").join("systemd/charliebot-agents.slice");
+  replace_text(&unit_file, "CPUWeight=100\n", "");
+  sandbox.install_systemd_stubs();
+  let run = run_preflight(&launcher, &sandbox.env());
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("charliebot-agents.slice unit file has no CPUWeight"), "{}", run.stderr);
+}
+
+#[test]
+fn preflight_rejects_an_unset_live_weight() {
+  let sandbox = Sandbox::new();
+  let launcher = stash_launcher(&sandbox);
+  sandbox.install_systemd_stubs();
+  let mut env = sandbox.env();
+  env.insert("SYSTEMCTL_CPU_WEIGHT".to_string(), "[not set]".to_string());
+  let run = run_preflight(&launcher, &env);
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stderr.contains("charliebot-agents.slice CPUWeight is '[not set]', unit file says '100'"),
+    "{}",
+    run.stderr
+  );
 }
 
 #[test]

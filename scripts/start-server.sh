@@ -4,8 +4,9 @@
 # The current link in the release root selects the Rust release; without it the launcher refuses to start.
 #
 # Each server start has a timestamp-and-PID scope so earlier runs can keep their processes.
-# Before starting, the launcher checks the agents' slice against its unit file; a missing slice or different limit
-# stops the start visibly. --preflight checks the slice and creates a trial scope without writing a server log.
+# Before starting, the launcher checks the agents' slice against its unit file; a missing slice or a memory limit,
+# CPUWeight or IOWeight that differs stops the start visibly. --preflight checks the slice and creates a trial scope
+# without writing a server log.
 set -uo pipefail
 
 # Resolve repo root from the script location — no absolute paths (shared repo).
@@ -91,7 +92,7 @@ preflight_slices() {
       rc=1
       continue
     fi
-    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryMax -p MemorySwapMax)"; then
+    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryMax -p MemorySwapMax -p CPUWeight -p IOWeight)"; then
       echo "preflight: systemctl --user show $unit failed" >&2
       rc=1
       continue
@@ -120,6 +121,24 @@ preflight_slices() {
       actual="$(printf '%s\n' "$shown" | sed -n "s/^$key=//p")"
       if [ "$actual" != "$expected" ]; then
         echo "preflight: $unit $key is '${actual:-missing}', unit file says '$raw' ($expected bytes)" >&2
+        rc=1
+      fi
+    done
+    # The weights compare as the memory limits do, except the unit file must declare them: a missing
+    # weight is what keeps its controller out of the slice's cgroup.controllers, so it must stop the
+    # start, not be inferred. The shown value is the manager's configured value, which it reports even
+    # while the controller cannot reach the slice (io below the user manager, for one).
+    for key in CPUWeight IOWeight; do
+      raw="$(_unit_setting "$file" "$key")"
+      if ! [[ "$raw" =~ ^[0-9]+$ ]]; then
+        echo "preflight: $unit unit file has no $key" >&2
+        rc=1
+        continue
+      fi
+      actual="$(printf '%s\n' "$shown" | sed -n "s/^$key=//p")"
+      if [ "$actual" != "$raw" ]; then
+        echo "preflight: $unit $key is '${actual:-missing}', unit file says '$raw';" \
+          "bring the installed units to scripts/systemd with scripts/setup.sh" >&2
         rc=1
       fi
     done
@@ -168,7 +187,7 @@ main() {
   echo "  scope  -> $SERVER_SCOPE_NAME"
 
   if ! preflight_slices; then
-    echo "launcher: the agents' memory slice does not match scripts/systemd/; not starting the server" >&2
+    echo "launcher: the agents' slice does not match scripts/systemd/; not starting the server" >&2
     exit 1
   fi
 

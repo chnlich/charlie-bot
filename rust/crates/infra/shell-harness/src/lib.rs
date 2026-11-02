@@ -32,6 +32,8 @@ const SYSTEMCTL: &str = r#"case "$*" in
     echo "ActiveState=${SYSTEMCTL_ACTIVE_STATE:-active}"
     echo "MemoryMax=${SYSTEMCTL_MEMORY_MAX:-{memory_max}}"
     echo "MemorySwapMax=${SYSTEMCTL_MEMORY_SWAP_MAX:-0}"
+    echo "CPUWeight=${SYSTEMCTL_CPU_WEIGHT:-100}"
+    echo "IOWeight=${SYSTEMCTL_IO_WEIGHT:-100}"
     ;;
   *)
     exit 1
@@ -146,8 +148,9 @@ impl Sandbox {
     env
   }
 
-  /// Installs the `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the limits its
-  /// committed unit file declares, and the systemd-run stub records each scope it starts (see `scope_records`).
+  /// Installs the `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the limits and
+  /// the weights its committed unit file declares, and the systemd-run stub records each scope it starts (see
+  /// `scope_records`).
   pub fn install_systemd_stubs(&self) {
     let memory_max = memtotal_percent_bytes(AGENTS_MEMORY_PERCENT);
     self.stub("systemctl", &SYSTEMCTL.replace("{memory_max}", &memory_max.to_string()));

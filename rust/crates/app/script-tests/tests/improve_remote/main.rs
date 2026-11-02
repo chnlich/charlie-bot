@@ -833,6 +833,26 @@ fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
 }
 
 #[test]
+fn an_other_directions_clone_whose_fetch_keeps_failing_stops_the_round_with_exit_1() {
+  let world = World::new();
+  let clone = world.other_direction_clone("ux");
+  // The clone's origin is gone, so every attempt to fetch its origin/main fails. The round must stop
+  // rather than build its in-flight list without the ux clone's files.
+  let gone = world.sandbox.root().join("gone.git").display().to_string();
+  world.git(&clone, &["remote", "set-url", "origin", &gone]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(
+    stderr(&run).contains(&format!("cannot fetch origin/main in {}", clone.display())),
+    "the round did not name the clone it could not fetch:\n{}",
+    run.describe()
+  );
+  assert!(!world.claude_ran(), "the round started without the ux clone's in-flight files");
+}
+
+#[test]
 fn the_runners_own_checkout_contributes_no_files() {
   let world = World::new();
   // The runner's checkout, with mainline work that its remote's main does not hold.

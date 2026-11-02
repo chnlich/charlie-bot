@@ -287,11 +287,13 @@ pub struct RoutingConfig {
   pub command: Vec<String>,
 }
 
-/// `backends:` section: the rotation pool, optional router command, and model-switch options.
+/// `backends:` section: the rotation pool, optional router command, the strong option id, and model-switch options.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendsConfig {
   pub pool: Vec<String>,
   pub routing: Option<RoutingConfig>,
+  /// The option id that a context-work delegation runs on. Config load checks it names a `options` entry.
+  pub strong: Option<String>,
   pub options: Vec<BackendOption>,
 }
 
@@ -615,7 +617,7 @@ fn parse_backends(
 ) -> Result<BackendsConfig, ConfigError> {
   let mapping = match value {
     None => {
-      return Ok(BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() });
+      return Ok(BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() });
     }
     Some(Value::Mapping(mapping)) => mapping,
     Some(other) => {
@@ -626,7 +628,7 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if !matches!(key.as_str(), Some("pool" | "options" | "routing")) {
+    if !matches!(key.as_str(), Some("pool" | "options" | "routing" | "strong")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
     }
@@ -648,7 +650,13 @@ fn parse_backends(
       )));
     }
   };
-  Ok(BackendsConfig { pool, routing, options })
+  let strong: Option<String> = typed_section(config_path, "backends.strong", mapping.get("strong").cloned(), || None)?;
+  if let Some(strong_id) = &strong
+    && !options.iter().any(|option| option.id == *strong_id)
+  {
+    return Err(ConfigError(format!("{config_path}: backends.strong '{strong_id}' is not in backends.options")));
+  }
+  Ok(BackendsConfig { pool, routing, strong, options })
 }
 
 /// One backend entry, validated as the option model its `type` names would (`backend_models.parse_option`).
@@ -893,6 +901,18 @@ mod tests {
     let home = home_with("backends:\n  routing:\n    command: [synthetic-router]\n    extra: refused\n");
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("backends.routing.extra") && error.contains("unknown field"), "{error}");
+  }
+
+  #[test]
+  fn strong_must_name_a_backends_option() {
+    let home = home_with(
+      "backends:\n  strong: synthetic-strong\n  options:\n    - {id: synthetic-strong, label: S, type: codex, model: m}\n",
+    );
+    assert_eq!(load(&home).unwrap().backends.strong.as_deref(), Some("synthetic-strong"));
+
+    let home = home_with("backends:\n  strong: ghost\n  options:\n    - {id: a, label: A, type: codex, model: m}\n");
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.ends_with("backends.strong 'ghost' is not in backends.options"), "{error}");
   }
 
   #[test]

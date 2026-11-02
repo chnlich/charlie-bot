@@ -98,6 +98,7 @@ Every core section model sets `extra='forbid'`.
 | `paths.scratch_dir` | str | `"~/scripts"` | root whose top-level entries `disk-sweep` treats as old scratch directories; `~` is expanded at load (`src/infra/config.py:98`, `:105`) |
 | `backends.pool` | list[str] | `[]` | rotation order of option ids for unpinned work; each must name an option (startup check) |
 | `backends.routing` | `RoutingConfig` or null | null | optional router command; routed unpinned work asks it to order candidates before pool rotation |
+| `backends.strong` | str or null | null | option id that a delegation declared with `--context-work 1` runs on; config load requires it to name a `backends.options` id, and such a delegation fails with HTTP 400 naming `backends.strong` while it is unset |
 | `backends.options` | list[option] | `[]` | backend catalog (section 4); an empty list fails server startup |
 | `ui.home_services` | list[`{name: str, description: str, url: str}`] | `[]` | cards on `/home`, probed by connecting to the URL's host and port; each item forbids extra keys |
 | `telegram.chat_id` | str or null | null | Telegram notification target; sending without it raises `RuntimeError` (`src/infra/notifications.py`) |

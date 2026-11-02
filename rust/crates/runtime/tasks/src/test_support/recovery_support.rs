@@ -400,7 +400,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       worktree_dir: home.join("worktrees").display().to_string(),
       scratch_dir: home.join("scripts").display().to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, options },
+    backends: BackendsConfig { pool, routing: None, strong: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     sections: Sections::default(),

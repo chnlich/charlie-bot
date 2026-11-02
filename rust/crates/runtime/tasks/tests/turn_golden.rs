@@ -282,7 +282,7 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, options },
+    backends: BackendsConfig { pool, routing: None, strong: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     sections: Sections::default(),

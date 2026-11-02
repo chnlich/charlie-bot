@@ -542,6 +542,7 @@ mod tests {
       backends: BackendsConfig {
         pool: pool.iter().map(|member| (*member).to_string()).collect(),
         routing: None,
+        strong: None,
         options,
       },
       ui: UiConfig { home_services: Vec::new() },

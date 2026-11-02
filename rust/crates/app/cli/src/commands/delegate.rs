@@ -48,7 +48,7 @@ Task types (--task-type):
 
 Context work (--context-work):
 
-  Context work is a first read of unfamiliar material, an understanding, or a design draft. Pass --context-work 1 for context work; the server runs it on backends.strong. Pass 0 for every other task, verify included.
+  Context work is a first read of unfamiliar material, an understanding, a design draft, or a diagnosis. Pass --context-work 1 for context work; the server runs it on backends.strong. Pass 0 for every other task, verify included.
 
 Backend selection (--backend):
 

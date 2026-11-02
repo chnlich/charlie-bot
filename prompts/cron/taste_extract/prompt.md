@@ -40,14 +40,17 @@ proposed. A take-off and a go-ahead are approvals of a step. Each of the three y
 for each fork that the reply, or the page the reply links, laid out when all of these hold:
 - the fork names two or more options;
 - the reply or the page recommends one of them;
-- the user's words address that fork, by its number, by its content, or as the rest of the page's
-  forks ("其余都没问题", "别的都ok").
+- the user's words answer that fork, in one of these forms:
+  - they name the fork, by its number or by its content;
+  - they cover the forks together ("都没问题", "按推荐来", "其余都ok");
+  - they approve a reply whose question to the user was that fork.
 
 The row's `options` are the fork's named options, and `recommended` and `chosen` are the recommendation.
-A take-off or a go-ahead whose words address no fork accepts the step alone and yields no fork row, even
-when the page states that unaddressed forks take the recommendation. That page statement is the agent's
-default, so a row from it would record the agent's recommendation as the user's taste and feed it back to
-later agents. The step itself yields no row: a take-off, a go-ahead, and a step whose only alternatives
+A take-off or a go-ahead answers the step. When its words answer no fork and the reply asked the user
+only for the step, the approval accepts the step alone and yields no fork row, even when the page states
+that unaddressed forks take the recommendation. That page statement is the agent's default, so a row from
+it would record the agent's recommendation as the user's taste and feed it back to later agents. The step
+itself yields no row: a take-off, a go-ahead, and a step whose only alternatives
 are to skip it or to revise it first offer no choice between named options, so the step holds no
 preference to record. One message can accept a step and a fork together, and one page can hold several
 forks; each accepted fork is its own decision and gets its own row. Without the approval rule the table

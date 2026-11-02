@@ -122,8 +122,9 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 ### Metadata slots
 
 - Rust: `metadata_slot(slot: MetadataSlot)`, where `MetadataSlot { owner, on: MetadataFile, after, fields }`. One owner
-  registers once per file (`MetadataFile::Session` or `MetadataFile::Thread`). The store serializes the keys in
-  registration order: `metadata_slots()` hands the list to `Store::new` at startup.
+  registers once per file (`MetadataFile::Session` or `MetadataFile::Thread`). `metadata_slots()` hands the list to
+  `Store::new`, which validates it at startup. The store serializes the session slots' keys in registration order; no
+  Rust code writes a thread metadata file.
 - Example: `registry.metadata_slot(MetadataSlot { owner: "cron", on: MetadataFile::Session, after: Some("backend"), fields })?;`
 
 ### Page packages

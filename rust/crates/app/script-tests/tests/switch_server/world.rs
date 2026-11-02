@@ -84,6 +84,8 @@ pub struct World {
   pub rust_sha: String,
   /// A later release: agy cannot re-attach.
   pub new_sha: String,
+  /// A later release whose checkout predates the slice-unit install owner.
+  pub no_owner_sha: String,
   pub port: u16,
   /// The files the disk preflight reads instead of the live disk and cgroup tree.
   pub cgroups: PathBuf,
@@ -178,13 +180,20 @@ impl World {
     git(&git_vars, &clone, &["commit", "-q", "-m", "new release"]);
     let new_sha = git(&git_vars, &clone, &["rev-parse", "HEAD"]);
 
+    // A later build whose checkout predates the slice-unit install owner: a switch back to it must still install its
+    // units, because the owner is gone from that checkout once the clone moves.
+    fs::remove_file(clone.join("scripts/install-slice-units.sh")).expect("the install owner to remove");
+    git(&git_vars, &clone, &["add", "scripts"]);
+    git(&git_vars, &clone, &["commit", "-q", "-m", "a build before the slice-unit install owner"]);
+    let no_owner_sha = git(&git_vars, &clone, &["rev-parse", "HEAD"]);
+
     let clone_text = clone.display().to_string();
     let origin = sandbox.root().join("origin.git");
     let origin_text = origin.display().to_string();
     git(&git_vars, sandbox.root(), &["clone", "-q", "--bare", clone_text.as_str(), origin_text.as_str()]);
     git(&git_vars, &clone, &["remote", "add", "origin", origin_text.as_str()]);
     git(&git_vars, &clone, &["checkout", "-q", old_sha.as_str()]);
-    for sha in [old_sha.as_str(), pre_sha.as_str(), rust_sha.as_str(), new_sha.as_str()] {
+    for sha in [old_sha.as_str(), pre_sha.as_str(), rust_sha.as_str(), new_sha.as_str(), no_owner_sha.as_str()] {
       install_release(&releases, sha);
     }
     symlink(&old_sha, releases.join("current")).expect("the current release");
@@ -241,6 +250,7 @@ impl World {
       old_sha,
       rust_sha,
       new_sha,
+      no_owner_sha,
       port,
       cgroups,
       proc,

@@ -80,6 +80,9 @@ REPO_ROOT="${CHARLIEBOT_REPO_ROOT:-$SCRIPT_DIR/..}"
 }
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
+# The slice-unit install this switch calls. switch_forward points this at a copy outside the checkout, because the
+# clone moves to a rollback target whose checkout may predate the owner.
+SLICE_INSTALL="$SCRIPT_DIR/install-slice-units.sh"
 HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
@@ -1118,10 +1121,10 @@ dry_run_disk() {
 
 # install_slice_units COMMIT: installs COMMIT's slice units through install-slice-units.sh, the one owner of the
 # install. The launcher's preflight compares the running slice with the release's unit files, so the installed copy
-# must be the new server's text before it starts. The copy beside this script is the one called: after the clone moves
-# to an older commit, that commit's checkout may hold no owner.
+# must be the new server's text before it starts. The copy run_detached keeps outside the checkout is the one called:
+# after the clone moves to an older commit, that commit's checkout may hold no owner.
 install_slice_units() {
-  "$SCRIPT_DIR/install-slice-units.sh" "$REPO_ROOT" "$1"
+  "$SLICE_INSTALL" "$REPO_ROOT" "$1"
 }
 
 # weight_controller_check: each switched-on session-weight switch names a controller that must have reached the
@@ -1313,6 +1316,10 @@ die() {
 }
 
 switch_forward() {
+  # The clone moves to each install's target first, and a rollback target may predate the owner in its checkout, so
+  # every install below runs from a copy outside the checkout.
+  cp "$SLICE_INSTALL" "$WORK/install-slice-units.sh" || die "copy the slice-unit install to $WORK"
+  SLICE_INSTALL="$WORK/install-slice-units.sh"
   scan_home || die "cannot read the run records in $HOME_DIR"
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"

@@ -699,6 +699,29 @@ fn test_switch_forward_installs_the_slice_units_and_reloads_before_the_new_serve
   assert!(reload < start, "the reload ran after the server start: {records:?}");
 }
 
+#[test]
+fn test_a_switch_to_a_release_whose_checkout_predates_the_slice_install_owner_installs_its_units() {
+  let mut world = World::new();
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  world.seed_live_run("run-live", Some("claude-opus"));
+  let target = world.no_owner_sha.clone();
+
+  let run = world.switch(&["rust", &target]);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert_eq!(fs::read_link(world.releases.join("current")).expect("current"), PathBuf::from(&target));
+  assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), target);
+  assert!(world.serves_release(&target), "the target release does not serve");
+  // The clone is at the target, whose checkout holds no owner, so the install could only run from the copy kept
+  // outside the checkout.
+  assert!(!world.clone.join("scripts/install-slice-units.sh").exists(), "the target's checkout holds the owner");
+  let installed = fs::read_to_string(world.user_units().join("charliebot-agents.slice")).expect("the installed unit");
+  let target_text =
+    fs::read_to_string(world.clone.join("scripts/systemd/charliebot-agents.slice")).expect("the target's unit file");
+  assert_eq!(installed, target_text, "{}", world.report(&run));
+}
+
 // ---- escalation: a server under the pane is stopped by SIGTERM, then SIGKILL --------------------------------------
 
 #[test]

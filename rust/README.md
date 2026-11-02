@@ -6,10 +6,8 @@ log. It holds the home writer fence, so no second server process serves the same
 
 ## Build
 
-```sh
-cd rust
-cargo build --release        # target/release/charliebot-server
-```
+Build the server through `tools/remote-run/cargo-slot.sh` from `rust/`. The build host keeps the output, so the agent host
+builds nothing locally.
 
 CI (`.github/workflows/ci.yml`) runs two Rust jobs on `ubuntu-24.04`, whose glibc 2.39 matches the live host. `release-build`
 runs `cargo build --release --locked -p charliebot-server` on every pull request and push. On a push to `main` it uploads
@@ -61,15 +59,13 @@ adds `error`.
 
 ## Test
 
-```sh
-cd rust
-cargo build --release
-cargo test --locked
-cargo clippy --all-targets --locked -- -D warnings
-cargo fmt --check
-```
+- Run every compile and test through `tools/remote-run/`: `run.sh` for any command, `cargo-slot.sh` for Cargo.
+- The Rust suite is `cargo test --workspace --locked` from `rust/`.
+- The frontend JavaScript tests are `node --test` from the checkout root, as CI does.
+- The agent environment on the agent host refuses the toolchains that `tools/remote-run/README.md` lists.
+- When the runner exits 86 or 87, end the run and report the blocker with the link it prints.
 
-`cargo test` compares the YAML writer, JSON reader, boot marker, body and form handling, and html tokenizer
+The Rust tests compare the YAML writer, JSON reader, boot marker, body and form handling, and html tokenizer
 with recorded outputs. The compatibility and SSH outputs under `rust/fixtures/golden/` are recorded data; other
 recorded expectations live beside the tests that read them. The recorded tables name their generator in the table
 headers, and the WAV fixtures name theirs in the fixture README.

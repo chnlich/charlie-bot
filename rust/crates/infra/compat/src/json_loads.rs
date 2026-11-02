@@ -2,8 +2,8 @@
 //!
 //! A document that `serde_json` reads to the same value is taken from `serde_json` (see [`loads_serde`]). Every
 //! other document goes through the scanner below. A syntax error renders as `<message>: line L column C (char P)`,
-//! and a body that is not UTF-8 gives the decoder's text. A body's byte-order mark selects UTF-16 or UTF-32, so a
-//! body with null bytes decodes as one of those.
+//! and a body that is not UTF-8 gives the decoder's text. A body's byte-order mark, or its null bytes when it has no
+//! mark, selects UTF-16 or UTF-32.
 //!
 //! Positions count code points. A document that loads but that a `serde_json::Value` cannot hold (a non-finite
 //! float, an integer beyond 64 bits, a lone surrogate, nesting past [`MAX_DEPTH`]) is parsed to its end. The syntax
@@ -72,7 +72,7 @@ pub fn loads(body: &[u8]) -> Result<Value, LoadError> {
 
 /// Load a body of bytes, distinguishing JSON syntax failures from body-decoding failures.
 ///
-/// A body serde_json reads needs no codec. A body the byte-order mark makes UTF-16 or UTF-32, or whose text starts
+/// A body serde_json reads needs no codec. A body that `detect_codec` decodes as UTF-16 or UTF-32, or whose text starts
 /// with a byte-order mark, is not valid JSON text. serde_json refuses it and the scanner decodes it.
 pub fn loads_classified(body: &[u8]) -> Result<Value, LoadFailure> {
   if let Some(value) = loads_serde(body) {
@@ -480,7 +480,8 @@ fn detect_codec(body: &[u8]) -> Codec {
   Codec::Utf8 { skip: 0 }
 }
 
-/// Decode the body's code points, surrogate pairs included.
+/// Decode the body's code points under the detected codec: UTF-16 surrogate pairs join into one code point,
+/// and any other surrogate stays a code point.
 fn decode(body: &[u8]) -> Result<Vec<u32>, LoadError> {
   match detect_codec(body) {
     Codec::Utf8 { skip } => decode_utf8(body, skip),

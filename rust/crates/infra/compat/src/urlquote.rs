@@ -3,7 +3,7 @@
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 
-/// The bytes plain percent quoting leaves alone: every ASCII byte except the alphanumerics, `_.-~` and
+/// The bytes that plain percent quoting encodes: every ASCII byte except the alphanumerics, `_.-~` and
 /// `safe`. The crate also encodes every non-ASCII byte.
 pub const fn quote_set(safe: &[u8]) -> AsciiSet {
   let mut set = NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');

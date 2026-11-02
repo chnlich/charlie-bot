@@ -733,7 +733,7 @@ mod tests {
   #[test]
   fn starlette_style_matches_ensure_ascii_false() {
     // The bytes with `ensure_ascii` off: the control set escaped, DEL and
-    // the non-ASCII characters raw (the shapes the fixture `json_renders.json` pins at large).
+    // the non-ASCII characters raw (the shapes the fixture `json_renders_golden.json` pins at large).
     assert_eq!(
       json_dumps(&json!("raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b} del\u{7f}"), &STARLETTE_JSON),
       "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b del\u{7f}\""

@@ -440,9 +440,9 @@ impl Store {
   /// The node's folded facts, shared. A read after appends folds only the events appended since the last read.
   ///
   /// The memo answers what a fold of [`Store::load_all_facts`] answers because its key covers every input of that
-  /// read: the live-cache generation and the archived extent. This follows `src/runtime/task_sessions.py:650,710-746`'s
-  /// list-identity key and suffix cursor; `node_facts_cache` stays resident across recovery eviction. A load from disk
-  /// takes a new generation. Within one
+  /// read: the live-cache generation and the archived extent. A list-identity key and suffix cursor keep the fold
+  /// incremental; `node_facts_cache` stays resident across recovery eviction. A load from disk takes a new
+  /// generation. Within one
   /// generation the cached list changes only by `append_chat_event` pushes, which the suffix fold extends.
   pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
     let mut never_stop = || false;
@@ -2062,9 +2062,8 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     names.push(name);
   }
   names.sort();
-  // As `_build_index_sync` (`src/runtime/task_sessions.py:495`): `fresh_cached_metas` uses the same per-entry stat
-  // check as `src/runtime/session_store.py:241` and returns shared metadata. The index owns Arcs, so cached metadata
-  // incurs no deep clone while building or serving the index.
+  // `fresh_cached_metas` uses the same per-entry stat check the listing build uses and returns shared metadata. The
+  // index owns Arcs, so cached metadata incurs no deep clone while building or serving the index.
   let Some(mut cached) = store.fresh_cached_metas_until(should_stop)? else {
     return Ok(None);
   };
@@ -2593,9 +2592,8 @@ fn default_task_name(task: &TaskSpec, profile: TaskProfile) -> Option<String> {
   Some(selected.chars().take(80).collect())
 }
 
-/// The heading rule `_MD_HEADING_RE` compiles once in `src/runtime/task_sessions.py:1973-1990`:
-/// up to three leading whitespace characters, one to six marks, then whitespace or the line's end.
-/// Rust's regex `\s` is Unicode-aware exactly like Python's, so the same pattern decides each line.
+/// The heading rule: up to three leading whitespace characters, one to six marks, then whitespace or the line's end.
+/// Rust's regex `\s` is Unicode-aware, so a non-ASCII whitespace character counts too.
 static MARKDOWN_HEADING: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"^\s{0,3}#{1,6}(\s|$)").expect("the markdown heading pattern compiles"));
 
@@ -2630,8 +2628,7 @@ fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
   StoreError::new(format!("{}: {error}", path.display()))
 }
 
-/// The unpublished create's staging directory name, matching Python's
-/// `.task-{task_id}-{os.getpid()}-{uuid4().hex}.tmp` in src/runtime/task_sessions.py.
+/// The unpublished create's staging directory name: `.task-{task_id}-{pid}-{uuid}.tmp`.
 fn staging_dir_name(task_id: &str) -> String {
   format!(".task-{}-{}-{}.tmp", task_id, std::process::id(), uuid::Uuid::new_v4().simple())
 }
@@ -2656,8 +2653,8 @@ pub(crate) mod tests {
   };
   use crate::streaming::{SIDEBAR_CHANNEL, Subscription};
 
-  /// `_MD_HEADING_RE = ^\s{0,3}#{1,6}(\s|$)` (`src/runtime/task_sessions.py:1973-1990`): up to three
-  /// leading spaces, one to six marks, then whitespace or the line's end.
+  /// The heading pattern `^\s{0,3}#{1,6}(\s|$)`: up to three leading spaces, one to six marks, then
+  /// whitespace or the line's end.
   #[test]
   fn markdown_heading_lines_match_the_pattern() {
     for line in ["# Title", "## Sub", "###### six", "#", "  ## indented", "   # three", "\t# tabbed"] {
@@ -3683,7 +3680,7 @@ pub(crate) mod tests {
     fs::write(&path, meta.to_json_string(&store.slots, true)).unwrap();
   }
 
-  // Python: src/runtime/task_sessions.py:581
+  // Archived descendants do not count toward the 1000-node subtree cap.
   #[test]
   fn subtree_walk_holds_more_than_a_thousand_stored_archived_descendants() {
     let home = tempfile::tempdir().unwrap();
@@ -3699,7 +3696,7 @@ pub(crate) mod tests {
     assert!(walked.as_ref().is_ok_and(|ids| ids.len() == 1003), "{walked:?}");
   }
 
-  // Python: src/runtime/task_sessions.py:585
+  // More than 1000 non-archived descendants is a conflict naming the cap.
   #[test]
   fn subtree_walk_refuses_more_than_a_thousand_non_archived_descendants() {
     let home = tempfile::tempdir().unwrap();
@@ -3717,7 +3714,7 @@ pub(crate) mod tests {
     );
   }
 
-  // Python: src/runtime/task_sessions.py:581
+  // A node archived only by its ancestor's derived marker does not count toward the cap.
   #[tokio::test]
   async fn subtree_cap_does_not_count_a_node_only_the_derived_archive_marks() {
     let home = tempfile::tempdir().unwrap();

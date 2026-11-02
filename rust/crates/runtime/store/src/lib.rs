@@ -68,9 +68,9 @@ use std::fmt;
 /// Store operation result.
 pub type StoreResult<T> = Result<T, StoreError>;
 
-/// A store refusal or failure. The refusal variants name the Python class they answer, and `status_code` gives the
-/// HTTP status the routes map it to (`src/runtime/api/sessions.py::_task_http_error`). `Failure` covers I/O,
-/// serialization, corrupt-state and hook errors, which carry no status.
+/// A store refusal or failure. The refusal variants name the failure class they answer, and `status_code` gives the
+/// HTTP status the routes map it to. `Failure` covers I/O, serialization, corrupt-state and hook errors, which carry
+/// no status.
 #[derive(Debug)]
 pub enum StoreError {
   /// An input, serialization, filesystem, or hook error.

@@ -129,7 +129,7 @@ impl fmt::Display for UtcDateTime {
   }
 }
 
-/// Session lifecycle state (`src/infra/models.py::SessionStatus`).
+/// Session lifecycle state.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
@@ -353,7 +353,7 @@ pub enum ThreadStatus {
   Cancelled,
 }
 
-/// Legacy thread metadata (`src/infra/models.py::ThreadMetadata`).
+/// Legacy thread metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ThreadMetadata {
   #[serde(default = "fresh_uuid")]
@@ -426,7 +426,7 @@ impl ThreadMetadata {
   }
 }
 
-/// Session metadata (`src/infra/models.py::SessionMetadata`).
+/// Session metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SessionMetadata {
   #[serde(default = "fresh_uuid")]

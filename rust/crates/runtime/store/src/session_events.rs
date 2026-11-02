@@ -110,7 +110,7 @@ impl Store {
   }
 
   /// Best-effort sidebar notification for one node's durable task fact. Call it after the fact is durable: a failure is
-  /// logged and never fails the write (`control_sink.py::ControlEventSink.notify_tree_changed`).
+  /// logged and never fails the write.
   pub async fn notify_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) {
     if let Err(error) = self.broadcast_task_tree_changed(session_id, event_type).await {
       tracing::error!(session_id, event_type = ?event_type, %error, "task_tree_changed_broadcast_failed");

@@ -1,6 +1,6 @@
-//! The trigger-file walk shared by sidebar probes and trigger readers. Its three stat-keyed memos follow
-//! `src/runtime/session_sidebar.py:94-145,193-226`: 1024 parsed files, 1024 directory verdicts, and 4096 walks.
-//! This module also owns the trigger record and its file: the record type, the one read and the one write.
+//! The trigger-file walk shared by sidebar probes and trigger readers. Its three stat-keyed memos hold 1024 parsed
+//! files, 1024 directory verdicts, and 4096 walks. This module also owns the trigger record and its file: the record
+//! type, the one read and the one write.
 
 #[cfg(test)]
 use std::collections::HashMap;
@@ -334,7 +334,6 @@ mod tests {
 
   #[test]
   fn walk_returns_trigger_files_sorted_by_name() {
-    // Python: src/runtime/trigger_files.py:24
     let root = tempfile::tempdir().unwrap();
     for name in ["e.json", "b.json", "h.json", "a.json", "g.json", "c.json", "f.json", "d.json"] {
       fs::write(root.path().join(name), "{}").unwrap();

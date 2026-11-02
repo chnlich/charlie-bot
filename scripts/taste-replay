@@ -69,25 +69,9 @@ def run_cli(cli: str, home: Path, args: list[str]) -> str:
     return completed.stdout
 
 
-def read_model(config_path: Path) -> str:
-    if not config_path.is_file():
-        die(f"missing config file {config_path}")
-    in_backends = False
-    in_options = False
-    for line in config_path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("backends:"):
-            in_backends = True
-            continue
-        if in_backends and line.startswith("  options:"):
-            in_options = True
-            continue
-        if in_options:
-            if line and not line.startswith("  "):
-                break
-            match = re.match(r"^    model:\s*(\S+)", line)
-            if match:
-                return match.group(1).strip("'\"")
-    die(f"no backends.options[0].model in {config_path}")
+def manager_model(cli: str, home: Path) -> str:
+    backends = json.loads(run_cli(cli, home, ["config", "get", "backends"]))
+    return backends["options"][0]["model"]
 
 
 def domains(cli: str, home: Path) -> list[str]:
@@ -269,7 +253,7 @@ def main() -> None:
 
     home = home_dir()
     cli = cli_path()
-    model = read_model(home / "config.yaml")
+    model = manager_model(cli, home)
     claude = shutil.which("claude")
     if not claude:
         die("missing `claude` on PATH")
@@ -308,7 +292,7 @@ def main() -> None:
 
     results = {
         "model": model,
-        "model_source": f"backends.options[0].model in {home / 'config.yaml'}",
+        "model_source": "backends.options[0].model from `charliebot config get backends`",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "isolation": ISOLATION,
         "as_of_rule": AS_OF_RULE,

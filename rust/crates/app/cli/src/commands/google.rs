@@ -30,7 +30,7 @@ const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profil
 const REDIRECT_URI: &str = "http://localhost";
 const SCOPES: &str = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents \
   https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.readonly \
-  https://www.googleapis.com/auth/calendar.readonly";
+  https://www.googleapis.com/auth/calendar";
 
 /// The two endpoints this command calls. Tests point them at local stubs.
 #[derive(Debug, Clone)]
@@ -1723,7 +1723,7 @@ mod tests {
     "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments",
     "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file",
     "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly",
-    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.readonly",
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar",
     "&access_type=offline",
     "&prompt=consent+select_account",
     "&state=default",
@@ -1812,9 +1812,7 @@ appointments and the tax paperwork of the household";
     assert_eq!(parameter(&query, "login_hint"), "person@example.invalid");
     assert_eq!(parameter(&query, "state"), "personal");
     assert_eq!(parameter(&query, "redirect_uri"), "http://localhost");
-    assert!(
-      parameter(&query, "scope").split(' ').any(|scope| scope == "https://www.googleapis.com/auth/calendar.readonly")
-    );
+    assert!(parameter(&query, "scope").split(' ').any(|scope| scope == "https://www.googleapis.com/auth/calendar"));
   }
 
   #[test]

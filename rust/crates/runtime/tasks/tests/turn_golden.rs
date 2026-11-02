@@ -274,6 +274,7 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
       subprocess_buffer_limit_mb: 1,
       session_memory_max_mb: 0,
       session_swap_max_mb: 0,
+      public_url: None,
       session_tasks_max: 0,
       min_free_disk_gib: 0,
       enable_session_cpu_weight: true,

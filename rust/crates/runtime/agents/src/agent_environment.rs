@@ -335,6 +335,7 @@ mod tests {
         subprocess_buffer_limit_mb: 1024,
         session_memory_max_mb: memory,
         session_swap_max_mb: swap,
+        public_url: None,
         session_tasks_max: tasks,
         min_free_disk_gib: 10,
         enable_session_cpu_weight: true,

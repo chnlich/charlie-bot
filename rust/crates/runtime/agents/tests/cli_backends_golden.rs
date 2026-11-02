@@ -93,6 +93,7 @@ impl Fixture {
         subprocess_buffer_limit_mb: 1024,
         session_memory_max_mb: 0,
         session_swap_max_mb: 0,
+        public_url: None,
         session_tasks_max: 4096,
         min_free_disk_gib: 10,
         enable_session_cpu_weight: true,

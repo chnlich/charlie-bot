@@ -41,6 +41,9 @@ server:
   # check. Manager turns never check (they write little and are the path that
   # reports the shortage).
   min_free_disk_gib: 10
+  # The address a person reaches this server at, read by `charliebot config get server.public_url`. It has no
+  # default: a command that links a page on this server fails until the host sets it.
+  # public_url: https://<host>.<tailnet>:18498
 
 # Paths: repos to scan and where worker worktrees live.
 paths:

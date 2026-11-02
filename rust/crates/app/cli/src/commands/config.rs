@@ -9,7 +9,7 @@
 //!
 //! Stdout carries exactly the value — a scalar as its plain text, lists, mappings and models as compact JSON — so a
 //! caller can substitute `$(charliebot config get <key>)` into a command. Diagnostics go to stderr: an unknown key
-//! exits 2, an unset (null) value exits 1.
+//! exits 2, an unset (null) value exits 1. `server.public_url` is the one nested key the command reads.
 
 use std::ffi::OsString;
 
@@ -113,9 +113,15 @@ const FIELD_KEYS: [&str; 7] =
 /// `charliebot_home`.
 const DEFAULT_HOME_KEY: &str = "default_charliebot_home";
 
-/// True for a top-level field, a registered section, or the default-home fact.
+/// The nested key the command reads: the address a person reaches the server at, unset until the host sets it.
+const PUBLIC_URL_KEY: &str = "server.public_url";
+
+/// True for a top-level field, a registered section, the default-home fact, or `server.public_url`.
 fn known_key(key: &str, registry: &Registry) -> bool {
-  key == DEFAULT_HOME_KEY || FIELD_KEYS.contains(&key) || registry.config_sections().any(|section| section.key == key)
+  key == DEFAULT_HOME_KEY
+    || key == PUBLIC_URL_KEY
+    || FIELD_KEYS.contains(&key)
+    || registry.config_sections().any(|section| section.key == key)
 }
 
 /// One key's stdout text, or the failure that exits.
@@ -142,6 +148,10 @@ fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Optio
     "default_charliebot_home" => Rendered::Scalar(paths::display(&home::default_charliebot_home())),
     "headless_chrome_bin" => Rendered::Scalar(cfg.headless_chrome_bin.clone()),
     "server" => Rendered::Json(server_json(cfg)),
+    PUBLIC_URL_KEY => match &cfg.server.public_url {
+      Some(url) => Rendered::Scalar(url.clone()),
+      None => Rendered::Json(Value::Null),
+    },
     "paths" => Rendered::Json(paths_json(cfg)),
     "backends" => Rendered::Json(backends_json(cfg, registry).map_err(Failure::value)?),
     "ui" => Rendered::Json(ui_json(cfg)),
@@ -172,6 +182,7 @@ fn server_json(cfg: &CharlieBotConfig) -> Value {
     "session_swap_max_mb": server.session_swap_max_mb,
     "session_tasks_max": server.session_tasks_max,
     "min_free_disk_gib": server.min_free_disk_gib,
+    "public_url": server.public_url,
   })
 }
 
@@ -310,6 +321,30 @@ mod tests {
       failure.message,
       "error: unknown config key: server.port (not a CharlieBotConfig field or registered section)"
     );
+  }
+
+  /// The stdout of `key` against a profile home whose `config.yaml` is `yaml`.
+  fn run_yaml(yaml: &str, key: &str) -> Result<String, Failure> {
+    let home = tempfile::tempdir().expect("a temp dir");
+    std::fs::write(home.path().join(config::CONFIG_FILENAME), yaml).expect("write the config");
+    let registry = charliebot_packages::registry().expect("the packages register");
+    let cfg = registry.load_config(home.path()).expect("the synthetic config loads");
+    get(key, &cfg, &registry)
+  }
+
+  #[test]
+  fn a_public_url_prints_the_configured_address() {
+    let yaml = "server:\n  public_url: https://synthetic.example.test:18498\n";
+    let stdout = run_yaml(yaml, "server.public_url").expect("the address prints");
+    assert_eq!(stdout, "https://synthetic.example.test:18498\n");
+  }
+
+  #[test]
+  fn an_unset_public_url_exits_1_naming_the_key() {
+    // The fixture sets no address, so the key is null and the command refuses to print it.
+    let failure = run("server.public_url").expect_err("an unset address is refused");
+    assert_eq!(failure.code, 1);
+    assert_eq!(failure.message, "error: config key server.public_url is unset");
   }
 
   #[test]

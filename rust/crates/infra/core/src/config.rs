@@ -217,6 +217,10 @@ pub struct ServerConfig {
   pub enable_session_io_weight: bool,
   #[serde(default = "default_min_free_disk_gib")]
   pub min_free_disk_gib: i64,
+  /// The address a person reaches this server at, e.g. `https://<host>.<tailnet>:18498`. It has no default: a guessed
+  /// address would send links to the wrong place, so an unset value stays unset until the host sets it.
+  #[serde(default)]
+  pub public_url: Option<String>,
 }
 
 // The schema defaults of `ServerConfig`.
@@ -589,6 +593,7 @@ fn default_server() -> ServerConfig {
     enable_session_cpu_weight: default_switch_on(),
     enable_session_io_weight: default_switch_on(),
     min_free_disk_gib: default_min_free_disk_gib(),
+    public_url: None,
   }
 }
 

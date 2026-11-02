@@ -25,9 +25,6 @@ use crate::store::SourceRef;
 /// The comment-batch prefixes a user event starts with.
 const COMMENT_PREFIXES: [&str; 2] = ["[Artifact comments", "[Diff comments"];
 
-/// The round rating that makes the user's next message a candidate.
-const THUMBS_DOWN: &str = "thumbs_down";
-
 /// One source of candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateSource {
@@ -207,7 +204,7 @@ fn round_ratings(session_dir: &Path) -> anyhow::Result<Vec<Rating>> {
       .map(|(event_id, rating)| Rating {
         event_id: event_id.clone(),
         index: usize::MAX,
-        thumbs_down: rating.as_str() == Some(THUMBS_DOWN),
+        thumbs_down: rating.as_str() == Some(metadata::THUMBS_DOWN),
       })
       .collect(),
   )

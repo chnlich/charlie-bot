@@ -14,7 +14,7 @@ use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::metadata::{HAS_UNREAD, RoundRating};
+use charliebot_store::metadata::{HAS_UNREAD, RoundRating, THUMBS_DOWN, THUMBS_UP};
 use charliebot_store::{Store, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
 use serde_json::{Map, Value, json};
@@ -26,8 +26,7 @@ const RENAME_GROUP_FIELDS: &[Field] =
 const RENAME_GROUP_BODY: BodyModel = BodyModel::required(RENAME_GROUP_FIELDS);
 const DELETE_GROUP_FIELDS: &[Field] = &[Field::required("group", FieldType::String)];
 const DELETE_GROUP_BODY: BodyModel = BodyModel::required(DELETE_GROUP_FIELDS);
-const RATE_ROUND_FIELDS: &[Field] =
-  &[Field::required("rating", FieldType::NullableLiteral(&["thumbs_up", "thumbs_down"]))];
+const RATE_ROUND_FIELDS: &[Field] = &[Field::required("rating", FieldType::NullableLiteral(&[THUMBS_UP, THUMBS_DOWN]))];
 const RATE_ROUND_BODY: BodyModel = BodyModel::required(RATE_ROUND_FIELDS);
 const SET_GROUP_FIELDS: &[Field] = &[Field::optional("group", FieldType::NullableString)];
 const SET_GROUP_BODY: BodyModel = BodyModel::required(SET_GROUP_FIELDS);
@@ -173,8 +172,7 @@ async fn rate_round(
   };
   let rating = match payload.get("rating") {
     Some(Value::Null) => None,
-    Some(Value::String(value)) if value == "thumbs_up" => Some(RoundRating::ThumbsUp),
-    Some(Value::String(value)) if value == "thumbs_down" => Some(RoundRating::ThumbsDown),
+    Some(Value::String(value)) => Some(RoundRating::from_wire(value).expect("a validated literal names a rating")),
     _ => unreachable!("validated nullable literal field"),
   };
   match features.store.rate_round(&session_id, &round_id, rating).await {

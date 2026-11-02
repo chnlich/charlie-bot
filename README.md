@@ -102,16 +102,21 @@ A subcommand name the binary does not carry answers with the unknown-subcommand 
 
 ## Repository layout
 
-- `rust/crates/` — the server that runs: `app/server` is the `charliebot-server` entry point, `app/cli` holds the Rust CLI commands, `runtime/` carries the task tree, agent processes and the session store, `features/` one crate per feature, `infra/` the shared foundations
-- `src/` — the Rust server's page templates, static assets and helper scripts, which the server and repo tools read by path
-- `web/` — Jinja2 templates + vanilla JS static assets, served by the Rust server
-- `skills/` — repo-shared agent skills
-- `prompts/` — agent prompt definitions
+Every root entry, one line each:
+
+- `.github/` — the CI workflow: the Python guard, the frontend suite, the release build and the Rust checks
+- `.gitignore` — the build outputs, dependencies and local environments git ignores
+- `AGENTS.md` — the repository guide for agents working in this checkout
+- `LICENSE` — the MIT license
+- `README.md` — this file
+- `configs/` — example configuration and the repository's default cron tasks
+- `dev/` — repository maintenance: git hooks, leak and style checks, the CSS build, the eval harnesses and the improve cron prompts
+- `docs/` — the design documents, the project specification and supplementary assets
+- `prompts/` — the agent prompt definitions and page templates
+- `rust/` — the server and CLI workspace; `cargo` builds and tests here
 - `scripts/` — operator scripts: setup, server launcher, release install and switch, skill sync, charlie-code preflight
-- `tools/` — maintenance tools: style and leak checks, git hooks, browser and live harnesses, CSS build
-- `tests/` — the frontend JavaScript test suites (`node --test`, one suite per `tests/*.test.{js,mjs}` file) and their fixture data
-- `configs/` — example config and repo-default cron tasks
-- `docs/` — supplementary documentation and assets
+- `skills/` — repo-shared agent skills
+- `web/` — the frontend: Jinja2 templates and static assets, the page packages under `web/features` and `web/backends`, the `node --test` suites under `web/tests`, and the frontend `web/package.json` and `web/tailwind.config.js`
 
 ## License
 

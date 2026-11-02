@@ -14,9 +14,9 @@ use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 
 const PACKAGES: [(&str, &str, RegisterFn); 3] = [
-  ("web_reply", "src.features.web_reply", charliebot_web_reply::register),
-  ("slack", "src.features.slack", charliebot_slack::register),
-  ("discord", "src.features.discord", charliebot_discord::register),
+  ("web_reply", "features.web_reply", charliebot_web_reply::register),
+  ("slack", "features.slack", charliebot_slack::register),
+  ("discord", "features.discord", charliebot_discord::register),
 ];
 
 #[test]

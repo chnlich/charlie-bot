@@ -37,7 +37,7 @@ use regex::bytes::Regex;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
-const PACKAGE: &str = "src.backends.openai_compatible";
+const PACKAGE: &str = "backends.openai_compatible";
 const ACCESS_KEY: &str = "synthetic-access-key";
 const DONE_FRAME: &[u8] = b"data: [DONE]\n\n";
 const MESSAGE_STOP_FRAME: &[u8] = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";

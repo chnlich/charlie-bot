@@ -116,7 +116,7 @@ mod tests {
 
   fn synthetic_config(home: &Path) -> CharlieBotConfig {
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.voice", crate::register).expect("register the voice config section");
+    registry.register_package("features.voice", crate::register).expect("register the voice config section");
     registry.load_config(home).expect("load synthetic config")
   }
 

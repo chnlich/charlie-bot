@@ -104,9 +104,9 @@ impl Home {
     write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
     let mut registry = Registry::new();
     registry
-      .register_package("src.features.user_text_checks", charliebot_user_text_checks::register)
+      .register_package("features.user_text_checks", charliebot_user_text_checks::register)
       .expect("the user text checks package registers");
-    registry.register_package("src.features.web_reply", crate::register).expect("the web reply package registers");
+    registry.register_package("features.web_reply", crate::register).expect("the web reply package registers");
     registry.register_package("tests.origins", register_origins).expect("the origin slots register");
     registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
     let registry = Arc::new(registry);

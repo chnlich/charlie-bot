@@ -37,7 +37,7 @@ pub fn claude_config(account_dir: Option<&Path>) -> String {
 
 /// The feature context over `home`, whose config.yaml is `config_body`, with the cc-claude backend registered.
 pub fn claude_features(home: &Path, config_body: &str) -> Arc<FeatureContext> {
-  features_with_packages(home, config_body, &[("src.backends.claude_code", charliebot_claude_code::register)])
+  features_with_packages(home, config_body, &[("backends.claude_code", charliebot_claude_code::register)])
 }
 
 /// The feature context over `home`, whose config.yaml is `config_body`, with each of `packages` registered in order.

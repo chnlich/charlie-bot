@@ -632,7 +632,7 @@ fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
     )
   };
   let mut registry = Registry::new();
-  registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+  registry.register_package("backends.anthropic_compatible", register_anthropic_compatible).unwrap();
   let home = root.path().join("home");
   fs::create_dir_all(&home).unwrap();
 
@@ -656,7 +656,7 @@ fn anthropic_compatible_registration_matches_traits_and_usage_attribution() {
 
   let mut registry = Registry::new();
   registry.register_package("test.claude_usage_source", register_claude_usage_source).unwrap();
-  registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+  registry.register_package("backends.anthropic_compatible", register_anthropic_compatible).unwrap();
 
   let registration = registry.backend_type_of("cc-anthropic-compatible").unwrap();
   assert_eq!(
@@ -689,7 +689,7 @@ fn anthropic_compatible_registration_matches_traits_and_usage_attribution() {
 #[test]
 fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
   let mut registry = Registry::new();
-  registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+  registry.register_package("backends.anthropic_compatible", register_anthropic_compatible).unwrap();
   let lifecycle = registry.backend_type_of("cc-anthropic-compatible").unwrap().lifecycle.clone().unwrap();
   let option = option_of(&argv_case(
     "variant",

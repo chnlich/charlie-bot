@@ -1,0 +1,226 @@
+// ---------------------------------------------------------------------------
+// Coverage boundary: this test only asserts that Tailwind utility classes
+// produced by the render paths the fixture below actually exercises --
+// renderMessage() (user/assistant/tool-activity/system/delegate/worker/plan/
+// clone/trigger/separator) and the plan compact-card builder -- are present
+// in the committed web/static/css/tailwind.css. It says nothing about class
+// usage in code paths (or templates) the fixture does not touch.
+// ---------------------------------------------------------------------------
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
+
+const ROOT = path.join(__dirname, '..');
+const NODE_BIN_DIR = path.join(os.homedir(), '.local', 'nodeenvs', 'charliebot-node-20', 'bin');
+const BUILD_ENV = Object.assign({}, process.env, {
+  PATH: `${NODE_BIN_DIR}:${process.env.PATH || ''}`,
+});
+
+const { readStatic } = require('./read_static');
+const { loadArtifactsScript } = require('./artifacts_context_stub');
+const { makeChatRenderContext } = require('./chat_rendering_context_stub');
+
+// ---------------------------------------------------------------------------
+// Loaders for each render surface, mirroring the vm bootstrap pattern used by
+// web/tests/compact_button.test.js and web/tests/plan_cards.test.js.
+// ---------------------------------------------------------------------------
+function loadChatContext(elements) {
+  const context = makeChatRenderContext(elements);
+  vm.createContext(context);
+  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
+  vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });
+  context.Chat.renderRoundRatingButtons = () => '<button class="round-rating-btn text-slate-500 hover:text-green-400"></button>';
+  context.Chat.markFileLinks = () => {};
+  // The voice package registers the badge a dictated message's bubble carries.
+  context.Chat.registerInputMode('voice', '&#127908; Voice');
+  vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
+  // The explain package's separator button.
+  context.Chat.registerSeparatorButton(() => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>');
+  return context;
+}
+
+// ---------------------------------------------------------------------------
+// Class-token extraction and Tailwind build helpers.
+// ---------------------------------------------------------------------------
+function extractClassTokens(snippets) {
+  const tokens = new Set();
+  const classAttrRe = /\bclass="([^"]*)"/g;
+  for (const html of snippets) {
+    let m;
+    while ((m = classAttrRe.exec(String(html)))) {
+      m[1].split(/\s+/).filter(Boolean).forEach((t) => tokens.add(t));
+    }
+  }
+  return tokens;
+}
+
+function buildTailwindCssFromTokens(tokens) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-coverage-'));
+  const contentFile = path.join(tmpDir, 'fixture.html');
+  const configFile = path.join(tmpDir, 'tailwind.config.js');
+  const entryFile = path.join(tmpDir, 'entry.css');
+  const outFile = path.join(tmpDir, 'out.css');
+
+  fs.writeFileSync(contentFile, `<div class="${Array.from(tokens).join(' ')}"></div>\n`);
+  fs.writeFileSync(configFile, `module.exports = {
+  content: ['${contentFile}'],
+  darkMode: 'class',
+  theme: { extend: { colors: { slate: { 850: '#172033' } } } },
+};
+`);
+  fs.writeFileSync(entryFile, '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n');
+
+  // Ensure the pinned tailwindcss devDependency is installed (idempotent).
+  execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: ROOT, env: BUILD_ENV, stdio: 'pipe' });
+
+  const cliPath = path.join(ROOT, 'node_modules', 'tailwindcss', 'lib', 'cli.js');
+  execFileSync('node', [cliPath, '--config', configFile, '--input', entryFile, '--output', outFile],
+      { cwd: ROOT, env: BUILD_ENV, stdio: 'pipe' });
+
+  const css = fs.readFileSync(outFile, 'utf8');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  return css;
+}
+
+// ---------------------------------------------------------------------------
+// Rule-level subset check: every leaf rule (selector + declarations) in the
+// coverage build must appear, modulo whitespace, in the committed CSS.
+// ---------------------------------------------------------------------------
+function extractLeafRules(css) {
+  const rules = [];
+  let i = 0;
+  while (i < css.length) {
+    const braceIdx = css.indexOf('{', i);
+    if (braceIdx === -1) break;
+    let depth = 1;
+    let j = braceIdx + 1;
+    while (j < css.length && depth > 0) {
+      if (css[j] === '{') depth++;
+      else if (css[j] === '}') depth--;
+      j++;
+    }
+    const selector = css.slice(i, braceIdx).trim();
+    const body = css.slice(braceIdx + 1, j - 1);
+    if (selector.startsWith('@media') || selector.startsWith('@supports')) {
+      rules.push(...extractLeafRules(body));
+    } else if (selector) {
+      rules.push(`${selector}{${body}}`);
+    }
+    i = j;
+  }
+  return rules;
+}
+
+function normalizeCss(s) {
+  return s.replace(/\s+/g, '');
+}
+
+function findMissingRules(coverageCss, committedCss) {
+  const normalizedCommitted = normalizeCss(committedCss);
+  return extractLeafRules(coverageCss)
+      .map((rule) => ({ rule, normalized: normalizeCss(rule) }))
+      .filter(({ normalized }) => normalized && !normalizedCommitted.includes(normalized))
+      .map(({ rule }) => rule);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture
+// ---------------------------------------------------------------------------
+const LONG_BASH_COMMAND = 'find . -name "*.py" -exec grep -l "def render_message_with_a_very_long_command_line_to_trigger_truncation" {} \\;';
+const LONG_TOOL_OUTPUT = Array.from({ length: 30 }, (_, i) => `line ${i}: some tool output text here`).join('\n');
+
+const CHAT_MESSAGES = [
+  {
+    role: 'user', id: 'u1', timestamp: '2026-07-30T12:00:00Z', input_mode: 'voice',
+    content: 'Please check the build script', uploaded_files: [{ filename: 'notes.txt', path: '/tmp/notes.txt' }],
+  },
+  {
+    role: 'assistant', id: 'a1', timestamp: '2026-07-30T12:00:05Z',
+    content: 'Sure, looking now.', thinking: 'Let me check the repo layout first.',
+    tools: [
+      { name: 'Bash', input: { command: LONG_BASH_COMMAND }, output: LONG_TOOL_OUTPUT, is_error: false },
+      { name: 'Read', input: { file_path: '/repo/dev/build-css.sh' } },
+      { name: 'Grep', input: { pattern: 'tailwind', path: 'web' }, output: 'no matches', is_error: true },
+    ],
+  },
+  { role: 'assistant', id: 'a2', timestamp: '2026-07-30T12:00:06Z', content: '<tool_call>raw protocol text</tool_call>' },
+  { role: 'system', id: 's1', timestamp: '2026-07-30T12:00:07Z', content: 'Context compacted (auto)', kind: 'context_compacted' },
+  {
+    role: 'system', id: 're1', timestamp: '2026-07-30T12:00:07Z', kind: 'run_error', line_count: 2,
+    content: 'Error: backend exited\nTraceback line',
+  },
+  {
+    role: 'system', id: 'se1', timestamp: '2026-07-30T12:00:07Z',
+    content: 'Error: Agent error: Usage: charlie-code [OPTIONS]\nError: Invalid value: --image',
+  },
+  {
+    role: 'task_delegated', id: 't1', timestamp: '2026-07-30T12:00:08Z', thread_id: 'th-1',
+    delegate_invocation: {
+      task_type: 'implement', repo_path: '/repo', base_branch: 'main',
+      task_spec_file: '/tmp/spec.md', reviewer_context_file: null, backend: 'claude', keep_worktree: false,
+    },
+  },
+  { role: 'worker_summary', id: 'w1', timestamp: '2026-07-30T12:00:09Z', content: 'Worker finished the task.' },
+  { role: 'worker_summary', id: 'w2', timestamp: '2026-07-30T12:00:10Z', content: 'Worker ran elsewhere.', thread_id: 'th-2', origin_session_id: 'parent-1' },
+  { role: 'plan', id: 'p1', timestamp: '2026-07-30T12:00:10Z', content: 'Step 1. Step 2.' },
+  { role: 'clone_start', id: 'c1', content: 'parent session', parent_session_id: 'parent-1' },
+  { role: 'scheduled_trigger', id: 'st1', timestamp: '2026-07-30T12:00:11Z', content: 'Trigger fired' },
+  { role: 'web_reply', id: 'wr1', timestamp: '2026-07-30T12:00:12Z', content: 'Found the cause.' },
+  { role: 'separator', id: 'sep1', thinking_seconds: 12, event_index: 3 },
+];
+
+// ---------------------------------------------------------------------------
+// Test
+// ---------------------------------------------------------------------------
+test('tailwind utility classes used by rendered messages/cards are all present in the committed build', async () => {
+  const snippets = [];
+
+  // 1. Chat messages via renderMessage(), including tool-activity rendering.
+  const chatCtx = loadChatContext(new Map());
+  for (const msg of CHAT_MESSAGES) snippets.push(chatCtx.renderMessage(msg, 'sess-1'));
+
+  // 2. The worker transcript's own chrome: the delegated card's live-state
+  // row + child link (new-style and legacy shapes) and the delivery banner in
+  // both palettes.
+  for (const delegated of [
+    { role: 'task_delegated', id: 'del-1', timestamp: '2026-07-30T12:00:00Z', content: 'Task delegated',
+      thread_id: 'run-1', child_session_id: 'child-1', backend: 'claude-sonnet-5', model: 'sonnet',
+      delegate_invocation: { task_type: 'implement', repo_path: '/repo', base_branch: 'main',
+        task_spec_file: '/tmp/spec.md', reviewer_context_file: null, keep_worktree: false, backend: 'claude-sonnet-5' } },
+    { role: 'task_delegated', id: 'del-2', timestamp: '2026-07-30T12:00:01Z', content: 'Task delegated',
+      thread_id: 'legacy-thread', backend: 'codex-o3' },
+  ]) {
+    snippets.push(chatCtx.renderMessage(delegated, 'sess-1'));
+  }
+  for (const delivery of [
+    { role: 'run_delivery', id: 'rd-1', timestamp: '2026-07-30T12:05:00Z', content: 'shipped the parser',
+      task_state: 'completed', completed: true, result_refs: ['evidence/a.txt'],
+      raw_log_ref: '/h/runs/run-1/raw.log', events_ref: '/h/runs/run-1/events.jsonl',
+      result_ref: '/h/runs/run-1/raw.log', repo_path: '/repo', base_branch: 'main', branch_name: 'task/run-1' },
+    { role: 'run_delivery', id: 'rd-2', timestamp: '2026-07-30T12:05:01Z', content: '',
+      task_state: 'failed', completed: false, result_refs: [] },
+  ]) {
+    snippets.push(chatCtx.renderMessage(delivery, 'sess-1'));
+  }
+
+  // 3. Plan compact card, in both a pending and an approved-with-takeoff state.
+  const artifactsCtx = loadArtifactsScript({ sessionId: 'sess-1' });
+  snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
+  snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));
+
+  const tokens = extractClassTokens(snippets);
+  assert.ok(tokens.size > 50, `fixture should exercise a healthy number of distinct class tokens (got ${tokens.size})`);
+
+  const coverageCss = buildTailwindCssFromTokens(tokens);
+  const committedCss = fs.readFileSync(path.join(ROOT, 'static', 'css', 'tailwind.css'), 'utf8');
+  const missing = findMissingRules(coverageCss, committedCss);
+
+  assert.deepEqual(missing, [],
+      `Tailwind rules used by rendered output are missing from the committed CSS ` +
+      `(rerun dev/build-css.sh?):\n${missing.join('\n')}`);
+});

@@ -70,7 +70,7 @@ fn memory_root(cfg: &CharlieBotConfig) -> PathBuf {
 fn state_for(home: &Path, workspace: &Path, with_memory_root: bool) -> Arc<GitState> {
   let mut registry = Registry::new();
   if with_memory_root {
-    registry.register_package("src.features.memory", register_memory_root).expect("the memory root registers");
+    registry.register_package("features.memory", register_memory_root).expect("the memory root registers");
   }
   let registry = Arc::new(registry);
   fs::create_dir_all(home).expect("the home exists");

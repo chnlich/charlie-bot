@@ -1,4 +1,4 @@
-//! `src/features/host_auth`: the host login panel. A standing poller probes every ssh alias in the operator's config,
+//! `web/features/host_auth`: the host login panel. A standing poller probes every ssh alias in the operator's config,
 //! keeps the result in `<home>/host_auth.json`, and serves it at `/host-auth` and `/api/host-auth/*`.
 
 mod api;
@@ -35,7 +35,7 @@ mod tests {
   #[test]
   fn register_mounts_the_router_starts_the_service_and_lists_the_card() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.host_auth", register).expect("the package registers");
+    registry.register_package("features.host_auth", register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);
     let services = registry.services_in(Phase::Ready);
     assert_eq!(services.iter().map(|service| service.name()).collect::<Vec<_>>(), ["host_auth"]);

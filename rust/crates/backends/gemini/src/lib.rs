@@ -14,7 +14,7 @@ use charliebot_registry::{Registry, RegistryError, registration_step};
 use charliebot_agents::cli_base::CliHost;
 
 /// The package label the composition list registers this backend's package under.
-pub const PACKAGE: &str = "src.backends.gemini";
+pub const PACKAGE: &str = "backends.gemini";
 
 /// Registers the `gemini` type and the two legacy credential keys. The registration names no usage source.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

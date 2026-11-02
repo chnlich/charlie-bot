@@ -91,9 +91,9 @@ pub(crate) fn features() -> (tempfile::TempDir, Arc<FeatureContext>) {
 fn features_in(home: &Path) -> Arc<FeatureContext> {
   let mut registry = Registry::new();
   registry
-    .register_package("src.features.user_text_checks", charliebot_user_text_checks::register)
+    .register_package("features.user_text_checks", charliebot_user_text_checks::register)
     .expect("the user text checks package registers");
-  registry.register_package("src.features.artifacts", crate::register).expect("the artifacts package registers");
+  registry.register_package("features.artifacts", crate::register).expect("the artifacts package registers");
   let registry = Arc::new(registry);
   let config_value = registry.load_config(home).expect("the default config loads");
   let store = Arc::new(
@@ -116,7 +116,7 @@ fn features_in(home: &Path) -> Arc<FeatureContext> {
   let repo_root = repo_root();
   let startup = StartupState::default();
   startup
-    .insert(Templating::new(&repo_root, &["src.features.artifacts"]))
+    .insert(Templating::new(&repo_root, &["features.artifacts"]))
     .expect("the template engine enters startup state");
   startup
     .insert(RepoRoot::new(Some(repo_root.clone().into_os_string())).expect("the checkout is a non-empty path"))

@@ -305,7 +305,7 @@ impl Harness {
     values.extend(additions);
     // The runner finds the serve transport through the registry, so the run's registry holds the opencode type.
     let mut registry = Registry::new();
-    registry.register_package("src.backends.opencode", super::tests::register_synthetic).unwrap();
+    registry.register_package("backends.opencode", super::tests::register_synthetic).unwrap();
     let mut request = RunRequest::new(
       prompt.to_string(),
       self.root.path().join("work"),
@@ -2185,7 +2185,7 @@ fn option_model_accepts_proxy_url_and_rejects_other_fields() {
 #[test]
 fn registration_keeps_traits_attribution_and_snapshot_limits() {
   let mut registry = Registry::new();
-  registry.register_package("src.backends.opencode", super::tests::register_synthetic).unwrap();
+  registry.register_package("backends.opencode", super::tests::register_synthetic).unwrap();
   let backend_type = registry.backend_type_of("opencode").unwrap();
   assert_eq!(backend_type.traits.resume, charliebot_registry::backend::ResumeStyle::NativeId);
   assert!(backend_type.traits.restart_reattach);
@@ -2226,7 +2226,7 @@ fn opencode_join_script_moves_the_shell_and_sets_its_oom_priority() {
   let root = tempfile::tempdir().unwrap();
   let procs = root.path().join("cgroup.procs");
   fs::write(&procs, "").unwrap();
-  let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../src/backends/opencode/cgroup_join.sh");
+  let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../web/backends/opencode/cgroup_join.sh");
   // bash skips BASH_ENV when the environment says sshd started it (SSH_CLIENT), so the shell starts clean.
   let output = std::process::Command::new("bash")
     .args(["-c", "echo $$; cat /proc/$$/oom_score_adj"])

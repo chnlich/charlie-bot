@@ -68,9 +68,9 @@ mod tests {
   use tower::ServiceExt;
 
   const LISTING: (&str, RegisterFn) = ("runtime.session_api", charliebot_session_api::register);
-  const CHAT_THREADS: (&str, RegisterFn) = ("src.features.chat_threads", crate::register);
-  const SLACK: (&str, RegisterFn) = ("src.features.slack", charliebot_slack::register);
-  const DISCORD: (&str, RegisterFn) = ("src.features.discord", charliebot_discord::register);
+  const CHAT_THREADS: (&str, RegisterFn) = ("features.chat_threads", crate::register);
+  const SLACK: (&str, RegisterFn) = ("features.slack", charliebot_slack::register);
+  const DISCORD: (&str, RegisterFn) = ("features.discord", charliebot_discord::register);
   /// The server's order: the session-api's listing and per-session routes, this package, then the Slack and Discord
   /// packages that own the origin slots.
   const SERVER: [(&str, RegisterFn); 4] = [LISTING, CHAT_THREADS, SLACK, DISCORD];

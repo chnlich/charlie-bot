@@ -59,9 +59,9 @@ impl Home {
     write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
     let mut registry = Registry::new();
     registry
-      .register_package("src.features.web_reply", charliebot_web_reply::register)
+      .register_package("features.web_reply", charliebot_web_reply::register)
       .expect("the web reply package registers");
-    registry.register_package("src.features.approval", crate::register).expect("the approval package registers");
+    registry.register_package("features.approval", crate::register).expect("the approval package registers");
     let registry = Arc::new(registry);
     let loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.

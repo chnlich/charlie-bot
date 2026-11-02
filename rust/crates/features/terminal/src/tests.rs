@@ -99,7 +99,7 @@ impl Drop for TmuxCleanup {
 #[test]
 fn register_adds_the_terminal_websocket_route() {
   let mut registry = charliebot_registry::Registry::new();
-  registry.register_package("src.features.terminal", register).unwrap();
+  registry.register_package("features.terminal", register).unwrap();
   assert!(registry.websocket_match("/ws/terminal").is_some());
   assert!(registry.websocket_match("/ws/terminal/extra").is_none());
 }

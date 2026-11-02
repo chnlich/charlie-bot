@@ -1,4 +1,4 @@
-//! `src/features/code_server`: the `code_server:` config section, the `code_server_enabled` template global that shows
+//! `web/features/code_server`: the `code_server:` config section, the `code_server_enabled` template global that shows
 //! the diff page's open button, and the `/api/code-server/open` route that opens a folder in code-server.
 
 // The helpers answer a failure as the HTTP response it sends, as `charliebot_registry::caller` does, so their

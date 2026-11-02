@@ -1,0 +1,2 @@
+web/features/host_auth/templates/host_auth.html
+web/features/host_auth/templates/browser_login.html

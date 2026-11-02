@@ -1,4 +1,4 @@
-//! `src/features/taste`: the user's choice precedents. The crate owns the append-only store at
+//! `web/features/taste`: the user's choice precedents. The crate owns the append-only store at
 //! `$CHARLIEBOT_HOME/taste/rows.jsonl`, the `taste` CLI, and the turn contribution that puts the table's index into
 //! every manager and worker run.
 

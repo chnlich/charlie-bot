@@ -1,4 +1,4 @@
-//! The no-Python tree guard: `tools/check-no-python.sh` fails on a tracked .py file, a Python shebang, a line in a
+//! The no-Python tree guard: `dev/check-no-python.sh` fails on a tracked .py file, a Python shebang, a line in a
 //! shell script or CI configuration that names python, and a line in prompts, skills or docs that names python. It
 //! passes a clean tree, prose that names the language with a capital P, and the exempted paths.
 
@@ -10,7 +10,7 @@ use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 const PGREP_EXAMPLE: &str = r#"Anchor the pattern, for example `pgrep -fc "^python3 -c while True"`."#;
 
 fn guard() -> PathBuf {
-  harness::repo_root().join("tools/check-no-python.sh")
+  harness::repo_root().join("dev/check-no-python.sh")
 }
 
 fn git(env: &Env, cwd: &Path, args: &[&str]) {
@@ -45,7 +45,7 @@ fn repo(sandbox: &Sandbox, env: &Env) -> PathBuf {
   let repo = sandbox.dir("repo");
   git(env, sandbox.root(), &["init", "-q", "-b", "main", repo.to_str().unwrap()]);
   write(&repo, "README.md", "A clean checkout.\n");
-  write(&repo, "tools/note.sh", "#!/usr/bin/env bash\n# The Python program is gone.\ntrue\n");
+  write(&repo, "dev/note.sh", "#!/usr/bin/env bash\n# The Python program is gone.\ntrue\n");
   git(env, &repo, &["add", "."]);
   git(env, &repo, &["commit", "-q", "-m", "seed commit"]);
   repo
@@ -84,8 +84,8 @@ fn a_tracked_python_file_fails() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
   let repo = repo(&sandbox, &env);
-  stage(&repo, &env, "tools/improve/evil.py", "x = 1\n");
-  fails_naming(&run_guard(&repo), "tools/improve/evil.py");
+  stage(&repo, &env, "dev/improve/evil.py", "x = 1\n");
+  fails_naming(&run_guard(&repo), "dev/improve/evil.py");
 }
 
 #[test]
@@ -102,10 +102,10 @@ fn a_script_or_ci_line_that_runs_python_fails() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
   let repo = repo(&sandbox, &env);
-  stage(&repo, &env, "tools/gen.sh", "#!/usr/bin/env bash\npython3 -m compileall .\n");
-  stage(&repo, &env, ".github/workflows/ci.yml", "steps:\n  - run: python3 tools/gen.sh\n");
+  stage(&repo, &env, "dev/gen.sh", "#!/usr/bin/env bash\npython3 -m compileall .\n");
+  stage(&repo, &env, ".github/workflows/ci.yml", "steps:\n  - run: python3 dev/gen.sh\n");
   let run = run_guard(&repo);
-  fails_naming(&run, "tools/gen.sh");
+  fails_naming(&run, "dev/gen.sh");
   fails_naming(&run, ".github/workflows/ci.yml");
 }
 
@@ -115,7 +115,7 @@ fn a_prompts_skills_or_docs_line_that_runs_python_fails() {
   let env = env_for(&sandbox);
   let repo = repo(&sandbox, &env);
   stage(&repo, &env, "prompts/example.md", "Run `python3 -c 'print(1)'` to test.\n");
-  stage(&repo, &env, "docs/guide.md", "Generate the table:\n\n    python3 tools/gen.sh\n");
+  stage(&repo, &env, "docs/guide.md", "Generate the table:\n\n    python3 dev/gen.sh\n");
   let run = run_guard(&repo);
   fails_naming(&run, "prompts/example.md");
   fails_naming(&run, "docs/guide.md");

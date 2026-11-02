@@ -260,7 +260,7 @@ impl Home {
         .expect("the credentials write");
     }
     let mut registry = Registry::new();
-    registry.register_package("src.features.discord", crate::register).expect("the discord package registers");
+    registry.register_package("features.discord", crate::register).expect("the discord package registers");
     let registry = Arc::new(registry);
     let config_home = dir.path().to_path_buf();
     let config_registry = Arc::clone(&registry);

@@ -13,12 +13,45 @@ mod web_search_gate;
 mod tests {
   use std::env;
   use std::fs;
-  use std::path::PathBuf;
+  use std::path::{Path, PathBuf};
   use std::sync::Arc;
 
   use charliebot_registry::store_hooks::store_hooks;
 
   use super::registry;
+
+  /// The page packages that carry frontend files. The other registered packages ship no template or static
+  /// directory, so `package_directory` may resolve them to a path no checkout has.
+  const PAGE_PACKAGES_WITH_FRONTEND_FILES: &[&str] = &[
+    "features.approval",
+    "features.artifacts",
+    "features.chat_threads",
+    "features.code_server",
+    "features.cron",
+    "features.diag",
+    "features.diff_view",
+    "features.explain",
+    "features.host_auth",
+    "features.terminal",
+    "features.trace",
+    "features.usage",
+    "features.voice",
+    "backends.claude_code",
+    "backends.codex",
+  ];
+
+  #[test]
+  fn frontend_page_packages_resolve_to_directories_with_files() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    for package in PAGE_PACKAGES_WITH_FRONTEND_FILES {
+      let directory = charliebot_registry::pages::package_directory(&repo_root, package);
+      assert!(directory.is_dir(), "{package} resolves to {} which is not a directory", directory.display());
+      let carries_files = ["templates", "static"]
+        .iter()
+        .any(|part| fs::read_dir(directory.join(part)).map(|mut entries| entries.next().is_some()).unwrap_or(false));
+      assert!(carries_files, "{package} resolves to {} which holds no templates or static files", directory.display());
+    }
+  }
 
   #[test]
   fn the_listed_packages_render_the_five_chat_lines() {

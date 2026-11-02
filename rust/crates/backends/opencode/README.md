@@ -1,6 +1,6 @@
 # charliebot-opencode
 
-The `opencode` backend type (`src/backends/opencode`): its shared server, serve transport, session backend, relay,
+The `opencode` backend type (`web/backends/opencode`): its shared server, serve transport, session backend, relay,
 usage source and snapshot reading limits.
 
 ## Public API

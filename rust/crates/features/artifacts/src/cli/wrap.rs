@@ -102,7 +102,7 @@ fn prerender_math(
   node_command: &[OsString],
 ) -> Result<String, String> {
   ensure_vendored_katex(vendor)?;
-  let driver = repo_root.join("src/features/artifacts/prerender_math.js");
+  let driver = repo_root.join("web/features/artifacts/prerender_math.js");
   let output = Command::new(&node_command[0])
     .args(&node_command[1..])
     .arg(driver)

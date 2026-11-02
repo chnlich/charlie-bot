@@ -4,7 +4,7 @@
 - Google Code Style
 - 2-space indentation, 120-column limit
 - `rustfmt` and `clippy` gate the Rust code: `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` from `rust/`
-- `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (leak checks, git hooks, browser and live harnesses, builds, eval runners) and the improve cron prompts (the landing protocol, the five direction prompts and `inflight-files.sh`) live in `tools/`.
+- `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (leak checks, git hooks, browser and live harnesses, builds, eval runners) and the improve cron prompts (the landing protocol, the five direction prompts and `inflight-files.sh`) live in `dev/`.
 
 ### Module Boundaries
 

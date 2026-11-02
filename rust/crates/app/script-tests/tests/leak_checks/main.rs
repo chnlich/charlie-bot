@@ -1,6 +1,6 @@
 //! The leak gate the improve round and the repository's git hooks run:
-//! `tools/improve/github-post.sh`, `tools/check-skills-host-leak.sh`, `tools/leak-patterns.sh` and
-//! `tools/git-hooks/`.
+//! `dev/improve/github-post.sh`, `dev/check-skills-host-leak.sh`, `dev/leak-patterns.sh` and
+//! `dev/git-hooks/`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,11 +15,11 @@ const PATTERN_FILE_COMMENT: &str = "# local leak patterns";
 const CLEAN_BODY: &str = "## Evidence\nbefore 259 ms, after 130 ms (n=50).\n";
 
 fn github_post() -> PathBuf {
-  harness::repo_root().join("tools/improve/github-post.sh")
+  harness::repo_root().join("dev/improve/github-post.sh")
 }
 
 fn leak_scanner() -> PathBuf {
-  harness::repo_root().join("tools/check-skills-host-leak.sh")
+  harness::repo_root().join("dev/check-skills-host-leak.sh")
 }
 
 /// The github-post environment: the `gh` stub records its calls, the profile home carries the
@@ -370,12 +370,12 @@ fn the_stdin_mode_exit_codes() {
 
 /// Copies the leak tools and the two hooks into `checkout`, at the paths a real checkout uses.
 fn copy_leak_tools(checkout: &Path) {
-  let tools = checkout.join("tools");
-  std::fs::create_dir_all(tools.join("git-hooks")).unwrap();
-  harness::copy_file(&leak_scanner(), &tools.join("check-skills-host-leak.sh"));
-  harness::copy_file(&harness::repo_root().join("tools/leak-patterns.sh"), &tools.join("leak-patterns.sh"));
+  let dev = checkout.join("dev");
+  std::fs::create_dir_all(dev.join("git-hooks")).unwrap();
+  harness::copy_file(&leak_scanner(), &dev.join("check-skills-host-leak.sh"));
+  harness::copy_file(&harness::repo_root().join("dev/leak-patterns.sh"), &dev.join("leak-patterns.sh"));
   for hook in ["pre-commit", "commit-msg"] {
-    harness::copy_file(&harness::repo_root().join("tools/git-hooks").join(hook), &tools.join("git-hooks").join(hook));
+    harness::copy_file(&harness::repo_root().join("dev/git-hooks").join(hook), &dev.join("git-hooks").join(hook));
   }
 }
 
@@ -404,12 +404,12 @@ fn leak_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
   let mut env = pinned_git_env(sandbox);
   env.insert("EXTRA_PATTERNS_FILE".to_string(), patterns.join("secretmarker.txt").display().to_string());
   git(&env, sandbox.root(), &["init", "-q", "-b", "main", repo.to_str().unwrap()]);
-  git(&env, &repo, &["config", "core.hooksPath", "tools/git-hooks"]);
+  git(&env, &repo, &["config", "core.hooksPath", "dev/git-hooks"]);
   (repo, env)
 }
 
 /// A repository to commit to whose `core.hooksPath` is an absolute path into a second checkout that holds the
-/// leak tools and the hooks; the repository itself has no `tools/` directory.
+/// leak tools and the hooks; the repository itself has no `dev/` directory.
 fn cross_checkout_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
   let hooks_checkout = sandbox.dir("hooks-checkout");
   copy_leak_tools(&hooks_checkout);
@@ -421,7 +421,7 @@ fn cross_checkout_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
   env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("committer-home").display().to_string());
   env.insert("EXTRA_PATTERNS_FILE".to_string(), patterns.join("secretmarker.txt").display().to_string());
   git(&env, sandbox.root(), &["init", "-q", "-b", "main", repo.to_str().unwrap()]);
-  git(&env, &repo, &["config", "core.hooksPath", hooks_checkout.join("tools/git-hooks").to_str().unwrap()]);
+  git(&env, &repo, &["config", "core.hooksPath", hooks_checkout.join("dev/git-hooks").to_str().unwrap()]);
   (repo, env)
 }
 
@@ -491,12 +491,12 @@ fn the_installed_checkouts_hooks_check_the_committers_tree() {
 
   assert_eq!(leak_run(&repo, &env, &["reset", "-q"]).code, 0);
   std::fs::remove_file(repo.join("clean2.txt")).unwrap();
-  std::fs::create_dir_all(repo.join("src/features/demo")).unwrap();
-  std::fs::write(repo.join("src/features/demo/leak_scan_files.txt"), "notes.txt\n").unwrap();
+  std::fs::create_dir_all(repo.join("web/features/demo")).unwrap();
+  std::fs::write(repo.join("web/features/demo/leak_scan_files.txt"), "notes.txt\n").unwrap();
   std::fs::write(repo.join("notes.txt"), format!("{HOME_PATH_TEXT}\n")).unwrap();
   let mut builtin_env = env.clone();
   builtin_env.remove("EXTRA_PATTERNS_FILE");
-  assert_eq!(leak_run(&repo, &builtin_env, &["add", "notes.txt", "src/features/demo/leak_scan_files.txt"]).code, 0);
+  assert_eq!(leak_run(&repo, &builtin_env, &["add", "notes.txt", "web/features/demo/leak_scan_files.txt"]).code, 0);
   let commit = leak_run(&repo, &builtin_env, &["commit", "-m", "add notes"]);
   assert_ne!(commit.code, 0, "{}", commit.describe());
   assert!(commit.stderr.contains("notes.txt"), "{}", commit.stderr);
@@ -529,5 +529,5 @@ fn the_host_scan_covers_tracked_gzip_and_explicit_files() {
 }
 
 fn tools_scanner(repo: &Path) -> PathBuf {
-  repo.join("tools/check-skills-host-leak.sh")
+  repo.join("dev/check-skills-host-leak.sh")
 }

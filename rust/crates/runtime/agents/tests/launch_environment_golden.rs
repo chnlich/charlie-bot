@@ -53,7 +53,7 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   assert_eq!(python_cases.len(), cases.len());
 
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
+  registry.register_package("backends.claude_code", claude_code::register).unwrap();
   let registry = Arc::new(registry);
   let cfg = main_config();
   let mut rust_cases = Vec::new();

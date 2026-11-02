@@ -30,17 +30,19 @@ jobs:
       # configuration and a Python-naming line in prompts, skills or docs all fail the job. It needs git alone, so it
       # runs before the installs.
       - name: Reject Python
-        run: tools/check-no-python.sh
+        run: dev/check-no-python.sh
 
       # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from node_modules;
       # installing up front keeps the installs the suites run themselves at no-op speed.
       - name: Install frontend dependencies
+        working-directory: web
         run: npm install --no-audit --no-fund
 
-      # One suite per tests/*.test.{js,mjs} file on disk: the glob is the single source, so a suite file that
+      # One suite per web/tests/*.test.{js,mjs} file on disk: the glob is the single source, so a suite file that
       # lands runs here without a registration edit. The bound turns a hung runner into a step failure instead
       # of a CI hang.
       - name: Test
+        working-directory: web
         run: |
           suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) | sort)
           count=$(printf '%s\n' "$suites" | grep -c .)

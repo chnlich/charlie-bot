@@ -306,8 +306,8 @@ mod tests {
       &home.path().join("home"),
       &test_fixtures::claude_config(None),
       &[
-        ("src.backends.claude_code", charliebot_claude_code::register),
-        ("src.features.web_reply", charliebot_web_reply::register),
+        ("backends.claude_code", charliebot_claude_code::register),
+        ("features.web_reply", charliebot_web_reply::register),
       ],
     );
     let cfg = features.config.get().unwrap();

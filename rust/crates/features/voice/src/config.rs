@@ -139,7 +139,7 @@ mod tests {
     )
     .expect("write a synthetic config");
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.voice", crate::register).expect("register voice config");
+    registry.register_package("features.voice", crate::register).expect("register voice config");
     assert!(registry.config_schema().legacy_keys.is_empty());
     let cfg = charliebot_core::config::load_config(home.path(), &registry.config_schema())
       .expect("parse config before its registered check");

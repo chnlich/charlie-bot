@@ -61,7 +61,7 @@ fn rust_config(data: &Value) -> charliebot_core::config::CharlieBotConfig {
   )
   .unwrap();
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", charliebot_claude_code::register).unwrap();
+  registry.register_package("backends.claude_code", charliebot_claude_code::register).unwrap();
   registry.load_config(home).unwrap()
 }
 

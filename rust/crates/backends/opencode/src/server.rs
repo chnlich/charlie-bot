@@ -94,7 +94,7 @@ impl OpenCodeHost {
 
   /// The shell hook used by each session command to enter its CharlieBot cgroup.
   pub fn join_script(&self) -> PathBuf {
-    self.repo_root.join("src/backends/opencode/cgroup_join.sh")
+    self.repo_root.join("web/backends/opencode/cgroup_join.sh")
   }
 
   pub fn store_dir(&self) -> PathBuf {

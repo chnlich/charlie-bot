@@ -738,7 +738,7 @@ mod tests {
     let home = tempfile::tempdir().expect("the synthetic home is created");
     std::fs::write(home.path().join("config.yaml"), "").expect("the synthetic config is written");
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.slow_stop", slow_stop_package).expect("the test service registers");
+    registry.register_package("features.slow_stop", slow_stop_package).expect("the test service registers");
     let features = features_over(home.path(), Arc::new(registry));
     let mut lifespan = match Lifespan::start(features).await.expect("the lifespan starts") {
       StartupOutcome::Ready(lifespan) => lifespan,

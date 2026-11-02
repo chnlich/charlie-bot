@@ -715,7 +715,7 @@ mod tests {
     };
     std::fs::write(home.join("config.yaml"), body).unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.backends.claude_code", crate::register).unwrap();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
     let cfg = registry.load_config(&home).unwrap();
     (Arc::new(registry), cfg)
   }

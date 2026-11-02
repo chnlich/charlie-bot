@@ -56,7 +56,7 @@ mod tests {
   fn test_server_startup_builds_no_speech_model_and_imports_no_local_engine() {
     let mut registry = Registry::new();
 
-    registry.register_package("src.features.voice", register).expect("register voice");
+    registry.register_package("features.voice", register).expect("register voice");
 
     for phase in [charliebot_registry::wiring::Phase::Early, charliebot_registry::wiring::Phase::Ready] {
       assert!(registry.services_in(phase).iter().all(|service| service.name() != "speech"));

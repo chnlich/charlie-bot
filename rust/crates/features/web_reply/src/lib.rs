@@ -1,4 +1,4 @@
-//! `src/features/web_reply`: the internal routes behind `charliebot web reply`, `charliebot web dialog` and
+//! `web/features/web_reply`: the internal routes behind `charliebot web reply`, `charliebot web dialog` and
 //! `charliebot web status`, the turn contribution that carries the reply rules into a web session's manager runs,
 //! runs the round-end audit after a turn that answers a user, and renders the reply chat lines, and the web-reply
 //! status field of each session.
@@ -150,7 +150,7 @@ mod tests {
   #[test]
   fn registers_one_router_that_claims_the_web_reply_paths_only() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.web_reply", register).expect("the web reply package registers");
+    registry.register_package("features.web_reply", register).expect("the web reply package registers");
 
     let routers = registry.routers();
     assert_eq!(routers.len(), 1);

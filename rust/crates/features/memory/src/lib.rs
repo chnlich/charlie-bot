@@ -32,7 +32,7 @@ mod tests {
   #[test]
   fn the_diff_root_is_the_home_memory_dir() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.memory", register).unwrap();
+    registry.register_package("features.memory", register).unwrap();
     let cfg = CharlieBotConfig {
       charliebot_home: Path::new("/synthetic/home").to_path_buf(),
       headless_chrome_bin: "/synthetic/bin/chrome".to_string(),

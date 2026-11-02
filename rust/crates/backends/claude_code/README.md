@@ -1,6 +1,6 @@
 # charliebot-claude-code
 
-The `cc-claude` backend type (`src/backends/claude_code`): the Claude Code process, its account pool, launch,
+The `cc-claude` backend type (`web/backends/claude_code`): the Claude Code process, its account pool, launch,
 lifecycle, environment, event translation, compaction, mid-turn delivery, and the Claude Code usage source.
 
 The endpoint backends built here (`AnthropicEndpointBackend`) disallow Claude Code's built-in `WebSearch` and mount

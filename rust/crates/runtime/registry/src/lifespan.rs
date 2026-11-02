@@ -370,9 +370,9 @@ mod tests {
     TRACE.lock().unwrap().clear();
     let home = tempfile::tempdir().unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.alpha", alpha).unwrap();
-    registry.register_package("src.features.second", second_recovery).unwrap();
-    registry.register_package("src.features.beta", beta).unwrap();
+    registry.register_package("features.alpha", alpha).unwrap();
+    registry.register_package("features.second", second_recovery).unwrap();
+    registry.register_package("features.beta", beta).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
 
     let mut lifespan = match Lifespan::start(features).await.unwrap() {
@@ -398,8 +398,8 @@ mod tests {
     TRACE.lock().unwrap().clear();
     let home = tempfile::tempdir().unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.alpha", alpha).unwrap();
-    registry.register_package("src.features.beta", beta).unwrap();
+    registry.register_package("features.alpha", alpha).unwrap();
+    registry.register_package("features.beta", beta).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
 
     let mut lifespan = match Lifespan::start(features).await.unwrap() {
@@ -436,7 +436,7 @@ mod tests {
     TRACE.lock().unwrap().clear();
     let home = tempfile::tempdir().unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.gamma", let_go_only).unwrap();
+    registry.register_package("features.gamma", let_go_only).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     let mut lifespan = match Lifespan::start(features).await.unwrap() {
       StartupOutcome::Ready(lifespan) => lifespan,

@@ -1140,7 +1140,7 @@ fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint(
   let option = option_yaml("anthro", "cc-anthropic-compatible", None, None);
   fs::write(root.home().join("config.yaml"), config_text(&root, &[], &[], &[option])?)?;
   let mut registry = Registry::new();
-  registry.register_package("src.backends.anthropic_compatible", anthropic_compatible::register)?;
+  registry.register_package("backends.anthropic_compatible", anthropic_compatible::register)?;
   let config = registry.load_config(&root.home())?;
 
   let refused = charliebot_tasks::spawner_backends::resolve_backend_option(&config, "anthro", Some(""));

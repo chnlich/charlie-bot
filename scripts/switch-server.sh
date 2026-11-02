@@ -33,7 +33,9 @@
 # record and the worktree path only. Pass or fail, it stops the run, removes the worktree and its branch, and archives
 # its session.
 #
-# Environment: CHARLIEBOT_HOME (default ~/.charliebot), CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
+# Environment: CHARLIEBOT_REPO_ROOT is the runtime clone this switch moves; unset means the script's parent
+# directory, which only holds when the script sits inside the clone. CHARLIEBOT_HOME (default ~/.charliebot),
+# CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
 # server, where the production pane runs). CHARLIEBOT_SWITCH_CTRL_C_WAIT_S, CHARLIEBOT_SWITCH_STOP_WAIT_S and
 # CHARLIEBOT_SWITCH_READY_WAIT_S replace the 60 s, 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and
@@ -55,7 +57,15 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"   # the runtime clone that this switch moves
+# The clone this switch moves comes from the input, so a copy outside the clone runs it. Without the variable the
+# script's parent directory is the clone.
+REPO_ROOT="${CHARLIEBOT_REPO_ROOT:-$SCRIPT_DIR/..}"
+[ -d "$REPO_ROOT" ] || {
+  echo "switch-server.sh: CHARLIEBOT_REPO_ROOT is not a directory: $REPO_ROOT" >&2
+  exit 1
+}
+REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"

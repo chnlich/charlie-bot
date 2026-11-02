@@ -578,7 +578,7 @@ mod tests {
 
     let home = tempfile::tempdir().expect("make an isolated relay home");
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.voice", crate::register).expect("register the voice config section");
+    registry.register_package("features.voice", crate::register).expect("register the voice config section");
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
     let state = Arc::new(RelayTestState { config: Arc::clone(&config), endpoint_url, max_recording_samples });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the relay test server");

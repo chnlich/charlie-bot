@@ -4,7 +4,7 @@
 //!
 //! The server builds one registry at startup, calling each listed package's `register` in the composition order
 //! (`charliebot_packages`), then shares it read-only. Each hook kind has one typed registration method and one
-//! reader. `rust/docs/registry.md` lists them.
+//! reader. `docs/registry.md` lists them.
 
 pub mod backend;
 pub mod caller;

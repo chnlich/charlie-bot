@@ -76,7 +76,7 @@ mod tests {
   #[test]
   fn register_mounts_the_routers_starts_the_service_lists_the_card_and_checks_the_ids() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.usage", register).expect("the package registers");
+    registry.register_package("features.usage", register).expect("the package registers");
     assert_eq!(registry.routers().len(), 2);
     let services = registry.services_in(Phase::Ready);
     assert_eq!(services.iter().map(|service| service.name()).collect::<Vec<_>>(), ["ext_usage"]);

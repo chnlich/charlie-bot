@@ -46,7 +46,7 @@ use crate::run_support::{
 };
 
 /// The stash-guard `git` wrapper directory, under the checkout. It rides first on every child's PATH.
-const GIT_STASH_GUARD_DIR: &str = "src/runtime/git_stash_guard";
+const GIT_STASH_GUARD_DIR: &str = "rust/crates/runtime/tasks/git_stash_guard";
 /// The instructions file of a task run, kept beside its events log.
 pub const HARNESS_INSTRUCTIONS_NAME: &str = "harness_instructions.md";
 /// The diagnostics file of a run whose process outlives its result.

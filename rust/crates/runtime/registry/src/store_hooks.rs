@@ -379,7 +379,7 @@ mod tests {
 
   fn pair_registry() -> Arc<Registry> {
     let mut registry = Registry::new();
-    registry.register_package("src.features.synthetic", register_pair).unwrap();
+    registry.register_package("features.synthetic", register_pair).unwrap();
     Arc::new(registry)
   }
 
@@ -515,7 +515,7 @@ mod tests {
   fn anchor_registry() -> Arc<Registry> {
     let mut registry = Registry::new();
     registry
-      .register_package("src.features.synthetic", |registry| {
+      .register_package("features.synthetic", |registry| {
         registry.backend_type(BackendTypeRegistration {
           type_name: "synthetic-lifecycle",
           traits: BackendTraits {

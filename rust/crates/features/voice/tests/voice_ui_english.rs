@@ -19,7 +19,7 @@ const CJK_RANGES: [(char, char); 6] = [
 ];
 
 /// The directories of voice UI source files, relative to the repository root.
-const VOICE_UI_DIRS: [&str; 2] = ["src/features/voice/static", "src/features/voice/templates"];
+const VOICE_UI_DIRS: [&str; 2] = ["web/features/voice/static", "web/features/voice/templates"];
 
 fn is_cjk(character: char) -> bool {
   CJK_RANGES.iter().any(|&(low, high)| (low..=high).contains(&character))

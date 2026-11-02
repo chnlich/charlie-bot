@@ -170,7 +170,7 @@ An understanding page lists the divergences of a request that admits several rea
   2. Run the assertions.
   3. Register the plan with `charliebot plan present`.
   4. Run one Improve round: answer the plan page's Improve prompt
-     (src/features/artifacts/static/artifact-comments.js) yourself.
+     (web/features/artifacts/static/artifact-comments.js) yourself.
   5. Start verify round 1 and the cold read in the same turn.
   6. Complete the revision under the rules below.
   7. Approve the plan with `charliebot plan approve`, and send the user its link.

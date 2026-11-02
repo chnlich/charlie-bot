@@ -31,8 +31,6 @@ charliebot-antigravity.workspace = true
 charliebot-charlie-code.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-codex.workspace = true
-# `json_loads_golden` checks `charliebot-compat`'s JSON loader against recorded decoder outputs.
-charliebot-compat.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-gemini.workspace = true
 serde_yaml.workspace = true

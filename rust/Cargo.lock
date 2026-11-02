@@ -352,7 +352,6 @@ dependencies = [
  "charliebot-charlie-code",
  "charliebot-claude-code",
  "charliebot-codex",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-gemini",
  "charliebot-registry",

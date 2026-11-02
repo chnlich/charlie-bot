@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use charliebot_core::event_types;
-use charliebot_store::layout;
+use charliebot_store::{layout, run_records};
 use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -122,13 +122,6 @@ fn planned_sizes(count: usize, rng: &mut Rng) -> Vec<u64> {
   sizes
 }
 
-/// One event as its JSON line, with the newline.
-fn encode_event(event: &Value) -> Vec<u8> {
-  let mut line = serde_json::to_vec(event).expect("a JSON value serializes");
-  line.push(b'\n');
-  line
-}
-
 fn final_event(final_text: &str, timestamp: &str) -> Value {
   json!({"type": "user", "content": final_text, "timestamp": timestamp})
 }
@@ -183,7 +176,7 @@ fn master_done_event(rng: &mut Rng, timestamp: &str) -> Value {
 
 /// One user message whose line takes exactly `room` bytes, or `None` when `room` cannot hold an empty one.
 fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
-  let empty = encode_event(&json!({"type": "user", "content": "", "timestamp": timestamp})).len() as u64;
+  let empty = run_records::event_line(&json!({"type": "user", "content": "", "timestamp": timestamp})).len() as u64;
   if room < empty {
     return None;
   }
@@ -209,7 +202,7 @@ fn write_event_log(
   final_text: &str,
 ) -> Result<(u64, u64)> {
   let target = target as i64;
-  let final_bytes = encode_event(&final_event(final_text, &event_stamp(started_at, 0))).len() as i64;
+  let final_bytes = run_records::event_line(&final_event(final_text, &event_stamp(started_at, 0))).len() as i64;
   let mut log = BufWriter::new(File::create(path).with_context(|| format!("cannot create {}", path.display()))?);
   let mut written: i64 = 0;
   let mut count: u64 = 0;
@@ -222,7 +215,7 @@ fn write_event_log(
     let event = next_event(rng, text, &event_stamp(started_at, count), room as u64);
     let stimulus = opens_turn(&event);
     if stimulus && turn_open {
-      let separator = encode_event(&master_done_event(rng, &event_stamp(started_at, count)));
+      let separator = run_records::event_line(&master_done_event(rng, &event_stamp(started_at, count)));
       if separator.len() as i64 > room {
         break;
       }
@@ -232,7 +225,7 @@ fn write_event_log(
       turn_open = false;
     }
     let room = target - written - final_bytes;
-    let line = encode_event(&event);
+    let line = run_records::event_line(&event);
     if line.len() as i64 > room {
       break;
     }
@@ -244,7 +237,7 @@ fn write_event_log(
     }
   }
   if turn_open {
-    let separator = encode_event(&master_done_event(rng, &event_stamp(started_at, count)));
+    let separator = run_records::event_line(&master_done_event(rng, &event_stamp(started_at, count)));
     if separator.len() as i64 <= target - written - final_bytes {
       log.write_all(&separator)?;
       written += separator.len() as i64;
@@ -255,12 +248,12 @@ fn write_event_log(
   if room > 0
     && let Some(filler) = filler_event(room as u64, &event_stamp(started_at, count))
   {
-    let line = encode_event(&filler);
+    let line = run_records::event_line(&filler);
     log.write_all(&line)?;
     written += line.len() as i64;
     count += 1;
   }
-  let line = encode_event(&final_event(final_text, &event_stamp(started_at, count)));
+  let line = run_records::event_line(&final_event(final_text, &event_stamp(started_at, count)));
   log.write_all(&line)?;
   written += line.len() as i64;
   count += 1;

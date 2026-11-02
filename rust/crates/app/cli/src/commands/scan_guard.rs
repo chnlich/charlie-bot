@@ -74,15 +74,22 @@ const READERS: &[&str] = &[
 /// The wrappers a reader may follow, which the glob rule skips.
 const WRAPPERS: &[&str] = &["sudo", "timeout", "nice", "ionice", "time", "env"];
 
-/// The commands a loop body would run as a separate process per item.
-const LOOP_EXTERNAL: &str = concat!(
-  r"\b(?:python3?|node|jq|grep|egrep|fgrep|rg|ag|ack|cat|head|tail|awk|sed|sort|uniq|cut|tr|wc|stat|ls|find|du|",
-  r"cp|mkdir|rm|xargs|sh|bash|zsh|readlink|dirname|basename|date|git|curl)\b"
-);
+/// The shell builtins a bounded metadata loop's body may run. Any other command in the body starts a process per
+/// session, so the body is refused.
+const LOOP_BUILTINS: &[&str] =
+  &["[", "test", "echo", "printf", "true", "false", ":", "if", "then", "else", "elif", "fi"];
 
-/// The commands that read file contents, for the item list before a pipe: a list built by one of them reads every
-/// session's file rather than only listing the sessions.
-const CONTENT_READERS: &str = r"\b(?:grep|egrep|fgrep|rg|ag|ack|cat|head|tail|jq|python3?|node|xargs|find|du)\b";
+/// The characters that end one command in a loop body, so that each command's first word is found.
+const LOOP_COMMAND_END: &[char] = &[';', '&', '|', '(', ')', '{', '}', '`', '\n'];
+
+/// Text in a loop's item list that reads file contents, reaches below a session directory, or walks the store
+/// recursively: a content reader, a session glob with a path under it, or `ls -R`. A list with any of them reads more
+/// than each session's entry.
+const LIST_READS_BELOW: &str = concat!(
+  r"\b(?:grep|egrep|fgrep|rg|ag|ack|cat|head|tail|jq|python3?|node|xargs|find|du)\b",
+  r#"|\*/[^\s|;&)'"`]"#,
+  r"|\bls\b[^|;&\n]*\s-[a-zA-Z]*R",
+);
 
 /// The shortest literal session-id prefix that identifies one session: every session id is a UUID, whose first eight
 /// hex characters are enough to name it.
@@ -467,17 +474,20 @@ fn enumeration_token(store: &str) -> String {
 /// `ls */ | ... | while read id; do [ -f "$id/metadata.json" ] ...; done` lists the store's top level in one process
 /// and only tests one top-level file per session with shell builtins, so its work does not grow with the store's file
 /// contents. The same body on a `for ... in */` list stays refused: that form is also the one-process-per-session
-/// shape. Any other per-session form left after the bounded loops are masked keeps the refusal.
+/// shape. A list that reads contents or reaches below a session directory, and a body that runs any command outside
+/// the builtins, keep the refusal. Any other per-session form left after the bounded loops are masked keeps it too.
 fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
   let mut spans = Vec::new();
   for captures in metadata_loop_pattern()?.captures_iter(shell) {
     let captures = captures.map_err(parse_error)?;
     let whole = captures.get(0).expect("the metadata loop pattern has a whole match");
     let body = captures.name("body").map_or("", |body| body.as_str());
-    let list = captures.name("list").map_or("", |list| list.as_str());
+    let list_end = captures.name("list").map_or(whole.end(), |list| list.end());
+    let segment_start = shell[..whole.start()].rfind([';', '&', '\n']).map_or(0, |at| at + 1);
+    let list = &shell[segment_start..list_end];
     if !body.contains(METADATA_FILE_NAME)
-      || loop_external_pattern()?.is_match(body).map_err(parse_error)?
-      || content_reader_pattern()?.is_match(list).map_err(parse_error)?
+      || !loop_body_is_builtin(body)
+      || list_reads_below_pattern()?.is_match(list).map_err(parse_error)?
     {
       continue;
     }
@@ -521,14 +531,14 @@ fn per_file_process_pattern() -> Result<&'static Regex, String> {
     .map_err(Clone::clone)
 }
 
-/// A `| while read` loop over an enumeration, with the item list before the pipe and the body after `do`, up to
-/// `done`. The list is checked for a content reader, and the body for a per-item process.
+/// A `| while read` loop over an enumeration, with the item list before the pipe and the body after `do`, up to a
+/// `done` that ends a command.
 fn metadata_loop_pattern() -> Result<&'static Regex, String> {
   static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
   PATTERN
     .get_or_init(|| {
       Regex::new(&format!(
-        concat!(r"(?s)(?P<list>{enumeration}[^;\n]*)\|\s*while\s+read\b[^;]*;\s*do\b", r"(?P<body>.*?)\bdone\b"),
+        concat!(r"(?s)(?P<list>{enumeration}[^;\n]*)\|\s*while\s+read\b[^;]*;\s*do\b", r"(?P<body>.*?)[;&\n]\s*done\b"),
         enumeration = enumeration_token(&store_token()?)
       ))
       .map_err(parse_error)
@@ -537,14 +547,21 @@ fn metadata_loop_pattern() -> Result<&'static Regex, String> {
     .map_err(Clone::clone)
 }
 
-fn loop_external_pattern() -> Result<&'static Regex, String> {
-  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
-  PATTERN.get_or_init(|| Regex::new(LOOP_EXTERNAL).map_err(parse_error)).as_ref().map_err(Clone::clone)
+/// Whether a loop body runs only shell builtins and reads no file inside the shell: a `<` redirection, `read < file`
+/// or `$(< file)`, would read a session's contents with no process to show it.
+fn loop_body_is_builtin(body: &str) -> bool {
+  !body.contains('<')
+    && body.split(LOOP_COMMAND_END).all(|command| {
+      match command.split_whitespace().map(|word| word.trim_start_matches('!')).find(|word| !word.is_empty()) {
+        Some(word) => LOOP_BUILTINS.contains(&word),
+        None => true,
+      }
+    })
 }
 
-fn content_reader_pattern() -> Result<&'static Regex, String> {
+fn list_reads_below_pattern() -> Result<&'static Regex, String> {
   static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
-  PATTERN.get_or_init(|| Regex::new(CONTENT_READERS).map_err(parse_error)).as_ref().map_err(Clone::clone)
+  PATTERN.get_or_init(|| Regex::new(LIST_READS_BELOW).map_err(parse_error)).as_ref().map_err(Clone::clone)
 }
 
 /// (b) A search from `/`, `/home` or the home directory itself, with its arguments on both sides.
@@ -838,6 +855,29 @@ mod tests {
       // A body that starts a process for every matched session.
       format!(
         "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do jq -r .name \"$id/metadata.json\"; done"
+      ),
+      // A `done` inside an echo does not end the body, so the jq after it still runs once per session.
+      format!(
+        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo done; jq -r .name \"$id/metadata.json\"; done"
+      ),
+      // A command outside the builtins, such as perl, starts a process per session.
+      format!(
+        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && perl -ne 1 \"$id/metadata.json\"; done"
+      ),
+      // A builtin redirect reads each session's file inside the shell.
+      format!(
+        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do read -r line < \"$id/metadata.json\"; echo \"$line\"; done"
+      ),
+      // A producer ahead of the session enumeration reads every session's metadata.json.
+      format!(
+        "cat {home}/.charliebot/sessions/*/metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+      ),
+      format!(
+        "cd {home}/.charliebot/sessions && sed -n 1p */metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+      ),
+      // A recursive listing walks below every session directory.
+      format!(
+        "cd {home}/.charliebot/sessions && ls -R */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
       ),
       // A short prefix, or one that is not a session id, can match many sessions.
       format!("grep -l X {home}/.charliebot/sessions/1680*/specs/*"),

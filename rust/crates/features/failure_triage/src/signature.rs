@@ -300,8 +300,11 @@ fn has_http_status(text: &str) -> bool {
   HTTP_STATUS.is_match(text)
 }
 
-/// The first cause the ordered pattern list finds in `text`.
+/// The first cause the ordered pattern list finds in `text`. Request ids are masked first: a hex id can hold the digits
+/// of a status pattern, and a per-request value names no cause.
 fn match_cause(text: &str) -> Option<String> {
+  let masked = UUID.replace_all(text, "<uuid>");
+  let text = masked.as_ref();
   for pattern in PATTERNS.iter() {
     let Some(found) = pattern.expression.find(text) else { continue };
     if pattern.whole_text {
@@ -520,6 +523,16 @@ mod tests {
     assert_eq!(other, cause("something unexpected happened"));
     let status = extract_run_cause(&[], "", Some("api_error status=503"));
     assert!(matches!(status, ExtractedCause::Cause { .. }));
+  }
+
+  #[test]
+  fn a_request_id_that_holds_a_status_digit_run_names_no_cause() {
+    let text = "upstream call failed for request 0a401b2c-3d4e-4f50-8a61-7b8c9d0e1f2a";
+    let cause = extract_run_cause(&[text], "", None);
+    assert_eq!(
+      run_signature("work", Some(1), "synthetic-backend", &cause),
+      "run:work:1:upstream call failed for request <uuid>"
+    );
   }
 
   #[test]

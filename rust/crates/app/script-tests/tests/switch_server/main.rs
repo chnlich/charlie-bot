@@ -930,6 +930,10 @@ fn test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3() {
   assert_eq!(run.code, 2, "{}", world.report(&run));
   world.assert_server_scope_records(3);
   world.assert_untouched();
+  // The failed switch installed the new release's units first, so the restore must put the old release's text back.
+  let installed = fs::read_to_string(world.user_units().join("charliebot-agents.slice")).expect("the installed unit");
+  let old_text = fs::read_to_string(world.clone.join("scripts/systemd/charliebot-agents.slice")).expect("the old unit");
+  assert_eq!(installed, old_text, "{}", world.report(&run));
 
   // With a passing readback the live run is adopted, and the clone moves to the new release's commit. This release
   // ignores SIGTERM, so the switch back has to SIGKILL it.

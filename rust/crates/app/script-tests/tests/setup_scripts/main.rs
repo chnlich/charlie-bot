@@ -55,10 +55,63 @@ fn recorded(record: &Path) -> Vec<String> {
   fs::read_to_string(record).unwrap_or_default().lines().map(String::from).collect()
 }
 
+// ---- the slice-unit install: the commit's units, read from the commit object ----------------------------------------
+
+const COMMITTED_SLICE: &str = "[Slice]\nCPUWeight=100\n";
+const CHECKOUT_SLICE: &str = "[Slice]\nCPUWeight=1\n";
+
+#[test]
+fn install_slice_units_installs_the_commits_units_and_reloads_the_user_manager() {
+  let sandbox = Sandbox::new();
+  let repo = sandbox.dir("repo");
+  let unit_dir = sandbox.dir("unit-dir");
+  let calls = sandbox.root().join("systemctl.calls");
+  sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_CALLS\"\n");
+  let mut env = sandbox.env();
+  env.insert("SYSTEMCTL_CALLS".to_string(), calls.display().to_string());
+  env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), unit_dir.display().to_string());
+  for (name, value) in [
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_AUTHOR_NAME", "setup-test"),
+    ("GIT_AUTHOR_EMAIL", "setup-test@example.invalid"),
+    ("GIT_COMMITTER_NAME", "setup-test"),
+    ("GIT_COMMITTER_EMAIL", "setup-test@example.invalid"),
+  ] {
+    env.insert(name.to_string(), value.to_string());
+  }
+  let git = |args: &[&str]| {
+    let mut command = harness::command("git", &env);
+    command.arg("-C").arg(&repo).args(args);
+    let run = harness::run(&mut command);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    run.stdout.trim().to_string()
+  };
+  git(&["init", "-q", "-b", "main"]);
+  fs::create_dir_all(repo.join("scripts/systemd")).expect("the unit directory");
+  fs::write(repo.join("scripts/systemd/charliebot-agents.slice"), COMMITTED_SLICE).expect("the committed unit");
+  git(&["add", "scripts"]);
+  git(&["commit", "-q", "-m", "the units"]);
+  let commit = git(&["rev-parse", "HEAD"]);
+  // A checkout that edits the unit after the commit: the install must read the commit, not this file.
+  fs::write(repo.join("scripts/systemd/charliebot-agents.slice"), CHECKOUT_SLICE).expect("the edited unit");
+
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("scripts/install-slice-units.sh")).arg(&repo).arg(&commit);
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(
+    fs::read_to_string(unit_dir.join("charliebot-agents.slice")).expect("the installed unit"),
+    COMMITTED_SLICE
+  );
+  assert_eq!(recorded(&calls), ["--user daemon-reload"]);
+}
+
 #[test]
 fn the_rewritten_shell_entry_points_parse() {
   for script in [
     "scripts/setup.sh",
+    "scripts/install-slice-units.sh",
     "scripts/preflight-charlie-code.sh",
     "scripts/sync-skills.sh",
     "dev/check-skills-host-leak.sh",

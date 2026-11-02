@@ -50,18 +50,16 @@ else
 fi
 
 # Install the systemd user units and start the agents' slice. The unit files are the single
-# home of the memory limits: the launcher's preflight reads its expected values from them.
+# home of the memory limits: the launcher's preflight reads its expected values from them, and
+# install-slice-units.sh copies the checkout's units into the unit directory.
 echo "==> Installing systemd user units"
-UNIT_DIR="$HOME/.config/systemd/user"
+UNIT_DIR="${CHARLIEBOT_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
+HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 if (( DRY_RUN )); then
-  echo "install -d $UNIT_DIR"
-  echo "install -m 0644 $SCRIPT_DIR/systemd/*.slice $UNIT_DIR/"
-  echo "systemctl --user daemon-reload"
+  echo "$SCRIPT_DIR/install-slice-units.sh $REPO_ROOT $HEAD_SHA"
   echo "systemctl --user enable --now charliebot-agents.slice"
 else
-  install -d "$UNIT_DIR"
-  install -m 0644 "$SCRIPT_DIR/systemd/"*.slice "$UNIT_DIR/"
-  systemctl --user daemon-reload
+  "$SCRIPT_DIR/install-slice-units.sh" "$REPO_ROOT" "$HEAD_SHA"
   systemctl --user enable --now charliebot-agents.slice
 fi
 

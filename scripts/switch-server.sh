@@ -6,9 +6,11 @@
 # The preflight checks the release, the clone, the runs and the config, then asks start-server.sh to test its slices
 # and scope, and checks that every switched-on session-weight switch (server.enable_session_cpu_weight,
 # server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
-# agents slice's cgroup.controllers. It refuses a clone with local changes and a target commit that a fetch does not
-# bring. The switch then stops the old server, moves the clone with `git reset --keep <commit>` (forward or back),
-# installs the clone's slice units into the user manager's unit directory and reloads it, starts the release and
+# agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
+# installed: scripts/release.sh installs them ahead of its trial and rehearsal. It refuses a clone with local changes
+# and a target commit that a fetch does not bring. The switch then stops the old server, moves the clone with
+# `git reset --keep <commit>` (forward or back), installs the target commit's slice units with
+# scripts/install-slice-units.sh and reloads the user manager, starts the release and
 # reads it back. A refusal changes nothing and exits 1, except that a missing helper binary exits 2 (below). The switch
 # runs detached under setsid, because stopping the old server ends the master turn that started this command. The
 # command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
@@ -81,7 +83,6 @@ export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
-UNIT_USER_DIR="${CHARLIEBOT_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 CURRENT="$RELEASES_DIR/current"
 CTRL_C_WAIT_S="${CHARLIEBOT_SWITCH_CTRL_C_WAIT_S:-60}"
 STOP_WAIT_S="${CHARLIEBOT_SWITCH_STOP_WAIT_S:-60}"
@@ -1115,16 +1116,12 @@ dry_run_disk() {
   return "$rc"
 }
 
-# install_slice_units: copy the clone's slice units into the user manager's unit directory and reload it. The unit
-# files are the single home of the slice settings, and a release's launcher preflight compares the running slice
-# against the release's text, so the installed copy must be that text before the new server starts. The reload applies
-# the slice properties to the running slice without restarting it, which is what brings a controller into the slice's
-# cgroup.controllers the same way.
+# install_slice_units COMMIT: installs COMMIT's slice units through install-slice-units.sh, the one owner of the
+# install. The launcher's preflight compares the running slice with the release's unit files, so the installed copy
+# must be the new server's text before it starts. The copy beside this script is the one called: after the clone moves
+# to an older commit, that commit's checkout may hold no owner.
 install_slice_units() {
-  log "installing the slice units from $REPO_ROOT/scripts/systemd into $UNIT_USER_DIR and reloading the user manager"
-  install -d "$UNIT_USER_DIR" || return 1
-  install -m 0644 "$REPO_ROOT/scripts/systemd/"*.slice "$UNIT_USER_DIR/" || return 1
-  systemctl --user daemon-reload
+  "$SCRIPT_DIR/install-slice-units.sh" "$REPO_ROOT" "$1"
 }
 
 # weight_controller_check: each switched-on session-weight switch names a controller that must have reached the
@@ -1161,12 +1158,14 @@ weight_controller_check() {
         if [ "$controller" = io ]; then
           fail "the io weight cannot reach the sessions: 'io' is missing from" \
             "$slice_dir/cgroup.controllers (have: $controllers). Give io to the user manager with" \
-            "scripts/systemd/setup-io-share.sh and install the release's slice units with scripts/setup.sh," \
+            "scripts/systemd/setup-io-share.sh, install the release's slice units with" \
+            "scripts/install-slice-units.sh $REPO_ROOT $TARGET_SHA," \
             "or set server.$switch = false to turn the io weight off"
         else
           fail "the cpu weight cannot reach the sessions: 'cpu' is missing from" \
             "$slice_dir/cgroup.controllers (have: $controllers). Install the release's slice units with" \
-            "scripts/setup.sh, or set server.$switch = false to turn the cpu weight off"
+            "scripts/install-slice-units.sh $REPO_ROOT $TARGET_SHA," \
+            "or set server.$switch = false to turn the cpu weight off"
         fi
         ;;
     esac
@@ -1294,7 +1293,7 @@ restore() {
   fi
   git -C "$REPO_ROOT" reset --keep -q "$OLD_SHA" || restore_failed "git reset --keep $OLD_SHA failed"
   set_current "$PREV_CURRENT" || restore_failed "could not put current back"
-  install_slice_units || restore_failed "the restored release's slice units did not install"
+  install_slice_units "$OLD_SHA" || restore_failed "the restored release's slice units did not install"
   if [ "$OLD_STOPPED" = 1 ]; then
     start_in_pane || restore_failed "could not type the launcher into pane $PANE"
     wait_ready || restore_failed "the previous implementation did not reach server_ready"
@@ -1321,7 +1320,7 @@ switch_forward() {
   stop_old || die "the old server did not stop"
   git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
-  install_slice_units || die "the slice units of $TARGET_SHA did not install"
+  install_slice_units "$TARGET_SHA" || die "the slice units of $TARGET_SHA did not install"
   start_in_pane || die "could not type the launcher into pane $PANE"
   wait_ready || die "the new server did not reach server_ready"
   record_session_reads "after the new server is ready" || true

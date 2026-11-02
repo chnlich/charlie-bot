@@ -126,6 +126,7 @@ impl World {
 
     copy_repo_file("scripts/start-server.sh", &scripts.join("start-server.sh"));
     copy_repo_file("scripts/switch-server.sh", &scripts.join("switch-server.sh"));
+    copy_repo_file("scripts/install-slice-units.sh", &scripts.join("install-slice-units.sh"));
     // The launcher's preflight reads its expected limits from this directory.
     let systemd = scripts.join("systemd");
     fs::create_dir_all(&systemd).expect("the systemd directory");
@@ -168,7 +169,12 @@ impl World {
     // A later build turns agy's re-attachment back off inside its own crate, so a switch away from a new-layout build
     // is read there too.
     write_registration(&clone, "antigravity", "antigravity", false, Layout::New);
-    git(&git_vars, &clone, &["add", "rust"]);
+    // The new release's agents slice differs from the old one, so a restore that skipped the install would leave this
+    // text in the unit directory.
+    let slice = clone.join("scripts/systemd/charliebot-agents.slice");
+    let slice_text = fs::read_to_string(&slice).expect("the agents slice");
+    fs::write(&slice, format!("{slice_text}# the new release's text\n")).expect("the new agents slice");
+    git(&git_vars, &clone, &["add", "rust", "scripts"]);
     git(&git_vars, &clone, &["commit", "-q", "-m", "new release"]);
     let new_sha = git(&git_vars, &clone, &["rev-parse", "HEAD"]);
 

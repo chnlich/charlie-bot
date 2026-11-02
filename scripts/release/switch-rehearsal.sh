@@ -9,10 +9,9 @@
 # dir> holds the new release's charliebot-server, charliebot and sha256sums.txt, as scripts/release.sh downloaded them.
 #
 # The rehearsal checkout is a clone of a bare origin that holds this repository's origin/main, checked out at the old
-# release's commit. The switch copy runs from .cutover-switch/ outside the checkout, so the switch moves the
-# rehearsal checkout
-# and never this repository. The delegation check of each switch delegates its task on that checkout, so the task's
-# repository and worktrees lie in the rehearsal tree. Every server starts from the rehearsal home's own config,
+# release's commit. The switch copy runs from .cutover-switch/ outside the checkout, so the switch moves the rehearsal
+# checkout and never this repository. The delegation check of each switch delegates its task on that checkout, so the
+# task's repository and worktrees lie in the rehearsal tree. Every server starts from the rehearsal home's own config,
 # credentials, releases and approval policy table. The table is the stand-in that trial.sh's home also copies from
 # scripts/release/standin-approval-policy.yaml: the release under test refuses a home without one.
 #

@@ -2,6 +2,7 @@
 //! to an Anthropic message, and the OpenAI chat stream to Anthropic's events. Each keeps the golden fixture's
 //! operation order, so a request raises the first failure it records.
 
+use charliebot_core::event_types;
 use charliebot_core::text_repr::{self, is_truthy};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -174,7 +175,7 @@ fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>>
       Some("image") => user_parts.push(image_block_to_openai_part(block, "user image")?),
       Some("tool_result") => {
         flush_user_parts(&mut converted, &mut user_parts);
-        let Some(tool_use_id) = block.get("tool_use_id").filter(|id| is_truthy(id)) else {
+        let Some(tool_use_id) = block.get(event_types::TOOL_USE_ID).filter(|id| is_truthy(id)) else {
           return value_error("tool_result block missing tool_use_id");
         };
         let content = block.get("content").cloned().unwrap_or_else(|| json!(""));

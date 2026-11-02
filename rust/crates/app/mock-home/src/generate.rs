@@ -160,7 +160,8 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
   let lines = if budget > LONG_EVENT_BUDGET { rng.range(1, 40) } else { rng.range(1, 4) };
   let tool_use_id = text::tool_id(rng);
   let content = text.tool_output(rng, lines);
-  let result = json!({"type": "tool_result", "tool_use_id": tool_use_id, "content": content, "is_error": false});
+  let result =
+    json!({"type": "tool_result", event_types::TOOL_USE_ID: tool_use_id, "content": content, "is_error": false});
   json!({"type": "user", "message": {"content": [result]}, "timestamp": timestamp})
 }
 

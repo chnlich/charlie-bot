@@ -39,7 +39,7 @@ impl CharlieCodeTranslator {
       Some("command_progress") => self.command_progress(event),
       Some("observation") => {
         let mut translated = make_tool_result_event("Bash", str_field(event, "output", "")?);
-        translated["tool_use_id"] = json!(required_str(event, "id")?);
+        translated[event_types::TOOL_USE_ID] = json!(required_str(event, "id")?);
         Ok(vec![translated])
       }
       Some("result") => {

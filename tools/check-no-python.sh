@@ -22,6 +22,9 @@ EXEMPT_PATHS=(
   'README.md' # quotes the emergency rollback command of the last Python-server commit; that script and its mode exist only there
   'prompts/task_base.md' # the recorded prompt snapshot asserts on this text byte for byte (tasks/tests/fixtures)
   'skills/cli-tool-traps/SKILL.md' # quotes a recorded runaway process's argv as the pgrep anchoring example
+  'tools/remote-run/README.md' # the refused-toolchain list names the pytest and unittest entry forms it must name
+  'tools/remote-run/common.sh' # reads the project's .venv interpreter and asks uv for the matching one on the build host
+  'tools/remote-run/setup.sh' # installs the project's pinned CPython on the build host through uv
 )
 
 exempt() {

@@ -14,7 +14,7 @@ use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, UtcDateTime, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state;
 use http::header::HeaderValue;
@@ -317,7 +317,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   for meta in &sessions {
     let entry = derived.get(&meta.id);
     let mut payload = Map::new();
-    payload.insert("has_unread".to_string(), Value::Bool(meta.has_unread));
+    payload.insert(HAS_UNREAD.to_string(), Value::Bool(meta.has_unread));
     payload.insert(
       "has_running_tasks".to_string(),
       entry.and_then(|row| row.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),

@@ -930,6 +930,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",
   },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
+  OwnerRow { name: "has_unread", owner: "runtime/store", hint: "Use `charliebot_store::metadata::HAS_UNREAD`." },
   OwnerRow {
     name: "has_pending_trigger",
     owner: "runtime/store",

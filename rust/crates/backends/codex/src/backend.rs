@@ -145,11 +145,11 @@ impl CodexBackend {
   pub fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = self.exec_command_head();
     command.extend(self.instructions_config_args()?);
-    command.extend(scan_guard_hook_args());
     if let Some(session_id) = &self.resume_session_id {
       command.insert(2, "resume".to_string());
       command.push(session_id.clone());
     }
+    command.extend(scan_guard_hook_args());
     command.extend(self.extra_flags.iter().cloned());
     command.push("--".to_string());
     command.push(prompt.to_string());

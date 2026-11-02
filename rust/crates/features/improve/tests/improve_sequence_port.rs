@@ -495,9 +495,8 @@ async fn three_iterations_deliver_reports_and_wake_the_parent_four_times() -> an
   let expected_run_refs = runs.iter().map(|run| format!("run:{}", run.id)).collect::<Vec<_>>();
   assert_eq!(reported_run_refs, expected_run_refs.iter().map(String::as_str).collect::<Vec<_>>());
   for iteration in 1..=3 {
-    let report = command::loop_dir(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)
-      .join(format!("iter_{iteration:04}.md"));
-    assert!(report.is_file());
+    let loop_dir = command::loop_dir(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id);
+    assert!(command::iteration_report_path(&loop_dir, iteration).is_file());
   }
   let child_events = harness.events(&harness.child.id);
   let closes = child_close_facts(&child_events);
@@ -518,8 +517,8 @@ async fn an_iteration_report_carries_the_mechanical_header_and_fallback_file() -
   assert!(summary.contains(" commits_added=0 "));
   assert!(summary.contains(" report="));
   assert!(summary.ends_with("\n\nworker words"));
-  let path = command::loop_dir(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id).join("iter_0001.md");
-  let fallback = std::fs::read_to_string(path)?;
+  let loop_dir = command::loop_dir(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id);
+  let fallback = std::fs::read_to_string(command::iteration_report_path(&loop_dir, 1))?;
   assert!(fallback.starts_with("<!-- runner fallback: worker wrote no report -->\n"));
   assert!(fallback.contains("worker words"));
   Ok(())
@@ -714,7 +713,8 @@ async fn recovery_loads_a_legacy_failed_state_without_end_error() -> anyhow::Res
     });
     let run = harness.stack.register(run).await?;
     harness.stack.record_terminal(&harness.child.id, &run.id, RunOutcomeKind::Success).await?;
-    std::fs::write(child_dir.join(format!("iter_{position:04}.md")), format!("## Iter {position}\n\n{text}\n"))?;
+    let report_path = command::iteration_report_path(&child_dir, position);
+    std::fs::write(report_path, format!("## Iter {position}\n\n{text}\n"))?;
   }
 
   harness.stack.boot().await?;

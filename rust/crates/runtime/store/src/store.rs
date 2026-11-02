@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use charliebot_core::config::CharlieBotConfig;
@@ -342,6 +342,8 @@ impl Store {
 /// Session metadata and event-log persistence for one configured CharlieBot home.
 pub struct Store {
   pub(crate) cfg: CharlieBotConfig,
+  /// The open sessions directory that anchors each history-identity read to a shorter path walk.
+  sessions_dir: OnceLock<fs::File>,
   pub(crate) slots: Vec<MetadataSlot>,
   pub(crate) account_labels: Arc<dyn AccountLabelKeeper>,
   pub(crate) anchor_reconciler: Arc<dyn AnchorFieldReconciler>,
@@ -442,6 +444,7 @@ impl Store {
     let store_id = Uuid::new_v4();
     Ok(Self {
       cfg,
+      sessions_dir: OnceLock::new(),
       slots,
       account_labels,
       anchor_reconciler,
@@ -507,6 +510,23 @@ impl Store {
   /// The session directory for `session_id`.
   pub fn session_dir(&self, session_id: &str) -> PathBuf {
     self.cfg.sessions_dir().join(session_id)
+  }
+
+  /// The open sessions directory, or None while no sessions directory exists.
+  ///
+  /// The handle is opened once and held for the store's life. A read through it resolves the current
+  /// directory entry, so a replaced history file still reads its new inode.
+  pub(crate) fn sessions_dir_handle(&self) -> StoreResult<Option<&fs::File>> {
+    if let Some(handle) = self.sessions_dir.get() {
+      return Ok(Some(handle));
+    }
+    let dir = self.cfg.sessions_dir();
+    let handle = match fs::File::open(&dir) {
+      Ok(handle) => handle,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", dir.display()))),
+    };
+    Ok(Some(self.sessions_dir.get_or_init(|| handle)))
   }
 
   /// The typed configuration this store was built from.

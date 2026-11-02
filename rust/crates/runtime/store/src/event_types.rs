@@ -1,8 +1,13 @@
 //! Chat event values and the live event-log identity shared by store readers.
 
 use std::fs;
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::sync::Arc;
+
+use nix::errno::Errno;
+use nix::fcntl::AtFlags;
+use nix::sys::stat::fstatat;
 
 use crate::compact::CompactValue;
 use crate::{StoreError, StoreResult};
@@ -39,6 +44,22 @@ impl FileIdentity {
       })),
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
       Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+    }
+  }
+
+  /// The identity of the file at `relative`, resolved below the open directory `dir`.
+  ///
+  /// The read is the same `fstatat` the path form makes. Anchoring it on a directory handle means a
+  /// page's hundred identity reads walk only the session's own components, not the home's whole path.
+  pub(crate) fn read_at(dir: &impl AsFd, relative: &str) -> StoreResult<Option<Self>> {
+    match fstatat(dir, relative, AtFlags::empty()) {
+      Ok(stat) => Ok(Some(Self {
+        inode: stat.st_ino,
+        size: stat.st_size as u64,
+        mtime_ns: i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec),
+      })),
+      Err(Errno::ENOENT) => Ok(None),
+      Err(error) => Err(StoreError::new(format!("{relative}: {error}"))),
     }
   }
 }

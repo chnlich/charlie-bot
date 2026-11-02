@@ -1049,12 +1049,13 @@ fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for changed in ["committed.md", "base.md", "untracked.md"] {
-    assert!(
-      list.lines().any(|line| line == changed),
-      "the in-flight list misses the {changed} change of the ux clone:\n{list}"
-    );
-  }
+  let mut listed: Vec<&str> = list.lines().collect();
+  listed.sort_unstable();
+  assert_eq!(
+    listed,
+    ["base.md", "committed.md", "untracked.md"],
+    "the in-flight list is not the ux clone's files:\n{list}"
+  );
   assert!(
     !clone.join(".git/FETCH_HEAD").exists(),
     "the runner wrote the clone's shared FETCH_HEAD:\n{}",

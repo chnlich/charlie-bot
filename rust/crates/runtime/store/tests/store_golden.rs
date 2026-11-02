@@ -1896,7 +1896,7 @@ fn assert_recorded_tree(root: &Path, expected_files: &[Value]) {
   }
 }
 
-/// Copy one seeded home to a Python copy and a Rust copy, then read each copy through its own implementation.
+/// Copy one seeded home to a reference copy and a Rust copy, then read each copy through its own implementation.
 fn read_on_copies(root: &Path, seed_home: &Path, case: &str, rust_read: fn(&Store) -> Value) -> (Value, Value) {
   let case_root = root.join(case);
   copy_tree(seed_home, &case_root.join("python-home"));
@@ -2361,8 +2361,8 @@ fn write_session_metadata(home: &Path, session_id: &str, archive_offset: i64) {
   fs::write(path, meta.to_json_string(&slots(), true)).unwrap();
 }
 
-/// Run one read-parity case: the Rust test builds one fixture home, copies it for Python and Rust,
-/// asks the Python helper for its answer, and compares the store's results against it.
+/// Run one read-parity case: the Rust test builds one fixture home, copies it for the reference and Rust,
+/// asks the reference helper for its answer, and compares the store's results against it.
 fn parity_case_dir(root: &Path, case: &str) -> PathBuf {
   let case_dir = root.join(case);
   fs::create_dir_all(&case_dir).unwrap();
@@ -2514,11 +2514,11 @@ fn legacy_master_run_and_thread_log_readers_walk_the_layouts() {
   assert_eq!(store.thread_event_log_paths_sync().unwrap(), vec![thread_log]);
 }
 
-/// Every content and metadata shape that Python's aggregator iterates must feed the Rust port too.
+/// Every content and metadata shape that the aggregator iterates must feed the Rust code too.
 ///
 /// A native transcript event carries `message.content` as a plain string rather than a list of
-/// blocks; Python iterates the characters and ignores them, and the port likewise reads the string
-/// as no blocks. The other fields here follow the same `or []` and truthiness rules.
+/// blocks; the characters are iterated and ignored, and the Rust code likewise reads the string
+/// as no blocks. The other fields here follow the same empty-list and truthiness rules.
 #[test]
 fn message_aggregator_accepts_every_recorded_shape() {
   let events = json!([

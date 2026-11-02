@@ -15,7 +15,7 @@ use crate::{Store, StoreError, StoreResult};
 #[derive(Clone, Debug)]
 pub struct MetadataListing {
   /// Session rows in newest-first order. Each row is shared with the memoized corpus: a listing hit
-  /// clones pointers, not metadata, the way Python's `load_session_metas` hands out its cached rows.
+  /// clones pointers, not metadata, so each caller shares the cached rows.
   pub rows: Vec<Arc<SessionMetadata>>,
   /// Sequence-owned fields keyed by session id.
   pub sequence_fields: std::collections::HashMap<String, serde_json::Map<String, Value>>,
@@ -46,7 +46,7 @@ pub struct ArchivedPage {
   pub sessions: Vec<SessionMetadata>,
   /// Whether another page follows this one.
   pub has_more: bool,
-  /// The next page's timestamp cursor, in Python `datetime.isoformat()` form.
+  /// The next page's timestamp cursor, in ISO 8601 form.
   pub next_before: Option<String>,
   /// The next page's id cursor.
   pub next_before_id: Option<String>,
@@ -60,7 +60,7 @@ const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 impl Store {
   /// Read all metadata rows, optionally restricted to one stored status.
   ///
-  /// As Python's `load_session_metas`, each filter's result is memoized on the listings revision, the sessions root's
+  /// Each filter's result is memoized on the listings revision, the sessions root's
   /// signature and a [`LISTINGS_SWEEP_INTERVAL`] clock. A metadata write through this store moves the revision, and a
   /// created or removed session directory moves the root's signature, so both walk again on the next call. The sweep
   /// bounds an out-of-band edit to the cache entry's expiry plus one interval.
@@ -336,7 +336,7 @@ impl Store {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
         // A missing or unreadable or malformed file logs at debug level and drops out of the
-        // scan, the way `json_utils.load_json_meta` reports its log event and answers None.
+        // scan, the way the metadata JSON read reports its log event and answers None.
         Err(error) => {
           tracing::debug!(path = %path.display(), error = %error, "metadata_raw_scan_read_failed");
           continue;

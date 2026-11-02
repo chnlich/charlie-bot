@@ -224,7 +224,7 @@ pub fn read_trigger(path: &Path) -> anyhow::Result<PendingTrigger> {
 }
 
 /// Write one trigger record to its file under the session directory's trigger directory, replacing the file, and
-/// mark the session's sidebar stale. Python writes `model_dump_json(indent=2)` as it is, with no trailing newline.
+/// mark the session's sidebar stale. The file is JSON indented by two spaces, with no trailing newline.
 pub fn write_trigger(session_dir: &Path, trigger: &PendingTrigger) -> anyhow::Result<()> {
   let path = trigger_path(session_dir, &trigger.id);
   let parent = path.parent().expect("trigger file path has a parent");
@@ -235,7 +235,7 @@ pub fn write_trigger(session_dir: &Path, trigger: &PendingTrigger) -> anyhow::Re
   Ok(())
 }
 
-/// A trigger status written by Python as a string enum.
+/// A trigger status, stored as its string value.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerStatus {
@@ -252,7 +252,7 @@ pub const LOCAL_PID_KIND: &str = "local_pid";
 pub const REMOTE_PID_KIND: &str = "remote_pid";
 pub const SLURM_JOB_KIND: &str = "slurm_job";
 
-/// A tagged watched target. The discriminator and field order match Python's `WatchTarget` models.
+/// A tagged watched target. The discriminator and field order match the stored file format.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 pub enum WatchTarget {

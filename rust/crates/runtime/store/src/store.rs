@@ -372,15 +372,15 @@ pub struct Store {
   pub(crate) node_state_cache: StdMutex<HashMap<String, CachedNodeState>>,
   pub(crate) task_state_tail_cache: StdMutex<HashMap<String, CachedTaskStateTail>>,
   pub(crate) task_state_tail_reads: AtomicU64,
-  /// Python's `_activity_memo`: each node's verdict keyed by the records generation and the history identity.
+  /// The activity memo: each node's verdict keyed by the records generation and the history identity.
   pub(crate) activity_cache: StdMutex<HashMap<String, CachedActivity>>,
-  /// Python's `_outcomes_memo`: each node's run facts keyed by the history identity they were folded from.
+  /// The outcomes memo: each node's run facts keyed by the history identity they were folded from.
   pub(crate) run_facts_by_session: StdMutex<HashMap<String, CachedRunFactsAt>>,
   /// Chat-history walks that read a node's facts from its files without caching them.
   pub(crate) history_fact_walks: AtomicU64,
   pub(crate) run_record_reads: AtomicU64,
   pub(crate) task_tree_activity_calls: AtomicU64,
-  /// Python's `_tree_rows_lock`: one tree page's row computation runs at a time, so concurrent pages never walk the
+  /// `tree_rows_lock`: one tree page's row computation runs at a time, so concurrent pages never walk the
   /// same histories in parallel.
   pub(crate) tree_rows_lock: StdMutex<()>,
   pub(crate) history_work: HistoryWorkCounters,
@@ -528,7 +528,7 @@ impl Store {
     layout::metadata_path(&self.session_dir(session_id))
   }
 
-  /// Serialize one session with every registered field's Python model default.
+  /// Serialize one session with every registered field's model default.
   pub fn session_metadata_value(&self, metadata: &SessionMetadata) -> Value {
     metadata.to_response_value(&self.slots)
   }
@@ -605,7 +605,7 @@ impl Store {
       .map_err(|error| StoreError::new(format!("{}: invalid thread metadata: {error}", path.display())))
   }
 
-  /// Atomically write a thread metadata file using Python model field and slot order.
+  /// Atomically write a thread metadata file using the model field and slot order.
   pub fn write_thread_metadata(&self, path: &Path, metadata: &crate::metadata::ThreadMetadata) -> StoreResult<()> {
     let parent = path.parent().expect("thread metadata path has a parent");
     fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;

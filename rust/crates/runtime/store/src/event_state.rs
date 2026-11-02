@@ -22,7 +22,7 @@ pub(crate) struct LiveRangeMemo {
   pub(crate) mtime_ns: i128,
   pub(crate) size: u64,
   pub(crate) inode: u64,
-  // Python's BoundedMemo returns the cached list by reference. Arc keeps a live-range hit just as cheap.
+  // The bounded memo returns the cached list by reference. Arc keeps a live-range hit just as cheap.
   pub(crate) lines: Arc<Vec<Option<Arc<ChatEvent>>>>,
   pub(crate) covered_byte_end: usize,
   pub(crate) ends_on_boundary: bool,
@@ -41,7 +41,7 @@ pub(crate) struct TailLineWalk {
   pub(crate) bytes_read: usize,
 }
 
-/// Bounded file-signature memos for the Python-equivalent event readers.
+/// Bounded file-signature memos for the event readers.
 pub(crate) struct EventReadCaches {
   pub(crate) count: StatSignatureMemo<PathBuf, usize>,
   pub(crate) tail: StatSignatureMemo<(PathBuf, usize), TailPage>,

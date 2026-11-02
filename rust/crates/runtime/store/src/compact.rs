@@ -2,10 +2,10 @@
 //! arrays are stored without growth slack.
 //!
 //! `serde_json::Value` gives every parsed chat event a fresh `String` per object key inside an
-//! `IndexMap` with hash-table and entry-vector slack, which is the measured representation gap
-//! against Python's parsed events. This module keeps the same JSON semantics — insertion order,
-//! the three `serde_json::Number` forms, and Python-compatible access — while sharing each
-//! distinct key once and storing each object as one exact-fit `Box<[ObjectEntry]>`.
+//! `IndexMap` with hash-table and entry-vector slack, which is the measured representation gap against a plain
+//! `Value` map. This module keeps the JSON semantics: insertion order, the three `serde_json::Number` forms, and
+//! mapping-style access. It shares each distinct key once and stores each object as one exact-fit
+//! `Box<[ObjectEntry]>`.
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -164,7 +164,7 @@ impl<'de> serde::Deserialize<'de> for CompactValue {
         while let Some(key) = access.next_key_seed(KeySeed)? {
           let value = access.next_value::<Self::Value>()?;
           // A repeated key keeps its first position and takes the last value, as serde_json's map
-          // insert (and Python's dict) does.
+          // insert does.
           match entries.iter_mut().find(|entry| entry.key == key) {
             Some(entry) => entry.value = value,
             None => entries.push(ObjectEntry { key, value }),
@@ -252,8 +252,7 @@ impl CompactValue {
     }
   }
 
-  /// Convert back to a `serde_json::Value` for the response boundary, where the Python
-  /// `json.dumps` formatter runs.
+  /// Convert back to a `serde_json::Value` for the response boundary, where the JSON text is formatted.
   #[must_use]
   pub fn to_value(&self) -> Value {
     match self {
@@ -353,7 +352,7 @@ impl CompactValue {
     matches!(self, Self::Null)
   }
 
-  /// Insert or replace one object field in Python's dict order: an existing key keeps its position.
+  /// Insert or replace one object field in insertion order: an existing key keeps its position.
   ///
   /// # Panics
   /// Panics when this is not an object; call [`CompactValue::is_object`] first.

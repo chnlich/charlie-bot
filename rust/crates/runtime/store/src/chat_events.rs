@@ -35,7 +35,7 @@ pub enum LineRule {
   PerLine,
   /// `split_inclusive('\n')` over the whole file, read as strict UTF-8: each line keeps its `\n`.
   Terminated,
-  /// Python universal newlines over the whole file, read as strict UTF-8: `\r\n` and a lone `\r` end a line as `\n`
+  /// Universal newlines over the whole file, read as strict UTF-8: `\r\n` and a lone `\r` end a line as `\n`
   /// does, and a final line without a terminator is a line.
   Universal,
 }
@@ -133,7 +133,7 @@ fn split_whole(text: &str, rule: LineRule) -> Vec<String> {
   }
 }
 
-/// The text of a live or archived log with Python's universal newlines: `\r\n` and a lone `\r` end a line as `\n`
+/// The text of a live or archived log with universal newlines: `\r\n` and a lone `\r` end a line as `\n`
 /// does. A reader that polls a growing log calls this on each read and passes the result to `take_complete_lines`.
 pub fn read_universal_text(path: &Path) -> Result<String, LogReadError> {
   let bytes = fs::read(path).map_err(LogReadError::Io)?;

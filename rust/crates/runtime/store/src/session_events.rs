@@ -253,7 +253,7 @@ impl Store {
       {
         return Ok(aggregator);
       }
-      // Python's `_load_aggregator_init_inputs` runs the full history read in `asyncio.to_thread`.
+      // The full history read runs through the async store call.
       let events = self.load_chat_events_shared_async(session_id).await?;
       let archive_offset = self.read_archive_offset(session_id)?;
       let mut aggregator = self.new_message_aggregator(archive_offset, false);
@@ -791,7 +791,7 @@ mod tests {
     let (home, store) = make_test_store();
     write_test_session(&store, "synthetic");
     // Root-session creation writes this fact before the three chat events in
-    // the Python fixture, so the new user event has global index 4.
+    // the recorded fixture, so the new user event has global index 4.
     store.append_chat_event("synthetic", json!({"type": "task_created"})).await.unwrap();
     store
       .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "t1"}))

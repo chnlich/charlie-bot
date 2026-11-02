@@ -13,8 +13,8 @@ pub type ChatEvent = CompactValue;
 /// A reference counted parsed event shared by the live cache and task facts.
 pub type SharedChatEvent = Arc<ChatEvent>;
 
-/// The identity of a live event log on disk: its inode, size and modification time, as Python's
-/// `_task_state_fast` keys its memo. An append moves the size, and a rewrite publishes a new inode.
+/// The identity of a live event log on disk: its inode, size and modification time.
+/// An append moves the size, and a rewrite publishes a new inode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileIdentity {
   pub(crate) inode: u64,

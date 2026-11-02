@@ -381,7 +381,7 @@ fn copy_reference_file(out: &mut impl Write, source: &Path, take: usize) -> Stor
     raw += 1;
     appended += usize::from(copy_reference_line(out, line)?);
   }
-  // An unterminated final frame is a frame like any other, as Python's `find` loop reads it.
+  // An unterminated final frame is a frame like any other.
   if raw < take && start < bytes.len() {
     raw += 1;
     appended += usize::from(copy_reference_line(out, &bytes[start..])?);

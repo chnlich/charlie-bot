@@ -77,7 +77,7 @@ pub struct SharedChatEventRange {
 }
 
 impl Store {
-  /// Append one event, injecting its id and Python `datetime.isoformat()` timestamp when absent.
+  /// Append one event, injecting its id and an ISO 8601 timestamp when absent.
   pub async fn append_chat_event(&self, session_id: &str, mut event: Value) -> StoreResult<ChatEvent> {
     let object = event.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
     if !object.contains_key("id") {
@@ -264,7 +264,7 @@ impl Store {
   /// Read archived facts and retain the live event cache as a shared segment.
   ///
   /// Task paths that only scan history use this view so an archived prefix does not force a deep clone of every live
-  /// JSON value. Python's `fact_history` returns shared event dictionaries in both its cached and concatenated cases.
+  /// JSON value. The fact history returns shared event dictionaries in both its cached and concatenated cases.
   pub fn load_all_facts_view_sync(&self, session_id: &str) -> StoreResult<ChatEventHistory> {
     self.history_work.event_history_views.fetch_add(1, Ordering::Relaxed);
     let cache_entry = self.events_cache_entry(session_id);
@@ -348,7 +348,7 @@ impl Store {
   /// Global indices are `archive_offset + line_in_live_file`. With a positive archive offset the live
   /// half numbers physical lines — a blank or a malformed line consumes its index and parses to nothing,
   /// the same inconsistency `ndjson.parse_ndjson_range`'s islice shows on the unarchived cold path. An
-  /// unarchived warm cache instead numbers its own parsed-event indices, matching Python's cache branch.
+  /// unarchived warm cache instead numbers its own parsed-event indices, matching the cached branch.
   pub fn load_chat_events_range(
     &self,
     session_id: &str,
@@ -811,7 +811,7 @@ impl Store {
   /// The per-session cache entry stays in the map: an append or cold read that holds its lock keeps its exclusion, so
   /// the next read sees every event that the file holds. The node's task state stays keyed by the log file's identity
   /// when a fold covers the whole cached list (see [`Store::seal_node_state`]). The run-facts memo keeps the current
-  /// event list under its bounded identity key, like Python, so a later reload has a new key.
+  /// event list under its bounded identity key, so a later reload has a new key.
   pub fn evict_recovery_history(&self, session_id: &str) {
     let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
     match cache_entry {
@@ -941,7 +941,7 @@ impl Store {
 
   /// Archive the oldest consecutive events before `cutoff` and advance metadata `archive_offset`.
   ///
-  /// The live log is decoded as strict UTF-8 before any write, as Python's `open(encoding="utf-8")` does. Invalid
+  /// The live log is decoded as strict UTF-8 before any write. Invalid
   /// UTF-8, a non-object line, or a truthy non-string `timestamp` before the split point fails before any write, so
   /// the live log, the archive and `archive_offset` stay unchanged.
   pub async fn archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>> {
@@ -1172,7 +1172,7 @@ impl<'a> ReverseFactLines<'a> {
       let newline = memchr::memrchr(b'\n', &self.bytes[..pos]);
       let start = newline.map_or(0, |index| index + 1);
       if start == pos {
-        // A trailing or doubled newline leaves an empty segment, which Python's reader also skips.
+        // A trailing or doubled newline leaves an empty segment, which the reader also skips.
         let newline = newline.unwrap_or(0);
         #[cfg(test)]
         {
@@ -1460,7 +1460,7 @@ fn event_timestamp(value: UtcDateTime) -> String {
 
 /// Whether a non-blank line before the split point is an event older than `cutoff`. A line that is not JSON, or
 /// whose `timestamp` is missing, falsy or unparsable, is not archived and starts the kept part. A JSON value that
-/// is not an object, or a truthy `timestamp` that is not a string, fails the archive, as Python raises on it.
+/// is not an object, or a truthy `timestamp` that is not a string, fails the archive.
 fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number: usize) -> StoreResult<bool> {
   let Ok(event) = decode_line(str_methods::strip(line).as_bytes()) else {
     tracing::debug!(path = %live_path.display(), line = line_number, "chat_event_archive_parse_skip");

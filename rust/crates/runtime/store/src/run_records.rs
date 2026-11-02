@@ -67,7 +67,7 @@ pub fn read_run_record_file(path: &Path) -> Result<RunRecord, MetadataReadError>
 }
 
 /// Write one run's metadata file as `record` rendered under `style`, replacing the file. The release helper's seed
-/// writes its own check's record this way, as Python's `json.dumps` one-liner; the store's own saves write the model
+/// writes its own check's record this way, as a one-line JSON dump; the store's own saves write the model
 /// dump through `Store::write_run_record`.
 pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std::io::Result<()> {
   fs::write(path, text_repr::json_dumps(record, style))
@@ -292,7 +292,7 @@ pub struct SequenceRef {
   pub position: i64,
 }
 
-/// One run's persisted identity and evidence, in Python model field order.
+/// One run's persisted identity and evidence, in model field order.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunRecord {
@@ -346,7 +346,7 @@ pub struct RunRecord {
   pub result_ref: Option<String>,
 }
 
-/// The record fields a retry caller passes, in Python's keyword order. `input_event_ids` is empty for a worker
+/// The record fields a retry caller passes, in keyword order. `input_event_ids` is empty for a worker
 /// retry, which consumes whatever input is pending when it launches.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetryRunFields {
@@ -582,8 +582,8 @@ pub struct StopResult {
 /// The result of a new stop request.
 pub type StopRequest = StopResult;
 
-/// The boundary of a run page cursor. Python's cursor is `s`, `i`, and `d` (only when descending); unknown keys are
-/// ignored, as Python ignores them.
+/// The boundary of a run page cursor. The cursor is `s`, `i`, and `d` (only when descending); unknown keys are
+/// ignored.
 #[derive(Deserialize)]
 struct RunCursor {
   s: Value,
@@ -610,8 +610,8 @@ fn run_cursor(run: &RunRecord, order: RunOrder) -> String {
   run_token::b64url_encode(serde_json::to_string(&value).expect("a run cursor serializes").as_bytes())
 }
 
-/// Decode a cursor into its boundary and the order it was minted under. The error text is Python's `ValueError`,
-/// which does not carry the decoding cause.
+/// Decode a cursor into its boundary and the order it was minted under. The error text names the cursor, and it
+/// does not carry the decoding cause.
 fn decode_run_cursor(cursor: &str) -> StoreResult<((UtcDateTime, String), RunOrder)> {
   let malformed = || StoreError::new(format!("malformed run page cursor: {}", text_repr::str_repr(cursor)));
   let decoded = run_token::b64url_decode(cursor).map_err(|_| malformed())?;
@@ -795,7 +795,7 @@ impl Store {
         .ok_or_else(|| StoreError::new("run_finished fact has no string timestamp"))?;
       let parsed = UtcDateTime::parse(timestamp)
         .map_err(|error| StoreError::new(format!("run_finished fact timestamp is invalid: {error}")))?;
-      // The last fact per run wins, as Python's dict assignment in last_ended_run_id does.
+      // The last fact per run wins, as a map insert does.
       fact_times.insert(run_id.to_string(), parsed);
     }
     let runs = self.list_run_records_sync(session_id)?;
@@ -824,7 +824,7 @@ impl Store {
     if descending {
       records.reverse();
     }
-    // An empty cursor reads as no cursor, as Python's `if cursor` does.
+    // An empty cursor reads as no cursor.
     if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
       let (boundary, cursor_order) = decode_run_cursor(cursor)?;
       if cursor_order != order {
@@ -849,14 +849,14 @@ impl Store {
   /// Derive one run's display state from its record, facts and current process identity.
   ///
   /// A caller that derives the states of several runs reads [`Store::node_state`] once and asks
-  /// [`RunFacts::display_state`] for each run, as Python passes one event list to `run_display_state`.
+  /// [`RunFacts::display_state`] for each run, from one event list.
   pub fn run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState> {
     let run = require_run(self, session_id, run_id)?;
     self.node_state(session_id)?.display_state(&run, &mut HostBoot::default())
   }
 
   /// Return every structural-change blocker in chronological run order; an empty list means none.
-  /// Callers collect all of them, as Python's `_structural_blockers` does.
+  /// Callers collect all of them.
   pub fn run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>> {
     let mut blockers = Vec::new();
     let runs = self.list_run_records_sync(session_id)?;
@@ -1071,8 +1071,8 @@ impl Store {
     let run_facts = &node_state.runs;
     let mut run = require_run(self, session_id, run_id)?;
     if run_facts.terminal_outcome(run_id)?.is_some() {
-      // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
-      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
+      // The outcome is the last fact's and the payload is the first fact's. An empty `ended_at` is the half-written end
+      // record: the caller's `ended_at`
       // and `exit_code` fill it, and values already written stay.
       let events = self.load_all_facts_shared_sync(session_id)?;
       let input_event_ids = events

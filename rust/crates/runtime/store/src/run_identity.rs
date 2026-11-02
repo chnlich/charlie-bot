@@ -66,7 +66,7 @@ pub fn read_run_identity_sync(path: &Path) -> StoreResult<Option<RunIdentity>> {
 }
 
 impl Store {
-  /// Return why a run token fails the Python `require_caller` identity check.
+  /// Return why a run token fails the caller identity check.
   pub fn run_identity_refusal(&self, session_id: &str, run_id: &str) -> StoreResult<Option<&'static str>> {
     let run = self.read_run_sync(session_id, run_id)?;
     let Some(run) = run.as_ref() else {

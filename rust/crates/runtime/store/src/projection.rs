@@ -95,8 +95,7 @@ impl MessageProjection {
     Ok(copied)
   }
 
-  /// Return committed messages. Each message is shared: a page copy is one `Arc` bump per message,
-  /// the structure `message_projection.MessageProjection` keeps on the Python side.
+  /// Return committed messages. Each message is shared: a page copy is one `Arc` bump per message.
   pub fn committed(&self) -> &[Arc<Value>] {
     &self.committed
   }

@@ -191,7 +191,7 @@ pub(crate) enum NodeStateKey {
 
 /// A node's memoized [`TaskTreeActivity`]: the run-record generation and the history identity it was derived at.
 ///
-/// Python's `_activity_memo` holds the same key. A verdict that read `/proc` is never stored.
+/// The activity memo holds the same key. A verdict that read `/proc` is never stored.
 #[derive(Clone)]
 pub(crate) struct CachedActivity {
   pub(crate) records_generation: u64,
@@ -199,7 +199,7 @@ pub(crate) struct CachedActivity {
   pub(crate) activity: TaskTreeActivity,
 }
 
-/// A node's run facts folded from its history at one identity. Python's `_outcomes_memo` holds the same key.
+/// A node's run facts folded from its history at one identity. The outcomes memo holds the same key.
 #[derive(Clone)]
 pub(crate) struct CachedRunFactsAt {
   pub(crate) identity: Option<FileIdentity>,

@@ -100,14 +100,14 @@ fn parse_mapped_lines(bytes: &[u8], should_stop: &mut impl FnMut() -> bool) -> O
   Some(events)
 }
 
-/// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.
+/// One event as an NDJSON line: its JSON with non-ASCII kept as is, and the newline.
 pub(crate) fn encode_line(value: &Value) -> String {
   let mut line = text_repr::json_dumps(value, &APPEND_JSON);
   line.push('\n');
   line
 }
 
-/// Append one Python `json.dumps(..., ensure_ascii=False)` line and sync its data to disk.
+/// Append one JSON line with non-ASCII kept as is, and sync its data to disk.
 pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
   let parent = path.parent().expect("an event-log path has a parent directory");
   fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;

@@ -73,7 +73,7 @@ pub enum TaskCaller {
 }
 
 /// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing; `Some(None)` is an
-/// explicit null, which clears the field where the Python model allows it. `name` has no explicit null: a `None` name
+/// explicit null, which clears the field where the model allows it. `name` has no explicit null: a `None` name
 /// changes nothing.
 #[derive(Clone, Debug, Default)]
 pub struct PatchTask {
@@ -138,7 +138,7 @@ impl NodeState {
     self.runs.display_state(run, boot, || self.withheld_reason(&run.id))
   }
 
-  /// Whether the node's history records a `run_launch_withheld` reason for `run_id`, the question Python's
+  /// Whether the node's history records a `run_launch_withheld` reason for `run_id`, the question that
   /// `withheld_reason_in_events` answers for a queued run. The scan runs only when [`Self::display_state`]'s closure
   /// asks it, so a settled run never walks the history.
   fn withheld_reason(&self, run_id: &str) -> bool {
@@ -288,7 +288,7 @@ impl TaskTreeSnapshot {
 /// A row reads a node from several places: its own state and activity, its descendants' open and running counts,
 /// and the archive inheritance of its subtree. The pass holds one verdict per node, so an append that lands during
 /// the pass is seen by every read of that node or by none. The records generation is read before the first run
-/// record, because it keys every activity verdict the pass stores (Python's `_NodeReads`).
+/// record, because it keys every activity verdict the pass stores.
 pub(crate) struct NodeReads<'a> {
   store: &'a Store,
   generation: u64,
@@ -317,7 +317,7 @@ impl<'a> NodeReads<'a> {
     Ok(identity)
   }
 
-  /// The node's lifecycle state from its history at the pass's identity (Python's `_NodeReads.task_state`).
+  /// The node's lifecycle state from its history at the pass's identity.
   pub(crate) fn task_state(&mut self, session_id: &str) -> StoreResult<TaskState> {
     if let Some(state) = self.states.get(session_id) {
       return Ok(state.clone());
@@ -328,7 +328,7 @@ impl<'a> NodeReads<'a> {
     Ok(state)
   }
 
-  /// Whether the node is archived, counting an archived ancestor, with this pass's states (Python's `_effective_archived`).
+  /// Whether the node is archived, counting an archived ancestor, with this pass's states.
   fn archived(&mut self, index: &TreeIndex, session_id: &str, memo: &mut HashMap<String, bool>) -> StoreResult<bool> {
     archived_with(index, session_id, memo, &mut |node_id| self.task_state(node_id))
   }
@@ -344,7 +344,7 @@ impl<'a> NodeReads<'a> {
     )
   }
 
-  /// The node's activity (Python's `_NodeReads.activity`). A queued run reads this pass's task state for its gate.
+  /// The node's activity. A queued run reads this pass's task state for its gate.
   pub(crate) fn activity(&mut self, session_id: &str) -> StoreResult<TaskTreeActivity> {
     if let Some(activity) = self.activities.get(session_id) {
       return Ok(activity.clone());
@@ -387,8 +387,7 @@ impl<'a> NodeReads<'a> {
       if run.ended_at.is_some() {
         continue;
       }
-      // The activity's queued verdict reads the task-open gate below, never a withheld reason, as Python's
-      // derive_task_tree_activity does.
+      // The activity's queued verdict reads the task-open gate below, never a withheld reason.
       match facts.display_state(run, &mut boot, || false)? {
         RunDisplayState::Running => running = true,
         // Queued and withheld runs both wait on an open task. A closed task's queued run never launches.
@@ -455,7 +454,7 @@ impl Store {
     Ok(self.run_facts_until(session_id, &mut never_stop)?.expect("the no-stop run-facts read completes"))
   }
 
-  /// Read run facts with the Python memo bound and check the stop flag between event blocks.
+  /// Read run facts with the memo bound and check the stop flag between event blocks.
   pub fn run_facts_until(
     &self,
     session_id: &str,
@@ -822,7 +821,7 @@ impl Store {
 
   /// Read the task lifecycle state from the history's newest lifecycle fact, without loading the history.
   ///
-  /// The verdict is memoized by the history identity `(inode, size, mtime)`, as Python's `_task_state_fast` is.
+  /// The verdict is memoized by the history identity `(inode, size, mtime)`.
   pub fn task_state_fast(&self, session_id: &str) -> StoreResult<TaskState> {
     let identity = self.history_identity(session_id)?;
     self.task_state_at(session_id, identity, false)
@@ -836,7 +835,7 @@ impl Store {
     self.task_state_at(session_id, identity, true)
   }
 
-  /// The task state at one history identity, memoized by that identity (Python's `_task_state_at`).
+  /// The task state at one history identity, memoized by that identity.
   fn task_state_at(
     &self,
     session_id: &str,
@@ -968,7 +967,7 @@ impl Store {
   /// whose root holds thousands of sessions, the whole list costs about 5 microseconds per row, so a 100-row page of
   /// 7,160 rows paid for the 7,060 it truncated away.
   ///
-  /// The rows are computed under `tree_rows_lock`, as Python's `_tree_rows_lock` serializes its page computations.
+  /// The rows are computed under `tree_rows_lock`, which serializes page computations.
   pub fn task_tree_page(
     &self,
     snapshot: &TaskTreeSnapshot,
@@ -1859,7 +1858,7 @@ impl Store {
   /// The node's run facts at `identity`, folded from a walk over its history and memoized by that identity.
   ///
   /// The walk collects the run facts newest first and folds them oldest first, so the last fact of each kind wins as
-  /// [`RunFacts::observe`] requires. Python's `_run_facts_at` folds the same way.
+  /// [`RunFacts::observe`] requires.
   fn run_facts_at(&self, session_id: &str, identity: Option<FileIdentity>) -> StoreResult<Arc<RunFacts>> {
     let cached = self
       .run_facts_by_session
@@ -2013,7 +2012,7 @@ impl Store {
   }
 
   /// Name the next session from `sessions/.counter`. An unreadable or unparsable counter takes the
-  /// session-directory count, as Python's `_next_session_name` does, and the counter is rewritten after it.
+  /// session-directory count, and the counter is rewritten after it.
   fn next_session_name(&self) -> StoreResult<String> {
     let sessions_dir = self.cfg.sessions_dir();
     fs::create_dir_all(&sessions_dir).map_err(|error| path_error(&sessions_dir, error))?;
@@ -2464,7 +2463,7 @@ fn fold_node_facts_from(
   if let Some(error) = task_error {
     facts.task = Err(error);
   }
-  // A malformed task fold still has complete Run facts, like Python's independent Run-facts memo.
+  // A malformed task fold still has complete Run facts, since the Run-facts memo is independent.
   // Valid histories collect both sets during the task fold above.
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
@@ -2616,7 +2615,7 @@ fn profile_name(profile: TaskProfile) -> &'static str {
 fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
   let mut count = 0;
   for entry in fs::read_dir(sessions_dir).map_err(|error| path_error(sessions_dir, error))? {
-    // Path::is_dir follows symlinks, as Python's Path.is_dir does; DirEntry::file_type would not.
+    // Path::is_dir follows symlinks; DirEntry::file_type would not.
     if entry.map_err(|error| path_error(sessions_dir, error))?.path().is_dir() {
       count += 1;
     }
@@ -3300,7 +3299,7 @@ pub(crate) mod tests {
     assert_eq!(error.status_code(), Some(409));
     assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
 
-    // The node's own guard counts once for the structural change and once for the moving subtree, as Python's does.
+    // The node's own guard counts once for the structural change and once for the moving subtree.
     let reparent = PatchTask { task_parent_id: Some(Some(other.id.clone())), ..Default::default() };
     let error = store.patch_task(&worker.id, reparent, TaskCaller::Operator, &guards).await.unwrap_err();
     let mut expected = vec![pending.clone(), format!("{}: {pending}", worker.id)];
@@ -4350,7 +4349,7 @@ pub(crate) mod tests {
 
   #[test]
   fn a_settled_run_never_scans_the_history_for_a_withheld_reason() {
-    // Python's `runs.run_display_state` asks `withheld_reason` only on the queued branch, after the outcome and
+    // The withheld-reason question is asked only on the queued branch, after the outcome and
     // stop-request maps decline the Run. The closure is that question; a settled Run must not ask it, or a node's
     // display-state pass walks its whole history once per Run (912 Runs over a 15 MB log on the production copy).
     let mut facts = crate::run_records::RunFacts::default();
@@ -4401,8 +4400,8 @@ pub(crate) mod tests {
 
   #[tokio::test]
   async fn a_session_detail_reuses_the_tree_indexs_lifecycle_tail_read() {
-    // Python's `session_detail` reads `task_state` through the shared lifecycle-tail memo (`_task_state_at` over
-    // `_state_tail_memo`), whose entries the index build's `_task_state_fast` pass already fills for every node. The
+    // The session detail reads `task_state` through the shared lifecycle-tail memo, whose entries the index build
+    // already fills for every node. The
     // detail must not fall back to a full history fold: on the production copy that fold was the whole tail of the
     // `GET /api/sessions/{id}` p95.
     let home = tempfile::tempdir().unwrap();

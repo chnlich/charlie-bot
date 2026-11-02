@@ -234,25 +234,38 @@ pub fn last_attempt(name: &str) -> Option<AttemptSnapshot> {
 /// The attempt is registered before the first await, so a click that arrives while this start waits joins it rather
 /// than starting a second process. Fails with the 502 body when the login gives no link.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
-  let current = LIVE
-    .lock()
-    .expect("the live-attempt map lock is never poisoned")
-    .get(&login.name)
-    .map(|entry| (entry.link.clone(), Arc::clone(&entry.core)));
-  if let Some((mut link, core)) = current {
-    if matches!(&*link.borrow_and_update(), LinkState::Pending) {
-      return await_link(&mut link).await;
+  let mut link = match claim_slot(login) {
+    Slot::Join(link) => link,
+    Slot::Started { link, replaced } => {
+      if let Some(core) = replaced {
+        end(&core, Outcome::Replaced);
+      }
+      link
     }
-    end(&core, Outcome::Replaced);
+  };
+  await_link(&mut link).await
+}
+
+/// What a click gets from the live-attempt map: a start in progress to join, or its own new attempt and the one it
+/// replaces.
+enum Slot {
+  Join(watch::Receiver<LinkState>),
+  Started { link: watch::Receiver<LinkState>, replaced: Option<Arc<Mutex<AttemptCore>>> },
+}
+
+/// Join the login's start in progress, or register a new attempt in its slot. The check and the registration share one
+/// lock hold, so two clicks that arrive together cannot both start a process.
+fn claim_slot(login: &BrowserLoginConfig) -> Slot {
+  let mut live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
+  if let Some(entry) = live.get(&login.name).filter(|entry| matches!(&*entry.link.borrow(), LinkState::Pending)) {
+    return Slot::Join(entry.link.clone());
   }
-  let (link, mut link_rx) = watch::channel(LinkState::Pending);
+  let replaced = live.remove(&login.name).map(|entry| entry.core);
+  let (link, link_rx) = watch::channel(LinkState::Pending);
   let core = Arc::new(Mutex::new(AttemptCore::new(login, link)));
   let driver = tokio::spawn(drive(Arc::clone(&core)));
-  LIVE
-    .lock()
-    .expect("the live-attempt map lock is never poisoned")
-    .insert(login.name.clone(), LiveEntry { core: Arc::clone(&core), link: link_rx.clone(), driver });
-  await_link(&mut link_rx).await
+  live.insert(login.name.clone(), LiveEntry { core, link: link_rx.clone(), driver });
+  Slot::Started { link: link_rx, replaced }
 }
 
 /// The link watch's answer to a waiting click: the link, or the 502 body of a start that gave none.
@@ -698,5 +711,27 @@ mod tests {
     let stopped = last_attempt("replaced").expect("the stopped attempt is recorded");
     assert_eq!(stopped.outcome, Some(Outcome::LoginFailed));
     assert_eq!(live_attempt("replaced"), None);
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn concurrent_clicks_on_one_login_start_one_process() {
+    let _serial = SERIAL.lock().await;
+    // The link prints after a delay, so every click arrives while the start is still pending. Each run appends a
+    // line to a file named after its script, which counts the starts.
+    let stub = LoginStub::new(
+      "concurrent",
+      &format!("echo started >> \"$0.starts\"\nsleep 1\n{PRINT_LINK}\nexec sleep 30\n"),
+      "exit 0\n",
+    );
+    let clicks = (0..16).map(|_| {
+      let login = stub.login.clone();
+      tokio::spawn(async move { start_login(&login).await })
+    });
+    for click in futures_util::future::join_all(clicks).await {
+      assert_eq!(click.expect("the click task finishes").expect("the click gets the link"), LINK);
+    }
+    let starts = fs::read_to_string(stub._dir.path().join("concurrent-login.starts")).expect("the login ran");
+    assert_eq!(starts.lines().count(), 1, "one start serves every click");
+    stop_all().await;
   }
 }

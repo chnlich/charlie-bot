@@ -821,8 +821,9 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
   let world = ServeWorld::new();
   // The live config switches the cpu weight off and leaves the io weight absent.
   let live_config = PathBuf::from(world.env.get("CHARLIEBOT_HOME").expect("the live home")).join("config.yaml");
-  let backends = fs::read_to_string(&live_config).expect("the live config");
-  fs::write(&live_config, format!("server:\n  enable_session_cpu_weight: false\n{backends}")).expect("the live config");
+  let live = fs::read_to_string(&live_config).expect("the live config");
+  let live = live.replacen("server:\n", "server:\n  enable_session_cpu_weight: false\n", 1);
+  fs::write(&live_config, live).expect("the live config");
   let seed = world.seed_home("seed", "2");
   let tree_root = world.sandbox.dir("tree-root");
   let copied = world.sandbox.root().join("trial-config.yaml");

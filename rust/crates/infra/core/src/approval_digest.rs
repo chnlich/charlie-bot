@@ -23,7 +23,7 @@ pub const DIGEST_RELATIVE_PATH: &str = "state/digest_entries.jsonl";
 /// The pseudo-policy a T2 decision records under (`approval_digest.T2_POLICY`).
 pub const T2_POLICY: &str = "t2";
 
-/// `json.dumps(..., ensure_ascii=False)` with the default separators: one NDJSON record line.
+/// One NDJSON record line, with non-ASCII passed through and the default separators.
 const RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
@@ -182,7 +182,7 @@ pub fn record_of(entry: &DigestEntry) -> Value {
   record
 }
 
-/// Append one record line (`approval_digest._append`), the NDJSON-APPEND discipline.
+/// Append one record line, the NDJSON-APPEND discipline.
 fn append(home: &Path, entry: &DigestEntry) -> Result<(), DigestError> {
   let store = digest_path(home);
   if let Some(parent) = store.parent() {

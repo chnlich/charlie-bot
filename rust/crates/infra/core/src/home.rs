@@ -1,4 +1,4 @@
-//! The profile home: the one reader of `CHARLIEBOT_HOME` (`src/infra/home.py`).
+//! The profile home: the one reader of `CHARLIEBOT_HOME`.
 //!
 //! Every home fact a crate needs comes from this module: the profile home, the default home, and the explicit
 //! home the terminal passes to its panes. The environment is read only in [`raw_env_value`]. The rules are pure
@@ -36,7 +36,7 @@ impl std::error::Error for HomeError {}
 
 /// The raw `CHARLIEBOT_HOME` value, or `""` when the variable is unset.
 fn raw_env_value() -> String {
-  // Unset reads as "", the same as Python's `os.environ.get(CHARLIEBOT_HOME_ENV, "")`.
+  // Unset reads as "".
   std::env::var_os(CHARLIEBOT_HOME_ENV).map(|value| value.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
@@ -56,9 +56,9 @@ pub fn default_charliebot_home() -> PathBuf {
 
 /// The profile home when `CHARLIEBOT_HOME` is set and not blank, or `None` when it is not.
 ///
-/// This is the second read of the variable that the `charliebot_home_dir` docstring in `src/infra/home.py`
-/// names. The terminal passes the home to each new tmux pane only when a profile is set. A pane inherits the
-/// tmux server's environment rather than this process's (`src/features/terminal/terminal.py:53-54`).
+/// This is the second read of the variable, separate from [`charliebot_home_dir`]. The terminal passes the home to
+/// each new tmux pane only when a profile is set. A pane inherits the tmux server's environment rather than this
+/// process's.
 /// A set value that names no usable home is an error, as in [`charliebot_home_dir`].
 pub fn explicit_charliebot_home() -> Result<Option<PathBuf>, HomeError> {
   explicit_home(&raw_env_value())
@@ -107,7 +107,6 @@ mod tests {
 
   #[test]
   fn opencode_store_paths_derive_from_the_profile() {
-    // Python: tests/test_charliebot_home.py::test_opencode_store_paths_derive_from_the_profile
     let home = Path::new("/synthetic/profile");
     assert_eq!(opencode_store_in(home), PathBuf::from("/synthetic/profile/opencode"));
     assert_eq!(opencode_data_in(home), PathBuf::from("/synthetic/profile/opencode/data"));

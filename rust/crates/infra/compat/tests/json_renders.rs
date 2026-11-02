@@ -1,4 +1,4 @@
-//! The JSON renders against the bytes orjson and Starlette write for the same values
+//! The JSON renders against the recorded bytes for the same values
 //! (`rust/fixtures/golden/json_renders_golden.json`).
 
 use charliebot_compat::json::{fast_json_bytes, starlette_bytes};

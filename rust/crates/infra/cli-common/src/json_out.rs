@@ -3,11 +3,11 @@
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::Value;
 
-/// One line, `", "` between items: the style `json.dumps(value, ensure_ascii=False, indent=None)` writes.
+/// One line, `", "` between items, with non-ASCII passed through.
 const ONE_LINE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// An indent block, `","` between items: the style `json.dumps(value, ensure_ascii=False, indent=N)` writes.
+/// An indent block, `","` between items, with non-ASCII passed through.
 const INDENTED: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 

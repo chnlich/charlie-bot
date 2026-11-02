@@ -1,5 +1,5 @@
-//! The shared template environment's `tojson` and `urlencode`, and its printing, against the output
-//! Jinja2 gives for the same templates and contexts (`rust/fixtures/golden/jinja_filters_golden.json`).
+//! The shared template environment's `tojson` and `urlencode`, and its printing, against the recorded output
+//! for the same templates and contexts (`rust/fixtures/golden/jinja_filters_golden.json`).
 
 use charliebot_compat::jinja;
 use minijinja::Value;

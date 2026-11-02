@@ -1,11 +1,11 @@
-//! The file-link scanner against Python's `src/runtime/file_urls.py` on one synthetic case matrix.
+//! The file-link scanner against the recorded case matrix.
 //!
 //! The test builds a synthetic home, session directory and user home, writes the case matrix as JSON, and asks
-//! the recorded file for Python's findings and detail text. `scan_file_links` and `dead_links_detail` answer the
+//! the recorded file for its findings and detail text. `scan_file_links` and `dead_links_detail` answer the
 //! same cases here. Every answer must match, and the matrix must reach each form, live and dead, with and without a
 //! correct link.
 //!
-//! Run with `cargo test -p charliebot-compat --test file_links_cross_implementation`.
+//! Run with `cargo test -p charliebot-compat --test file_links_golden`.
 
 use std::fs;
 use std::path::Path;

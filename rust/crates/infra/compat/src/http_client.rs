@@ -1,4 +1,4 @@
-//! The outbound HTTP client, as the Python app builds it: `src/infra/http.py`'s `httpx.AsyncClient`.
+//! The outbound HTTP client: shared TLS roots, HTTPS proxy selection, and no redirect following.
 
 use std::sync::{Arc, Mutex};
 
@@ -6,12 +6,12 @@ use reqwest::Proxy;
 
 pub use crate::transport::{ClientError, Settings};
 
-/// The process's shared client, as `src/infra/http.py`'s `get_http_client()` gives it: built from the process
-/// environment on first use, and dropped by [`close_shared_client`] at shutdown.
+/// The process's shared client, built from the process environment on first use, and dropped by
+/// [`close_shared_client`] at shutdown.
 static SHARED: Mutex<Option<reqwest::Client>> = Mutex::new(None);
 
 /// The outbound HTTP client with shared TLS roots and HTTPS proxy selection. A 3xx response is returned as it
-/// arrived: `httpx.AsyncClient()` does not follow redirects by default, and no Python caller asks it to.
+/// arrived: redirects are never followed.
 pub fn client(settings: &Settings) -> Result<reqwest::Client, ClientError> {
   let tls = crate::transport::tls_config(settings.cert_file.as_deref())?;
   let proxy_settings = crate::transport::proxy_settings(settings)?;

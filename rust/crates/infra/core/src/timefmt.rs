@@ -1,4 +1,4 @@
-//! Timestamp renderings the Python server emits.
+//! Timestamp renderings the server emits.
 
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,8 +7,8 @@ use time::OffsetDateTime;
 use time::format_description::{self, BorrowedFormatItem};
 use time::macros::format_description;
 
-/// `datetime.now(UTC).isoformat()`: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00`, without the fraction when the
-/// microsecond is zero (CPython's `isoformat` drops a zero fraction).
+/// The current UTC time: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00`, without the fraction when the
+/// microsecond is zero.
 pub fn utc_now_iso() -> String {
   iso_from_system_time(SystemTime::now())
 }
@@ -32,7 +32,7 @@ const ISO_FRACTION_OFFSET_SECONDS: &[BorrowedFormatItem<'static>] = format_descr
    [offset_hour sign:mandatory]:[offset_minute]:[offset_second]"
 );
 
-/// Render a datetime with Python `datetime.isoformat()`'s local clock, microsecond and UTC-offset form. The fraction
+/// Render a datetime with its local clock, microsecond and UTC-offset form. The fraction
 /// appears only when the microsecond is non-zero, and the offset's seconds only when they are non-zero.
 pub fn isoformat(moment: OffsetDateTime) -> String {
   let format = match (moment.microsecond() != 0, moment.offset().seconds_past_minute() != 0) {
@@ -74,9 +74,9 @@ pub fn log_timestamp() -> String {
   )
 }
 
-/// Seconds since the epoch of `instant`, as CPython's `st_mtime` float computes it from the stat pair.
+/// Seconds since the epoch of `instant`.
 pub fn float_seconds(seconds: i64, nanoseconds: i64) -> f64 {
-  // posixmodule.c fill_time: `sec + nsec * 1e-9`, evaluated in double.
+  // `sec + nsec * 1e-9`, evaluated in double.
   seconds as f64 + nanoseconds as f64 * 1e-9
 }
 

@@ -1,18 +1,18 @@
-//! CPython's path resolution: `os.path.expanduser` and the non-strict `os.path.realpath`.
+//! Path resolution: `expanduser` and the non-strict `realpath`.
 //!
 //! The home resolution, the fence's containment check and the static-file containment check all
-//! compare paths these two functions produced on the Python side, so they follow posixpath.py
-//! (CPython 3.14) step for step rather than `std::fs::canonicalize`, which fails on a missing tail.
+//! compare paths these two functions produce, so they follow POSIX path resolution step for step rather
+//! than `std::fs::canonicalize`, which fails on a missing tail.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
-/// `os.path.expanduser`: `~` and `~user` prefixes become the home directory; other paths pass through.
+/// `expanduser`: `~` and `~user` prefixes become the home directory; other paths pass through.
 ///
 /// `~` reads `HOME`, falling back to the password database entry of the current uid; `~user` reads
-/// that user's entry. An unknown user leaves the path unchanged, as CPython does.
+/// that user's entry. An unknown user leaves the path unchanged.
 pub fn expanduser(path: &str) -> String {
   if !path.starts_with('~') {
     return path.to_string();
@@ -38,7 +38,7 @@ pub fn expanduser(path: &str) -> String {
   }
 }
 
-/// `os.path.realpath(path, strict=False)`: an absolute path with every symlink resolved.
+/// The real path of an absolute path: every symlink resolved.
 ///
 /// A component that does not exist, or that fails to stat, is kept as written and resolution goes on
 /// with the components after it. A symlink loop leaves the looping link unresolved.
@@ -116,19 +116,19 @@ pub fn realpath(path: &Path) -> PathBuf {
   PathBuf::from(OsString::from_vec(resolved))
 }
 
-/// `os.path.commonpath([path, directory]) == directory` (equally `PurePath.is_relative_to`) for two
-/// absolute normalized paths: `path` is `directory` or lies under it.
+/// Whether `path` is `directory` or lies under it, for two
+/// absolute normalized paths.
 pub fn is_within(path: &Path, directory: &Path) -> bool {
   path.starts_with(directory)
 }
 
-/// The text of `path` as CPython's `str(path)` prints it (lossy for non-UTF-8 bytes).
+/// The text of `path` as its display form prints it (lossy for non-UTF-8 bytes).
 pub fn display(path: &Path) -> String {
   path.to_string_lossy().into_owned()
 }
 
-/// `pathlib.PurePosixPath(path).name`: the last component, after empty and `.` components are dropped. A `..`
-/// component is kept, as Python keeps it.
+/// The last component, after empty and `.` components are dropped. A `..`
+/// component is kept.
 pub fn name(path: &str) -> &str {
   path.rsplit('/').find(|part| !part.is_empty() && *part != ".").unwrap_or("")
 }

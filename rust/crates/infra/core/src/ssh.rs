@@ -1,4 +1,4 @@
-//! The batch-mode ssh invocation that the remote probes and the CLI's remote launcher share (`src/infra/ssh.py`).
+//! The batch-mode ssh invocation that the remote probes and the CLI's remote launcher share.
 
 use std::fs::DirBuilder;
 use std::io;

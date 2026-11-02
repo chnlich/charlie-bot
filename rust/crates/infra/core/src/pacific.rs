@@ -1,4 +1,4 @@
-//! The Pacific calendar day (`src/infra/pacific.py` semantics in the ported tree): the day the approval digest, the
+//! The Pacific calendar day: the day the approval digest, the
 //! approval day view and the standing policies' caps and expiries read by. Every approval date is a
 //! America/Los_Angeles calendar day, whatever zone the process runs in.
 

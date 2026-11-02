@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::exit::{self, CliExit};
 
-/// The request timeout, matching the Python clients' `urlopen(..., timeout=30)`.
+/// The request timeout: 30 seconds.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The arguments every `<service> request` verb shares.

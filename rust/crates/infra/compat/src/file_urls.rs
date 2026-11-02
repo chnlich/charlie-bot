@@ -1,4 +1,4 @@
-//! The host-file links accepted by `src/runtime/file_urls.py`.
+//! The host-file links the scanner accepts.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -18,14 +18,14 @@ use crate::urlquote::quote_set;
 /// The first file-server mount, without its trailing slash.
 pub const FILE_SERVER_MOUNT: &str = "/absolute_filepath";
 
-/// The retired file-server prefixes, without their trailing slashes (`RETIRED_FILE_SERVER_PREFIXES`).
+/// The retired file-server prefixes, without their trailing slashes.
 const RETIRED_PREFIXES: [&str; 2] = ["/files", "/file"];
 
-/// Python's `str.isspace` characters, as the inside of a character class where its `re` matches `\s`.
+/// The whitespace characters, as the inside of a character class where `\s` matches them.
 const PY_SPACE: &str =
   concat!(r"\t\n\x0B\x0C\r\x1C-\x1F \x85\x{A0}\x{1680}\x{2000}-\x{200A}", r"\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}",);
 
-/// Any URL reply text can carry: scheme, authority, optional port, path, query string and fragment (`_URL_RE`).
+/// Any URL reply text can carry: scheme, authority, optional port, path, query string and fragment.
 static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(&format!(
     r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?:\[[^\]{PY_SPACE}]+\]|[^/:(){PY_SPACE}]+)(?::(?P<port>\d+))?(?P<path>/[^?#(){PY_SPACE}]*)?(?:\?[^#{PY_SPACE}]*)?(?:#[^{PY_SPACE}]*)?"
@@ -38,18 +38,18 @@ pub fn url_regex() -> &'static Regex {
   &URL_RE
 }
 
-/// A Markdown inline link's target, `<...>` or bare (`_MARKDOWN_INLINE_TARGET_RE`).
+/// A Markdown inline link's target, `<...>` or bare.
 static MARKDOWN_INLINE_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(&format!(r"\[[^\]\n]*\]\([{PY_SPACE}]*(?P<target><[^>\n]*>|[^){PY_SPACE}]+)")).expect("valid pattern")
 });
 
-/// A Markdown reference definition's target, `<...>` or bare, at the start of a line (`_MARKDOWN_REFERENCE_TARGET_RE`).
+/// A Markdown reference definition's target, `<...>` or bare, at the start of a line.
 static MARKDOWN_REFERENCE_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(&format!(r"(?m)^[ \t]{{0,3}}\[[^\]\n]+\]:[ \t]*(?P<target><[^>\n]*>|[^{PY_SPACE}]+)"))
     .expect("valid pattern")
 });
 
-/// The decimal digit zero code points in CPython 3.14.7's Unicode 16.0.0 data.
+/// The decimal digit zero code points in Unicode 16.0.0.
 const DECIMAL_DIGIT_ZEROES: &[u32] = &[
   0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20,
   0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0,
@@ -59,7 +59,7 @@ const DECIMAL_DIGIT_ZEROES: &[u32] = &[
   0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
 ];
 
-/// The schemes `urllib.parse` gives a network location (`uses_netloc`), without the empty scheme.
+/// The schemes that carry a network location, without the empty scheme.
 const USES_NETLOC: [&str; 26] = [
   "file",
   "ftp",
@@ -93,7 +93,7 @@ const USES_NETLOC: [&str; 26] = [
 ///
 /// File-server URLs use the absolute path after the mount, whatever scheme or host precedes it. A bare absolute path
 /// names itself only when it has no scheme, network location, query or fragment. Malformed bracketed authorities
-/// return the error `urllib.parse.urlsplit` raises.
+/// return the error the URL splitter reports.
 pub fn host_file(link: Option<&str>) -> Result<Option<PathBuf>, String> {
   let Some(link) = link.filter(|link| !link.is_empty()) else {
     return Ok(None);
@@ -114,7 +114,7 @@ pub fn host_file(link: Option<&str>) -> Result<Option<PathBuf>, String> {
   Ok(None)
 }
 
-/// The parts `urllib.parse.urlsplit` returns for a link, with the scheme lowercased.
+/// The parts of a split link, with the scheme lowercased.
 #[derive(Debug)]
 struct SplitUrl {
   scheme: String,
@@ -124,8 +124,8 @@ struct SplitUrl {
   fragment: String,
 }
 
-/// Splits a link as `urllib.parse.urlsplit` does. A bracketed network location that is malformed fails with
-/// `urlsplit`'s message.
+/// Splits a link into scheme, network location, path, query and fragment. A bracketed network location that is
+/// malformed fails with the splitter's error message.
 fn split_url(link: &str) -> Result<SplitUrl, String> {
   let cleaned: String =
     link.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
@@ -162,12 +162,12 @@ fn is_url_scheme(text: &str) -> bool {
     && chars.all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-'))
 }
 
-/// Whether `link` begins with a scheme and `://` (`_URL_SCHEME_RE`).
+/// Whether `link` begins with a scheme and `://`.
 fn has_url_scheme(link: &str) -> bool {
   link.split_once("://").is_some_and(|(scheme, _)| is_url_scheme(scheme))
 }
 
-/// Python's URL splitter validates square-bracketed hosts while splitting the authority.
+/// Validate square-bracketed hosts while splitting the authority.
 fn validate_bracketed_netloc(netloc: &str) -> Result<(), String> {
   let has_open_bracket = netloc.contains('[');
   let has_close_bracket = netloc.contains(']');
@@ -206,12 +206,12 @@ fn valid_bracketed_host(hostname: &str) -> bool {
   !address.is_empty() && address.parse::<Ipv6Addr>().is_ok()
 }
 
-/// Decode `%XX` bytes and replace invalid UTF-8 as `urllib.parse.unquote` does.
+/// Decode `%XX` bytes and replace invalid UTF-8 lossily.
 fn percent_decode_lossy(value: &str) -> String {
   percent_decode_str(value).decode_utf8_lossy().into_owned()
 }
 
-/// A Unicode decimal digit's numeric value, as Python's `int` reads it.
+/// A Unicode decimal digit's numeric value.
 fn decimal_digit(character: char) -> Option<u32> {
   let codepoint = u32::from(character);
   let zero = DECIMAL_DIGIT_ZEROES.iter().rev().find(|zero| codepoint >= **zero)?;
@@ -219,7 +219,7 @@ fn decimal_digit(character: char) -> Option<u32> {
   (digit < 10).then_some(digit)
 }
 
-/// The value of a URL port written in Unicode decimal digits, as Python's `int` reads it; `None` when it exceeds `u64`.
+/// The value of a URL port written in Unicode decimal digits; `None` when it exceeds `u64`.
 pub fn decimal_port(text: &str) -> Option<u64> {
   text.chars().try_fold(0_u64, |value, character| {
     let digit = decimal_digit(character)?;
@@ -325,8 +325,8 @@ fn file_server_named_path(url_path: &str) -> Option<String> {
   Some(format!("/{}", percent_decode_lossy(rest)))
 }
 
-/// The path `pathlib` makes of an absolute string: repeated and `.` components drop, and exactly two leading slashes
-/// stay two (`PurePosixPath`).
+/// The path of an absolute string: repeated and `.` components drop, and exactly two leading slashes
+/// stay two.
 fn posix_path(absolute: &str) -> PathBuf {
   let root = if absolute.starts_with("//") && !absolute.starts_with("///") { "//" } else { "/" };
   let parts: Vec<&str> = absolute.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
@@ -343,7 +343,7 @@ fn hostname(netloc: &str) -> String {
   host.to_lowercase()
 }
 
-/// The port a link names, or else its scheme's default (`_effective_port`). `None` when the explicit port exceeds
+/// The port a link names, or else its scheme's default. `None` when the explicit port exceeds
 /// `u64` or the scheme has no default, and no server port equals that.
 fn link_port(parts: &SplitUrl, explicit: Option<&str>) -> Option<u64> {
   match explicit {
@@ -356,7 +356,7 @@ fn link_port(parts: &SplitUrl, explicit: Option<&str>) -> Option<u64> {
   }
 }
 
-/// The explicit port digits that `_URL_RE` reads at the start of `link` (`_candidate_port`).
+/// The explicit port digits read at the start of `link`.
 fn candidate_port(link: &str) -> Option<&str> {
   let captures = URL_RE.captures(link)?;
   if captures.get(0)?.start() != 0 {
@@ -406,18 +406,17 @@ fn retired_path(
   Ok((Some(absolute), None))
 }
 
-/// The file-server URL path's safe set: `urllib.parse.quote(path, safe="/:@")`.
+/// The file-server URL path's safe set.
 static MOUNT_QUOTE: AsciiSet = quote_set(b"/:@");
 
-/// The file-server URL path that names an absolute host path, quoted as `urllib.parse.quote(path, safe="/:@")` does
-/// (`_encoded_file_server_url_for_parts`).
+/// The file-server URL path that names an absolute host path, quoted with the mount's safe set.
 fn mount_url(path: &Path) -> String {
   let bytes = path.as_os_str().as_bytes();
   let relative = &bytes[bytes.iter().take_while(|byte| **byte == b'/').count()..];
   format!("{FILE_SERVER_MOUNT}/{}", percent_encode(relative, &MOUNT_QUOTE))
 }
 
-/// `urllib.parse.urlunsplit` of a link's scheme, network location, query and fragment around the absolute `path`.
+/// The URL of a link's scheme, network location, query and fragment around the absolute `path`.
 fn unsplit(parts: &SplitUrl, path: &str) -> String {
   let mut url = path.to_string();
   if !parts.netloc.is_empty() || (USES_NETLOC.contains(&parts.scheme.as_str()) && !url.starts_with("//")) {
@@ -468,7 +467,7 @@ fn local_path_target(parts: &SplitUrl, context: Option<&ScanContext>) -> io::Res
   Ok(None)
 }
 
-/// The finding for one candidate link, or `None` when the link names no file (`_scan_candidate`).
+/// The finding for one candidate link, or `None` when the link names no file.
 fn scan_candidate(candidate: &Candidate, context: Option<&ScanContext>) -> io::Result<Option<FileLink>> {
   let parts = split_url(&candidate.link).map_err(io::Error::other)?;
   let port = link_port(&parts, candidate_port(&candidate.link));

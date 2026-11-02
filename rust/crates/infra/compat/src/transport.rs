@@ -10,7 +10,7 @@ use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-/// The variables the outbound clients read. Empty values count as unset, as they do for httpx.
+/// The variables the outbound clients read. Empty values count as unset.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Settings {
   pub https_proxy: Option<String>,

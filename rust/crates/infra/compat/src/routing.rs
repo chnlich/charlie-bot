@@ -1,6 +1,6 @@
-//! The method answers of the Python app's routes. FastAPI registers each route with the methods it names and no
-//! others, so a GET route does not answer HEAD. A request whose path matches a route with other methods gets
-//! Starlette's 405: `{"detail": "Method Not Allowed"}` with an `allow` header.
+//! The method answers of a route. A route registers the methods it names and no others, so a GET route does not
+//! answer HEAD. A request whose path matches a route with other methods gets a 405:
+//! `{"detail": "Method Not Allowed"}` with an `allow` header.
 //!
 //! axum answers a HEAD request with the GET handler when the router names no HEAD handler. The helpers that serve GET
 //! without serving HEAD name a HEAD handler that refuses, so the GET handler never answers HEAD by accident.
@@ -18,7 +18,7 @@ fn refuse(allow: &'static str) -> impl FnOnce() -> Ready<Response> + Clone + Sen
   move || ready(responses::method_not_allowed(allow))
 }
 
-/// A FastAPI GET route: GET is served. HEAD and every other method answer 405 with `allow: GET`.
+/// A GET-only route: GET is served. HEAD and every other method answer 405 with `allow: GET`.
 pub fn get_only<H, T, S>(handler: H) -> MethodRouter<S>
 where
   H: Handler<T, S>,
@@ -28,9 +28,9 @@ where
   get(handler).head(refuse("GET")).fallback(refuse("GET"))
 }
 
-/// A route that FastAPI registers with `methods=["GET", "HEAD"]`: GET and HEAD are served, with HEAD answered by the
-/// GET handler (hyper drops the body of a HEAD response). Every other method answers 405 with `allow: GET, HEAD`.
-/// Starlette joins the methods of a set, whose order varies per process, so the value here is this one fixed order.
+/// A GET-and-HEAD route: GET and HEAD are served, with HEAD answered by the GET handler (hyper drops the body of a
+/// HEAD response). Every other method answers 405 with `allow: GET, HEAD`. The `allow` value is this one fixed order,
+/// where a set of methods would vary its order per process.
 pub fn get_and_head<H, T, S>(handler: H) -> MethodRouter<S>
 where
   H: Handler<T, S>,
@@ -40,7 +40,7 @@ where
   get(handler).fallback(refuse("GET, HEAD"))
 }
 
-/// A FastAPI POST route: POST is served. HEAD and every other method answer 405 with `allow: POST`.
+/// A POST-only route: POST is served. HEAD and every other method answer 405 with `allow: POST`.
 pub fn post_only<H, T, S>(handler: H) -> MethodRouter<S>
 where
   H: Handler<T, S>,
@@ -53,8 +53,8 @@ where
 /// A path that serves several methods, through `method_router`. Each method the router does not serve answers 405
 /// with `allow`, and so does HEAD: this helper sets the HEAD handler, so `method_router` must not name one.
 ///
-/// `allow` follows Starlette's rule: it lists the methods of the first route that Python registers on the path, the
-/// first partial match for the request. Those methods can differ from the methods this router serves.
+/// `allow` lists the methods of the first route registered on the path, the first partial match for the request.
+/// Those methods can differ from the methods this router serves.
 pub fn refuse_other_methods<S>(method_router: MethodRouter<S>, allow: &'static str) -> MethodRouter<S>
 where
   S: Clone + Send + Sync + 'static,
@@ -84,7 +84,7 @@ mod tests {
     assert_eq!(send(router, method).await.status(), StatusCode::OK);
   }
 
-  /// The FastAPI refusal: 405 and the `allow` header, then the `{"detail": ...}` body. axum drops the body of a HEAD
+  /// The 405 refusal: 405 and the `allow` header, then the `{"detail": ...}` body. axum drops the body of a HEAD
   /// response, as hyper does, so a HEAD refusal has none to check.
   async fn assert_refused(router: Router, method: Method, allow: &str) {
     let head = method == Method::HEAD;

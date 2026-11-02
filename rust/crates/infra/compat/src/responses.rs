@@ -1,5 +1,5 @@
-//! The responses the Python app's framework layers produce: starlette `JSONResponse`, FastAPI's
-//! `HTTPException` rendering, `PlainTextResponse`, `RedirectResponse`, and `ServerErrorMiddleware`'s 500.
+//! The response helpers every route uses: JSON, plain text, HTML, redirect, the `HTTPException`
+//! rendering, and the 500 body.
 
 use axum::body::Body;
 use axum::response::Response;
@@ -11,52 +11,52 @@ use serde_json::{Value, json};
 use crate::json;
 use crate::urlquote::quote_set;
 
-/// The failure behind a 500: the name the `http_request` log line carries in `error` (the Python
-/// exception class the same failure raises there) and the detail logged beside it.
+/// The failure behind a 500: the name the `http_request` log line carries in `error`, and the
+/// detail logged beside it.
 #[derive(Debug, Clone)]
 pub struct Failure {
   pub kind: String,
   pub detail: String,
 }
 
-/// starlette `JSONResponse(content, status_code)`: compact separators, raw UTF-8.
+/// The JSON response: compact separators, raw UTF-8.
 pub fn json(status: StatusCode, content: &Value) -> Response {
   bytes_response(status, "application/json", Bytes::from(json::starlette_bytes(content)))
 }
 
-/// `FastJsonResponse(content, status_code)` (src/infra/responses.py): the same media type, orjson's bytes.
+/// The fast JSON response: `application/json` with the compact serializer's bytes.
 pub fn fast_json(status: StatusCode, content: &Value) -> Response {
   bytes_response(status, "application/json", Bytes::from(json::fast_json_bytes(content)))
 }
 
-/// `FastJsonResponse` over a body its route already serialized, so a rendered page skips the value tree.
+/// The fast JSON response over a body its route already serialized, so a rendered page skips the value tree.
 pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
   bytes_response(status, "application/json", Bytes::from(body))
 }
 
-/// FastAPI's rendering of `HTTPException(status_code)`: `{"detail": <reason phrase>}`.
+/// The `HTTPException` rendering: `{"detail": <reason phrase>}`.
 pub fn http_exception(status: StatusCode) -> Response {
   json(status, &json!({ "detail": status.canonical_reason().expect("every raised status has a reason phrase") }))
 }
 
-/// FastAPI's 405 for a route whose path matched and whose methods did not.
+/// The 405 for a route whose path matched and whose methods did not.
 pub fn method_not_allowed(allow: &str) -> Response {
   let mut response = http_exception(StatusCode::METHOD_NOT_ALLOWED);
   response.headers_mut().insert(header::ALLOW, HeaderValue::from_str(allow).expect("method names are header-safe"));
   response
 }
 
-/// starlette `PlainTextResponse(content, status_code)`.
+/// The plain-text response.
 pub fn plain_text(status: StatusCode, content: &str) -> Response {
   bytes_response(status, "text/plain; charset=utf-8", Bytes::from(content.to_string()))
 }
 
-/// starlette `HTMLResponse(content)`.
+/// The HTML response.
 pub fn html(content: String) -> Response {
   bytes_response(StatusCode::OK, "text/html; charset=utf-8", Bytes::from(content))
 }
 
-/// starlette `RedirectResponse(url)`: 307, empty body, the URL quoted as starlette quotes it.
+/// The redirect response: 307, empty body, the URL quoted with the redirect-safe set.
 pub fn redirect(url: &str) -> Response {
   let location = quote_redirect_url(url);
   Response::builder()
@@ -67,7 +67,7 @@ pub fn redirect(url: &str) -> Response {
     .expect("a redirect response builds")
 }
 
-/// `ServerErrorMiddleware`'s answer to a failed request: 500 `Internal Server Error` as plain text.
+/// The answer to a failed request: 500 `Internal Server Error` as plain text.
 /// The failure rides the response as an extension so the request log names it.
 pub fn internal_error(kind: &str, detail: String) -> Response {
   tracing::error!(error = kind, detail = %detail, "Exception in ASGI application");
@@ -85,7 +85,7 @@ fn bytes_response(status: StatusCode, content_type: &'static str, body: Bytes) -
     .expect("a fixed-header response builds")
 }
 
-/// `urllib.parse.quote(url, safe=":/%#?=@[]!$&'()*+,;")`, starlette's `RedirectResponse` quoting.
+/// The characters a redirect URL keeps unescaped: `:/%#?=@[]!$&'()*+,;`.
 static REDIRECT_QUOTE: AsciiSet = quote_set(b":/%#?=@[]!$&'()*+,;");
 
 fn quote_redirect_url(url: &str) -> String {

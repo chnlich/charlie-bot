@@ -45,7 +45,7 @@ pub const CHANGES_RELATIVE_PATH: &str = "state/policy_table_changes.jsonl";
 /// The file that holds the last recorded table content, the baseline the change records diff against.
 pub const RECORDED_RELATIVE_PATH: &str = "state/policy_table_recorded.yaml";
 
-/// `json.dumps(..., ensure_ascii=False)` with the default separators: one NDJSON record line.
+/// One NDJSON record line, with non-ASCII passed through and the default separators.
 const RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 

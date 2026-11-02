@@ -1,4 +1,4 @@
-//! `config.yaml` loading: the typed mirror of `src/infra/config.py`.
+//! `config.yaml` loading: the typed configuration model.
 //!
 //! The file is a mapping of sections. The core sections (`server`, `paths`, `backends`, `ui`,
 //! `telegram`) and `headless_chrome_bin` parse into the structs below, each refusing unknown keys.
@@ -102,24 +102,24 @@ pub struct ConfigSection {
   /// The retired top-level keys this section replaced, each with its new location.
   pub legacy_keys: &'static [(&'static str, &'static str)],
   pub parse: fn(&Value) -> Result<SectionValue, String>,
-  /// Renders the parsed section the way Python's `model_dump()` dumps it. `charliebot config get <key>`
+  /// Renders the parsed section as the configuration model dumps it. `charliebot config get <key>`
   /// prints this, so a section's defaults appear the same as the server's own model holds them.
   pub dump: fn(&SectionValue) -> Result<serde_json::Value, String>,
 }
 
-/// The value a backend option's Python model holds for a type-specific field the entry omits.
+/// The value a backend option's model holds for a type-specific field the entry omits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionFieldDefault {
   /// A required field: the loader has already refused an entry that omits it.
   Required,
   Null,
   Bool(bool),
-  /// An empty mapping, like pydantic's `dict` default factory.
+  /// An empty mapping, the shape a default factory produces.
   EmptyMap,
 }
 
 impl OptionFieldDefault {
-  /// The JSON value Python's model dumps for the absent field; `None` for a required field.
+  /// The JSON value the model dumps for the absent field; `None` for a required field.
   pub fn json(self) -> Option<serde_json::Value> {
     match self {
       OptionFieldDefault::Required => None,
@@ -135,13 +135,13 @@ impl OptionFieldDefault {
 pub enum OptionFieldKind {
   /// The value as YAML loads it.
   AsIs,
-  /// A `float` field: pydantic dumps an integer entry as a float (`1` prints `1.0`).
+  /// A `float` field: an integer entry dumps as a float (`1` prints `1.0`).
   Float,
 }
 
-/// One type-specific field of a `backends.options[]` entry, in its Python model's declaration order. A
+/// One type-specific field of a `backends.options[]` entry, in its model's declaration order. A
 /// backend package owns its type's fields; `charliebot config get backends` reads them so an option's dump
-/// carries the same fields and defaults as the type's pydantic model.
+/// carries the same fields and defaults as the type's model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OptionField {
   pub name: &'static str,
@@ -155,7 +155,7 @@ impl OptionField {
     OptionField { name, default, kind: OptionFieldKind::AsIs }
   }
 
-  /// A `float` field; `default` is its Python default.
+  /// A `float` field; `default` is its default.
   pub const fn float_field(name: &'static str, default: OptionFieldDefault) -> OptionField {
     OptionField { name, default, kind: OptionFieldKind::Float }
   }
@@ -213,7 +213,7 @@ pub struct ServerConfig {
   pub min_free_disk_gib: i64,
 }
 
-// The schema defaults of `ServerConfig` in src/infra/config.py.
+// The schema defaults of `ServerConfig`.
 fn default_host() -> String {
   "127.0.0.1".to_string()
 }
@@ -381,7 +381,7 @@ impl CharlieBotConfig {
   }
 }
 
-/// The retired top-level key `key` moved to, as the Python loader prints it, or `None` for a live key.
+/// The retired top-level key `key` moved to, as the loader prints it, or `None` for a live key.
 ///
 /// A structure key maps to its dotted location; a secret maps to `credentials.yaml <key path>`. The schema's
 /// legacy keys include every package section's keys.
@@ -711,7 +711,7 @@ fn parse_option(
   Ok(BackendOption { id, label, model, prompt_overlay, backend_type, type_fields })
 }
 
-/// A YAML mapping key as CPython's `repr` prints the value PyYAML loaded for it.
+/// A YAML mapping key as its repr prints the value loaded for it.
 pub fn yaml_key_repr(key: &Value) -> String {
   match key {
     Value::String(text) => text_repr::str_repr(text),

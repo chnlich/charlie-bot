@@ -1,18 +1,18 @@
-//! FastAPI's request-validation errors and the 422 bodies they render.
+//! Request-validation errors and the 422 bodies they render.
 //!
 //! A request whose parameters or body fail validation gets status 422 and `{"detail": [...]}`, one entry
 //! per failed value in declaration order. An entry names its `type`, its `loc` (the request part, the field,
-//! and a list index where one applies), pydantic's `msg` and the `input` that failed. Some types add a `ctx`
-//! with the bound or the choices. [`Kind`] lists the pydantic error types the routes produce with
-//! their texts; [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value the
-//! way pydantic's lax mode does and return the entry for a value that it rejects.
+//! and a list index where one applies), its `msg` and the `input` that failed. Some types add a `ctx`
+//! with the bound or the choices. [`Kind`] lists the error types the routes produce with
+//! their texts; [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value in
+//! lax mode and return the entry for a value that it rejects.
 //!
-//! The texts follow pydantic 2.12.5 and FastAPI 0.135.2 as the deleted Python environment pinned them.
+//! The texts are the recorded validation-error texts.
 //! `rust/fixtures/golden/validation_422_golden.json`
-//! holds the bodies the Python app answers for these inputs, and the fixture test compares them.
+//! holds the bodies these inputs answer, and the fixture test compares them.
 //!
-//! Parsing a JSON body is not here: pydantic reads the body while it validates it. The JSON decoder's
-//! messages (`json_invalid`) come from CPython's `json` module, which these kinds only carry.
+//! Parsing a JSON body is not here: the body is read while the model validates it. The JSON decoder's
+//! messages (`json_invalid`) are carried unchanged by these kinds.
 
 use axum::response::Response;
 use charliebot_core::text_repr;
@@ -28,7 +28,7 @@ pub enum Loc {
   Index(usize),
 }
 
-/// A bound of `gt`, `ge` or `le`. pydantic keeps the bound's own type: an integer prints as `1`, a float
+/// A bound of `gt`, `ge` or `le`. The bound keeps its own type: an integer prints as `1`, a float
 /// as `1.0` in `ctx`, and the `msg` prints the number as Rust's `Display` writes it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Bound {
@@ -52,7 +52,7 @@ impl Bound {
   }
 }
 
-/// A pydantic error type, with the arguments its `msg` and `ctx` print.
+/// An error type, with the arguments its `msg` and `ctx` print.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
   /// `missing`: a required field or parameter is absent.
@@ -64,12 +64,12 @@ pub enum Kind {
   StringTooLong {
     max_length: usize,
   },
-  /// `too_short` on a list: fewer items than `min_length`. pydantic reports it after the items validate.
+  /// `too_short` on a list: fewer items than `min_length`. It is reported after the items validate.
   ListTooShort {
     min_length: usize,
     actual_length: usize,
   },
-  /// `too_long` on a list: more items than `max_length`. pydantic reports it before the items validate.
+  /// `too_long` on a list: more items than `max_length`. It is reported before the items validate.
   ListTooLong {
     max_length: usize,
     actual_length: usize,
@@ -111,7 +111,7 @@ pub enum Kind {
   UnionTagNotFound {
     discriminator: &'static str,
   },
-  /// `union_tag_invalid`: the item's discriminator value names no variant. `tag` is the value's Python `str()`, and
+  /// `union_tag_invalid`: the item's discriminator value names no variant. `tag` is the value's text rendering, and
   /// `expected_tags` lists the union's tags in declaration order.
   UnionTagInvalid {
     discriminator: &'static str,
@@ -121,7 +121,7 @@ pub enum Kind {
 }
 
 impl Kind {
-  /// pydantic's error `type`.
+  /// The error `type`.
   fn type_name(&self) -> &'static str {
     match self {
       Kind::Missing => "missing",
@@ -155,7 +155,7 @@ impl Kind {
     }
   }
 
-  /// pydantic's error `msg`.
+  /// The error `msg`.
   fn msg(&self) -> String {
     match self {
       Kind::Missing => "Field required".to_string(),
@@ -202,7 +202,7 @@ impl Kind {
     }
   }
 
-  /// pydantic's error `ctx`, for the types that carry one.
+  /// The error `ctx`, for the types that carry one.
   fn ctx(&self) -> Option<Value> {
     match self {
       Kind::StringTooShort { min_length } => Some(json!({"min_length": min_length})),
@@ -219,7 +219,7 @@ impl Kind {
       Kind::LessThanEqual(bound) => Some(json!({"le": bound.value()})),
       Kind::JsonInvalid { error } => Some(json!({"error": error})),
       Kind::ModelType { class_name } => Some(json!({"class_name": class_name})),
-      // FastAPI's jsonable_encoder writes the ValueError object as an empty mapping (FastAPI 0.135.2).
+      // A ValueError object renders as an empty mapping.
       Kind::ValueError { .. } => Some(json!({"error": {}})),
       Kind::UnionTagNotFound { discriminator } => Some(json!({"discriminator": text_repr::str_repr(discriminator)})),
       Kind::UnionTagInvalid { discriminator, tag, expected_tags } => Some(json!({
@@ -240,12 +240,12 @@ fn items(count: usize) -> &'static str {
   if count == 1 { "item" } else { "items" }
 }
 
-/// pydantic's expected-tags text: each tag repr-quoted, joined by `, ` with no `or`.
+/// The expected-tags text: each tag repr-quoted, joined by `, ` with no `or`.
 fn quoted_list(choices: &[&str]) -> String {
   choices.iter().map(|choice| text_repr::str_repr(choice)).collect::<Vec<_>>().join(", ")
 }
 
-/// pydantic's expected-choices text: `'a'`, `'a' or 'b'`, `'a', 'b' or 'c'`.
+/// The expected-choices text: `'a'`, `'a' or 'b'`, `'a', 'b' or 'c'`.
 fn one_of(choices: &[&str]) -> String {
   let quoted: Vec<String> = choices.iter().map(|choice| text_repr::str_repr(choice)).collect();
   match quoted.split_last() {
@@ -289,7 +289,7 @@ pub fn detail(errors: &[FieldError]) -> Value {
   json!({"detail": errors.iter().map(FieldError::entry).collect::<Vec<Value>>()})
 }
 
-/// FastAPI's answer to a request with `errors`: status 422 and the `detail` body.
+/// The answer to a request with `errors`: status 422 and the `detail` body.
 pub fn response(errors: &[FieldError]) -> Response {
   responses::json(StatusCode::UNPROCESSABLE_ENTITY, &detail(errors))
 }
@@ -320,7 +320,7 @@ pub fn missing(source: Source, name: &str) -> FieldError {
   FieldError { loc: source.loc(name), input: Value::Null, kind: Kind::Missing }
 }
 
-/// An `int` parameter's text, read as pydantic's lax mode reads a string, then checked against `ge` and `le`.
+/// An `int` parameter's text, read in lax mode as a string, then checked against `ge` and `le`.
 ///
 /// A value beyond the i64 range that violates a bound reports that bound. A value beyond i64 that violates
 /// neither has no i64 to return, so it fails as `int_parsing`; no route parameter needs more than i64.
@@ -341,7 +341,7 @@ pub fn parse_int(
   i64::try_from(value).map_err(|_| failure(source, name, text, Kind::IntParsing))
 }
 
-/// pydantic's lax string-to-int: an optional sign, digits with single underscores between them, and an
+/// The lax string-to-int: an optional sign, digits with single underscores between them, and an
 /// optional fraction of plain zeros (`"1.0"` reads as 1, `"1.0_0"` does not). Surrounding whitespace is
 /// ignored. Digits beyond i128 saturate; the caller compares them with an i64 bound, so the comparison stays right.
 fn lax_int(text: &str) -> Option<i128> {
@@ -380,7 +380,7 @@ fn digit_groups(text: &str) -> Option<String> {
   valid.then(|| text.replace('_', ""))
 }
 
-/// A `bool` parameter's text, read as pydantic's lax mode reads it: a case-insensitive word or digit, with no
+/// A `bool` parameter's text in lax mode: a case-insensitive word or digit, with no
 /// surrounding whitespace.
 pub fn parse_bool(source: Source, name: &str, text: &str) -> Result<bool, Box<FieldError>> {
   match text.to_ascii_lowercase().as_str() {
@@ -390,7 +390,7 @@ pub fn parse_bool(source: Source, name: &str, text: &str) -> Result<bool, Box<Fi
   }
 }
 
-/// A `float` value's text, read as pydantic's lax mode reads a string: surrounding whitespace is ignored and an
+/// A `float` value's text in lax mode: surrounding whitespace is ignored and an
 /// underscore may join two digits. A non-finite text (`nan`, `inf`) fails as `float_parsing`, because the port
 /// refuses non-finite floats (`rust/docs/PORT_STATUS.md`).
 pub fn parse_float(source: Source, name: &str, text: &str) -> Result<f64, Box<FieldError>> {
@@ -398,7 +398,7 @@ pub fn parse_float(source: Source, name: &str, text: &str) -> Result<f64, Box<Fi
   parsed.filter(|value| value.is_finite()).ok_or_else(|| failure(source, name, text, Kind::FloatParsing))
 }
 
-/// Whether each underscore in `text` sits between two ASCII digits, the places Python's `float` accepts one.
+/// Whether each underscore in `text` sits between two ASCII digits.
 fn underscores_join_digits(text: &str) -> bool {
   let bytes = text.as_bytes();
   bytes.iter().enumerate().all(|(index, byte)| {

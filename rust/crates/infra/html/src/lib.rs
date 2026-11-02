@@ -1,4 +1,4 @@
-//! CPython 3.14.7-compatible HTML, character-reference, and sequence-diff primitives.
+//! HTML tokenizer, character-reference, and sequence-diff primitives.
 
 mod elements;
 mod entities;

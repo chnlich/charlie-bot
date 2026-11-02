@@ -1,4 +1,4 @@
-//! `init_seed.init_charliebot_home`: the profile home's directories and seeded files. The server's startup and
+//! The profile home's directories and seeded files. The server's startup and
 //! `charliebot setup` both run this one provisioning path.
 
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::config::CharlieBotConfig;
 
-/// `_default_config_yaml()` as `yaml_utils.save_yaml` writes it, for a checkout without the template.
+/// The default `config.yaml` for a checkout without the template.
 const DEFAULT_CONFIG_YAML: &str = "paths:\n  workspace_dirs:\n  - ~/workspace\n  worktree_dir: ~/worktrees\n";
 
 /// Create the home, `sessions/` and `config.d/`; seed `config.yaml` and `credentials.yaml` (mode 0600)
@@ -35,7 +35,7 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
   Ok(())
 }
 
-/// Python's text-mode read: `\r\n` and `\r` become `\n`.
+/// A text-mode read: `\r\n` and `\r` become `\n`.
 fn universal_newlines(text: &str) -> String {
   text.replace("\r\n", "\n").replace('\r', "\n")
 }

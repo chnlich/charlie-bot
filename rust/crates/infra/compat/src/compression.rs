@@ -1,4 +1,4 @@
-//! The request path's one-shot gzip deflators (`src/infra/compression.py`).
+//! The request path's one-shot gzip deflators.
 //!
 //! A response pays the deflate once per body it builds; a memo serves the repeats. The level-1
 //! deflator covers every body that is compressed per response, and its byte count is one counter.
@@ -13,7 +13,7 @@ use flate2::write::GzEncoder;
 static LEVEL_ONE_BYTES_DEFLATED: AtomicU64 = AtomicU64::new(0);
 
 /// The level-1 gzip form of *data*; deterministic for equal input, with the gzip header's mtime
-/// field zeroed like Python's `gzip_level1` (`isal_zlib.compressobj(1, DEFLATED, 31)`).
+/// field zeroed.
 pub fn gzip_level_one(data: &[u8]) -> Vec<u8> {
   LEVEL_ONE_BYTES_DEFLATED.fetch_add(data.len() as u64, Ordering::Relaxed);
   compress(data, 1)

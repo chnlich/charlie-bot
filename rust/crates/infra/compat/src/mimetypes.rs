@@ -1,15 +1,15 @@
-//! Content-type guessing as CPython's `mimetypes.guess_type(path)[0]` answers it on this host.
+//! Content-type guessing from a file extension, using this host's `mime.types` files.
 //!
-//! The database is CPython's built-in table ([`mimetypes_table`]) overlaid by the system `mime.types`
-//! files CPython reads at `mimetypes.init()`, in its order. A later entry for an extension replaces an
-//! earlier one. A guess applies the suffix map (`.tgz` -> `.tar.gz`), drops one case-sensitive encoding
-//! suffix (`.gz`), then looks the remaining extension up lowercased.
+//! The database is the built-in table ([`mimetypes_table`]) overlaid by the known `mime.types` files
+//! present on this host, in the order below. A later entry for an extension replaces an earlier one. A
+//! guess applies the suffix map (`.tgz` -> `.tar.gz`), drops one case-sensitive encoding suffix (`.gz`),
+//! then looks the remaining extension up lowercased.
 
 use std::collections::HashMap;
 
 use crate::mimetypes_table;
 
-/// `mimetypes.knownfiles`, read in this order when present.
+/// The known `mime.types` files, read in this order when present.
 const KNOWN_FILES: &[&str] = &[
   "/etc/mime.types",
   "/etc/httpd/mime.types",
@@ -31,7 +31,7 @@ impl MimeTypes {
   pub fn load() -> MimeTypes {
     let mut database = MimeTypes::builtin();
     for file in KNOWN_FILES {
-      // CPython reads the files that `os.path.isfile` admits and skips the rest silently.
+      // A missing or unreadable file is skipped.
       if std::path::Path::new(file).is_file()
         && let Ok(bytes) = std::fs::read(file)
       {
@@ -41,7 +41,7 @@ impl MimeTypes {
     database
   }
 
-  /// The CPython built-in table alone, without the host's `mime.types` files.
+  /// The built-in table alone, without the host's `mime.types` files.
   pub fn builtin() -> MimeTypes {
     MimeTypes {
       types: mimetypes_table::TYPES_MAP.iter().map(|(ext, kind)| (ext.to_string(), kind.to_string())).collect(),
@@ -77,7 +77,7 @@ impl MimeTypes {
   }
 }
 
-/// `posixpath.splitext`: the extension is the last dot's suffix within the final component, ignoring
+/// The extension: the last dot's suffix within the final component, ignoring
 /// the component's leading dots.
 fn splitext(path: &str) -> (String, String) {
   let sep_index = path.rfind('/').map_or(-1, |index| index as isize);

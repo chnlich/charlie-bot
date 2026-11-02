@@ -1,8 +1,8 @@
-//! The home writer fence: the exclusion a server holds over its home (`src/runtime/home_writer_fence.py`).
+//! The home writer fence: the exclusion a server holds over its home.
 //!
 //! The exclusion is an exclusive non-blocking `flock` on `<home>/state/home_writer.lock`, held for the
 //! holder's lifetime; the kernel drops it when the holder dies. `<home>/state/writer_identity.json`
-//! names the holder for a refused caller and is evidence only. A Python server, a migration apply and
+//! names the holder for a refused caller and is evidence only. A migration apply and
 //! this server take the same lock file the same way, so each refuses while another holds the home.
 //! A symlinked state directory or fence file refuses acquisition.
 

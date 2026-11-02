@@ -1,16 +1,13 @@
-//! `json.loads` as CPython 3.14 runs it, for the bodies and stored texts the Python server parses.
+//! JSON loading for the bodies and stored texts the server parses.
 //!
-//! A document that `serde_json` reads to the same value as `json.loads` is taken from `serde_json` (see
-//! [`loads_serde`]). Every other document goes through the scanner, which follows `_json.c`, which `json.loads` uses,
-//! and `json/decoder.py` where the two agree. The scanner's messages and positions are the ones `json.loads` raises.
-//! A `JSONDecodeError` renders as `<message>: line L column C (char P)`, and a body that is not UTF-8 gives the
-//! `UnicodeDecodeError` text. `json/__init__.py`'s `detect_encoding` picks the codec of a body, so a body with null
-//! bytes decodes as UTF-16 or UTF-32, as Python decodes it.
+//! A document that `serde_json` reads to the same value is taken from `serde_json` (see [`loads_serde`]). Every
+//! other document goes through the scanner below. A syntax error renders as `<message>: line L column C (char P)`,
+//! and a body that is not UTF-8 gives the decoder's text. A body's byte-order mark selects UTF-16 or UTF-32, so a
+//! body with null bytes decodes as one of those.
 //!
-//! Positions count code points, as Python `str` indexes do. A document Python loads but a `serde_json::Value` cannot
-//! hold (a non-finite float, an integer beyond 64 bits, a lone surrogate, nesting past [`MAX_DEPTH`]) is parsed to its
-//! end. The syntax errors before it therefore win as in Python, and the document is then refused as
-//! [`LoadError::Unrepresentable`].
+//! Positions count code points. A document that loads but that a `serde_json::Value` cannot hold (a non-finite
+//! float, an integer beyond 64 bits, a lone surrogate, nesting past [`MAX_DEPTH`]) is parsed to its end. The syntax
+//! errors before it therefore win, and the document is then refused as [`LoadError::Unrepresentable`].
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -18,24 +15,23 @@ use std::sync::LazyLock;
 use regex::bytes::Regex;
 use serde_json::{Map, Number, Value};
 
-/// The integer forms that serde_json reads as a different value than `json.loads`, so a body holding one goes to the
-/// scanner. A run of 19 digits: serde_json reads an integer past 64 bits as a float, where `json.loads` gives an int
-/// that [`Value`] cannot hold. A negative one past `i64::MIN` likewise gives an int that [`Value`] cannot hold. An
-/// integer `-0`: serde_json reads the float -0.0, where `json.loads` gives the int 0. Other digit runs and the float
-/// forms read the same in both.
+/// The integer forms serde_json reads differently from the scanner, so a body holding one goes to the scanner. A run
+/// of 19 digits: serde_json reads an integer past 64 bits as a float, where the scanner gives an int that [`Value`]
+/// cannot hold. A negative one past `i64::MIN` likewise gives an int that [`Value`] cannot hold. An integer `-0`:
+/// serde_json reads the float -0.0, where the scanner gives the int 0. Other digit runs and the float forms read the
+/// same in both.
 static INTEGER_FORM_OF_SCANNER: LazyLock<Regex> =
   LazyLock::new(|| Regex::new("[0-9]{19}|-0([^.0-9eE]|$)").expect("a literal pattern compiles"));
 
-/// The nesting depth the scanner accepts. CPython's recursion limit is 1000 frames minus the caller's depth, so the
-/// exact depth where Python fails varies; the port refuses past this bound instead of overflowing its stack.
+/// The nesting depth the scanner accepts. The bound keeps the recursive parse from overflowing its stack.
 pub const MAX_DEPTH: usize = 500;
 
 /// Why a document did not load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadError {
-  /// Python raises `ValueError` with this text: a `JSONDecodeError` or a `UnicodeDecodeError`.
+  /// A syntax or decode failure: the message the parser renders.
   Value(String),
-  /// Python loads the document, and this port cannot hold it in a `serde_json::Value`. The text names the value.
+  /// The document loads, but cannot be held in a `serde_json::Value`. The text names the value.
   Unrepresentable(String),
 }
 
@@ -49,14 +45,14 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-/// The source of a failed `json.loads(body)` call.
+/// The source of a failed [`loads`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadFailure {
   /// The scanner rejected JSON at a code-point offset.
   JsonDecode { message: String, position: usize, text: String },
-  /// Python could not decode the body's detected character encoding.
+  /// The body's detected character encoding could not be decoded.
   Decode(String),
-  /// Python loaded a value that this port cannot represent.
+  /// A loaded value cannot be represented.
   Unrepresentable(String),
 }
 
@@ -69,15 +65,15 @@ impl LoadFailure {
   }
 }
 
-/// `json.loads(body)` for a body of bytes: the codec `detect_encoding` picks, then the scanner.
+/// Load a body of bytes: the codec the byte-order mark selects, then the scanner.
 pub fn loads(body: &[u8]) -> Result<Value, LoadError> {
   loads_classified(body).map_err(LoadFailure::into_load_error)
 }
 
-/// `json.loads(body)` with the distinction FastAPI uses between JSON and body-decoding failures.
+/// Load a body of bytes, distinguishing JSON syntax failures from body-decoding failures.
 ///
-/// A body serde_json reads needs no codec. A body that `detect_encoding` would decode as UTF-16 or UTF-32 or with a
-/// byte-order mark is not valid JSON text. serde_json refuses it and the scanner decodes it.
+/// A body serde_json reads needs no codec. A body the byte-order mark makes UTF-16 or UTF-32, or whose text starts
+/// with a byte-order mark, is not valid JSON text. serde_json refuses it and the scanner decodes it.
 pub fn loads_classified(body: &[u8]) -> Result<Value, LoadFailure> {
   if let Some(value) = loads_serde(body) {
     return Ok(value);
@@ -89,8 +85,7 @@ pub fn loads_classified(body: &[u8]) -> Result<Value, LoadFailure> {
   loads_code_points(&code_points)
 }
 
-/// `json.loads(text)` for a `str`. Python refuses a leading byte-order mark here, where the bytes path has already
-/// removed one.
+/// Load a `str`. A leading byte-order mark is refused here, where the bytes path has already removed one.
 pub fn loads_text(text: &str) -> Result<Value, LoadError> {
   if text.starts_with('\u{feff}') {
     return Err(LoadError::Value(format_error("Unexpected UTF-8 BOM (decode using utf-8-sig)", &[], 0)));
@@ -102,9 +97,9 @@ pub fn loads_text(text: &str) -> Result<Value, LoadError> {
   loads_code_points(&code_points).map_err(LoadFailure::into_load_error)
 }
 
-/// The success path: the value serde_json reads from `body`, when it reads one that `json.loads` also reads to the same
-/// value. Any other body gives `None`, and the scanner then raises the error `json.loads` raises, so serde_json's own
-/// error text is not reported.
+/// The success path: the value serde_json reads from `body`, when it reads one that the scanner also reads to the
+/// same value. Any other body gives `None`, and the scanner then raises its own error, so serde_json's own error text
+/// is not reported.
 fn loads_serde(body: &[u8]) -> Option<Value> {
   if INTEGER_FORM_OF_SCANNER.is_match(body) {
     return None;
@@ -435,7 +430,7 @@ enum Endian {
   Big,
 }
 
-/// The codec `json/__init__.py`'s `detect_encoding` names, with the BOM the codec consumes.
+/// The codec selected by a body's byte-order mark, with the BOM the codec consumes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Codec {
   Utf8 { skip: usize },
@@ -485,7 +480,7 @@ fn detect_codec(body: &[u8]) -> Codec {
   Codec::Utf8 { skip: 0 }
 }
 
-/// `body.decode(detect_encoding(body), 'surrogatepass')`: the code points of the document.
+/// Decode the body's code points, surrogate pairs included.
 fn decode(body: &[u8]) -> Result<Vec<u32>, LoadError> {
   match detect_codec(body) {
     Codec::Utf8 { skip } => decode_utf8(body, skip),
@@ -494,7 +489,7 @@ fn decode(body: &[u8]) -> Result<Vec<u32>, LoadError> {
   }
 }
 
-/// `UnicodeDecodeError.__str__`: a one-byte range names the byte, a longer range names `start-end` (end inclusive).
+/// The decode-error text: a one-byte range names the byte, a longer range names `start-end` (end inclusive).
 fn codec_error(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> LoadError {
   let text = if end == start + 1 {
     format!("'{codec}' codec can't decode byte 0x{:02x} in position {start}: {reason}", body[start])
@@ -504,7 +499,7 @@ fn codec_error(codec: &str, body: &[u8], start: usize, end: usize, reason: &str)
   LoadError::Value(text)
 }
 
-/// UTF-8 as CPython's decoder reads it under `surrogatepass`: a surrogate encoded in three bytes is a code point.
+/// UTF-8 decoded with surrogatepass semantics: a surrogate encoded in three bytes is a code point.
 fn decode_utf8(body: &[u8], skip: usize) -> Result<Vec<u32>, LoadError> {
   let mut out = Vec::with_capacity(body.len());
   let mut i = skip;

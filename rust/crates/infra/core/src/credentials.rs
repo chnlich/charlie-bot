@@ -1,4 +1,4 @@
-//! `credentials.yaml`: the profile's secrets, `section -> key -> scalar` (`src/infra/credentials.py`).
+//! `credentials.yaml`: the profile's secrets, `section -> key -> scalar`.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -12,7 +12,7 @@ use serde_yaml::Value;
 use crate::config::{self, CREDENTIALS_FILENAME, ConfigError};
 use crate::paths;
 
-/// One credential value. CPython admits `str` and `int`, and `bool` is an `int` there.
+/// One credential value: text, an integer, or a flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialValue {
   Text(String),
@@ -21,7 +21,7 @@ pub enum CredentialValue {
 }
 
 impl CredentialValue {
-  /// Python truthiness: `""`, `0` and `False` are unset for every `or ""` reader.
+  /// The truth value of a credential: `""`, `0` and `False` are unset.
   pub fn is_truthy(&self) -> bool {
     match self {
       CredentialValue::Text(text) => !text.is_empty(),
@@ -30,7 +30,7 @@ impl CredentialValue {
     }
   }
 
-  /// CPython `str(value)`.
+  /// The value's text: text as is, an integer in decimal, a flag as `True` or `False`.
   pub fn value_str(&self) -> String {
     match self {
       CredentialValue::Text(text) => text.clone(),
@@ -55,14 +55,14 @@ impl Credentials {
     self.sections.get(section).and_then(|keys| keys.get(key))
   }
 
-  /// `configured_access_key()`: the `charliebot.access_key` credential, or `None` when it is unset or
-  /// falsy. `None` means every access-key gate lets unauthenticated readers through, as in Python.
+  /// The `charliebot.access_key` credential, or `None` when it is unset or
+  /// falsy. `None` means every access-key gate lets unauthenticated readers through.
   pub fn access_key(&self) -> Option<String> {
     self.get("charliebot", "access_key").filter(|value| value.is_truthy()).map(CredentialValue::value_str)
   }
 
-  /// `Credentials.require(section, key)`: the value as `str(...)`, or an error naming the key and the file
-  /// when it is unset. A falsy value such as `""` or `False` is set, as in Python.
+  /// The value under `section`/`key` as text, or an error naming the key and the file
+  /// when it is unset. A falsy value such as `""` or `False` is set.
   pub fn require(&self, section: &str, key: &str) -> Result<String, ConfigError> {
     self
       .get(section, key)
@@ -236,7 +236,7 @@ fn yaml_scalar(value: &str) -> String {
   if plain { value.to_string() } else { format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")) }
 }
 
-/// A mapping key as CPython's `str()` prints the value PyYAML loaded for it.
+/// A mapping key as its text form prints the value loaded for it.
 fn key_text(key: &Value) -> String {
   match key {
     Value::String(text) => text.clone(),

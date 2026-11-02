@@ -200,7 +200,7 @@ impl EventFields for serde_json::Value {
   }
 }
 
-/// Python's truth value of a JSON value: `None`, `False`, zero, and empty strings, arrays and objects are false.
+/// The truth value of a JSON value: `None`, `False`, zero, and empty strings, arrays and objects are false.
 pub fn is_truthy(value: &impl EventFields) -> bool {
   if value.is_null() {
     return false;

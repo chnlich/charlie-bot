@@ -15,16 +15,20 @@ set -euo pipefail
 # The io legs need setup-io-share.sh to have run first (io delegated to the user manager and io.cost
 # enabled on the root disk): io-idle once BEFORE that script and once after, to catch an idle-time
 # slowdown, io-contest only after. The CPU legs need no root setup and run in transient units of
-# their own under the user manager. Every unit carries CPUWeight=100 explicitly. The CPU legs saturate
-# every core on purpose: run them only when the host can spare the cores for about a minute.
+# their own under the user manager. Every weighted unit carries CPUWeight=100 explicitly; the cpu-slice
+# leg's last phase starts its units without one. The CPU legs saturate every core on purpose: run them
+# only when the host can spare the cores for about two minutes.
 # CHECK_SHARE_RUN=fake shrinks the CPU legs to a seconds-long plumbing test; the real measurement is
 # the default.
 #
 # cpu-slice: two session-like cgroups under the test slice, check-share.slice, against three rival
 # slices, check-rival1..3.slice, that saturate the machine. The rivals are siblings of the test slice
 # under check.slice: systemd nests a dash-named slice under its prefix, so their names must not extend
-# check-share. Phase one runs 8 busy loops against 1; phase two runs 8 against 8. Both shares are read
-# from cpu.stat. The leg prints them; a person judges the one-loop share against the plan's 45-55%.
+# check-share. Phase one runs 8 busy loops against 1; phase two runs 8 against 8; phase three runs 8
+# against 1 with the weights off — the slice stops first so systemd releases the cpu controller the
+# weighted units enabled, and the next units set no CPUWeight, so nothing arbitrates between the
+# cgroups. All shares are read from cpu.stat. The leg prints them, then the 1-loop cgroup's cores with
+# and without the session weights, and a person judges the comparison.
 # cpu-login: one busy loop in the login session, through a detached tmux session that the leg creates
 # and removes and that touches no other tmux session, against the same rival slices. The login scope
 # and the user manager are siblings under user-N.slice. A single loop can use at most one core, so the
@@ -75,8 +79,12 @@ machine_cpu_nsec() {
   awk '/^cpu / {print ($2 + $3 + $4) * 10000000}' /proc/stat
 }
 
-# Sample two unit cgroups' cpu.stat over the window and print each side's cores and the second
-# cgroup's share of the two cgroups' usage.
+# The cores each side of the last sample_slice_cpu call used. The leg reads them for its comparison.
+CORES_A=""
+CORES_B=""
+
+# Sample two unit cgroups' cpu.stat over the window, leave each side's cores in CORES_A and CORES_B,
+# and print the cores and the second cgroup's share of the two cgroups' usage.
 sample_slice_cpu() {
   local unit_a=$1 unit_b=$2 window=$3 path_a path_b a0 b0 a1 b1
   path_a=$(unit_cgroup "$unit_a" check-share.slice)
@@ -86,8 +94,9 @@ sample_slice_cpu() {
   sleep "$window"
   a1=$(cpu_usage_usec "$path_a")
   b1=$(cpu_usage_usec "$path_b")
-  echo "cores used: $unit_a $(awk "BEGIN {printf \"%.2f\", ($a1 - $a0) / ($window * 1000000)}")," \
-    "$unit_b $(awk "BEGIN {printf \"%.2f\", ($b1 - $b0) / ($window * 1000000)}")"
+  CORES_A=$(awk "BEGIN {printf \"%.2f\", ($a1 - $a0) / ($window * 1000000)}")
+  CORES_B=$(awk "BEGIN {printf \"%.2f\", ($b1 - $b0) / ($window * 1000000)}")
+  echo "cores used: $unit_a $CORES_A," "$unit_b $CORES_B"
   echo "$unit_b share of the two cgroups' usage:" \
     "$(awk "BEGIN {printf \"%.1f\", 100 * ($b1 - $b0) / ($a1 - $a0 + $b1 - $b0)}")%"
 }
@@ -110,38 +119,69 @@ stop_rivals() {
   done
 }
 
+# The phase's two session-like units under check-share.slice: $1 and $2 are the loop counts, $3 the
+# window, and $4 the CPUWeight both carry — empty starts them without one, so the cpu controller stays
+# out of the slice and nothing arbitrates between the cgroups.
+start_share_units() {
+  local loops_a=$1 loops_b=$2 window=$3 weight=${4:-} property=""
+  [ -n "$weight" ] && property="-p CPUWeight=$weight"
+  systemd-run --user --unit=check-share-a --slice=check-share.slice $property \
+    bash -c "for i in \$(seq $loops_a); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
+  if [ "$loops_b" -eq 1 ]; then
+    systemd-run --user --unit=check-share-b --slice=check-share.slice $property \
+      bash -c "$BUSY_LOOP & sleep $((window + SLACK))" >/dev/null
+  else
+    systemd-run --user --unit=check-share-b --slice=check-share.slice $property \
+      bash -c "for i in \$(seq $loops_b); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
+  fi
+}
+
 leg_cpu_slice() {
   local loops_a=8 window=$WINDOW
   if [[ $RUN_MODE == fake ]]; then
     loops_a=2
     window=2
   fi
-  echo "== cpu-slice: $loops_a busy loops against 1, then $loops_a against $loops_a, $window s windows =="
-  # The rivals stay up across both phases.
-  start_rivals $((2 * window + 2 * SLACK + 5))
+  echo "== cpu-slice: $loops_a busy loops against 1, then $loops_a against $loops_a, then $loops_a" \
+    "against 1 with the weights off, $window s windows =="
+  # The rivals stay up across the phases.
+  start_rivals $((3 * window + 4 * SLACK + 5))
   # Phase 1, the process-count case: a cgroup with one loop against one with eight. The share is printed
   # as measured; a single thread can use at most one core.
-  systemd-run --user --unit=check-share-a --slice=check-share.slice -p CPUWeight=100 \
-    bash -c "for i in \$(seq $loops_a); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
-  systemd-run --user --unit=check-share-b --slice=check-share.slice -p CPUWeight=100 \
-    bash -c "$BUSY_LOOP & sleep $((window + SLACK))" >/dev/null
+  start_share_units "$loops_a" 1 "$window" 100
   sleep 2
-  echo "-- 8 loops against 1"
+  echo "-- $loops_a loops against 1"
   sample_slice_cpu check-share-a.service check-share-b.service "$window"
+  local with_weights=$CORES_B
   sleep "$SLACK"
   systemctl --user stop check-share-a.service check-share-b.service 2>/dev/null || true
   # Phase 2, the weight case: comparable thread counts, so the equal weights should split the slice
   # about evenly.
-  systemd-run --user --unit=check-share-a --slice=check-share.slice -p CPUWeight=100 \
-    bash -c "for i in \$(seq $loops_a); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
-  systemd-run --user --unit=check-share-b --slice=check-share.slice -p CPUWeight=100 \
-    bash -c "for i in \$(seq $loops_a); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
+  start_share_units "$loops_a" "$loops_a" "$window" 100
   sleep 2
   echo "-- $loops_a loops against $loops_a"
   sample_slice_cpu check-share-a.service check-share-b.service "$window"
   sleep "$SLACK"
+  # Stopping the slice with its units is what makes systemd release the cpu controller the weighted
+  # units enabled, so phase 3 runs without any weight in the chain.
+  systemctl --user stop check-share-a.service check-share-b.service check-share.slice 2>/dev/null || true
+  # Phase 3, the weights-off case: the same shape with no CPUWeight anywhere. The assertion proves the
+  # controller really left, so the comparison answers what the weights changed.
+  start_share_units "$loops_a" 1 "$window" ""
+  sleep 2
+  if grep -qw cpu "$CGROUP_ROOT/check.slice/check-share.slice/cgroup.subtree_control"; then
+    echo "cpu-slice: the cpu controller stayed in check-share.slice's cgroup.subtree_control;" \
+      "the weights-off phase did not run without weights" >&2
+    exit 1
+  fi
+  echo "-- $loops_a loops against 1, weights off"
+  sample_slice_cpu check-share-a.service check-share-b.service "$window"
+  local without_weights=$CORES_B
+  sleep "$SLACK"
   systemctl --user stop check-share-a.service check-share-b.service check-share.slice 2>/dev/null || true
   stop_rivals
+  echo "1-loop cgroup cores, $loops_a against 1: with session weights $with_weights," \
+    "without $without_weights"
 }
 
 leg_cpu_login() {

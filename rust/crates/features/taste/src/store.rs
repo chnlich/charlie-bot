@@ -270,14 +270,15 @@ pub fn parse_record(value: &Value) -> Result<Record, FieldError> {
   }
 }
 
-/// Parse a row as `taste add` receives it: its id is absent because the CLI assigns one under the lock.
+/// Parse a row as `taste add` receives it. Its id is absent because the CLI assigns one under the lock, and `type`
+/// may be absent because the verb takes only rows.
 fn parse_input_row(value: &Value) -> Result<Row, FieldError> {
   let object = value.as_object().ok_or_else(|| FieldError::new("record", "expected a JSON object"))?;
-  match object.get("type").and_then(Value::as_str) {
-    Some("row") => {}
-    Some("mark") => return Err(FieldError::new("type", "taste add takes a row, not a mark")),
-    Some(other) => return Err(FieldError::new("type", format!("expected \"row\", got {other:?}"))),
-    None => return Err(FieldError::new("type", "expected \"row\"")),
+  match object.get("type") {
+    None => {}
+    Some(Value::String(text)) if text == "row" => {}
+    Some(Value::String(_)) => return Err(FieldError::new("type", "taste add takes a row, not a mark")),
+    Some(other) => return Err(FieldError::new("type", format!("expected \"row\", got {other}"))),
   }
   reject_unknown(object, ROW_FIELDS)?;
   if object.contains_key("id") {
@@ -639,6 +640,10 @@ mod tests {
     bad_kind["kind"] = json!("preference");
     let error = add_row(dir.path(), &bad_kind).expect_err("an unknown kind is refused");
     assert!(error.to_string().contains("kind"), "{error}");
+
+    let mut no_type = valid_row("work/code-review", "evt-4", "2026-10-16T12:00:00+00:00");
+    no_type.as_object_mut().unwrap().remove("type");
+    assert_eq!(add_row(dir.path(), &no_type).expect("a row file may omit type"), "T1");
   }
 
   #[test]

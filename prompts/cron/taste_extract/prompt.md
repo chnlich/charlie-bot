@@ -35,16 +35,17 @@ situations across sessions.
 
 A row carries these fields:
 
-- the decision time, from the candidate's timestamp;
-- the domain, as `<area>/<topic>`;
-- the kind: `choice` when the user picked among options, `rejection` when the user rejected a working
+- `decided_at`: the decision time, from the candidate's timestamp;
+- `domain`: `<area>/<topic>`;
+- `kind`: `choice` when the user picked among options, `rejection` when the user rejected a working
   result;
-- one or two sentences of situation;
-- every option the source names, and `[]` when it names none;
-- the recommendation when the source states one, and `null` otherwise;
-- the user's choice, or the result the user asked for;
-- the user's words as their reason, or `未说明` when the source states none;
-- the source: the session id, the session link, and exactly one of `event_id` or `plan_version`.
+- `situation`: one or two sentences;
+- `options`: every option the source names, and `[]` when it names none;
+- `recommended`: the recommendation when the source states one, and `null` otherwise;
+- `chosen`: the user's choice, or the result the user asked for;
+- `reason`: the user's words, or `未说明` when the source states none;
+- `source`: `session_id`, `url`, and exactly one of `event_id` or `plan_version`;
+- `supersedes`: the row this precedent reverses, or `null`.
 
 When you judge the new choice a reversal of an active row in the same situation, name that row in
 `supersedes`. Before you do, compare the situations, not just the domains: an option chosen in a

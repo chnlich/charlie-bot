@@ -220,7 +220,9 @@ struct ChatScan {
   ratings: Vec<Rating>,
 }
 
-/// Scan a session's chat log in file order. A line that is not JSON names no event and is skipped.
+/// Scan a session's chat log in file order. A line that is not JSON is skipped, as `chat_events::find_in_log` skips
+/// it: an append can tear a line. A JSON value that is not an object, or a user or web reply event without the fields a
+/// candidate carries, fails the scan with the line's location.
 fn scan_chat_log(session_dir: &Path, ratings: &[Rating]) -> anyhow::Result<ChatScan> {
   let path = layout::chat_events_path(session_dir);
   let lines = match chat_events::read_lines(&path, LineRule::Lines) {
@@ -241,14 +243,13 @@ fn scan_chat_log(session_dir: &Path, ratings: &[Rating]) -> anyhow::Result<ChatS
   for (index, line) in lines.enumerate() {
     let line = line.with_context(|| format!("read {}:{}", path.display(), index + 1))?;
     let Ok(event) = line.decode() else { continue };
+    let location = format!("{}:{}", path.display(), index + 1);
+    anyhow::ensure!(event.is_object(), "{location}: a chat event is not a JSON object");
     let event_type = event.get("type").and_then(Value::as_str);
     if event_type == Some(event_types::WEB_REPLY) {
-      if let Some(text) = event.get("content").and_then(Value::as_str) {
-        previous_web_reply = Some(text.to_string());
-        if let Some(timestamp) = event_time(&event) {
-          scan.web_replies.push((timestamp, text.to_string()));
-        }
-      }
+      let text = required_str(&event, "content", &location)?;
+      previous_web_reply = Some(text.to_string());
+      scan.web_replies.push((event_time(&event, &location)?, text.to_string()));
       continue;
     }
     if let Some(event_id) = event.get("id").and_then(Value::as_str)
@@ -259,22 +260,29 @@ fn scan_chat_log(session_dir: &Path, ratings: &[Rating]) -> anyhow::Result<ChatS
     if event_type != Some(event_types::USER) {
       continue;
     }
-    let Some(text) = event.get("content").and_then(Value::as_str) else { continue };
-    let Some(timestamp) = event_time(&event) else { continue };
-    let Some(event_id) = event.get("id").and_then(Value::as_str) else { continue };
     scan.users.push(UserMessage {
       index,
-      event_id: event_id.to_string(),
-      timestamp,
-      text: text.to_string(),
+      event_id: required_str(&event, "id", &location)?.to_string(),
+      timestamp: event_time(&event, &location)?,
+      text: required_str(&event, "content", &location)?.to_string(),
       previous_web_reply: previous_web_reply.clone(),
     });
   }
   Ok(scan)
 }
 
-fn event_time(value: &Value) -> Option<OffsetDateTime> {
-  OffsetDateTime::parse(value.get("timestamp")?.as_str()?, &Rfc3339).ok()
+/// The string `field` of a chat event. A missing or non-string field fails the scan, naming the line.
+fn required_str<'a>(event: &'a Value, field: &str, location: &str) -> anyhow::Result<&'a str> {
+  event
+    .get(field)
+    .and_then(Value::as_str)
+    .with_context(|| format!("{location}: a chat event carries no string `{field}`"))
+}
+
+/// The event's timestamp in RFC 3339. A missing or malformed timestamp fails the scan, naming the line.
+fn event_time(event: &Value, location: &str) -> anyhow::Result<OffsetDateTime> {
+  let text = required_str(event, "timestamp", location)?;
+  OffsetDateTime::parse(text, &Rfc3339).with_context(|| format!("{location}: the timestamp {text:?} is not RFC 3339"))
 }
 
 /// Classify one session's user messages and plan notes into candidates.
@@ -342,25 +350,41 @@ where
   let Some(plans) = read_plans(session_dir)? else { return Ok(Vec::new()) };
   let mut candidates = Vec::new();
   for plan in &plans {
-    let Some(plan_id) = plan_id(plan) else { continue };
-    let Some(versions) = plan.get("versions").and_then(Value::as_array) else { continue };
+    let plan_id = plan_id(plan).with_context(|| format!("{}: a plan carries no id", session_dir.display()))?;
+    let versions = plan
+      .get("versions")
+      .and_then(Value::as_array)
+      .with_context(|| format!("{}: plan {plan_id} carries no versions", session_dir.display()))?;
     for version in versions {
+      // A version without a note has nothing for the extractor to read.
       let Some(note) = version.get("note").and_then(Value::as_str).filter(|note| !note.trim().is_empty()) else {
         continue;
       };
-      let Some(number) = version.get("v").and_then(Value::as_u64) else { continue };
-      let Some(created_at) = version.get("created_at").and_then(Value::as_str) else { continue };
+      let number = version
+        .get("v")
+        .and_then(Value::as_u64)
+        .with_context(|| format!("plan {plan_id}: a version with a note carries no number"))?;
+      let created_at = version
+        .get("created_at")
+        .and_then(Value::as_str)
+        .with_context(|| format!("plan {plan_id} v{number}: no created_at"))?;
       let decided_at = OffsetDateTime::parse(created_at, &Rfc3339)
         .map_err(|error| anyhow::anyhow!("plan {plan_id} v{number}: created_at: {error}"))?;
       if decided_at < since {
         continue;
       }
-      let previous = number.checked_sub(1).and_then(|previous| {
-        versions.iter().find(|candidate| candidate.get("v").and_then(Value::as_u64) == Some(previous))
-      });
-      let trade_off_options = match previous {
-        Some(previous) => predecessor_options(session_dir, previous)?,
-        None => Some(Vec::new()),
+      // The first version has no predecessor page, so it names no options. A later version whose predecessor record is
+      // gone has unknown options, the same as a predecessor page that is gone.
+      let trade_off_options = if number == 1 {
+        Some(Vec::new())
+      } else {
+        let previous = number.checked_sub(1).and_then(|previous| {
+          versions.iter().find(|candidate| candidate.get("v").and_then(Value::as_u64) == Some(previous))
+        });
+        match previous {
+          Some(previous) => predecessor_options(session_dir, previous)?,
+          None => None,
+        }
       };
       candidates.push(Candidate {
         source: CandidateSource::Notes,
@@ -619,5 +643,18 @@ mod fixture_tests {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].trade_off_options, None);
     assert!(candidates[0].to_value()["trade_off_options"].is_null());
+  }
+
+  #[test]
+  fn a_user_event_without_an_id_fails_the_scan_and_names_its_line() {
+    let (_temp, sessions) = fixture();
+    let log = sessions.join(SESSION).join("data/chat_events.jsonl");
+    let mut body = fs::read_to_string(&log).unwrap();
+    body.push_str("{\"type\": \"user\", \"content\": \"no id\", \"timestamp\": \"2026-10-16T16:00:00+00:00\"}\n");
+    fs::write(&log, body).unwrap();
+    let error = collect(&sessions, since(), &CandidateSource::all(), &read_plans).expect_err("the scan fails");
+    let message = format!("{error:#}");
+    assert!(message.contains("chat_events.jsonl:8"), "{message}");
+    assert!(message.contains("`id`"), "{message}");
   }
 }

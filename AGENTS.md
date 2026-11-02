@@ -20,7 +20,7 @@ The screen space then goes to content and controls.
 ## Test and Verification
 
 - Run the Rust suite from `rust/`: `cargo test --workspace --locked`. The frontend JavaScript tests run with
-  `node --test` from the checkout root, as CI does.
+  `node --test` from `web/`, as CI does.
 - Run Cargo on the shared test host through `cargo-slot.sh` when the task names it; build the CLI locally with
   `cargo build --locked -p charliebot-cli --bin charliebot` from `rust/`.
 - Reproduce a load-sensitive failure by forcing interleaving.

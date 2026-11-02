@@ -64,7 +64,7 @@ pub struct Templating {
   render_cache: Mutex<Option<RenderCache>>,
   /// The page text one render built and the inputs it built from.
   render_memo: Mutex<Option<RenderMemo>>,
-  /// The compressed forms of the page bodies served most recently.
+  /// The compressed forms of the last eight page bodies deflated, the oldest first.
   page_gzips: Mutex<Vec<PageGzip>>,
   /// The watch whose revision says whether the template and static trees moved.
   watch: TreeWatch,
@@ -122,7 +122,8 @@ struct PageGzip {
   gzip: Vec<u8>,
 }
 
-/// How many page bodies the compressed forms are kept for, beyond which the one stored longest ago goes.
+/// How many page bodies the compressed forms are kept for. A new body past this count drops the body deflated
+/// first, whether or not the requests since then served it again.
 const PAGE_GZIP_ENTRIES: usize = 8;
 
 impl Templating {

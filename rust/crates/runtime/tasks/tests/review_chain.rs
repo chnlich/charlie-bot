@@ -1389,8 +1389,16 @@ async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Re
   let wrapper_dir = checkout.join("src/runtime/gh_wrapper");
   let guard_dir = checkout.join("src/runtime/git_stash_guard");
   let expected_head = format!("{}:{}:", wrapper_dir.display(), guard_dir.display());
-  assert!(fs::read_to_string(worker_path)?.starts_with(&expected_head));
-  assert!(fs::read_to_string(review_path)?.starts_with(&expected_head));
+  let worker_path_text = fs::read_to_string(worker_path)?;
+  assert!(
+    worker_path_text.starts_with(&expected_head),
+    "worker PATH {worker_path_text:?} starts with {expected_head:?}"
+  );
+  let review_path_text = fs::read_to_string(review_path)?;
+  assert!(
+    review_path_text.starts_with(&expected_head),
+    "review PATH {review_path_text:?} starts with {expected_head:?}"
+  );
   Ok(())
 }
 

@@ -63,11 +63,11 @@ pub fn require_installed(dir: &Path) -> anyhow::Result<()> {
 /// `gh` resolving to the wrapper without changing the other entries. A PATH that does not carry the wrapper
 /// directory at all is left alone, so the resolution check below reports the `gh` it does resolve.
 ///
-/// An environment without [`WRAPPER_PATH_VAR`] was not built by `agent_environment`, so the check applies to it
-/// vacuously; every environment the server builds carries the variable.
+/// An environment without [`WRAPPER_PATH_VAR`] was not built by an agent environment builder: it carries no wrapper
+/// contract, so the spawn fails rather than letting `gh` resolve to the operator's personal login.
 pub fn require_gh_wrapper(env: &mut Env) -> anyhow::Result<()> {
   let Some(wrapper) = env.get(WRAPPER_PATH_VAR).cloned() else {
-    return Ok(());
+    bail!("{WRAPPER_PATH_VAR} is not set, so the spawn has no agent gh wrapper; refusing to start the agent process");
   };
   let wrapper_path = PathBuf::from(&wrapper);
   let Some(wrapper_dir) = wrapper_path.parent() else {
@@ -201,10 +201,14 @@ mod tests {
   }
 
   #[test]
-  fn spawn_check_is_vacuous_without_the_wrapper_variable() {
-    let mut env = env_with(&[("PATH", "/bin".to_string())]);
+  fn spawn_check_fails_without_the_wrapper_variable() {
+    let mut env = env_with(&[("PATH", "/home/operator/.local/bin:/bin".to_string())]);
 
-    require_gh_wrapper(&mut env).unwrap();
+    let error = require_gh_wrapper(&mut env).unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains(WRAPPER_PATH_VAR), "{message}");
+    assert!(message.contains("refusing to start"), "{message}");
   }
 
   // --- token command ---

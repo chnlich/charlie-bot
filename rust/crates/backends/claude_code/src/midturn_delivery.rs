@@ -64,6 +64,22 @@ mod tests {
     SessionCgroupConfig::disabled()
   }
 
+  /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+  fn gh_wrapper_env(root: &std::path::Path) -> Env {
+    use std::os::unix::fs::PermissionsExt;
+    let wrapper_dir = root.join("gh-wrapper");
+    std::fs::create_dir_all(&wrapper_dir).unwrap();
+    let wrapper = wrapper_dir.join("gh");
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).unwrap();
+    Env::from([
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", wrapper_dir.display())),
+      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+    ])
+  }
+
   fn midturn_launch_kwargs(run_id: &str) -> LaunchArgs {
     LaunchArgs {
       backend_kwargs: serde_json::Map::from_iter([
@@ -137,7 +153,7 @@ mod tests {
     let mut request = RunRequest::new(
       "Initial prompt".to_string(),
       root.path().join("cwd"),
-      AgentBaseEnvironment { values: Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]) },
+      AgentBaseEnvironment { values: gh_wrapper_env(root.path()) },
       SessionCgroupConfig::disabled(),
       Arc::new(Registry::new()),
     );

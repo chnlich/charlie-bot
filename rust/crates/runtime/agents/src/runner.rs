@@ -1509,6 +1509,21 @@ mod tests {
   }
 
   fn test_request(prompt: String, cwd: PathBuf, values: Env, cgroup_base: PathBuf) -> RunRequest {
+    // Every agent environment carries the wrapper; a test that checks the spawn path supplies its own.
+    let mut values = values;
+    if !values.contains_key(crate::gh_wrapper::WRAPPER_PATH_VAR) {
+      let wrapper_dir = cgroup_base.parent().expect("the cgroup base has a parent").join("gh-wrapper-stub");
+      fs::create_dir_all(&wrapper_dir).unwrap();
+      let wrapper = wrapper_dir.join("gh");
+      fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+      use std::os::unix::fs::PermissionsExt;
+      let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+      permissions.set_mode(0o755);
+      fs::set_permissions(&wrapper, permissions).unwrap();
+      let path = values.remove("PATH").unwrap_or_else(|| "/bin:/usr/bin".to_string());
+      values.insert("PATH".to_string(), format!("{}:{path}", wrapper_dir.display()));
+      values.insert(crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string());
+    }
     let cgroup_config = SessionCgroupConfig { base_dir: cgroup_base, ..SessionCgroupConfig::disabled() };
     RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_config, Arc::new(Registry::new()))
   }

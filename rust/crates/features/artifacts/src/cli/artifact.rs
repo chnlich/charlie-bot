@@ -352,6 +352,8 @@ fn run_probe(
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+  use std::os::unix::fs::PermissionsExt;
   use std::sync::Arc;
 
   use super::*;
@@ -359,6 +361,23 @@ mod tests {
   use charliebot_agents::agent_environment::AgentBaseEnvironment;
   use charliebot_agents::backend_pool::BackendPool;
   use charliebot_registry::Registry;
+
+  /// The agent base environment the CLI's composition root builds, so a spawn from this host resolves `gh` to the
+  /// wrapper.
+  fn agent_base(home: &Path, repo_root: &Path) -> AgentBaseEnvironment {
+    let server_bin_dir = home.join("release");
+    fs::create_dir_all(&server_bin_dir).unwrap();
+    let cli = server_bin_dir.join("charliebot");
+    fs::write(&cli, "test fixture; this file is not run\n").unwrap();
+    let mut permissions = fs::metadata(&cli).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&cli, permissions).unwrap();
+    charliebot_agents::agent_environment::agent_base_environment(
+      &server_bin_dir,
+      &charliebot_agents::gh_wrapper::dir_under(repo_root),
+    )
+    .unwrap()
+  }
 
   fn test_host(home: &Path, repo_root: &Path) -> CliHost {
     let mut registry = Registry::new();
@@ -369,7 +388,7 @@ mod tests {
       cfg,
       registry: Arc::new(registry),
       repo_root: repo_root.to_path_buf(),
-      base_env: AgentBaseEnvironment { values: std::env::vars().collect() },
+      base_env: agent_base(home, repo_root),
       pool: BackendPool::default(),
     }
   }

@@ -20,6 +20,7 @@ status=0
 # One entry per path whose lines stay, with the reason. Keep the list as short as the tree allows.
 EXEMPT_PATHS=(
   'README.md' # quotes the emergency rollback command of the last Python-server commit; that script and its mode exist only there
+  'prompts/task_base.md' # the recorded prompt snapshot asserts on this text byte for byte (tasks/tests/fixtures)
   'skills/cli-tool-traps/SKILL.md' # quotes a recorded runaway process's argv as the pgrep anchoring example
 )
 

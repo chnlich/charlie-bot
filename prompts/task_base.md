@@ -25,7 +25,7 @@ The codebase has a single user. Apply these principles:
   the mechanisms the task depends on (launcher, credentials, environment).
 - **含反斜杠内容经文件写入工具或带引号 heredoc 落盘**: LaTeX、正则表达式、Windows 路径这类内容
   用写入工具或 `cat > file <<'EOF'` 写入;页面产物直接交给组装入口点
-  (`charliebot artifact wrap`)。嵌进解释器命令行的字符串字面量会让解释器在写入前静默
+  (`charliebot artifact wrap`)。嵌进 `python3 -c` 的字符串字面量会让解释器在写入前静默
   改写 \t、\n、\\ 序列。
 - **Waiting releases the process**: a held process delays every message to its session, so run work in the foreground only when it finishes within 15 minutes (or within a 60-second readback after an action such as a push). Every other wait, a CI run or a server restart included, ends the turn through a registered trigger (`charliebot schedule-trigger` with `--max-wait <seconds>` and a short `--message <label>`; see `charliebot schedule-trigger --help` for `--cmd` and `--watch` targets), and the trigger wake starts the next turn in the same conversation.
 

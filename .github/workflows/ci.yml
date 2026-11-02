@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   contract-check:
@@ -87,6 +88,18 @@ jobs:
           name: charliebot-server-${{ github.sha }}
           path: dist/
           retention-days: 30
+          if-no-files-found: error
+
+      # A manual run on a task branch keeps its binaries for the shortest retention GitHub allows: the
+      # branch-binary script downloads them within minutes, and the unlanded branch code should not outlive
+      # that need.
+      - name: Upload server and CLI binaries (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: charliebot-server-${{ github.sha }}
+          path: dist/
+          retention-days: 1
           if-no-files-found: error
 
   rust-test:

@@ -1,5 +1,5 @@
-//! `src/features/usage`: the quota panel, the usage ledger capture, the token usage page, the cold-storage sweep and the
-//! `backend_ids` startup check are ported. The home card stays registered.
+//! The usage crate: the quota panel, the usage ledger capture, the token usage page, the cold-storage sweep and the
+//! `backend_ids` startup check. The home card stays registered.
 
 mod api;
 mod backend_ids;

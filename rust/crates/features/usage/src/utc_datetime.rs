@@ -6,7 +6,7 @@
 //! and `HHMMSS`, with an optional `.` or `,` fraction of any length, read to microseconds. An offset is `Z`, `±HH`,
 //! `±HHMM` or `±HH:MM`, with optional seconds. Hour 24 at zero minutes is the next day's midnight.
 //!
-//! Three parts of that grammar are not ported: ISO week dates, the parser's acceptance of a stray final character after
+//! Three parts of the ISO grammar this parser refuses: ISO week dates, a stray final character after
 //! the seconds, and a fraction of a second in an offset, which `UtcOffset` cannot hold. Text that uses one reads as None,
 //! so its session is not cold and keeps its files.
 

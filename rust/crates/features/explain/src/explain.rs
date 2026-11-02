@@ -1,4 +1,4 @@
-//! The explain generation, its results file and the stale-pending reap (`src/features/explain/explain.py`).
+//! The explain generation, its results file and the stale-pending reap.
 //!
 //! The results file `sessions/<sid>/data/explain_results.json` is the persisted truth: one entry per divider, keyed
 //! by the divider's event index. The live generations are memory-only, so a server restart leaves pending entries

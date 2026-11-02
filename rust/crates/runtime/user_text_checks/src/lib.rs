@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as AnyhowContext, anyhow};
 use charliebot_compat::file_urls::{self, FileLinkForm, ScanContext};
 use charliebot_core::config::{ConfigSection, SectionValue, sessions_dir_in};
-use charliebot_html::{EventKind, parse_with};
+use charliebot_html::{EventKind, VOID_TAGS, parse_with};
 use charliebot_registry::{Registry, RegistryError};
 use fancy_regex::Regex;
 use serde::Deserialize;
@@ -55,8 +55,6 @@ static MARKDOWN_LINK_RE: LazyLock<Regex> =
 
 const PAGE_BLOCK_TAGS: &[&str] =
   &["p", "li", "tr", "dd", "dt", "h1", "h2", "h3", "h4", "blockquote", "figcaption", "summary", "pre"];
-const HTML_VOID_TAGS: &[&str] =
-  &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 
 #[derive(Clone)]
 struct InternalIdPattern {
@@ -691,7 +689,7 @@ fn parse_page(html: &str) -> anyhow::Result<PageScan> {
       };
       let in_pre = parent.in_pre || tag == "pre";
       let hidden = parent.hidden || matches!(tag.as_str(), "script" | "style");
-      if event.kind == EventKind::StartTag && !HTML_VOID_TAGS.contains(&tag.as_str()) {
+      if event.kind == EventKind::StartTag && !VOID_TAGS.contains(&tag.as_str()) {
         stack.push(ElementState { tag, block, anchor, code, in_pre, hidden });
       }
     }

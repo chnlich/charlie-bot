@@ -171,6 +171,10 @@ sequence controller	src.features.cron	cron
 sequence controller	src.features.improve	improve
 plan registry	src.features.artifacts	plan_registry
 open waiting items reader	src.features.web_reply	open_waiting_items
+derived waiting items reader	src.features.cron	derived_waiting_items
+backend host alias	src.backends.anthropic_compatible	cc-anthropic-compatible
+host login reader	src.features.host_auth	host_logins
+host probe	src.features.host_auth	host_probe
 fork assertions	src.features.artifacts	fork_assertions
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups

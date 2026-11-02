@@ -6,6 +6,8 @@ use axum::Router;
 use axum::body::to_bytes;
 use charliebot_registry::templating::Templating;
 use http::{Method, Request};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -61,6 +63,17 @@ async fn render(home: &Home, uri: &str) -> (http::StatusCode, String) {
   (status, String::from_utf8(bytes.to_vec()).expect("the page is UTF-8"))
 }
 
+/// The page rendered from a view read at `now`, so the age test asserts against a fixed clock.
+async fn render_at(home: &Home, date: Option<Date>, now: Timestamp) -> (http::StatusCode, String) {
+  let view = crate::day::approval_day_view_at(&home.features, date, now).await.expect("the view reads");
+  let (parts, _) =
+    Request::builder().method(Method::GET).uri("/approval").body(()).expect("the request builds").into_parts();
+  let response = super::render(&home.features, view, &parts).expect("the page renders");
+  let status = response.status();
+  let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+  (status, String::from_utf8(bytes.to_vec()).expect("the page is UTF-8"))
+}
+
 #[tokio::test]
 async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
   let (home, session) = seeded_home().await;
@@ -94,4 +107,63 @@ async fn a_mistyped_date_refuses_before_any_read() {
 
   assert_eq!(status, 422, "{body}");
   assert!(body.contains("YYYY-MM-DD"), "{body}");
+}
+
+#[tokio::test]
+async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
+  let home = Home::new();
+  let session = home.manager("Alpha").await;
+  home
+    .set_web_status(
+      &session,
+      json!({
+        "now": "Running",
+        "waiting": [
+          {"text": "Delete the backup volume", "link": null, "since": "2026-10-30T17:00:00Z", "since_exact": true, "tier": "t0", "rule": "irreversible"},
+          {"text": "Log into the console", "link": null, "since": "2026-11-02T12:00:00Z", "since_exact": true, "tier": "user-act", "rule": null},
+        ],
+        "updated_at": "2026-11-02T17:00:00Z",
+      }),
+    )
+    .await;
+  home
+    .features
+    .startup
+    .insert(Templating::new(repo_root(), &["src.features.approval"]))
+    .expect("the templating inserts once");
+
+  let now: Timestamp = "2026-11-02T17:00:00Z".parse().expect("the fixed clock parses");
+  let today: Date = "2026-11-02".parse().expect("the fixed day parses");
+  let (status, body) = render_at(&home, Some(today), now).await;
+
+  assert_eq!(status, 200, "{body}");
+  // The T0 item started exactly three days before the clock, so its one queue row reads 3 d ago.
+  assert_eq!(body.matches("3 d ago").count(), 1, "{body}");
+  // The user-act item started five hours before the clock; the queue and today's login sheet each show its age.
+  assert_eq!(body.matches("5 h ago").count(), 2, "{body}");
+}
+
+#[tokio::test]
+async fn today_s_view_refreshes_when_the_tab_becomes_visible_and_a_past_day_does_not() {
+  let home = Home::new();
+  home
+    .features
+    .startup
+    .insert(Templating::new(repo_root(), &["src.features.approval"]))
+    .expect("the templating inserts once");
+  let now: Timestamp = "2026-11-02T17:00:00Z".parse().expect("the fixed clock parses");
+  let today: Date = "2026-11-02".parse().expect("the fixed day parses");
+  let past: Date = "2026-10-30".parse().expect("the fixed past day parses");
+
+  for date in [None, Some(today)] {
+    let (status, body) = render_at(&home, date, now).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("visibilitychange"), "{body}");
+    assert!(body.contains("document.visibilityState === 'visible'"), "{body}");
+    assert!(body.contains("location.reload()"), "{body}");
+  }
+
+  let (status, body) = render_at(&home, Some(past), now).await;
+  assert_eq!(status, 200, "{body}");
+  assert!(!body.contains("visibilitychange"), "{body}");
 }

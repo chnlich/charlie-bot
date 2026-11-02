@@ -12,9 +12,9 @@ use charliebot_compat::{responses, routing};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
 use jiff::{Span, civil::Date};
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::day::{self, DayError};
+use super::day::{self, DayError, DayView};
 
 const TEMPLATE: &str = "approval_day.html";
 
@@ -34,7 +34,7 @@ async fn approval_page(State(features): State<Arc<FeatureContext>>, request: Par
     Ok(date) => date,
     Err(error) => return refused_answer(error),
   };
-  let view = match day::approval_day(&features, date).await {
+  let view = match day::approval_day_view(&features, date).await {
     Ok(view) => view,
     Err(error) => return refused_answer(error),
   };
@@ -48,9 +48,9 @@ async fn approval_page(State(features): State<Arc<FeatureContext>>, request: Par
 }
 
 /// The rendered page: the view plus the day navigation.
-fn render(features: &FeatureContext, view: Value, request: &Parts) -> Result<Response, (String, String)> {
-  let date_text = view["date"].as_str().unwrap_or_default().to_string();
-  let day: Date = date_text.parse().map_err(|error| ("ValueError".to_string(), format!("the view's date: {error}")))?;
+fn render(features: &FeatureContext, view: DayView, request: &Parts) -> Result<Response, (String, String)> {
+  let day = view.date;
+  let date_text = view.date.to_string();
   let previous = day.checked_sub(Span::new().days(1)).map_err(|error| ("ValueError".to_string(), error.to_string()))?;
   let next = day.checked_add(Span::new().days(1)).map_err(|error| ("ValueError".to_string(), error.to_string()))?;
   let context = json!({
@@ -58,9 +58,10 @@ fn render(features: &FeatureContext, view: Value, request: &Parts) -> Result<Res
       "date": date_text,
       "previous": previous.to_string(),
       "next": next.to_string(),
-      "queue": view["queue"],
-      "login_sheet": view["login_sheet"],
-      "digest": view["digest"],
+      "is_today": view.date == view.today,
+      "queue": view.body["queue"],
+      "login_sheet": view.body["login_sheet"],
+      "digest": view.body["digest"],
     },
   });
   let templating =

@@ -41,6 +41,7 @@
   let panelStatus = null;
   let panelDescendants = [];
   let panelChildren = [];
+  let panelDerived = [];
   let statusViewShown = false;
   let panelFetchGen = 0;
   // The reader's place in the underlying list, saved when the Status view
@@ -294,11 +295,12 @@
     return item.tier === 'user-act';
   }
 
-  // The panel's user-act items: this session's own and every descendant's.
+  // The panel's user-act items: this session's own, every descendant's, and the derived ones the server holds for
+  // this session's tree.
   function userActItems() {
     const own = panelStatus ? panelStatus.waiting.filter(isUserAct) : [];
     const descendant = panelDescendants.flatMap((child) => child.waiting.filter(isUserAct));
-    return own.concat(descendant);
+    return own.concat(descendant, panelDerived.filter(isUserAct));
   }
 
   // The Pacific-day date the approval page reads by, as its day navigation names it.
@@ -557,6 +559,7 @@
     }
     panelDescendants = body.descendants;
     panelChildren = body.children;
+    panelDerived = body.derived_waiting;
     renderPanel();
   }
 
@@ -573,6 +576,7 @@
     panelStatus = session.web_status || null;
     panelDescendants = [];
     panelChildren = [];
+    panelDerived = [];
     setStatusViewShown(Chat.ForYou.viewFor(session) === STATUS_VIEW);
     absorbWebStatusMessages(messages);
     renderPanel();
@@ -585,6 +589,7 @@
     panelStatus = null;
     panelDescendants = [];
     panelChildren = [];
+    panelDerived = [];
     setStatusViewShown(false);
   }
 

@@ -757,7 +757,26 @@ pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Resu
   Ok(status_payload(&status))
 }
 
-/// The sessions among `session_ids` with a status, an open task and no archived marker.
+/// The session's metadata when the session is open: not archived, not in `archived`, and with an open task. A session
+/// deleted since the task-tree index was read is absent.
+async fn open_meta(
+  store: &Arc<Store>,
+  session_id: &str,
+  archived: &HashSet<String>,
+) -> Result<Option<SessionMetadata>, WebReplyError> {
+  let Some(meta) = store.get_session(session_id).await? else {
+    return Ok(None);
+  };
+  if meta.status == SessionStatus::Archived || archived.contains(session_id) {
+    return Ok(None);
+  }
+  if task_state(store, session_id).await? != "open" {
+    return Ok(None);
+  }
+  Ok(Some(meta))
+}
+
+/// The sessions among `session_ids` that are open and hold a status.
 async fn open_statuses(
   store: &Arc<Store>,
   session_ids: Vec<String>,
@@ -765,29 +784,71 @@ async fn open_statuses(
 ) -> Result<Vec<(String, SessionMetadata, WebStatus)>, WebReplyError> {
   let mut statuses = Vec::new();
   for session_id in session_ids {
-    let Some(meta) = store.get_session(&session_id).await? else {
-      continue; // deleted between the task-tree index read and this metadata read
+    let Some(meta) = open_meta(store, &session_id, archived).await? else {
+      continue;
     };
     let Some(status) = stored_status(&meta)? else {
       continue;
     };
-    if meta.status == SessionStatus::Archived || archived.contains(&session_id) {
-      continue;
-    }
-    if task_state(store, &session_id).await? != "open" {
-      continue;
-    }
     statuses.push((session_id, meta, status));
   }
   Ok(statuses)
 }
 
+/// The derived Waiting on you items that the registry's reader gives: those held by a session in `holders`, or all of
+/// them when `holders` is `None`. The status read and the approval view both list them through this function, and no
+/// stored status holds them.
+async fn derived_items(
+  features: &FeatureContext,
+  holders: Option<&HashSet<String>>,
+) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
+  let read = features.registry.derived_waiting_items_reader().map_err(WebReplyError::Failed)?;
+  let rows = read(features).await.map_err(WebReplyError::Failed)?;
+  Ok(
+    rows
+      .into_iter()
+      .filter(|row| holders.is_none_or(|holders| holders.contains(&row.session_id)))
+      .map(|row| OpenWaitingItem {
+        session_id: row.session_id,
+        session_name: row.session_name,
+        text: row.text,
+        context: row.context,
+        link: row.link,
+        tier: row.tier,
+        rule: row.rule,
+        since: row.since,
+      })
+      .collect(),
+  )
+}
+
+/// A derived item as the status read returns it: its holder, its text and the fields a stored item carries.
+fn derived_payload(item: &OpenWaitingItem) -> Value {
+  json!({
+    "session_id": item.session_id,
+    "text": item.text,
+    "context": item.context,
+    "link": item.link,
+    "tier": item.tier,
+    "rule": item.rule,
+    "since": item.since.to_str(),
+  })
+}
+
 /// The session's status, waiting items of open descendants and Now items of open children, newest
-/// first. A descendant needs waiting items; a child needs a Now value.
+/// first. A descendant needs waiting items; a child needs a Now value. The derived items the session holds ride
+/// beside the stored ones, under `derived_waiting`.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
   let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
+  let mut holders = HashSet::from([session_id.to_string()]);
+  for descendant_id in descendant_ids(&features.store, session_id).await? {
+    if open_meta(&features.store, &descendant_id, &archived).await?.is_some() {
+      holders.insert(descendant_id);
+    }
+  }
+  let derived = derived_items(features, Some(&holders)).await?;
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
   for (descendant_id, child, child_status) in
     open_statuses(&features.store, descendant_ids(&features.store, session_id).await?, &archived).await?
@@ -827,6 +888,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   Ok(json!({
     "session_id": session_id,
     (WEB_STATUS): stored.as_ref().map(status_payload),
+    "derived_waiting": derived.iter().map(derived_payload).collect::<Vec<_>>(),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
     "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
   }))
@@ -851,8 +913,8 @@ pub struct OpenWaitingItem {
   pub since: UtcDateTime,
 }
 
-/// Every open session's Waiting on you items, in metadata-listing order. The approval
-/// day view reads the whole home through this, where the status read reads one task tree.
+/// Every open session's Waiting on you items, the stored ones in metadata-listing order and then the derived ones. The
+/// approval day view reads the whole home through this, where the status read reads one task tree.
 pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
   let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
   let metas = tree_read(&features.store, |store| store.load_session_metas(None)).await?;
@@ -881,6 +943,7 @@ pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWai
       });
     }
   }
+  rows.extend(derived_items(features, None).await?);
   Ok(rows)
 }
 
@@ -953,7 +1016,8 @@ mod tests {
   use serde_json::json;
 
   use super::*;
-  use crate::test_support::{self, Home};
+  use crate::test_support::{self, Home, set_derived_waiting};
+  use charliebot_registry::registry::OpenWaitingRow;
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
 
@@ -2360,5 +2424,60 @@ mod tests {
     read_status(&home.features, &root).await.expect("the status reads again");
     assert_eq!(home.features.store.task_tree_index_build_count(), index_after_first);
     assert_eq!(home.features.store.history_work().full_folds, state_after_first);
+  }
+
+  /// The derived item one holder carries, as the host gate's reader gives it.
+  fn derived_row(session_id: &str) -> OpenWaitingRow {
+    OpenWaitingRow {
+      session_id: session_id.to_string(),
+      session_name: "Synthetic holder".to_string(),
+      text: "Approve the ssh login to synthetic-login-host on /host-auth".to_string(),
+      context: Some("Synthetic login check".to_string()),
+      link: Some("/host-auth".to_string()),
+      tier: Some("user-act".to_string()),
+      rule: None,
+      since: UtcDateTime::parse("2026-11-01T21:43:00-07:00").expect("the fixture time parses"),
+    }
+  }
+
+  #[tokio::test]
+  async fn a_derived_item_rides_the_status_of_its_open_holders_and_no_set_stores_it() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let child = home.child(&root, "child").await;
+    let unrelated = home.manager("unrelated", None).await;
+    set_derived_waiting(&home.root(), vec![derived_row(&root), derived_row(&child), derived_row(&unrelated)]);
+
+    let read = read_status(&home.features, &root).await.expect("the status reads");
+    let held = |read: &Value| -> Vec<String> {
+      read["derived_waiting"]
+        .as_array()
+        .expect("the status lists its derived items")
+        .iter()
+        .map(|item| item["session_id"].as_str().expect("an item names its holder").to_string())
+        .collect()
+    };
+    assert_eq!(
+      held(&read),
+      [root.clone(), child.clone()],
+      "the holder and its open descendants, not the other session"
+    );
+    assert_eq!(
+      held(&read_status(&home.features, &child).await.expect("the child reads")),
+      std::slice::from_ref(&child)
+    );
+
+    // A set stores its own items and leaves the derived ones where the reader gives them.
+    set_status(&home.features, &root, VALID_SET).await.expect("the set stores");
+    assert_eq!(stored(&home, &root).await["waiting"], json!([]));
+    let after = read_status(&home.features, &root).await.expect("the status reads after the set");
+    assert_eq!(held(&after), [root.clone(), child.clone()]);
+    assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
+
+    // The approval view lists every open holder's derived item with the stored ones.
+    let rows = open_waiting_items(&home.features).await.expect("the approval rows read");
+    let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
+    assert_eq!(listed, [root.as_str(), child.as_str(), unrelated.as_str()]);
+    assert!(rows.iter().all(|row| row.tier.as_deref() == Some("user-act") && row.rule.is_none()));
   }
 }

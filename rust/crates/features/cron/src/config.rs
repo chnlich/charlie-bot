@@ -1,6 +1,7 @@
 //! Scheduled-task request and file models.
 
 use charliebot_compat::request_body::{BodyModel, Field, FieldType};
+use charliebot_core::config::CharlieBotConfig;
 use serde::{Deserialize, Serialize};
 
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
@@ -134,6 +135,23 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
     }
   }
   Ok(())
+}
+
+/// The backend a scheduled task fires on: its own `backend`, else the first configured option. The setup seed lists it
+/// per task.
+pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
+  if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
+    if cfg.get_backend_option(backend).is_none() {
+      anyhow::bail!("scheduled task backend '{backend}' is not in backends.options");
+    }
+    return Ok(backend.to_string());
+  }
+  cfg
+    .backends
+    .options
+    .first()
+    .map(|option| option.id.clone())
+    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))
 }
 
 fn default_timezone() -> String {

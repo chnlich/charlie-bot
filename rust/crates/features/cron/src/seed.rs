@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use charliebot_core::config::CharlieBotConfig;
 use serde_json::Value;
 
+use crate::config::effective_backend;
 use crate::loader;
-use crate::scheduler::effective_backend;
 
 /// One seeded entry's report: the job name and whether its host file was `created`, already `exists`, or in a dry
 /// run `would-create`.

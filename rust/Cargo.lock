@@ -416,6 +416,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "charliebot-web-reply",
+ "futures-util",
  "http 1.5.0",
  "jiff",
  "serde_json",

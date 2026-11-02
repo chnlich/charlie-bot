@@ -41,6 +41,11 @@ pub fn classify(returncode: i32, output: &str) -> &'static str {
   STATUS_UNREACHABLE
 }
 
+/// `awaits_approval`: whether a verdict waits for the user to approve the host's login.
+pub fn awaits_approval(status: &str) -> bool {
+  matches!(status, STATUS_NEEDS_OKTA | STATUS_NEEDS_INTERACTIVE_AUTH)
+}
+
 /// `build_detail`: the first output line, plus the first URL line that follows it. An empty output is named by its
 /// return code. The result is capped at `DETAIL_MAX_CHARS` characters.
 pub fn build_detail(returncode: i32, output: &str) -> String {
@@ -61,6 +66,12 @@ pub fn build_detail(returncode: i32, output: &str) -> String {
 pub async fn probe_host(alias: String) -> io::Result<(i32, String)> {
   let argv = ssh::ssh_cmd(&alias, &["true"])?;
   run_probe(&argv, PROBE_TIMEOUT).await
+}
+
+/// `probe_host_fresh`: probe `alias` over a new connection, as the remote launcher's preflight does, so the verdict is
+/// the one a launch gets. The standing poller's reused connection can answer for a login the preflight must renew.
+pub async fn probe_host_fresh(alias: String) -> io::Result<(i32, String)> {
+  run_probe(&ssh::fresh_argv(&alias, &["true"]), PROBE_TIMEOUT).await
 }
 
 /// Run `argv`, read its stdout and stderr in full, and kill it when it outlives `timeout`. The output read before

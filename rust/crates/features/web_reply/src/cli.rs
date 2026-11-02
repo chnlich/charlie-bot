@@ -224,8 +224,9 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then one
-/// block per child with waiting items, then the Now of each open child.
+/// The GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then the derived items the
+/// server holds for the session in their own block, then one block per child with waiting items, then the Now of each
+/// open child.
 fn render_status(result: &Value) -> Result<String, CliExit> {
   let mut lines: Vec<String> = Vec::new();
   let status = field(result, event_types::WEB_STATUS)?;
@@ -265,6 +266,14 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
       }
     }
   }
+  let derived = list(field(result, "derived_waiting")?)?;
+  if !derived.is_empty() {
+    lines.push(String::new());
+    lines.push("Derived by the server (not stored):".to_string());
+    for item in derived {
+      lines.extend(derived_item_lines(item)?);
+    }
+  }
   for row in list(field(result, "descendants")?)? {
     lines.push(String::new());
     lines.push(format!("{} ({})", text_repr::value_str(field(row, "name")?), short_session_id(row)?));
@@ -296,15 +305,30 @@ fn item_lines(item: &Value) -> Result<Vec<String>, CliExit> {
     format!("  since: {}", text_repr::value_str(field(item, "since")?)),
     format!("  since_exact: {}", text_repr::json_dumps(field(item, "since_exact")?, &text_repr::DEFAULT_JSON)),
   ];
-  if let Some(context) = item.get("context").filter(|context| !context.is_null()) {
-    let context = text_repr::value_str(context);
-    let context_lines = splitlines(&context);
-    if let Some((first, rest)) = context_lines.split_first() {
-      lines.push(format!("  context: {first}"));
-      lines.extend(rest.iter().map(|line| format!("  {line}")));
-    }
-  }
+  lines.extend(context_lines(item));
   Ok(lines)
+}
+
+/// A derived item's lines: its text, its start time and its context. The server gives a derived item no `since_exact`.
+fn derived_item_lines(item: &Value) -> Result<Vec<String>, CliExit> {
+  let mut lines = vec![item_line(item)?, format!("  since: {}", text_repr::value_str(field(item, "since")?))];
+  lines.extend(context_lines(item));
+  Ok(lines)
+}
+
+/// The item's context, indented below it: its first line after `context:` and each later line under it.
+fn context_lines(item: &Value) -> Vec<String> {
+  let Some(context) = item.get("context").filter(|context| !context.is_null()) else {
+    return Vec::new();
+  };
+  let context = text_repr::value_str(context);
+  let context_lines = splitlines(&context);
+  let Some((first, rest)) = context_lines.split_first() else {
+    return Vec::new();
+  };
+  let mut lines = vec![format!("  context: {first}")];
+  lines.extend(rest.iter().map(|line| format!("  {line}")));
+  lines
 }
 
 /// A remaining item's `done` flag; a response without a boolean one is a broken server contract.
@@ -362,9 +386,9 @@ mod tests {
 
   use super::render_status;
 
-  /// A GET result for a status that carries `status` and no descendant or child rows.
+  /// A GET result for a status that carries `status` and no descendant, child or derived rows.
   fn status_result(status: serde_json::Value) -> serde_json::Value {
-    json!({"web_status": status, "descendants": [], "children": []})
+    json!({"web_status": status, "descendants": [], "children": [], "derived_waiting": []})
   }
 
   #[test]

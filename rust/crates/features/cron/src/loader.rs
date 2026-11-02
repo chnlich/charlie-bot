@@ -175,15 +175,21 @@ pub fn valid_name(name: &str) -> bool {
     && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-/// Return the unchanged YAML and prompt snapshot until one of its file mtimes moves.
+/// Return the unchanged YAML and prompt snapshot until one of its file mtimes moves. A reload that finds broken files
+/// raises their alert.
 pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> anyhow::Result<CronSnapshot> {
-  let repo = repo_root(features);
-  let directory = cron_dir(cfg);
-  let (snapshot, reloaded) = load_snapshot_for_paths(&directory, repo.path())?;
+  let (snapshot, reloaded) = read_snapshot(features, cfg)?;
   if reloaded {
     fire_error_alert(features, cfg, &snapshot.errors);
   }
   Ok(snapshot)
+}
+
+/// The snapshot of the cron files, and whether it was reloaded, without raising the alert: a read that is not the
+/// scheduler's tick takes its tasks from here.
+pub(crate) fn read_snapshot(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<(CronSnapshot, bool)> {
+  let repo = repo_root(features);
+  load_snapshot_for_paths(&cron_dir(cfg), repo.path())
 }
 
 /// Load one shared cron snapshot, rereading it when a cron YAML appears, disappears or changes mtime, or a prompt

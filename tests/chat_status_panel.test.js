@@ -90,7 +90,7 @@ function panelRig() {
     ['messages', root], ['streaming-msg', stream], ['chat-status-view', view], ['status-waiting-count', badge],
     ['status-new-messages', newMessagesRow], ['scroll-to-bottom', scrollButton],
   ]);
-  const page = {web_status: null, descendants: [], children: []};
+  const page = {web_status: null, descendants: [], children: [], derived_waiting: []};
   const statusGets = [];
   const {context} = baseSessionContext();
   const layout = {mode: 'desktop', callbacks: []};
@@ -113,6 +113,7 @@ function panelRig() {
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
         session_id: sessionId, web_status: page.web_status, descendants: page.descendants, children: page.children,
+        derived_waiting: page.derived_waiting,
       })};
     }
     return {ok: true, status: 200, json: async () => []};
@@ -486,6 +487,27 @@ test('the panel collapses its user-act items, own and descendant, into one login
     ['Child one · ' + CHILD_ID.slice(0, 8)]);
   // The badge counts what the panel shows, so the user-act item stays out of it.
   assert.equal(rig.badge.textContent, '1');
+});
+
+test('a derived user-act item the server holds counts in the login-sheet line and stays out of the item rows', async () => {
+  const rig = panelRig();
+  rig.page.derived_waiting = [{
+    session_id: OTHER_CHILD_ID,
+    text: 'Approve the ssh login to synthetic-login-host on /host-auth',
+    context: 'Synthetic login check',
+    link: '/host-auth',
+    tier: 'user-act',
+    rule: null,
+    since: '2026-11-01T21:43:00-07:00',
+  }];
+  await openSession(rig, {web_status: STATUS});
+  rig.context.setChatView('status');
+  const sheet = viewRow(rig.view, 'login-sheet');
+  assert.ok(sheet, 'the derived user-act item shows in the login-sheet line');
+  assert.ok(allElements(sheet).find((el) => el.textContent === '1 action that only you can do today'));
+  assert.equal(viewWaitingItems(rig.view).some((el) => el.textContent.includes('Approve the ssh login')), false);
+  // The badge counts only the session's stored waiting items.
+  assert.equal(rig.badge.textContent, '2');
 });
 
 test('without user-act items the Status view shows no login-sheet line', async () => {

@@ -58,6 +58,24 @@ pub fn ssh_cmd(host: &str, remote_argv: &[&str]) -> io::Result<Vec<String>> {
   Ok(argv(host, remote_argv, &dir))
 }
 
+/// The argv that runs `remote_argv` on `host` over a new connection, with the options of the remote launcher's
+/// preflight. It names no ControlMaster socket, so a reused connection cannot answer for a login that the preflight
+/// would have to make again.
+pub fn fresh_argv(host: &str, remote_argv: &[&str]) -> Vec<String> {
+  let mut argv = vec![
+    "ssh".to_string(),
+    "-T".to_string(),
+    "-o".to_string(),
+    "BatchMode=yes".to_string(),
+    "-o".to_string(),
+    format!("ConnectTimeout={CONNECT_TIMEOUT_SECONDS}"),
+    "-n".to_string(),
+    host.to_string(),
+  ];
+  argv.extend(remote_argv.iter().map(|arg| arg.to_string()));
+  argv
+}
+
 #[cfg(test)]
 mod tests {
   use std::os::unix::fs::PermissionsExt;
@@ -93,6 +111,14 @@ mod tests {
         .collect();
       assert_eq!(argv(host, &remote, &control_dir), expected, "argv for {host}");
     }
+  }
+
+  #[test]
+  fn fresh_argv_is_the_launch_preflight_without_a_control_socket() {
+    assert_eq!(
+      fresh_argv("host3", &["true"]),
+      ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", "host3", "true"]
+    );
   }
 
   #[test]

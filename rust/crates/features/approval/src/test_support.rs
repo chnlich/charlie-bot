@@ -12,10 +12,12 @@ use charliebot_core::approval_policy::TABLE_RELATIVE_PATH;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
 use charliebot_store::metadata::TaskProfile;
 use charliebot_store::{CreateTask, Store, TaskCaller};
+use futures_util::future::BoxFuture;
 use http::{Method, Request};
 use serde_json::{Map, Value};
 use tempfile::TempDir;
@@ -37,6 +39,15 @@ enable_ask_tier_refusal: false
 ";
 
 /// Writes `text` as the home's approval policy table.
+/// A derived-item reader with no derived items: the approval tests hold no host waits.
+fn register_no_derived_waiting(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  registry.derived_waiting_items(no_derived_waiting)
+}
+
+fn no_derived_waiting(_features: &FeatureContext) -> BoxFuture<'_, anyhow::Result<Vec<OpenWaitingRow>>> {
+  Box::pin(async { Ok(Vec::new()) })
+}
+
 pub fn write_approval_policy_table(home: &Path, text: &str) {
   let path = home.join(TABLE_RELATIVE_PATH);
   fs::create_dir_all(path.parent().expect("the table path has a parent")).expect("config.d");
@@ -62,6 +73,9 @@ impl Home {
       .register_package("src.features.web_reply", charliebot_web_reply::register)
       .expect("the web reply package registers");
     registry.register_package("src.features.approval", crate::register).expect("the approval package registers");
+    registry
+      .register_package("tests.derived_waiting", register_no_derived_waiting)
+      .expect("the derived Waiting on you reader registers");
     let registry = Arc::new(registry);
     let loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.

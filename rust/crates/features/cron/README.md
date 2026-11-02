@@ -2,12 +2,14 @@
 
 Scheduled cron tasks in `config.d/cron.d`. The crate owns the five `/api/cron/tasks` routes, cron task loading and
 validation, the 60-second scheduler, scheduled handlers, task bindings and sequence recovery. The step-boundary
-waiters in `boundary.rs` are the leaf module the scheduler and the sequence controller share.
+waiters in `boundary.rs` are the leaf module the scheduler and the sequence controller share. `host_gate.rs` holds the
+host gate of a fire whose backend names a host (`host_auth_alias`), and the Waiting on you items that the gate's hosts
+derive.
 
 ## Public API
 
 - `register`, which adds the routes, the `cron` turn contribution, the session metadata slot, the startup backend
-  reference check, the scheduler service and the sequence owner
+  reference check, the scheduler service, the sequence owner and the derived Waiting on you reader
 - `GET /api/cron/tasks`, `PUT /api/cron/tasks/{name}`, `POST /api/cron/tasks`, `POST /api/cron/tasks/{name}/run`
   and `DELETE /api/cron/tasks/{name}`
 - `config::DEFAULT_TIMEZONE`, `config::StepConfig`, `config::ScheduledTaskConfig`, `config::ScheduledTaskError`,

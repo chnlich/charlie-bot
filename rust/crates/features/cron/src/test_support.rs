@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
@@ -13,9 +13,11 @@ use charliebot_registry::backend::{
   TransportKind,
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
+use charliebot_registry::registry::HostLogin;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
 use charliebot_store::{CreateTask, Store, TaskCaller};
+use futures_util::future::BoxFuture;
 use nix::errno::Errno;
 use nix::sys::prctl::set_child_subreaper;
 use nix::sys::signal::{Signal, killpg};
@@ -23,12 +25,32 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, getpgid};
 use serde_json::Map;
 use serde_json::Value;
+use serde_yaml::Mapping;
 
 pub fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
   feature_context_with_extra_backends(&[])
 }
 
 pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  let entries: Vec<(&str, Mapping)> =
+    std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()).map(|id| (id, Mapping::new())).collect();
+  feature_context_with_entries(&entries)
+}
+
+/// A feature context whose synthetic backend entries each log into a host: every `(backend id, host alias)` pair is an
+/// entry that names the host through `host_auth_alias`, as a `cc-anthropic-compatible` entry does.
+pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  let mut entries = vec![("synthetic", Mapping::new())];
+  for (id, alias) in hosts {
+    let mut fields = Mapping::new();
+    fields.insert("host_auth_alias".into(), (*alias).into());
+    entries.push((*id, fields));
+  }
+  feature_context_with_entries(&entries)
+}
+
+/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type.
+fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let home = tempfile::tempdir().expect("temporary cron home");
   std::fs::create_dir_all(home.path().join("sessions")).expect("session directory provisions");
   std::fs::create_dir_all(home.path().join("config.d/cron.d")).expect("cron directory provisions");
@@ -37,6 +59,7 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   registry.register_package("src.features.cron", crate::register).expect("cron registration");
   registry.register_package("test.cron_handlers", register_test_handler).expect("handler registration");
   registry.register_package("test.cron_backend", register_test_backend).expect("backend registration");
+  registry.register_package("test.host_auth", register_host_auth_stub).expect("host auth registration");
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");
   cfg.paths.worktree_dir = home.path().join("worktrees").display().to_string();
@@ -45,14 +68,14 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   // A worker launch is withheld below `server.min_free_disk_gib`. The production default of 10 GiB can exceed a CI
   // runner's free disk, so this fixture pins the check off; the tasks crate tests the withhold itself.
   cfg.server.min_free_disk_gib = 0;
-  for id in std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()) {
+  for (id, type_fields) in entries {
     cfg.backends.options.push(BackendOption {
       id: id.to_string(),
       label: id.to_string(),
       prompt_overlay: None,
       model: format!("{id}-model"),
       backend_type: "synthetic".to_string(),
-      type_fields: serde_yaml::Mapping::new(),
+      type_fields: type_fields.clone(),
     });
     cfg.backends.pool.push(id.to_string());
   }
@@ -176,6 +199,60 @@ fn register_test_backend(registry: &mut Registry) -> Result<(), RegistryError> {
     factory: Arc::new(TestBackendFactory),
     lifecycle: None,
     translate_fallback: false,
+  })?;
+  registry.backend_host_alias("synthetic", synthetic_host_alias)
+}
+
+/// The synthetic entries name a host the way `cc-anthropic-compatible` entries do.
+fn synthetic_host_alias(fields: &Mapping) -> Result<Option<String>, String> {
+  Ok(fields.get("host_auth_alias").and_then(serde_yaml::Value::as_str).map(str::to_string))
+}
+
+/// The host verdicts the stub host readers serve, each with the profile home it belongs to, and each probe the stub ran.
+/// Tests set a verdict per home and alias, so parallel tests never share one.
+static HOST_VERDICTS: Mutex<Vec<(PathBuf, HostLogin)>> = Mutex::new(Vec::new());
+static HOST_PROBES: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+
+/// Set the verdict a home's stub host reports for `login.alias`, replacing an earlier one.
+pub fn set_host_login(home: &Path, login: HostLogin) {
+  let mut verdicts = HOST_VERDICTS.lock().expect("the verdict list is not poisoned");
+  verdicts.retain(|(owner, existing)| !(owner == home && existing.alias == login.alias));
+  verdicts.push((home.to_path_buf(), login));
+}
+
+/// How many times the stub probed `alias` for the profile home.
+pub fn host_probe_count(home: &Path, alias: &str) -> usize {
+  HOST_PROBES
+    .lock()
+    .expect("the probe log is not poisoned")
+    .iter()
+    .filter(|(owner, probed)| owner == home && probed == alias)
+    .count()
+}
+
+fn register_host_auth_stub(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.host_logins(host_logins_stub)?;
+  registry.host_probe(host_probe_stub)
+}
+
+fn host_logins_stub(features: &FeatureContext) -> anyhow::Result<Vec<HostLogin>> {
+  let home = features.config.get()?.charliebot_home.clone();
+  let verdicts = HOST_VERDICTS.lock().expect("the verdict list is not poisoned");
+  Ok(verdicts.iter().filter(|(owner, _)| *owner == home).map(|(_, login)| login.clone()).collect())
+}
+
+/// The stub's probe answers with the verdict set for the alias. An alias with no verdict is an error, as an alias the
+/// ssh config does not name is for the real probe.
+fn host_probe_stub<'a>(features: &'a FeatureContext, alias: &'a str) -> BoxFuture<'a, anyhow::Result<HostLogin>> {
+  Box::pin(async move {
+    let home = features.config.get()?.charliebot_home.clone();
+    HOST_PROBES.lock().expect("the probe log is not poisoned").push((home.clone(), alias.to_string()));
+    let verdicts = HOST_VERDICTS.lock().expect("the verdict list is not poisoned");
+    verdicts
+      .iter()
+      .find(|(owner, login)| *owner == home && login.alias == alias)
+      .map(|(_, login)| login.clone())
+      .ok_or_else(|| anyhow::anyhow!("no verdict is set for host {alias}"))
   })
 }
 
@@ -344,13 +421,71 @@ impl Default for ProcessGroupGuard {
 }
 
 pub async fn manager(features: &FeatureContext, request_id: &str) -> anyhow::Result<SessionMetadata> {
+  task_manager(features, None, request_id).await
+}
+
+/// A manager session under `parent_id`, the shape a task tree gives a child.
+pub async fn child_manager(
+  features: &FeatureContext,
+  parent_id: &str,
+  request_id: &str,
+) -> anyhow::Result<SessionMetadata> {
+  task_manager(features, Some(parent_id), request_id).await
+}
+
+/// Archive a task session as the completion owner's archive writes it: one closed fact on the session.
+pub async fn archive_task(features: &FeatureContext, session_id: &str) {
+  let guard = features.store.control_lock().await;
+  let event = charliebot_store::control_events::build_control_event(
+    charliebot_core::event_types::TASK_CLOSED,
+    "user",
+    session_id,
+    None,
+    None,
+    [
+      ("request_id".to_string(), serde_json::json!("synthetic-cron-archive")),
+      ("outcome".to_string(), serde_json::json!("archived")),
+      ("summary".to_string(), serde_json::json!("archived by the user")),
+      ("result_refs".to_string(), serde_json::json!([])),
+      ("run_ids".to_string(), serde_json::json!([])),
+      ("report_to".to_string(), Value::Null),
+    ],
+  );
+  features.store.append_control_fact(&guard, session_id, event).await.expect("the archive fact appends");
+  drop(guard);
+  features.store.invalidate_tree_index();
+}
+
+/// Write one cron task file under the home's `config.d/cron.d`, where the task loader reads it.
+pub fn write_task(home: &Path, name: &str, body: &Value) -> PathBuf {
+  let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
+  std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+  std::fs::write(&path, charliebot_core::yaml::dump(body).unwrap()).unwrap();
+  path
+}
+
+/// Write one worker task whose prompt is `HELD_ROUND_GOAL`, in a prompt file the task points to through `prompt_file`.
+/// A cron.d host file may not carry an inline `prompt`, so the loader would isolate it as broken.
+pub fn write_prompted_task(home: &Path, name: &str, body: &Value) -> PathBuf {
+  let prompt = home.join(format!("{name}-prompt.md"));
+  std::fs::write(&prompt, format!("{HELD_ROUND_GOAL}\n")).unwrap();
+  let mut body = body.clone();
+  body["prompt_file"] = Value::String(prompt.display().to_string());
+  write_task(home, name, &body)
+}
+
+async fn task_manager(
+  features: &FeatureContext,
+  parent_id: Option<&str>,
+  request_id: &str,
+) -> anyhow::Result<SessionMetadata> {
   Ok(
     features
       .store
       .create_task(
         CreateTask {
           request_id: request_id.to_string(),
-          task_parent_id: None,
+          task_parent_id: parent_id.map(str::to_string),
           profile: TaskProfile::Manager,
           task: Some(TaskSpec { goal: "Synthetic cron manager".to_string(), ..TaskSpec::default() }),
           name: Some("Synthetic cron manager".to_string()),

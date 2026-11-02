@@ -12,11 +12,13 @@ use charliebot_core::config::{BackendOption, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, RunningTurnInputs, StartupState};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, Store, Subscription, TaskCaller, session_channel};
+use futures_util::future::BoxFuture;
 use http::{Method, Request};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -66,6 +68,28 @@ fn register_plans(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.plan_registry(read_plans_fixture)
 }
 
+/// The derived Waiting on you rows the stub reader serves, each with the profile home it belongs to.
+static DERIVED_ROWS: Mutex<Vec<(PathBuf, OpenWaitingRow)>> = Mutex::new(Vec::new());
+
+/// Set the derived rows that the stub reader serves for the profile home `home`, replacing the earlier ones.
+pub fn set_derived_waiting(home: &Path, rows: Vec<OpenWaitingRow>) {
+  let mut stored = DERIVED_ROWS.lock().expect("the derived rows are not poisoned");
+  stored.retain(|(owner, _)| owner != home);
+  stored.extend(rows.into_iter().map(|row| (home.to_path_buf(), row)));
+}
+
+fn register_derived_waiting(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.derived_waiting_items(read_derived_waiting)
+}
+
+fn read_derived_waiting(features: &FeatureContext) -> BoxFuture<'_, anyhow::Result<Vec<OpenWaitingRow>>> {
+  Box::pin(async move {
+    let home = features.config.get()?.charliebot_home.clone();
+    let stored = DERIVED_ROWS.lock().expect("the derived rows are not poisoned");
+    Ok(stored.iter().filter(|(owner, _)| *owner == home).map(|(_, row)| row.clone()).collect())
+  })
+}
+
 /// The origin slots a thread session carries; the web test only reads them, so each is a null field.
 fn register_origins(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.metadata_slot(MetadataSlot {
@@ -109,6 +133,9 @@ impl Home {
     registry.register_package("src.features.web_reply", crate::register).expect("the web reply package registers");
     registry.register_package("tests.origins", register_origins).expect("the origin slots register");
     registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
+    registry
+      .register_package("tests.derived_waiting", register_derived_waiting)
+      .expect("the derived Waiting on you reader registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.

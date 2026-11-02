@@ -19,5 +19,6 @@ tokio.workspace = true
 
 [dev-dependencies]
 charliebot-web-reply.workspace = true
+futures-util.workspace = true
 tempfile.workspace = true
 tower.workspace = true

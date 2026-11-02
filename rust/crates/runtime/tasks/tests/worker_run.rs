@@ -1314,9 +1314,14 @@ fn install_router(stack: &Stack, directory: &Path, body: &str, arguments: &[Stri
   stack.replace_config(cfg)
 }
 
-/// A router body that answers `backends` in that order. It drains its request first, as a router reads its stdin.
+/// A router body that prints `answer` as its one JSON object. It drains its request first, as a router reads its stdin.
+fn router_answer_body(answer: Value) -> String {
+  format!("cat >/dev/null\nprintf '%s' '{answer}'")
+}
+
+/// A router body that routes to `backends` in that order.
 fn router_order_body(backends: &[&str]) -> String {
-  format!("cat >/dev/null\nprintf '%s' '{}'", json!({"backends": backends, "reason": "design p=0.9"}))
+  router_answer_body(json!({"routed": true, "backends": backends, "reason": "design p=0.9"}))
 }
 
 /// A router body that fails: it writes `router boom` to stderr and exits 3.
@@ -1462,7 +1467,7 @@ async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_ba
   install_router(
     &stack,
     router_dir.path(),
-    "cat > \"$1\"\nprintf '%s\\n' started >> \"$2\"\nprintf '%s' '{\"backends\":[\"fake2\"],\"reason\":\"verify route\"}'",
+    "cat > \"$1\"\nprintf '%s\\n' started >> \"$2\"\nprintf '%s' '{\"routed\":true,\"backends\":[\"fake2\"],\"reason\":\"verify route\"}'",
     &[capture.display().to_string(), calls.display().to_string()],
   )?;
   let manager = stack.node("router-parent", None, TaskProfile::Manager, None).await?;
@@ -1491,39 +1496,120 @@ async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_ba
 
   let request: Value = serde_json::from_slice(&std::fs::read(capture)?)?;
   assert_eq!(request["role"], "verify");
-  assert_eq!(request["text"], "Task type: verify\n\nconfirm the change");
+  assert_eq!(request["text"], "confirm the change");
+  assert_eq!(request["session_backend"], "fake", "the manager's backend, which the router sees");
   assert_eq!(request["candidates"], json!([{"id": "fake2", "cooling_until": null}]));
   assert_eq!(std::fs::read_to_string(calls)?, "started\n");
   assert_eq!(stack.wait_terminal(child_id, run_id).await?, RunOutcomeKind::Success);
   Ok(())
 }
 
-/// A router failure is returned before the delegation handler creates a worker child.
+/// A router failure does not fail the delegation: the implement takes the pool, and its node's route names the failure.
 #[tokio::test]
-async fn router_failure_returns_502_without_creating_a_worker() -> anyhow::Result<()> {
-  let scripts = Scripts::new(vec![result_script("unused")]);
-  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
-  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
-  stack.write_access_key()?;
+async fn a_router_failure_takes_the_pool_and_records_the_failure() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
-  install_router(&stack, router_dir.path(), "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[])?;
-  let manager = stack.node("router-error-parent", None, TaskProfile::Manager, None).await?;
-  stack.dispatch.set_executor(None);
-  stack.dispatch.admit_input(&manager.id, event_types::USER, "Take off and delegate this.", "user", json!({})).await?;
-  let before = stack.store().child_ids(&manager.id)?;
+  install_router(&stack, router_dir.path(), FAILING_ROUTER, &[])?;
 
-  let body = json!({
-    "session_id": manager.id,
-    "description": "run the script",
-    "task_type": "script-run",
-  });
-  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+  let body = json!({"session_id": manager, "description": "implement the change", "task_type": "implement"});
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
+  let route = meta.extra("route").expect("the node records its route");
+  assert_eq!(route["backends"], json!([]));
+  let reason = route["reason"].as_str().unwrap_or_default();
+  assert!(reason.starts_with("router failed: ") && reason.contains("router boom"), "{route}");
+  Ok(())
+}
 
-  assert_eq!(status, StatusCode::BAD_GATEWAY, "{response}");
-  assert!(response["detail"].as_str().unwrap_or_default().contains("router boom"), "{response}");
-  assert_eq!(stack.store().child_ids(&manager.id)?, before);
-  assert!(
-    stack.store().load_chat_events_sync(&manager.id)?.iter().all(|event| event["type"] != event_types::TASK_DELEGATED)
+/// A verify whose router fails keeps the verify selection: the reviewer is the pool member the session does not run on.
+#[tokio::test]
+async fn a_verify_router_failure_takes_the_verify_selection() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("verified")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), FAILING_ROUTER, &[])?;
+
+  let body = json!({"session_id": manager, "description": "confirm the change", "task_type": "verify"});
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake2", "the pool member that is not the session's backend");
+  assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
+  let reason = meta.extra("route").and_then(|route| route["reason"].as_str()).unwrap_or_default();
+  assert!(reason.starts_with("router failed: "), "{reason}");
+  Ok(())
+}
+
+/// A quick-edit the router does not list takes the pool, and its node's route says the router did not route it.
+#[tokio::test]
+async fn an_unrouted_quick_edit_takes_the_pool_and_records_why() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(
+    &stack,
+    router_dir.path(),
+    &router_answer_body(json!({"routed": false, "backends": [], "reason": "quick-edit not routed"})),
+    &[],
+  )?;
+
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "quick-edit not routed"})));
+  Ok(())
+}
+
+/// A verify the router does not list keeps the verify selection, and its node's route says why.
+#[tokio::test]
+async fn an_unrouted_verify_takes_the_verify_selection_and_records_why() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("verified")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(
+    &stack,
+    router_dir.path(),
+    &router_answer_body(json!({"routed": false, "backends": [], "reason": "verify not routed"})),
+    &[],
+  )?;
+
+  let body = json!({"session_id": manager, "description": "confirm the change", "task_type": "verify"});
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake2", "the pool member that is not the session's backend");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "verify not routed"})));
+  Ok(())
+}
+
+/// A routed list whose members are all cooling runs on the pool, and the route says the routed members were cooling.
+#[tokio::test]
+async fn a_routed_list_that_is_all_cooling_runs_on_the_pool_and_says_so() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
+  backend_pool::backend_pool(&stack.features)?.cool("fake2", None);
+
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
+  assert_eq!(
+    meta.extra("route"),
+    Some(&json!({"backends": ["fake2"], "reason": "design p=0.9; fake2 cooling; ran on pool"}))
   );
   Ok(())
 }

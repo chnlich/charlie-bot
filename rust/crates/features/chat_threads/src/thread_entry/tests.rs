@@ -998,7 +998,7 @@ async fn accept_summon_routes_the_full_thread_before_creating_the_session() {
   let capture_text = capture.to_string_lossy().into_owned();
   let command = router_command(
     &router_dir,
-    "cat > \"$1\"\nprintf '%s' '{\"backends\":[\"synthetic-strong\"],\"reason\":\"thread route\"}'",
+    "cat > \"$1\"\nprintf '%s' '{\"routed\":true,\"backends\":[\"synthetic-strong\"],\"reason\":\"thread route\"}'",
     &[&capture_text],
   );
   let home = Home::with_router(command);
@@ -1014,12 +1014,13 @@ async fn accept_summon_routes_the_full_thread_before_creating_the_session() {
   let input: Value = serde_json::from_slice(&fs::read(capture).unwrap()).unwrap();
   assert_eq!(input["role"], "thread");
   assert_eq!(input["text"], "u:  first \nu: second\nline");
+  assert!(input["session_backend"].is_null(), "a thread has no session backend");
   assert_eq!(input["candidates"].as_array().unwrap().len(), 2);
   settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }
 
 #[tokio::test]
-async fn accept_summon_posts_router_failure_without_creating_a_session() {
+async fn accept_summon_takes_the_default_backend_when_the_router_fails_without_posting() {
   let router_dir = tempfile::tempdir().unwrap();
   let command = router_command(&router_dir, "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[]);
   let home = Home::with_router(command);
@@ -1027,20 +1028,48 @@ async fn accept_summon_posts_router_failure_without_creating_a_session() {
   let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
   let (origin_value, block) = (origin(), summon_block());
 
-  let error = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap_err();
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
 
-  assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
-  assert!(home.features.store.get_session("s1").await.unwrap().is_none());
-  assert_eq!(adapter.posts.lock().unwrap().len(), 1);
-  assert!(adapter.posts.lock().unwrap()[0].1.contains("router boom"));
-  assert!(home.launches().is_empty());
+  let meta = home.meta(&sid).await;
+  assert_eq!(meta.backend, "synthetic-fakechat", "the default backend");
+  let route = meta.extra("route").expect("the session records its route");
+  assert_eq!(route["backends"], json!([]));
+  assert!(route["reason"].as_str().unwrap().starts_with("router failed: "), "{route}");
+  assert!(route["reason"].as_str().unwrap().contains("router boom"), "{route}");
+  assert!(adapter.posts.lock().unwrap().is_empty(), "a router failure posts nothing into the thread");
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
+}
+
+#[tokio::test]
+async fn accept_summon_takes_the_default_backend_when_the_router_does_not_route_the_thread() {
+  let router_dir = tempfile::tempdir().unwrap();
+  let command = router_command(
+    &router_dir,
+    "cat >/dev/null\nprintf '%s' '{\"routed\":false,\"backends\":[],\"reason\":\"thread not routed\"}'",
+    &[],
+  );
+  let home = Home::with_router(command);
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
+
+  let meta = home.meta(&sid).await;
+  assert_eq!(meta.backend, "synthetic-fakechat", "the default backend");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "thread not routed"})));
+  assert!(adapter.posts.lock().unwrap().is_empty(), "an unrouted thread posts nothing");
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }
 
 #[tokio::test]
 async fn accept_summon_uses_the_pool_for_an_empty_router_order() {
   let router_dir = tempfile::tempdir().unwrap();
-  let command =
-    router_command(&router_dir, "cat >/dev/null\nprintf '%s' '{\"backends\":[],\"reason\":\"no preference\"}'", &[]);
+  let command = router_command(
+    &router_dir,
+    "cat >/dev/null\nprintf '%s' '{\"routed\":true,\"backends\":[],\"reason\":\"no preference\"}'",
+    &[],
+  );
   let home = Home::with_router(command);
   let adapter = FakeAdapter::with_thread(&[]);
   let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();

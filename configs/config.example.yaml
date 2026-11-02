@@ -58,13 +58,14 @@ backends:
   # An id names the model family, never a version: a version bump edits only the
   # entry's model and label (the id rule: usage's startup check in rust/crates/features/usage/src/backend_ids.rs
   # refuses an id outside the prefixes the backend types register).
-  # Router program that orders unpinned work (commented out: without this section the pool
+  # Router program that routes unpinned work (commented out: without this section the pool
   # rotation alone decides, as it always has). The first item resolves on the server process's
-  # PATH; each selection starts it once, feeds it one JSON object on stdin ({role, text,
-  # candidates: [{id, cooling_until}]}) and reads one JSON object on stdout
-  # ({backends: [id, ...], reason: "one line"}). The server side is route_command in
-  # rust/crates/runtime/agents/src/backend_pool.rs; the charliebot router CLI it names is the Rust
-  # subcommand in rust/crates/app/cli/src/commands/router.rs, which reads <charliebot home>/router.yaml.
+  # PATH; each request starts it once, feeds it one JSON object on stdin ({role, text,
+  # session_backend, candidates: [{id, cooling_until}]}; session_backend is null for a thread) and
+  # reads one JSON object on stdout ({routed: true|false, backends: [id, ...], reason: "one line"}).
+  # The server side is route_command in rust/crates/runtime/agents/src/backend_pool.rs; the charliebot
+  # router CLI it names is the Rust subcommand in rust/crates/app/cli/src/commands/router.rs, which
+  # reads <charliebot home>/router.yaml (configs/router.example.yaml shows its form).
   # routing:
   #   command: [charliebot, router]
   # Option id that a delegation declared with `charliebot delegate --context-work 1` runs on (see its help).

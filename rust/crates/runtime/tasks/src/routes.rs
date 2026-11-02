@@ -8,6 +8,7 @@ use axum::extract::{FromRequestParts, Path, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use charliebot_agents::backend_pool::{RouteTarget, RoutedRequest};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -368,42 +369,44 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     && matches!(request.task_type, TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun | TaskType::Verify)
     && cfg.backends.routing.is_some()
   {
-    let avoided = if request.task_type == TaskType::Verify {
-      match crate::spawner_backends::session_backend_id(&cfg, &session_meta) {
-        Ok(backend_id) => Some(backend_id),
-        Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
-      }
-    } else {
-      None
+    let session_backend = match crate::spawner_backends::session_backend_id(&cfg, &session_meta) {
+      Ok(backend_id) => backend_id,
+      Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
     };
+    let avoided = (request.task_type == TaskType::Verify).then_some(session_backend.as_str());
     let candidates = cfg
       .backends
       .options
       .iter()
-      .filter(|option| avoided.as_deref() != Some(option.id.as_str()))
+      .filter(|option| avoided != Some(option.id.as_str()))
       .map(|option| option.id.clone())
       .collect::<Vec<_>>();
     let role = task_type_name(request.task_type);
-    let text = format!("Task type: {role}\n\n{}", request.description);
-    let routed = match pool.route(&cfg, role, &text, &candidates).await {
-      Ok(route) => route,
+    let decided = match pool.route(&cfg, role, &request.description, &candidates, Some(&session_backend)).await {
+      Ok(answer) => match pool.decide(&cfg, role, answer) {
+        Ok(decided) => decided,
+        Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+      },
       Err(error) => {
-        return responses::json(
-          StatusCode::BAD_GATEWAY,
-          &json!({ "detail": format!("backend router failed: {error}") }),
+        tracing::warn!(
+          target: "charliebot_tasks",
+          request_id = %delegate_request_id(&request),
+          session = %request.session_id,
+          error = %error,
+          "delegate_route_failed"
         );
+        RoutedRequest::failed(&error)
       }
     };
-    route = Some(routed.clone());
-    match pool.pick_ordered(&cfg, role, &routed.backends, &[]) {
-      Ok(Some(option)) => {
+    route = Some(decided.route);
+    match decided.target {
+      RouteTarget::Backend(option) => {
         match crate::spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model)) {
           Ok(option) => Some((option.id, Some(option.model), false)),
           Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
         }
       }
-      Ok(None) => None,
-      Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+      RouteTarget::NotRouted | RouteTarget::Pool => None,
     }
   } else {
     None

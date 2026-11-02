@@ -1007,10 +1007,7 @@ impl Store {
       )
       .await?;
     if meta.is_some() {
-      let rating_name = rating.map(|rating| match rating {
-        RoundRating::ThumbsUp => "thumbs_up",
-        RoundRating::ThumbsDown => "thumbs_down",
-      });
+      let rating_name = rating.map(RoundRating::as_str);
       tracing::info!(session_id, round_id, rating = ?rating_name, "round_rated");
     }
     Ok(meta)

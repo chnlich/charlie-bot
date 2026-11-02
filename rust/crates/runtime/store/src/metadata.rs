@@ -183,12 +183,54 @@ impl TaskApprover {
   }
 }
 
+/// The wire spelling of a thumbs-up round rating.
+pub const THUMBS_UP: &str = "thumbs_up";
+/// The wire spelling of a thumbs-down round rating.
+pub const THUMBS_DOWN: &str = "thumbs_down";
+
 /// Round feedback value persisted in `round_ratings`.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RoundRating {
   ThumbsUp,
   ThumbsDown,
+}
+
+impl RoundRating {
+  /// The wire spelling stored in `round_ratings` and named in a rate request.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::ThumbsUp => THUMBS_UP,
+      Self::ThumbsDown => THUMBS_DOWN,
+    }
+  }
+
+  /// The rating that a stored or requested wire value names.
+  pub fn from_wire(value: &str) -> Option<Self> {
+    match value {
+      THUMBS_UP => Some(Self::ThumbsUp),
+      THUMBS_DOWN => Some(Self::ThumbsDown),
+      _ => None,
+    }
+  }
+}
+
+impl Serialize for RoundRating {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: Serializer,
+  {
+    serializer.serialize_str(self.as_str())
+  }
+}
+
+impl<'de> Deserialize<'de> for RoundRating {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let value = String::deserialize(deserializer)?;
+    Self::from_wire(&value).ok_or_else(|| serde::de::Error::unknown_variant(&value, &[THUMBS_UP, THUMBS_DOWN]))
+  }
 }
 
 /// Round ratings in source order, the order the serialized object keeps.

@@ -15,7 +15,6 @@
       "status": 200,
       "body": {
         "session_id": "abc",
-        "derived_waiting": [],
         "web_status": null,
         "descendants": [
           {

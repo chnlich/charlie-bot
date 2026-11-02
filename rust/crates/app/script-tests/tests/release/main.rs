@@ -346,8 +346,8 @@ const LIVE_CREDENTIAL: &str = "deploy-endpoint";
 fn live_home(sandbox: &Sandbox, credential: bool) -> PathBuf {
   let home = sandbox.dir("live-home");
   let mut config = format!(
-    "backends:\n  options:\n    - id: deploy-endpoint\n      type: charlie-code\n      model: openai/test-model\n      \
-api_base: {LIVE_API_BASE}\n"
+    "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: deploy-endpoint\n      type: \
+charlie-code\n      model: openai/test-model\n      api_base: {LIVE_API_BASE}\n"
   );
   let mut credentials = String::new();
   if credential {
@@ -360,12 +360,26 @@ api_base: {LIVE_API_BASE}\n"
   home
 }
 
+/// A live home like [`live_home`] with the local work guard on and, when `runner_host` is set, the runner section.
+fn guarded_live_home(sandbox: &Sandbox, runner_host: Option<&str>) -> PathBuf {
+  let home = live_home(sandbox, false);
+  let config = fs::read_to_string(home.join("config.yaml")).expect("the live config");
+  let config = config.replace("server:\n  enable_local_work_guard: false\n", "server:\n  enable_local_work_guard: true\n");
+  let config = match runner_host {
+    Some(host) => format!("{config}remote_run:\n  host: {host}\n"),
+    None => config,
+  };
+  fs::write(home.join("config.yaml"), config).expect("the live config");
+  home
+}
+
 /// A live home whose only backend entry sets no `api_base`.
 fn live_home_without_an_endpoint(sandbox: &Sandbox) -> PathBuf {
   let home = sandbox.dir("live-home");
   fs::write(
     home.join("config.yaml"),
-    "backends:\n  options:\n    - id: subscription\n      type: claude\n      model: claude-example\n",
+    "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: subscription\n      type: claude\n      \
+model: claude-example\n",
   )
   .expect("the live config");
   fs::write(home.join("credentials.yaml"), format!("charliebot:\n  access_key: {}\n", "0".repeat(64)))
@@ -570,6 +584,49 @@ fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
   let calls = recorded_calls(&calls);
   assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live config: {calls}");
   assert!(!calls.contains("free-port"), "the preflight continued past a config with no endpoint: {calls}");
+}
+
+#[test]
+fn test_trial_preflight_refuses_a_live_config_whose_guard_runs_without_a_runner_host() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("charlie-code", "exit 0\n");
+  let home = guarded_live_home(&sandbox, None);
+  let (release, calls) = write_trial_release(&sandbox);
+
+  let run = trial_preflight(&sandbox, &home, &release);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.contains("runs the local work guard without remote_run.host"),
+    "{}",
+    run.describe()
+  );
+  let calls = recorded_calls(&calls);
+  assert!(calls.contains("config get server.enable_local_work_guard"), "the preflight did not read the switch: {calls}");
+  assert!(calls.contains("config get remote_run.host"), "the preflight did not read the runner host: {calls}");
+  assert!(!calls.contains("free-port"), "the refusal started the trial: {calls}");
+}
+
+#[test]
+fn test_trial_preflight_accepts_a_live_config_whose_guard_runs_with_a_runner_host() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("charlie-code", "exit 0\n");
+  let home = guarded_live_home(&sandbox, Some("build-host.example"));
+  let (release, calls) = write_trial_release(&sandbox);
+
+  let run = trial_preflight(&sandbox, &home, &release);
+
+  // free-port still refuses, so nothing starts; the guard check is not what stopped the preflight.
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(!run.stderr.contains("remote_run.host"), "{}", run.describe());
+  assert!(
+    run.stderr.contains("a free 127.0.0.1 port exists in 18650-18669")
+      || run.stderr.contains("agents' slice cgroup directory is writable"),
+    "the preflight stopped at the guard check: {}",
+    run.describe()
+  );
+  let calls = recorded_calls(&calls);
+  assert!(calls.contains("config get remote_run.host"), "the preflight did not read the runner host: {calls}");
 }
 
 #[test]

@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use charliebot_core::config::ServerConfig;
+use charliebot_core::config::{RemoteRunConfig, ServerConfig};
 use charliebot_registry::backend::Env;
 
 /// The refusal scripts' directory, relative to the runtime checkout.
@@ -26,10 +26,10 @@ struct LocalWorkGuard {
   remote_run_remote_base: Option<String>,
 }
 
-/// Reads the switch and the runner keys of `server`, for the checkout at `repo_root`. The server calls this once, before
-/// any agent run; an error names the key that the start must fix.
-pub fn configure(repo_root: &Path, server: &ServerConfig) -> Result<(), String> {
-  let guard = LocalWorkGuard::from_server(repo_root, server)?;
+/// Reads the guard switch of `server` and the runner keys of `remote_run`, for the checkout at `repo_root`. The server
+/// calls this once, before any agent run; an error names the key that the start must fix.
+pub fn configure(repo_root: &Path, server: &ServerConfig, remote_run: &RemoteRunConfig) -> Result<(), String> {
+  let guard = LocalWorkGuard::from_server(repo_root, server, remote_run)?;
   GUARD.set(guard).map_err(|_| "the local work guard is configured twice in one process".to_string())
 }
 
@@ -44,13 +44,13 @@ pub fn child_env(env: &mut Env) {
 
 impl LocalWorkGuard {
   /// The guard for `server`, or `None` when its switch is off.
-  fn from_server(repo_root: &Path, server: &ServerConfig) -> Result<Option<Self>, String> {
+  fn from_server(repo_root: &Path, server: &ServerConfig, remote_run: &RemoteRunConfig) -> Result<Option<Self>, String> {
     if !server.enable_local_work_guard {
       return Ok(None);
     }
-    let remote_run_host = server.remote_run_host.clone().filter(|host| !host.is_empty()).ok_or_else(|| {
-      "server.remote_run_host is required while server.enable_local_work_guard is true: set it to the ssh alias of \
-       the build host"
+    let remote_run_host = remote_run.host.clone().filter(|host| !host.is_empty()).ok_or_else(|| {
+      "remote_run.host is required while server.enable_local_work_guard is true: set it to the ssh alias of the build \
+       host"
         .to_string()
     })?;
     let dir = repo_root.join(GUARD_DIR);
@@ -61,7 +61,7 @@ impl LocalWorkGuard {
         dir.display()
       ));
     }
-    Ok(Some(Self { dir, remote_run_host, remote_run_remote_base: server.remote_run_remote_base.clone() }))
+    Ok(Some(Self { dir, remote_run_host, remote_run_remote_base: remote_run.remote_base.clone() }))
   }
 
   /// Adds the refusal variables to `env`. An entry already set keeps its value after the guard's entry.
@@ -98,6 +98,10 @@ mod tests {
   use super::*;
 
   fn server(yaml: &str) -> ServerConfig {
+    serde_yaml::from_str(yaml).unwrap()
+  }
+
+  fn remote_run(yaml: &str) -> RemoteRunConfig {
     serde_yaml::from_str(yaml).unwrap()
   }
 
@@ -140,9 +144,23 @@ mod tests {
   #[test]
   fn the_switch_off_configures_no_guard_and_a_missing_runner_host_names_its_key() {
     let root = Path::new("/checkout");
-    assert_eq!(LocalWorkGuard::from_server(root, &server("enable_local_work_guard: false")).unwrap(), None);
+    assert_eq!(
+      LocalWorkGuard::from_server(root, &server("enable_local_work_guard: false"), &remote_run("{}")).unwrap(),
+      None
+    );
 
-    let error = LocalWorkGuard::from_server(root, &server("enable_local_work_guard: true")).unwrap_err();
-    assert!(error.contains("server.remote_run_host"), "{error}");
+    let error = LocalWorkGuard::from_server(root, &server("enable_local_work_guard: true"), &remote_run("{}"))
+      .unwrap_err();
+    assert!(error.contains("remote_run.host"), "{error}");
+
+    let guard = LocalWorkGuard::from_server(
+      root,
+      &server("enable_local_work_guard: true"),
+      &remote_run("host: build-host\nremote_base: scripts/remote-run\n"),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(guard.remote_run_host, "build-host");
+    assert_eq!(guard.remote_run_remote_base.as_deref(), Some("scripts/remote-run"));
   }
 }

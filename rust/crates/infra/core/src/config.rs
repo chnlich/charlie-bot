@@ -54,7 +54,7 @@ const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
 const FIELD_NAMES: &[&str] =
-  &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram"];
+  &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run"];
 
 /// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
 const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
@@ -227,13 +227,21 @@ pub struct ServerConfig {
   /// address would send links to the wrong place, so an unset value stays unset until the host sets it.
   #[serde(default)]
   pub public_url: Option<String>,
-  /// The ssh alias of the build host that `tools/remote-run` sends runs to. Required while the local work guard is on:
-  /// a refused agent is told to run on this host, so the value must exist.
+}
+
+/// `remote_run:` section: the build host that the local work guard names and `tools/remote-run` sends runs to. A
+/// top-level section, not `server:` keys, because a live release refuses unknown `server:` keys: a host sets this
+/// section while the previous release still runs.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteRunConfig {
+  /// The ssh alias of the build host that `tools/remote-run` sends runs to. Required while the local work guard is
+  /// on: a refused agent is told to run on this host, so the value must exist.
   #[serde(default)]
-  pub remote_run_host: Option<String>,
+  pub host: Option<String>,
   /// The runner's state directory on the build host, relative to its home. Unset keeps the runner's own default.
   #[serde(default)]
-  pub remote_run_remote_base: Option<String>,
+  pub remote_base: Option<String>,
 }
 
 // The schema defaults of `ServerConfig`.
@@ -371,6 +379,7 @@ pub struct CharlieBotConfig {
   pub backends: BackendsConfig,
   pub ui: UiConfig,
   pub telegram: TelegramConfig,
+  pub remote_run: RemoteRunConfig,
   /// Every registered package section, parsed by its package's parser. An omitted section holds the
   /// parser's result for an empty mapping, which is the package's defaults.
   pub sections: Sections,
@@ -549,6 +558,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
     backends: parse_backends(&config_path_text, section("backends"), &schema.backend_types)?,
     ui: typed_section(&config_path_text, "ui", section("ui"), || UiConfig { home_services: Vec::new() })?,
     telegram: typed_section(&config_path_text, "telegram", section("telegram"), || TelegramConfig { chat_id: None })?,
+    remote_run: typed_section(&config_path_text, "remote_run", section("remote_run"), RemoteRunConfig::default)?,
     sections: Sections(sections),
   })
 }
@@ -620,8 +630,6 @@ fn default_server() -> ServerConfig {
     enable_local_work_guard: default_switch_on(),
     min_free_disk_gib: default_min_free_disk_gib(),
     public_url: None,
-    remote_run_host: None,
-    remote_run_remote_base: None,
   }
 }
 
@@ -851,8 +859,7 @@ mod tests {
     assert!(cfg.server.enable_session_cpu_weight);
     assert!(!cfg.server.enable_session_io_weight);
     assert!(cfg.server.enable_local_work_guard);
-    assert_eq!(cfg.server.remote_run_host, None);
-    assert_eq!(cfg.server.remote_run_remote_base, None);
+    assert_eq!(cfg.remote_run, RemoteRunConfig { host: None, remote_base: None });
     assert_eq!(cfg.backends.pool, vec!["claude-fable".to_string()]);
     let option = cfg.get_backend_option("claude-fable").unwrap();
     assert_eq!(
@@ -878,15 +885,22 @@ mod tests {
   }
 
   #[test]
-  fn the_local_work_guard_switch_and_runner_keys_parse_from_the_server_section() {
+  fn the_local_work_guard_switch_and_the_runner_section_parse() {
     let home = home_with(
-      "server:\n  enable_local_work_guard: false\n  remote_run_host: build-host\n  remote_run_remote_base: \
-       scripts/remote-run\nvoice: {}\n",
+      "server:\n  enable_local_work_guard: false\nremote_run:\n  host: build-host\n  remote_base: scripts/remote-run\n\
+       voice: {}\n",
     );
     let cfg = load(&home).unwrap();
     assert!(!cfg.server.enable_local_work_guard);
-    assert_eq!(cfg.server.remote_run_host.as_deref(), Some("build-host"));
-    assert_eq!(cfg.server.remote_run_remote_base.as_deref(), Some("scripts/remote-run"));
+    assert_eq!(cfg.remote_run.host.as_deref(), Some("build-host"));
+    assert_eq!(cfg.remote_run.remote_base.as_deref(), Some("scripts/remote-run"));
+  }
+
+  #[test]
+  fn an_unknown_remote_run_key_names_the_section() {
+    let home = home_with("remote_run:\n  base: scripts/remote-run\nvoice: {}\n");
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.contains("remote_run") && error.contains("unknown field"), "{error}");
   }
 
   #[test]

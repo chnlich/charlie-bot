@@ -9,7 +9,8 @@
 //!
 //! Stdout carries exactly the value — a scalar as its plain text, lists, mappings and models as compact JSON — so a
 //! caller can substitute `$(charliebot config get <key>)` into a command. Diagnostics go to stderr: an unknown key
-//! exits 2, an unset (null) value exits 1. `server.public_url` is the one nested key the command reads.
+//! exits 2, an unset (null) value exits 1. The nested keys the command reads are `server.public_url`, the local work
+//! guard's `server.enable_local_work_guard`, and the runner's `remote_run.host` and `remote_run.remote_base`.
 
 use std::ffi::OsString;
 
@@ -105,21 +106,28 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 /// The top-level names `CharlieBotConfig` declares as fields.
-const FIELD_KEYS: [&str; 7] =
-  ["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram"];
+const FIELD_KEYS: [&str; 8] =
+  ["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run"];
 
 /// The home fact that is no config field: the state directory `CHARLIEBOT_HOME` selects when it is unset or
 /// blank. [`charliebot_core::home`] owns the value; the launcher scripts read it the same way they read
 /// `charliebot_home`.
 const DEFAULT_HOME_KEY: &str = "default_charliebot_home";
 
-/// The nested key the command reads: the address a person reaches the server at, unset until the host sets it.
+/// The nested keys the command reads: the address a person reaches the server at, the local work guard's switch, and
+/// the build-host keys the guard names and the runner reads. The unset optionals are null.
 const PUBLIC_URL_KEY: &str = "server.public_url";
+const GUARD_SWITCH_KEY: &str = "server.enable_local_work_guard";
+const RUNNER_HOST_KEY: &str = "remote_run.host";
+const RUNNER_BASE_KEY: &str = "remote_run.remote_base";
 
-/// True for a top-level field, a registered section, the default-home fact, or `server.public_url`.
+/// True for a top-level field, a registered section, the default-home fact, or one of the nested keys.
 fn known_key(key: &str, registry: &Registry) -> bool {
   key == DEFAULT_HOME_KEY
     || key == PUBLIC_URL_KEY
+    || key == GUARD_SWITCH_KEY
+    || key == RUNNER_HOST_KEY
+    || key == RUNNER_BASE_KEY
     || FIELD_KEYS.contains(&key)
     || registry.config_sections().any(|section| section.key == key)
 }
@@ -152,6 +160,10 @@ fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Optio
       Some(url) => Rendered::Scalar(url.clone()),
       None => Rendered::Json(Value::Null),
     },
+    GUARD_SWITCH_KEY => Rendered::Scalar(cfg.server.enable_local_work_guard.to_string()),
+    "remote_run" => Rendered::Json(remote_run_json(cfg)),
+    RUNNER_HOST_KEY => optional_text(&cfg.remote_run.host),
+    RUNNER_BASE_KEY => optional_text(&cfg.remote_run.remote_base),
     "paths" => Rendered::Json(paths_json(cfg)),
     "backends" => Rendered::Json(backends_json(cfg, registry).map_err(Failure::value)?),
     "ui" => Rendered::Json(ui_json(cfg)),
@@ -193,6 +205,18 @@ fn paths_json(cfg: &CharlieBotConfig) -> Value {
     "worktree_dir": paths.worktree_dir,
     "scratch_dir": paths.scratch_dir,
   })
+}
+
+fn remote_run_json(cfg: &CharlieBotConfig) -> Value {
+  json!({ "host": cfg.remote_run.host, "remote_base": cfg.remote_run.remote_base })
+}
+
+/// A set option as its text, an unset one as null: the caller reads the null as "unset".
+fn optional_text(value: &Option<String>) -> Rendered {
+  match value {
+    Some(text) => Rendered::Scalar(text.clone()),
+    None => Rendered::Json(Value::Null),
+  }
 }
 
 fn ui_json(cfg: &CharlieBotConfig) -> Value {
@@ -345,6 +369,19 @@ mod tests {
     let failure = run("server.public_url").expect_err("an unset address is refused");
     assert_eq!(failure.code, 1);
     assert_eq!(failure.message, "error: config key server.public_url is unset");
+  }
+
+  #[test]
+  fn the_guard_switch_prints_its_boolean_and_the_runner_keys_print_their_values() {
+    let yaml = "server:\n  enable_local_work_guard: false\nremote_run:\n  host: build-host\n";
+    assert_eq!(run_yaml(yaml, "server.enable_local_work_guard").expect("the switch prints"), "false\n");
+    assert_eq!(run_yaml(yaml, "remote_run.host").expect("the host prints"), "build-host\n");
+    let failure = run_yaml(yaml, "remote_run.remote_base").expect_err("an unset base is null");
+    assert_eq!(failure.code, 1);
+    assert_eq!(failure.message, "error: config key remote_run.remote_base is unset");
+    let printed: Value =
+      serde_json::from_str(run_yaml(yaml, "remote_run").expect("the section prints").trim_end()).unwrap();
+    assert_eq!(printed, json!({ "host": "build-host", "remote_base": null }));
   }
 
   #[test]

@@ -252,6 +252,42 @@ if [[ ! -x /usr/bin/git ]]; then
 fi
 REAL_GIT=/usr/bin/git
 
+# The trial runs the local work guard with the live config's switch and runner keys, read through the release's own
+# CLI (`config get` resolves each key through the same load and defaults the server uses). The guard on with no
+# runner host fails here, before anything starts: the server under test would refuse the same key at its start.
+LIVE_KEY_TEXT=
+# Prints nothing; leaves the key's read in LIVE_KEY_TEXT. Returns 0 set, 1 unset, 2 unreadable.
+read_live_key() {
+  LIVE_KEY_TEXT="$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" config get "$1" 2>&1)" && return 0
+  if [[ $LIVE_KEY_TEXT == *'is unset'* ]]; then
+    return 1
+  fi
+  return 2
+}
+LIVE_GUARD_SWITCH=
+if read_live_key server.enable_local_work_guard; then
+  LIVE_GUARD_SWITCH=$LIVE_KEY_TEXT
+else
+  preflight_fail "the live config reads through the trial CLI: server.enable_local_work_guard: $LIVE_KEY_TEXT"
+fi
+LIVE_RUNNER_HOST=
+if read_live_key remote_run.host; then
+  LIVE_RUNNER_HOST=$LIVE_KEY_TEXT
+else
+  (( $? == 1 )) || preflight_fail "the live config reads through the trial CLI: remote_run.host: $LIVE_KEY_TEXT"
+fi
+LIVE_RUNNER_BASE=
+if read_live_key remote_run.remote_base; then
+  LIVE_RUNNER_BASE=$LIVE_KEY_TEXT
+else
+  (( $? == 1 )) || preflight_fail "the live config reads through the trial CLI: remote_run.remote_base: $LIVE_KEY_TEXT"
+fi
+if [[ $LIVE_GUARD_SWITCH == true ]] && [[ -z $LIVE_RUNNER_HOST ]]; then
+  preflight_fail \
+    'the live config runs the local work guard without remote_run.host: set it to the ssh alias of the build host'
+fi
+readonly LIVE_GUARD_SWITCH LIVE_RUNNER_HOST LIVE_RUNNER_BASE
+
 # The trial's backend entry comes from the live config: the first option with an api_base, so the trial runs the
 # operator's own model endpoint and the repository names no host and no credential. Its credential is optional. When
 # the entry names one, the trial copies that section's key from the live credentials into the trial home and redacts
@@ -394,8 +430,8 @@ server:
   min_free_disk_gib: 0
   enable_session_cpu_weight: $CPU_WEIGHT_SWITCH
   enable_session_io_weight: $IO_WEIGHT_SWITCH
-  # The synthetic trial home names no build host, so the guard stays off.
-  enable_local_work_guard: false
+  # The guard runs with the live config's switch, so the trial checks the configuration that the switch will start.
+  enable_local_work_guard: $LIVE_GUARD_SWITCH
 paths:
   workspace_dirs:
     - $WORKSPACE
@@ -412,6 +448,14 @@ backends:
 EOF
 if [[ -n $TRIAL_CREDENTIAL ]]; then
   printf '      credential: %s\n' "$TRIAL_CREDENTIAL" >>"$TRIAL_CB_HOME/config.yaml"
+fi
+# The runner keys ride along whether the guard is on or off: the configuration that the switch will start is what the
+# trial checks.
+if [[ -n $LIVE_RUNNER_HOST ]]; then
+  printf '\nremote_run:\n  host: %s\n' "$LIVE_RUNNER_HOST" >>"$TRIAL_CB_HOME/config.yaml"
+  if [[ -n $LIVE_RUNNER_BASE ]]; then
+    printf '  remote_base: %s\n' "$LIVE_RUNNER_BASE" >>"$TRIAL_CB_HOME/config.yaml"
+  fi
 fi
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 

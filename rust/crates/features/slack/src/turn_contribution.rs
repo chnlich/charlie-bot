@@ -126,8 +126,6 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
-        remote_run_host: None,
-        remote_run_remote_base: None,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),

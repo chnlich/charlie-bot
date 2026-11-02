@@ -165,9 +165,9 @@ fn the_local_work_guard_refuses_a_start_whose_build_host_key_is_unset() {
 
   let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
   assert_eq!(output.status.code(), Some(1));
-  assert!(String::from_utf8_lossy(&output.stderr).contains("server.remote_run_host"));
+  assert!(String::from_utf8_lossy(&output.stderr).contains("remote_run.host"));
 
-  fs::write(home.join("config.yaml"), format!("server:\n  remote_run_host: build-host\n{backends}")).unwrap();
+  fs::write(home.join("config.yaml"), format!("remote_run:\n  host: build-host\n{backends}")).unwrap();
   let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
   assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
 }

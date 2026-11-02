@@ -37,14 +37,9 @@ server:
   # slice's cgroup.controllers (scripts/systemd/setup-io-share.sh).
   enable_session_cpu_weight: true
   enable_session_io_weight: false
-  # Local work guard: an agent's shell refuses a compile or a test run on this host and names the build host below,
-  # so one run does not slow the other agents. false sets none of its variables.
+  # Local work guard: an agent's shell refuses a compile or a test run on this host and names the build host in the
+  # remote_run section below, so one run does not slow the other agents. false sets none of its variables.
   enable_local_work_guard: true
-  # The ssh alias of the build host that tools/remote-run sends runs to. The server refuses to start while the guard is
-  # on and this is unset.
-  remote_run_host:
-  # The runner's state directory on the build host, relative to its home. Unset keeps the runner's default.
-  # remote_run_remote_base: scripts/remote-run
   # Worker-class launch precheck, GiB: the filesystems holding the CharlieBot
   # data dir and the worktree root must hold at least this much free space, or
   # the run stays queued with a blocked report to its parent. 0 disables the
@@ -54,6 +49,14 @@ server:
   # The address a person reaches this server at, read by `charliebot config get server.public_url`. It has no
   # default: a command that links a page on this server fails until the host sets it.
   # public_url: https://<host>.<tailnet>:18498
+
+# Remote run: the build host that the local work guard names and tools/remote-run sends runs to. A top-level
+# section, not server keys, so a host sets it while the previous release still runs. The server refuses to start
+# while the guard is on and remote_run.host is unset.
+remote_run:
+  host:
+  # The runner's state directory on the build host, relative to its home. Unset keeps the runner's default.
+  # remote_base: scripts/remote-run
 
 # Paths: repos to scan and where worker worktrees live.
 paths:

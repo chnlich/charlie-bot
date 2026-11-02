@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use charliebot_mock_home::DATA_VERSION;
 use charliebot_mock_home::generate::generate;
+use charliebot_mock_home::{DATA_VERSION, Shape};
 use sha2::{Digest, Sha256};
 
 /// The data version that `RECORDED_DIGEST` and `SIZE_CURVE_DIGEST` belong to.
@@ -49,7 +49,7 @@ fn collect(root: &Path, dir: &Path, file_digests: &mut BTreeMap<String, String>)
 fn generated_digest(sessions: usize, seed: u64) -> String {
   let scratch = tempfile::tempdir().expect("a scratch directory");
   let output = scratch.path().join("home");
-  generate(&output, sessions, seed).expect("the home generates");
+  generate(&output, sessions, seed, Shape::Default).expect("the home generates");
   digest_tree(&output)
 }
 

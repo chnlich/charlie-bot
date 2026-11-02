@@ -1,7 +1,8 @@
 //! Writes a synthetic session home: the sessions, their event logs, and the manifest that describes them.
 //!
 //! The event-log size of each session follows the production shape. `SIZE_KNOTS` gives the size at each quantile,
-//! log-linear between knots, and `planned_sizes` deals those sizes to the sessions in a seeded order.
+//! log-linear between knots, and `planned_sizes` deals those sizes to the sessions in a seeded order. The task-tree shape
+//! (`crate::task_tree`) writes sessions of the same sizes as the task nodes of a production startup.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -14,8 +15,10 @@ use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::Shape;
 use crate::manifest::{MANIFEST_NAME, Manifest, ManifestSession, SessionMetadata};
 use crate::rng::Rng;
+use crate::task_tree;
 use crate::text::{self, SyntheticText};
 
 /// The event-log size at each quantile, as (quantile, bytes). Each knot is a production measurement: 1.7 KB at the
@@ -26,18 +29,18 @@ const SIZE_KNOTS: [(f64, f64); 5] = [(0.0, 150.0), (0.5, 1.7e3), (0.9, 1.4e6), (
 const SEGMENT_EXPONENTS: [f64; 4] = [1.0, 1.0, 2.0, 4.0];
 /// Each session starts within this many seconds after the anchor. The fixed anchor keeps the seed reproducible and
 /// keeps the pages from showing sessions dated after the run.
-const SESSION_START_SPREAD_SECONDS: u64 = 200 * 86_400;
+pub(crate) const SESSION_START_SPREAD_SECONDS: u64 = 200 * 86_400;
 /// Above this many bytes left to fill, an assistant event carries long answers.
 const LONG_EVENT_BUDGET: u64 = 200_000;
 /// A log's last gap smaller than this takes no more events; one filler message fills the gap.
 const FILLER_THRESHOLD_BYTES: i64 = 4096;
 
-/// Writes a home of `sessions` sessions for `seed` into `output`, which must be absent or empty.
+/// Writes a home of `shape` with `sessions` sessions for `seed` into `output`, which must be absent or empty.
 ///
 /// The home is built in a staging directory beside `output` and renamed into place when it is complete, so no reader
 /// sees a partial home. Two runs that finish together yield the same bytes; the one that comes second keeps the first's
-/// home when the manifest matches its seed and session count.
-pub fn generate(output: &Path, sessions: usize, seed: u64) -> Result<()> {
+/// home when the manifest matches its seed, session count and shape.
+pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape) -> Result<()> {
   if output.exists() && fs::read_dir(output)?.next().is_some() {
     bail!("output directory is not empty: {}", output.display());
   }
@@ -50,7 +53,16 @@ pub fn generate(output: &Path, sessions: usize, seed: u64) -> Result<()> {
   let staging = parent.join(format!(".{name}.staging-{}", std::process::id()));
   fs::create_dir(&staging).with_context(|| format!("cannot create the staging directory {}", staging.display()))?;
 
-  let total = match write_home(&staging, sessions, seed) {
+  let written = match shape {
+    Shape::Default => write_home(&staging, sessions, seed),
+    Shape::TaskTree => {
+      let home = fs::canonicalize(parent)
+        .with_context(|| format!("cannot resolve {}", parent.display()))
+        .map(|parent| parent.join(name.as_ref()));
+      home.and_then(|home| task_tree::write_home(&staging, &home, sessions, seed))
+    }
+  };
+  let total = match written {
     Ok(total) => total,
     Err(error) => {
       remove_staging(&staging);
@@ -59,7 +71,7 @@ pub fn generate(output: &Path, sessions: usize, seed: u64) -> Result<()> {
   };
   if let Err(error) = fs::rename(&staging, output) {
     remove_staging(&staging);
-    if finished_by_another_run(output, sessions, seed) {
+    if finished_by_another_run(output, sessions, seed, shape) {
       println!("{} already holds this home: seed {seed}, {sessions} sessions", output.display());
       return Ok(());
     }
@@ -76,18 +88,19 @@ fn remove_staging(staging: &Path) {
   }
 }
 
-/// Whether `output` holds a finished home for this seed and session count. A home is renamed into place only when it is
-/// complete, so its manifest is the last file a run leaves there.
-fn finished_by_another_run(output: &Path, sessions: usize, seed: u64) -> bool {
-  Manifest::read(output).is_ok_and(|manifest| manifest.seed == seed && manifest.session_count == sessions)
+/// Whether `output` holds a finished home for this seed, session count and shape. A home is renamed into place only when
+/// it is complete, so its manifest is the last file a run leaves there.
+fn finished_by_another_run(output: &Path, sessions: usize, seed: u64, shape: Shape) -> bool {
+  Manifest::read(output)
+    .is_ok_and(|manifest| manifest.seed == seed && manifest.session_count == sessions && manifest.shape == shape)
 }
 
-fn first_session_time() -> NaiveDateTime {
+pub(crate) fn first_session_time() -> NaiveDateTime {
   NaiveDate::from_ymd_opt(2025, 9, 1).and_then(|date| date.and_hms_opt(0, 0, 0)).expect("the anchor is a valid date")
 }
 
 /// The timestamp of a session or metadata record, with microseconds.
-fn stamp(moment: NaiveDateTime) -> String {
+pub(crate) fn stamp(moment: NaiveDateTime) -> String {
   moment.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
 }
 
@@ -122,7 +135,16 @@ fn planned_sizes(count: usize, rng: &mut Rng) -> Vec<u64> {
   sizes
 }
 
-fn final_event(final_text: &str, timestamp: &str) -> Value {
+/// The seeded stream of a home of `sessions` sessions, after the text pools and the event-log sizes it draws first:
+/// the stream, the pools and the sizes in session order.
+pub(crate) fn planned_home(sessions: usize, seed: u64) -> (Rng, SyntheticText, Vec<u64>) {
+  let mut rng = Rng::new(seed);
+  let text = SyntheticText::new(&mut rng);
+  let sizes = planned_sizes(sessions, &mut rng);
+  (rng, text, sizes)
+}
+
+pub(crate) fn final_event(final_text: &str, timestamp: &str) -> Value {
   json!({"type": "user", "content": final_text, "timestamp": timestamp})
 }
 
@@ -187,12 +209,100 @@ fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
   Some(json!({"type": "user", "content": content, "timestamp": timestamp}))
 }
 
+/// One event log being written: its file, the clock of its events, and the bytes and events written so far.
+pub(crate) struct EventLog {
+  out: BufWriter<File>,
+  started_at: NaiveDateTime,
+  written: i64,
+  count: u64,
+}
+
+impl EventLog {
+  /// Creates the log at `path` for a session that started at `started_at`.
+  pub(crate) fn create(path: &Path, started_at: NaiveDateTime) -> Result<Self> {
+    let out = BufWriter::new(File::create(path).with_context(|| format!("cannot create {}", path.display()))?);
+    Ok(Self { out, started_at, written: 0, count: 0 })
+  }
+
+  /// The bytes written so far.
+  pub(crate) fn written(&self) -> i64 {
+    self.written
+  }
+
+  /// The timestamp of the next event: one event per second from the session start.
+  pub(crate) fn next_stamp(&self) -> String {
+    event_stamp(self.started_at, self.count)
+  }
+
+  /// Writes one event as one line.
+  pub(crate) fn push(&mut self, event: &Value) -> Result<()> {
+    let line = run_records::event_line(event);
+    self.out.write_all(&line)?;
+    self.written += line.len() as i64;
+    self.count += 1;
+    Ok(())
+  }
+
+  /// Writes turns of random events while at least `FILLER_THRESHOLD_BYTES` remain below `limit` bytes.
+  ///
+  /// A plain user message opens a turn, and one `master_done` separator closes the turn before it and the last turn.
+  /// `tail(40)` snaps to a turn start through these separators, so a seeded log renders a bounded page like a
+  /// production log instead of its whole history. `label` sees each turn-opening message before it is written.
+  pub(crate) fn write_turns(
+    &mut self,
+    limit: i64,
+    rng: &mut Rng,
+    text: &SyntheticText,
+    label: &mut dyn FnMut(&mut Rng, &mut Value),
+  ) -> Result<()> {
+    let mut turn_open = false;
+    loop {
+      let room = limit - self.written;
+      if room < FILLER_THRESHOLD_BYTES {
+        break;
+      }
+      let timestamp = self.next_stamp();
+      let mut event = next_event(rng, text, &timestamp, room as u64);
+      let stimulus = opens_turn(&event);
+      if stimulus && turn_open {
+        let separator = master_done_event(rng, &timestamp);
+        if run_records::event_line(&separator).len() as i64 > room {
+          break;
+        }
+        self.push(&separator)?;
+        turn_open = false;
+      }
+      if stimulus {
+        label(rng, &mut event);
+      }
+      if run_records::event_line(&event).len() as i64 > limit - self.written {
+        break;
+      }
+      self.push(&event)?;
+      if !stimulus {
+        turn_open = true;
+      }
+    }
+    if turn_open {
+      let separator = master_done_event(rng, &self.next_stamp());
+      if run_records::event_line(&separator).len() as i64 <= limit - self.written {
+        self.push(&separator)?;
+      }
+    }
+    Ok(())
+  }
+
+  /// Flushes the log and returns its bytes and event count.
+  pub(crate) fn finish(mut self) -> Result<(u64, u64)> {
+    self.out.flush()?;
+    Ok((self.written as u64, self.count))
+  }
+}
+
 /// Writes events into one log of exactly `target` bytes, ending with one final user message.
 ///
-/// Each turn ends with one `master_done` separator, and a plain user message closes the turn before it. `tail(40)`
-/// snaps to a turn start through these separators, so a seeded log renders a bounded page like a production log
-/// instead of its whole history. The last gap is one filler message, so the log takes the planned size and not a
-/// size that the last event overshoots. Returns the bytes and the event count.
+/// The last gap is one filler message, so the log takes the planned size and not a size that the last event
+/// overshoots. Returns the bytes and the event count.
 fn write_event_log(
   path: &Path,
   target: u64,
@@ -203,66 +313,20 @@ fn write_event_log(
 ) -> Result<(u64, u64)> {
   let target = target as i64;
   let final_bytes = run_records::event_line(&final_event(final_text, &event_stamp(started_at, 0))).len() as i64;
-  let mut log = BufWriter::new(File::create(path).with_context(|| format!("cannot create {}", path.display()))?);
-  let mut written: i64 = 0;
-  let mut count: u64 = 0;
-  let mut turn_open = false;
-  loop {
-    let room = target - written - final_bytes;
-    if room < FILLER_THRESHOLD_BYTES {
-      break;
-    }
-    let event = next_event(rng, text, &event_stamp(started_at, count), room as u64);
-    let stimulus = opens_turn(&event);
-    if stimulus && turn_open {
-      let separator = run_records::event_line(&master_done_event(rng, &event_stamp(started_at, count)));
-      if separator.len() as i64 > room {
-        break;
-      }
-      log.write_all(&separator)?;
-      written += separator.len() as i64;
-      count += 1;
-      turn_open = false;
-    }
-    let room = target - written - final_bytes;
-    let line = run_records::event_line(&event);
-    if line.len() as i64 > room {
-      break;
-    }
-    log.write_all(&line)?;
-    written += line.len() as i64;
-    count += 1;
-    if !stimulus {
-      turn_open = true;
-    }
-  }
-  if turn_open {
-    let separator = run_records::event_line(&master_done_event(rng, &event_stamp(started_at, count)));
-    if separator.len() as i64 <= target - written - final_bytes {
-      log.write_all(&separator)?;
-      written += separator.len() as i64;
-      count += 1;
-    }
-  }
-  let room = target - written - final_bytes;
+  let mut log = EventLog::create(path, started_at)?;
+  log.write_turns(target - final_bytes, rng, text, &mut |_, _| {})?;
+  let room = target - log.written() - final_bytes;
   if room > 0
-    && let Some(filler) = filler_event(room as u64, &event_stamp(started_at, count))
+    && let Some(filler) = filler_event(room as u64, &log.next_stamp())
   {
-    let line = run_records::event_line(&filler);
-    log.write_all(&line)?;
-    written += line.len() as i64;
-    count += 1;
+    log.push(&filler)?;
   }
-  let line = run_records::event_line(&final_event(final_text, &event_stamp(started_at, count)));
-  log.write_all(&line)?;
-  written += line.len() as i64;
-  count += 1;
-  log.flush()?;
-  Ok((written as u64, count))
+  log.push(&final_event(final_text, &log.next_stamp()))?;
+  log.finish()
 }
 
 /// A random version-4 session id, drawn from the seeded stream.
-fn session_id(rng: &mut Rng) -> String {
+pub(crate) fn session_id(rng: &mut Rng) -> String {
   let mut bytes = [0u8; 16];
   bytes[..8].copy_from_slice(&rng.next_u64().to_be_bytes());
   bytes[8..].copy_from_slice(&rng.next_u64().to_be_bytes());
@@ -270,7 +334,7 @@ fn session_id(rng: &mut Rng) -> String {
 }
 
 /// Writes one JSON file with the given indent, and no newline at the end.
-fn write_json<T: Serialize>(path: &Path, value: &T, indent: &[u8]) -> Result<()> {
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T, indent: &[u8]) -> Result<()> {
   let mut bytes = Vec::new();
   let formatter = serde_json::ser::PrettyFormatter::with_indent(indent);
   let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, formatter);
@@ -280,9 +344,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T, indent: &[u8]) -> Result<()>
 
 /// Writes the sessions and the manifest into `home`, and returns the total event-log bytes.
 fn write_home(home: &Path, sessions: usize, seed: u64) -> Result<u64> {
-  let mut rng = Rng::new(seed);
-  let text = SyntheticText::new(&mut rng);
-  let sizes = planned_sizes(sessions, &mut rng);
+  let (mut rng, text, sizes) = planned_home(sessions, seed);
   let mut manifest_sessions = Vec::with_capacity(sessions);
   let mut total = 0;
   for size in sizes {
@@ -311,7 +373,13 @@ fn write_home(home: &Path, sessions: usize, seed: u64) -> Result<u64> {
     manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
     total += log_bytes;
   }
-  let manifest = Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions };
+  let manifest = Manifest {
+    seed,
+    session_count: sessions,
+    event_log_bytes: total,
+    sessions: manifest_sessions,
+    shape: Shape::Default,
+  };
   write_json(&home.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
 }

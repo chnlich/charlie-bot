@@ -6,6 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::Shape;
+
 pub const MANIFEST_NAME: &str = "manifest.json";
 
 /// One session's `metadata.json`, with the fields in the order the server's session list reads them.
@@ -23,13 +25,17 @@ pub struct SessionMetadata {
   pub starred: bool,
 }
 
-/// The home's `manifest.json`: the seed and count that produced it, and each session's log size and newest message.
+/// The home's `manifest.json`: the seed, count and shape that produced it, and each session's log size and newest
+/// message, in the order `generate` wrote the sessions. A default home's manifest has no `shape` key, so its bytes stay
+/// those of the data version.
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
   pub seed: u64,
   pub session_count: usize,
   pub event_log_bytes: u64,
   pub sessions: Vec<ManifestSession>,
+  #[serde(default, skip_serializing_if = "Shape::is_default")]
+  pub shape: Shape,
 }
 
 #[derive(Serialize, Deserialize)]

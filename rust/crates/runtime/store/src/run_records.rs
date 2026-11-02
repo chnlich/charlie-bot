@@ -66,6 +66,12 @@ pub fn read_run_record_file(path: &Path) -> Result<RunRecord, MetadataReadError>
   serde_json::from_str(&text).map_err(|error| MetadataReadError::Json(error.to_string()))
 }
 
+/// One run record as the text of its metadata file: the model dump that `Store::write_run_record` saves.
+pub fn run_record_text(run: &RunRecord) -> String {
+  let value = serde_json::to_value(run).expect("a run record serializes");
+  text_repr::model_json_dumps(&value, &RUN_MODEL_JSON)
+}
+
 /// Write one run's metadata file as `record` rendered under `style`, replacing the file. The release helper's seed
 /// writes its own check's record this way, as a one-line JSON dump; the store's own saves write the model
 /// dump through `Store::write_run_record`.
@@ -1317,8 +1323,7 @@ impl Store {
     self.fail_run_record_write(run, &path)?;
     let parent = path.parent().expect("run metadata path has a parent");
     fs::create_dir_all(parent).map_err(|error| path_error(parent, error))?;
-    let value = serde_json::to_value(run).map_err(|error| StoreError::new(error.to_string()))?;
-    let text = text_repr::model_json_dumps(&value, &RUN_MODEL_JSON);
+    let text = run_record_text(run);
     fsutil::atomic_write_text(&path, &text).map_err(|error| path_error(&path, error))?;
     self.records_generation.fetch_add(1, Ordering::Relaxed);
     Ok(())

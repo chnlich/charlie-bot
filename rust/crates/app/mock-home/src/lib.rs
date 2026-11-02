@@ -5,11 +5,17 @@
 //! beside the sessions. The event-log sizes follow the production shape in `generate::SIZE_KNOTS`. Every sentence is
 //! written for this crate, so no text comes from a real session. One seed gives the same bytes on every run, so the
 //! servers under test load the same data.
+//!
+//! The task-tree shape (`task_tree`) adds the production startup's task tree to the same sessions, and `reset` returns
+//! such a home to its generated state after a server start.
+
+use serde::{Deserialize, Serialize};
 
 pub mod check;
 pub mod generate;
 mod manifest;
 mod rng;
+pub mod task_tree;
 mod text;
 
 /// The data version. It names the mock home's directory, `~/improve/mock-home/<version>/`, and changes with any change
@@ -19,3 +25,20 @@ pub const DATA_VERSION: &str = "2";
 pub const PRODUCTION_SESSIONS: usize = 7160;
 /// The seed of `generate` when no seed is given.
 pub const DEFAULT_SEED: u64 = 1;
+
+/// The kind of home that `generate` writes.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum Shape {
+  /// Sessions with metadata and an event log: the home of the hourly improve rounds, named by `DATA_VERSION`.
+  #[default]
+  Default,
+  /// Sessions of the default size curve, written as the task nodes of a production startup (`task_tree`).
+  TaskTree,
+}
+
+impl Shape {
+  fn is_default(&self) -> bool {
+    *self == Shape::Default
+  }
+}

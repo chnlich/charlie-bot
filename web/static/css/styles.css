@@ -269,32 +269,30 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex; gap: 0.5rem; justify-content: flex-end;
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
-/* Session-row action buttons, the hover reveal: at rest a row's buttons sit
-   out of flow at the row's right end. The name and the second-line spans then
-   reach the row's right edge, and no width is reserved for actions. On hover
-   they stack over the text end on an opaque cover matching the hovered row,
-   so revealing them reflows nothing. Buttons forced visible via !opacity-100
-   — the current session's actions and a starred row's solid star — keep
-   their place at rest, so the name truncates before them. The same class
-   flips are all the star toggle and the highlight move paint with (no list
-   repaint).
+/* Session-row action buttons, the hover reveal: at rest every row's buttons
+   sit out of flow at the row's right end. The name and the second-line spans
+   then reach the row's right edge, and no width is reserved for actions. On
+   hover they stack over the text end on an opaque cover matching the hovered
+   row, so revealing them reflows nothing. The starred star is the one button
+   that keeps its place at rest: it shows the row's state rather than an
+   action on it. The star toggle and the highlight move both flip classes on
+   the existing row, so neither needs a list repaint.
    Geometry: a button's icon slot is 22px (p-1 around its 14px glyph), the
    row's flex gap is 8px and its horizontal padding 12px. One stack pitch is
    30px. A hover-revealed box stretches over the row's full height, and its
-   flex centering keeps that slot vertically centered in it. A pinned box of
-   the current row sits on the name line. The offsets run from the
-   row's padding edge right-to-left in reverse DOM order; nth-last-of-type
-   keeps non-button trailing spans (the archived tree's active tag) out of
-   the count. */
+   flex centering keeps that slot vertically centered in it. The offsets run
+   from the row's padding edge right-to-left in reverse DOM order;
+   nth-last-of-type keeps non-button trailing spans (the archived tree's
+   active tag) out of the count. */
 .session-row { position: relative; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Each out-of-flow button stretches over the row's full height (top to
    bottom of the row box), and its own flex keeps the icon slot vertically
    centered. So the hovered cover is one continuous block from the row's top
    edge to its bottom edge. No sliver of the name or the second line shows
-   above or below the buttons. The rule skips the static !opacity-100 pins:
-   top/bottom would be inert on their static boxes, but the flex flip would
-   change their in-flow layout. */
+   above or below the buttons. The rule skips the static starred star:
+   top/bottom would be inert on its static box, but the flex flip would
+   change its in-flow layout. */
 .session-row > button:not(.\!opacity-100) {
   top: 0;
   bottom: 0;
@@ -309,39 +307,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .session-row > .star-btn.\!opacity-100 ~ button { right: 42px; }
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(2) { right: 72px; }
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(3) { right: 102px; }
-/* The current session's buttons and the starred star stay clickable at rest;
-   a starred star keeps its flow slot. */
+/* The starred star stays visible and clickable at rest, and its flow slot is
+   what the hover neighbours above clear. */
 .session-row > button.\!opacity-100 { position: static; pointer-events: auto; }
-/* The current session pins every action it draws, and two adjacent pinned
-   buttons tell its row from a starred row's lone pinned star. Those actions
-   leave the flow with the plain stack from the row's right edge, so the text
-   column spans the row. The name reserves the stack and the row's gap, while
-   the time line keeps the full width. That leaves a short row's backend
-   label whole. An archived row draws three actions and reserves one pitch
-   less. A hover guard keeps a touch row off this padding, because there the
-   one gear stays in the flow. */
-@media (hover: hover) {
-  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100 {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-  }
-  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100:nth-last-of-type(2) {
-    right: 42px;
-  }
-  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100:nth-last-of-type(3) {
-    right: 72px;
-  }
-  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) > button.\!opacity-100:nth-last-of-type(4) {
-    right: 102px;
-  }
-  .session-row:has(> button.\!opacity-100 + button.\!opacity-100) .session-name {
-    padding-right: 120px;
-  }
-  .session-row:has(> button.\!opacity-100 + button.\!opacity-100):has(> [title="Unarchive"]) .session-name {
-    padding-right: 90px;
-  }
-}
 /* Scope the reveal to the hovered row: the buttons' Tailwind group-hover
    class rides every ancestor carrying the `group` class. Each group
    section wrapper (groups.js's <div class="session-group group">) carries
@@ -349,8 +317,8 @@ body.resizing { cursor: col-resize; user-select: none; }
    out-of-flow buttons in it to opacity 1, painted over those rows' text
    without their hover cover. This reset out-specifies that class (it adds
    the element), so a row's buttons reveal only while the row itself is
-   hovered. The !opacity-100 pins above are exempt, and the touch block
-   below re-wins through its ID selectors. */
+   hovered. The starred star is exempt, and the touch block below re-wins
+   through its ID selectors. */
 .session-row:not(:hover) > button:not(.\!opacity-100) { opacity: 0; }
 /* Hover: the revealed buttons cover the text end with the hovered row's own
    composite. That composite is the sidebar panel (slate-850) under the row's
@@ -369,6 +337,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   background-color: #172033;
   background-image: linear-gradient(rgba(51, 65, 85, 0.5), rgba(51, 65, 85, 0.5));
   box-shadow: 8px 0 0 0 rgb(37, 49, 68);
+}
+/* The current session's row paints its blue tint at rest and takes no hover
+   tint, so its cover is that tint over the panel color, the same composite
+   the row already shows. */
+.session-row.bg-blue-600\/20:hover > button:not(.\!opacity-100) {
+  background-color: #172033;
+  background-image: linear-gradient(rgba(37, 99, 235, 0.2), rgba(37, 99, 235, 0.2));
+  box-shadow: 8px 0 0 0 rgb(26, 45, 88);
 }
 /* Touch (hover: none): the hover reveal cannot exist, so every row and named
    group header keeps its menu entry always visible, full opacity and

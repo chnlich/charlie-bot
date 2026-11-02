@@ -193,11 +193,11 @@ function starButtonOnclick(id, starred) {
   return `event.preventDefault(); event.stopPropagation(); sidebarControl('toggleSessionStar', '${id}', ${starred})`;
 }
 
-function renderStarButton(s, activeBtnClass) {
+function renderStarButton(s) {
   const starFill = s.starred ? 'currentColor' : 'none';
   const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
   return `<button onclick="${starButtonOnclick(s.id, s.starred)}"
-          class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
+          class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass}" title="Star" id="star-${s.id}">
     <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${STAR_SVG_PATH}</svg>
   </button>`;
 }
@@ -206,33 +206,31 @@ function renderStarButton(s, activeBtnClass) {
 // actions: a markup change is made here once, not in each renderer. The star's
 // dynamic fill and id and the Settings button's data attributes stay at
 // their own renderers.
-function renderRowActionButton(onclick, colorClass, title, svgBody, activeBtnClass) {
+function renderRowActionButton(onclick, colorClass, title, svgBody) {
   return `<button onclick="${onclick}"
-          class="opacity-0 group-hover:opacity-100 p-1 ${colorClass} transition-opacity flex-shrink-0 ${activeBtnClass}" title="${title}">
+          class="opacity-0 group-hover:opacity-100 p-1 ${colorClass} transition-opacity flex-shrink-0" title="${title}">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${svgBody}</svg>
   </button>`;
 }
 
-function renderArchiveButton(s, activeBtnClass) {
+function renderArchiveButton(s) {
   return renderRowActionButton(
       `event.preventDefault(); event.stopPropagation(); sidebarControl('archiveSession', '${s.id}')`,
       'hover:text-red-400',
       'Archive',
-      ARCHIVE_SVG_PATH,
-      activeBtnClass);
+      ARCHIVE_SVG_PATH);
 }
 
 // Renders '' for a falsy taskName: the caller's show-guard stays visible in
 // the argument it passes.
 // A logical session row creates a child logical session under itself: the
 // same creation body as New Session with this row as the parent.
-function renderNewChildButton(s, activeBtnClass) {
+function renderNewChildButton(s) {
   return renderRowActionButton(
       `event.preventDefault(); event.stopPropagation(); sidebarControl('createChildSession', '${s.id}')`,
       'hover:text-green-400',
       'New child session',
-      PLUS_SVG_PATH,
-      activeBtnClass);
+      PLUS_SVG_PATH);
 }
 
 // The row's Settings hover button: opens the shared row menu (row-menu.js)
@@ -244,14 +242,14 @@ function renderNewChildButton(s, activeBtnClass) {
 // (archived.js's [data-current-group] rewrite included). Only the menu
 // differs. It writes its own markup the way the star does: the frame renderer
 // takes no extra attributes.
-function renderSettingsButton(s, activeBtnClass, rowMenu) {
+function renderSettingsButton(s, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); sidebarControl('openSessionRowMenu', this, '${s.id}')"
           title="Settings"${menuMarker}
           data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
           data-profile="${escapeHtmlAttr(s.profile || '')}"${renderSessionMenuAttrs(s)}
-          class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}">
+          class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
 }
@@ -633,36 +631,34 @@ function renderSessionItem(s, filter, options = {}) {
   const isWorker = s.profile === 'worker';
   const isWorkerRow = isWorker && !isArchivedRow;
   const activeClass = sessionRowActiveClass(isActive);
-  const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
   const timeIso = s.updated_at || '';
   let actions = '';
   if (isContextRow) {
-    actions = renderStarButton(s, activeBtnClass);
+    actions = renderStarButton(s);
   } else if (isArchivedRow) {
     // The archived row: three direct buttons; the group move and the delete
     // moved into the archived Settings menu (openArchivedRowMenu in
     // session-menus.js).
     actions = `
-      ${renderStarButton(s, activeBtnClass)}
+      ${renderStarButton(s)}
       ${renderRowActionButton(
           `event.preventDefault(); event.stopPropagation(); sidebarControl('unarchiveSession', '${s.id}')`,
           'hover:text-green-400',
           'Unarchive',
-          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/>',
-          activeBtnClass)}
-      ${renderSettingsButton(s, activeBtnClass, 'archived')}`;
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/>')}
+      ${renderSettingsButton(s, 'archived')}`;
   } else if (isWorkerRow) {
-    actions = renderArchiveButton(s, activeBtnClass);
+    actions = renderArchiveButton(s);
   } else {
     // A normal row (manager or legacy): four direct buttons; rename, group
     // move, Task & context and the registered items moved into the Settings
     // menu (openSessionRowMenu in session-menus.js).
     actions = `
-      ${renderStarButton(s, activeBtnClass)}
-      ${renderNewChildButton(s, activeBtnClass)}
-      ${renderArchiveButton(s, activeBtnClass)}
-      ${renderSettingsButton(s, activeBtnClass)}`;
+      ${renderStarButton(s)}
+      ${renderNewChildButton(s)}
+      ${renderArchiveButton(s)}
+      ${renderSettingsButton(s)}`;
   }
   const indicators = isArchivedRow ? '' : [
       renderSessionIndicators(s),

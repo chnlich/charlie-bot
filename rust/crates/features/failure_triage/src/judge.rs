@@ -487,8 +487,8 @@ mod tests {
       timeout: JUDGE_TIMEOUT,
     };
     // Another shared caller takes the first slot, so the judge must try beta before alpha. No "synthetic" type is
-    // registered, so each build fails and the last error names the last member tried: alpha only under the shared
-    // rotation order, beta under the pool's own declaration order.
+    // registered, so each build fails and the last error names the last member tried. That member is alpha under the
+    // shared rotation order, and beta under the pool's own declaration order.
     assert_eq!(pool.select(&config, "light_oneshot", &[]).unwrap().unwrap().id, "alpha");
     let error = judge_signature(&backends, &judge_input()).await.unwrap_err().to_string();
     assert!(error.contains("backend alpha"), "{error}");

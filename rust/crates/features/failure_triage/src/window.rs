@@ -1,5 +1,5 @@
-//! The batch window of a cron-bound session: the two latest fires of one cron task in the session's chat log, or the
-//! session's creation time when the latest fire is the first.
+//! The batch window of a cron-bound session is the two latest fires of one cron task in the session's chat log. When
+//! the latest fire is the first, the window starts at the session's creation time.
 //!
 //! A master-mode cron fire admits a `scheduled_trigger` whose id is `cron:<task>:<firing>` and whose timestamp is the
 //! admission time. The same session receives other `scheduled_trigger` events (self-wakes and close-blocked notices),

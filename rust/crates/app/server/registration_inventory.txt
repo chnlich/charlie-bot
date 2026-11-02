@@ -83,6 +83,7 @@ config section	src.features.artifacts	publish
 config section	src.features.code_server	code_server
 config section	src.features.slack	slack
 config section	src.features.discord	discord
+config section	src.features.host_auth	host_auth
 config section	src.features.voice	voice
 config section	src.backends.claude_code	accounts
 legacy config key	src.features.artifacts	publish_dir

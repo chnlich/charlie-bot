@@ -26,6 +26,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The no-Python guard: a tracked .py file, a Python shebang, a Python-naming line in scripts or CI
+      # configuration and a Python-naming line in prompts, skills or docs all fail the job. It needs git alone, so it
+      # runs before the installs.
+      - name: Reject Python
+        run: tools/check-no-python.sh
+
       # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from node_modules;
       # installing up front keeps the installs the suites run themselves at no-op speed.
       - name: Install frontend dependencies

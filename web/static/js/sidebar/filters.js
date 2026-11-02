@@ -158,18 +158,40 @@ function restoreSidebarFromUrl() {
 // Session search
 // ---------------------------------------------------------------------------
 let searchDebounceTimer = null;
+// The query generation the list is waiting for. Each input text takes the next
+// one, and a response carries the generation it was fetched under, so a slow
+// earlier query cannot repaint the rows of a newer one.
+let searchGeneration = 0;
+
+// The list's text from the first keystroke until that query's own response
+// lands. The previous query's rows answer other text, so leaving them under the
+// new text reads as a search that does nothing. A content search over a
+// production session home takes long enough to see.
+function showSearchNote(text) {
+  const nav = document.getElementById('session-list');
+  if (nav) nav.innerHTML = renderEmptyNote(text);
+}
 
 function handleSidebarSearch(query) {
   clearTimeout(searchDebounceTimer);
   const pills = document.querySelector('.filter-pill')?.parentElement;
+  const generation = ++searchGeneration;
   if (query.trim()) {
     // Hide filter pills while searching
     if (pills) pills.style.display = 'none';
+    showSearchNote('Searching…');
     searchDebounceTimer = setTimeout(() => {
       fetch('/api/sessions/search?q=' + encodeURIComponent(query.trim()))
         .then(res => res.json())
-        .then(sessions => renderSessionList(sessions, 'search'))
-        .catch(err => console.error('Search failed:', err));
+        .then(sessions => {
+          if (generation !== searchGeneration) return;
+          renderSessionList(sessions, 'search');
+        })
+        .catch(err => {
+          if (generation !== searchGeneration) return;
+          console.error('Search failed:', err);
+          showSearchNote('Search failed; try again.');
+        });
     }, 300);
   } else {
     // Restore filter pills and current filter

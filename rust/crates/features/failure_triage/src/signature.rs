@@ -313,7 +313,7 @@ pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Op
     }
     return ExtractedCause::NoCause { shape: NoCauseShape::TerminalReason, anchor: anchor(&line) };
   }
-  if !combined.trim().is_empty() {
+  if !error_texts.is_empty() || !stderr.is_empty() {
     return ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() };
   }
   ExtractedCause::NoCause { shape: NoCauseShape::ExitCodeOnly, anchor: String::new() }
@@ -382,6 +382,10 @@ mod tests {
   fn the_four_no_cause_shapes_are_closed_and_distinct() {
     let empty = extract_run_cause(&["\u{1b}[0m   "], "", None);
     assert_eq!(empty, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
+    let whitespace = extract_run_cause(&["   \n\t"], "", None);
+    assert_eq!(whitespace, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
+    let whitespace_stderr = extract_run_cause(&[], "  \n ", None);
+    assert_eq!(whitespace_stderr, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
 
     let banner = extract_run_cause(&["Provider List: https://docs.litellm.ai/docs/providers"], "", None);
     assert_eq!(

@@ -367,7 +367,11 @@ mod tests {
         ),
         (
           "run:work:1:RateLimitError: rate limit exceeded".to_string(),
-          Err(JudgeError::Call("the judge call timed out after 30s".to_string())),
+          Err(JudgeError::Timeout("the judge call timed out after 30s".to_string())),
+        ),
+        (
+          "run:work:1:failed to load skill <path>: missing YAML frontmatter".to_string(),
+          Err(JudgeError::Call("backend synthetic: the backend has no native one-shot path".to_string())),
         ),
       ])),
       calls: Cell::new(0),
@@ -412,7 +416,7 @@ mod tests {
         worktree_dir: "/synthetic".to_string(),
         scratch_dir: "/synthetic".to_string(),
       },
-      backends: BackendsConfig { pool, routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool, routing: None, strong: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       sections: Sections::default(),

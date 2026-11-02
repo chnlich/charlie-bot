@@ -1,6 +1,6 @@
 //! Session fork and elone. A fork copies one session's chat history into a new manager
 //! session. A clone of a manager source is a sibling at the source's task-tree position. An elone replaces a manager
-//! source in place: the child takes over the source's decomposition edge and subtree, the source closes archived, and
+//! source in place. The child takes over the source's decomposition edge and subtree, the source closes archived, and
 //! the scheduled bindings of the source move to the child. An elone of a worker source is an ordinary fork, and its
 //! source only archives.
 

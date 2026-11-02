@@ -2,7 +2,7 @@
 //! arrays are stored without growth slack.
 //!
 //! `serde_json::Value` gives every parsed chat event a fresh `String` per object key inside an
-//! `IndexMap` with hash-table and entry-vector slack, which is the measured representation gap against a plain
+//! `IndexMap` with hash-table and entry-vector slack. That representation is the measured gap against a plain
 //! `Value` map. This module keeps the JSON semantics: insertion order, the three `serde_json::Number` forms, and
 //! mapping-style access. It shares each distinct key once and stores each object as one exact-fit
 //! `Box<[ObjectEntry]>`.

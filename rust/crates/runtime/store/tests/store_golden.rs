@@ -303,7 +303,7 @@ fn read_optional(path: &Path) -> Option<Vec<u8>> {
 }
 
 /// `Store::archive_events_before` runs on the same live-log bytes, one input per case. Each case must match in the
-/// failure outcome, the archived count, and the live and archive bytes; a failed call must also leave the live log,
+/// failure outcome, the archived count, and the live and archive bytes. A failed call must also leave the live log,
 /// the archive and `archive_offset` unchanged.
 #[tokio::test]
 async fn archive_events_before_matches_archive_old_chat_events_sync() {
@@ -2361,8 +2361,8 @@ fn write_session_metadata(home: &Path, session_id: &str, archive_offset: i64) {
   fs::write(path, meta.to_json_string(&slots(), true)).unwrap();
 }
 
-/// Run one read-parity case: the Rust test builds one fixture home, copies it for the reference and Rust,
-/// asks the reference helper for its answer, and compares the store's results against it.
+/// Run one read-parity case: the Rust test builds one fixture home and copies it for the reference and Rust.
+/// It asks the reference helper for its answer, and compares the store's results against it.
 fn parity_case_dir(root: &Path, case: &str) -> PathBuf {
   let case_dir = root.join(case);
   fs::create_dir_all(&case_dir).unwrap();
@@ -2517,7 +2517,7 @@ fn legacy_master_run_and_thread_log_readers_walk_the_layouts() {
 /// Every content and metadata shape that the aggregator iterates must feed the Rust code too.
 ///
 /// A native transcript event carries `message.content` as a plain string rather than a list of
-/// blocks; the characters are iterated and ignored, and the Rust code likewise reads the string
+/// blocks. The characters are iterated and ignored, and the Rust code likewise reads the string
 /// as no blocks. The other fields here follow the same empty-list and truthiness rules.
 #[test]
 fn message_aggregator_accepts_every_recorded_shape() {
@@ -2622,7 +2622,7 @@ fn sleep_stub(directory: &Path, name: &str) -> (Child, PathBuf) {
   (child, binary)
 }
 
-/// The delete runs the session's browser sweep to completion: the chrome stub in the session's fake cgroup is dead
+/// The delete runs the session's browser sweep to completion. The chrome stub in the session's fake cgroup is dead
 /// when `delete_session_permanently` returns, and the plain sleep beside it is not.
 #[tokio::test]
 async fn delete_session_permanently_ends_the_session_browsers_before_the_cgroup_cleanup() {

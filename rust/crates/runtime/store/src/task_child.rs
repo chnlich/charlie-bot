@@ -12,10 +12,10 @@ use crate::run_records::RUN_METADATA_NAME;
 /// The v2 task-tree child that a request's stable identity binds to.
 ///
 /// The sent-but-lost readback of `delegate` and `improve` binds to the operation's request id,
-/// not to a description scan: the child's id derives from `(parent, request id)`, so two
+/// not to a description scan. The child's id derives from `(parent, request id)`, so two
 /// intentional identical-spec siblings can never report each other's result. The candidate must
-/// still be that child: the parent, worker profile, spec body and task type all match, or the
-/// readback returns `None` (outcome unknown), never a fallback to an unrelated sibling.
+/// still be that child: the parent, worker profile, spec body and task type all match. Otherwise
+/// the readback returns `None` (outcome unknown), never a fallback to an unrelated sibling.
 ///
 /// `task_type` is `None` for a child created without a task type (the improve loop's worker
 /// child), which matches a task record whose `task_type` is absent or null.
@@ -61,8 +61,8 @@ pub fn find_local_task_child(
   }
 
   // The authoritative Run is this operation's own work Run: the same stable
-  // `(child, "<request id>:work")` binding the server launched — not "whatever run directory
-  // sorts first" (a review Run of the same child is a different operation).
+  // `(child, "<request id>:work")` binding the server launched, not "whatever run directory
+  // sorts first". A review Run of the same child is a different operation.
   let run_id = control_events::stable_run_id(&child_id, &format!("{resolved_request_id}:work"));
   let run_metadata_path = layout::runs_dir(&session_dir).join(&run_id).join(RUN_METADATA_NAME);
   let run_id = run_metadata_path.is_file().then_some(run_id);

@@ -2,10 +2,10 @@
 //!
 //! The seam compiles only in test builds of this crate or under the `write-faults` feature, which a dev-dependency
 //! enables, so production builds carry none of it. A fault belongs to one `Store` value, so parallel tests never see
-//! each other's faults. A failed
-//! write returns before it writes its event line or record file, so no partial event or record is left behind; a
-//! directory the caller created before the write stays, as it would after a real failure. Each injector returns a
-//! `WriteFault` guard that logs the writes it matches and removes its fault when the guard drops.
+//! each other's faults. A failed write returns before it writes its event line or record file, so no partial event
+//! or record is left behind. A directory the caller created before the write stays, as it would after a real
+//! failure. Each injector returns a `WriteFault` guard that logs the writes it matches and removes its fault when
+//! the guard drops.
 
 use std::io;
 use std::path::Path;

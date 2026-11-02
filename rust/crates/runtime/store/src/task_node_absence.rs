@@ -1,7 +1,7 @@
 //! The cheap answer to whether a session holds no task-tree node.
 //!
 //! A task facts fold parses a session's whole event log. A chat log that never held a task boundary has nothing to
-//! fold: its task facts hold no boundary and its runs are empty, so the boot pass can only report the node absence.
+//! fold. Its task facts hold no boundary and its runs are empty, so the boot pass can only report the node absence.
 //! This module reads the raw event bytes to answer that absence without parsing them.
 
 use std::fs;

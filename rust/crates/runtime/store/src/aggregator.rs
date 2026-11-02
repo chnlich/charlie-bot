@@ -688,8 +688,8 @@ fn render_task_input_acknowledged<E: EventFields>(event: &E) -> StoreResult<Valu
 
 /// The content blocks of a message field.
 ///
-/// A string's characters or an object's keys are iterated when `content` is not a list, and
-/// none of those values is a block object, so those shapes contribute no blocks. A scalar that
+/// A string's characters or an object's keys are iterated when `content` is not a list.
+/// None of those values is a block object, so those shapes contribute no blocks. A scalar that
 /// cannot be iterated still fails, while an assistant field treats a falsy value as empty,
 /// because a falsy value is replaced by an empty list.
 fn message_blocks<'a, E: EventFields>(

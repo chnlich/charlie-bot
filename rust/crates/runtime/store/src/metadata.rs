@@ -259,8 +259,8 @@ pub struct ColdReadSpec {
   pub trigger: String,
 }
 
-/// Whether a flag is off. A task record leaves an off `context_work` out, so a task without context work keeps its
-/// canonical text, and the spec hash it names, as they were before the flag existed.
+/// Whether a flag is off. A task record leaves an off `context_work` out. A task without context work therefore
+/// keeps its canonical text, and the spec hash it names, as they were before the flag existed.
 fn is_false(value: &bool) -> bool {
   !*value
 }
@@ -681,8 +681,8 @@ impl SessionMetadata {
   }
 }
 
-// The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns: the
-// readers below open, read and decode the file for every caller, so a change to the format, the location or the
+// The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns.
+// The readers below open, read and decode the file for every caller, so a change to the format, the location or the
 // bad-file handling happens here.
 
 /// Why a metadata file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of

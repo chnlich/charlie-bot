@@ -99,7 +99,7 @@ impl PatchTask {
 }
 
 /// The structural guards that the task dispatcher answers for a node (`TaskTreeManager.pending_input_blockers` and
-/// `TaskInputDispatcher.undelivered_report_blockers`). The store does not own them: the dispatcher reads the input
+/// `TaskInputDispatcher.undelivered_report_blockers`). The store does not own them. The dispatcher reads the input
 /// boundary and the report deliveries through the store, so the dispatcher implements this trait and the caller passes
 /// it in.
 pub trait StructuralBlockers: Send + Sync {
@@ -682,7 +682,7 @@ impl Store {
   /// [`Store::node_state`] and the version of the memo entry that answered it.
   ///
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
-  /// the archived extent are the ones it covers; the read parses no history. Any other cold read loads the history.
+  /// the archived extent are the ones it covers. The read parses no history. Any other cold read loads the history.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
@@ -945,7 +945,7 @@ impl Store {
 
   /// Return every task node whose effective archive state is inherited or fact-derived.
   ///
-  /// The list belongs to the shared task index, so a reader that only compares or filters it shares the index's
+  /// The list belongs to the shared task index. A reader that only compares or filters it shares the index's
   /// copy instead of cloning one entry per session on every request.
   pub fn derived_archived_ids(&self) -> StoreResult<Arc<Vec<String>>> {
     Ok(Arc::clone(&self.tree_index()?.derived_archived_ids))
@@ -963,9 +963,9 @@ impl Store {
   /// parent keeps that parent's child page visible; the row still reports `archived`.
   ///
   /// `after` is the `(created_at, session_id)` of the previous page's last row, and `limit` is the page size. The page
-  /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list: on a home
-  /// whose root holds thousands of sessions, the whole list costs about 5 microseconds per row, so a 100-row page of
-  /// 7,160 rows paid for the 7,060 it truncated away.
+  /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list. On a home
+  /// whose root holds thousands of sessions, the whole list costs about 5 microseconds per row. A 100-row page of
+  /// 7,160 rows therefore paid for the 7,060 it truncated away.
   ///
   /// The rows are computed under `tree_rows_lock`, which serializes page computations.
   pub fn task_tree_page(
@@ -4166,7 +4166,7 @@ pub(crate) mod tests {
     assert!(store.cached_chat_events(&worker.id).is_none());
   }
 
-  /// A page's rows across an append to an open worker: the worker's history identity is read either just before or
+  /// A page's rows across an append to an open worker. The worker's history identity is read either just before or
   /// just after the append, and every row shows the worker wholly before or wholly after it.
   async fn tree_rows_computed_across_an_append(stage: IdentityStage) {
     let home = tempfile::tempdir().unwrap();
@@ -4350,8 +4350,9 @@ pub(crate) mod tests {
   #[test]
   fn a_settled_run_never_scans_the_history_for_a_withheld_reason() {
     // The withheld-reason question is asked only on the queued branch, after the outcome and
-    // stop-request maps decline the Run. The closure is that question; a settled Run must not ask it, or a node's
-    // display-state pass walks its whole history once per Run (912 Runs over a 15 MB log on the production copy).
+    // stop-request maps decline the Run. The closure is that question. A settled Run must not ask it, or a node's
+    // display-state pass walks its whole history once per Run. That pass cost 912 Runs over a 15 MB log on the
+    // production copy.
     let mut facts = crate::run_records::RunFacts::default();
     for event in [
       json!({"type": "run_finished", "run_id": "done", "outcome": "success"}),

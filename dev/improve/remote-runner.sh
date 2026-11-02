@@ -260,14 +260,24 @@ branch_is_in_flight() {
 # make merged work look live, and a branch without a merge base is skipped with a note. The
 # runner's own checkout is no direction's clone and contributes nothing.
 other_inflight_files() {
-  local clone other branch merge_base
+  local clone other branch merge_base attempt
   for clone in "$HOME_DIR"/improve/*/charlie-bot; do
     [[ -d $clone ]] || continue
     [[ $clone == "$RUNNER_ROOT/charlie-bot" ]] && continue
     other=$(basename -- "$(dirname -- "$clone")")
     [[ $other == "$direction" ]] && continue
-    git -C "$clone" fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main \
-      || fail 1 "cannot fetch origin/main in $clone"
+    # Every direction's round fetches every other clone, so two fetches of one clone can race on
+    # refs/remotes/origin/main and one fails with `cannot lock ref`. Three attempts, a second apart,
+    # let the fetch read the moved ref; the last failure stops the round.
+    for attempt in 1 2 3; do
+      if git -C "$clone" fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main; then
+        break
+      fi
+      (( attempt < 3 )) || fail 1 "cannot fetch origin/main in $clone"
+      printf '%s retrying the fetch of origin/main in %s, attempt %s of 3\n' \
+        "$STDERR_PREFIX" "$clone" $((attempt + 1)) >&2
+      sleep 1
+    done
     while IFS= read -r branch; do
       if merge_base=$(git -C "$clone" merge-base origin/main "$branch" 2>/dev/null); then
         if branch_is_in_flight "$clone" "$merge_base" "$branch"; then

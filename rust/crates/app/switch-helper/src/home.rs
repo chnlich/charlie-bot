@@ -29,6 +29,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   };
   match mode.to_str() {
     Some("config") => config(rest),
+    Some("switches") => switches(rest),
     Some("scan") => scan::scan(rest),
     Some("alive") => alive(rest),
     Some("outcome") => outcome(rest),
@@ -56,6 +57,24 @@ fn default_port() -> u16 {
   serde_json::from_value::<config::ServerConfig>(Value::Object(serde_json::Map::new()))
     .expect("ServerConfig deserializes its defaults")
     .port
+}
+
+/// `switches`: `cpu=<true|false>` on the first line and `io=<true|false>` on the second, for
+/// `server.enable_session_cpu_weight` and `server.enable_session_io_weight`. The section deserializes through
+/// `ServerConfig`, so an absent switch reads as its default, the same value the server resolves.
+fn switches(args: &[OsString]) -> Result<(), CliExit> {
+  let [home] = exact::<1>(args)?;
+  let home = Path::new(&home);
+  let document = read_config(home).map_err(failed)?;
+  print!("{}", switches_text(&document).map_err(failed)?);
+  Ok(())
+}
+
+/// The `switches` output for one raw config document.
+fn switches_text(document: &Value) -> anyhow::Result<String> {
+  let server = document.get("server").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+  let server: config::ServerConfig = serde_json::from_value(server)?;
+  Ok(format!("cpu={}\nio={}\n", server.enable_session_cpu_weight, server.enable_session_io_weight))
 }
 
 /// `alive PID PID_START`: `alive` while the recorded process instance runs, `ended` once it is gone or recycled.
@@ -168,6 +187,21 @@ impl Outcome {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn switches_read_the_section_and_the_absent_ones_default_on() {
+    let mut document = read_yaml("server:\n  enable_session_io_weight: false\n");
+    assert_eq!(switches_text(&document).expect("the switches print"), "cpu=true\nio=false\n");
+    document = read_yaml("server:\n  port: 1\n");
+    assert_eq!(switches_text(&document).expect("the switches print"), "cpu=true\nio=true\n");
+  }
+
+  /// One config.yaml text parsed the way `switches` reads it.
+  fn read_yaml(text: &str) -> Value {
+    let home = tempfile::tempdir().expect("a temp dir");
+    std::fs::write(home.path().join(config::CONFIG_FILENAME), text).expect("write the fixture config");
+    read_config(home.path()).expect("the fixture config reads")
+  }
 
   #[test]
   fn the_last_run_finished_fact_wins_and_a_falsy_outcome_reads_empty() {

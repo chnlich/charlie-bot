@@ -4,8 +4,11 @@
 #   scripts/switch-server.sh rust <full main commit> [--pane PANE]
 #
 # The preflight checks the release, the clone, the runs and the config, then asks start-server.sh to test its slices
-# and scope. It refuses a clone with local changes and a target commit that a fetch does not bring. The switch then
-# stops the old server, moves the clone with `git reset --keep <commit>` (forward or back), starts the release and
+# and scope, and checks that every switched-on session-weight switch (server.enable_session_cpu_weight,
+# server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
+# agents slice's cgroup.controllers. It refuses a clone with local changes and a target commit that a fetch does not
+# bring. The switch then stops the old server, moves the clone with `git reset --keep <commit>` (forward or back),
+# installs the clone's slice units into the user manager's unit directory and reloads it, starts the release and
 # reads it back. A refusal changes nothing and exits 1, except that a missing helper binary exits 2 (below). The switch
 # runs detached under setsid, because stopping the old server ends the master turn that started this command. The
 # command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
@@ -46,6 +49,7 @@
 # CHARLIEBOT_SWITCH_DISK_SAMPLE_S replace the disk preflight's 40 MB/s threshold, 15 min bound and 10 s sample window;
 # CHARLIEBOT_SWITCH_DISKSTATS, CHARLIEBOT_SWITCH_MOUNTINFO, CHARLIEBOT_SWITCH_CGROUP_ROOT and CHARLIEBOT_SWITCH_PROC
 # replace the /proc and /sys/fs/cgroup paths the disk preflight reads, so its tests inject their own.
+# CHARLIEBOT_SYSTEMD_USER_DIR replaces the user manager's unit directory the slice units install into.
 #
 # The disk preflight reads files only. It samples the root disk's read rate and waits while the rate stays above the
 # threshold, up to the bound, logging why it waits. A quiet disk proceeds at once. On timeout the switch exits 1 with
@@ -77,6 +81,7 @@ export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
+UNIT_USER_DIR="${CHARLIEBOT_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 CURRENT="$RELEASES_DIR/current"
 CTRL_C_WAIT_S="${CHARLIEBOT_SWITCH_CTRL_C_WAIT_S:-60}"
 STOP_WAIT_S="${CHARLIEBOT_SWITCH_STOP_WAIT_S:-60}"
@@ -1110,6 +1115,65 @@ dry_run_disk() {
   return "$rc"
 }
 
+# install_slice_units: copy the clone's slice units into the user manager's unit directory and reload it. The unit
+# files are the single home of the slice settings, and a release's launcher preflight compares the running slice
+# against the release's text, so the installed copy must be that text before the new server starts. The reload applies
+# the slice properties to the running slice without restarting it, which is what brings a controller into the slice's
+# cgroup.controllers the same way.
+install_slice_units() {
+  log "installing the slice units from $REPO_ROOT/scripts/systemd into $UNIT_USER_DIR and reloading the user manager"
+  install -d "$UNIT_USER_DIR" || return 1
+  install -m 0644 "$REPO_ROOT/scripts/systemd/"*.slice "$UNIT_USER_DIR/" || return 1
+  systemctl --user daemon-reload
+}
+
+# weight_controller_check: each switched-on session-weight switch names a controller that must have reached the
+# agents slice by switch time, because the new server writes that controller's weight into every session cgroup and
+# a slice without the controller fails every spawn. The switches are read through the release's `charliebot`
+# switch-helper; a helper older than the switches serves no switch that writes weights, so its usage refusal skips
+# the check. A missing controller stops the switch before the old server does anything.
+weight_controller_check() {
+  local slice_dir controllers switches rc
+  slice_dir="$CGROUP_ROOT/user.slice/user-$(id -u).slice/user@$(id -u).service/charliebot.slice/charliebot-agents.slice"
+  controllers="$(cat "$slice_dir/cgroup.controllers" 2> /dev/null)" \
+    || fail "cannot read $slice_dir/cgroup.controllers; run scripts/setup.sh"
+  switches="$(helper home-helper switches "$HOME_DIR")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 2 ]; then
+      log "the release's charliebot reads no session-weight switches; the weight-controller check does not apply"
+      return 0
+    fi
+    fail "cannot read the session-weight switches from $HOME_DIR"
+  fi
+  local controller switch
+  for pair in "cpu enable_session_cpu_weight" "io enable_session_io_weight"; do
+    set -- $pair
+    controller=$1
+    switch=$2
+    case "$switches" in
+      *"$controller=true"*) ;;
+      *) continue ;;
+    esac
+    case " $controllers " in
+      *" $controller "*) ;;
+      *)
+        if [ "$controller" = io ]; then
+          fail "the io weight cannot reach the sessions: 'io' is missing from" \
+            "$slice_dir/cgroup.controllers (have: $controllers). Give io to the user manager with" \
+            "scripts/systemd/setup-io-share.sh and install the release's slice units with scripts/setup.sh," \
+            "or set server.$switch = false to turn the io weight off"
+        else
+          fail "the cpu weight cannot reach the sessions: 'cpu' is missing from" \
+            "$slice_dir/cgroup.controllers (have: $controllers). Install the release's slice units with" \
+            "scripts/setup.sh, or set server.$switch = false to turn the cpu weight off"
+        fi
+        ;;
+    esac
+  done
+  log "weight controllers ready: controllers='$controllers' switches='$(tr '\n' ' ' <<<"$switches")'"
+}
+
 preflight() {
   PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
@@ -1135,6 +1199,7 @@ preflight() {
   [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
   [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"
   "$REPO_ROOT/scripts/start-server.sh" --preflight || fail "launcher preflight failed"
+  weight_controller_check
   if [ -z "$PANE" ]; then
     PANE="$(pane_of_pid "$LISTENER")" || fail "no tmux pane runs the server on port $PORT; pass --pane"
   fi
@@ -1229,6 +1294,7 @@ restore() {
   fi
   git -C "$REPO_ROOT" reset --keep -q "$OLD_SHA" || restore_failed "git reset --keep $OLD_SHA failed"
   set_current "$PREV_CURRENT" || restore_failed "could not put current back"
+  install_slice_units || restore_failed "the restored release's slice units did not install"
   if [ "$OLD_STOPPED" = 1 ]; then
     start_in_pane || restore_failed "could not type the launcher into pane $PANE"
     wait_ready || restore_failed "the previous implementation did not reach server_ready"
@@ -1255,6 +1321,7 @@ switch_forward() {
   stop_old || die "the old server did not stop"
   git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
+  install_slice_units || die "the slice units of $TARGET_SHA did not install"
   start_in_pane || die "could not type the launcher into pane $PANE"
   wait_ready || die "the new server did not reach server_ready"
   record_session_reads "after the new server is ready" || true

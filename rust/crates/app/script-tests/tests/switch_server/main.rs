@@ -383,6 +383,73 @@ fn test_preflight_refusal_exits_1_and_changes_nothing_launcher_preflight() {
   preflight_refusal_exits_1_and_changes_nothing("launcher-preflight");
 }
 
+// ---- preflight: the session-weight controllers ------------------------------------------------------
+
+#[test]
+fn test_preflight_stops_when_the_cpu_switch_is_on_and_cpu_is_missing_from_the_agents_slice() {
+  let world = World::new();
+  world.write_agents_controllers("memory pids");
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("preflight failed: the cpu weight cannot reach the sessions"), "{}", world.report(&run));
+  assert!(run.stdout.contains("'cpu' is missing from"), "{}", world.report(&run));
+  assert!(run.stdout.contains("server.enable_session_cpu_weight = false"), "{}", world.report(&run));
+}
+
+#[test]
+fn test_preflight_stops_when_the_io_switch_is_on_and_io_is_missing_from_the_agents_slice() {
+  let world = World::new();
+  world.write_agents_controllers("cpu memory pids");
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("preflight failed: the io weight cannot reach the sessions"), "{}", world.report(&run));
+  assert!(run.stdout.contains("'io' is missing from"), "{}", world.report(&run));
+  assert!(run.stdout.contains("server.enable_session_io_weight = false"), "{}", world.report(&run));
+  assert!(run.stdout.contains("setup-io-share.sh"), "{}", world.report(&run));
+}
+
+#[test]
+fn test_preflight_passes_a_missing_controller_when_its_switch_is_off() {
+  let world = World::new();
+  world.set_weight_switches(false, false);
+  world.write_agents_controllers("memory pids");
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("weight controllers ready"), "{}", world.report(&run));
+}
+
+#[test]
+fn test_preflight_skips_the_weight_controller_check_for_a_helper_without_the_switches() {
+  let world = World::new();
+  // The target release's helper serves switch-helper but predates the switches read: every other subcommand still
+  // reaches the real helper.
+  let real = world.root().join("real-fake-charliebot");
+  harness::copy_file(&world.releases.join(&world.rust_sha).join("charliebot"), &real);
+  replace_charliebot(
+    &world.releases.join(&world.rust_sha),
+    &format!(
+      r#"if [ "$2" = home-helper ] && [ "$3" = switches ]; then
+  echo "unknown switch helper" >&2
+  exit 2
+fi
+exec {} "$@"
+"#,
+      real.display()
+    ),
+  );
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("reads no session-weight switches"), "{}", world.report(&run));
+}
+
 /// Each preflight check refuses before the switch stops anything: exit 1 and no change. The refusals that a live run
 /// raises run against a started release, because the scan reads the running build's registrations.
 fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
@@ -604,6 +671,31 @@ fn switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(outcome: Option<
       world.report(&run)
     );
   }
+}
+
+// ---- the switch installs the slice units ---------------------------------------------------------------------------
+
+#[test]
+fn test_switch_forward_installs_the_slice_units_and_reloads_before_the_new_server_starts() {
+  let mut world = World::new();
+  world.seed_live_run("run-install", Some("claude-opus"));
+  world.record_outcome("run-install", "success");
+  let pid = world.live[0].id();
+
+  let run = world.switch_forward(pid, &drain_line("run-install"), ":");
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  // The clone moved to the target release, so the installed text is the release's.
+  for unit in ["charliebot.slice", "charliebot-agents.slice"] {
+    let installed = fs::read_to_string(world.user_units().join(unit)).expect("the installed unit");
+    let release = fs::read_to_string(world.clone.join("scripts/systemd").join(unit)).expect("the release's unit file");
+    assert_eq!(installed, release, "the installed {unit} is not the release's text");
+  }
+  // The reload precedes the server start: the records hold the reload, then the launch's marker.
+  let records = world.systemctl_records();
+  let reload = records.iter().position(|line| line == "daemon-reload").expect("no daemon-reload ran");
+  let start = records.iter().position(|line| line == "server-start").expect("the server did not start");
+  assert!(reload < start, "the reload ran after the server start: {records:?}");
 }
 
 // ---- escalation: a server under the pane is stopped by SIGTERM, then SIGKILL --------------------------------------

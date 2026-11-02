@@ -3,7 +3,7 @@
 //!
 //! The switch script runs the `charliebot` binary of the release it reads with (see the script's header), so every
 //! helper prints exactly what the switch compares and exits with the code it branches on: a helper that matched prints
-//! nothing and exits 0, and one that did not match exits 1. The eight names each take the arguments the switch
+//! nothing and exits 0, and one that did not match exits 1. The nine names each take the arguments the switch
 //! passes.
 
 use std::ffi::OsString;

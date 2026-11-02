@@ -41,6 +41,32 @@ const BACKENDS_OF_BUILDS: [(&str, &str, bool); 3] =
 /// The backends that the test config names, with the types the scan maps them to.
 const BACKEND_OPTIONS: &str = "backends:\n  options:\n  - id: oc-deepseek-flash\n    type: opencode\n  - id: agy-gemini-flash\n    type: antigravity\n  - id: claude-opus\n    type: cc-claude\n";
 
+/// The fake agents slice cgroup the weight-controller check reads, at the path the switch derives on the host.
+fn world_agents_slice(cgroups: &Path) -> PathBuf {
+  let uid = u32::from(getuid());
+  cgroups.join(format!("user.slice/user-{uid}.slice/user@{uid}.service/charliebot.slice/charliebot-agents.slice"))
+}
+
+/// The switch world's `systemctl`: the harness stub's show answers plus the `daemon-reload` the slice-unit install
+/// runs, which lands one line in the record file beside the stub.
+const SWITCH_SYSTEMCTL: &str = r#"case "$*" in
+  *daemon-reload*)
+    printf 'daemon-reload\n' >> "${BASH_SOURCE[0]%/*}/systemctl.records"
+    exit 0
+    ;;
+  *charliebot-agents.slice*)
+    echo "ActiveState=${SYSTEMCTL_ACTIVE_STATE:-active}"
+    echo "MemoryMax=${SYSTEMCTL_MEMORY_MAX:-{memory_max}}"
+    echo "MemorySwapMax=${SYSTEMCTL_MEMORY_SWAP_MAX:-0}"
+    echo "CPUWeight=${SYSTEMCTL_CPU_WEIGHT:-100}"
+    echo "IOWeight=${SYSTEMCTL_IO_WEIGHT:-100}"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"#;
+
 /// One test's runtime clone, home, release root, log directory and tmux socket. The clone starts at `old_sha`.
 pub struct World {
   pub sandbox: Sandbox,
@@ -157,8 +183,17 @@ impl World {
     }
     symlink(&old_sha, releases.join("current")).expect("the current release");
 
-    // The launcher's slice preflight and its systemd-run scope, without the host's user manager.
+    // The launcher's slice preflight and its systemd-run scope, without the host's user manager. The switch world's
+    // systemctl also serves the daemon-reload the slice-unit install runs, and records it (see `reload_records`).
     sandbox.install_systemd_stubs();
+    sandbox
+      .stub("systemctl", &SWITCH_SYSTEMCTL.replace("{memory_max}", &harness::memtotal_percent_bytes(80).to_string()));
+    // A healthy host for the weight-controller check: the agents slice carries every controller a switched-on
+    // session-weight switch needs, io included, as it does once setup-io-share.sh has delegated io. The path mirrors
+    // the host's, under the fake cgroup root.
+    let agents_slice = world_agents_slice(&cgroups);
+    fs::create_dir_all(&agents_slice).expect("the fake agents slice cgroup");
+    fs::write(agents_slice.join("cgroup.controllers"), "cpu memory pids io\n").expect("the fake controllers");
     let port = free_port();
     let config = format!("server:\n  host: 127.0.0.1\n  port: {port}\n{BACKEND_OPTIONS}");
     fs::write(home.join("config.yaml"), config).expect("the config");
@@ -169,6 +204,8 @@ impl World {
     env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
     env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
     env.insert("CHARLIEBOT_LOG_DIR".to_string(), logs.display().to_string());
+    // The slice units install into the sandbox, never into the user running the tests.
+    env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("user-units").display().to_string());
     // A long TMPDIR puts the sandbox's private TMUX_TMPDIR past the 108-byte unix socket path limit.
     env.insert("TMUX_TMPDIR".to_string(), "/tmp".to_string());
     let socket = format!("switch-test-{}", &Uuid::new_v4().simple().to_string()[..8]);
@@ -213,6 +250,36 @@ impl World {
     self.clone.join("scripts/switch-server.sh")
   }
 
+  /// The `daemon-reload` lines the systemctl stub recorded, oldest first. `extra` marks a line another test wrote
+  /// into the same file, so an ordering test can read the reload against it.
+  pub fn systemctl_records(&self) -> Vec<String> {
+    let path = self.sandbox.bin().join("systemctl.records");
+    if !path.exists() {
+      return Vec::new();
+    }
+    fs::read_to_string(&path).expect("read the systemctl records").lines().map(String::from).collect()
+  }
+
+  /// The directory the slice units install into, which the environment redirected into the sandbox.
+  pub fn user_units(&self) -> PathBuf {
+    self.sandbox.dir("user-units")
+  }
+
+  /// Rewrites the agents slice's fake `cgroup.controllers`.
+  pub fn write_agents_controllers(&self, controllers: &str) {
+    let path = world_agents_slice(&self.cgroups);
+    fs::write(path.join("cgroup.controllers"), format!("{controllers}\n")).expect("the fake controllers");
+  }
+
+  /// Rewrites the home config with the two session-weight switches set to `cpu` and `io`, keeping the rest.
+  pub fn set_weight_switches(&self, cpu: bool, io: bool) {
+    let config = format!(
+      "server:\n  host: 127.0.0.1\n  port: {}\n  enable_session_cpu_weight: {}\n  enable_session_io_weight: {}\n{BACKEND_OPTIONS}",
+      self.port, cpu, io
+    );
+    fs::write(self.home.join("config.yaml"), config).expect("the config");
+  }
+
   /// Runs the clone's own switch command, as the operator does from the runtime clone.
   pub fn switch(&self, args: &[&str]) -> Run {
     let mut command = harness::command("bash", &self.env);
@@ -250,12 +317,13 @@ impl World {
     env.insert("NEW_OFFSET".to_string(), "0".to_string());
     env.insert("WORK".to_string(), work.display().to_string());
     env.insert("DELEGATION".to_string(), delegation.to_string());
+    env.insert("SYSTEMCTL_RECORDS".to_string(), self.sandbox.bin().join("systemctl.records").display().to_string());
     let script = r#"
 source "$1" rust "$2"
 REPO_ROOT="$CLONE"
 OLD_IMPL="$3"
 stop_old() { kill -KILL "$RUN_PID"; log "old server stopped"; }
-start_in_pane() { :; }
+start_in_pane() { printf 'server-start\n' >> "$SYSTEMCTL_RECORDS"; }
 wait_ready() { :; }
 serving() { :; }
 probe_turn() { :; }

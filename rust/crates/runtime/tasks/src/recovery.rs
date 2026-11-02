@@ -101,15 +101,23 @@ fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTi
   Ok(())
 }
 
-fn boot_skip_reason(
+/// The boot marker's verdict on one node.
+enum SkipCheck {
+  /// The node takes its full pass for this keep reason.
+  Keep(&'static str),
+  /// The node skips its pass. The newest run's backend warms the display-backend map.
+  Skip { newest_backend: Option<String> },
+}
+
+fn boot_skip_check(
   features: &FeatureContext,
   session_id: &str,
   session_dir: &std::path::Path,
   meta: &SessionMetadata,
   marker: UtcDateTime,
-) -> anyhow::Result<Option<&'static str>> {
+) -> anyhow::Result<SkipCheck> {
   if features.store.task_state_fast(session_id)? == "open" {
-    return Ok(Some("state_open"));
+    return Ok(SkipCheck::Keep("state_open"));
   }
 
   let marker_instant = marker.into_inner();
@@ -118,30 +126,30 @@ fn boot_skip_reason(
   for path in [layout::chat_events_path(session_dir), session_dir.join(run_records::METADATA_NAME)] {
     let modified = match std::fs::metadata(&path) {
       Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some("file_after_marker")),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(SkipCheck::Keep("file_after_marker")),
       Err(error) => return Err(error).with_context(|| format!("stating {}", path.display())),
     };
     let modified = OffsetDateTime::from(modified);
     let modified_seconds =
       charliebot_core::timefmt::float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
     if modified_seconds >= marker_seconds - MARKER_MTIME_SLACK_SECONDS {
-      return Ok(Some("file_after_marker"));
+      return Ok(SkipCheck::Keep("file_after_marker"));
     }
   }
 
   let runs = features.store.list_run_records_sync(session_id)?;
   for run in &runs {
     if run.ended_at.is_none() {
-      return Ok(Some("run_unended"));
+      return Ok(SkipCheck::Keep("run_unended"));
     }
     if run.sequence_ref.is_some() {
-      return Ok(Some("sequence_ref"));
+      return Ok(SkipCheck::Keep("sequence_ref"));
     }
     if let Some(worktree_path) = run.worktree_path.as_deref().filter(|path| !path.is_empty()) {
       // A path that cannot be stat'ed counts as absent, so the pass continues past it. An error other than
       // not-found logs a warning, which keeps that error visible.
       match std::fs::symlink_metadata(worktree_path) {
-        Ok(_) => return Ok(Some("worktree_exists")),
+        Ok(_) => return Ok(SkipCheck::Keep("worktree_exists")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!(
           target: "charliebot_tasks",
@@ -158,9 +166,10 @@ fn boot_skip_reason(
     && let Some(last_work_run) = runs.iter().rfind(|run| run.kind == RunKind::Work)
     && features.store.node_state(session_id)?.runs.terminal_outcome(&last_work_run.id)? == Some(RunOutcomeKind::Failed)
   {
-    return Ok(Some("cold_read_failed"));
+    return Ok(SkipCheck::Keep("cold_read_failed"));
   }
-  Ok(None)
+  // The listing is in `(started_at, id)` order, so its last record is the session's newest run.
+  Ok(SkipCheck::Skip { newest_backend: runs.last().and_then(|run| run.backend.clone()) })
 }
 
 /// The counters of one boot pass, logged with `task_tree_recovery_done`.
@@ -325,18 +334,27 @@ struct FullPassSession {
   meta: SessionMetadata,
 }
 
-/// The threads one absence-proof batch may split across.
+/// One session directory's verdict from the walk's skip check.
+enum WalkEntry {
+  /// No node: the directory, its metadata file or its metadata is missing.
+  Absent,
+  /// The boot marker skips the node's pass.
+  Skipped { session_id: String, newest_backend: Option<String> },
+  /// The node takes its full pass; the keep reason is absent when no marker was read.
+  Kept { reason: Option<&'static str>, session: Box<FullPassSession> },
+}
+
+/// The threads one batch of the walk's per-session reads may split across.
 ///
-/// Every proof memory-maps its session's event logs and scans their raw bytes, and a fresh home makes that scan
-/// several gigabytes. Each proof reads only its own session's files, so the batch splits across the available cores.
-/// On the 7,160-session mock home sixteen threads leave the scan at about the walk's fixed per-session cost, so more
-/// threads gained nothing.
-const CLASSIFY_WORKERS: usize = 16;
-/// The candidate count below which the absence proofs run on the calling thread.
+/// The skip checks and the absence proofs each read only their own session's files, before any node pass writes, so
+/// each batch splits across the available cores. On the 7,160-session mock home sixteen threads
+/// left the absence-proof scan at about the walk's fixed per-session cost, so more threads gained nothing.
+const WALK_WORKERS: usize = 16;
+/// The batch size below which a batch runs on the calling thread.
 ///
-/// Starting a thread costs more than a handful of small proofs, so only a batch a production home produces takes the
+/// Starting a thread costs more than a handful of small reads, so only a batch a production home produces takes the
 /// parallel path.
-const CLASSIFY_MIN_SESSIONS: usize = 64;
+const WALK_PARALLEL_MIN_ITEMS: usize = 64;
 
 /// Reconcile every node this home owns, in sorted directory order (`task_recovery.reconcile_task_tree`). The sequence
 /// controllers mark their interrupted state first.
@@ -385,45 +403,38 @@ pub async fn reconcile_task_tree(
   session_dirs.sort();
   let listing_ms = phase_ms();
   tracing::info!(target: "charliebot_tasks", sessions = session_dirs.len(), "task_tree_recovery_walk_started");
+  // The skip checks only read, and no node pass has run yet, so the checks run in parallel and their verdicts are
+  // applied in the walk's order: the first failing session in that order fails the walk.
+  let check_features = Arc::clone(features);
+  let (_, entries) =
+    blocking_batch(session_dirs, &stop, move |session_dir| examine_session_dir(&check_features, session_dir, marker))
+      .await?;
+  let Some(entries) = entries else {
+    return Ok(counters);
+  };
   let mut candidates: Vec<FullPassSession> = Vec::new();
-  for session_dir in session_dirs {
-    if stop.is_cancelled() {
-      return Ok(counters);
-    }
-    if !session_dir.is_dir() || !session_dir.join(run_records::METADATA_NAME).is_file() {
-      continue;
-    }
-    let session_id = session_dir
-      .file_name()
-      .and_then(|name| name.to_str())
-      .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
-      .to_string();
-    let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
-    let Some(meta) = features.store.load_meta(&session_id).await? else {
-      continue;
-    };
-    if stop.is_cancelled() {
-      return Ok(counters);
-    }
-    counters.nodes += 1;
-    if let Some(marker) = marker {
-      if let Some(reason) = boot_skip_reason(features, &session_id, &session_dir, &meta, marker)? {
-        *counters.keep_reasons.entry(reason.to_string()).or_default() += 1;
-      } else {
-        if let Some(newest) = features.store.newest_run_record_sync(&session_id)?
-          && let Some(backend) = newest.backend.as_deref()
-        {
+  for entry in entries {
+    match entry? {
+      WalkEntry::Absent => {}
+      WalkEntry::Skipped { session_id, newest_backend } => {
+        counters.nodes += 1;
+        if let Some(backend) = newest_backend.as_deref() {
           features.store.note_run_backend(&session_id, backend);
         }
         counters.skipped += 1;
-        continue;
+      }
+      WalkEntry::Kept { reason, session } => {
+        counters.nodes += 1;
+        if let Some(reason) = reason {
+          *counters.keep_reasons.entry(reason.to_string()).or_default() += 1;
+        }
+        counters.full += 1;
+        candidates.push(*session);
       }
     }
-    if stop.is_cancelled() {
-      return Ok(counters);
-    }
-    counters.full += 1;
-    candidates.push(FullPassSession { session_id, meta });
+  }
+  if stop.is_cancelled() {
+    return Ok(counters);
   }
   let skip_checks_ms = phase_ms();
   // A session with no task boundary, no run directory and no prompt ref has nothing to reconcile: its pass can only
@@ -431,7 +442,13 @@ pub async fn reconcile_task_tree(
   // absence without folding the log. Each proof reads only its own session's files, so the whole batch proves in
   // parallel before the passes run in the walk's order. A probe that cannot read the session's files fails the node,
   // as a node pass that cannot read them does.
-  let Some(no_nodes) = classify_no_task_nodes(&features.store, &candidates, &stop) else {
+  let proof_features = Arc::clone(features);
+  let (candidates, no_nodes) = blocking_batch(candidates, &stop, move |candidate| {
+    let _session_timer = SessionTimer { session_id: candidate.session_id.clone(), started: Instant::now() };
+    proof_features.store.has_no_task_node(&candidate.meta)
+  })
+  .await?;
+  let Some(no_nodes) = no_nodes else {
     return Ok(counters);
   };
   let absence_proofs_ms = phase_ms();
@@ -483,51 +500,101 @@ pub async fn reconcile_task_tree(
   Ok(counters)
 }
 
-/// Whether each candidate session holds no task-tree node, in the candidates' order.
+/// The skip check of one session directory: whether it holds a node, and whether the boot marker skips that node.
+fn examine_session_dir(
+  features: &FeatureContext,
+  session_dir: &std::path::Path,
+  marker: Option<UtcDateTime>,
+) -> anyhow::Result<WalkEntry> {
+  if !session_dir.is_dir() || !session_dir.join(run_records::METADATA_NAME).is_file() {
+    return Ok(WalkEntry::Absent);
+  }
+  let session_id = session_dir
+    .file_name()
+    .and_then(|name| name.to_str())
+    .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
+    .to_string();
+  let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
+  let Some(meta) = features.store.get_session_cached_or_read_sync(&session_id)? else {
+    return Ok(WalkEntry::Absent);
+  };
+  let reason = match marker {
+    None => None,
+    Some(marker) => match boot_skip_check(features, &session_id, session_dir, &meta, marker)? {
+      SkipCheck::Keep(reason) => Some(reason),
+      SkipCheck::Skip { newest_backend } => return Ok(WalkEntry::Skipped { session_id, newest_backend }),
+    },
+  };
+  Ok(WalkEntry::Kept { reason, session: Box::new(FullPassSession { session_id, meta }) })
+}
+
+/// [`parallel_map_until`] on the blocking pool; the items come back with the results.
 ///
-/// The proofs split across the available cores when the batch is large enough to pay for the threads. A worker that
-/// meets a stop request returns `None`, and the walk then ends with the counters it has, as a sequential stop does.
-fn classify_no_task_nodes(
-  store: &Store,
-  candidates: &[FullPassSession],
+/// A batch reads for seconds on a large home. Run in place, it would hold one of the async runtime's threads for that
+/// long, and the stop request arrives through a runtime task: on a host with one runtime thread, the stop would wait for
+/// the batch to end. A batch below [`WALK_PARALLEL_MIN_ITEMS`] runs on the calling thread, as the walk's reads did
+/// before they were batched.
+async fn blocking_batch<T, R>(
+  items: Vec<T>,
   stop: &StartupStop,
-) -> Option<Vec<StoreResult<bool>>> {
-  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(CLASSIFY_WORKERS);
-  if candidates.len() < CLASSIFY_MIN_SESSIONS || workers < 2 {
-    let mut results = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
+  job: impl Fn(&T) -> R + Send + Sync + 'static,
+) -> anyhow::Result<(Vec<T>, Option<Vec<R>>)>
+where
+  T: Send + Sync + 'static,
+  R: Send + 'static,
+{
+  if items.len() < WALK_PARALLEL_MIN_ITEMS {
+    let results = parallel_map_until(&items, stop, job);
+    return Ok((items, results));
+  }
+  let stop = stop.clone();
+  tokio::task::spawn_blocking(move || {
+    let results = parallel_map_until(&items, &stop, job);
+    (items, results)
+  })
+  .await
+  .context("a startup walk batch task failed")
+}
+
+/// `job` applied to each item, in the items' order.
+///
+/// The items split across the available cores when the batch is large enough to pay for the threads. Each worker takes
+/// the next unclaimed item, so one large session's read never holds back a run of others behind it. A worker checks
+/// the stop request before each item and stops when it meets one; the result is then `None`, and the walk ends with
+/// the counters it has, as a sequential stop does.
+fn parallel_map_until<T: Sync, R: Send>(
+  items: &[T],
+  stop: &StartupStop,
+  job: impl Fn(&T) -> R + Sync,
+) -> Option<Vec<R>> {
+  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(WALK_WORKERS);
+  if items.len() < WALK_PARALLEL_MIN_ITEMS || workers < 2 {
+    let mut results = Vec::with_capacity(items.len());
+    for item in items {
       if stop.is_cancelled() {
         return None;
       }
-      let _session_timer = SessionTimer { session_id: candidate.session_id.clone(), started: Instant::now() };
-      results.push(store.has_no_task_node(&candidate.meta));
+      results.push(job(item));
     }
     return Some(results);
   }
-  let chunk = candidates.len().div_ceil(workers);
+  let next = std::sync::atomic::AtomicUsize::new(0);
+  let slots: Vec<std::sync::Mutex<Option<R>>> = items.iter().map(|_| std::sync::Mutex::new(None)).collect();
   std::thread::scope(|scope| {
-    let chunks: Vec<_> = candidates
-      .chunks(chunk)
-      .map(|chunk| {
-        scope.spawn(move || {
-          let mut results = Vec::with_capacity(chunk.len());
-          for candidate in chunk {
-            if stop.is_cancelled() {
-              return None;
-            }
-            let _session_timer = SessionTimer { session_id: candidate.session_id.clone(), started: Instant::now() };
-            results.push(store.has_no_task_node(&candidate.meta));
+    for _ in 0..workers {
+      scope.spawn(|| {
+        loop {
+          let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+          if index >= items.len() || stop.is_cancelled() {
+            return;
           }
-          Some(results)
-        })
-      })
-      .collect();
-    let mut results = Vec::with_capacity(candidates.len());
-    for chunk in chunks {
-      results.extend(chunk.join().expect("a classification chunk only proves session absence")?);
+          let result = job(&items[index]);
+          *slots[index].lock().expect("walk slot mutex is not poisoned") = Some(result);
+        }
+      });
     }
-    Some(results)
-  })
+  });
+  slots.into_iter().map(|slot| slot.into_inner().expect("walk slot mutex is not poisoned")).collect()
 }
 
 async fn reconcile_node_until_stopped<T>(stop: &StartupStop, node_pass: impl Future<Output = T>) -> Option<T> {
@@ -1576,10 +1643,10 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn the_absence_batch_proves_every_session_and_keeps_its_order() {
+  async fn a_walk_batch_keeps_each_result_in_order_and_ends_at_a_stop() {
     let (_home, features) = startup_features().await;
     let store = &features.store;
-    let count = CLASSIFY_MIN_SESSIONS + 2;
+    let count = WALK_PARALLEL_MIN_ITEMS + 2;
     let mut candidates = Vec::with_capacity(count);
     for index in 0..count {
       let session_id = format!("batch-{index:03}");
@@ -1598,13 +1665,24 @@ mod tests {
       candidates.push(FullPassSession { session_id, meta });
     }
     let stop = StartupStop::default();
-    let proved = classify_no_task_nodes(store, &candidates, &stop).expect("no stop request arrived");
+    let proved = parallel_map_until(&candidates, &stop, |candidate| store.has_no_task_node(&candidate.meta))
+      .expect("no stop request arrived");
     assert_eq!(proved.len(), candidates.len(), "every candidate keeps its proof");
     for (index, (proved, candidate)) in proved.into_iter().zip(&candidates).enumerate() {
       let sequential = store.has_no_task_node(&candidate.meta).expect("the sequential proof reads the session");
       assert_eq!(proved.expect("the batch proof reads the session"), sequential, "candidate {index}");
       assert_eq!(sequential, index % 7 != 0 && index % 11 != 0, "candidate {index}");
     }
+
+    // A worker checks the stop before each item it takes, so a stop ends the batch with the later items unread.
+    let taken = std::sync::atomic::AtomicUsize::new(0);
+    let stopped = parallel_map_until(&candidates, &stop, |_| {
+      taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+      stop.cancel();
+    });
+    assert!(stopped.is_none(), "a stopped batch returns no results");
+    let taken = taken.into_inner();
+    assert!(taken < candidates.len(), "the stop ended the batch after {taken} of {} items", candidates.len());
   }
 
   #[tokio::test]
@@ -1877,7 +1955,11 @@ mod tests {
         std::fs::File::open(&path).expect("the durable file exists").set_modified(stamp).expect("the mtime is set");
       }
 
-      let reason = boot_skip_reason(&features, &session_id, &session_dir, &meta, marker).expect("the skip check reads");
+      let reason =
+        match boot_skip_check(&features, &session_id, &session_dir, &meta, marker).expect("the skip check reads") {
+          SkipCheck::Keep(reason) => Some(reason),
+          SkipCheck::Skip { .. } => None,
+        };
 
       assert_eq!(reason, expected, "a durable file {before:?} before the marker");
     }

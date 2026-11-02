@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# The placeholder toolchain's rustc, selected by RUSTUP_TOOLCHAIN. The queries that cargo and users make of rustc run
+# through the toolchain that rustup picks without the placeholder; a compile is refused.
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+for arg in "$@"; do
+  case $arg in
+    -vV|-V|--version|--print|--print=*)
+      exec env -u RUSTUP_TOOLCHAIN "${CARGO_HOME:-$HOME/.cargo}/bin/rustc" "$@" ;;
+  esac
+done
+exec bash "$here/../../refuse.sh" rustc

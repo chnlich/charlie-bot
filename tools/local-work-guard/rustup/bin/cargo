@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# The placeholder toolchain's cargo, selected by RUSTUP_TOOLCHAIN. The read-only subcommands run through the toolchain
+# that rustup picks without the placeholder; every other subcommand is refused. A leading +toolchain argument names a
+# toolchain and is skipped when the subcommand is read.
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+sub=
+for arg in "$@"; do
+  case $arg in
+    +*) continue ;;
+  esac
+  sub=$arg
+  break
+done
+case $sub in
+  ''|fmt|metadata|tree|locate-project|--list|-h|--help|help|-V|--version)
+    exec env -u RUSTUP_TOOLCHAIN "${CARGO_HOME:-$HOME/.cargo}/bin/cargo" "$@" ;;
+esac
+exec bash "$here/../../refuse.sh" cargo

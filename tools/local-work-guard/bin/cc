@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# The C and C++ compilers on PATH and in CC and CXX. gcc, g++ and c++ link to this script, which takes its own name
+# from $0. The version queries run the compiler of that name that this directory does not shadow; any other run is
+# refused.
+set -euo pipefail
+
+name=$(basename -- "$0")
+here=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
+if (( $# == 1 )) && [[ $1 == --version || $1 == -dumpversion || $1 == -dumpmachine ]]; then
+  # The guard directory can sit anywhere on PATH, so each entry is compared by its physical path.
+  kept=()
+  IFS=: read -r -a entries <<< "$PATH"
+  for entry in "${entries[@]}"; do
+    if [[ -d $entry && "$(cd -P -- "$entry" && pwd -P)" == "$here" ]]; then
+      continue
+    fi
+    kept+=("$entry")
+  done
+  exec env PATH="$(IFS=:; printf '%s' "${kept[*]}")" "$name" "$1"
+fi
+exec bash "$here/../refuse.sh" "$name"

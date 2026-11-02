@@ -376,6 +376,8 @@ server:
   session_swap_max_mb: 0
   session_tasks_max: 256
   min_free_disk_gib: 0
+  # The synthetic trial home names no build host, so the guard stays off.
+  enable_local_work_guard: false
 paths:
   workspace_dirs:
     - $WORKSPACE

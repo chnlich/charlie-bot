@@ -1241,7 +1241,13 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      SessionCgroupConfig { base_dir: base, memory_max_mb: 64, swap_max_mb: 32, tasks_max: 0, ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base,
+        memory_max_mb: 64,
+        swap_max_mb: 32,
+        tasks_max: 0,
+        ..SessionCgroupConfig::disabled()
+      },
     );
     let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1288,7 +1294,13 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      SessionCgroupConfig { base_dir: base, memory_max_mb: 64, swap_max_mb: 0, tasks_max: 16, ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base,
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+        ..SessionCgroupConfig::disabled()
+      },
     );
     let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1312,7 +1324,13 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      SessionCgroupConfig { base_dir: base, memory_max_mb: 64, swap_max_mb: 0, tasks_max: 16, ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base,
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+        ..SessionCgroupConfig::disabled()
+      },
     );
     let mut spawned = spawn_one_shot(&spec, None).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1343,7 +1361,13 @@ mod tests {
       None,
       env,
       Some("test1234-session".into()),
-      SessionCgroupConfig { base_dir: base, memory_max_mb: 64, swap_max_mb: 0, tasks_max: 16, ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base,
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+        ..SessionCgroupConfig::disabled()
+      },
     );
     let mut child =
       spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await.unwrap().child;
@@ -1383,7 +1407,13 @@ mod tests {
       None,
       env,
       Some("test1234-session".into()),
-      SessionCgroupConfig { base_dir: base, memory_max_mb: 64, swap_max_mb: 0, tasks_max: 16, ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base,
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+        ..SessionCgroupConfig::disabled()
+      },
     );
     let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await.unwrap().child;
     let pid = child.id().unwrap();

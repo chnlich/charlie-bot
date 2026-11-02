@@ -44,7 +44,7 @@ The memory verbs read `<home>/memory` without `config.yaml`; proposal `open`, `s
   module's `main()`.
 - Every argparse usage error exits 2.
 
-The 20 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
+The 20 top-level subcommands recorded at the Python baseline: `artifact`,
 `compaction-context`, `config`, `delegate`, `discord`, `disk-sweep`, `gc-trash`, `improve`, `improve-stop`, `memory`,
 `plan`, `publish`, `router`, `schedule-trigger`, `session`, `slack`, `storage`, `usage-ledger`, `voice-replay-eval`,
 `web`. Each has a section
@@ -127,12 +127,5 @@ below.
 
 ## 4. Acceptance check
 
-At the Python baseline this read the subcommand list from the Python CLI:
-
-```
-uv run python -m src.app.main --help | sed -n '/Available subcommands:/,$p' | tail -n +2 | awk '{print $1}' \
-  | while read c; do grep -q "\`$c" rust/docs/contract/state/cli.md && echo "ok $c" || echo "MISSING $c"; done
-```
-
-The Python CLI is deleted; the Rust binary now answers the same question via its dispatcher help, which names the 22
-caller-bearing subcommands.
+At the Python baseline this read the subcommand list from the Python CLI. The Python CLI is deleted; the Rust binary
+now answers the same question via its dispatcher help, which names the 22 caller-bearing subcommands.

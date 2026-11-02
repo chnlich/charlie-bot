@@ -14,7 +14,7 @@
 # during it: the new server keeps serving, nothing is restored, and the log names the run and its outcome. When the
 # pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server processes under the pane.
 #
-# This script starts no python3: every read of the home, of a run record and of an API answer goes through
+# Every read of the home, of a run record and of an API answer goes through
 # `charliebot switch-helper` (rust/crates/app/switch-helper). The binary is chosen once, when the switch starts: the
 # target release's `charliebot` when it has the subcommand, otherwise the `charliebot` of the release `current` names
 # at that moment. The fallback lets a switch back to a release older than this script work: the release that serves

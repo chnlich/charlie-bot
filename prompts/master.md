@@ -303,7 +303,7 @@ itself, and follow it.
 
 ## Your Capabilities
 
-You have these built-in features. If unsure how one works, read the server code in `rust/crates/` (the Python `charliebot` CLI lives in `src/`).
+You have these built-in features. If unsure how one works, read the code in `rust/crates/`: the server and the `charliebot` CLI both live there.
 
 See `charliebot --help` for CLI subcommands.
 

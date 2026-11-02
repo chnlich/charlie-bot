@@ -81,7 +81,7 @@ The tables come from four sources:
 
 The route dump, in outline:
 
-```python
+```
 import inspect
 from starlette import routing
 import server

@@ -7,10 +7,10 @@ use charliebot_core::str_methods;
 use charliebot_html::{EventKind, Opcode, OpcodeTag, StreamEvent, escape, opcodes, parse_with, unescape};
 use regex::Regex;
 
+/// The parser's void-element set, which the artifact check reads through this module.
+pub use charliebot_html::VOID_TAGS;
+
 const IGNORED_TAGS: &[&str] = &["head", "style", "script", "template", "noscript", "title"];
-/// HTML void elements that the tokenizer tree builder never pushes onto its open-element stack.
-pub const VOID_TAGS: &[&str] =
-  &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 const BLOCK_TAGS: &[&str] = &[
   "address",
   "article",
@@ -1209,14 +1209,6 @@ mod tests {
       control.iter().zip(&expected).filter(|(actual, expected)| actual != expected).count(),
       1,
       "the planted control difference must produce one mismatch"
-    );
-  }
-
-  #[test]
-  fn void_tags_match_the_differ_set() {
-    assert_eq!(
-      VOID_TAGS,
-      &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",]
     );
   }
 

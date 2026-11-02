@@ -237,6 +237,23 @@ graphql_call_kind() {
   printf 'unknown\n'
 }
 
+# Print the single-letter flags that take a value in the current subcommand. A cluster such as -db or -iXDELETE is
+# split at its first value letter, so a letter missing here would read as a boolean.
+value_letters() {
+  case $cmd in
+    api) printf 'FHXfpqt' ;;
+    pr)
+      case $action in
+        close) printf 'cR' ;;
+        merge) printf 'bFtR' ;;
+        *) printf 'aBbFHlmprRtT' ;;
+      esac
+      ;;
+    issue) printf 'aBbFlmpRtT' ;;
+    *) printf 'R' ;;
+  esac
+}
+
 # Classify the argv without touching the caller's positionals. Sets:
 #   cmd, action    the first two positional words
 #   repo_flag      the -R/--repo value, empty when absent
@@ -411,6 +428,38 @@ classify() {
         -?)
           continue
           ;;
+        # A cluster of several single-letter flags, such as -db "text" or -iXDELETE. Its boolean letters read no value;
+        # its first value letter takes the rest of the cluster, or the next argument when none is left.
+        -?*)
+          cluster=${arg#-}
+          value_letter=
+          while [ -n "$cluster" ]; do
+            letter=${cluster%"${cluster#?}"}
+            cluster=${cluster#?}
+            case $(value_letters) in
+              *"$letter"*)
+                value_letter=$letter
+                break
+                ;;
+            esac
+          done
+          if [ -z "$value_letter" ]; then
+            continue
+          fi
+          case $value_letter in
+            # The letters classified above: read the value letter as its own flag, the rest of the cluster attached.
+            R|X|c|b|t|f|F|H|p|q)
+              set -- "-$value_letter$cluster" "$@"
+              ;;
+            *)
+              if [ -z "$cluster" ]; then
+                [ $# -gt 0 ] || break
+                shift
+              fi
+              ;;
+          esac
+          continue
+          ;;
       esac
     fi
     words=$((words + 1))
@@ -485,20 +534,19 @@ case $cmd in
     if [ -z "$method" ]; then
       method=GET
     fi
-    case $method in
-      [Gg][Ee][Tt]) ;;
-      *)
-        if [ "$path" = graphql ]; then
-          kind=$(graphql_call_kind)
-          [ -n "$kind" ] || kind=unknown
-          if [ "$kind" != query ]; then
-            refuse
-          fi
-        else
-          is_text=1
-        fi
-        ;;
-    esac
+    # The GraphQL rule holds for every method: a query document passes, and any other document is refused.
+    if [ "$path" = graphql ]; then
+      kind=$(graphql_call_kind)
+      [ -n "$kind" ] || kind=unknown
+      if [ "$kind" != query ]; then
+        refuse
+      fi
+    else
+      case $method in
+        [Gg][Ee][Tt]) ;;
+        *) is_text=1 ;;
+      esac
+    fi
     ;;
 esac
 
@@ -532,7 +580,9 @@ if [ "$cmd" = api ]; then
   esac
   case $path in
     repos/*/*)
+      # A query string or fragment after the repository name is no part of the repository.
       rest=${path#repos/}
+      rest=${rest%%[?#]*}
       owner=${rest%%/*}
       rest=${rest#*/}
       repo=${rest%%/*}
@@ -546,6 +596,12 @@ if [ "$cmd" = api ]; then
   fi
 else
   if [ -n "$repo_flag" ]; then
+    # The token command takes owner/repo only; another shape would reach it unchecked.
+    case $repo_flag in
+      */*/* | /* | */) refuse ;;
+      */*) ;;
+      *) refuse ;;
+    esac
     owner_repo=$repo_flag
   else
     owner_repo=$(cwd_repo) || refuse

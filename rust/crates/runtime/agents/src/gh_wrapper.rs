@@ -278,12 +278,16 @@ esac
       Self { root, record, token_record, bin }
     }
 
+    /// The test process's own GitHub credentials stay out of the wrapper's environment, so a run sees only what the
+    /// test sets.
     fn run(&self, args: &[&str], extra: &[(&str, &str)]) -> std::process::Output {
       let mut command = Command::new(script());
       command
         .args(args)
         .current_dir(self.root.path())
         .env("PATH", format!("{}:/usr/bin:/bin", self.bin.display()))
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .env(TOKEN_COMMAND_VAR, self.bin.join("token-cmd"));
       for (name, value) in extra {
         command.env(name, value);
@@ -298,6 +302,8 @@ esac
         .args(args)
         .current_dir(self.root.path())
         .env("PATH", format!("{}:/usr/bin:/bin", self.bin.display()))
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .env_remove(TOKEN_COMMAND_VAR);
       command.output().expect("the wrapper script runs")
     }
@@ -339,6 +345,10 @@ esac
       (vec!["api", "--silent", "-f", "k=v", "repos/o/r/issues"], "o/r"),
       (vec!["api", "-q", ".id", "-f", "k=v", "repos/o/r/issues"], "o/r"),
       (vec!["api", "--verbose", "-X", "PATCH", "-p", "preview", "repos/o/r/issues/1"], "o/r"),
+      (vec!["api", "-X", "POST", "repos/o/r?per_page=1"], "o/r"),
+      (vec!["pr", "merge", "-R", "o/r", "12", "-db", "subject line"], "o/r"),
+      (vec!["pr", "close", "-R", "o/r", "12", "-dc", "done"], "o/r"),
+      (vec!["api", "-iXDELETE", "repos/o/r/git/refs/heads/x"], "o/r"),
     ];
 
     for (args, target) in &cases {
@@ -378,6 +388,10 @@ esac
       vec!["api", "graphql", "-F", "query=query { viewer { login } }"],
       vec!["api", "-X", "POST", "graphql", "-f", "query=# mutation in a comment\nquery { viewer { login } }"],
       vec!["api", "-X", "POST", "graphql", "-f", "query=query { search(type: ISSUE, query: \"mutation\") { x } }"],
+      vec!["api", "-X", "GET", "graphql", "-f", "query={viewer{login}}"],
+      // Bool-only clusters and clusters whose value letter is not a text flag read no text.
+      vec!["pr", "merge", "-R", "o/r", "12", "-sd"],
+      vec!["api", "-iq", ".x", "repos/o/r/pulls"],
     ];
 
     for args in &cases {
@@ -418,9 +432,13 @@ esac
 
   #[test]
   fn an_unresolvable_target_is_refused_before_anything_runs() {
-    for args in
-      [vec!["api", "graphql", "-f", "query=mutation{x}"], vec!["api", "-X", "POST", "/user"], vec!["api", "-f", "k=v"]]
-    {
+    for args in [
+      vec!["api", "graphql", "-f", "query=mutation{x}"],
+      vec!["api", "-X", "POST", "/user"],
+      vec!["api", "-f", "k=v"],
+      vec!["pr", "create", "-R", "github.com/o/r", "--title", "t"],
+      vec!["pr", "comment", "-R", "o", "12", "-b", "x"],
+    ] {
       let stubs = Stubs::start();
       let output = stubs.run(&args, &[]);
 
@@ -445,6 +463,7 @@ esac
       vec!["api", "graphql", "--input", "body.json"],
       vec!["api", "graphql", "-f", "query=query { a }", "--input", "body.json"],
       vec!["api", "graphql", "-F", "query=@/synthetic/unreadable-query.graphql"],
+      vec!["api", "-X", "GET", "graphql", "-f", "query=mutation { x }"],
     ];
 
     for args in &cases {

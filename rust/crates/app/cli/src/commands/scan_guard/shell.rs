@@ -139,10 +139,7 @@ pub fn strip_quotes(word: &str) -> String {
 
 /// The shell words of a text, as byte spans.
 pub fn word_spans(shell: &str) -> Result<Vec<(usize, usize)>, String> {
-  word_pattern()
-    .find_iter(shell)
-    .map(|word| word.map(|word| (word.start(), word.end())).map_err(parse_error))
-    .collect()
+  word_pattern().find_iter(shell).map(|word| word.map(|word| (word.start(), word.end())).map_err(parse_error)).collect()
 }
 
 fn cd_spans(shell: &str) -> Result<Vec<CdSpan>, String> {
@@ -170,8 +167,10 @@ fn word_pattern() -> &'static Regex {
 fn cd_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
   PATTERN.get_or_init(|| {
-    Regex::new(r#"(?:(?<=[;&|(\n`])|^)[ \t]*cd(?=[ \t]|[;&|()\n`]|$)(?:[ \t]+((?:"[^"\n]*"|'[^'\n]*'|[^\s;&|()<>`'"])+))?"#)
-      .expect("cd pattern is valid")
+    Regex::new(
+      r#"(?:(?<=[;&|(\n`])|^)[ \t]*cd(?=[ \t]|[;&|()\n`]|$)(?:[ \t]+((?:"[^"\n]*"|'[^'\n]*'|[^\s;&|()<>`'"])+))?"#,
+    )
+    .expect("cd pattern is valid")
   })
 }
 
@@ -183,7 +182,8 @@ fn heredoc_pattern() -> &'static Regex {
 fn bash_c_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
   PATTERN.get_or_init(|| {
-    Regex::new(r#"\b(?:bash|sh|zsh)\s+-[lc]*c\s+(?:'([^'\n]*)'|"((?:[^"\\\n]|\\.)*)")"#).expect("bash -c pattern is valid")
+    Regex::new(r#"\b(?:bash|sh|zsh)\s+-[lc]*c\s+(?:'([^'\n]*)'|"((?:[^"\\\n]|\\.)*)")"#)
+      .expect("bash -c pattern is valid")
   })
 }
 

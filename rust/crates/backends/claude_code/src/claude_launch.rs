@@ -93,10 +93,10 @@ fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>, guards: PreToolUseG
     hooks.push(json!({"type": "command", "command": "charliebot scan-guard"}));
   }
   let event_hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
-  event_hooks.as_object_mut().expect("Claude hook settings are an object").insert(
-    PRE_TOOL_USE_HOOK_EVENT.to_string(),
-    json!([{"matcher": "Bash", "hooks": hooks}]),
-  );
+  event_hooks
+    .as_object_mut()
+    .expect("Claude hook settings are an object")
+    .insert(PRE_TOOL_USE_HOOK_EVENT.to_string(), json!([{"matcher": "Bash", "hooks": hooks}]));
 }
 
 /// The one settings object every headless Claude process receives for its run kind.

@@ -401,6 +401,7 @@ fn test_preflight_stops_when_the_cpu_switch_is_on_and_cpu_is_missing_from_the_ag
 #[test]
 fn test_preflight_stops_when_the_io_switch_is_on_and_io_is_missing_from_the_agents_slice() {
   let world = World::new();
+  world.set_weight_switches(true, true);
   world.write_agents_controllers("cpu memory pids");
 
   let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);

@@ -189,11 +189,13 @@ mod tests {
   use super::*;
 
   #[test]
-  fn switches_read_the_section_and_the_absent_ones_default_on() {
-    let mut document = read_yaml("server:\n  enable_session_io_weight: false\n");
+  fn switches_read_the_section_and_the_absent_ones_take_their_defaults() {
+    let mut document = read_yaml("server:\n  enable_session_io_weight: true\n");
+    assert_eq!(switches_text(&document).expect("the switches print"), "cpu=true\nio=true\n");
+    document = read_yaml("server:\n  enable_session_io_weight: false\n");
     assert_eq!(switches_text(&document).expect("the switches print"), "cpu=true\nio=false\n");
     document = read_yaml("server:\n  port: 1\n");
-    assert_eq!(switches_text(&document).expect("the switches print"), "cpu=true\nio=true\n");
+    assert_eq!(switches_text(&document).expect("the switches print"), "cpu=true\nio=false\n");
   }
 
   /// One config.yaml text parsed the way `switches` reads it.

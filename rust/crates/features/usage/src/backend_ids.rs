@@ -36,7 +36,7 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
   }
   Err(format!(
     "backend option ids must attribute to their type's usage source \
-     (id rule: BackendsConfig in src/infra/config.py):\n{}",
+     (id rule: check_backend_ids in rust/crates/features/usage/src/backend_ids.rs):\n{}",
     problems.iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   ))
 }

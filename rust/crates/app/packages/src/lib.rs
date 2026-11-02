@@ -1,7 +1,7 @@
 //! The composition root both binaries share: the runtime registrations and the server's package list, in the
 //! server's order.
 //!
-//! Each entry names a package by its `src.*` label and the `register` function that makes the package's
+//! Each entry names a package by its `features.*` or `backends.*` label and the `register` function that makes the package's
 //! contributions. This crate owns the list: a package added to the server is added here. The list keeps every
 //! package, so the page parts, the static mounts and the template search path keep their registration order.
 //!
@@ -21,31 +21,31 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
 
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
-  ("src.features.user_text_checks", charliebot_user_text_checks::register),
-  ("src.features.artifacts", charliebot_artifacts::register),
-  ("src.features.backup", charliebot_backup::register),
-  ("src.features.backend_pool", charliebot_agents::backend_pool::register),
-  ("src.features.chat_threads", charliebot_chat_threads::register),
-  ("src.features.code_server", charliebot_code_server::register),
-  ("src.features.cron", charliebot_cron::register),
-  ("src.features.diag", charliebot_diag::register),
-  ("src.features.slack", charliebot_slack::register),
-  ("src.features.discord", charliebot_discord::register),
-  ("src.features.disk_sweep", charliebot_disk_sweep::register),
-  ("src.features.web_reply", charliebot_web_reply::register),
-  ("src.features.approval", charliebot_approval::register),
-  ("src.features.host_auth", charliebot_host_auth::register),
-  ("src.features.diff_view", charliebot_diff_view::register),
-  ("src.features.explain", charliebot_explain::register),
-  ("src.features.failure_triage", charliebot_failure_triage::register),
-  ("src.features.improve", charliebot_improve::register),
-  ("src.features.memory", charliebot_memory::register),
-  ("src.features.taste", charliebot_taste::register),
-  ("src.features.terminal", charliebot_terminal::register),
-  ("src.features.trace", charliebot_trace::register),
-  ("src.features.usage", charliebot_usage_page::register),
-  ("src.features.voice", charliebot_voice::register),
-  ("src.features.web_search", charliebot_web_search::register),
+  ("features.user_text_checks", charliebot_user_text_checks::register),
+  ("features.artifacts", charliebot_artifacts::register),
+  ("features.backup", charliebot_backup::register),
+  ("features.backend_pool", charliebot_agents::backend_pool::register),
+  ("features.chat_threads", charliebot_chat_threads::register),
+  ("features.code_server", charliebot_code_server::register),
+  ("features.cron", charliebot_cron::register),
+  ("features.diag", charliebot_diag::register),
+  ("features.slack", charliebot_slack::register),
+  ("features.discord", charliebot_discord::register),
+  ("features.disk_sweep", charliebot_disk_sweep::register),
+  ("features.web_reply", charliebot_web_reply::register),
+  ("features.approval", charliebot_approval::register),
+  ("features.host_auth", charliebot_host_auth::register),
+  ("features.diff_view", charliebot_diff_view::register),
+  ("features.explain", charliebot_explain::register),
+  ("features.failure_triage", charliebot_failure_triage::register),
+  ("features.improve", charliebot_improve::register),
+  ("features.memory", charliebot_memory::register),
+  ("features.taste", charliebot_taste::register),
+  ("features.terminal", charliebot_terminal::register),
+  ("features.trace", charliebot_trace::register),
+  ("features.usage", charliebot_usage_page::register),
+  ("features.voice", charliebot_voice::register),
+  ("features.web_search", charliebot_web_search::register),
   (charliebot_openai_compatible::PACKAGE, charliebot_openai_compatible::register),
   (charliebot_antigravity::PACKAGE, charliebot_antigravity::register),
   (charliebot_charlie_code::PACKAGE, charliebot_charlie_code::register),
@@ -54,7 +54,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   (charliebot_gemini::PACKAGE, charliebot_gemini::register),
   (charliebot_anthropic_compatible::PACKAGE, charliebot_anthropic_compatible::register),
   (charliebot_opencode::PACKAGE, charliebot_opencode::register),
-  ("src.features.files", charliebot_files::register),
+  ("features.files", charliebot_files::register),
 ];
 
 /// The registry of every listed package, registered in list order. A failing registration fails the server's

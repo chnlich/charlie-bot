@@ -637,7 +637,7 @@
               "sources": [
                 {
                   "scope": "base",
-                  "source_ref": "src/runtime/review.py:review_rules_text",
+                  "source_ref": "rust/crates/runtime/tasks/src/review_text.rs:review_rules_text",
                   "source_session_id": null
                 }
               ],
@@ -646,8 +646,8 @@
               "text": "## Code Review\nYou are reviewing another worker's code changes.\n- The repository guide is the repository's `CLAUDE.md` or `AGENTS.md` file and its `.claude/rules/` files.\n- The repository guide sets the rules for the repository's code, environment and tests.\n- These instructions set the rules for the task lifecycle, git operations and delegation.\n- When the repository guide conflicts with these instructions, follow these instructions.\n\n## Review Checklist\nIMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. Only fix clear bugs, correctness issues, or scope violations. Do not refactor, restyle, or improve code that is functionally correct.\n\nThe Context section carries the task spec. When the spec has a `## Source Files` section, read every path it lists before judging the diff. Apply the spec's `## Reviewer Checklist`. For control-flow or state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only on tests.\n\nThe Later Messages section holds each message that the worker received\nafter the task spec, in claim order.\nWhen a later message changes the task spec, judge the work against the later\nmessage.\nWhen the task spec and a skill disagree, follow the task spec.\n\n- **Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n   new parameters, behavioral changes. Workers must only do what was asked.\n- **Think divergently**: Beyond the diff, consider what could go wrong.\n   - Do changed values make sense? Cross-check against existing defaults and conventions.\n   - Are there edge cases, regressions, or interactions with other code the worker missed?\n   - Would this change surprise someone reading the code for the first time?\n- Check for: correctness, bugs, unintended side effects, missing edge cases.\n- Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most)."
             }
           ],
-          "prompt_hash": "e04469ae35cc89410e8028265ed6da4fdbc893f308564d257820bf0c5868291e",
-          "char_count": 8088
+          "prompt_hash": "$PROMPT_HASH",
+          "char_count": "$CHAR_COUNT"
         }
       },
       {

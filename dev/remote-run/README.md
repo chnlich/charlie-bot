@@ -14,7 +14,7 @@ release it pins. A directory without a Python project gets none.
 
 ```sh
 cd <project directory>
-tools/remote-run/setup.sh
+dev/remote-run/setup.sh
 ```
 
 `run.sh` syncs and runs one command; `cargo-slot.sh` sends Cargo commands through `run.sh`. Both
@@ -22,13 +22,13 @@ run from the directory to run in:
 
 ```sh
 cd <project directory>/rust
-../tools/remote-run/cargo-slot.sh test --workspace --locked
+../dev/remote-run/cargo-slot.sh test --workspace --locked
 
 cd <project directory>
-tools/remote-run/run.sh node --test
+dev/remote-run/run.sh node --test
 
 cd /tmp/<any project>
-~/workspace/charlie-bot/tools/remote-run/run.sh cargo test
+~/workspace/charlie-bot/dev/remote-run/run.sh cargo test
 ```
 
 ## Directory modes

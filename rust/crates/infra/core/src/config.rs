@@ -554,7 +554,7 @@ pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
     return Ok(());
   }
   Err(ConfigError(format!(
-    "backend references must name a backends.options id (id rule: BackendsConfig in src/infra/config.py):\n{}",
+    "backend references must name a backends.options id (id rule: charliebot_core::config::BackendsConfig):\n{}",
     problems.iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   )))
 }

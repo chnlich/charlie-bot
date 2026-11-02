@@ -1,7 +1,7 @@
-//! The remote runner: `tools/remote-run/run.sh` starts every run with a connectivity check whose
+//! The remote runner: `dev/remote-run/run.sh` starts every run with a connectivity check whose
 //! Tailscale login link exits 86, whose other failures and its time limit exit 87, and whose stop
 //! text names the `/host-auth` page; after the check, the command's exit code comes back
-//! unchanged, 255 included. `tools/remote-run/remote-exec.pl` runs a payload with a short TMPDIR
+//! unchanged, 255 included. `dev/remote-run/remote-exec.pl` runs a payload with a short TMPDIR
 //! under /tmp, passes the command's exit code through, and stops the descendants the command
 //! leaves behind.
 
@@ -13,7 +13,7 @@ use charliebot_shell_harness::{self as harness, Env, Sandbox};
 
 const HOST: &str = "build-host";
 const PAGE_URL: &str = "https://charlie.example.test:18498/host-auth";
-const SCRIPTS: &str = "tools/remote-run";
+const SCRIPTS: &str = "dev/remote-run";
 
 fn run_sh() -> PathBuf {
   harness::repo_root().join(format!("{SCRIPTS}/run.sh"))

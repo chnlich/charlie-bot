@@ -188,8 +188,10 @@ fn worker_kind_rule_segments(
   let base = sections_text(repo, "task_base.md", &WORKER_BASE_SECTIONS)?;
   let mut segments = vec![segment(base, vec![base_source("prompts/task_base.md")])];
   if kind == "review" {
-    segments
-      .push(segment(review_text::review_rules_text(), vec![base_source("src/runtime/review.py:review_rules_text")]));
+    segments.push(segment(
+      review_text::review_rules_text(),
+      vec![base_source("rust/crates/runtime/tasks/src/review_text.rs:review_rules_text")],
+    ));
   } else if prompt_task_type(task) == TaskType::Verify {
     let contract = sections_text(repo, "verify.md", &["preamble", "scope"])?;
     let contract = spawner_prompt::substitute_tokens(&contract, &spawner_prompt::verify_contract_tokens(repo)?);

@@ -2,7 +2,7 @@
 # Builds the server and CLI binaries of a task branch on CI and downloads them, so a live demo before
 # landing costs one CI build and no local compile.
 #
-# Usage: tools/branch-binary.sh <branch> [dest-dir]
+# Usage: dev/branch-binary.sh <branch> [dest-dir]
 #
 # The script pushes the branch to origin (no PR), dispatches the CI workflow on that ref, waits for the
 # release-build job, downloads its artifact into dest-dir (default:
@@ -19,7 +19,7 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
 usage() {
-  echo "usage: tools/branch-binary.sh <branch> [dest-dir]" >&2
+  echo "usage: dev/branch-binary.sh <branch> [dest-dir]" >&2
   exit 2
 }
 

@@ -1,4 +1,4 @@
-//! `src.features.failure_triage`: the stateless half of CharlieBot failure triage.
+//! `features.failure_triage`: the stateless half of CharlieBot failure triage.
 //!
 //! A scan reads a time window of failed runs and error-level server log lines, groups them by signature, decides
 //! no-cause records and archived signatures in code, retrieves candidate LESSONS entries and judges each remaining
@@ -28,7 +28,7 @@ pub use window::{Window, cron_window};
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register` (`src/features/failure_triage/__init__.py`): this half contributes no route and no service.
+/// `register` (`web/features/failure_triage/__init__.py`): this half contributes no route and no service.
 pub fn register(_registry: &mut Registry) -> Result<(), RegistryError> {
   Ok(())
 }
@@ -40,7 +40,7 @@ mod tests {
   #[test]
   fn register_adds_no_router_and_no_service() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.failure_triage", register).expect("the package registers");
+    registry.register_package("features.failure_triage", register).expect("the package registers");
     assert!(registry.routers().is_empty());
     assert!(registry.services_in(charliebot_registry::wiring::Phase::Early).is_empty());
     assert!(registry.services_in(charliebot_registry::wiring::Phase::Ready).is_empty());

@@ -264,7 +264,7 @@ host_auth:
     );
     fs::write(dir.path().join(CONFIG_FILENAME), config).expect("the config writes");
     let mut registry = Registry::new();
-    registry.register_package("src.features.host_auth", crate::register).expect("the package registers");
+    registry.register_package("features.host_auth", crate::register).expect("the package registers");
     let registry = Arc::new(registry);
     let config_registry = Arc::clone(&registry);
     let config_home = dir.path().to_path_buf();
@@ -292,7 +292,7 @@ host_auth:
     if templating {
       features
         .startup
-        .insert(Templating::new(repo_root(), &["src.features.host_auth"]))
+        .insert(Templating::new(repo_root(), &["features.host_auth"]))
         .expect("the templating inserts once");
     }
     let router = routes(&features);

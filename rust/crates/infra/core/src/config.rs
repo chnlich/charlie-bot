@@ -247,6 +247,15 @@ fn default_switch_on() -> bool {
 fn default_switch_off() -> bool {
   false
 }
+
+/// The two session-weight switches of a parsed `config.yaml` as `(cpu, io)`. An absent switch reads as its
+/// `ServerConfig` default, the value the server starts with, so every reader of a home's switches goes through here.
+pub fn session_weight_switches(document: &serde_json::Value) -> Result<(bool, bool), serde_json::Error> {
+  let server = document.get("server").cloned().unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+  let server: ServerConfig = serde_json::from_value(server)?;
+  Ok((server.enable_session_cpu_weight, server.enable_session_io_weight))
+}
+
 fn default_min_free_disk_gib() -> i64 {
   10
 }

@@ -72,9 +72,8 @@ fn switches(args: &[OsString]) -> Result<(), CliExit> {
 
 /// The `switches` output for one raw config document.
 fn switches_text(document: &Value) -> anyhow::Result<String> {
-  let server = document.get("server").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-  let server: config::ServerConfig = serde_json::from_value(server)?;
-  Ok(format!("cpu={}\nio={}\n", server.enable_session_cpu_weight, server.enable_session_io_weight))
+  let (cpu, io) = config::session_weight_switches(document)?;
+  Ok(format!("cpu={cpu}\nio={io}\n"))
 }
 
 /// `alive PID PID_START`: `alive` while the recorded process instance runs, `ended` once it is gone or recycled.

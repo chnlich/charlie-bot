@@ -947,33 +947,45 @@ fn cgroup_clean(args: &[String]) -> Result<i32, String> {
 
 // ---- the preflight reads --------------------------------------------------------------------------------------------
 
+/// A live `config.yaml` as the JSON document the release verbs read.
+fn live_config_document(config_path: &str) -> Result<Value, String> {
+  let document = config::read_yaml_document(Path::new(config_path)).map_err(|error| error.to_string())?;
+  config::yaml_to_json(&document)
+}
+
 /// The first `backends.options` entry whose `api_base` is set: the operator's own model endpoint, which the trial and
 /// the rehearsal run against. The entry's `credential` names the `credentials.yaml` section that holds the endpoint's
 /// key; an endpoint that needs no client-side key has none.
-fn backend_choice(config_path: &str) -> Result<Option<(String, Option<String>)>, String> {
-  let document = config::read_yaml_document(Path::new(config_path)).map_err(|error| error.to_string())?;
-  let document = config::yaml_to_json(&document).map_err(|error| error.to_string())?;
-  let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array);
-  let Some(options) = options else { return Ok(None) };
+fn backend_choice(document: &Value) -> Option<(String, Option<String>)> {
+  let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array)?;
   for option in options {
     let Some(api_base) = option.get(config::API_BASE_KEY).filter(|value| text_repr::is_truthy(value)) else {
       continue;
     };
     let credential =
       option.get(config::CREDENTIAL_KEY).filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str);
-    return Ok(Some((text_repr::value_str(api_base), credential)));
+    return Some((text_repr::value_str(api_base), credential));
   }
-  Ok(None)
+  None
 }
 
-/// Prints the chosen entry as two lines, its `api_base` and then its `credential`, the second empty when the entry
-/// names no credential. The trial and the rehearsal read the same two lines.
+/// The four lines `backend-option` prints: the chosen entry's `api_base`, its credential (empty when it names none),
+/// then the cpu and io session-weight switches. `None` when no entry sets an `api_base`.
+fn backend_option_lines(document: &Value) -> Result<Option<[String; 4]>, String> {
+  let Some((api_base, credential)) = backend_choice(document) else { return Ok(None) };
+  let (cpu, io) = config::session_weight_switches(document).map_err(|error| error.to_string())?;
+  Ok(Some([api_base, credential.unwrap_or_default(), cpu.to_string(), io.to_string()]))
+}
+
+/// Prints `backend_option_lines` for a live config. The trial and the rehearsal read these lines into their configs,
+/// so both carry the live entry and the live weight switches the same way.
 fn backend_option(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "backend-option")?;
-  match backend_choice(path)? {
-    Some((api_base, credential)) => {
-      println!("{api_base}");
-      println!("{}", credential.unwrap_or_default());
+  match backend_option_lines(&live_config_document(path)?)? {
+    Some(lines) => {
+      for line in lines {
+        println!("{line}");
+      }
       Ok(0)
     }
     None => Ok(1),
@@ -1475,8 +1487,28 @@ mod tests {
     .unwrap();
 
     assert_eq!(
-      backend_choice(&config.to_string_lossy()).unwrap(),
+      backend_choice(&live_config_document(&config.to_string_lossy()).unwrap()),
       Some(("http://second.invalid".to_string(), Some("upstream".to_string())))
+    );
+  }
+
+  #[test]
+  fn the_backend_option_lines_carry_the_weight_switches_and_an_absent_one_reads_its_default() {
+    let directory = temporary();
+    let config = directory.path().join("config.yaml");
+    fs::write(
+      &config,
+      concat!(
+        "server:\n  enable_session_io_weight: false\n",
+        "backends:\n  options:\n",
+        "    - id: upstream\n      api_base: http://second.invalid\n      credential: upstream\n",
+      ),
+    )
+    .unwrap();
+
+    assert_eq!(
+      backend_option_lines(&live_config_document(&config.to_string_lossy()).unwrap()).unwrap(),
+      Some(["http://second.invalid".to_string(), "upstream".to_string(), "true".to_string(), "false".to_string()])
     );
   }
 
@@ -1495,7 +1527,10 @@ mod tests {
     )
     .unwrap();
 
-    assert_eq!(backend_choice(&config.to_string_lossy()).unwrap(), Some(("http://first.invalid".to_string(), None)));
+    assert_eq!(
+      backend_choice(&live_config_document(&config.to_string_lossy()).unwrap()),
+      Some(("http://first.invalid".to_string(), None))
+    );
   }
 
   #[test]
@@ -1504,7 +1539,7 @@ mod tests {
     let config = directory.path().join("config.yaml");
     fs::write(&config, "backends:\n  options:\n    - id: subscription\n      type: claude\n").unwrap();
 
-    assert_eq!(backend_choice(&config.to_string_lossy()).unwrap(), None);
+    assert_eq!(backend_option_lines(&live_config_document(&config.to_string_lossy()).unwrap()).unwrap(), None);
     assert_eq!(backend_option(&[config.to_string_lossy().into_owned()]).unwrap(), 1);
   }
 

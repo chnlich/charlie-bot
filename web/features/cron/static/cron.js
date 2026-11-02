@@ -24,7 +24,7 @@ const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', '
 // the normal editable form. Broken: every field read-only, Enabled disabled and
 // rendering the file's raw value (indeterminate when the file was
 // unparseable). The full load error + path sit in the error box, Save hidden,
-// Delete kept. Normal/add: byte-identical behavior to the pre-broken form.
+// Delete kept. Otherwise every field is editable and Save is shown.
 function applyCronBrokenView(task) {
   const isBroken = !!(task && task.broken);
   CRON_EDITABLE_FIELD_IDS.forEach(id => { document.getElementById(id).readOnly = isBroken; });
@@ -148,8 +148,7 @@ async function saveCronTask() {
   }
   if ((await cronModalRequest(promise)) === null) return;
   closeCronModal();
-  // The saved schedule shows on its node row in the view the editor was
-  // opened from (the Scheduled view is gone).
+  // The saved schedule shows on its node row in the view the editor was opened from.
   switchSidebarFilter(currentFilter);
 }
 
@@ -203,8 +202,7 @@ function renderScheduledBadge(s) {
 
 // A bound node's schedule lines, in every view: the next run (or Disabled),
 // then the truncated cron · timezone line, then the Last line from the firing
-// bookkeeping. That Last line is the one the legacy cron rows carried. One
-// markup home for every view's row.
+// bookkeeping. One markup home for every view's row.
 function renderSessionScheduleLine(s) {
   const disabled = s.schedule_enabled === false;
   let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`

@@ -1012,7 +1012,7 @@
     "from_json_errors": {
       "hash": "stored prompt snapshot hash mismatch: recorded '0000000000000000000000000000000000000000000000000000000000000000', content hashes to '$DAMAGED_HASH'",
       "char_count": "stored prompt snapshot char_count mismatch: recorded 48242, content measures 48241",
-      "body_ref": "stored prompt snapshot body_ref mismatch: block hashes to a8fbfcb12f6497c46eb926feee760f7b32624d9036929b3fea1b0efec4961cf9, recorded 1111111111111111111111111111111111111111111111111111111111111111"
+      "body_ref": "stored prompt snapshot body_ref mismatch: block hashes to acd11fc083d141ba980b4bbc6a8f5ebb26367d36926ff4d2bbaf0f989df3fd01, recorded 1111111111111111111111111111111111111111111111111111111111111111"
     }
   },
   "placeholders": {

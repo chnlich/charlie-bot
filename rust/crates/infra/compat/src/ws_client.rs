@@ -78,7 +78,7 @@ pub enum Message {
   Close(Option<CloseFrame>),
 }
 
-/// A WebSocket connection failure, displayed with websockets 16 text for matching failures.
+/// A WebSocket connection failure. The display text follows the module table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
   InvalidUri(String, String),

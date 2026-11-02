@@ -286,7 +286,7 @@ fn trim_url_punctuation(link: &str) -> &str {
   link.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '。', '！', '？', '；', '，', '、', '：', '．'])
 }
 
-/// The URL and Markdown target spans of `text`, in order (`_candidates`). A span that both forms name keeps the
+/// The URL and Markdown target spans of `text`, in order. A span that both forms name keeps the
 /// Markdown target status.
 fn candidates(text: &str) -> Vec<Candidate> {
   let mut found: BTreeMap<(usize, usize), Candidate> = BTreeMap::new();
@@ -314,12 +314,12 @@ fn candidates(text: &str) -> Vec<Candidate> {
   found.into_values().collect()
 }
 
-/// The retired `/files` or `/file` prefix that `path` opens, without its trailing slash (`_retired_prefix`).
+/// The retired `/files` or `/file` prefix that `path` opens, without its trailing slash.
 fn retired_prefix(path: &str) -> Option<&'static str> {
   RETIRED_PREFIXES.into_iter().find(|prefix| path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/')))
 }
 
-/// The absolute filesystem path that a file-server URL path names, percent-decoded (`_file_server_named_path`).
+/// The absolute filesystem path that a file-server URL path names, percent-decoded.
 fn file_server_named_path(url_path: &str) -> Option<String> {
   let rest = url_path.strip_prefix(FILE_SERVER_MOUNT)?.strip_prefix('/')?;
   Some(format!("/{}", percent_decode_lossy(rest)))
@@ -333,7 +333,7 @@ fn posix_path(absolute: &str) -> PathBuf {
   PathBuf::from(format!("{root}{}", parts.join("/")))
 }
 
-/// The hostname of a network location, lowercased and without brackets, port or userinfo (`SplitResult.hostname`).
+/// The hostname of a network location, lowercased and without brackets, port or userinfo.
 fn hostname(netloc: &str) -> String {
   let hostinfo = netloc.rsplit_once('@').map_or(netloc, |(_, hostinfo)| hostinfo);
   let host = match hostinfo.strip_prefix('[') {
@@ -370,7 +370,7 @@ fn names_server_port(port: Option<u64>, context: Option<&ScanContext>) -> bool {
   context.is_some_and(|context| port == Some(u64::from(context.server_port)))
 }
 
-/// Whether a canonical file-server link names this host (`_canonical_is_local`).
+/// Whether a canonical file-server link names this host.
 fn canonical_is_local(parts: &SplitUrl, port: Option<u64>, context: Option<&ScanContext>) -> bool {
   if parts.netloc.is_empty() {
     return true;
@@ -379,7 +379,7 @@ fn canonical_is_local(parts: &SplitUrl, port: Option<u64>, context: Option<&Scan
   host == "localhost" || host == "127.0.0.1" || names_server_port(port, context)
 }
 
-/// The retired link's host file and its file-server URL path, when the file exists (`_retired_path`). Without a
+/// The retired link's host file and its file-server URL path, when the file exists. Without a
 /// context neither is known.
 fn retired_path(
   path: &str,
@@ -435,8 +435,7 @@ fn unsplit(parts: &SplitUrl, path: &str) -> String {
 }
 
 /// The host path a Markdown target names: a `~/` path under the user's home, a path under the session directory, or an
-/// absolute path. An absolute path names a file only when its first segment is a directory on this host
-/// (`_local_path_target`).
+/// absolute path. An absolute path names a file only when its first segment is a directory on this host.
 fn local_path_target(parts: &SplitUrl, context: Option<&ScanContext>) -> io::Result<Option<PathBuf>> {
   let path = percent_decode_lossy(&parts.path);
   if !parts.scheme.is_empty() || !parts.netloc.is_empty() || path.is_empty() {
@@ -513,8 +512,7 @@ fn stat_path(path: &Path) -> io::Result<Option<fs::Metadata>> {
   }
 }
 
-/// Whether `path` is a regular file, as `pathlib.Path.is_file` answers: a path that names no file, and the errors
-/// `pathlib` ignores, read as no file.
+/// Whether `path` is a regular file: a path that names no file, or an error that means so, reads as no file.
 pub fn is_file(path: &Path) -> io::Result<bool> {
   Ok(stat_path(path)?.is_some_and(|metadata| metadata.is_file()))
 }

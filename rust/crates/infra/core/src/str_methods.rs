@@ -1,5 +1,6 @@
 //! String methods on Unicode text: `isalnum`, `isdigit`, the decimal value of a decimal
-//! digit, `isspace`, `strip()`, `split()` with its `" ".join` collapse, and the slicing `s[:n]`, `s[n:]` and `len(s)`.
+//! digit, `isspace`, `strip()`, `split()` with its single-space collapse, the first-n and from-n slices,
+//! and the code point count.
 
 use std::sync::LazyLock;
 

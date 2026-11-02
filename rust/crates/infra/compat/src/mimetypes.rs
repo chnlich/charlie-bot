@@ -48,7 +48,7 @@ impl MimeTypes {
     }
   }
 
-  /// `MimeTypes.readfp`: each line names a type then its extensions; `#` starts a comment.
+  /// Read `mime.types` text: each line names a type then its extensions; `#` starts a comment.
   fn read_mime_types(&mut self, text: &str) {
     for line in text.lines() {
       let words: Vec<&str> = line.split_whitespace().take_while(|word| !word.starts_with('#')).collect();
@@ -60,7 +60,7 @@ impl MimeTypes {
     }
   }
 
-  /// `mimetypes.guess_type(path)[0]`, or `None` when the extension is unknown.
+  /// The type of `path` from its extension, or `None` when the extension is unknown.
   pub fn guess_type(&self, path: &str) -> Option<&str> {
     let (mut base, mut ext) = splitext(path);
     while let Some((_, expanded)) = mimetypes_table::SUFFIX_MAP.iter().find(|(suffix, _)| *suffix == ext.to_lowercase())

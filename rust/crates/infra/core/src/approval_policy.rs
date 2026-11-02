@@ -174,7 +174,7 @@ pub fn load(home: &Path) -> Result<LoadedTable, PolicyError> {
   Ok(LoadedTable { table, sha256: sha256_text(&raw), raw })
 }
 
-/// The checks serde cannot express: known ids, each exactly once (`approval_policy._validate`).
+/// The checks serde cannot express: known ids, each exactly once.
 fn validate(path_text: &str, table: &ApprovalPolicyTable) -> Result<(), PolicyError> {
   let mut seen = Vec::new();
   for (index, test) in table.consequence_tests.iter().enumerate() {
@@ -220,7 +220,7 @@ fn validate(path_text: &str, table: &ApprovalPolicyTable) -> Result<(), PolicyEr
   Ok(())
 }
 
-/// The canonical `YYYY-MM-DD` date `text` holds, or `None` (`approval_policy._parse_date`).
+/// The canonical `YYYY-MM-DD` date `text` holds, or `None`.
 pub fn parse_date(text: &str) -> Option<Date> {
   let (year, rest) = text.split_once('-')?;
   let (month, day) = rest.split_once('-')?;
@@ -249,7 +249,7 @@ pub fn load_and_record(home: &Path) -> Result<LoadedTable, PolicyError> {
   Ok(loaded)
 }
 
-/// The check-and-append one read performs, serialized per process (`approval_policy._record_if_changed`). The first
+/// The check-and-append one read performs, serialized per process. The first
 /// read on a home records the baseline content and no record; a later read whose content hash differs appends one
 /// record and becomes the new baseline.
 pub fn record_if_changed(home: &Path, loaded: &LoadedTable) -> Result<bool, PolicyError> {
@@ -295,7 +295,7 @@ pub fn record_if_changed(home: &Path, loaded: &LoadedTable) -> Result<bool, Poli
   Ok(true)
 }
 
-/// The last recorded content's file, written after each read that sees content (`approval_policy._write_recorded`).
+/// The last recorded content's file, written after each read that sees content.
 fn write_recorded(path: &Path, raw: &str) -> Result<(), PolicyError> {
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent).map_err(|error| PolicyError(format!("{}: {error}", paths::display(parent))))?;
@@ -362,7 +362,7 @@ fn require_policy(table: &ApprovalPolicyTable, id: &str) -> Result<(), PolicyErr
 }
 
 /// The line-level difference of `new` from `old`: removed lines prefixed `-`, added lines prefixed `+`, shared
-/// lines prefixed two spaces (`approval_policy._unified_diff`).
+/// lines prefixed two spaces.
 fn unified_diff(old: &str, new: &str) -> String {
   let old_lines: Vec<&str> = old.lines().collect();
   let new_lines: Vec<&str> = new.lines().collect();

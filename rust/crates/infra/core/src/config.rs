@@ -3,7 +3,7 @@
 //! The file is a mapping of sections. The core sections (`server`, `paths`, `backends`, `ui`,
 //! `telegram`) and `headless_chrome_bin` parse into the structs below, each refusing unknown keys.
 //! A section a package registered ([`ConfigSchema::sections`]) parses with the package's own parser, and
-//! the type-specific fields of a backend option stay raw until their backend type's port stage types
+//! the type-specific fields of a backend option stay raw until their backend type's package parses
 //! them. The schema comes from the registered packages (`charliebot-registry` builds it). The checks
 //! that run before validation (stray `config.d/*.yaml` files, retired keys, a `charliebot_home` key)
 //! and their messages follow `load_config`.
@@ -264,7 +264,7 @@ pub struct BackendOption {
   pub prompt_overlay: Option<String>,
   /// The registered backend type, one of [`ConfigSchema::backend_types`].
   pub backend_type: String,
-  /// The type-specific keys, raw until the backend package's port stage types them.
+  /// The type-specific keys, raw until the backend package parses them.
   pub type_fields: Mapping,
 }
 

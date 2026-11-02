@@ -420,7 +420,7 @@ fn split_parameters(value: &str) -> Vec<&str> {
   segments
 }
 
-/// Unquote a header value the way `email.utils.unquote` does. A quoted value loses its quotes, with `\\` read as `\`
+/// Unquote a header value. A quoted value loses its quotes, with `\\` read as `\`
 /// before `\"` is read as `"`. An angle-bracketed value loses its brackets.
 fn unquote_header_value(value: &str) -> String {
   if value.len() > 1 && value.starts_with('"') && value.ends_with('"') {

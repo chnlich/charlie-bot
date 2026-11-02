@@ -44,9 +44,9 @@ pub fn isoformat(moment: OffsetDateTime) -> String {
   moment.format(format).expect("a datetime formats as isoformat")
 }
 
-/// `email.utils.formatdate(seconds, usegmt=True)`: `Sun, 18 Oct 2026 07:15:40 GMT`.
+/// An HTTP date: `Sun, 18 Oct 2026 07:15:40 GMT`.
 ///
-/// `time.gmtime` floors a float timestamp to whole seconds, so callers pass the floored second.
+/// A float timestamp is floored to whole seconds, so callers pass the floored second.
 pub fn http_date(unix_seconds: i64) -> String {
   static HTTP_DATE: LazyLock<Vec<BorrowedFormatItem<'static>>> = LazyLock::new(|| {
     format_description::parse_borrowed::<2>(

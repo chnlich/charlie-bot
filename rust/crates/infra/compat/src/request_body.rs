@@ -106,7 +106,7 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<RequestBody, Box<Re
   }
 }
 
-/// True when `email.message.Message` would select JSON for this content type.
+/// True when the media type is `application/json` or `application/*+json`, compared case-insensitively.
 pub fn is_json_content_type(value: &str) -> bool {
   let media_type = value.split(';').next().unwrap_or_default().trim();
   let mut components = media_type.split('/');
@@ -277,7 +277,7 @@ pub enum ExtraKeys {
 }
 
 /// A model validator. It runs on the validated values once every field passes, and returns the message of the
-/// `ValueError` it raises, or `None` when the values are valid.
+/// error it raises, or `None` when the values are valid.
 pub type ModelCheck = fn(&Map<String, Value>) -> Option<String>;
 
 /// A request model's fields, body-parameter requirement, extra-key policy and model validator.

@@ -10,11 +10,11 @@ pub const SUFFIX_MAP: &[(&str, &str)] = &[
   (".txz", ".tar.xz"),
 ];
 
-/// `_encodings_map_default`: case-sensitive encoding suffixes.
+/// Case-sensitive encoding suffixes.
 pub const ENCODINGS_MAP: &[(&str, &str)] =
   &[(".gz", "gzip"), (".Z", "compress"), (".bz2", "bzip2"), (".xz", "xz"), (".br", "br")];
 
-/// `_types_map_default`: the strict extension -> type table, in insertion order.
+/// The strict extension -> type table, in insertion order.
 pub const TYPES_MAP: &[(&str, &str)] = &[
   (".js", "text/javascript"),
   (".mjs", "text/javascript"),

@@ -262,7 +262,7 @@ fn real(value: &serde_json::Value, conversion: char) -> Result<f64, Error> {
   }
 }
 
-/// The argument of a `%d` conversion as an integer: a float truncates toward zero, as `int()` does.
+/// The argument of a `%d` conversion as an integer: a float truncates toward zero.
 fn integer(value: &serde_json::Value) -> Result<String, Error> {
   match value {
     serde_json::Value::Number(number) if number.is_f64() => {
@@ -270,7 +270,7 @@ fn integer(value: &serde_json::Value) -> Result<String, Error> {
       if !float.is_finite() {
         return Err(format_error(format!("cannot convert float {float} to integer")));
       }
-      // The sign of a zero truncation is dropped: `int(-0.5)` is `0`, not `-0`.
+      // The sign of a zero truncation is dropped: -0.5 truncates to `0`, not `-0`.
       let truncated = float.trunc();
       Ok(format!("{:.0}", if truncated == 0.0 { 0.0 } else { truncated }))
     }

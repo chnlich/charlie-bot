@@ -107,7 +107,7 @@ fn loads_serde(body: &[u8]) -> Option<Value> {
   serde_json::from_slice(body).ok()
 }
 
-/// A failed scan. `Stop` is `StopIteration(pos)`, which `raw_decode` reports as "Expecting value" at `pos`.
+/// A failed scan. `Stop` ends the scan at `pos`, and the loader reports it as "Expecting value" there.
 #[derive(Debug)]
 enum Fail {
   Stop(usize),
@@ -153,7 +153,7 @@ fn json_decode_failure(message: &str, text: &[u32], position: usize) -> LoadFail
   LoadFailure::JsonDecode { message: message.to_string(), position, text: format_error(message, text, position) }
 }
 
-/// `JSONDecodeError.__init__`: the message, then the 1-based line and column and the code point index of `pos`.
+/// The decode error text: the message, then the 1-based line and column and the code point index of `pos`.
 fn format_error(message: &str, text: &[u32], pos: usize) -> String {
   let before = &text[..pos];
   let line = before.iter().filter(|&&c| c == u32::from('\n')).count() + 1;
@@ -260,7 +260,7 @@ impl Scanner<'_> {
     idx
   }
 
-  /// `_match_number_unicode`: `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`, or `None` when no number starts at
+  /// A number: `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`, or `None` when no number starts at
   /// `start`. An exponent without digits is not part of the number.
   fn number(&mut self, start: usize) -> Option<(Value, usize)> {
     let mut idx = start;
@@ -364,7 +364,7 @@ impl Scanner<'_> {
     }
   }
 
-  /// `_parse_object_unicode`, from the index after `{`.
+  /// Parse an object, from the index after `{`.
   fn parse_object(&mut self, mut idx: usize) -> Scan<(Value, usize)> {
     let mut members = Map::new();
     idx = self.skip_ws(idx);
@@ -398,7 +398,7 @@ impl Scanner<'_> {
     Ok((Value::Object(members), idx + 1))
   }
 
-  /// `_parse_array_unicode`, from the index after `[`.
+  /// Parse an array, from the index after `[`.
   fn parse_array(&mut self, mut idx: usize) -> Scan<(Value, usize)> {
     let mut items = Vec::new();
     idx = self.skip_ws(idx);

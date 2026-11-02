@@ -298,7 +298,7 @@ enum RangeError {
   NotSatisfiable,
 }
 
-/// `FileResponse._parse_range_header`: the requested `[start, end)` ranges, merged when several.
+/// The requested `[start, end)` ranges, merged when several.
 fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, RangeError> {
   let (units, spec) = range.split_once('=').ok_or(RangeError::Malformed("Malformed range header."))?;
   if units.trim().to_lowercase() != "bytes" {
@@ -403,7 +403,7 @@ fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u
   response
 }
 
-/// `secrets.token_hex(count)`: the multipart boundary.
+/// `count` random bytes in hex: the multipart boundary.
 fn random_hex(count: usize) -> std::io::Result<String> {
   let mut bytes = vec![0u8; count];
   std::io::Read::read_exact(&mut std::fs::File::open("/dev/urandom")?, &mut bytes)?;

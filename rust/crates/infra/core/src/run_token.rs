@@ -25,7 +25,7 @@ pub const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 /// and the CLIs read it back.
 pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 
-/// `base64.urlsafe_b64decode` tolerance: missing padding and nonzero trailing bits both decode.
+/// URL-safe base64 with lenient decoding: missing padding and nonzero trailing bits both decode.
 const LENIENT_URL_SAFE: GeneralPurpose = GeneralPurpose::new(
   &base64::alphabet::URL_SAFE,
   GeneralPurposeConfig::new()

@@ -103,7 +103,7 @@ pub enum Kind {
   JsonInvalid {
     error: String,
   },
-  /// `value_error`: a validator raised `ValueError(message)`.
+  /// `value_error`: a validator raised an error carrying `message`.
   ValueError {
     message: String,
   },
@@ -219,7 +219,7 @@ impl Kind {
       Kind::LessThanEqual(bound) => Some(json!({"le": bound.value()})),
       Kind::JsonInvalid { error } => Some(json!({"error": error})),
       Kind::ModelType { class_name } => Some(json!({"class_name": class_name})),
-      // A ValueError object renders as an empty mapping.
+      // The error object in `ctx` renders as an empty mapping.
       Kind::ValueError { .. } => Some(json!({"error": {}})),
       Kind::UnionTagNotFound { discriminator } => Some(json!({"discriminator": text_repr::str_repr(discriminator)})),
       Kind::UnionTagInvalid { discriminator, tag, expected_tags } => Some(json!({
@@ -391,7 +391,7 @@ pub fn parse_bool(source: Source, name: &str, text: &str) -> Result<bool, Box<Fi
 }
 
 /// A `float` value's text in lax mode: surrounding whitespace is ignored and an
-/// underscore may join two digits. A non-finite text (`nan`, `inf`) fails as `float_parsing`, because the port
+/// underscore may join two digits. A non-finite text (`nan`, `inf`) fails as `float_parsing`, because the parser
 /// refuses non-finite floats (`rust/docs/PORT_STATUS.md`).
 pub fn parse_float(source: Source, name: &str, text: &str) -> Result<f64, Box<FieldError>> {
   let parsed = if underscores_join_digits(text) { text.trim().replace('_', "").parse::<f64>().ok() } else { None };

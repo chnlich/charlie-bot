@@ -31,7 +31,7 @@ const RECORD_JSON: JsonStyle =
 /// (`approval_digest.DigestEntry`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DigestEntry {
-  /// The UTC instant the entry was written, as `datetime.now(UTC).isoformat()` renders it.
+  /// The UTC instant the entry was written, as an ISO 8601 timestamp renders it.
   pub time: String,
   /// The session that made the step.
   pub session: String,
@@ -87,8 +87,8 @@ pub fn read_entries(home: &Path) -> Result<Vec<DigestEntry>, DigestError> {
   Ok(entries)
 }
 
-/// One digest-add call's inputs (`approval_digest.DigestCall`). `scope_check` carries a T1 use's scope reason; `now`
-/// is the instant the entry records, as `datetime.now(UTC).isoformat()` text.
+/// One digest-add call's inputs. `scope_check` carries a T1 use's scope reason; `now`
+/// is the instant the entry records, as ISO 8601 text.
 #[derive(Clone, Copy, Debug)]
 pub struct DigestCall<'a> {
   pub session: &'a str,
@@ -156,7 +156,7 @@ pub fn add(home: &Path, call: DigestCall<'_>) -> Result<DigestEntry, DigestError
   Ok(entry)
 }
 
-/// The refusal for a policy id the table does not name (`approval_digest._unknown_policy`).
+/// The refusal for a policy id the table does not name.
 fn unknown_policy(policy: &str, table: &approval_policy::ApprovalPolicyTable) -> DigestError {
   let known = table.standing_policies.iter().map(|standing| standing.id.as_str()).collect::<Vec<_>>();
   DigestError(format!(
@@ -166,12 +166,12 @@ fn unknown_policy(policy: &str, table: &approval_policy::ApprovalPolicyTable) ->
   ))
 }
 
-/// The Pacific day a stored stamp falls in, when the stamp is one (`approval_digest._day_text_of`).
+/// The Pacific day a stored stamp falls in, when the stamp is one.
 fn day_text_of(stamp: &str) -> Option<String> {
   pacific::day_of_stamp(stamp).ok().map(pacific::date_text)
 }
 
-/// One stored record of `entry`, `type` first (`approval_digest._record_of`).
+/// One stored record of `entry`, `type` first.
 pub fn record_of(entry: &DigestEntry) -> Value {
   let mut record = json!({"type": "digest_entry"});
   let fields = serde_json::to_value(entry).expect("a digest entry serializes to JSON");

@@ -4729,6 +4729,10 @@ pub(crate) mod tests {
       r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null}"#
     );
     assert_eq!(task_spec_hash(&verify).unwrap(), "9e765c73c0cf10b2fbaef99cb808d77a04b4451cc5924cdaa17b7ddf4c6f106b");
+
+    // A record written while the context-work flag existed still reads, and the read drops the retired key.
+    let written_with_flag = r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null,"context_work":true}"#;
+    assert_eq!(serde_json::from_str::<TaskSpec>(written_with_flag).unwrap(), verify);
   }
 }
 

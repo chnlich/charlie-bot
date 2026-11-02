@@ -309,6 +309,10 @@ impl<'de> Deserialize<'de> for TaskSpec {
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
+      // The retired context-work flag. Sessions written while it existed still carry it; the read
+      // accepts it and drops it.
+      #[serde(default, rename = "context_work")]
+      _retired_context_work: Option<bool>,
     }
     let fields = Fields::deserialize(deserializer)?;
     if fields.task_type == Some(TaskType::ColdRead) && fields.cold_read.is_none() {

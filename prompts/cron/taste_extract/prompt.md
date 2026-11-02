@@ -1,90 +1,95 @@
 # Taste extraction
 
-Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` first, its "Text a model
-reads" subsection included, and write every row by those rules. Repo text names no person: say "the
-user".
+This run turns the user's own choices into precedent rows in the taste table. The daily run and the backfill
+share this contract.
 
-This prompt serves the daily run and the backfill. The daily run reads the 24 hours before its
-scheduled time. A backfill run reads the window its task gives it.
+Read these two files before you write a row or a memory change:
+- the "Text a model reads" subsection of the Writing Style section in `~/workspace/charlie-bot/prompts/master.md`;
+- `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md`.
 
-## Read the candidates
+## Candidates
 
-Run `charliebot taste candidates --since <iso>` for the run's window and read its output in full.
-Each candidate carries:
-- the user's text;
-- the latest web reply before it;
-- the session link;
-- the timestamp.
+The run reads the candidates that `charliebot taste candidates` prints for its window. Each candidate
+carries:
+- `text`: the user's own words;
+- `previous_web_reply`: the reply the user read before writing `text`, which states the question and the
+  recommendation;
+- `session_id`, `url` and `timestamp`;
+- `event_id` for a chat message or a comment batch, or `plan_version` for a plan note;
+- `trade_off_options` on a plan note: the option lines of the predecessor page, or `null` when that page
+  is gone.
 
-A candidate from a plan note also carries its `<plan>/v<n>` and the predecessor page's Trade-off
-lines, which name that fork's options.
+The `text` holds the user's choice when the user made one. The `previous_web_reply` gives the context of
+that choice. The agent wrote it, so it never supplies the chosen option.
 
-A chat or comment candidate is the user's own text. A plan note is the agent's record of a plan
-version: it becomes a choice only when the note or its Trade-off lines show the user made one. A
-`trade_off_options` of `null` means the predecessor page is gone, so the note names no options you
-can read.
-
-Text that the system or another agent delivered into a session is not the user's words, so it never
-becomes a row:
-- a scheduled trigger notice;
-- a context reset;
-- a task report;
-- a message from another session;
-- a takeover briefing.
-
-An `agent_message` never becomes a candidate.
-
-## Choose the candidates that are precedents
+## Which candidates become rows
 
 A candidate becomes a row when the user:
-- picks among options;
+- picks one option among the options that the candidate or its `trade_off_options` names;
 - overrides a recommendation;
 - rejects a working result and states a preference.
 
-Leave out bug reports and new requests: they name a defect or ask for work, not a choice.
+A candidate that reports a defect or asks for new work becomes no row.
 
-A general preference the user states goes to `charliebot memory add`, not to a row, because it holds
-outside one situation. The memory store owns what the user wants at all times; the table owns what
-the user chose in one situation.
+Text that the system or another agent delivered is not the user's words. A scheduled trigger notice, a
+context reset, a task report, a message from another session and a takeover briefing become no row.
 
-## Write the row
+A general preference that the user states becomes a memory candidate, staged with `charliebot memory add`.
+It becomes no row, because a preference holds across situations and a row holds one situation.
 
-Read the domain's active rows before you write: `charliebot taste query --domain <domain>`. Prefer a
-domain that `charliebot taste index` already lists, so the table stays coarse enough to compare
-situations across sessions.
+## Rows
 
-A row carries these fields:
-
-- `decided_at`: the decision time, from the candidate's timestamp;
-- `domain`: `<area>/<topic>`;
-- `kind`: `choice` when the user picked among options, `rejection` when the user rejected a working
+Write one row for each candidate that qualifies. A row carries:
+- `decided_at`: the candidate's `timestamp`;
+- `domain`: `<area>/<topic>`. Use a domain that `charliebot taste index` already lists when one fits the
+  situation;
+- `kind`: `choice` when the user picked among options, and `rejection` when the user rejected a working
   result;
 - `situation`: one or two sentences;
-- `options`: every option the source names, and `[]` when it names none; for a rejection, the
-  delivered result and the result the user asked for;
-- `recommended`: the recommendation when the source states one, and `null` otherwise;
-- `chosen`: the user's choice, or the result the user asked for;
-- `reason`: the user's words, or `未说明` when the source states none;
-- `source`: `session_id`, `url`, and exactly one of `event_id` or `plan_version`;
-- `supersedes`: the row this precedent reverses, or `null`.
+- `options`: every option the candidate names, and `[]` when it names none. A rejection lists the delivered
+  result and the result the user asked for;
+- `recommended`: the recommendation that the candidate names, or `null`;
+- `chosen`: the option the user picked, or the result the user asked for;
+- `reason`: the user's words for the choice, or `未说明` when the candidate states no reason;
+- `source`: `session_id` and `url` from the candidate, and exactly one of `event_id` or `plan_version`
+  from the candidate;
+- `supersedes`: the id of the row that this row reverses, or `null`.
 
-When you judge the new choice a reversal of an active row in the same situation, name that row in
-`supersedes`. Before you do, compare the situations, not just the domains: an option chosen in a
-different situation is no reversal. When the reversal contradicts a memory entry, also stage a
-memory revision candidate with `charliebot memory add`, following the `llm-context-guideline` skill.
+Write each row with `charliebot taste add --file <row.json>`. The command validates every field, assigns
+the id and refuses a duplicate. A refusal that names an existing row means that candidate already has a
+row, so continue with the next candidate. Any other refusal stops the run, and the run reports the error.
 
-Write each row with `charliebot taste add --file <row.json>`. The command validates every field,
-assigns the row id, and refuses a row whose source and choice repeat an existing row.
+Write rows only through `charliebot taste add`, and change a row's state only through `charliebot taste mark`.
 
-## Propose patterns on Mondays
+## Reversals
 
-The daily run on Monday proposes patterns. A pattern is at least three active rows that choose the
-same direction in one kind of situation; the rule is one sentence that covers all of them.
+Before you write a row, read the domain's active rows with `charliebot taste query --domain <domain>`. A
+query of a domain with no active row fails and lists the known domains. Treat that failure as an empty set
+of active rows.
 
-List all patterns in one Waiting on you item in this session, naming the rows behind each, and ask
-the user for a yes or a no on each pattern. Commit nothing before that yes.
+Fill `supersedes` with an active row's id when all of these hold:
+- the row is in the same domain;
+- the row's situation is the same situation, not only the same domain;
+- the new choice is the opposite of the row's `chosen`.
 
-After the user says yes to a pattern, commit one memory entry for it as the user-approved commit
-that the `llm-context-guideline` skill requires, then mark each of its rows covered with
-`charliebot taste mark <id> --covered-by <entry>`. A pattern the user turns down changes nothing:
-its rows stay active.
+When the new choice reverses a rule that a memory entry states, stage a memory revision candidate with
+`charliebot memory add`, following the `llm-context-guideline` skill. Its first line is `# <title>`, and its
+body names the target entry and the change.
+
+## Patterns on Mondays
+
+When the daily run falls on a Monday, the run proposes patterns. A pattern is a sentence that states one
+direction the user chose in one kind of situation. A pattern covers at least three active rows that choose
+that direction.
+
+Propose all patterns in one Waiting on you item in the run's own session. The item names the rows behind
+each pattern and asks for a yes or a no on each pattern.
+
+Commit nothing before the user's yes.
+
+When the user says yes to a pattern:
+- commit one memory entry for the pattern as a user-approved commit, following the `llm-context-guideline`
+  skill;
+- mark each row behind the pattern as covered: `charliebot taste mark <id> --covered-by <entry>`.
+
+When the user says no to a pattern, its rows stay active and nothing changes.

@@ -27,7 +27,7 @@ use http_body_util::{BodyExt, BodyStream, StreamBody};
 use charliebot_compat::headers::header_text;
 
 /// `GZipMiddleware(minimum_size=1000)`.
-pub const MINIMUM_SIZE: usize = 1000;
+pub const MINIMUM_SIZE: usize = charliebot_compat::compression::MINIMUM_DEFLATE_BYTES;
 /// `GZipMiddleware(compresslevel=1)`.
 pub const COMPRESS_LEVEL: u32 = 1;
 

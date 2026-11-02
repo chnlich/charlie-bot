@@ -21,10 +21,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use axum::body::Body;
 use axum::http::HeaderValue;
+use axum::http::StatusCode;
 use axum::http::header;
 use axum::http::request::Parts;
 use axum::response::Response;
+use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
+use charliebot_compat::headers::header_text;
 use charliebot_compat::{jinja, responses};
 use charliebot_core::{git, text_repr};
 use ignore::WalkBuilder;
@@ -60,6 +64,8 @@ pub struct Templating {
   render_cache: Mutex<Option<RenderCache>>,
   /// The page text one render built and the inputs it built from.
   render_memo: Mutex<Option<RenderMemo>>,
+  /// The compressed forms of the page bodies served most recently.
+  page_gzips: Mutex<Vec<PageGzip>>,
   /// The watch whose revision says whether the template and static trees moved.
   watch: TreeWatch,
 }
@@ -105,6 +111,20 @@ struct RenderMemo {
   html: String,
 }
 
+/// One page's finished body and its compressed form.
+///
+/// A page load deflates its body on every request the transport compresses, and deflating costs far more than
+/// comparing a body with the one served last. The bodies a page serves in a burst repeat, so the first request of
+/// a body builds its compressed form and the next ones reuse those bytes.
+struct PageGzip {
+  name: String,
+  html: Vec<u8>,
+  gzip: Vec<u8>,
+}
+
+/// How many page bodies the compressed forms are kept for, beyond which the one stored longest ago goes.
+const PAGE_GZIP_ENTRIES: usize = 8;
+
 impl Templating {
   /// The engine of `repo_root` for the page packages `packages`, in registration order.
   pub fn new(repo_root: &Path, packages: &[&'static str]) -> Templating {
@@ -123,6 +143,7 @@ impl Templating {
       sources: Mutex::new(None),
       render_cache: Mutex::new(None),
       render_memo: Mutex::new(None),
+      page_gzips: Mutex::new(Vec::new()),
       watch: TreeWatch::new(&trees),
     }
   }
@@ -227,11 +248,28 @@ impl Templating {
     substitutions: &[(&str, &str)],
   ) -> Result<Response, RenderError> {
     let html = self.render_page_html(features, name, context, request, substitutions)?;
+    let deflate = accepts_gzip(request) && html.len() >= MINIMUM_DEFLATE_BYTES;
     // `no-store` sends every back navigation and tab restore to the server, so the page never runs
     // JavaScript from a cached copy that references an older static asset version.
-    let mut response = responses::html(html);
+    let mut response =
+      if deflate { compressed_html(self.page_gzip(name, html.as_bytes())) } else { responses::html(html) };
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+  }
+
+  /// The gzip form of one page body: the bytes kept for this body, or a fresh deflate that is kept for the next
+  /// request of it.
+  fn page_gzip(&self, name: &str, html: &[u8]) -> Vec<u8> {
+    let mut kept = self.page_gzips.lock().expect("the page gzip mutex is not poisoned");
+    if let Some(entry) = kept.iter().find(|entry| entry.name == name && entry.html == html) {
+      return entry.gzip.clone();
+    }
+    let gzip = gzip_memoized_body(html);
+    kept.push(PageGzip { name: name.to_string(), html: html.to_vec(), gzip: gzip.clone() });
+    if kept.len() > PAGE_GZIP_ENTRIES {
+      kept.remove(0);
+    }
+    gzip
   }
 
   /// Render a page and each `(placeholder, text)` substitution as the finished HTML.
@@ -426,6 +464,25 @@ impl std::error::Error for RenderError {}
 /// `Request`.
 fn request_context(request: &Parts) -> serde_json::Value {
   json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
+}
+
+/// Whether the client asked for gzip, by the transport's rule: its `Accept-Encoding` names it.
+fn accepts_gzip(request: &Parts) -> bool {
+  header_text(&request.headers, &header::ACCEPT_ENCODING).contains("gzip")
+}
+
+/// The page response carrying a body this layer deflated. The transport gzip layer passes a response that already
+/// sets `Content-Encoding` through, so this response names its encoding, its compressed length and the header its
+/// bytes vary on.
+fn compressed_html(body: Vec<u8>) -> Response {
+  Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+    .header(header::CONTENT_LENGTH, body.len())
+    .header(header::CONTENT_ENCODING, "gzip")
+    .header(header::VARY, "Accept-Encoding")
+    .body(Body::from(body))
+    .expect("a page response builds")
 }
 
 /// Build a recursive walk that applies no hidden-file or ignore-file filters.
@@ -664,6 +721,49 @@ mod tests {
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label one");
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} two, longer").unwrap();
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
+  }
+
+  /// A page body at or above the transport's minimum travels compressed when the client asked for gzip, and the
+  /// next request of that body reuses the compressed bytes instead of deflating it again.
+  #[tokio::test]
+  async fn a_gzip_page_request_reuses_the_compressed_body_it_kept() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    let page = "note ".repeat(400);
+    fs::write(templates.join("bulk.html"), &page).unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let templating = features.startup.require::<Templating>().unwrap();
+    let parts = |encoding: Option<&str>| {
+      let builder = Request::builder().method("GET").uri("/bulk");
+      let builder = match encoding {
+        Some(encoding) => builder.header(header::ACCEPT_ENCODING, encoding),
+        None => builder,
+      };
+      builder.body(()).unwrap().into_parts().0
+    };
+
+    let first = templating.render_page(&features, "bulk.html", &json!({}), &parts(Some("gzip"))).unwrap();
+    assert_eq!(first.headers()[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(first.headers()[header::VARY], "Accept-Encoding");
+    let length: usize = first.headers()[header::CONTENT_LENGTH].to_str().unwrap().parse().unwrap();
+    let first_body = axum::body::to_bytes(first.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(first_body.len(), length);
+    assert!(first_body.len() < page.len(), "the compressed page is the shorter body");
+
+    let second = templating.render_page(&features, "bulk.html", &json!({}), &parts(Some("gzip"))).unwrap();
+    let second_body = axum::body::to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(second_body, first_body);
+    assert_eq!(templating.page_gzips.lock().unwrap().len(), 1, "the repeat served the body it kept");
+
+    let plain = templating.render_page(&features, "bulk.html", &json!({}), &parts(None)).unwrap();
+    assert!(plain.headers().get(header::CONTENT_ENCODING).is_none());
+    let plain_body = axum::body::to_bytes(plain.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(plain_body, page.as_bytes());
   }
 
   /// A page part's list is resolved once per compiled environment. A part added on disk is a new template source,

@@ -101,7 +101,8 @@ fn scan_forms(command: &str) -> Result<Vec<ScanForm>, String> {
     let captures = captures.map_err(parse_error)?;
     let around = groups_text(&captures);
     let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
-    if !around.contains("-maxdepth") && !prunes_store {
+    let bounded_depth = depth_limited(&around)?;
+    if !bounded_depth && !prunes_store {
       forms.push(ScanForm::RootedSearch);
       break;
     }
@@ -239,6 +240,26 @@ fn rooted_search_pattern() -> Result<&'static Regex, String> {
         home = home_token()?
       ))
       .map_err(|error| format!("scan command parsing failed: {error}"))
+    })
+    .as_ref()
+    .map_err(Clone::clone)
+}
+
+/// Whether the search bounds its depth: find's `-maxdepth`, or rg's and fd's `--max-depth` (spaced or with `=`) and
+/// `-d N`. grep's `-d` takes an action word, not a depth, so the short flag needs a number.
+fn depth_limited(search_text: &str) -> Result<bool, String> {
+  if search_text.contains("-maxdepth") {
+    return Ok(true);
+  }
+  depth_flag_pattern()?.is_match(search_text).map_err(parse_error)
+}
+
+fn depth_flag_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN
+    .get_or_init(|| {
+      Regex::new(concat!(r"(?<![\w-])-d\s*\d", r"|--max-depth(?:\s+|=)\d"))
+        .map_err(|error| format!("scan command parsing failed: {error}"))
     })
     .as_ref()
     .map_err(Clone::clone)
@@ -394,6 +415,17 @@ mod tests {
         .unwrap()
         .is_empty()
     );
+  }
+
+  #[test]
+  fn rg_depth_flags_bound_a_rooted_search() {
+    for command in ["rg --max-depth 3 -l X ~", "rg --max-depth=3 -l X ~", "rg -d 2 -l X /"] {
+      assert!(scan_forms(command).unwrap().is_empty(), "{command}");
+    }
+    // Without a depth flag the same searches refuse, and grep's `-d` takes an action word, not a depth.
+    for command in ["rg -l X ~", "rg -l X /", "grep -d skip -r X /"] {
+      assert!(!scan_forms(command).unwrap().is_empty(), "{command}");
+    }
   }
 
   #[test]

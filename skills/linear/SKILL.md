@@ -12,19 +12,19 @@ Read, create, update, and search issues in Linear using the Linear GraphQL API.
 
 - API endpoint: `https://api.linear.app/graphql`
 - Key: a Personal API Key, which the operator stores in the profile home's `credentials.yaml` under `linear.api_key`.
-- Send every Linear request through `charliebot linear graphql`.
+- Send every Linear request through `charliebot linear request`.
   The command is the one reader of the key, so the key stays out of session commands, output and run records.
 
 ## API Reference
 
-`charliebot linear graphql` sends one GraphQL request to Linear and prints Linear's JSON response.
+`charliebot linear request` sends one GraphQL request to Linear and prints Linear's JSON response.
 It reads the request body from stdin, or from the file that `--file <path>` names.
 The body is a JSON object with a string `query` and an optional `variables` object.
 
 Send the viewer query through a quoted heredoc on stdin. This keeps the JSON body out of shell arguments.
 
 ```sh
-charliebot linear graphql <<'JSON'
+charliebot linear request <<'JSON'
 {"query":"query { viewer { id name email } }"}
 JSON
 ```
@@ -198,7 +198,7 @@ query($teamId: String!) {
 
 ## Workflow
 
-1. Send each request through `charliebot linear graphql` (API Reference above).
+1. Send each request through `charliebot linear request` (API Reference above).
 2. If team context is needed, call `teams` query first to resolve team IDs
 3. Use `searchIssues` for text lookups and `issues` with filters for structured queries
 4. For creating/updating issues, resolve team and user IDs first

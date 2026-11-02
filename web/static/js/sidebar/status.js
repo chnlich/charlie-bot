@@ -27,7 +27,7 @@ const renderedTaskTreeRows = new Set();
 // The paused-worker fact per row: a worker whose Run ended with its wake-up
 // trigger still pending has no live Run and no running turn. Its own state
 // then reads idle, yet it delivers nothing until the trigger fires. The
-// wake-up trigger is a charliebot schedule-trigger registration. The gear
+// wake-up trigger is a charliebot session trigger registration. The gear
 // stands in for it on every ancestor row for the whole pause. The list paint
 // records the fact from the row's own profile and has_pending_trigger. The
 // status poll's reply carries no profile, so the poll path takes the worker

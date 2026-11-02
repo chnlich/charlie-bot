@@ -2,6 +2,7 @@
   "python_test": "test_main_exits_on_request_error",
   "argv": [
     "improve",
+    "start",
     "--session",
     "s1",
     "--repo",

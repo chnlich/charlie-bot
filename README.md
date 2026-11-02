@@ -9,15 +9,15 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - Master/worker/reviewer delegation in isolated git worktrees, integrated by fast-forward-only pushes to the base branch
 - Pluggable backends: Claude Code, Anthropic-compatible, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
 - Chat file uploads: text attachments ride the message's path text; image attachments reach the Charlie Code CLI as repeated `--image` flags by default, and are refused with one error event (nothing sent) when the backend entry sets `image_input: false`
-- `charliebot improve` autonomous change-run-verify iteration loops
+- `charliebot improve start` autonomous change-run-verify iteration loops
 - Plan registry (`charliebot plan`) with HTML plan artifacts and anchored comments
 
 ### Automation
 
 - Cron scheduled tasks in prompt, handler, loop, and task-chain (`steps`) modes
 - Manual run of a scheduled task: `POST /api/cron/tasks/{name}/run` fires it once through the scheduled path
-- Delayed triggers (`charliebot schedule-trigger`) watching local/remote PIDs and SLURM jobs; one trigger can watch many targets
-- `charliebot schedule-trigger --cmd` starts a long-running command detached (locally or over ssh) and registers its wake; the wake carries the exit code and log path
+- Delayed triggers (`charliebot session trigger`) watching local/remote PIDs and SLURM jobs; one trigger can watch many targets
+- `charliebot session trigger --cmd` starts a long-running command detached (locally or over ssh) and registers its wake; the wake carries the exit code and log path
 
 ### Knowledge
 
@@ -88,12 +88,12 @@ release.
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
-- `charliebot improve` — start an iterative improvement loop
-- `charliebot improve-stop` — stop this session's running improvement loop after the current iteration
+- `charliebot improve start` — start an iterative improvement loop
+- `charliebot improve stop` — stop this session's running improvement loop after the current iteration
 - `charliebot memory` — query, lint and propose from the store; `add` stages a capture
 - `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans
 - `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
-- `charliebot schedule-trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
+- `charliebot session trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
 - `charliebot session` — create a session; `send` relays a message to another session as an agent_message
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status

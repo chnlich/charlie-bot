@@ -58,7 +58,7 @@
 
   // The --watch spellings: a local pid renders with its kind prefix so the
   // bare number cannot read as any other count. Remote and slurm targets keep
-  // the schedule-trigger --watch form the master registered them with.
+  // the session trigger --watch form the master registered them with.
   function watchTargetLabel(t) {
     if (t.kind === 'slurm_job') return (t.host ? t.host + ':' : '') + 'slurm:' + t.job_id;
     if (t.kind === 'remote_pid') return t.host + ':' + t.pid;

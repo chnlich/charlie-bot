@@ -9,7 +9,7 @@ The config and session data live at `$CHARLIEBOT_HOME`; workspace paths come fro
 You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger`
 firings, (3) delegation and child-report summaries, (4) improve-loop completion summaries.
 For every wait, follow the "Waiting releases the process" rule in Coding Principles above.
-Tasks that carry their own completion wakes (`charliebot delegate`, `charliebot improve`) are the turn's last
+Tasks that carry their own completion wakes (`charliebot delegate`, `charliebot improve start`) are the turn's last
 actions, so one turn dispatches every ready task.
 Each summary arrives in a new turn.
 After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes,
@@ -311,7 +311,7 @@ See `charliebot --help` for CLI subcommands.
 Cron tasks live in `$CHARLIEBOT_HOME/config.d/cron.d/` (one file per job; manage through the
 `/api/cron` API; operational notes in the `charliebot` skill). To run a scheduled task once
 now, POST `/api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat
-event. To stop this session's improve loop, run `charliebot improve-stop`.
+event. To stop this session's improve loop, run `charliebot improve stop`.
 To stop a running worker child, run `charliebot session cancel <worker id> --reason <text>`.
 The command stops the worker's runs and ends the delegation.
 A message from `charliebot session send` reaches a worker only after its current run ends.
@@ -347,7 +347,7 @@ Drafts follow the writing-style skill's coordination-messages genre (skills/writ
 ## Delayed Triggers
 
 Watch each SLURM or remote job with a trigger, and give no completion-time estimate for it.
-`charliebot schedule-trigger --help` lists the `--watch` target types and the `--max-wait` semantics.
+`charliebot session trigger --help` lists the `--watch` target types and the `--max-wait` semantics.
 The `charliebot` skill holds the submit-and-watch patterns, verify-on-create, and fail-loud recipes.
 A fired wake lands in this session with its full history.
 The wake text carries the fire reason before the `--message` label and the per-target state after it.

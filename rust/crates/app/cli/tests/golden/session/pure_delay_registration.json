@@ -1,6 +1,7 @@
 {
   "argv": [
-    "schedule-trigger",
+    "session",
+    "trigger",
     "--session",
     "s1",
     "--max-wait",

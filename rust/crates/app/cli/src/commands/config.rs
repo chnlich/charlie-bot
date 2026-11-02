@@ -1,7 +1,9 @@
-//! The `config get` command: print one top-level config value on stdout.
+//! The `config` verbs: `get` prints one top-level config value on stdout, `policy` prints the
+//! approval policy table as the server reads it.
 //!
-//! `config.yaml` holds the whole sectioned mapping and the loader is its only reader, so the command resolves the
-//! key through the same load, validation and defaults the server uses rather than opening the file itself:
+//! `config.yaml` holds the whole sectioned mapping and the loader is its only reader, so `get`
+//! resolves the key through the same load, validation and defaults the server uses rather than
+//! opening the file itself:
 //!
 //! ```text
 //! charliebot config get <key>
@@ -11,12 +13,17 @@
 //! caller can substitute `$(charliebot config get <key>)` into a command. Diagnostics go to stderr: an unknown key
 //! exits 2, an unset (null) value exits 1. The nested keys the command reads are `server.public_url`, the local work
 //! guard's `server.enable_local_work_guard`, and the runner's `remote_run.host` and `remote_run.remote_base`.
+//!
+//! `policy` prints the titled section the manager prompts carry, the table rendered back to YAML. The table loads
+//! through the same loader the server's prompt assembly and web routes use, so the output is the validated table and
+//! an absent or invalid table is the same error the server refuses with. Diagnostics go to stderr.
 
 use std::ffi::OsString;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
+use charliebot_core::approval_policy;
 use charliebot_core::config::{self, BackendOption, CharlieBotConfig, OptionFieldKind};
 use charliebot_core::home;
 use charliebot_core::paths;
@@ -25,7 +32,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
 #[derive(Parser)]
-#[command(name = "config", about = "Read a CharlieBot config key through the loader")]
+#[command(name = "config", about = "Read CharlieBot config values through the loader")]
 struct ConfigCli {
   #[command(subcommand)]
   verb: ConfigVerb,
@@ -38,6 +45,8 @@ enum ConfigVerb {
     /// Top-level CharlieBotConfig field or registered section name
     key: String,
   },
+  /// Print the approval policy table as the manager prompts carry it (nothing else)
+  Policy,
 }
 
 /// A `config get` failure: the stderr line and the exit code. These diagnostics are plain text, not the CLI's
@@ -71,7 +80,7 @@ enum Rendered {
   Json(Value),
 }
 
-/// Parse the arguments and print the key's value. Parser errors print and exit on their own
+/// Parse the arguments and run one verb. Parser errors print and exit on their own
 /// (help exits 0, a usage error exits 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(ConfigCli::command());
@@ -81,7 +90,10 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Err(error) => error.exit(),
   };
   let cli = ConfigCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
-  let ConfigVerb::Get { key } = cli.verb;
+  let key = match cli.verb {
+    ConfigVerb::Get { key } => key,
+    ConfigVerb::Policy => return policy_section(),
+  };
 
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(error.to_string()))?;
   // The key check takes the schema only: an unknown key is a usage error even when `config.yaml`
@@ -103,6 +115,18 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
       std::process::exit(failure.code);
     }
   }
+}
+
+/// `config policy`: the stdout section comes from the same loader the server's prompt assembly reads.
+fn policy_section() -> Result<(), CliExit> {
+  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  policy_section_in(&home)
+}
+
+fn policy_section_in(home: &std::path::Path) -> Result<(), CliExit> {
+  let loaded = approval_policy::load(home).map_err(|error| CliExit::error(error.to_string()))?;
+  print!("{}", approval_policy::prompt_section(&loaded.table));
+  Ok(())
 }
 
 /// The top-level names `CharlieBotConfig` declares as fields.
@@ -285,7 +309,43 @@ fn option_field_json(raw: &serde_yaml::Value, kind: OptionFieldKind) -> Result<V
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
   use super::*;
+
+  const VALID_TABLE: &str = "\
+consequence_tests:
+  - {id: irreversible, rank: 1, text: \"Deletes data with no backup.\"}
+  - {id: chao-name, rank: 2, text: \"A message in Chao's name reaches other people.\"}
+  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
+  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
+  - {id: rule-named, rank: 4, text: \"A rule names the user's explicit approval.\"}
+  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
+standing_policies: []
+enable_ask_tier_refusal: false
+";
+
+  fn write_table(home: &std::path::Path, text: &str) {
+    let table = home.join("config.d").join("approval.d").join("policy.yaml");
+    fs::create_dir_all(table.parent().unwrap()).unwrap();
+    fs::write(table, text).unwrap();
+  }
+
+  #[test]
+  fn policy_refuses_an_absent_table_with_the_path_and_prints_a_valid_one() {
+    let home = tempfile::tempdir().unwrap();
+
+    let error = policy_section_in(home.path()).expect_err("the absent table is an error");
+
+    assert!(error.body.to_string().contains("config.d/approval.d/policy.yaml: missing"), "{}", error.body);
+
+    write_table(home.path(), "consequence_tests: []\nstanding_policies: []\nenable_ask_tier_refusal: false\n");
+    let error = policy_section_in(home.path()).expect_err("an invalid table is an error");
+    assert!(error.body.to_string().contains("consequence_tests: consequence test id"), "{}", error.body);
+
+    write_table(home.path(), VALID_TABLE);
+    policy_section_in(home.path()).expect("a valid table prints");
+  }
 
   /// A profile home holding the committed synthetic `config.yaml`.
   fn fixture_home() -> tempfile::TempDir {

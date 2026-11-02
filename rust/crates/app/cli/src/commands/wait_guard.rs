@@ -1,7 +1,7 @@
 //! The Claude Code `PreToolUse` hook for waits in Bash commands.
 //!
 //! A declared wait is the largest matching wait budget in one command: a sleep, a `tail --pid` wait, or a polling
-//! loop with a sleep in its body. A `charliebot schedule-trigger` command declares zero seconds.
+//! loop with a sleep in its body. A `charliebot session trigger` command declares zero seconds.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -13,7 +13,7 @@ use fancy_regex::{Captures, Regex};
 use serde_json::{Value, json};
 
 const WAIT_LIMIT_SECONDS: f64 = 60.0;
-const DENY_REASON: &str = "This command waits: it sleeps or repeats a check for more than 60 seconds. Run the work itself in the foreground in one call, or start the wait with `charliebot schedule-trigger --cmd` and end your turn.";
+const DENY_REASON: &str = "This command waits: it sleeps or repeats a check for more than 60 seconds. Run the work itself in the foreground in one call, or start the wait with `charliebot session trigger --cmd` and end your turn.";
 
 /// Read one Claude Code hook event and emit a deny decision when its Bash command waits too long.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
@@ -57,7 +57,7 @@ fn deny_decision() -> Value {
 }
 
 fn declared_wait_seconds(command: &str) -> Result<f64, String> {
-  if schedule_trigger_pattern().is_match(command).map_err(regex_error)? {
+  if trigger_command_pattern().is_match(command).map_err(regex_error)? {
     return Ok(0.0);
   }
   let mut wait = 0.0f64;
@@ -136,9 +136,9 @@ fn regex_error(error: fancy_regex::Error) -> String {
   format!("wait command parsing failed: {error}")
 }
 
-fn schedule_trigger_pattern() -> &'static Regex {
+fn trigger_command_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
-  PATTERN.get_or_init(|| Regex::new(r"charliebot\s+schedule-trigger").expect("schedule-trigger pattern is valid"))
+  PATTERN.get_or_init(|| Regex::new(r"charliebot\s+session\s+trigger").expect("session trigger pattern is valid"))
 }
 
 fn tail_pid_pattern() -> &'static Regex {
@@ -201,7 +201,7 @@ mod tests {
       (r#"timeout 60 bash -c "until curl ok; do sleep 2; done""#, false),
       ("sleep 20; grep -l x f | while read f; do python3 -c 1; done", false),
       ("for i in 1 2 3; do git fetch && break; sleep 5; done", false),
-      ("charliebot schedule-trigger --cmd 'while ! ok; do sleep 30; done' --max-wait 900 --message m", false),
+      ("charliebot session trigger --cmd 'while ! ok; do sleep 30; done' --max-wait 900 --message m", false),
       ("for s in a b c; do echo $s; done; sleep 30", false),
       ("for i in range(85): time.sleep(10)", true),
       ("for i in range(1, 85): time.sleep(10)", true),

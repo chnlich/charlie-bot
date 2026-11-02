@@ -774,7 +774,7 @@ mod authenticated_commands {
       .env("CHARLIEBOT_HOME", home.path())
       .env("HTTPS_PROXY", &proxy)
       .env("HTTP_PROXY", &proxy)
-      .args(["linear", "graphql", "--file"])
+      .args(["linear", "request", "--file"])
       .arg(home.path().join("request.json"))
       .output()
       .unwrap()

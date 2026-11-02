@@ -106,8 +106,8 @@ const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
   TaggedVariant { tag: REMOTE_PID_KIND, model: &REMOTE_PID },
   TaggedVariant { tag: SLURM_JOB_KIND, model: &SLURM_JOB },
 ];
-/// The schedule-trigger body field that lists the targets a trigger watches. The body model reads it and so does
-/// the `schedule-trigger` command, so neither crate spells the name on its own.
+/// The session trigger body field that lists the targets a trigger watches. The body model reads it and so does
+/// the `session trigger` command, so neither crate spells the name on its own.
 pub const WATCH_TARGETS_FIELD: &str = "watch_targets";
 
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
@@ -1344,7 +1344,7 @@ fn remote_exit_read_command(exit_file: &str) -> Result<String, shlex::QuoteError
   Ok(format!("cat {} 2>/dev/null", shlex::try_quote(exit_file)?))
 }
 
-/// The route path that the `schedule-trigger` command posts to. The router and `ROUTE_PATTERNS` use it, and so does the
+/// The route path that the `session trigger` command posts to. The router and `ROUTE_PATTERNS` use it, and so does the
 /// CLI.
 pub const SCHEDULE_TRIGGER_PATH: &str = "/api/internal/schedule-trigger";
 

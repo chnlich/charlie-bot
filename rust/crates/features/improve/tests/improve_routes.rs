@@ -188,7 +188,7 @@ async fn starting_a_second_loop_returns_conflict_with_the_running_loop_id() {
   assert_eq!(status, StatusCode::CONFLICT);
   assert_eq!(
     body["detail"],
-    format!("Loop {} is already running for this session. Use charliebot improve-stop first.", first.loop_id)
+    format!("Loop {} is already running for this session. Use charliebot improve stop first.", first.loop_id)
   );
   assert_eq!(
     command::find_running_loop(&cfg, SESSION).expect("the running loop reads").unwrap().loop_id,

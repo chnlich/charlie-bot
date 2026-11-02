@@ -2,6 +2,7 @@
   "python_test": "test_main_posts_to_improve_endpoint",
   "argv": [
     "improve",
+    "start",
     "--session",
     "s1",
     "--repo",

@@ -1,7 +1,8 @@
 {
   "python_test": "test_improve_stop_cli_exits_1_without_a_running_loop",
   "argv": [
-    "improve-stop",
+    "improve",
+    "stop",
     "--session",
     "s1"
   ],

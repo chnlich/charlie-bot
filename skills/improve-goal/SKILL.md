@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Improve Loop — Goal Prompt Construction
 
-This skill is for the **master CC** (orchestrator). It guides construction of the goal prompt written to the file passed via `--goal-file` to `charliebot improve` (the file content becomes the live, per-iteration goal). Workers do NOT need this skill — they read `improve-worker` instead.
+This skill is for the **master CC** (orchestrator). It guides construction of the goal prompt written to the file passed via `--goal-file` to `charliebot improve start` (the file content becomes the live, per-iteration goal). Workers do NOT need this skill — they read `improve-worker` instead.
 
 ## Goal Prompt Rules
 

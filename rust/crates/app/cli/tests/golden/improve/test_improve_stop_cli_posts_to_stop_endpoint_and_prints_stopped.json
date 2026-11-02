@@ -1,7 +1,8 @@
 {
   "python_test": "test_improve_stop_cli_posts_to_stop_endpoint_and_prints_stopped",
   "argv": [
-    "improve-stop",
+    "improve",
+    "stop",
     "--session",
     "s1"
   ],

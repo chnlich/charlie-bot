@@ -1,6 +1,6 @@
 # `charliebot-improve`
 
-The improve loop: `charliebot improve` runs an iterative worker loop on the task tree as one sequence. The loop's
+The improve loop: `charliebot improve start` runs an iterative worker loop on the task tree as one sequence. The loop's
 state lives under `sessions/<sid>/loops/`; the sequence controller owns every Run whose `sequence_ref.kind` is
 `improve`. `register` mounts the routes and the controller; the packages list in `charliebot-server` calls it in
 place of the improve stub.

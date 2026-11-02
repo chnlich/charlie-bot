@@ -153,7 +153,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
   - Exclude backends registered with `restart_reattach=False` and improve-loop controllers from restart reattachment.
 - For CLC run end conditions, resuming an errored session, context reset, landing a CLC change, or running its reviewer, read the charlie-code `README.md`.
 - **Long-running remote command**:
-  1. `charliebot schedule-trigger --cmd '...' --host H --cwd P --max-wait N --message "..."` — starts the command on H and registers its wake in one step. Stdout prints one JSON object: `trigger_id`, `fire_at` and the launch record (`launch_id`, `host`, `pid`, `log`, `exit_file`), also written to `<session>/launches/<launch_id>/metadata.json`. Exit 3 means the ssh start failed and nothing was registered; exit 2 means the registration was rejected and the started process was killed.
+  1. `charliebot session trigger --cmd '...' --host H --cwd P --max-wait N --message "..."` — starts the command on H and registers its wake in one step. Stdout prints one JSON object: `trigger_id`, `fire_at` and the launch record (`launch_id`, `host`, `pid`, `log`, `exit_file`), also written to `<session>/launches/<launch_id>/metadata.json`. Exit 3 means the ssh start failed and nothing was registered; exit 2 means the registration was rejected and the started process was killed.
   2. After the registration prints its result, end the turn.
   3. On wake (trigger fired): the wake message carries the exit code and the log path; pull the log if needed. The remote files sit under `/tmp/charliebot_runs/<launch_id>/` (`log`, `exit`); `ssh H rm -rf /tmp/charliebot_runs/<launch_id>` cleans up remote staging.
 
@@ -161,7 +161,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
   Constraints: the command inside `--cmd` must not outlive the wrapper. A command that starts jobs with `&` must end with `wait`. Each `--cmd` start registers its own trigger. For parallel jobs under one wake, run them all in one `--cmd` that ends with `wait`; for SLURM jobs, pass every job to one `--watch` (the next bullet). The wrapper log captures stdout/stderr only — if the cmd internally redirects output to its own log path (e.g. `/storage/...`), that file is the source of truth and the wrapper log will be near-empty. For sub-2-minute commands, just `ssh host 'cmd'` synchronously instead — the launch+trigger overhead is not worth it.
 
-- **One trigger watches many targets — a single trigger covers every parallel job.** When master is waiting on N parallel runs, pass all targets to one `charliebot schedule-trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event. The per-session pending-trigger cap and the sixth registration's exit-2 behavior are contract in `prompts/master.md`, section Delayed Triggers.
+- **One trigger watches many targets — a single trigger covers every parallel job.** When master is waiting on N parallel runs, pass all targets to one `charliebot session trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event. The per-session pending-trigger cap and the sixth registration's exit-2 behavior are contract in `prompts/master.md`, section Delayed Triggers.
 
 ---
 
@@ -391,10 +391,10 @@ Submit with `sbatch --parsable` (prints only the job id), then watch it. The rem
 
 ```bash
 JOBID=$(ssh neptune sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
-charliebot schedule-trigger --max-wait 86400 --watch neptune:slurm:"$JOBID" --message "train done"
+charliebot session trigger --max-wait 86400 --watch neptune:slurm:"$JOBID" --message "train done"
 # Local form (the trigger-server host itself runs slurm):
 # JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
-# charliebot schedule-trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
+# charliebot session trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
 ```
 
 Caveats:
@@ -428,7 +428,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 
 ## Improve Loop Control
 
-`charliebot improve-stop` marks the session's running improve loop stopped; the session comes from `CHARLIEBOT_SESSION_ID`. A successful stop prints `stopped` and exits 0. With no running loop the command prints a message and exits 1. The current iteration finishes, and the next `charliebot improve` in the same session starts a new loop.
+`charliebot improve stop` marks the session's running improve loop stopped; the session comes from `CHARLIEBOT_SESSION_ID`. A successful stop prints `stopped` and exits 0. With no running loop the command prints a message and exits 1. The current iteration finishes, and the next `charliebot improve start` in the same session starts a new loop.
 
 ---
 

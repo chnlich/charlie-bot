@@ -202,7 +202,7 @@
     <section class="plan-section">
       <h2><span class="n">2</span> Context</h2>
       <p>A scheduled trigger resumes a CharlieBot session after a delay or when watched work finishes. Operators can create these triggers, but cannot inspect the triggers already scheduled for the session before adding another watch. <span class="src">Sources: rust/crates/app/server/src/app.rs; rust/crates/runtime/triggers/src/triggers.rs</span></p>
-      <p>The unified command dispatcher exposes trigger creation as <code>charliebot schedule-trigger</code>. The component responsible for trigger lifecycle, <code>TriggerManager</code>, persists each record as a JSON file under the session's <code>triggers</code> directory; no read-only CLI path currently loads those records for inspection. <span class="src">Sources: rust/crates/app/server/src/app.rs; rust/crates/runtime/triggers/src/triggers.rs</span></p>
+      <p>The unified command dispatcher exposes trigger creation as <code>charliebot session trigger</code>. The component responsible for trigger lifecycle, <code>TriggerManager</code>, persists each record as a JSON file under the session's <code>triggers</code> directory; no read-only CLI path currently loads those records for inspection. <span class="src">Sources: rust/crates/app/server/src/app.rs; rust/crates/runtime/triggers/src/triggers.rs</span></p>
     </section>
 
     <section class="plan-section">
@@ -254,7 +254,7 @@
           <summary>Full story, no prior knowledge required — expand to check the recommendation by hand</summary>
           <ul>
             <li><b>Session</b> here names the working directory's persisted trigger collection: every
-              <code>charliebot schedule-trigger</code> run on that directory writes its record there, and
+              <code>charliebot session trigger</code> run on that directory writes its record there, and
               <code>triggers list</code> would read only that collection.</li>
             <li>Cross-session visibility inherits whatever the CLI's other read commands do, so changing
               scope to "all sessions" reaches triggers the current directory did not write.</li>

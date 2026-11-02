@@ -121,7 +121,8 @@ impl TriggerKey {
       if stored.get("message").and_then(Value::as_str) != Some(self.message.as_str()) {
         continue;
       }
-      let stored_targets = stored.get("watch_targets").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+      let stored_targets =
+        stored.get(triggers::WATCH_TARGETS_FIELD).and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
       if stored_targets.len() != self.watch_targets.len() {
         continue;
       }
@@ -266,7 +267,8 @@ fn register_watch(sessions_dir: &Path, session_id: &str, args: &Args) -> Result<
   payload.insert("delay_seconds".to_string(), json!(args.max_wait));
   payload.insert("message".to_string(), json!(args.message));
   if let Some(watch) = &args.watch {
-    payload.insert("watch_targets".to_string(), Value::Array(watch.iter().map(WatchSpec::to_json).collect()));
+    payload
+      .insert(triggers::WATCH_TARGETS_FIELD.to_string(), Value::Array(watch.iter().map(WatchSpec::to_json).collect()));
   }
   let key = TriggerKey { session_id: session_id.to_string(), message: args.message.clone(), watch_targets };
   let result = post_registration(Value::Object(payload), &key, sessions_dir)?;
@@ -307,7 +309,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
     "session_id": session_id,
     "delay_seconds": args.max_wait,
     "message": args.message,
-    "watch_targets": [launch_target(&launch)],
+    (triggers::WATCH_TARGETS_FIELD): [launch_target(&launch)],
   });
   let result = match post_registration(payload, &key, sessions_dir) {
     Ok(result) => result,

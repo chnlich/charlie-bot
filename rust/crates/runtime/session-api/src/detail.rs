@@ -298,7 +298,7 @@ async fn pending_triggers(
   };
   let mut pending: Vec<PendingTrigger> =
     triggers.into_iter().filter(|trigger| trigger.status == TriggerStatus::Pending).collect();
-  // A stable sort keeps `list_triggers`' creation order among equal deadlines, as Python's `sorted` does.
+  // A stable sort keeps `list_triggers`' creation order among equal deadlines.
   pending.sort_by_key(|trigger| trigger.fire_at);
   let values = match pending.iter().map(serde_json::to_value).collect::<Result<Vec<Value>, _>>() {
     Ok(values) => values,
@@ -521,7 +521,7 @@ async fn session_transcript(
     .expect("worker transcript response builds")
 }
 
-// Borrow the cached projection through serialization as Python does at src/runtime/api/sessions.py:1158-1170.
+// Borrow the cached projection through serialization.
 struct TranscriptJson<'a> {
   messages: &'a [std::sync::Arc<Value>],
   total: usize,
@@ -877,7 +877,7 @@ fn active_backend_payload(
   Ok(payload)
 }
 
-/// Python's `displayed_backend_id`: only a worker's in-memory run backend overrides its metadata backend.
+/// The displayed backend: only a worker's in-memory run backend overrides its metadata backend.
 fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>, default_backend: &str) -> String {
   let active_backend = if meta.profile == TaskProfile::Worker {
     run_backend

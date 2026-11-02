@@ -8,7 +8,7 @@ use charliebot_compat::{responses, validation};
 use charliebot_store::{StoreError, StoreResult};
 use serde_json::json;
 
-/// Run a handler's store work on the blocking pool, as Python's handlers run it in `asyncio.to_thread`, so a slow
+/// Run a handler's store work on the blocking pool, so a slow
 /// read holds no async worker.
 pub(crate) async fn blocking_store<T, F>(work: F) -> StoreResult<T>
 where
@@ -19,7 +19,7 @@ where
 }
 
 /// The store error as the route's JSON response: the mapped status when the error carries one, else the
-/// `RuntimeError` internal error the Python handlers raise.
+/// `RuntimeError` internal error that the handlers raise.
 pub(crate) fn store_error(error: StoreError) -> Response {
   if let Some(status) = error.status_code().and_then(|code| StatusCode::from_u16(code).ok()) {
     return responses::json(status, &json!({"detail": error.to_string()}));
@@ -32,8 +32,7 @@ pub(crate) struct Query {
 }
 
 impl Query {
-  /// The query string's pairs, in order, decoded the way Starlette's `parse_qsl(keep_blank_values=True)`
-  /// decodes them behind FastAPI's `Query` (`form_urlencoded::parse` has those semantics): `+` reads as a
+  /// The query string's pairs, in order, decoded with `form_urlencoded::parse` semantics: `+` reads as a
   /// space, `%XX` escapes decode with replacement, and a part without a value keeps its blank value.
   pub(crate) fn new(request: &Request<Body>) -> Self {
     let values = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())

@@ -37,7 +37,7 @@ struct FileSignature {
   inode: u64,
 }
 
-/// One file's needle roots, newest needles kept: the same bounded per-needle list Python's per-file memo holds.
+/// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
 type RootMemo = LruCache<String, FileSignature>;
 
 struct SearchFileRoots {
@@ -163,8 +163,8 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 
   let needle = query.to_lowercase();
   let (all, _) = store.load_session_metas_snapshot_versioned(None)?;
-  // Python checks the query result's listing identity, then each stored file signature, before doing name matching or
-  // content classification (`src/runtime/session_search.py:293-295`). Keep that hot path ahead of candidate rebuilds.
+  // The query result's listing identity is checked first, then each stored file signature, before name matching or
+  // content classification. Keep that hot path ahead of candidate rebuilds.
   if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
     && Arc::ptr_eq(&cached.corpus, &all)
   {
@@ -332,8 +332,8 @@ fn scan_content(path: &Path, needle: &str, start: u64) -> io::Result<bool> {
 
 fn scan_ascii(file: &mut File, needle: &[u8]) -> io::Result<bool> {
   let overlap = needle.len().saturating_sub(1);
-  // memchr's memmem is the two-way search behind Python's `needle in window`
-  // (src/runtime/session_search.py:188-194), built once per scan over the folded windows.
+  // memchr's memmem is the two-way search behind the substring test,
+  // built once per scan over the folded windows.
   let finder = memchr::memmem::Finder::new(needle);
   let mut tail = Vec::with_capacity(overlap);
   let mut chunk = vec![0_u8; SEARCH_CHUNK_SIZE];
@@ -576,7 +576,6 @@ mod tests {
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
   }
 
-  /// `test_archived_pagination.py::test_search_cap_keeps_content_hits_above_the_cap_line`.
   #[test]
   fn content_hits_compete_with_name_hits_at_the_two_hundred_row_cap() {
     let home = tempfile::tempdir().unwrap();
@@ -606,7 +605,6 @@ mod tests {
     assert!(!ids.contains(&"archived-000"));
   }
 
-  /// `test_archived_pagination.py::test_search_match_memo_refreshes_when_chat_content_or_names_move`.
   #[test]
   fn search_reads_new_chat_content_and_names_on_the_next_request() {
     let home = tempfile::tempdir().unwrap();

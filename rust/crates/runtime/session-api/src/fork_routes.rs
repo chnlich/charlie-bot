@@ -1,5 +1,5 @@
-//! The fork and elone routes (`src/runtime/api/sessions.py`, `fork_session` and `elone_session`). Each creates a successor
-//! session from the source's chat history, then admits the bootstrap prompt as the caller's input and dispatches the
+//! The fork and elone routes. Each creates a successor session from the source's chat history, then admits the
+//! bootstrap prompt as the caller's input and dispatches the
 //! successor's first run.
 
 use std::sync::Arc;
@@ -174,14 +174,14 @@ async fn elone_session(
   spawn_response(&features, &meta)
 }
 
-/// The successor as its spawn returned it. Python answers with the in-memory model, which holds every session slot
+/// The successor as its spawn returned it. The answer is the in-memory model, which holds every session slot
 /// field at its default and has no live-run fields, so the response is the spawn's metadata with those defaults.
 fn spawn_response(features: &FeatureContext, meta: &SessionMetadata) -> Response {
   let value = features.store.session_metadata_value(meta);
   responses::json(StatusCode::OK, &value)
 }
 
-/// The fork body's fields. An absent body, which FastAPI passes as None, takes every default.
+/// The fork body's fields. An absent body takes every default.
 fn fork_fields(body: &RequestBody) -> Result<ForkFields, Box<Response>> {
   match body.validate(&FORK_BODY) {
     Ok(None) => Ok(ForkFields::default()),

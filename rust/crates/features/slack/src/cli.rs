@@ -124,7 +124,7 @@ fn slack_error(body: &[u8]) -> bool {
 fn credential_failure(kind: TokenKind, path: Option<&Path>) -> CliExit {
   let where_text = match path {
     Some(path) => paths::display(path),
-    None => format!("$CHARLIEBOT_HOME/{}", config::CREDENTIALS_FILENAME),
+    None => home::display_path(config::CREDENTIALS_FILENAME),
   };
   CliExit::contract(json!({"error": format!("credentials.slack.{} is unavailable in {where_text}", kind.key())}), 3)
 }

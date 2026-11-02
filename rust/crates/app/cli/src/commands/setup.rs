@@ -64,14 +64,13 @@ fn provision_home(
   repo: &std::path::Path,
   dry_run: bool,
 ) -> Result<(), String> {
-  let home_env = home::CHARLIEBOT_HOME_ENV;
-  println!("==> Provisioning ${home_env}");
+  println!("==> Provisioning {}", home::DISPLAY_HOME);
   let home_items = [
-    ("dir", format!("${home_env}/"), cfg.charliebot_home.clone()),
-    ("dir", format!("${home_env}/{}/", charliebot_core::config::SESSIONS_DIR_NAME), cfg.sessions_dir()),
-    ("dir", format!("${home_env}/{}/", charliebot_core::config::CONFIG_D_DIR_NAME), cfg.config_d_dir()),
-    ("file", format!("${home_env}/{}", charliebot_core::config::CONFIG_FILENAME), cfg.config_file()),
-    ("file", format!("${home_env}/{}", charliebot_core::config::CREDENTIALS_FILENAME), cfg.credentials_file()),
+    ("dir", home::display_dir(""), cfg.charliebot_home.clone()),
+    ("dir", home::display_dir(charliebot_core::config::SESSIONS_DIR_NAME), cfg.sessions_dir()),
+    ("dir", home::display_dir(charliebot_core::config::CONFIG_D_DIR_NAME), cfg.config_d_dir()),
+    ("file", home::display_path(charliebot_core::config::CONFIG_FILENAME), cfg.config_file()),
+    ("file", home::display_path(charliebot_core::config::CREDENTIALS_FILENAME), cfg.credentials_file()),
   ];
   let existed_before: Vec<bool> = home_items.iter().map(|(_, _, path)| path.exists()).collect();
   if !dry_run {

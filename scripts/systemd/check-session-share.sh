@@ -6,8 +6,8 @@ set -euo pipefail
 # scripts/systemd/setup-io-share.sh). Run it from the checkout on the CharlieBot host as the user
 # whose manager runs the server; it needs no root and touches no live unit:
 #
-#   scripts/systemd/check-session-share.sh cpu-slice   # 1-loop session cgroup gets about half the test slice
-#   scripts/systemd/check-session-share.sh cpu-login   # one login-session busy loop keeps its full core
+#   scripts/systemd/check-session-share.sh cpu-slice   # 1-loop session cgroup's share of the test slice
+#   scripts/systemd/check-session-share.sh cpu-login   # one login-session busy loop under rival load
 #   scripts/systemd/check-session-share.sh io-idle     # sequential-read throughput of the root disk
 #   scripts/systemd/check-session-share.sh io-contest  # two session cgroups split the disk about half each
 #   scripts/systemd/check-session-share.sh all         # the four in this order
@@ -15,22 +15,23 @@ set -euo pipefail
 # The io legs need setup-io-share.sh to have run first (io delegated to the user manager and io.cost
 # enabled on the root disk): io-idle once BEFORE that script and once after, to catch an idle-time
 # slowdown, io-contest only after. The CPU legs need no root setup and run in transient units of
-# their own under the user manager. Every unit carries the default CPUWeight=100. CHECK_SHARE_RUN=fake
-# shrinks the legs to a seconds-long plumbing test; the real measurement is the default.
+# their own under the user manager. Every unit carries CPUWeight=100 explicitly. The CPU legs saturate
+# every core on purpose: run them only when the host can spare the cores for about a minute.
+# CHECK_SHARE_RUN=fake shrinks the CPU legs to a seconds-long plumbing test; the real measurement is
+# the default.
 #
-# cpu-slice: two session-like cgroups under one slice against three rival slices that saturate the
-# rest of the machine, read from cpu.stat. Phase one runs 8 busy loops against 1: per-CPU weight
-# scheduling gives the 1-loop cgroup's single thread about half of the one core it occupies while the
-# sibling's eight threads fill the rest, so its share of the slice's usage lands below half — the leg
-# shows the floor a one-process session keeps under full contention. Phase two runs 8 against 8:
-# with comparable thread counts the equal weights split the slice evenly, and the share comes out
-# near half.
+# cpu-slice: two session-like cgroups under the test slice, check-share.slice, against three rival
+# slices, check-rival1..3.slice, that saturate the machine. The rivals are siblings of the test slice
+# under check.slice: systemd nests a dash-named slice under its prefix, so their names must not extend
+# check-share. Phase one runs 8 busy loops against 1; phase two runs 8 against 8. Both shares are read
+# from cpu.stat. The leg prints them; a person judges the one-loop share against the plan's 45-55%.
 # cpu-login: one busy loop in the login session, through a detached tmux session that the leg creates
-# and removes and that touches no other tmux session. A single loop cannot exceed one core, while the
-# login session's weight grants it about half the machine when it runs more processes: the leg reads
-# the loop's own CPU time and reports the cores it used and its share of the machine's usage.
-# io-idle: sequential reads that bypass the page cache, before and after setup-io-share.sh; a drop
-# beyond 10% is the line where the plan says to undo io.cost.
+# and removes and that touches no other tmux session, against the same rival slices. The login scope
+# and the user manager are siblings under user-N.slice. A single loop can use at most one core, so the
+# leg reports the cores the loop used (about one under contention) and its share of the machine's usage.
+# io-idle: direct sequential reads of 1 GiB, bounded to 30 s, before and after setup-io-share.sh; a read
+# that does not finish inside the bound fails the leg. A drop beyond 10% is the line where the plan
+# says to undo io.cost.
 # io-contest: two session cgroups with IOWeight=100, several direct readers against one; each takes
 # about half of the disk's read bandwidth, read from io.stat.
 
@@ -40,7 +41,7 @@ usage() {
 }
 case "$MODE" in
   cpu-slice|cpu-login|io-idle|io-contest|all) ;;
-  *) usage ;;
+  *) usage; exit 1 ;;
 esac
 
 RUN_MODE=${CHECK_SHARE_RUN:-real}
@@ -59,7 +60,7 @@ unit_cgroup() {
   parent=${slice%.slice}
   while [[ "$parent" == *-* ]]; do
     parent=${parent%-*}
-    prefix+="$parent.slice/"
+    prefix="$parent.slice/$prefix"
   done
   echo "$CGROUP_ROOT/$prefix$slice/$unit"
 }
@@ -69,9 +70,9 @@ cpu_usage_usec() {
   awk '$1 == "usage_usec" {print $2}' "$1/cpu.stat"
 }
 
-# Print the machine's CPU time used since boot, user plus system, in nanoseconds at 100 Hz clock.
+# Print the machine's CPU time used since boot, user plus nice plus system, in nanoseconds at 100 Hz clock.
 machine_cpu_nsec() {
-  awk '/^cpu / {print ($2 + $4) * 10000000}' /proc/stat
+  awk '/^cpu / {print ($2 + $3 + $4) * 10000000}' /proc/stat
 }
 
 # Sample two unit cgroups' cpu.stat over the window and print each side's cores and the second
@@ -87,7 +88,26 @@ sample_slice_cpu() {
   b1=$(cpu_usage_usec "$path_b")
   echo "cores used: $unit_a $(awk "BEGIN {printf \"%.2f\", ($a1 - $a0) / ($window * 1000000)}")," \
     "$unit_b $(awk "BEGIN {printf \"%.2f\", ($b1 - $b0) / ($window * 1000000)}")"
-  echo "$unit_b share of the two cgroups' usage: $(awk "BEGIN {printf \"%.1f\", 100 * ($b1 - $b0) / ($a1 - $a0 + $b1 - $b0)}")%"
+  echo "$unit_b share of the two cgroups' usage:" \
+    "$(awk "BEGIN {printf \"%.1f\", 100 * ($b1 - $b0) / ($a1 - $a0 + $b1 - $b0)}")%"
+}
+
+# Three rival slices of two busy loops each, siblings of the test slice under check.slice: with equal
+# weights they take three quarters of the machine and leave the test slice wanting every core it can
+# get. $1 is how long they stay up.
+start_rivals() {
+  local rival lifetime=$1
+  for rival in 1 2 3; do
+    systemd-run --user --unit=check-rival$rival --slice=check-rival$rival.slice -p CPUWeight=100 \
+      bash -c "$BUSY_LOOP & $BUSY_LOOP & sleep $lifetime" >/dev/null
+  done
+}
+
+stop_rivals() {
+  local rival
+  for rival in 1 2 3; do
+    systemctl --user stop check-rival$rival.service check-rival$rival.slice 2>/dev/null || true
+  done
 }
 
 leg_cpu_slice() {
@@ -97,18 +117,10 @@ leg_cpu_slice() {
     window=2
   fi
   echo "== cpu-slice: $loops_a busy loops against 1, then $loops_a against $loops_a, $window s windows =="
-  # Three rival slices, two loops each: with equal weights they take three quarters of the machine
-  # and leave the test slice, with its 9 loops, wanting every core it can get. They stay up across
-  # both phases.
-  local rival lifetime=$((2 * window + 2 * SLACK + 5))
-  for rival in 1 2 3; do
-    systemd-run --user --unit=check-share-r$rival --slice=check-share-r$rival.slice -p CPUWeight=100 \
-      bash -c "$BUSY_LOOP & $BUSY_LOOP & sleep $lifetime" >/dev/null
-  done
-  # Phase 1, the process-count case: a cgroup with one loop competes with one with eight. Per-CPU
-  # weight scheduling caps a single-thread cgroup at about half of the one core it occupies while its
-  # siblings' threads fill the rest, so its share of the slice's usage lands well below half; what
-  # the leg shows is the floor the one-loop session keeps under full contention.
+  # The rivals stay up across both phases.
+  start_rivals $((2 * window + 2 * SLACK + 5))
+  # Phase 1, the process-count case: a cgroup with one loop against one with eight. The share is printed
+  # as measured; a single thread can use at most one core.
   systemd-run --user --unit=check-share-a --slice=check-share.slice -p CPUWeight=100 \
     bash -c "for i in \$(seq $loops_a); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
   systemd-run --user --unit=check-share-b --slice=check-share.slice -p CPUWeight=100 \
@@ -118,8 +130,8 @@ leg_cpu_slice() {
   sample_slice_cpu check-share-a.service check-share-b.service "$window"
   sleep "$SLACK"
   systemctl --user stop check-share-a.service check-share-b.service 2>/dev/null || true
-  # Phase 2, the weight case: comparable thread counts, so the equal weights must split the slice
-  # evenly; the share comes out near half.
+  # Phase 2, the weight case: comparable thread counts, so the equal weights should split the slice
+  # about evenly.
   systemd-run --user --unit=check-share-a --slice=check-share.slice -p CPUWeight=100 \
     bash -c "for i in \$(seq $loops_a); do $BUSY_LOOP & done; sleep $((window + SLACK))" >/dev/null
   systemd-run --user --unit=check-share-b --slice=check-share.slice -p CPUWeight=100 \
@@ -129,9 +141,7 @@ leg_cpu_slice() {
   sample_slice_cpu check-share-a.service check-share-b.service "$window"
   sleep "$SLACK"
   systemctl --user stop check-share-a.service check-share-b.service check-share.slice 2>/dev/null || true
-  for rival in 1 2 3; do
-    systemctl --user stop check-share-r$rival.service check-share-r$rival.slice 2>/dev/null || true
-  done
+  stop_rivals
 }
 
 leg_cpu_login() {
@@ -139,7 +149,8 @@ leg_cpu_login() {
   if [[ $RUN_MODE == fake ]]; then
     window=2
   fi
-  echo "== cpu-login: one busy loop in the login session, $window s window =="
+  echo "== cpu-login: one busy loop in the login session against rival slices, $window s window =="
+  start_rivals $((window + 2 * SLACK))
   local session=check-share-login
   local pid_file=/tmp/check-share-login-loop.$$.pid
   tmux new-session -d -s "$session" \
@@ -159,32 +170,42 @@ leg_cpu_login() {
   machine_cores=$(awk "BEGIN {printf \"%.2f\", ($cpu1 - $cpu0) / ($window * 1000000000)}")
   echo "loop used $loop_cores cores; machine used $machine_cores cores"
   echo "loop share of the machine's usage: $(awk "BEGIN {printf \"%.1f\", 100 * $loop_cores / $machine_cores}")%" \
-    "(one busy loop cannot exceed one core; the login session's weight grants it about half the machine when it runs more)"
+    "(one busy loop cannot exceed one core; under the rival slices it should keep about one)"
   kill "$pid" 2>/dev/null || true
   tmux kill-session -t "$session" 2>/dev/null || true
   rm -f "$pid_file"
   trap - EXIT
+  stop_rivals
 }
 
-# A direct read of `file` that bypasses the page cache, as the idle user.
+# The MiB one io-idle read covers. Its rate is that size over the time the read took, so a read that the
+# bound cuts short has no rate.
+IO_READ_MIB=1024
+
+# A direct read of the first IO_READ_MIB MiB of `file` that bypasses the page cache, as the idle user,
+# bounded to 30 s. A read that does not finish inside the bound fails the leg.
 direct_read_throughput() {
-  local file=$1 seconds=$2
-  local before after bytes
+  local file=$1 before after
   before=$(date +%s%N)
-  ionice -c 3 nice -n 19 timeout "$seconds" dd if="$file" of=/dev/null iflag=direct bs=1M status=none || true
+  timeout 30 ionice -c 3 nice -n 19 dd if="$file" of=/dev/null iflag=direct bs=1M count="$IO_READ_MIB" status=none \
+    || { echo "io-idle: reading $IO_READ_MIB MiB did not finish within 30 s" >&2; exit 1; }
   after=$(date +%s%N)
-  bytes=$(stat -c %s "$file")
-  awk "BEGIN {printf \"%.0f MB/s over ${seconds}s\", $bytes / (($after - $before) / 1000000000) / 1048576}"
+  awk "BEGIN {printf \"throughput: %.0f MiB/s over $IO_READ_MIB MiB\\n\", \
+    $IO_READ_MIB / (($after - $before) / 1000000000)}"
 }
 
 leg_io_idle() {
   local file=${CHECK_SHARE_READ_FILE:-}
   if [[ -z "$file" || ! -f "$file" ]]; then
-    echo "io-idle: set CHECK_SHARE_READ_FILE to a file of at least 2 GiB to read" >&2
+    echo "io-idle: set CHECK_SHARE_READ_FILE to a file of at least $IO_READ_MIB MiB to read" >&2
     exit 1
   fi
-  echo "== io-idle: direct sequential read, 10 s =="
-  echo "throughput: $(direct_read_throughput "$file" 10)"
+  if (( $(stat -c %s "$file") < IO_READ_MIB * 1048576 )); then
+    echo "io-idle: $file is smaller than $IO_READ_MIB MiB" >&2
+    exit 1
+  fi
+  echo "== io-idle: direct sequential read of $IO_READ_MIB MiB, 30 s bound =="
+  direct_read_throughput "$file"
 }
 
 # The read bytes of a cgroup directory's io.stat, summed over the devices.
@@ -205,7 +226,8 @@ leg_io_contest() {
   fi
   echo "== io-contest: several direct readers against one, $WINDOW s window =="
   systemd-run --user --unit=check-io-a --slice=check-io.slice -p IOWeight=100 \
-    bash -c "for i in 1 2 3; do timeout $WINDOW dd if=$file of=/dev/null iflag=direct bs=1M status=none & done; sleep $SLACK; wait" >/dev/null
+    bash -c "for i in 1 2 3; do timeout $WINDOW dd if=$file of=/dev/null iflag=direct bs=1M status=none & done; \
+      sleep $SLACK; wait" >/dev/null
   systemd-run --user --unit=check-io-b --slice=check-io.slice -p IOWeight=100 \
     bash -c "timeout $WINDOW dd if=$file of=/dev/null iflag=direct bs=1M status=none; sleep $SLACK" >/dev/null
   sleep "$WINDOW"

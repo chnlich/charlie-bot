@@ -334,8 +334,27 @@ esac
       (vec!["pr", "review", "-R", "o/r", "12", "--approve"], "o/r"),
       (vec!["pr", "close", "-R", "o/r", "12", "-c", "done"], "o/r"),
       (vec!["pr", "close", "-R", "o/r", "12", "--comment=done"], "o/r"),
+      (vec!["pr", "reopen", "-R", "o/r", "12", "-c", "reopening"], "o/r"),
+      (vec!["issue", "close", "-R", "o/r", "3", "-c", "closing"], "o/r"),
+      (vec!["issue", "reopen", "-R", "o/r", "3", "--comment=reopening"], "o/r"),
       (vec!["pr", "merge", "-R", "o/r", "12", "-b", "subject line"], "o/r"),
       (vec!["pr", "merge", "-R", "o/r", "12", "--subject=squash title"], "o/r"),
+      (vec!["pr", "merge", "-R", "o/r", "12", "-F", "body.md"], "o/r"),
+      (vec!["pr", "merge", "-R", "o/r", "12", "--body-file=body.md"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "-n", "release notes"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "--notes=release notes"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "-F", "notes.md"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "--notes-file=notes.md"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "--generate-notes"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "--notes-from-tag"], "o/r"),
+      (vec!["release", "create", "-R", "o/r", "v1", "-t", "release title"], "o/r"),
+      (vec!["release", "edit", "-R", "o/r", "v1", "-n", "release notes"], "o/r"),
+      (vec!["release", "edit", "-R", "o/r", "v1", "-F", "notes.md"], "o/r"),
+      (vec!["discussion", "create", "-R", "o/r", "-t", "topic", "-b", "body"], "o/r"),
+      (vec!["discussion", "create", "-R", "o/r", "-F", "body.md"], "o/r"),
+      (vec!["discussion", "edit", "-R", "o/r", "12", "--title=topic"], "o/r"),
+      (vec!["discussion", "comment", "-R", "o/r", "12", "-b", "reply"], "o/r"),
+      (vec!["discussion", "comment", "-R", "o/r", "12", "--body-file=reply.md"], "o/r"),
       (vec!["issue", "create", "-R", "o/r", "--title", "t"], "o/r"),
       (vec!["issue", "edit", "-R", "o/r", "3", "--add-assignee", "@me"], "o/r"),
       (vec!["issue", "comment", "-R", "o/r", "3", "-b", "text"], "o/r"),
@@ -377,6 +396,18 @@ esac
       vec!["pr", "list", "--state", "open"],
       vec!["issue", "view", "-R", "o/r", "3"],
       vec!["issue", "close", "-R", "o/r", "3"],
+      vec!["issue", "reopen", "-R", "o/r", "3"],
+      vec!["pr", "reopen", "-R", "o/r", "12"],
+      // A release without notes or a title publishes no agent text.
+      vec!["release", "create", "-R", "o/r", "v1"],
+      vec!["release", "edit", "-R", "o/r", "v1", "--draft=false"],
+      // Discussion calls that carry no title or body.
+      vec!["discussion", "comment", "-R", "o/r", "12", "--delete"],
+      vec!["discussion", "create", "-R", "o/r", "-c", "Announcements"],
+      vec!["discussion", "edit", "-R", "o/r", "12", "--add-label", "topic"],
+      // Writes whose target is not a repository.
+      vec!["gist", "create", "-d", "description", "file.txt"],
+      vec!["gist", "edit", "-d", "description", "abc123"],
       vec!["repo", "view"],
       vec!["run", "watch"],
       vec!["api", "repos/o/r/pulls"],
@@ -418,6 +449,53 @@ esac
     assert!(output.status.success(), "{}", stdout_of(&output));
     assert_eq!(stubs.token_record(), "argv:--write\nargv:o/r\n");
     assert!(stubs.record().contains("token:\n"), "{}", stubs.record());
+  }
+
+  /// Each newly classified form keeps today's behavior when the App is not installed on the target: the real gh runs
+  /// as the personal login, with no `GH_TOKEN`.
+  #[test]
+  fn newly_classified_forms_run_unchanged_when_the_app_is_not_installed() {
+    let cases: Vec<Vec<&str>> = vec![
+      vec!["issue", "close", "-R", "o/r", "3", "-c", "closing"],
+      vec!["issue", "reopen", "-R", "o/r", "3", "-c", "reopening"],
+      vec!["pr", "reopen", "-R", "o/r", "12", "-c", "reopening"],
+      vec!["pr", "merge", "-R", "o/r", "12", "-F", "body.md"],
+      vec!["release", "create", "-R", "o/r", "v1", "-n", "release notes"],
+      vec!["release", "create", "-R", "o/r", "v1", "-F", "notes.md"],
+      vec!["release", "create", "-R", "o/r", "v1", "--generate-notes"],
+      vec!["release", "edit", "-R", "o/r", "v1", "--notes=release notes"],
+      vec!["discussion", "create", "-R", "o/r", "-t", "topic", "-b", "body"],
+      vec!["discussion", "comment", "-R", "o/r", "12", "-b", "reply"],
+    ];
+
+    for args in &cases {
+      let stubs = Stubs::start();
+      let output = stubs.run(args, &[("TOKEN_EXIT", "3")]);
+
+      assert!(output.status.success(), "{args:?}: {}", stdout_of(&output));
+      assert_eq!(stubs.token_record(), "argv:--write\nargv:o/r\n", "{args:?}");
+      assert!(stubs.record().contains("token:\n"), "{args:?}: {}", stubs.record());
+      for arg in args {
+        assert!(stubs.record().contains(&format!("argv:{arg}\n")), "{args:?}: {}", stubs.record());
+      }
+    }
+  }
+
+  /// A write whose target is not a repository never looks up the App token.
+  #[test]
+  fn non_repository_writes_pass_through() {
+    for args in [
+      vec!["gist", "create", "-d", "description", "file.txt"],
+      vec!["gist", "edit", "-d", "description", "abc123"],
+      vec!["gist", "create", "file.txt"],
+    ] {
+      let stubs = Stubs::start();
+      let output = stubs.run(&args, &[]);
+
+      assert!(output.status.success(), "{args:?}: {}", stdout_of(&output));
+      assert!(stubs.token_record().is_empty(), "{args:?}");
+      assert!(stubs.record().contains("token:\n"), "{args:?}: {}", stubs.record());
+    }
   }
 
   #[test]

@@ -9,10 +9,16 @@
 # the call before it runs anything:
 #
 #   - Text-carrying writes: pr create, pr edit, pr comment, pr review, issue
-#     create, issue edit, issue comment, pr close with -c/--comment, pr merge
-#     with -b/--body or -t/--subject, and gh api whose method is not GET (gh
-#     defaults to POST when fields are given; -X/--method overrides).
-#   - Every other call passes through unchanged, with no token lookup.
+#     create, issue edit, issue comment, pr close and reopen with -c/--comment,
+#     issue close and reopen with -c/--comment, pr merge with -b/--body,
+#     -F/--body-file or -t/--subject, release create and edit with notes
+#     (-n/--notes, -F/--notes-file, --generate-notes, --notes-from-tag) or a
+#     title, discussion create and edit with a title or body, discussion
+#     comment with a body, and gh api whose method is not GET (gh defaults to
+#     POST when fields are given; -X/--method overrides).
+#   - Every other call passes through unchanged, with no token lookup. That
+#     includes every write whose target is not a repository, such as gist
+#     create and gist edit.
 #
 # gh api graphql is classified by its document instead of its method: a
 # document whose operations are all queries passes through unchanged, while a
@@ -245,12 +251,25 @@ value_letters() {
     api) printf 'FHXfpqt' ;;
     pr)
       case $action in
-        close) printf 'cR' ;;
+        close|reopen) printf 'cR' ;;
         merge) printf 'bFtR' ;;
         *) printf 'aBbFHlmprRtT' ;;
       esac
       ;;
-    issue) printf 'aBbFlmpRtT' ;;
+    issue)
+      case $action in
+        close) printf 'crR' ;;
+        reopen) printf 'cR' ;;
+        *) printf 'aBbFlmpRtT' ;;
+      esac
+      ;;
+    release) printf 'nFtR' ;;
+    discussion)
+      case $action in
+        comment) printf 'bFR' ;;
+        *) printf 'bFctlR' ;;
+      esac
+      ;;
     *) printf 'R' ;;
   esac
 }
@@ -265,8 +284,15 @@ value_letters() {
 #   api_query      the GraphQL document, or the @file that holds it
 #   api_query_file 1 when api_query names a file
 #   api_query_ambiguous 1 when the call names two query fields
-#   close_comment  1 when the call passes -c/--comment
-#   merge_text     1 when the call passes -b/--body or -t/--subject
+#   comment_text      1 when the call passes -c/--comment
+#   flag_body         1 when the call passes -b/--body
+#   flag_subject      1 when the call passes -t/--subject or -t (release title)
+#   flag_title        1 when the call passes --title
+#   flag_body_file    1 when the call passes -F/--body-file
+#   flag_notes        1 when the call passes -n/--notes
+#   flag_notes_file   1 when the call passes -F/--notes-file
+#   flag_generate_notes 1 when the call passes --generate-notes
+#   flag_notes_from_tag 1 when the call passes --notes-from-tag
 classify() {
   cmd=
   action=
@@ -279,8 +305,15 @@ classify() {
   api_query_found=0
   api_query_file=0
   api_query_ambiguous=0
-  close_comment=0
-  merge_text=0
+  comment_text=0
+  flag_body=0
+  flag_subject=0
+  flag_title=0
+  flag_body_file=0
+  flag_notes=0
+  flag_notes_file=0
+  flag_generate_notes=0
+  flag_notes_from_tag=0
   words=0
   end_of_flags=0
   while [ $# -gt 0 ]; do
@@ -342,12 +375,18 @@ classify() {
           shift
           continue
           ;;
-        -f|-F|--raw-field|--field)
+        -f|--raw-field|--field)
           [ $# -gt 0 ] || break
           api_fields=1
           case $1 in
             query=*) record_query_value "${1#query=}" ;;
           esac
+          shift
+          continue
+          ;;
+        -F)
+          [ $# -gt 0 ] || break
+          record_file_flag "$1"
           shift
           continue
           ;;
@@ -358,13 +397,19 @@ classify() {
           shift
           continue
           ;;
-        -f?*|-F?*)
+        -f?*)
           api_fields=1
           case $arg in
             -fquery=*) record_query_value "${arg#-fquery=}" ;;
             -f=query=*) record_query_value "${arg#-f=query=}" ;;
-            -Fquery=*) record_query_value "${arg#-Fquery=}" ;;
-            -F=query=*) record_query_value "${arg#-F=query=}" ;;
+          esac
+          continue
+          ;;
+        -F?*)
+          case $arg in
+            -Fquery=*) api_fields=1 ; record_query_value "${arg#-Fquery=}" ;;
+            -F=query=*) api_fields=1 ; record_query_value "${arg#-F=query=}" ;;
+            *) record_file_flag "${arg#-F}" ;;
           esac
           continue
           ;;
@@ -378,44 +423,113 @@ classify() {
           continue
           ;;
         -c?*)
-          close_comment=1
+          comment_text=1
           continue
           ;;
-        -b?*|-t?*)
-          merge_text=1
+        -b?*)
+          flag_body=1
+          continue
+          ;;
+        -t?*)
+          flag_subject=1
+          continue
+          ;;
+        -n?*)
+          flag_notes=1
           continue
           ;;
         -c|--comment)
           [ $# -gt 0 ] || break
-          close_comment=1
+          comment_text=1
           shift
           continue
           ;;
-        -b|--body|-t|--subject)
+        -b|--body)
           [ $# -gt 0 ] || break
-          merge_text=1
+          flag_body=1
           shift
+          continue
+          ;;
+        -t|--subject)
+          [ $# -gt 0 ] || break
+          flag_subject=1
+          shift
+          continue
+          ;;
+        -n|--notes)
+          [ $# -gt 0 ] || break
+          flag_notes=1
+          shift
+          continue
+          ;;
+        --title)
+          [ $# -gt 0 ] || break
+          flag_title=1
+          shift
+          continue
+          ;;
+        --body-file)
+          [ $# -gt 0 ] || break
+          flag_body_file=1
+          shift
+          continue
+          ;;
+        --notes-file)
+          [ $# -gt 0 ] || break
+          flag_notes_file=1
+          shift
+          continue
+          ;;
+        --generate-notes)
+          flag_generate_notes=1
+          continue
+          ;;
+        --notes-from-tag)
+          flag_notes_from_tag=1
           continue
           ;;
         --comment=*)
-          close_comment=1
+          comment_text=1
           continue
           ;;
-        --body=*|--subject=*)
-          merge_text=1
+        --body=*)
+          flag_body=1
+          continue
+          ;;
+        --subject=*)
+          flag_subject=1
+          continue
+          ;;
+        --title=*)
+          flag_title=1
+          continue
+          ;;
+        --body-file=*)
+          flag_body_file=1
+          continue
+          ;;
+        --notes=*)
+          flag_notes=1
+          continue
+          ;;
+        --notes-file=*)
+          flag_notes_file=1
           continue
           ;;
         # Value flags the classification does not read; their values are
         # skipped so they are not mistaken for positional words.
         -H|-p|-q)
-          [ $# -gt 0 ] || break
-          shift
+          # gh api's -p/--preview takes a value; on every other command -p is a boolean (release create's
+          # --prerelease), so its value must not be consumed.
+          if [ "$cmd" = api ] && [ $# -gt 0 ]; then
+            shift
+          fi
           continue
           ;;
         -H?*|-H=*|-p?*|-q?*)
           continue
           ;;
-        --header|--hostname|--cache|--preview|--body-file|--title|--notes|\
+        --header|--hostname|--cache|--preview|--reason|--notes-start-tag|\
 --milestone|--assignee|--label|--project|--reviewer|--base|--head|--template|--jq)
           [ $# -gt 0 ] || break
           shift
@@ -451,7 +565,7 @@ classify() {
           fi
           case $value_letter in
             # The letters classified above: read the value letter as its own flag, the rest of the cluster attached.
-            R|X|c|b|t|f|F|H|p|q)
+            R|X|c|b|t|n|f|F|H|p|q)
               set -- "-$value_letter$cluster" "$@"
               ;;
             *)
@@ -475,6 +589,28 @@ classify() {
       api_path=$arg
     fi
   done
+}
+
+# -F names an api field for gh api, the merge body file for pr merge, and the
+# release notes file for release create/edit; on any other command it is a body
+# file. The command words are already known here: gh accepts the flag only after
+# its subcommand.
+record_file_flag() {
+  case $cmd in
+    api)
+      api_fields=1
+      case $1 in
+        query=*) record_query_value "${1#query=}" ;;
+      esac
+      ;;
+    release)
+      case $action in
+        create|edit) flag_notes_file=1 ;;
+        *) flag_body_file=1 ;;
+      esac
+      ;;
+    *) flag_body_file=1 ;;
+  esac
 }
 
 # Record the GraphQL document a field flag carries; a leading @ names a file
@@ -515,13 +651,13 @@ case $cmd in
       create|new|edit|comment|review)
         is_text=1
         ;;
-      close)
-        if [ "$close_comment" -eq 1 ]; then
+      close|reopen)
+        if [ "$comment_text" -eq 1 ]; then
           is_text=1
         fi
         ;;
       merge)
-        if [ "$merge_text" -eq 1 ]; then
+        if [ "$flag_body" -eq 1 ] || [ "$flag_body_file" -eq 1 ] || [ "$flag_subject" -eq 1 ]; then
           is_text=1
         fi
         ;;
@@ -531,6 +667,36 @@ case $cmd in
     case $action in
       create|new|edit|comment)
         is_text=1
+        ;;
+      close|reopen)
+        if [ "$comment_text" -eq 1 ]; then
+          is_text=1
+        fi
+        ;;
+    esac
+    ;;
+  release)
+    case $action in
+      create|edit)
+        if [ "$flag_notes" -eq 1 ] || [ "$flag_notes_file" -eq 1 ] || [ "$flag_generate_notes" -eq 1 ] ||
+          [ "$flag_notes_from_tag" -eq 1 ] || [ "$flag_title" -eq 1 ] || [ "$flag_subject" -eq 1 ]; then
+          is_text=1
+        fi
+        ;;
+    esac
+    ;;
+  discussion)
+    case $action in
+      create|edit)
+        if [ "$flag_body" -eq 1 ] || [ "$flag_body_file" -eq 1 ] || [ "$flag_title" -eq 1 ] ||
+          [ "$flag_subject" -eq 1 ]; then
+          is_text=1
+        fi
+        ;;
+      comment)
+        if [ "$flag_body" -eq 1 ] || [ "$flag_body_file" -eq 1 ]; then
+          is_text=1
+        fi
         ;;
     esac
     ;;

@@ -12,8 +12,8 @@ reason.
 | --- | --- | --- |
 | `CHARLIEBOT_HOME` | `src/infra/home.py::_resolve_home` (the only resolver); `src/features/terminal/terminal.py` checks whether it is set | Selects the profile home; default `/home/<user>/.charliebot`. A set value must start with `/` or `~` (`files.md` section 1). |
 | `HOME` | `home.py` (cache key, `Path.home()`), every `expanduser` | Base of the default home, `~/workspace`, `~/worktrees`, `~/.ssh/config`, `~/.claude`, `~/.codex`, `~/.local/bin` and `~/.opencode/bin/opencode` |
-| `PATH` | `agent_environment.agent_environment`; `shutil.which` for `claude`, `codex`, `gemini`, `agy`, `charlie-code`, `tmux`, `sacct`, `git`, `node` | Binary resolution; rewritten once at start (section 3) |
-| `VIRTUAL_ENV`, `UV_RUN_RECURSION_DEPTH` | `agent_environment` | Removed from the process environment at start |
+| `PATH` | `agent_environment.agent_environment`; `shutil.which` for `claude`, `codex`, `gemini`, `agy`, `charlie-code`, `tmux`, `sacct`, `git`, `node` | Binary resolution; the agent environment puts the wrapper first at start (section 3) |
+| `VIRTUAL_ENV`, `UV_RUN_RECURSION_DEPTH` | `agent_environment` | Removed from the agent environment; the server process keeps them |
 | `_VFORKSPAWN_TEST_EXEC_DELAY_MS` | `src/runtime/agent_process/_vfkspawn.c:170` (the vfork stub, read at each spawn) | Regression-test hook only: a value that `strtol` reads as above 0 holds the spawn child for that many milliseconds before `execve` (`_vfkspawn.c:74-80`). No launcher sets it. The Rust spawn path does not load the stub. |
 | `CLAUDE_CONFIG_DIR` | `src/backends/claude_code/login_dirs.py::claude_config_dir` | The default Claude login directory (else `/home/<user>/.claude`) for resume lookup, usage logs and the quota panel |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` | `src/backends/claude_code/claude_launch.py::headless_claude_env`, read per call | Forwarded to headless Claude children; a host value beats the per-run-kind default. The first three also drive the declared-window logic. |
@@ -35,9 +35,12 @@ and `PYTHONUNBUFFERED=1`, which the script sets for the server process.
 | `CHARLIEBOT_RUN_TOKEN` | `src/runtime/run_token.py::load_run_token` (from `cli/common.py`) | Sent as `Authorization: Bearer <token>`; without it the CLI sends `Bearer <credentials.charliebot.access_key>` when one is set |
 | `COLUMNS`, `PYTHON_COLORS`, `NO_COLOR`, `FORCE_COLOR`, `TERM` | `src/infra/help_formatter.py` | Help text width and color |
 
-## 3. Server environment rewrite at start (`runtime/agents/src/agent_environment.rs`)
+## 3. Agent environment at start (`runtime/agents/src/agent_environment.rs`)
 
-Every agent child copies the server's environment, so `charliebot-server` rewrites it once before anything spawns:
+`charliebot-server` builds an agent environment once before anything spawns, from its own process environment
+(`agent_base_environment`). Only agent spawns receive it. The server's process environment keeps the operator's
+values, and so does every child that is not an agent run (the web terminal's tmux shell included): `gh` resolves to
+the operator's gh as the operator's stored login. The agent environment:
 
 - `VIRTUAL_ENV` and `UV_RUN_RECURSION_DEPTH` are removed.
 - `GH_TOKEN`, `GITHUB_TOKEN` and `CHARLIEBOT_GH_APP_TOKEN_CMD` are removed: a pass-through or App-not-installed
@@ -58,7 +61,7 @@ scripts start no Python (task venv-removal).
 
 ## 4. Agent child environments
 
-The pieces below are applied in order. "Inherited" means the rewritten server environment from section 3.
+The pieces below are applied in order. "Inherited" means the agent environment from section 3.
 
 ### 4.1 Common edit (`src/runtime/launch_loop.py::child_env`)
 

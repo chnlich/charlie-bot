@@ -17,9 +17,9 @@ use crate::gh_wrapper;
 use crate::transport::cgroup;
 
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
-/// GitHub credentials and the token command the server process may have inherited. The wrapper owns the App
-/// token, and the server sets the token command from the host config, so neither a stale `GH_TOKEN` nor a stale
-/// command reaches an agent.
+/// GitHub credentials and the token command the server process may carry. The wrapper owns the App token, and the
+/// server sets the token command from the host config, so neither an inherited `GH_TOKEN` nor a stale command
+/// reaches an agent. The server's own environment and its non-agent children keep both.
 const GITHUB_ENVIRONMENT_VARIABLES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", gh_wrapper::TOKEN_COMMAND_VAR];
 
 /// The server environment after removing its virtualenv activation for agent children.
@@ -70,25 +70,13 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// Replace the server's process environment with its agent environment, as `server.py:582` does, and return that
-/// environment as the typed snapshot. `main` calls this before any thread starts and before the config load. Every
-/// child process copies the process environment, so the web terminal's tmux server and the usage panel's
-/// `claude --version` probe inherit the agent environment too.
-pub fn replace_process_environment(
-  server_bin_dir: &Path,
-  gh_wrapper_dir: &Path,
-) -> anyhow::Result<AgentBaseEnvironment> {
-  let inherited = process_environment()?;
-  let agent = agent_environment(&inherited, server_bin_dir, gh_wrapper_dir)?;
-  for name in inherited.keys().filter(|name| !agent.values.contains_key(*name)) {
-    // SAFETY: `main` calls this before the runtime and the logger start, so no other thread reads the environment.
-    unsafe { env::remove_var(name) };
-  }
-  for (name, value) in &agent.values {
-    // SAFETY: as above; this is the only thread.
-    unsafe { env::set_var(name, value) };
-  }
-  Ok(agent)
+/// Build the agent environment from the server's process environment without changing that environment.
+///
+/// Only an agent spawn receives this value. The server's own environment keeps the operator's PATH and GitHub
+/// credentials, and so does every child that is not an agent run: the web terminal's tmux shell resolves `gh` to the
+/// real gh as the operator's stored login, and the usage panel's `claude --version` probe inherits the same.
+pub fn agent_base_environment(server_bin_dir: &Path, gh_wrapper_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
+  agent_environment(&process_environment()?, server_bin_dir, gh_wrapper_dir)
 }
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
@@ -349,21 +337,21 @@ mod tests {
     );
   }
 
-  const STARTUP_TEST: &str = "agent_environment::tests::startup_environment_reaches_grandchildren";
+  const STARTUP_TEST: &str = "agent_environment::tests::server_children_keep_the_operator_environment";
   /// Set only in the child process: the file the child writes the grandchild's environment to.
   const CHILD_OUTPUT_ENV: &str = "CHARLIEBOT_STARTUP_ENV_OUTPUT";
   const SERVER_BIN_DIR_ENV: &str = "CHARLIEBOT_SERVER_BIN_DIR";
 
   #[test]
-  fn startup_environment_reaches_grandchildren() {
+  fn server_children_keep_the_operator_environment() {
     match env::var_os(CHILD_OUTPUT_ENV) {
       Some(output) => startup_child(Path::new(&output)),
       None => startup_parent(),
     }
   }
 
-  /// Run this test again in a child process with the activation the server would start with, then read the
-  /// environment that the child's grandchild inherited.
+  /// Run this test again in a child process with the environment the server starts with, then read both the
+  /// environment the child's non-agent grandchild inherited and the agent environment the server builds.
   fn startup_parent() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");
@@ -376,9 +364,10 @@ mod tests {
     let status = Command::new(env::current_exe().unwrap())
       .args(["--exact", STARTUP_TEST])
       .env_clear()
-      .env("PATH", path)
+      .env("PATH", &path)
       .env("VIRTUAL_ENV", root.path().join("venv"))
       .env("UV_RUN_RECURSION_DEPTH", "1")
+      .env("GH_TOKEN", "operator-token")
       .env(SERVER_BIN_DIR_ENV, &server_bin_dir)
       .env("CHARLIEBOT_TEST_GH_WRAPPER_DIR", &gh_wrapper_dir)
       .env(CHILD_OUTPUT_ENV, &output)
@@ -386,29 +375,44 @@ mod tests {
       .unwrap();
     assert!(status.success(), "the startup child failed: {status}");
 
+    // The server's own environment and its non-agent children keep the operator's values: gh resolves to the
+    // operator's gh, and the wrapper's PATH entry and variables are absent.
     let grandchild = fs::read_to_string(&output).unwrap();
     let vars: BTreeMap<&str, &str> = grandchild.lines().filter_map(|line| line.split_once('=')).collect();
-    assert!(!vars.contains_key("VIRTUAL_ENV"));
-    assert!(!vars.contains_key("UV_RUN_RECURSION_DEPTH"));
-    let entries: Vec<&str> = vars["PATH"].split(':').collect();
+    assert_eq!(vars["PATH"], path);
+    assert_eq!(vars["VIRTUAL_ENV"], root.path().join("venv").to_str().unwrap());
+    assert_eq!(vars["UV_RUN_RECURSION_DEPTH"], "1");
+    assert_eq!(vars["GH_TOKEN"], "operator-token");
+    assert!(!vars.contains_key(gh_wrapper::WRAPPER_PATH_VAR));
+    assert!(!vars.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));
+
+    // The agent environment built from the same process environment is the wrapper one.
+    let agent = fs::read_to_string(output.with_extension("agent")).unwrap();
+    let agent_vars: BTreeMap<&str, &str> = agent.lines().filter_map(|line| line.split_once('=')).collect();
+    let entries: Vec<&str> = agent_vars["PATH"].split(':').collect();
     assert_eq!(entries[0], gh_wrapper_dir.to_str().unwrap());
     assert_eq!(entries[1], server_bin_dir.to_str().unwrap());
     assert!(entries.contains(&venv_bin.to_str().unwrap()), "the venv bin stays on PATH: {entries:?}");
-    assert_eq!(vars[gh_wrapper::WRAPPER_PATH_VAR], gh_wrapper_dir.join("gh").to_str().unwrap());
-    assert_eq!(vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
-    assert_eq!(vars["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
+    assert!(!agent_vars.contains_key("VIRTUAL_ENV"));
+    assert!(!agent_vars.contains_key("UV_RUN_RECURSION_DEPTH"));
+    assert!(!agent_vars.contains_key("GH_TOKEN"));
+    assert_eq!(agent_vars[gh_wrapper::WRAPPER_PATH_VAR], gh_wrapper_dir.join("gh").to_str().unwrap());
+    assert_eq!(agent_vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
+    assert_eq!(agent_vars["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
   }
 
-  /// The startup step as `main` runs it, then the grandchild whose environment the parent checks.
+  /// The startup step as `main` runs it, the grandchild that inherits the unchanged process environment, and the
+  /// agent values the parent checks.
   fn startup_child(output: &Path) {
     let server_bin_dir = PathBuf::from(env::var_os(SERVER_BIN_DIR_ENV).unwrap());
     let gh_wrapper_dir = PathBuf::from(env::var_os("CHARLIEBOT_TEST_GH_WRAPPER_DIR").unwrap());
 
-    let agent = replace_process_environment(&server_bin_dir, &gh_wrapper_dir).unwrap();
+    let agent = agent_base_environment(&server_bin_dir, &gh_wrapper_dir).unwrap();
 
-    assert_eq!(process_environment().unwrap(), agent.values);
     let grandchild = Command::new("/usr/bin/env").output().unwrap();
     fs::write(output, grandchild.stdout).unwrap();
+    let values: String = agent.values.iter().map(|(name, value)| format!("{name}={value}\n")).collect();
+    fs::write(output.with_extension("agent"), values).unwrap();
   }
 
   #[test]

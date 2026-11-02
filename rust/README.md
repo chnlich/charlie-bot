@@ -127,7 +127,8 @@ roots copy.
   `{}` parameters.
   *Purpose:* a rename in one crate otherwise leaves the other crate compiling, and the break shows only at run time.
 - **The process environment changes only at startup.** `runtime/agents/src/agent_environment.rs` is the one production
-  place that sets or removes a process environment variable, and it does so before any thread starts. The structure
+  module allowed to set or remove a process environment variable, and any such change runs before any thread starts.
+  The server builds its agent environment as a value rather than rewriting its own process environment. The structure
   test `no_global_state_outside_its_owner` in `crates/app/structure/tests/structure.rs` checks the rule: a production
   call to `set_var`, `remove_var`, `setenv`, `unsetenv`, `putenv` or `clearenv`, and a production `use` of one, fail
   outside that file.

@@ -476,7 +476,8 @@ struct StateParts {
   credentials: Arc<charliebot_core::hot_reload::HotReload<charliebot_core::credentials::Credentials>>,
 }
 
-/// The checkout, read once, and the process environment rewritten from it. Any error names the input it concerns.
+/// The checkout, read once, and the agent environment built from the process environment. The process environment
+/// itself keeps the operator's values. Any error names the input it concerns.
 fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
   let server_executable =
@@ -484,9 +485,8 @@ fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let server_bin_dir = server_executable
     .parent()
     .ok_or_else(|| format!("charliebot-server path has no parent: {}", server_executable.display()))?;
-  let agent_base =
-    agent_environment::replace_process_environment(server_bin_dir, &gh_wrapper::dir_under(repo_root.path()))
-      .map_err(|error| format!("{error:#}"))?;
+  let agent_base = agent_environment::agent_base_environment(server_bin_dir, &gh_wrapper::dir_under(repo_root.path()))
+    .map_err(|error| format!("{error:#}"))?;
   Ok((repo_root, agent_base))
 }
 

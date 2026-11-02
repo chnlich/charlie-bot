@@ -168,6 +168,34 @@ fn tmux_environment_filters_session_identity_and_tmux_client_state() {
   assert!(attach_env.iter().any(|(key, value)| key == OsStr::new("TERM") && value == "xterm-256color"));
 }
 
+/// The tmux shell is not an agent run: it inherits the operator's PATH, so `gh` resolves to the operator's gh, and it
+/// carries no wrapper variable or token command.
+#[test]
+fn the_terminal_shell_environment_resolves_the_operators_gh() {
+  let root = tempfile::tempdir().unwrap();
+  let operator_bin = root.path().join("operator-bin");
+  std::fs::create_dir(&operator_bin).unwrap();
+  let operator_gh = operator_bin.join("gh");
+  charliebot_shell_harness::write_executable(&operator_gh, "#!/bin/sh\n");
+  let path = format!("{}:/usr/bin:/bin", operator_bin.display());
+  let source = vec![
+    (OsString::from("PATH"), OsString::from(&path)),
+    (OsString::from("GH_TOKEN"), OsString::from("operator-token")),
+  ];
+
+  let shell_env = pty::filtered_env(source, true, false);
+
+  let vars: std::collections::HashMap<&OsStr, &OsStr> =
+    shell_env.iter().map(|(key, value)| (key.as_os_str(), value.as_os_str())).collect();
+  assert_eq!(vars[OsStr::new("PATH")], OsStr::new(&path));
+  assert_eq!(vars[OsStr::new("GH_TOKEN")], OsStr::new("operator-token"));
+  assert!(!vars.contains_key(OsStr::new(charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR)));
+  assert!(!vars.contains_key(OsStr::new(charliebot_agents::gh_wrapper::TOKEN_COMMAND_VAR)));
+  let resolved =
+    std::env::split_paths(OsStr::new(&path)).map(|dir| dir.join("gh")).find(|candidate| candidate.is_file());
+  assert_eq!(resolved.as_deref(), Some(operator_gh.as_path()));
+}
+
 #[tokio::test]
 async fn failed_tmux_session_reports_stderr_from_the_temporary_file() {
   let root = tempfile::tempdir().unwrap();

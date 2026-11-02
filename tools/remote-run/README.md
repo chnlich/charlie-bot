@@ -38,6 +38,11 @@ it was called from. In any other directory (`/tmp`, `~/scripts`, a session direc
 the current directory. Changes the command leaves behind are copied back to the original
 directory in both modes.
 
+In a git tree, the ignore filters protect the remote paths the local tree ignores, so a remote
+build output survives the next upload. A directory outside git has no ignore rules: its remote
+tree mirrors the directory after every upload, and remote-only files do not survive, so a remote
+install or build that a later run needs is rebuilt.
+
 ## Configuration
 
 Every host-specific value comes from the host, so no tracked file carries an address or a path

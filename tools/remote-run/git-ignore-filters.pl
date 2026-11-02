@@ -64,11 +64,13 @@ sub main {
   fail('usage: git-ignore-filters.pl <local tree root>') unless defined $root && -d $root;
   binmode STDIN;
   binmode STDOUT;
+  # Drain standard input before any early return: a feeder still writing would die of SIGPIPE
+  # and the sync would read the death as a failure.
+  my $remote_paths = do { local $/; my $input = <STDIN>; $input // '' };
   # A tree outside git has no ignore rules and nothing to protect.
   if (system('git -C ' . quotemeta($root) . ' rev-parse --git-dir >/dev/null 2>&1') != 0) {
     return;
   }
-  my $remote_paths = do { local $/; my $input = <STDIN>; $input // '' };
   my $input_path = spool($remote_paths);
 
   my %paths;

@@ -74,8 +74,8 @@ pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std
 }
 
 // The run event log (`events.jsonl`, `RUN_EVENTS_NAME`): one JSON value per line. This module owns the line's
-// bytes, its two decodes — the strict one, which fails a line that is not one JSON value, and the skip contract,
-// which drops such a line — and the newest-first walk of a log.
+// bytes, its two decodes and the newest-first walk of a log. The strict decode fails a line that is not one JSON
+// value; the skip contract drops such a line.
 
 /// One persisted event as its log line: compact UTF-8 JSON and a newline.
 pub fn event_line(event: &Value) -> Vec<u8> {
@@ -90,7 +90,7 @@ pub fn decode_event_line(line: &str) -> Result<Value, serde_json::Error> {
   serde_json::from_str(line)
 }
 
-/// Decode one run event line under the skip contract: a blank line and a line that is not JSON give `None`, and a
+/// Decode one run event line under the skip contract. A blank line and a line that is not JSON give `None`, and a
 /// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse. A final partial line decodes like any
 /// other line.
 pub fn parse_event_line(raw: &[u8]) -> Option<Value> {
@@ -133,7 +133,7 @@ impl fmt::Display for EventReadError {
   }
 }
 
-/// The run event log at `path` as its event values, oldest first, under the strict decode: the file reads as text
+/// The run event log at `path` as its event values, oldest first, under the strict decode. The file reads as text,
 /// and every line, a blank one included, must be one JSON value, so a bad line fails the read with that line's
 /// parse error. A missing file is `Err` with `NotFound`, so the caller decides whether that means no events.
 pub fn read_event_values(path: &Path) -> Result<Vec<Value>, EventReadError> {
@@ -461,8 +461,8 @@ impl RunFacts {
   /// One run's display state, as [`Store::run_display_state`] derives it from the history these facts fold.
   ///
   /// `withheld` answers whether the history records a `run_launch_withheld` reason for this run. Only a queued run
-  /// that no stop request settled asks it, as `runs.run_display_state` asks `withheld_reason` only on that branch;
-  /// every settled run answers from the outcome and stop-request maps, so a node's display-state pass never walks
+  /// that no stop request settled asks it, as `runs.run_display_state` asks `withheld_reason` only on that branch.
+  /// Every settled run answers from the outcome and stop-request maps, so a node's display-state pass never walks
   /// its history once per run.
   pub fn display_state(
     &self,
@@ -1784,8 +1784,8 @@ mod tests {
     assert_eq!(stats.lines_visited, forward.len() as u64);
   }
 
-  /// The strict read: a missing file is the caller's no-events decision, and a blank line or a line that is not
-  /// JSON fails the read with that line's parse error, while a value that is not an object is still a value.
+  /// The strict read: a missing file is the caller's no-events decision. A blank line or a line that is not JSON
+  /// fails the read with that line's parse error. A value that is not an object is still a value.
   #[test]
   fn read_event_values_reports_a_missing_file_and_fails_a_bad_line() {
     let directory = tempfile::tempdir().unwrap();
@@ -1803,7 +1803,7 @@ mod tests {
     assert_eq!(events, [serde_json::json!({"type": "system"}), serde_json::json!([1, 2])]);
   }
 
-  /// The skip contract: a blank line and a line that is not JSON give `None`, and a line whose bytes are not UTF-8
+  /// The skip contract: a blank line and a line that is not JSON give `None`. A line whose bytes are not UTF-8
   /// is repaired with U+FFFD before the parse.
   #[test]
   fn parse_event_line_applies_the_skip_contract_per_line() {

@@ -18,8 +18,8 @@ const APPEND_JSON: JsonStyle =
 /// the parse, so such a line can still parse. A final partial line is parsed just like any other line.
 ///
 /// One pass: the line deserializes straight into [`CompactValue`] — the reader's only event form —
-/// through the visitor in `compact`, which produces the same value a `serde_json::Value` round trip
-/// would have.
+/// through the visitor in `compact`. That visitor produces the same value a `serde_json::Value`
+/// round trip would have.
 pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
   if raw.iter().all(u8::is_ascii_whitespace) {
     return None;

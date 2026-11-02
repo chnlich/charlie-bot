@@ -1,7 +1,7 @@
-//! The chat-events file rules. The live log `data/chat_events.jsonl` and its archives are one file kind: this module
-//! owns their names, the line rules that split them, the one decoder for a line, the append of one event, and the
-//! readers that the other crates call. `find_in_log` is the first-match reader that backends use to find one value in a
-//! session's live log.
+//! The chat-events file rules. The live log `data/chat_events.jsonl` and its archives are one file kind.
+//! This module owns their names and the line rules that split them. It also owns the one decoder for a line, the
+//! append of one event, and the readers that the other crates call. `find_in_log` is the first-match reader that
+//! backends use to find one value in a session's live log.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -36,7 +36,7 @@ pub enum LineRule {
   /// `split_inclusive('\n')` over the whole file, read as strict UTF-8: each line keeps its `\n`.
   Terminated,
   /// Universal newlines over the whole file, read as strict UTF-8: `\r\n` and a lone `\r` end a line as `\n`
-  /// does, and a final line without a terminator is a line.
+  /// does. A final line without a terminator is a line.
   Universal,
 }
 
@@ -431,8 +431,8 @@ mod tests {
   }
 
   /// The store's two chat line decoders — this module's `decode_line` and the compact mmap fast path's
-  /// `parse_line_compact` — agree on every line both can read, and differ today only on bytes that are not
-  /// UTF-8: the strict decode fails them and the compact decode repairs them to U+FFFD first. A change to one
+  /// `parse_line_compact` — agree on every line both can read. They differ today only on bytes that are not
+  /// UTF-8: the strict decode fails them, and the compact decode repairs them to U+FFFD first. A change to one
   /// decoder fails here until the other follows.
   #[test]
   fn compact_and_value_line_decoders_agree_over_the_line_corpus() {

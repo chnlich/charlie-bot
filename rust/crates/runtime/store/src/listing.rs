@@ -156,7 +156,7 @@ impl Store {
 
   /// The sessions directory's entry names, from the memo when the root signature still matches.
   ///
-  /// The key is the sessions root's `(mtime_ns, size)` and nothing else: a create or delete moves the signature, so
+  /// The key is the sessions root's `(mtime_ns, size)` and nothing else. A create or delete moves the signature, so
   /// an unchanged signature proves the name list unchanged and no time bound is needed. A hit costs one stat instead
   /// of a scandir plus one `file_type` per entry, which the production copy pays about 6,000 times per listing walk.
   fn session_dir_names(
@@ -207,7 +207,7 @@ impl Store {
 
   /// The sequence controllers' row fields for a listing of `rows`.
   ///
-  /// A caller that already holds the rows asks for their fields alone; the ids a controller binds bound the walk, so
+  /// A caller that already holds the rows asks for their fields alone. The ids a controller binds bound the walk, so
   /// a controller that binds nothing costs no per-row lookup.
   pub fn sequence_listing_fields(
     &self,
@@ -336,7 +336,7 @@ impl Store {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
         // A missing or unreadable or malformed file logs at debug level and drops out of the
-        // scan, the way the metadata JSON read reports its log event and answers None.
+        // scan. The metadata JSON read reports its log event and answers None in the same way.
         Err(error) => {
           tracing::debug!(path = %path.display(), error = %error, "metadata_raw_scan_read_failed");
           continue;
@@ -710,7 +710,7 @@ mod tests {
     assert_eq!(store.directory_scans.load(Ordering::Relaxed), scans + 1, "a new directory moves the key");
   }
 
-  /// A listing's newest-first order is kept while its corpus holds, so a write that moves a row must reach the next
+  /// A listing's newest-first order is kept while its corpus holds. A write that moves a row must reach the next
   /// listing through a corpus refresh rather than through the order memo.
   #[tokio::test]
   async fn a_listing_reorders_after_a_store_write_moves_a_row() {

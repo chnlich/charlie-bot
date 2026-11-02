@@ -185,8 +185,8 @@ impl Store {
   ///
   /// The live log is read backward from byte `live_end`, the size an identity stat reported, so the walk sees the
   /// history that identity names. Each archive segment follows whole, newest first. Nothing is cached: the walk holds
-  /// one line at a time and parses only the lines whose type it keeps, so a fact read from a long history costs the
-  /// bytes back to that fact, not the history.
+  /// one line at a time and parses only the lines whose type it keeps. A fact read from a long history therefore costs
+  /// the bytes back to that fact, not the history.
   pub(crate) fn visit_chat_facts_from_end<T>(
     &self,
     session_id: &str,
@@ -328,8 +328,8 @@ impl Store {
   }
 
   /// Read all durable facts, archived segments first and the live log last, composed the way
-  /// `task_sessions.fact_history` composes it: the archived count is the total event count minus
-  /// the live event count, the archived events are the range read from 0 to that count, and
+  /// `task_sessions.fact_history` composes it. The archived count is the total event count minus
+  /// the live event count. The archived events are the range read from 0 to that count, and
   /// archive files beyond that count stay unread.
   pub fn load_all_facts(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
     let live = self.load_chat_events_sync(session_id)?;
@@ -346,8 +346,8 @@ impl Store {
   /// Read the global event-index range `[start, end)` and say whether earlier indices exist.
   ///
   /// Global indices are `archive_offset + line_in_live_file`. With a positive archive offset the live
-  /// half numbers physical lines — a blank or a malformed line consumes its index and parses to nothing,
-  /// the same inconsistency `ndjson.parse_ndjson_range`'s islice shows on the unarchived cold path. An
+  /// half numbers physical lines: a blank or a malformed line consumes its index and parses to nothing.
+  /// `ndjson.parse_ndjson_range`'s islice shows the same inconsistency on the unarchived cold path. An
   /// unarchived warm cache instead numbers its own parsed-event indices, matching the cached branch.
   pub fn load_chat_events_range(
     &self,
@@ -808,8 +808,8 @@ impl Store {
 
   /// Drop a node's parsed live events and folded facts after a node pass releases its local references.
   ///
-  /// The per-session cache entry stays in the map: an append or cold read that holds its lock keeps its exclusion, so
-  /// the next read sees every event that the file holds. The node's task state stays keyed by the log file's identity
+  /// The per-session cache entry stays in the map. An append or cold read that holds its lock keeps its exclusion,
+  /// so the next read sees every event that the file holds. The node's task state stays keyed by the log file's identity
   /// when a fold covers the whole cached list (see [`Store::seal_node_state`]). The run-facts memo keeps the current
   /// event list under its bounded identity key, so a later reload has a new key.
   pub fn evict_recovery_history(&self, session_id: &str) {
@@ -1123,7 +1123,7 @@ fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignatur
 
 /// Visit one NDJSON file's lines whose type is in `types`, newest first, from byte `end` back to the file's start.
 ///
-/// The mapped walk uses mmap and rfind, keeping its line order and early stop while letting the kernel fault the
+/// The mapped walk uses mmap and rfind, keeping its line order and early stop. It lets the kernel fault the
 /// pages it crosses instead of issuing one read per chunk.
 fn visit_file_facts_from_end<T>(
   path: &Path,
@@ -1248,7 +1248,7 @@ fn mapped_span(file_len: usize, lowest: usize, scan_end: usize) -> usize {
   page_end.min(file_len) - page_start
 }
 
-/// `Some(false)` when the `type` string that the head's first bytes serialize is not one of `types`; `None` when the
+/// `Some(false)` when the `type` string that the head's first bytes serialize is not one of `types`. `None` when the
 /// head cannot prove it (a string that runs past the head, or an escape).
 fn type_head_verdict(head: &[u8], types: &[&str]) -> Option<bool> {
   let (event_type, _) = if head.starts_with(b"{\"type\"") {
@@ -1337,7 +1337,7 @@ fn read_live_range_suffix(path: &Path, start: usize, size: usize) -> std::io::Re
 /// Split decoded log bytes on universal newlines and parse each segment.
 ///
 /// `\n` and `\r` never occur inside a UTF-8 multibyte sequence, so the byte-boundary split yields the same
-/// segments a per-character walk would; the file still must decode strictly, and the error keeps its path.
+/// segments a per-character walk would. The file still must decode strictly, and the error keeps its path.
 fn parse_universal_newline_lines(path: &Path, bytes: &[u8]) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
   std::str::from_utf8(bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   let mut lines = Vec::new();
@@ -2126,7 +2126,7 @@ mod tests {
     }
 
     /// `fact_history` composition: the archived count is the total event count minus the live
-    /// count, archive files beyond that count stay unread — one stale archive row beyond the
+    /// count. Archive files beyond that count stay unread — one stale archive row beyond the
     /// offset never reaches the facts.
     #[tokio::test]
     async fn load_all_facts_stops_reading_archives_at_the_archive_offset() {

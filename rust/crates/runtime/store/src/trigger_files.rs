@@ -210,14 +210,14 @@ impl std::error::Error for TriggerReadError {}
 
 /// The trigger file at `path` as its JSON document: the store's one decode of the raw document, for the readers
 /// that check the record's fields one by one. A missing file is `Err` with `NotFound`, so the caller decides
-/// whether that means no record, and a document that is not one JSON value is the parse error of the file.
+/// whether that means no record. A document that is not one JSON value is the parse error of the file.
 pub fn read_trigger_value(path: &Path) -> Result<Value, TriggerReadError> {
   let text = fs::read_to_string(path).map_err(TriggerReadError::Io)?;
   serde_json::from_str(&text).map_err(TriggerReadError::Json)
 }
 
 /// The trigger file at `path` as its trigger record. A missing file fails the read with the io error, and a file
-/// that does not decode into a record fails with the parse error, each under the read's or the parse's context.
+/// that does not decode into a record fails with the parse error. Each error carries the read's or the parse's context.
 pub fn read_trigger(path: &Path) -> anyhow::Result<PendingTrigger> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
@@ -375,7 +375,7 @@ mod tests {
   }
 
   /// The raw read: a missing file is `Err` with `NotFound`, and a file that is not one JSON value is the parse
-  /// error, so a reader that skips bad files decides from the error.
+  /// error. A reader that skips bad files therefore decides from the error.
   #[test]
   fn read_trigger_value_reports_a_missing_file_and_a_bad_file() {
     let root = tempfile::tempdir().unwrap();

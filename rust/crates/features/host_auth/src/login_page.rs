@@ -30,12 +30,14 @@ pub fn context(logins: &[BrowserLoginConfig], readbacks: &HashMap<String, (i32, 
 }
 
 /// `_login_rows`: one row per login: its attempt in progress, else its last ended attempt and this load's readback.
+/// A login that went live while this load's readback ran shows no readback.
 fn row(
   login: &BrowserLoginConfig,
   live: Option<AttemptSnapshot>,
   last: Option<AttemptSnapshot>,
   readback: Option<&(i32, String)>,
 ) -> anyhow::Result<Value> {
+  let readback = if live.is_some() { None } else { readback };
   Ok(json!({
     "name": login.name,
     "label": login.label,
@@ -128,6 +130,14 @@ mod tests {
     assert_eq!(login_failed["last"]["readback_exit"], Value::Null);
     assert_eq!(login_failed["last"]["readback_output"], Value::Null);
     assert_eq!(login_failed["live"], Value::Null);
+  }
+
+  #[test]
+  fn a_login_that_went_live_during_the_readback_shows_no_readback() {
+    let readback = (0, "valid\n".to_string());
+    let row = row(&login(), Some(snapshot(None)), None, Some(&readback)).expect("the row builds");
+    assert!(!row["live"].is_null(), "the attempt in progress shows");
+    assert_eq!(row["readback"], Value::Null, "a live login shows no page-load readback");
   }
 
   #[test]

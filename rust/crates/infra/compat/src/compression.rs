@@ -12,6 +12,10 @@ use flate2::write::GzEncoder;
 
 static LEVEL_ONE_BYTES_DEFLATED: AtomicU64 = AtomicU64::new(0);
 
+/// The smallest complete body worth deflating: `GZipMiddleware(minimum_size=1000)` of the transport, and the
+/// smallest body a page compresses itself.
+pub const MINIMUM_DEFLATE_BYTES: usize = 1000;
+
 /// The level-1 gzip form of *data*; deterministic for equal input, with the gzip header's mtime
 /// field zeroed.
 pub fn gzip_level_one(data: &[u8]) -> Vec<u8> {

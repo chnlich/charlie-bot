@@ -1,5 +1,5 @@
-//! The `mock-home` program: writes the synthetic session home of the improve rounds, reads a served copy back against
-//! its manifest, resets a task-tree home after a server start, and prints the data version.
+//! The `mock-home` program writes the synthetic session home of the improve rounds. It reads a served copy back
+//! against its manifest, resets a task-tree home after a server start, and prints the data version.
 //!
 //! Exit codes: 0 on success; 1 when `check` finds a mismatch, or on any error; 2 for a usage error.
 

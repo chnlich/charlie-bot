@@ -72,8 +72,8 @@ fn planned_sizes(count: usize, rng: &mut Rng) -> Vec<u64> {
   sizes
 }
 
-/// The seeded stream of a home of `sessions` sessions, after the text pools and the event-log sizes it draws first:
-/// the stream, the pools and the sizes in session order.
+/// The seeded stream of a home of `sessions` sessions, after it draws the text pools and the event-log sizes.
+/// The tuple holds the stream, the pools and the sizes in session order.
 pub(crate) fn planned_home(sessions: usize, seed: u64) -> (Rng, SyntheticText, Vec<u64>) {
   let mut rng = Rng::new(seed);
   let text = SyntheticText::new(&mut rng);

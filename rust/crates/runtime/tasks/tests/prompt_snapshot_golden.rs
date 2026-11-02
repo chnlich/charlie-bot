@@ -362,6 +362,7 @@ fn config(home: &Path) -> CharlieBotConfig {
     backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    remote_run: charliebot_core::config::RemoteRunConfig::default(),
     sections: Sections::default(),
   }
 }

@@ -15,7 +15,7 @@ checkout=$(cd -P -- "$here/../.." && pwd)
 host=${REMOTE_RUN_HOST:?the local work guard sets REMOTE_RUN_HOST, which the refusal names}
 printf 'refused: %s compiles or runs tests on this host.\n' "$tool" >&2
 printf 'Agents run that work on %s, so one run does not slow every other agent.\n' "$host" >&2
-printf 'Run the same command from this directory through %s/tools/remote-run/run.sh (Cargo: cargo-slot.sh beside it).\n' \
+printf 'Run the same command from this directory through %s/dev/remote-run/run.sh (Cargo: cargo-slot.sh beside it).\n' \
   "$checkout" >&2
 printf 'When the runner exits 86 or 87, end this run and report the blocker with the link it prints.\n' >&2
 exit 97

@@ -6,7 +6,7 @@ log. It holds the home writer fence, so no second server process serves the same
 
 ## Build
 
-Build the server through `tools/remote-run/cargo-slot.sh` from `rust/`. The build host keeps the output, so the agent host
+Build the server through `dev/remote-run/cargo-slot.sh` from `rust/`. The build host keeps the output, so the agent host
 builds nothing locally.
 
 CI (`.github/workflows/ci.yml`) runs two Rust jobs on `ubuntu-24.04`, whose glibc 2.39 matches the live host. `release-build`
@@ -59,10 +59,10 @@ adds `error`.
 
 ## Test
 
-- Run every compile and test through `tools/remote-run/`: `run.sh` for any command, `cargo-slot.sh` for Cargo.
+- Run every compile and test through `dev/remote-run/`: `run.sh` for any command, `cargo-slot.sh` for Cargo.
 - The Rust suite is `cargo test --workspace --locked` from `rust/`.
-- The frontend JavaScript tests are `node --test` from the checkout root, as CI does.
-- The agent environment on the agent host refuses the toolchains that `tools/remote-run/README.md` lists.
+- The frontend JavaScript tests are `node --test` from `web/`, as CI does.
+- The agent environment on the agent host refuses the toolchains that `dev/remote-run/README.md` lists.
 - When the runner exits 86 or 87, end the run and report the blocker with the link it prints.
 
 The Rust tests compare the YAML writer, JSON reader, boot marker, body and form handling, and html tokenizer

@@ -229,13 +229,13 @@ pub struct ServerConfig {
   pub public_url: Option<String>,
 }
 
-/// `remote_run:` section: the build host that the local work guard names and `tools/remote-run` sends runs to. A
+/// `remote_run:` section: the build host that the local work guard names and `dev/remote-run` sends runs to. A
 /// top-level section, not `server:` keys, because a live release refuses unknown `server:` keys: a host sets this
 /// section while the previous release still runs.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteRunConfig {
-  /// The ssh alias of the build host that `tools/remote-run` sends runs to. Required while the local work guard is
+  /// The ssh alias of the build host that `dev/remote-run` sends runs to. Required while the local work guard is
   /// on: a refused agent is told to run on this host, so the value must exist.
   #[serde(default)]
   pub host: Option<String>,

@@ -50,7 +50,7 @@ server:
   # default: a command that links a page on this server fails until the host sets it.
   # public_url: https://<host>.<tailnet>:18498
 
-# Remote run: the build host that the local work guard names and tools/remote-run sends runs to. A top-level
+# Remote run: the build host that the local work guard names and dev/remote-run sends runs to. A top-level
 # section, not server keys, so a host sets it while the previous release still runs. The server refuses to start
 # while the guard is on and remote_run.host is unset.
 remote_run:

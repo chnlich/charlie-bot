@@ -3,8 +3,8 @@
 The server sets the variables in this table on every agent child process. Each variable points at a script in this
 directory, and a refused run reaches the agent as the refusal text. The server's own environment, the web terminal and
 the one-shot calls carry none of them. The variables are set in `rust/crates/runtime/agents/src/local_work_guard.rs`,
-and the switch and the runner keys are `server.enable_local_work_guard`, `server.remote_run_host` and
-`server.remote_run_remote_base` in `config.yaml`.
+and the switch and the runner keys are `server.enable_local_work_guard`, `remote_run.host` and
+`remote_run.remote_base` in `config.yaml`.
 
 | Toolchain | Variables | Scripts |
 |---|---|---|
@@ -22,7 +22,7 @@ Read-only and non-build commands run as usual: the cargo subcommands `fmt`, `met
 `refuse.sh` owns the refusal text. Each script calls it with the name of the tool that was run, then exits 97; pytest
 exits 4 instead.
 
-The list of refused toolchains is in `tools/remote-run/README.md`. Keep this table in step with that list.
+The list of refused toolchains is in `dev/remote-run/README.md`. Keep this table in step with that list.
 
-The scripts in `python/` load into an interpreter by path, so they are Python modules. `tools/check-no-python.sh`
+The scripts in `python/` load into an interpreter by path, so they are Python modules. `dev/check-no-python.sh`
 exempts this directory for that reason.

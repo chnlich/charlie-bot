@@ -53,7 +53,11 @@ if [[ -n ${SSH_APPROVAL_FILE:-} && -e $SSH_APPROVAL_FILE ]]; then
   sleep 30
   exit 255
 fi
-if [[ ${SSH_HANG_TAR:-0} == 1 && $remote == *' -cf - .'* ]]; then
+if [[ ${SSH_FAIL_EVIDENCE_LISTING:-0} == 1 && $remote == *'-mindepth 1 -printf'* ]]; then
+  printf 'stub ssh: the evidence listing failed\n' >&2
+  exit 7
+fi
+if [[ ${SSH_HANG_TAR:-0} == 1 && $remote == *'tar '*'-cf -'* ]]; then
   sleep 30
 fi
 environment=()

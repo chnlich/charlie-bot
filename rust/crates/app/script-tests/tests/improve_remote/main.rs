@@ -9,7 +9,7 @@
 mod world;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -269,6 +269,86 @@ fn the_round_writes_only_the_evidence_copy_on_this_host() {
   }
   let copied = world.local_evidence().join("claude-argv.txt");
   assert!(copied.is_file(), "the round's evidence did not arrive: {:?}", world.tree(&evidence_root));
+}
+
+#[test]
+fn a_failed_evidence_copy_reports_the_copys_status_and_the_round_still_starts() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("SSH_FAIL_EVIDENCE_LISTING".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the failed copy stopped the round itself:\n{}", run.describe());
+  let message = stderr(&run);
+  assert!(
+    message.contains("the evidence copy stopped (status 7)"),
+    "the copy's own status did not reach stderr: {message}"
+  );
+}
+
+#[test]
+fn a_second_evidence_copy_leaves_complete_evidence_alone() {
+  let world = World::new();
+  let previous = world.remote_home.join("improve").join(DIRECTION).join("evidence").join("20261101T090000Z");
+  fs::create_dir_all(&previous).expect("the previous round's evidence directory");
+  fs::write(previous.join("measure.txt"), "measurement\n").expect("the previous round's evidence");
+
+  let first = world.run(&world.env());
+
+  assert_eq!(first.code, 0, "{}", first.describe());
+  let copied = world.local_evidence().join("20261101T090000Z/measure.txt");
+  assert_eq!(fs::read_to_string(&copied).expect("the evidence arrived"), "measurement\n");
+  // A second copy that transferred this file again would rewrite it, which moves its status change
+  // time. The wait keeps the two times in different seconds even on a coarse filesystem.
+  std::thread::sleep(Duration::from_secs(1));
+  let before = status_change_time(&copied);
+
+  let second = world.run(&world.env());
+
+  assert_eq!(second.code, 0, "{}", second.describe());
+  assert_eq!(
+    status_change_time(&copied),
+    before,
+    "the second copy rewrote evidence that was already complete:\n{}",
+    second.describe()
+  );
+}
+
+#[test]
+fn a_partly_copied_evidence_directory_completes_on_the_next_copy() {
+  let world = World::new();
+  let remote_round = world.remote_home.join("improve").join(DIRECTION).join("evidence").join("20261101T090000Z");
+  fs::create_dir_all(&remote_round).expect("the previous round's evidence directory");
+  for (name, contents) in
+    [("complete.txt", "complete\n"), ("partial.txt", "partial evidence\n"), ("missing.txt", "missing\n")]
+  {
+    fs::write(remote_round.join(name), contents).expect("the previous round's evidence");
+  }
+  // The state a stopped copy leaves: one file complete, one truncated, one absent.
+  let local_round = world.local_evidence().join("20261101T090000Z");
+  fs::create_dir_all(&local_round).expect("the partly copied directory");
+  fs::write(local_round.join("complete.txt"), "complete\n").expect("the complete file");
+  fs::write(local_round.join("partial.txt"), "part").expect("the truncated file");
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for (name, contents) in
+    [("complete.txt", "complete\n"), ("partial.txt", "partial evidence\n"), ("missing.txt", "missing\n")]
+  {
+    assert_eq!(
+      fs::read_to_string(local_round.join(name)).unwrap_or_else(|error| panic!("{name}: {error}")),
+      contents,
+      "the next copy did not complete {name}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+/// The time a file's status last changed, as `(seconds, nanoseconds)`.
+fn status_change_time(path: &std::path::Path) -> (i64, i64) {
+  let metadata = fs::metadata(path).expect("the local evidence's metadata");
+  (metadata.ctime(), metadata.ctime_nsec())
 }
 
 #[test]

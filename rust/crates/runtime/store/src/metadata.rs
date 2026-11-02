@@ -259,6 +259,12 @@ pub struct ColdReadSpec {
   pub trigger: String,
 }
 
+/// Whether a flag is off. A task record leaves an off `context_work` out, so a task without context work keeps its
+/// canonical text, and the spec hash it names, as they were before the flag existed.
+fn is_false(value: &bool) -> bool {
+  !*value
+}
+
 /// Task body carried by a v2 session.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -277,6 +283,9 @@ pub struct TaskSpec {
   pub task_type: Option<TaskType>,
   #[serde(default)]
   pub keep_worktree: bool,
+  /// The delegation's context-work declaration. The route resolves a true record's backend from `backends.strong`.
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub context_work: bool,
   #[serde(default)]
   pub cold_read: Option<ColdReadSpec>,
   #[serde(default, skip_serializing_if = "TaskApprover::is_user")]
@@ -306,6 +315,8 @@ impl<'de> Deserialize<'de> for TaskSpec {
       #[serde(default)]
       keep_worktree: bool,
       #[serde(default)]
+      context_work: bool,
+      #[serde(default)]
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
@@ -326,6 +337,7 @@ impl<'de> Deserialize<'de> for TaskSpec {
       base_branch: fields.base_branch,
       task_type: fields.task_type,
       keep_worktree: fields.keep_worktree,
+      context_work: fields.context_work,
       cold_read: fields.cold_read,
       approver: fields.approver,
     })

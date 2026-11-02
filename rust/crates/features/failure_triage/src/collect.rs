@@ -255,10 +255,11 @@ fn collect_runs(options: &ScanOptions, groups: &mut BTreeMap<String, Group>) -> 
       if !failed {
         continue;
       }
-      let (error_texts, terminal_reason) = read_run_events(&run_dir.join(EVENTS_LOG_NAME))?;
+      let events = read_run_events(&run_dir.join(EVENTS_LOG_NAME))?;
       let stderr = read_tail(&run_dir.join(STDERR_LOG_NAME), STDERR_TAIL_BYTES)?;
-      let error_refs: Vec<&str> = error_texts.iter().map(String::as_str).collect();
-      let cause = extract_run_cause(&error_refs, &stderr, terminal_reason.as_deref());
+      let error_refs: Vec<&str> = events.errors.iter().map(String::as_str).collect();
+      let cause =
+        extract_run_cause(&error_refs, events.result_error.as_deref(), &stderr, events.terminal_reason.as_deref());
       let signature = run_signature(&record.kind, record.exit_code, &record.backend, &cause);
       let (cause_line, no_cause, anchor) = match &cause {
         ExtractedCause::Cause { line, anchor } => (normalize(line), None, anchor.clone()),
@@ -304,37 +305,61 @@ fn load_session_facts(path: &Path) -> Result<SessionFacts> {
   Ok(facts)
 }
 
-/// A run's `error` contents in file order and the `terminal_reason` its newest `result` event carries. The log is
-/// walked newest first and the walk stops after [`EVENT_LIMIT`] error events, so a long log costs no more than that.
-fn read_run_events(path: &Path) -> Result<(Vec<String>, Option<String>)> {
-  let mut errors = Vec::new();
-  let mut terminal_reason = None;
+/// One run's cause material from its `events.jsonl`.
+#[derive(Debug, Default)]
+struct RunEvents {
+  /// The `error` contents in file order.
+  errors: Vec<String>,
+  /// The error text the newest `result` event reports, when that event reports an error with text.
+  result_error: Option<String>,
+  /// The `terminal_reason` of the newest `result` event that carries one.
+  terminal_reason: Option<String>,
+}
+
+/// A run's events from its `events.jsonl`. The log is walked newest first and the walk stops after [`EVENT_LIMIT`]
+/// error events, so a long log costs no more than that.
+fn read_run_events(path: &Path) -> Result<RunEvents> {
+  let mut run = RunEvents::default();
+  let mut newest_result_seen = false;
   let mut events = run_records::NewestFirstEvents::open(path, &[event_types::ERROR, event_types::RESULT])?;
   for event in events.by_ref() {
     match event.get("type").and_then(serde_json::Value::as_str) {
       Some(event_types::ERROR) => {
         if let Some(content) = event.get("content").and_then(serde_json::Value::as_str) {
-          errors.push(content.to_string());
+          run.errors.push(content.to_string());
         }
-        if errors.len() >= EVENT_LIMIT {
+        if run.errors.len() >= EVENT_LIMIT {
           break;
         }
       }
       Some(event_types::RESULT) => {
-        // The walk is newest first, so the first result that carries a reason is the newest one, as the inventory's
-        // file-order loop leaves the last non-empty reason in place.
-        if terminal_reason.is_none()
+        // The walk is newest first, so the first result event is the run's newest; only its error text is read.
+        if !newest_result_seen {
+          newest_result_seen = true;
+          run.result_error = reported_error(&event);
+        }
+        // The first result that carries a reason is the newest one, as the inventory's file-order loop leaves the last
+        // non-empty reason in place.
+        if run.terminal_reason.is_none()
           && let Some(reason) = event.get("terminal_reason").and_then(serde_json::Value::as_str)
           && !reason.is_empty()
         {
-          terminal_reason = Some(reason.to_string());
+          run.terminal_reason = Some(reason.to_string());
         }
       }
       _ => {}
     }
   }
-  errors.reverse();
-  Ok((errors, terminal_reason))
+  run.errors.reverse();
+  Ok(run)
+}
+
+/// The text a `result` event reports as its error: its `result` text when `is_error` is true and the text is not empty.
+fn reported_error(event: &serde_json::Value) -> Option<String> {
+  if event.get("is_error").and_then(serde_json::Value::as_bool) != Some(true) {
+    return None;
+  }
+  event.get("result").and_then(serde_json::Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)
 }
 
 /// The last `max_bytes` of a file as text. A missing file reads as empty.
@@ -615,17 +640,81 @@ mod tests {
       ),
     )
     .unwrap();
-    let (errors, terminal_reason) = read_run_events(&path).unwrap();
-    assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(terminal_reason.as_deref(), Some("new_reason"));
+    let events = read_run_events(&path).unwrap();
+    assert!(events.errors.is_empty(), "{:?}", events.errors);
+    assert_eq!(events.terminal_reason.as_deref(), Some("new_reason"));
 
     fs::write(
       &path,
       concat!(r#"{"type":"result","terminal_reason":"older_reason"}"#, "\n", r#"{"type":"result"}"#, "\n",),
     )
     .unwrap();
-    let (_, terminal_reason) = read_run_events(&path).unwrap();
-    assert_eq!(terminal_reason.as_deref(), Some("older_reason"));
+    let events = read_run_events(&path).unwrap();
+    assert_eq!(events.terminal_reason.as_deref(), Some("older_reason"));
+  }
+
+  #[test]
+  fn the_newest_result_event_supplies_its_error_text_only_when_it_reports_an_error() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(EVENTS_LOG_NAME);
+    fs::write(
+      &path,
+      concat!(
+        r#"{"type":"result","is_error":true,"result":"older error"}"#,
+        "\n",
+        r#"{"type":"result","is_error":false,"result":"not an error"}"#,
+        "\n",
+      ),
+    )
+    .unwrap();
+    assert_eq!(read_run_events(&path).unwrap().result_error, None);
+
+    fs::write(
+      &path,
+      concat!(
+        r#"{"type":"result","is_error":false,"result":"not an error"}"#,
+        "\n",
+        r#"{"type":"result","is_error":true,"result":"newest error"}"#,
+        "\n",
+      ),
+    )
+    .unwrap();
+    assert_eq!(read_run_events(&path).unwrap().result_error.as_deref(), Some("newest error"));
+
+    fs::write(&path, concat!(r#"{"type":"result","is_error":true}"#, "\n")).unwrap();
+    assert_eq!(read_run_events(&path).unwrap().result_error, None);
+  }
+
+  #[test]
+  fn a_failed_run_is_signed_by_its_result_error_not_the_backend_notice() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let log_dir = root.path().join("logs");
+    fs::create_dir_all(&log_dir).unwrap();
+    let notice = r#"{"type":"error","content":"[claude-code:unrecognized_model] {\"model\":\"deepseek-flash\"}"}"#;
+    let result = concat!(
+      r#"{"type":"result","is_error":true,"api_error_status":402,"terminal_reason":"api_error","#,
+      r#""result":"API Error: 402 litellm.BadRequestError: OpenAIException - Insufficient Balance "#,
+      r#"(request_id: 0a401b2c-3d4e-4f50-8a61-7b8c9d0e1f2a)\n\nLiteLLM: model group 'deepseek-flash' failed "#,
+      r#"with the error above. No fallback was attempted."}"#,
+    );
+    write_run(
+      &home,
+      "session",
+      "run-a",
+      r#"{"id":"run-a","kind":"work","exit_code":1,"backend":"claude-code-deepseek-flash"}"#,
+      &format!("{notice}\n{result}\n"),
+      "",
+      "",
+    );
+    let collected = collect(&options(&home, &log_dir)).unwrap();
+    assert_eq!(collected.len(), 1, "{collected:?}");
+    assert_eq!(
+      collected[0].signature,
+      "run:work:1:API Error: <n> litellm.BadRequestError: OpenAIException - Insufficient Balance \
+       (request_id: <uuid>) LiteLLM: model group 'deepseek-flash' failed with the error above. \
+       No fallback was attempted."
+    );
   }
 
   #[test]

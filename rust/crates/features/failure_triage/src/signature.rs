@@ -1,8 +1,10 @@
 //! Run cause lines: cleaning, the ordered cause patterns, normalization, the no-cause shapes and the signature keys.
 //!
-//! A run's record names its error material in three places: the `error` events of its `events.jsonl`, the end of its
+//! A run's record names its error material in four places, tried in this order: the error text of its newest `result`
+//! event when that event reports an error, the `error` events of its `events.jsonl` (newest first), the end of its
 //! `agent.stderr.log`, and the `terminal_reason` of its `result` event. Extraction picks the first cause the ordered
-//! `PATTERNS` list in this file finds. A record that fits one of the closed no-cause shapes has no cause to judge.
+//! `PATTERNS` list in this file finds across those texts. A record that fits one of the closed no-cause shapes has no
+//! cause to judge.
 
 use std::sync::LazyLock;
 
@@ -328,15 +330,24 @@ fn containing_line(text: &str, start: usize, end: usize) -> &str {
   text[line_start..line_end].trim()
 }
 
-/// The cause of one run, from its error-event contents in file order, its stderr tail and its terminal reason.
-pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Option<&str>) -> ExtractedCause {
+/// The cause of one run, from the error text its newest result event reports, its error-event contents in file order,
+/// its stderr tail and its terminal reason. The result text is the first candidate, then the error events newest first,
+/// then the stderr tail. When no candidate matches a pattern, the result text names the cause if there is one, else the
+/// newest error event does, else the stderr tail does, and only then the terminal reason.
+pub fn extract_run_cause(
+  error_texts: &[&str],
+  result_error: Option<&str>,
+  stderr: &str,
+  terminal_reason: Option<&str>,
+) -> ExtractedCause {
   let error_materials: Vec<String> = error_texts
     .iter()
     .map(|text| clean(text))
     .filter(|text| !text.is_empty())
     .filter_map(|text| cause_material(&text))
     .collect();
-  for text in error_materials.iter().rev() {
+  let result_material = result_error.map(clean).filter(|text| !text.is_empty()).and_then(|text| cause_material(&text));
+  for text in result_material.iter().chain(error_materials.iter().rev()) {
     if let Some(line) = match_cause(text) {
       return ExtractedCause::Cause { line, anchor: anchor(text) };
     }
@@ -348,13 +359,14 @@ pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Op
   {
     return ExtractedCause::Cause { line, anchor: anchor(&stderr_material) };
   }
-  let mut combined = error_texts.join("\n");
-  combined.push('\n');
-  combined.push_str(stderr);
+  let mut parts: Vec<&str> = error_texts.to_vec();
+  parts.extend(result_error);
+  parts.push(stderr);
+  let combined = parts.join("\n");
   if banner_only(&combined) {
     return ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, anchor: anchor(combined.trim()) };
   }
-  if let Some(text) = error_materials.last() {
+  if let Some(text) = result_material.as_ref().or(error_materials.last()) {
     return ExtractedCause::Cause { line: text.clone(), anchor: anchor(text) };
   }
   if !stderr_material.is_empty() {
@@ -367,7 +379,7 @@ pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Op
     }
     return ExtractedCause::NoCause { shape: NoCauseShape::TerminalReason, anchor: anchor(&line) };
   }
-  if !error_texts.is_empty() || !stderr.is_empty() {
+  if !error_texts.is_empty() || result_error.is_some() || !stderr.is_empty() {
     return ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() };
   }
   ExtractedCause::NoCause { shape: NoCauseShape::ExitCodeOnly, anchor: String::new() }
@@ -405,10 +417,9 @@ mod tests {
 
   #[test]
   fn the_two_improve_ux_exit_five_texts_share_one_signature_and_keep_a_cause() {
-    let first =
-      extract_run_cause(&["improve runner: the previous round still runs: unit improve-ux.scope exists"], "", None);
-    let second =
-      extract_run_cause(&["improve runner: the previous round still runs: unit improve-ux.scope exists"], "", None);
+    let text = "improve runner: the previous round still runs: unit improve-ux.scope exists";
+    let first = extract_run_cause(&[text], None, "", None);
+    let second = extract_run_cause(&[text], None, "", None);
     assert_eq!(first, second);
     assert_eq!(
       run_signature("work", Some(5), "synthetic-backend", &first),
@@ -422,7 +433,7 @@ mod tests {
     let info = "timestamp=2026-10-18T09:05:08.980Z level=INFO run=568bf1ce message=stream providerID=opencode \
                 modelID=deepseek-v4.1-flash-free session.id=ses_eb1cc31f3ffez6qkkXU1c8k14m small=false";
     let failure = "OpenCode backend failed: OpenCode SSE stream carried no session progress";
-    let cause = extract_run_cause(&[failure, info], "", None);
+    let cause = extract_run_cause(&[failure, info], None, "", None);
     assert_eq!(cause, ExtractedCause::Cause { line: failure.to_string(), anchor: failure.to_string() });
     assert_eq!(run_signature("review", Some(-15), "synthetic-backend", &cause), format!("run:review:-15:{failure}"));
   }
@@ -431,6 +442,7 @@ mod tests {
   fn a_missing_yaml_frontmatter_skill_load_error_keeps_its_own_signature() {
     let cause = extract_run_cause(
       &[],
+      None,
       "Reading additional input from stdin...\n\
        2026-10-19T06:09:24.154864Z ERROR codex_core::session::session: failed to load skill \
        /home/synthetic/.charliebot/skills/zhihu-colony-article/SKILL.md: missing YAML frontmatter delimited by ---",
@@ -444,14 +456,14 @@ mod tests {
 
   #[test]
   fn the_four_no_cause_shapes_are_closed_and_distinct() {
-    let empty = extract_run_cause(&["\u{1b}[0m   "], "", None);
+    let empty = extract_run_cause(&["\u{1b}[0m   "], None, "", None);
     assert_eq!(empty, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
-    let whitespace = extract_run_cause(&["   \n\t"], "", None);
+    let whitespace = extract_run_cause(&["   \n\t"], None, "", None);
     assert_eq!(whitespace, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
-    let whitespace_stderr = extract_run_cause(&[], "  \n ", None);
+    let whitespace_stderr = extract_run_cause(&[], None, "  \n ", None);
     assert_eq!(whitespace_stderr, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
 
-    let banner = extract_run_cause(&["Provider List: https://docs.litellm.ai/docs/providers"], "", None);
+    let banner = extract_run_cause(&["Provider List: https://docs.litellm.ai/docs/providers"], None, "", None);
     assert_eq!(
       banner,
       ExtractedCause::NoCause {
@@ -460,13 +472,13 @@ mod tests {
       }
     );
 
-    let terminal = extract_run_cause(&[], "", Some("api_error"));
+    let terminal = extract_run_cause(&[], None, "", Some("api_error"));
     assert_eq!(
       terminal,
       ExtractedCause::NoCause { shape: NoCauseShape::TerminalReason, anchor: "terminal_reason=api_error".to_string() }
     );
 
-    let exit = extract_run_cause(&[], "", None);
+    let exit = extract_run_cause(&[], None, "", None);
     assert_eq!(exit, ExtractedCause::NoCause { shape: NoCauseShape::ExitCodeOnly, anchor: String::new() });
 
     for (cause, shape) in [
@@ -485,53 +497,78 @@ mod tests {
     let banner = "\u{1b}[1;31mProvider List: https://docs.litellm.ai/docs/providers\u{1b}[0m\n\
                   \u{1b}[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\u{1b}[0m\n\
                   \u{1b}[1;31mLiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.\u{1b}[0m";
-    let cause = extract_run_cause(&[banner], "", None);
+    let cause = extract_run_cause(&[banner], None, "", None);
     assert_eq!(cause, ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, anchor: anchor(banner.trim()) });
   }
 
   #[test]
   fn a_cut_short_banner_line_is_no_cause() {
     let text = "lm.ai/docs/providers\n\u{1b}[1;31mProvider List: https://docs.litellm.ai/docs/providers\u{1b}[0m";
-    let cause = extract_run_cause(&[text], "", None);
+    let cause = extract_run_cause(&[text], None, "", None);
     assert!(matches!(cause, ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, .. }), "{cause:?}");
   }
 
   #[test]
   fn a_single_error_word_takes_its_whole_line() {
     let cause =
-      extract_run_cause(&["starting\nError: No deferred tool marker found in the transcript\nrest"], "", None);
+      extract_run_cause(&["starting\nError: No deferred tool marker found in the transcript\nrest"], None, "", None);
     let ExtractedCause::Cause { line, .. } = cause else { panic!("{cause:?}") };
     assert_eq!(line, "Error: No deferred tool marker found in the transcript");
   }
 
   #[test]
   fn a_word_at_the_end_of_a_single_line_text_takes_that_line() {
-    let extracted = extract_run_cause(&["the run failed"], "", None);
+    let extracted = extract_run_cause(&["the run failed"], None, "", None);
     let ExtractedCause::Cause { line, .. } = extracted else { panic!("{extracted:?}") };
     assert_eq!(line, "the run failed");
   }
 
   #[test]
   fn a_word_that_merely_contains_oom_is_not_an_oom_kill() {
-    let extracted = extract_run_cause(&["the room is out of scope"], "", None);
+    let extracted = extract_run_cause(&["the room is out of scope"], None, "", None);
     assert_eq!(extracted, cause("the room is out of scope"));
   }
 
   #[test]
   fn other_text_is_a_cause_and_a_terminal_reason_with_a_status_is_not_no_cause() {
-    let other = extract_run_cause(&["something unexpected happened"], "", None);
+    let other = extract_run_cause(&["something unexpected happened"], None, "", None);
     assert_eq!(other, cause("something unexpected happened"));
-    let status = extract_run_cause(&[], "", Some("api_error status=503"));
+    let status = extract_run_cause(&[], None, "", Some("api_error status=503"));
     assert!(matches!(status, ExtractedCause::Cause { .. }));
   }
 
   #[test]
   fn a_request_id_that_holds_a_status_digit_run_names_no_cause() {
     let text = "upstream call failed for request 0a401b2c-3d4e-4f50-8a61-7b8c9d0e1f2a";
-    let cause = extract_run_cause(&[text], "", None);
+    let cause = extract_run_cause(&[text], None, "", None);
     assert_eq!(
       run_signature("work", Some(1), "synthetic-backend", &cause),
       "run:work:1:upstream call failed for request <uuid>"
+    );
+  }
+
+  /// A synthetic result error in the shape a LiteLLM-routed backend reports. The request id is its only per-request
+  /// value.
+  fn payment_error(request_id: &str) -> String {
+    format!(
+      "API Error: 402 litellm.BadRequestError: OpenAIException - Insufficient Balance (request_id: {request_id})\n\n\
+       LiteLLM: model group 'deepseek-flash' failed with the error above. No fallback was attempted."
+    )
+  }
+
+  #[test]
+  fn result_errors_that_differ_only_in_request_id_share_one_signature() {
+    // The first id's hex digits hold `401`, which must not read as an auth failure.
+    let first = payment_error("0a401b2c-3d4e-4f50-8a61-7b8c9d0e1f2a");
+    let second = payment_error("9c7d6e5f-4a3b-4c2d-8e1f-0a9b8c7d6e5f");
+    let first = run_signature("work", Some(1), "synthetic-backend", &extract_run_cause(&[], Some(&first), "", None));
+    let second = run_signature("work", Some(1), "synthetic-backend", &extract_run_cause(&[], Some(&second), "", None));
+    assert_eq!(first, second);
+    assert_eq!(
+      first,
+      "run:work:1:API Error: <n> litellm.BadRequestError: OpenAIException - Insufficient Balance \
+       (request_id: <uuid>) LiteLLM: model group 'deepseek-flash' failed with the error above. \
+       No fallback was attempted."
     );
   }
 

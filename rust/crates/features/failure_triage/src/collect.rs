@@ -315,7 +315,12 @@ fn read_run_events(path: &Path) -> Result<(Vec<String>, Option<String>)> {
         }
       }
       Some(event_types::RESULT) => {
-        if let Some(reason) = event.get("terminal_reason").and_then(serde_json::Value::as_str) {
+        // The walk is newest first, so the first result that carries a reason is the newest one, as the inventory's
+        // file-order loop leaves the last non-empty reason in place.
+        if terminal_reason.is_none()
+          && let Some(reason) = event.get("terminal_reason").and_then(serde_json::Value::as_str)
+          && !reason.is_empty()
+        {
           terminal_reason = Some(reason.to_string());
         }
       }
@@ -578,6 +583,35 @@ mod tests {
     assert_eq!(collected[0].count, 6);
     assert_eq!(collected[0].examples.len(), 5);
     assert!(collected[0].cause_line.contains("improve-ux.scope"));
+  }
+
+  #[test]
+  fn the_newest_result_event_supplies_the_terminal_reason() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(EVENTS_LOG_NAME);
+    fs::write(
+      &path,
+      concat!(
+        r#"{"type":"result","terminal_reason":"old_reason"}"#,
+        "\n",
+        r#"{"type":"result"}"#,
+        "\n",
+        r#"{"type":"result","terminal_reason":"new_reason"}"#,
+        "\n",
+      ),
+    )
+    .unwrap();
+    let (errors, terminal_reason) = read_run_events(&path).unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(terminal_reason.as_deref(), Some("new_reason"));
+
+    fs::write(
+      &path,
+      concat!(r#"{"type":"result","terminal_reason":"older_reason"}"#, "\n", r#"{"type":"result"}"#, "\n",),
+    )
+    .unwrap();
+    let (_, terminal_reason) = read_run_events(&path).unwrap();
+    assert_eq!(terminal_reason.as_deref(), Some("older_reason"));
   }
 
   #[test]

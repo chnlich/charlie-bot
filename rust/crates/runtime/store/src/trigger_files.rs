@@ -245,6 +245,13 @@ pub enum TriggerStatus {
   Cancelled,
 }
 
+/// The `kind` tags of the watched-target variants. The request validator and the CLI build the same tags from these.
+///
+/// A `WatchTarget` variant repeats its tag in `serde(rename)`, because that attribute takes a string literal.
+pub const LOCAL_PID_KIND: &str = "local_pid";
+pub const REMOTE_PID_KIND: &str = "remote_pid";
+pub const SLURM_JOB_KIND: &str = "slurm_job";
+
 /// A tagged watched target. The discriminator and field order match Python's `WatchTarget` models.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind")]

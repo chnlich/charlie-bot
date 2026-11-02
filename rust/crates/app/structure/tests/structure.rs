@@ -936,6 +936,21 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::sidebar_state::TASK_TREE_ACTIVITY`.",
   },
+  OwnerRow {
+    name: "local_pid",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::trigger_files::LOCAL_PID_KIND`.",
+  },
+  OwnerRow {
+    name: "remote_pid",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::trigger_files::REMOTE_PID_KIND`.",
+  },
+  OwnerRow {
+    name: "slurm_job",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::trigger_files::SLURM_JOB_KIND`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

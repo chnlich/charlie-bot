@@ -18,6 +18,7 @@ use charliebot_cli_common::resolve;
 use charliebot_core::config;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
+use charliebot_store::trigger_files::{LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND};
 use charliebot_store::{layout, trigger_files};
 use charliebot_triggers::triggers;
 use clap::{Arg, ArgMatches, Command};
@@ -41,10 +42,6 @@ const EXIT_SSH_FAILED: i32 = 3;
 const LAUNCH_RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
-const LOCAL_PID: &str = "local_pid";
-const REMOTE_PID: &str = "remote_pid";
-const SLURM_JOB: &str = "slurm_job";
-
 /// One `--watch` target, shaped as the Python parser's dict: the key order here is the order on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum WatchSpec {
@@ -56,10 +53,12 @@ enum WatchSpec {
 impl WatchSpec {
   fn to_json(&self) -> Value {
     match self {
-      WatchSpec::LocalPid { pid } => json!({ "kind": LOCAL_PID, "pid": pid }),
-      WatchSpec::RemotePid { host, pid } => json!({ "kind": REMOTE_PID, "host": host, "pid": pid }),
-      WatchSpec::SlurmJob { host: None, job_id } => json!({ "kind": SLURM_JOB, "job_id": job_id }),
-      WatchSpec::SlurmJob { host: Some(host), job_id } => json!({ "kind": SLURM_JOB, "host": host, "job_id": job_id }),
+      WatchSpec::LocalPid { pid } => json!({ "kind": LOCAL_PID_KIND, "pid": pid }),
+      WatchSpec::RemotePid { host, pid } => json!({ "kind": REMOTE_PID_KIND, "host": host, "pid": pid }),
+      WatchSpec::SlurmJob { host: None, job_id } => json!({ "kind": SLURM_JOB_KIND, "job_id": job_id }),
+      WatchSpec::SlurmJob { host: Some(host), job_id } => {
+        json!({ "kind": SLURM_JOB_KIND, "host": host, "job_id": job_id })
+      }
     }
   }
 
@@ -67,9 +66,9 @@ impl WatchSpec {
   /// host matches only a stored target whose host is null.
   fn matches_stored(&self, stored: &Value) -> bool {
     let (kind, pid, job_id, host) = match self {
-      WatchSpec::LocalPid { pid } => (LOCAL_PID, Some(*pid), None, None),
-      WatchSpec::RemotePid { host, pid } => (REMOTE_PID, Some(*pid), None, Some(host.as_str())),
-      WatchSpec::SlurmJob { host, job_id } => (SLURM_JOB, None, Some(*job_id), host.as_deref()),
+      WatchSpec::LocalPid { pid } => (LOCAL_PID_KIND, Some(*pid), None, None),
+      WatchSpec::RemotePid { host, pid } => (REMOTE_PID_KIND, Some(*pid), None, Some(host.as_str())),
+      WatchSpec::SlurmJob { host, job_id } => (SLURM_JOB_KIND, None, Some(*job_id), host.as_deref()),
     };
     if stored.get("kind").and_then(Value::as_str) != Some(kind) {
       return false;
@@ -373,9 +372,9 @@ fn kill_started(launch: &Launch) -> Result<(), CliExit> {
 /// The `watch_targets` entry the POST carries: the target shape plus the two paths its wake reads.
 fn launch_target(launch: &Launch) -> Value {
   match &launch.host {
-    None => json!({ "kind": LOCAL_PID, "pid": launch.pid, "exit_file": launch.exit_file, "log": launch.log }),
+    None => json!({ "kind": LOCAL_PID_KIND, "pid": launch.pid, "exit_file": launch.exit_file, "log": launch.log }),
     Some(host) => {
-      json!({ "kind": REMOTE_PID, "host": host, "pid": launch.pid, "exit_file": launch.exit_file, "log": launch.log })
+      json!({ "kind": REMOTE_PID_KIND, "host": host, "pid": launch.pid, "exit_file": launch.exit_file, "log": launch.log })
     }
   }
 }

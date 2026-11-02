@@ -221,9 +221,6 @@ listed here:
 - `GET /` renders the context of a home without sessions. The session sidebar, the redirect to the
   first session and the `?session=` bootstrap port with the sessions stage. Until then, a home whose
   `sessions/` directory holds anything answers 500 rather than render a sidebar that omits them.
-- WebSocket upgrades on `/ws/sessions/{id}`, `/ws/terminal` and `/ws/voice/{id}` run the `token`
-  check, but the streams are not ported, so every upgrade answers 403. An authorized one also logs
-  `websocket_route_not_ported`.
 - `GET /api/sessions/{session_id}/effective-prompt` leaves out the reply segments that the web, Slack and Discord
   turn contributions add to a manager run, because those contributions do not yet render their segments. The
   preview of a manager session with one of those origins differs from the Python server until they do.
@@ -231,7 +228,7 @@ listed here:
   decoded bytes match; the compressed bytes and their `content-length` differ.
 - Logs use the `logline` grammar, with UTC time and a source-location column. The Python server renders structlog's
   console format, with local time and no location column. Event names and fields match. The Rust server adds
-  `websocket_route_not_ported`, `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
+  `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
   `crates/app/server/src/main.rs`.
 - YAML loads as YAML 1.2 (serde_yaml), and the Python server loads YAML 1.1 (PyYAML). Unquoted `yes`,
   `no`, `on` and `off` are strings here and booleans there.

@@ -97,14 +97,15 @@ const NAMESPACE: &str = "improve";
 pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   let mut command = with_infer_long_args(ImproveCli::command());
   let argv = std::iter::once(OsString::from(format!("charliebot {NAMESPACE}"))).chain(args.iter().cloned());
-  let matches = match command.clone().try_get_matches_from(argv) {
+  let matches = match command.try_get_matches_from_mut(argv) {
     Ok(matches) => matches,
     Err(error) => error.exit(),
   };
   let cli = ImproveCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   match cli.verb {
     ImproveVerb::Start(start) => {
-      args::validate_repo_path(&mut command, &start.repo);
+      let start_command = command.find_subcommand_mut("start").expect("the start verb is declared");
+      args::validate_repo_path(start_command, &start.repo);
       start_loop(&start)
     }
     ImproveVerb::Stop(stop) => stop_loop(&stop),

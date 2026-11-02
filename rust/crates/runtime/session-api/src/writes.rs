@@ -14,7 +14,7 @@ use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::metadata::RoundRating;
+use charliebot_store::metadata::{HAS_UNREAD, RoundRating};
 use charliebot_store::{Store, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
 use serde_json::{Map, Value, json};
@@ -93,7 +93,7 @@ async fn mark_session_read(
   };
   match features.store.mark_read(&session_id).await {
     Ok(Some(_)) => match completion.recheck_after_user_view(&session_id).await {
-      Ok(()) => responses::fast_json(StatusCode::OK, &json!({"session_id": session_id, "has_unread": false})),
+      Ok(()) => responses::fast_json(StatusCode::OK, &json!({"session_id": session_id, (HAS_UNREAD): false})),
       Err(error) => task_http_error(error),
     },
     Ok(None) => session_not_found(),

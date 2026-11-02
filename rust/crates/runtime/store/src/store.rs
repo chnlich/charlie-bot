@@ -24,7 +24,8 @@ use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
-  CC_SESSION_STARTED_AT, MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime, WORK_STATE,
+  CC_SESSION_STARTED_AT, HAS_UNREAD, MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime,
+  WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1082,7 +1083,7 @@ impl Store {
     };
     let Some(meta) = meta else { return Ok(None) };
     let mut fields = Map::new();
-    fields.insert("has_unread".to_string(), Value::Bool(false));
+    fields.insert(HAS_UNREAD.to_string(), Value::Bool(false));
     self.broadcast_sidebar(session_id, charliebot_core::event_types::UNREAD_CHANGED, fields).await?;
     Ok(Some(meta))
   }
@@ -1199,7 +1200,7 @@ impl Store {
     };
     let Some(meta) = meta else { return Ok(None) };
     let mut fields = Map::new();
-    fields.insert("has_unread".to_string(), Value::Bool(true));
+    fields.insert(HAS_UNREAD.to_string(), Value::Bool(true));
     self.broadcast_sidebar(session_id, charliebot_core::event_types::UNREAD_CHANGED, fields).await?;
     Ok(Some(meta))
   }
@@ -1251,7 +1252,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "id",
         "name",
         "status",
-        "has_unread",
+        HAS_UNREAD,
         "has_running_tasks",
         WORK_STATE,
         "has_pending_trigger",

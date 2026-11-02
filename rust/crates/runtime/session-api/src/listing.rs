@@ -8,8 +8,8 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_FIELDS, SessionMetadata, SessionStatus,
-  TaskProfile, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_FIELDS, SessionMetadata,
+  SessionStatus, TaskProfile, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -478,7 +478,7 @@ fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreR
     value
       .as_object_mut()
       .expect("a session metadata value is an object")
-      .insert("has_unread".to_string(), Value::Bool(false));
+      .insert(HAS_UNREAD.to_string(), Value::Bool(false));
   }
   Ok(charliebot_compat::jinja::tojson_text(&value))
 }

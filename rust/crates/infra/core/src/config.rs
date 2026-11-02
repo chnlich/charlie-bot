@@ -212,8 +212,10 @@ pub struct ServerConfig {
   /// Session cgroups carry a cpu weight; false stops the cpu controller and weight writes.
   #[serde(default = "default_switch_on")]
   pub enable_session_cpu_weight: bool,
-  /// Session cgroups carry an io weight; false stops the io controller and weight writes.
-  #[serde(default = "default_switch_on")]
+  /// Session cgroups carry an io weight once a host turns this on; the default false stops the io controller and
+  /// weight writes. The io controller reaches the agents slice only after `scripts/systemd/setup-io-share.sh` has
+  /// delegated io there: a host sets this true when io appears in the slice's `cgroup.controllers`.
+  #[serde(default = "default_switch_off")]
   pub enable_session_io_weight: bool,
   #[serde(default = "default_min_free_disk_gib")]
   pub min_free_disk_gib: i64,
@@ -241,6 +243,9 @@ fn default_session_tasks_max() -> i64 {
 }
 fn default_switch_on() -> bool {
   true
+}
+fn default_switch_off() -> bool {
+  false
 }
 fn default_min_free_disk_gib() -> i64 {
   10
@@ -591,7 +596,7 @@ fn default_server() -> ServerConfig {
     session_swap_max_mb: 0,
     session_tasks_max: default_session_tasks_max(),
     enable_session_cpu_weight: default_switch_on(),
-    enable_session_io_weight: default_switch_on(),
+    enable_session_io_weight: default_switch_off(),
     min_free_disk_gib: default_min_free_disk_gib(),
     public_url: None,
   }
@@ -821,7 +826,7 @@ mod tests {
     assert_eq!(cfg.server.port, 18650);
     assert_eq!(cfg.server.session_memory_max_mb, 12288);
     assert!(cfg.server.enable_session_cpu_weight);
-    assert!(cfg.server.enable_session_io_weight);
+    assert!(!cfg.server.enable_session_io_weight);
     assert_eq!(cfg.backends.pool, vec!["claude-fable".to_string()]);
     let option = cfg.get_backend_option("claude-fable").unwrap();
     assert_eq!(
@@ -836,11 +841,14 @@ mod tests {
   }
 
   #[test]
-  fn session_weight_switches_take_their_explicit_off_values() {
+  fn session_weight_switches_take_their_explicit_values() {
     let home = home_with("server:\n  enable_session_cpu_weight: false\n  enable_session_io_weight: false\nvoice: {}\n");
     let cfg = load(&home).unwrap();
     assert!(!cfg.server.enable_session_cpu_weight);
     assert!(!cfg.server.enable_session_io_weight);
+    let home = home_with("server:\n  enable_session_io_weight: true\nvoice: {}\n");
+    let cfg = load(&home).unwrap();
+    assert!(cfg.server.enable_session_io_weight);
   }
 
   #[test]

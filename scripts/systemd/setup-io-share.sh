@@ -195,5 +195,7 @@ if [[ $DRY_RUN == 1 ]]; then
   echo "dry run: nothing was written; rerun without --dry-run as root to apply"
 else
   echo "done: io is delegated, io.cost is on $DISK_NAME, and the boot unit is enabled"
-  echo "the session io shares bind when the server next writes them (enable_session_io_weight is on by default)"
+  echo "io now reaches the agents slice: set server.enable_session_io_weight: true in config.yaml"
+  echo "(it is off by default) once io appears in the agents slice's cgroup.controllers, and the"
+  echo "session io shares bind when the server next writes them"
 fi

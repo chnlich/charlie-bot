@@ -31,10 +31,12 @@ server:
   session_tasks_max: 4096
   # Session cpu and io shares: each session cgroup gets weight 100, so the agents
   # split the CPU and the root disk evenly. false stops that controller and its
-  # weight writes; the io weight binds only with io.cost on the root disk
-  # (scripts/systemd/setup-io-share.sh).
+  # weight writes. The cpu weight is on by default. The io weight is off by
+  # default: io reaches the agents slice only after setup-io-share.sh has
+  # delegated io there, and a host sets it true once io appears in the agents
+  # slice's cgroup.controllers (scripts/systemd/setup-io-share.sh).
   enable_session_cpu_weight: true
-  enable_session_io_weight: true
+  enable_session_io_weight: false
   # Worker-class launch precheck, GiB: the filesystems holding the CharlieBot
   # data dir and the worktree root must hold at least this much free space, or
   # the run stays queued with a blocked report to its parent. 0 disables the

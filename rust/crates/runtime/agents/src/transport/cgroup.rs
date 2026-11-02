@@ -543,6 +543,19 @@ mod tests {
   }
 
   #[test]
+  fn an_io_switch_off_with_the_cpu_on_enables_only_cpu() {
+    let root = fake_slices();
+    fake_leaf(root.path(), AGENTS_SLICE);
+    let path = ensure_session_cgroup(&cgroup_config_with(root.path(), 64, true, false), SESSION_ID).unwrap();
+    assert_eq!(
+      fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
+      "+memory +pids +cpu\n"
+    );
+    assert_eq!(fs::read_to_string(path.join("cpu.weight")).unwrap(), format!("{}\n", SESSION_WEIGHT));
+    assert_eq!(fs::read_to_string(path.join("io.weight")).unwrap(), "");
+  }
+
+  #[test]
   fn a_failing_weight_enable_names_the_controller_the_slice_and_the_switch() {
     // A directory where the control file belongs makes the write fail, as a refused controller does on cgroupfs.
     let root = fake_slices();

@@ -1031,11 +1031,18 @@ impl Store {
   /// The identity of a node's live history file, read before and after its stat by the test hook.
   ///
   /// Every task-state and activity memo keys on this value, so the read is the one place a test can pause between
-  /// a memo's key and its history read.
+  /// a memo's key and its history read. The stat resolves from the open sessions directory: a page reads a hundred
+  /// of these, and the home's prefix would otherwise be walked a hundred times.
   pub(crate) fn history_identity(&self, session_id: &str) -> StoreResult<Option<FileIdentity>> {
     #[cfg(test)]
     self.run_identity_hook(session_id, IdentityStage::BeforeStat);
-    let identity = FileIdentity::read(&self.chat_events_path(session_id))?;
+    let identity = match self.sessions_dir_handle()? {
+      Some(sessions_dir) => {
+        let relative = format!("{session_id}/{}/{}", layout::DATA_DIR_NAME, layout::CHAT_EVENTS_FILE_NAME);
+        FileIdentity::read_at(sessions_dir, &relative)?
+      }
+      None => None,
+    };
     #[cfg(test)]
     self.run_identity_hook(session_id, IdentityStage::AfterStat);
     Ok(identity)

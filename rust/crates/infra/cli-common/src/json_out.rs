@@ -7,16 +7,14 @@ use serde_json::Value;
 const ONE_LINE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// An indent block, `","` between items, with non-ASCII passed through.
-const INDENTED: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
-
 /// Render `value` the way `print_json` writes it: non-ASCII characters kept as written, insertion
 /// order, one line when `indent` is `None` else an indent block, plus the trailing newline.
 pub fn render(value: &Value, indent: Option<usize>) -> String {
   let style = match indent {
     None => ONE_LINE,
-    Some(width) => JsonStyle { indent: Some(width), ..INDENTED },
+    Some(width) => {
+      JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(width) }
+    }
   };
   format!("{}\n", text_repr::json_dumps(value, &style))
 }

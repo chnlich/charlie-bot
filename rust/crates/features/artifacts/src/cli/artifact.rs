@@ -370,7 +370,7 @@ mod tests {
       registry: Arc::new(registry),
       repo_root: repo_root.to_path_buf(),
       base_env: AgentBaseEnvironment { values: std::env::vars().collect() },
-      pool: BackendPool::default(),
+      pool: Arc::new(BackendPool::default()),
     }
   }
 

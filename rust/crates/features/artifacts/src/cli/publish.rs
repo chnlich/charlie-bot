@@ -274,7 +274,7 @@ mod tests {
       registry,
       repo_root: PathBuf::from("/synthetic/checkout"),
       base_env: AgentBaseEnvironment { values: std::env::vars().collect() },
-      pool: BackendPool::default(),
+      pool: Arc::new(BackendPool::default()),
     }
   }
 

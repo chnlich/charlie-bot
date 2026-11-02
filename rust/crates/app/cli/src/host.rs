@@ -23,6 +23,6 @@ pub fn compose() -> anyhow::Result<CliHost> {
     registry: Arc::new(registry),
     repo_root,
     base_env: AgentBaseEnvironment { values: std::env::vars().collect() },
-    pool: BackendPool::default(),
+    pool: Arc::new(BackendPool::default()),
   })
 }

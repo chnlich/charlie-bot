@@ -781,7 +781,7 @@ BBBB
       registry: Arc::new(registry),
       repo_root: PathBuf::from("/synthetic/repo"),
       base_env: charliebot_agents::agent_environment::AgentBaseEnvironment { values: Env::new() },
-      pool: charliebot_agents::backend_pool::BackendPool::default(),
+      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::default()),
     };
 
     let probe = run_light_probe(&host, "prompt", "system").await.unwrap();

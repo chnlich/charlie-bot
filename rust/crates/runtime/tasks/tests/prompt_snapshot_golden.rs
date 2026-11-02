@@ -60,6 +60,8 @@ struct Case {
 
 const REPO: &str = "/synthetic/repo";
 const GOAL: &str = "Add the greeter.";
+const REQUESTER_WORDS_GOAL: &str = "## Goal\n\nRead the routing design and explain it.\n\n## Requester Words\n\n\
+- 「explain the routing design」 (session 11111111-2222-4333-8444-555555555555, user)\n";
 
 fn manager(id: &'static str, name: &'static str) -> Meta {
   Meta { id, name, profile: "manager", task: None }
@@ -67,6 +69,17 @@ fn manager(id: &'static str, name: &'static str) -> Meta {
 
 fn worker(id: &'static str, name: &'static str, repo: Option<&'static str>, task_type: Option<&'static str>) -> Meta {
   Meta { id, name, profile: "worker", task: Some(Task { goal: GOAL, repo_path: repo, task_type }) }
+}
+
+/// A worker whose task spec carries the Requester Words section.
+fn requester_words_worker(
+  id: &'static str,
+  name: &'static str,
+  repo: Option<&'static str>,
+  task_type: Option<&'static str>,
+) -> Meta {
+  let meta = worker(id, name, repo, task_type);
+  Meta { task: meta.task.map(|task| Task { goal: REQUESTER_WORDS_GOAL, ..task }), ..meta }
 }
 
 fn matrix() -> Vec<Case> {
@@ -158,6 +171,16 @@ fn matrix() -> Vec<Case> {
       name: "work_implement_with_repo",
       kind: "work",
       meta: worker("worker-session", "Worker", Some(REPO), Some("implement")),
+      overlay: None,
+      chain: NO_CHAIN,
+      node_body: None,
+      host: None,
+      bodies: &[],
+    },
+    Case {
+      name: "work_implement_requester_words",
+      kind: "work",
+      meta: requester_words_worker("worker-session", "Worker", Some(REPO), Some("implement")),
       overlay: None,
       chain: NO_CHAIN,
       node_body: None,

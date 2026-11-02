@@ -336,6 +336,18 @@ impl<'de> Deserialize<'de> for TaskSpec {
   }
 }
 
+/// The heading of the optional Requester Words section a task spec may carry.
+pub const REQUESTER_WORDS_HEADING: &str = "Requester Words";
+
+/// The line index of the `## Requester Words` heading in a task spec, or `None` when the spec does not carry the
+/// section. The prompt gate and the delegate quote check read this one definition of "the spec carries Requester
+/// Words".
+pub fn requester_words_heading_line(task_spec: &str) -> Option<usize> {
+  task_spec.lines().position(|line| {
+    line.strip_prefix("## ").is_some_and(|name| name.trim_end_matches([' ', '\t']) == REQUESTER_WORDS_HEADING)
+  })
+}
+
 /// Provenance pointer to a chat event.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -819,6 +831,16 @@ mod tests {
       ratings.0,
       vec![("round-a".to_string(), RoundRating::ThumbsDown), ("round-b".to_string(), RoundRating::ThumbsUp),]
     );
+  }
+
+  #[test]
+  fn requester_words_heading_line_finds_only_the_exact_heading() {
+    let spec = "## Goal\n\nDo the work.\n\n## Requester Words \n\
+- 「do it」 (session 11111111-2222-4333-8444-555555555555, user)\n";
+    assert_eq!(requester_words_heading_line(spec), Some(4));
+    assert_eq!(requester_words_heading_line("## Goal\n\nDo the work.\n"), None);
+    assert_eq!(requester_words_heading_line("### Requester Words\n"), None);
+    assert_eq!(requester_words_heading_line("## Requester Words and more\n"), None);
   }
 
   #[test]

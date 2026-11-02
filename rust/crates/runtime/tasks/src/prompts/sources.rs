@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use charliebot_core::text_repr::str_repr;
 use charliebot_store::control_events::sha256_hex;
-use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType};
+use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType, requester_words_heading_line};
 
 use super::{
   DELIVERY_FULL, HOST_SUPPLEMENT_FILENAME, MANAGER_KINDS, MAX_AGENT_MESSAGE_WEIGHTED_CHARS, PROMPT_BODIES_DIR,
@@ -204,6 +204,12 @@ fn worker_kind_rule_segments(
     let ids = spawner_prompt::workflow_rule_section_ids(task, repo_less)?;
     let workflow = sections_text(repo, "worker.md", &ids)?;
     segments.push(segment(format!("{worker}\n{workflow}"), vec![base_source(spawner_prompt::WORKER_PROMPT_PATH)]));
+    // A spec that carries Requester Words also gives its worker the decisions rule; every other worker's contract
+    // stays as it was.
+    if task.is_some_and(|task| requester_words_heading_line(&task.goal).is_some()) {
+      let decisions = sections_text(repo, "worker.md", &["user_decisions"])?;
+      segments.push(segment(decisions, vec![base_source(spawner_prompt::WORKER_PROMPT_PATH)]));
+    }
   }
   Ok(segments)
 }

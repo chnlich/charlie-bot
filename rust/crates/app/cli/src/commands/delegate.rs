@@ -13,6 +13,7 @@ use charliebot_cli_common::resolve;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_store::chat_events::{self, LineRule};
+use charliebot_store::metadata::{REQUESTER_WORDS_HEADING, requester_words_heading_line};
 use charliebot_tasks::routes as task_routes;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
@@ -43,15 +44,15 @@ Task types (--task-type):
   script-run: the worktree (repo-less: the Run directory) is a sandbox to run scripts, submit jobs, or query state; the worker must not modify tracked files or commit; no reviewer, no merge.
   verify: a repo-less read-only plan verifier; no worktree, reviewer, or merge.
 
-Requester Words (## Requester Words):
+Requester Words:
 
-  This section is optional. A spec for a first read of unfamiliar material, a diagnosis of an
-  unexplained failure, an explanation of a mechanism or a cause (an explain or debugging page
-  included), an understanding page, or a design or plan draft (a new plan version that changes the
-  design included) carries it: the words that asked the question, and each earlier user decision the
-  task rests on, each quoted verbatim with its session id and event kind (user, agent, scheduled or
-  thread). charliebot delegate checks each quote against the events of that kind in that session; a
-  spec without the section is accepted.
+  A spec for a first read of unfamiliar material, a diagnosis of an unexplained failure, an
+  explanation of a mechanism or cause (an explain or debugging page included), an understanding
+  page, or a design or plan draft (a new plan version that changes the design included) carries
+  it: the words that asked the question, and each earlier user decision the task rests on, each
+  quoted verbatim with its session id and event kind (user, agent, scheduled or thread).
+  charliebot delegate checks each quote against its session's events of that kind; the section
+  also gives its worker the user-decisions rule, and a spec without it is accepted.
   - 「<verbatim>」 (session <36-char session id>, <user|agent|scheduled|thread>)
 
 Backend selection (--backend):
@@ -324,9 +325,6 @@ fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The heading of the optional section that a requester-words spec carries.
-const REQUESTER_WORDS_HEADING: &str = "Requester Words";
-
 /// The event kinds a requester quote names. Each kind matches the chat-log events it stands for: a user message is a
 /// `user` event with string content; an agent message is an `agent_message` event; a scheduled-task prompt is a
 /// `scheduled_trigger` event; a Slack or Discord thread message is the `agent_message` event that carries the
@@ -388,7 +386,7 @@ fn parse_requester_line(line: &str) -> Option<(&str, &str, &str)> {
 /// A spec without the section is accepted. One refusal lists every quote that fails.
 fn validate_requester_words(task_spec: &str, home: &Path) -> Result<(), CliExit> {
   let lines: Vec<&str> = task_spec.lines().collect();
-  let Some(start) = lines.iter().position(|line| is_heading(line, REQUESTER_WORDS_HEADING)) else {
+  let Some(start) = requester_words_heading_line(task_spec) else {
     return Ok(());
   };
   let mut quotes = Vec::new();

@@ -454,20 +454,27 @@ pub fn select_master_memory(memory_dir: &Path) -> anyhow::Result<Option<MemorySe
   Ok(Some(selection_from_parts("master", None, full, index, None)))
 }
 
-/// The worker selection for `repo_basename`: the full text of worker entries whose topic is that repo, then the index
-/// lines of the other worker entries, then the usage line.
+/// The worker selection for `repo_basename`: the full text of worker entries whose topic matches that repo, then the
+/// index lines of the other worker entries, then the usage line. A topic matches a repo when their normalized names are
+/// equal, so the topic `charliebot` serves the repo `charlie-bot`.
 pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::Result<MemorySelection> {
   let store = load_store(memory_dir)?;
+  let repo_name = normalized_name(repo_basename);
   let mut full = Vec::new();
   let mut index = Vec::new();
   for entry in store.entries.iter().filter(|entry| audience_allows(entry, "worker")) {
-    if entry.topic.as_deref() == Some(repo_basename) {
+    if entry.topic.as_deref().is_some_and(|topic| normalized_name(topic) == repo_name) {
       full.push(entry);
     } else {
       index.push(entry);
     }
   }
   Ok(selection_from_parts("worker", Some(repo_basename.to_string()), full, index, Some(WORKER_USAGE_LINE)))
+}
+
+/// A topic or repo name in the form that topic matching compares: lowercase, with `-` and `_` removed.
+fn normalized_name(name: &str) -> String {
+  name.chars().filter(|c| !matches!(c, '-' | '_')).flat_map(char::to_lowercase).collect()
 }
 
 /// The selection's segments, full then index, each sorted by [`entry_order_key`].
@@ -741,5 +748,18 @@ mod tests {
     assert_eq!(selection.segments[1].delivery, "index");
     assert_eq!(selection.segments[1].sources[0].source_ref, "memory:profile/dark-mode");
     assert_eq!(selection.usage_line, Some(WORKER_USAGE_LINE));
+
+    // The repo `charlie-bot` takes the topic `charliebot`: the names match once `-` is removed.
+    write_files(dir.path(), &[("topics", "profile resident\ngamma-service\ncharliebot\n")]);
+    write_files(
+      dir.path(),
+      &[(
+        "entries/charliebot/local-checks.md",
+        "---\nscope: user\ntopic: charliebot\naudience: worker\ntitle: L\n---\nlocal\n",
+      )],
+    );
+    let selection = select_worker_memory(dir.path(), "charlie-bot").unwrap();
+    assert_eq!(selection.segments[0].delivery, "full");
+    assert_eq!(selection.segments[0].sources[0].source_ref, "memory:charliebot/local-checks");
   }
 }

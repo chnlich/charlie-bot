@@ -13,6 +13,8 @@
 //! shared HTTP client and WebSockets. The server releases the home fence and logs `charliebot_shutdown` next.
 //! On SIGINT and failed bind, it runs let-go steps after that line; on SIGTERM, it skips them and restores
 //! SIGTERM's default disposition and re-raises it.
+//!
+//! Startup logs one `startup_segment` line per step and service, through the server's [`StartupClock`].
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +26,7 @@ use futures_util::future::{BoxFuture, Shared};
 use crate::context::FeatureContext;
 pub use crate::registry::StepFn;
 use crate::startup_stop::StartupStop;
+use crate::startup_timing::StartupClock;
 use crate::wiring::{Phase, Service, ServiceContext};
 
 /// The lifespan of one running server: its started services and registered let-go steps.
@@ -60,6 +63,9 @@ pub struct CloseTimings {
   pub ws_close: Duration,
 }
 
+/// One spawned recovery step's outcome: the step's error, prefixed with its name.
+type RecoveryOutcome = Shared<BoxFuture<'static, Result<(), String>>>;
+
 /// The outcome of [`Lifespan::shutdown`]. Every stop runs even when one fails, so the closes are timed either way.
 pub struct Shutdown {
   pub closes: CloseTimings,
@@ -68,11 +74,11 @@ pub struct Shutdown {
 }
 
 impl Lifespan {
-  /// Runs the startup steps in the order of the module docs. A failure stops the services that started, runs the
-  /// let-go steps, and returns the startup error.
-  pub async fn start(features: Arc<FeatureContext>) -> anyhow::Result<StartupOutcome> {
+  /// Runs the startup steps in the order of the module docs, ending one `clock` segment per step and service. A failure
+  /// stops the services that started, runs the let-go steps, and returns the startup error.
+  pub async fn start(features: Arc<FeatureContext>, clock: &mut StartupClock) -> anyhow::Result<StartupOutcome> {
     let mut lifespan = Lifespan { stop: features.startup.stop(), features, started: Vec::new() };
-    match lifespan.startup().await {
+    match lifespan.startup(clock).await {
       Ok(true) => Ok(StartupOutcome::Ready(lifespan)),
       Ok(false) => Ok(StartupOutcome::Stopped(lifespan)),
       Err(error) if lifespan.stop.is_cancelled() => {
@@ -83,13 +89,14 @@ impl Lifespan {
     }
   }
 
-  async fn startup(&mut self) -> anyhow::Result<bool> {
+  async fn startup(&mut self, clock: &mut StartupClock) -> anyhow::Result<bool> {
     let registry = Arc::clone(&self.features.registry);
     for (name, step) in registry.pre_recovery_steps() {
       if self.stop.is_cancelled() {
         return Ok(false);
       }
       step(Arc::clone(&self.features)).await.with_context(|| format!("pre-recovery step {name:?} failed"))?;
+      clock.segment(&format!("pre_recovery:{name}"));
       if self.stop.is_cancelled() {
         return Ok(false);
       }
@@ -99,20 +106,24 @@ impl Lifespan {
     }
 
     let recovery = self.spawn_recovery_steps();
-    let recovery_done: Shared<BoxFuture<'static, ()>> = match &recovery {
-      Some(outcome) => outcome.clone().map(|_| ()).boxed().shared(),
-      None => futures_util::future::ready(()).boxed().shared(),
-    };
-
-    if !self.start_services(Phase::Early, &recovery_done).await? {
-      if let Some(outcome) = recovery {
-        outcome.await.map_err(|message| anyhow::anyhow!("crash recovery failed: {message}"))?;
+    // Resolves when every step has succeeded or the first one has failed, as the startup path's own waits do.
+    let outcomes: Vec<RecoveryOutcome> = recovery.iter().map(|(_, outcome)| outcome.clone()).collect();
+    let recovery_done: Shared<BoxFuture<'static, ()>> = async move {
+      for outcome in outcomes {
+        if outcome.await.is_err() {
+          return;
+        }
       }
+    }
+    .boxed()
+    .shared();
+    clock.segment("recovery_spawn");
+
+    if !self.start_services(Phase::Early, &recovery_done, clock).await? {
+      await_recovery(recovery, clock).await?;
       return Ok(false);
     }
-    if let Some(outcome) = recovery {
-      outcome.await.map_err(|message| anyhow::anyhow!("crash recovery failed: {message}"))?;
-    }
+    await_recovery(recovery, clock).await?;
     if self.stop.is_cancelled() {
       return Ok(false);
     }
@@ -122,18 +133,18 @@ impl Lifespan {
         return Ok(false);
       }
       step(Arc::clone(&self.features)).await.with_context(|| format!("trigger step {name:?} failed"))?;
+      clock.segment(&format!("trigger:{name}"));
       if self.stop.is_cancelled() {
         return Ok(false);
       }
     }
-    self.start_services(Phase::Ready, &recovery_done).await
+    self.start_services(Phase::Ready, &recovery_done, clock).await
   }
 
-  /// Spawns every registered recovery step as its own task, and
-  /// returns their joined outcome: the early services start while the steps run. The first failing step's error ends
-  /// the join, with the step's name in it.
-  fn spawn_recovery_steps(&self) -> Option<Shared<BoxFuture<'static, Result<(), String>>>> {
-    let runs: Vec<_> = self
+  /// Spawns every registered recovery step as its own task, so the early services start while the steps run. Returns
+  /// each step's name and outcome in registration order.
+  fn spawn_recovery_steps(&self) -> Vec<(&'static str, RecoveryOutcome)> {
+    self
       .features
       .registry
       .recovery_steps()
@@ -142,27 +153,16 @@ impl Lifespan {
         let run = step(Arc::clone(&self.features));
         let outcome = async move { run.await.map_err(|error| format!("{name:?}: {error:#}")) }.boxed().shared();
         tokio::spawn(outcome.clone());
-        outcome
+        (name, outcome)
       })
-      .collect();
-    if runs.is_empty() {
-      return None;
-    }
-    let joined = async move {
-      for run in runs {
-        run.await?;
-      }
-      Ok(())
-    }
-    .boxed()
-    .shared();
-    Some(joined)
+      .collect()
   }
 
   async fn start_services(
     &mut self,
     phase: Phase,
     recovery_done: &Shared<BoxFuture<'static, ()>>,
+    clock: &mut StartupClock,
   ) -> anyhow::Result<bool> {
     for service in self.features.registry.services_in(phase) {
       if self.stop.is_cancelled() {
@@ -171,6 +171,7 @@ impl Lifespan {
       let name = service.name();
       let ctx = ServiceContext { features: Arc::clone(&self.features), recovery_done: recovery_done.clone() };
       service.start(ctx).await.with_context(|| format!("service {name:?} failed to start"))?;
+      clock.segment(&format!("service:{name}"));
       self.started.push((phase, service));
       if self.stop.is_cancelled() {
         return Ok(false);
@@ -236,6 +237,19 @@ impl Lifespan {
     self.features.store.close_subscribers().await;
     CloseTimings { step_closes, http_client, ws_close: ws_started.elapsed() }
   }
+}
+
+/// Waits for each spawned recovery step in registration order, ending one `recovery:<step>` segment per step. The first
+/// failing step's error ends the wait, with the step's name in it.
+async fn await_recovery(
+  recovery: Vec<(&'static str, RecoveryOutcome)>,
+  clock: &mut StartupClock,
+) -> anyhow::Result<()> {
+  for (name, outcome) in recovery {
+    outcome.await.map_err(|message| anyhow::anyhow!("crash recovery failed: {message}"))?;
+    clock.segment(&format!("recovery:{name}"));
+  }
+  Ok(())
 }
 
 #[cfg(test)]
@@ -375,7 +389,7 @@ mod tests {
     registry.register_package("src.features.beta", beta).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
 
-    let mut lifespan = match Lifespan::start(features).await.unwrap() {
+    let mut lifespan = match Lifespan::start(features, &mut StartupClock::new(Instant::now())).await.unwrap() {
       StartupOutcome::Ready(lifespan) => lifespan,
       StartupOutcome::Stopped(_) => panic!("startup stopped without a stop request"),
     };
@@ -402,7 +416,7 @@ mod tests {
     registry.register_package("src.features.beta", beta).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
 
-    let mut lifespan = match Lifespan::start(features).await.unwrap() {
+    let mut lifespan = match Lifespan::start(features, &mut StartupClock::new(Instant::now())).await.unwrap() {
       StartupOutcome::Ready(lifespan) => lifespan,
       StartupOutcome::Stopped(_) => panic!("startup stopped without a stop request"),
     };
@@ -438,7 +452,7 @@ mod tests {
     let mut registry = Registry::new();
     registry.register_package("src.features.gamma", let_go_only).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
-    let mut lifespan = match Lifespan::start(features).await.unwrap() {
+    let mut lifespan = match Lifespan::start(features, &mut StartupClock::new(Instant::now())).await.unwrap() {
       StartupOutcome::Ready(lifespan) => lifespan,
       StartupOutcome::Stopped(_) => panic!("startup stopped without a stop request"),
     };

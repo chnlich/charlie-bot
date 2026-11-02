@@ -311,6 +311,34 @@ fn recovery_elapsed_ms(lines: &[String]) -> u64 {
     .expect("elapsed_ms is a whole number of milliseconds")
 }
 
+/// The `startup_segment` lines of one start, as (segment, elapsed_ms), must sum to its `ready_in_ms` and name the
+/// task-tree walk, because the startup rewrite ranks its work by these segments.
+fn assert_segments_cover_ready(lines: &[String]) {
+  let ready_line = lines.iter().find(|line| is_event(line, "server_ready")).expect("the start logs server_ready");
+  let ready_in_ms: u64 = field_of(ready_line, "ready_in_ms")
+    .expect("server_ready has ready_in_ms")
+    .parse()
+    .expect("ready_in_ms is a whole number of milliseconds");
+  let segments: Vec<(String, u64)> = lines
+    .iter()
+    .filter(|line| is_event(line, "startup_segment"))
+    .map(|line| {
+      let name = field_of(line, "segment").expect("a segment line names its segment");
+      let elapsed_ms = field_of(line, "elapsed_ms")
+        .expect("a segment line has elapsed_ms")
+        .parse()
+        .expect("elapsed_ms is a whole number of milliseconds");
+      (name, elapsed_ms)
+    })
+    .collect();
+  let total: u64 = segments.iter().map(|(_, elapsed_ms)| elapsed_ms).sum();
+  assert_eq!(total, ready_in_ms, "the segments do not sum to ready_in_ms: {segments:?}");
+  assert!(
+    segments.iter().any(|(name, _)| name == "recovery:task_recovery"),
+    "no segment covers the task-tree walk: {segments:?}"
+  );
+}
+
 /// SIGTERM during a real node walk. Neither boot sets the delay gate, so the walk's own stop checks end it.
 #[test]
 fn sigterm_stops_the_node_walk_without_the_delay_gate() {
@@ -347,6 +375,7 @@ fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   let walk_ms = recovery_elapsed_ms(&restarted_lines);
   println!("the node walk over {WALK_SESSIONS} sessions took {walk_ms} ms");
   assert!(walk_ms >= WALK_MIN_MS, "the node walk took {walk_ms} ms, under the {WALK_MIN_MS} ms the test needs");
+  assert_segments_cover_ready(&restarted_lines);
   assert!(
     !restarted_lines.iter().any(|line| is_event(line, "task_recovery_node_failed")),
     "the restarted home walks every node without a failure: {restarted_lines:?}"

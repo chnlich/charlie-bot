@@ -11,6 +11,9 @@
 //! without let-go steps. SIGINT runs let-go steps after the log and returns 0. A failed bind runs let-go steps after
 //! the log and returns 1.
 //!
+//! Each startup phase ends one `startup_segment` line (`charliebot_registry::startup_timing`), and the segments of one
+//! start sum to its `server_ready` `ready_in_ms`.
+//!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
 //! page packages and `configs/` the server serves.
 
@@ -38,6 +41,7 @@ use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::{config, home, logging, paths};
 use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
+use charliebot_registry::startup_timing::StartupClock;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, StartupState, StartupStop};
 use charliebot_store::v1_sessions;
@@ -190,7 +194,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     monitor_stop.cancel();
     let _ = signal_sender.send(received);
   });
-  let boot = Instant::now();
+  let mut clock = StartupClock::new(Instant::now());
   let registry = match packages::registry() {
     Ok(registry) => Arc::new(registry),
     Err(error) => {
@@ -198,6 +202,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
       return ExitCode::from(EXIT_CONFIG);
     }
   };
+  clock.segment("registry");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, None, signal_receiver).await;
   }
@@ -208,6 +213,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
       return ExitCode::from(EXIT_CONFIG);
     }
   };
+  clock.segment("load_inputs");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, None, signal_receiver).await;
   }
@@ -231,6 +237,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  clock.segment("writer_fence");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
   }
@@ -245,6 +252,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     );
     return ExitCode::from(EXIT_STARTUP);
   }
+  clock.segment("home_init");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
   }
@@ -256,6 +264,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  clock.segment("store");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
   }
@@ -276,7 +285,8 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   // The lifespan's recovery can re-attach a round whose master_done starts the after-turn works, so the context is
   // bound before the lifespan starts.
   registry.bind_feature_context(&features).expect("the registry binds its feature context once, at startup");
-  let mut lifespan = match Lifespan::start(Arc::clone(&features)).await {
+  clock.segment("features");
+  let mut lifespan = match Lifespan::start(Arc::clone(&features), &mut clock).await {
     Ok(StartupOutcome::Ready(lifespan)) => lifespan,
     Ok(StartupOutcome::Stopped(mut lifespan)) => {
       return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
@@ -303,11 +313,11 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   // The host_auth poller's 300 ms startup tail keeps its first state read after this line while preserving the stop
   // check: a boot stopped before readiness does not emit `server_ready`.
   // The boot's storage reads ride on the same line, so a slow boot states in one place what its disk wait cost.
-  match charliebot_core::proc_identity::read_self_storage_reads() {
-    Some((read_bytes, read_ops)) => {
-      tracing::info!(ready_in_ms = round_ms(boot.elapsed()), read_bytes, read_ops, "server_ready");
-    }
-    None => tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready"),
+  let storage_reads = charliebot_core::proc_identity::read_self_storage_reads();
+  let ready_in_ms = clock.segment("ready");
+  match storage_reads {
+    Some((read_bytes, read_ops)) => tracing::info!(ready_in_ms, read_bytes, read_ops, "server_ready"),
+    None => tracing::info!(ready_in_ms, "server_ready"),
   }
 
   let listener = match bind(&cfg.server.host, cfg.server.port).await {
@@ -740,10 +750,11 @@ mod tests {
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("src.features.slow_stop", slow_stop_package).expect("the test service registers");
     let features = features_over(home.path(), Arc::new(registry));
-    let mut lifespan = match Lifespan::start(features).await.expect("the lifespan starts") {
-      StartupOutcome::Ready(lifespan) => lifespan,
-      StartupOutcome::Stopped(_) => panic!("startup stopped without a stop signal"),
-    };
+    let mut lifespan =
+      match Lifespan::start(features, &mut StartupClock::new(Instant::now())).await.expect("the lifespan starts") {
+        StartupOutcome::Ready(lifespan) => lifespan,
+        StartupOutcome::Stopped(_) => panic!("startup stopped without a stop signal"),
+      };
 
     let (sender, receiver) = tokio::sync::oneshot::channel();
     sender.send(Signal::SIGINT).expect("the boot stop receives the signal");

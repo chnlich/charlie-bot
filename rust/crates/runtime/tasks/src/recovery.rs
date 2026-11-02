@@ -340,10 +340,20 @@ const CLASSIFY_MIN_SESSIONS: usize = 64;
 
 /// Reconcile every node this home owns, in sorted directory order (`task_recovery.reconcile_task_tree`). The sequence
 /// controllers mark their interrupted state first.
+///
+/// A pass that runs to its end logs `task_tree_recovery_phases`, the milliseconds of each phase in run order: the
+/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the node passes and the
+/// marker write.
 pub async fn reconcile_task_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
 ) -> anyhow::Result<PassCounters> {
+  let mut phase_started = Instant::now();
+  let mut phase_ms = || {
+    let elapsed_ms = phase_started.elapsed().as_millis() as u64;
+    phase_started = Instant::now();
+    elapsed_ms
+  };
   let stop = features.startup.stop();
   let cfg = features.config.get().context("reading the configuration for task recovery")?;
   let mut counters = PassCounters::default();
@@ -365,6 +375,7 @@ pub async fn reconcile_task_tree(
     }
     controller.reconcile_interrupted(&tree).await?;
   }
+  let sequence_reconcile_ms = phase_ms();
 
   let mut session_dirs = std::fs::read_dir(&sessions_dir)
     .with_context(|| format!("listing {}", sessions_dir.display()))?
@@ -372,6 +383,7 @@ pub async fn reconcile_task_tree(
     .collect::<io::Result<Vec<PathBuf>>>()
     .with_context(|| format!("listing {}", sessions_dir.display()))?;
   session_dirs.sort();
+  let listing_ms = phase_ms();
   tracing::info!(target: "charliebot_tasks", sessions = session_dirs.len(), "task_tree_recovery_walk_started");
   let mut candidates: Vec<FullPassSession> = Vec::new();
   for session_dir in session_dirs {
@@ -413,6 +425,7 @@ pub async fn reconcile_task_tree(
     counters.full += 1;
     candidates.push(FullPassSession { session_id, meta });
   }
+  let skip_checks_ms = phase_ms();
   // A session with no task boundary, no run directory and no prompt ref has nothing to reconcile: its pass can only
   // report the absence. `has_no_task_node` proves that from the raw event bytes, so the pass here reports the same
   // absence without folding the log. Each proof reads only its own session's files, so the whole batch proves in
@@ -421,6 +434,7 @@ pub async fn reconcile_task_tree(
   let Some(no_nodes) = classify_no_task_nodes(&features.store, &candidates, &stop) else {
     return Ok(counters);
   };
+  let absence_proofs_ms = phase_ms();
   for (candidate, no_node) in candidates.into_iter().zip(no_nodes) {
     if stop.is_cancelled() {
       return Ok(counters);
@@ -450,9 +464,21 @@ pub async fn reconcile_task_tree(
       }
     }
   }
+  let node_passes_ms = phase_ms();
   if !failed_node && !stop.is_cancelled() {
     write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
   }
+  let marker_ms = phase_ms();
+  tracing::info!(
+    target: "charliebot_tasks",
+    sequence_reconcile_ms,
+    listing_ms,
+    skip_checks_ms,
+    absence_proofs_ms,
+    node_passes_ms,
+    marker_ms,
+    "task_tree_recovery_phases"
+  );
   counters.marker = marker.map(UtcDateTime::to_isoformat_text);
   Ok(counters)
 }

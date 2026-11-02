@@ -4,7 +4,9 @@
 //! filter reaches run logs; a find that walks the store or a parent of it with no depth limit, alone or with a command
 //! on each file; or one process that reads the run logs of every session through a glob. An argument's quoting does not
 //! change its meaning, so a quoted store path counts as its bare form. Script code inside quotes or heredoc bodies is
-//! not shell, and a relative path resolves against the hook's cwd and the latest `cd`.
+//! not shell, and a relative path resolves against the hook's cwd and the latest `cd`. Two bounded lookups stay
+//! allowed: a loop whose body only tests one session's top-level `metadata.json` with shell builtins, and a glob under
+//! one session id prefix of at least eight hex characters.
 
 mod shell;
 
@@ -71,6 +73,20 @@ const READERS: &[&str] = &[
 
 /// The wrappers a reader may follow, which the glob rule skips.
 const WRAPPERS: &[&str] = &["sudo", "timeout", "nice", "ionice", "time", "env"];
+
+/// The commands a loop body would run as a separate process per item.
+const LOOP_EXTERNAL: &str = concat!(
+  r"\b(?:python3?|node|jq|grep|egrep|fgrep|rg|ag|ack|cat|head|tail|awk|sed|sort|uniq|cut|tr|wc|stat|ls|find|du|",
+  r"cp|mkdir|rm|xargs|sh|bash|zsh|readlink|dirname|basename|date|git|curl)\b"
+);
+
+/// The commands that read file contents, for the item list before a pipe: a list built by one of them reads every
+/// session's file rather than only listing the sessions.
+const CONTENT_READERS: &str = r"\b(?:grep|egrep|fgrep|rg|ag|ack|cat|head|tail|jq|python3?|node|xargs|find|du)\b";
+
+/// The shortest literal session-id prefix that identifies one session: every session id is a UUID, whose first eight
+/// hex characters are enough to name it.
+const SESSION_PREFIX_MIN: usize = 8;
 
 const PER_FILE_PROCESS_REASON: &str = "This command starts one process per session directory. Use `charliebot session tree --root <id> --include-archived --limit 500` for a session's children, or read all the files in one process.";
 const ROOTED_SEARCH_REASON: &str = "This search runs from `/`, `/home` or the home directory with no depth limit. Search the directories that can hold the answer, add `-maxdepth`, or prune the session store.";
@@ -164,7 +180,7 @@ fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
 
 fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   let mut forms = Vec::new();
-  if per_file_process_pattern()?.is_match(shell).map_err(parse_error)? {
+  if per_file_process_pattern()?.is_match(shell).map_err(parse_error)? && !bounded_metadata_loops(shell)? {
     forms.push(ScanForm::PerFileProcess);
   }
   for captures in rooted_search_pattern()?.captures_iter(shell) {
@@ -348,10 +364,10 @@ fn is_option_or_count(word: &str) -> bool {
 }
 
 /// Whether one glob token spans every session and reaches run logs. The token must start at the session store, and
-/// the session directory just under it must be a wildcard: a literal session id is one session's lookup. Under
-/// `data/runs/` the run id must be a wildcard too, and the token reaches run logs when it names the run directory
-/// itself or a run-log file, but not `metadata.json`. Elsewhere under the session wildcard, a name that is a run-log
-/// name counts.
+/// the session directory just under it must be a wildcard: a literal session id, or a prefix long enough to name one
+/// session, is one session's lookup. Under `data/runs/` the run id must be a wildcard too, and the token reaches run
+/// logs when it names the run directory itself or a run-log file, but not `metadata.json`. Elsewhere under the
+/// session wildcard, a name that is a run-log name counts.
 fn reaches_run_logs(token: &str) -> Result<bool, String> {
   if token.starts_with('!') {
     return Ok(false);
@@ -363,7 +379,7 @@ fn reaches_run_logs(token: &str) -> Result<bool, String> {
   let Some((&session, under_session)) = parts.split_first() else {
     return Ok(false);
   };
-  if !is_wild(session) {
+  if !is_wild(session) || names_one_session(session) {
     return Ok(false);
   }
   if under_session.starts_with(&["data", "runs"]) {
@@ -386,6 +402,15 @@ fn store_remainder(token: &str) -> Result<Option<&str>, String> {
 
 fn is_wild(component: &str) -> bool {
   component.contains(['*', '?', '['])
+}
+
+/// Whether a session component's literal prefix names one session: at least [`SESSION_PREFIX_MIN`] characters, all hex
+/// digits or hyphens, which is how an agent spells a session id prefix. A prefix that short or shaped differently
+/// could match many sessions, so it stays a wildcard.
+fn names_one_session(component: &str) -> bool {
+  let prefix: String = component.chars().take_while(|character| !matches!(character, '*' | '?' | '[')).collect();
+  prefix.len() >= SESSION_PREFIX_MIN
+    && prefix.chars().all(|character| character.is_ascii_hexdigit() || character == '-')
 }
 
 /// The session store: `~/.charliebot/sessions`, the absolute home's, or `$CHARLIEBOT_HOME`'s.
@@ -438,6 +463,40 @@ fn enumeration_token(store: &str) -> String {
   )
 }
 
+/// Whether every per-session form the command holds is a bounded metadata loop. A loop of the form
+/// `ls */ | ... | while read id; do [ -f "$id/metadata.json" ] ...; done` lists the store's top level in one process
+/// and only tests one top-level file per session with shell builtins, so its work does not grow with the store's file
+/// contents. The same body on a `for ... in */` list stays refused: that form is also the one-process-per-session
+/// shape. Any other per-session form left after the bounded loops are masked keeps the refusal.
+fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
+  let mut spans = Vec::new();
+  for captures in metadata_loop_pattern()?.captures_iter(shell) {
+    let captures = captures.map_err(parse_error)?;
+    let whole = captures.get(0).expect("the metadata loop pattern has a whole match");
+    let body = captures.name("body").map_or("", |body| body.as_str());
+    let list = captures.name("list").map_or("", |list| list.as_str());
+    if !body.contains(METADATA_FILE_NAME)
+      || loop_external_pattern()?.is_match(body).map_err(parse_error)?
+      || content_reader_pattern()?.is_match(list).map_err(parse_error)?
+    {
+      continue;
+    }
+    spans.push((whole.start(), whole.end()));
+  }
+  if spans.is_empty() {
+    return Ok(false);
+  }
+  let mut masked = String::with_capacity(shell.len());
+  let mut last = 0;
+  for (start, end) in spans {
+    masked.push_str(&shell[last..start]);
+    masked.push_str(&" ".repeat(shell[start..end].chars().count()));
+    last = end;
+  }
+  masked.push_str(&shell[last..]);
+  Ok(!per_file_process_pattern()?.is_match(&masked).map_err(parse_error)?)
+}
+
 /// (a) One process per session directory at the shell level: a `for` loop over an enumeration, an enumeration piped to
 /// `while read`, `xargs -n1` after a store path, or `find <store> -exec`.
 fn per_file_process_pattern() -> Result<&'static Regex, String> {
@@ -460,6 +519,32 @@ fn per_file_process_pattern() -> Result<&'static Regex, String> {
     })
     .as_ref()
     .map_err(Clone::clone)
+}
+
+/// A `| while read` loop over an enumeration, with the item list before the pipe and the body after `do`, up to
+/// `done`. The list is checked for a content reader, and the body for a per-item process.
+fn metadata_loop_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN
+    .get_or_init(|| {
+      Regex::new(&format!(
+        concat!(r"(?s)(?P<list>{enumeration}[^;\n]*)\|\s*while\s+read\b[^;]*;\s*do\b", r"(?P<body>.*?)\bdone\b"),
+        enumeration = enumeration_token(&store_token()?)
+      ))
+      .map_err(parse_error)
+    })
+    .as_ref()
+    .map_err(Clone::clone)
+}
+
+fn loop_external_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN.get_or_init(|| Regex::new(LOOP_EXTERNAL).map_err(parse_error)).as_ref().map_err(Clone::clone)
+}
+
+fn content_reader_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN.get_or_init(|| Regex::new(CONTENT_READERS).map_err(parse_error)).as_ref().map_err(Clone::clone)
 }
 
 /// (b) A search from `/`, `/home` or the home directory itself, with its arguments on both sides.
@@ -729,6 +814,37 @@ mod tests {
     ];
     for command in commands {
       assert!(scan_forms(&command, &home()).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn bounded_metadata_loops_and_session_id_prefix_globs_pass() {
+    let home = home();
+    let passed = [
+      // A top-level listing whose body only tests one session's metadata.json with shell builtins.
+      format!(
+        "cd {home}/.charliebot/sessions && ls -d */ | sed 's#/##' | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done > /tmp/ids.txt"
+      ),
+      // A glob under one session id prefix names one session, not every session.
+      format!("grep -l X {home}/.charliebot/sessions/dfb20fec*/specs/*"),
+      format!("grep -l X {home}/.charliebot/sessions/d7645e8f-*/data/runs/*/events.jsonl"),
+    ];
+    for command in passed {
+      assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+    }
+    let denied = [
+      // The same builtin body on a `for ... in */` list is the one-process-per-session shape.
+      format!("cd {home}/.charliebot/sessions && for id in */; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"),
+      // A body that starts a process for every matched session.
+      format!(
+        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do jq -r .name \"$id/metadata.json\"; done"
+      ),
+      // A short prefix, or one that is not a session id, can match many sessions.
+      format!("grep -l X {home}/.charliebot/sessions/1680*/specs/*"),
+      format!("grep -l X {home}/.charliebot/sessions/session-*/specs/*"),
+    ];
+    for command in denied {
+      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
     }
   }
 

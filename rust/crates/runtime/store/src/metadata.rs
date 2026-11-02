@@ -42,6 +42,12 @@ pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
+/// The session-metadata field saying whether a trigger waits for the session.
+pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
+/// The session-metadata field holding the number of triggers waiting for the session.
+pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
+/// The session-metadata field holding the next instant a waiting trigger fires.
+pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
 
 /// Datetime stored as UTC with Python's Pydantic `Z` and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -610,9 +616,9 @@ impl SessionMetadata {
     if !exclude_transient {
       push(&mut declared, "has_running_tasks", &self.has_running_tasks);
       push(&mut declared, WORK_STATE, &self.work_state);
-      push(&mut declared, "has_pending_trigger", &self.has_pending_trigger);
-      push(&mut declared, "pending_trigger_count", &self.pending_trigger_count);
-      push(&mut declared, "next_trigger_at", &self.next_trigger_at);
+      push(&mut declared, HAS_PENDING_TRIGGER, &self.has_pending_trigger);
+      push(&mut declared, PENDING_TRIGGER_COUNT, &self.pending_trigger_count);
+      push(&mut declared, NEXT_TRIGGER_AT, &self.next_trigger_at);
       push(&mut declared, "has_pending_plan_approval", &self.has_pending_plan_approval);
     }
     push(&mut declared, "starred", &self.starred);

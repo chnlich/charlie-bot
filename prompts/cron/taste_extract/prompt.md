@@ -9,8 +9,10 @@ Read these two files before you write a row or a memory change:
 
 ## Candidates
 
-The run reads the candidates that `charliebot taste candidates` prints for its window. Each candidate
-carries:
+The run reads the candidates that `charliebot taste candidates` prints for its window. The window of the
+daily run is the 24 hours before its scheduled time. The window of a backfill is the one its task names.
+Each candidate carries:
+- `source`: `comments`, `notes`, `downvote-replies` or `chat`;
 - `text`: the user's own words;
 - `previous_web_reply`: the reply the user read before writing `text`, which states the question and the
   recommendation;
@@ -69,12 +71,13 @@ of active rows.
 
 Fill `supersedes` with an active row's id when all of these hold:
 - the row is in the same domain;
-- the row's situation is the same situation, not only the same domain;
+- the row's situation matches the new situation;
 - the new choice is the opposite of the row's `chosen`.
 
-When the new choice reverses a rule that a memory entry states, stage a memory revision candidate with
-`charliebot memory add`, following the `llm-context-guideline` skill. Its first line is `# <title>`, and its
-body names the target entry and the change.
+When the reversed row is covered by a memory entry, or a memory entry states the rule that the new choice
+reverses, stage a memory revision candidate with `charliebot memory add`, following the
+`llm-context-guideline` skill. Its first line is `# <title>`, and its body names the target entry and the
+change.
 
 ## Patterns on Mondays
 

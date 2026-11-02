@@ -340,14 +340,14 @@ const LIVE_API_BASE: &str = "http://127.0.0.1:9/v1";
 /// The `credentials.yaml` section the live endpoint names when it needs the live key.
 const LIVE_CREDENTIAL: &str = "deploy-endpoint";
 
-/// A live home holding one `backends.options` entry with an `api_base`. With `credential`, the entry names that
-/// section of the live credentials file and the file holds its `api_key`; without it, the credentials file holds no
-/// backend section.
+/// A live home holding one `backends.options` entry with an `api_base`, and no other key: the live config's key set, so
+/// the guard switch and the runner section are absent. With `credential`, the entry names that section of the live
+/// credentials file and the file holds its `api_key`; without it, the credentials file holds no backend section.
 fn live_home(sandbox: &Sandbox, credential: bool) -> PathBuf {
   let home = sandbox.dir("live-home");
   let mut config = format!(
-    "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: deploy-endpoint\n      label: Test \
-endpoint\n      type: charlie-code\n      model: openai/test-model\n      api_base: {LIVE_API_BASE}\n"
+    "backends:\n  options:\n    - id: deploy-endpoint\n      label: Test endpoint\n      type: charlie-code\n      \
+     model: openai/test-model\n      api_base: {LIVE_API_BASE}\n"
   );
   let mut credentials = String::new();
   if credential {
@@ -360,27 +360,13 @@ endpoint\n      type: charlie-code\n      model: openai/test-model\n      api_ba
   home
 }
 
-/// A live home like [`live_home`] with the local work guard on and, when `runner_host` is set, the runner section.
-fn guarded_live_home(sandbox: &Sandbox, runner_host: Option<&str>) -> PathBuf {
-  let home = live_home(sandbox, false);
-  let config = fs::read_to_string(home.join("config.yaml")).expect("the live config");
-  let config =
-    config.replace("server:\n  enable_local_work_guard: false\n", "server:\n  enable_local_work_guard: true\n");
-  let config = match runner_host {
-    Some(host) => format!("{config}remote_run:\n  host: {host}\n"),
-    None => config,
-  };
-  fs::write(home.join("config.yaml"), config).expect("the live config");
-  home
-}
-
 /// A live home whose only backend entry sets no `api_base`.
 fn live_home_without_an_endpoint(sandbox: &Sandbox) -> PathBuf {
   let home = sandbox.dir("live-home");
   fs::write(
     home.join("config.yaml"),
-    "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: subscription\n      label: Test \
-subscription\n      type: charlie-code\n      model: openai/test-model\n",
+    "backends:\n  options:\n    - id: subscription\n      label: Test subscription\n      type: charlie-code\n      \
+     model: openai/test-model\n",
   )
   .expect("the live config");
   fs::write(home.join("credentials.yaml"), format!("charliebot:\n  access_key: {}\n", "0".repeat(64)))
@@ -588,45 +574,28 @@ fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
 }
 
 #[test]
-fn test_trial_preflight_refuses_a_live_config_whose_guard_runs_without_a_runner_host() {
+fn test_trial_preflight_accepts_a_live_config_with_only_the_endpoint_key_set() {
   let sandbox = Sandbox::new();
   sandbox.stub("charlie-code", "exit 0\n");
-  let home = guarded_live_home(&sandbox, None);
+  let home = live_home(&sandbox, false);
   let (release, calls) = write_trial_release(&sandbox);
 
   let run = trial_preflight(&sandbox, &home, &release);
 
+  // free-port still refuses, so nothing starts. The live config has no guard switch and no runner section, and the
+  // switch reads as its default, so every check before free-port passes.
   assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("runs the local work guard without remote_run.host"), "{}", run.describe());
+  assert!(
+    run.stderr.contains("a free 127.0.0.1 port exists in 18650-18669")
+      || run.stderr.contains("agents' slice cgroup directory is writable"),
+    "the preflight did not stop at the port or cgroup check: {}",
+    run.describe()
+  );
   let calls = recorded_calls(&calls);
   assert!(
     calls.contains("config get server.enable_local_work_guard"),
     "the preflight did not read the switch: {calls}"
   );
-  assert!(calls.contains("config get remote_run.host"), "the preflight did not read the runner host: {calls}");
-  assert!(!calls.contains("free-port"), "the refusal started the trial: {calls}");
-}
-
-#[test]
-fn test_trial_preflight_accepts_a_live_config_whose_guard_runs_with_a_runner_host() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("charlie-code", "exit 0\n");
-  let home = guarded_live_home(&sandbox, Some("build-host.example"));
-  let (release, calls) = write_trial_release(&sandbox);
-
-  let run = trial_preflight(&sandbox, &home, &release);
-
-  // free-port still refuses, so nothing starts; the guard check is not what stopped the preflight.
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(!run.stderr.contains("remote_run.host"), "{}", run.describe());
-  assert!(
-    run.stderr.contains("a free 127.0.0.1 port exists in 18650-18669")
-      || run.stderr.contains("agents' slice cgroup directory is writable"),
-    "the preflight stopped at the guard check: {}",
-    run.describe()
-  );
-  let calls = recorded_calls(&calls);
-  assert!(calls.contains("config get remote_run.host"), "the preflight did not read the runner host: {calls}");
 }
 
 #[test]
@@ -752,7 +721,7 @@ impl ServeWorld {
     let live_home = sandbox.dir("live-home");
     fs::write(
       live_home.join("config.yaml"),
-      "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+      "backends:\n  options:\n    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
     )
     .expect("the live config");
     fs::write(live_home.join("credentials.yaml"), "serve-test:\n  api_key: not-a-real-key\n").expect("the credentials");

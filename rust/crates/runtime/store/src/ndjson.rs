@@ -6,9 +6,10 @@ use charliebot_core::fsutil;
 use charliebot_core::text_repr::{self, JsonStyle};
 use memchr::memchr_iter;
 use memmap2::Mmap;
+use serde::de::DeserializeSeed;
 use serde_json::Value;
 
-use crate::compact::CompactValue;
+use crate::compact::{CompactValue, ParseKeys, ValueSeed};
 use crate::{StoreError, StoreResult};
 
 const APPEND_JSON: JsonStyle =
@@ -21,13 +22,32 @@ const APPEND_JSON: JsonStyle =
 /// through the visitor in `compact`. That visitor produces the same value a `serde_json::Value`
 /// round trip would have.
 pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
+  parse_line(raw, |text| serde_json::from_str(text).ok())
+}
+
+/// [`parse_line_compact`] with the object keys taken from one file's `keys`.
+fn parse_file_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
+  parse_line(raw, |text| {
+    // `serde_json::from_str` is this deserialize followed by the check that only whitespace remains.
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let value = ValueSeed(keys).deserialize(&mut deserializer).ok()?;
+    deserializer.end().ok()?;
+    Some(value)
+  })
+}
+
+fn parse_line(raw: &[u8], parse: impl Fn(&str) -> Option<CompactValue>) -> Option<CompactValue> {
   if raw.iter().all(u8::is_ascii_whitespace) {
     return None;
   }
   #[cfg(test)]
   LINE_PARSES.with(|count| count.set(count.get() + 1));
-  let text = String::from_utf8_lossy(raw);
-  serde_json::from_str(&text).ok()
+  // `from_utf8` validates word-at-a-time, and `from_utf8_lossy` walks byte by byte even over valid text. A valid line,
+  // which a lossy decode returns unchanged, takes the fast check.
+  match std::str::from_utf8(raw) {
+    Ok(text) => parse(text),
+    Err(_) => parse(&String::from_utf8_lossy(raw)),
+  }
 }
 
 // How many lines this thread's parser attempted, a test-only count that proves a reader parses each
@@ -77,22 +97,23 @@ fn open_log_map(path: &Path) -> StoreResult<Option<Mmap>> {
 
 /// Parse every `\n`-bounded slice plus the final fragment, checking `should_stop` before each parse and once
 /// after the last one, which is the check order `BufReader::split` had. A blank or malformed line skips.
-/// `None` marks a cancelled read.
+/// `None` marks a cancelled read. The lines share one [`ParseKeys`], so parses of different files run in parallel.
 fn parse_mapped_lines(bytes: &[u8], should_stop: &mut impl FnMut() -> bool) -> Option<Vec<CompactValue>> {
+  let keys = ParseKeys::default();
   let mut events = Vec::new();
   let mut start = 0;
   for boundary in memchr_iter(b'\n', bytes) {
     if should_stop() {
       return None;
     }
-    events.extend(parse_line_compact(&bytes[start..boundary]));
+    events.extend(parse_file_line(&bytes[start..boundary], &keys));
     start = boundary + 1;
   }
   if start < bytes.len() {
     if should_stop() {
       return None;
     }
-    events.extend(parse_line_compact(&bytes[start..]));
+    events.extend(parse_file_line(&bytes[start..], &keys));
   }
   if should_stop() {
     return None;
@@ -217,12 +238,15 @@ mod tests {
       b"{broken",
       b"{\"text\": \"ok\xff\"}",
       "\u{65e5}\u{672c}\u{8a9e} raw bytes".as_bytes(),
+      br#"{"a": 1} trailing"#,
     ];
+    let file_keys = ParseKeys::default();
     for line in lines {
       let reference = serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(line))
         .ok()
         .map(|value| CompactValue::from_value(&value));
       assert_eq!(parse_line_compact(line), reference, "line {line:?}");
+      assert_eq!(parse_file_line(line, &file_keys), reference, "a whole-file parse of line {line:?}");
     }
   }
 

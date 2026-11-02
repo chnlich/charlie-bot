@@ -353,7 +353,9 @@ function _buildRow(key, providerData) {
     const s24 = _el('span', '');
     s24.setAttribute('data-field', 'spend-24h');
     s24.textContent = _formatSpendUsd(spend.last_24h_usd);
-    const dot = _el('span', 'text-slate-700');
+    // The separator is a glyph the reader sees: slate-400 renders 6.0:1 on the strip, where
+    // slate-700's 1.48:1 leaves the 24h and 7d readings without a boundary.
+    const dot = _el('span', 'text-slate-400');
     dot.textContent = '·';
     const l7 = _el('span', '');
     l7.textContent = '7d:';
@@ -411,7 +413,9 @@ function _buildSummaryRow(providers) {
   let first = true;
   for (const [key, providerData] of Object.entries(providers)) {
     if (!first) {
-      const sep = _el('span', 'text-slate-700');
+      // The account boundary in the collapsed summary. slate-400 renders 6.0:1 on the strip,
+      // where slate-700's 1.48:1 hides the dot and runs two accounts into one phrase.
+      const sep = _el('span', 'text-slate-400');
       sep.textContent = '·';
       row.appendChild(sep);
     }

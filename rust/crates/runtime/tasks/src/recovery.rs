@@ -1,7 +1,6 @@
-//! The startup reconcile of task-tree nodes (`src/runtime/task_recovery.py`, `task_execution.py:2668-2914`), the
-//! end-landing retry, and the let-go step at shutdown.
+//! The startup reconcile of task-tree nodes, the end-landing retry, and the let-go step at shutdown.
 //!
-//! A node pass runs its steps in Python's order: an interrupted prompt edit lands its fact; stop requests win; a
+//! A node pass runs its steps in this order: an interrupted prompt edit lands its fact; stop requests win; a
 //! launched run re-attaches (live) or drains (dead); the follow-ups of terminal runs replay once; undelivered reports
 //! are recovered; pending inputs dispatch. A replay step whose owning task has not landed fails the pass with an error
 //! that names the owner; the call sites are listed in `README.md`.
@@ -49,8 +48,8 @@ use crate::spawner_prompt;
 pub use crate::execution::{RUN_END_LANDING_RETRY_INTERVAL, closed_task_stop_request_id};
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const BOOT_RECOVERY_MARKER_PATH: &str = "state/boot_recovery.json";
-/// A durable file whose mtime is no earlier than the marker minus this slack keeps its node
-/// (`src/runtime/task_recovery.py`, `MARKER_MTIME_SLACK_SECONDS`). The kernel stamps `st_mtime` from its coarse clock,
+/// A durable file whose mtime is no earlier than the marker minus this slack keeps its node.
+/// The kernel stamps `st_mtime` from its coarse clock,
 /// which can lag the fine-clock pass start by about two ticks (~2 ms at 500 Hz), so the slack must exceed that lag.
 const MARKER_MTIME_SLACK_SECONDS: f64 = 1.0;
 
@@ -59,7 +58,7 @@ fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
 }
 
 /// The last clean pass's start time, or None when the marker is absent or unreadable. None makes the pass check every
-/// node in full (`src/runtime/task_recovery.py:58-74`). Other read errors, such as a permission error, propagate.
+/// node in full. Other read errors, such as a permission error, propagate.
 fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<UtcDateTime>> {
   let path = boot_recovery_marker_path(home);
   let raw = match std::fs::read(&path) {
@@ -76,8 +75,8 @@ fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<Ut
   }
 }
 
-/// The pass start that a marker's bytes hold. On failure, the Python exception name that the boot logs as `error_type`.
-/// Python logs only that name, so the parser's own message is not kept.
+/// The pass start that a marker's bytes hold. On failure, the exception name that the boot logs as `error_type`.
+/// The boot logs only that name, so the parser's own message is not kept.
 fn parse_boot_recovery_marker(raw: &[u8]) -> Result<UtcDateTime, &'static str> {
   let text = std::str::from_utf8(raw).map_err(|_| "UnicodeDecodeError")?;
   let payload: Value = serde_json::from_str(text).map_err(|_| "JSONDecodeError")?;
@@ -139,8 +138,8 @@ fn boot_skip_reason(
       return Ok(Some("sequence_ref"));
     }
     if let Some(worktree_path) = run.worktree_path.as_deref().filter(|path| !path.is_empty()) {
-      // Python's os.path.lexists (src/runtime/task_recovery.py:119) reads any OSError as absent, so the pass
-      // continues past a path that cannot be stat'ed. The warning keeps that error visible.
+      // A path that cannot be stat'ed counts as absent, so the pass continues past it. An error other than
+      // not-found logs a warning, which keeps that error visible.
       match std::fs::symlink_metadata(worktree_path) {
         Ok(_) => return Ok(Some("worktree_exists")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -250,8 +249,8 @@ impl TaskExecutionAdapter {
   }
 }
 
-/// The startup recovery step (`_run_task_recovery`): a pass error is logged and the server starts anyway, as Python's
-/// `_run_task_recovery` does. The adapter is a wiring fact, so its absence fails startup.
+/// The startup recovery step: a pass error is logged and the server starts anyway. The adapter is a wiring fact, so its
+/// absence fails startup.
 pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let adapter = features.startup.require::<TaskExecutionAdapter>()?;
@@ -300,11 +299,11 @@ async fn wait_test_recovery_gate(features: &FeatureContext) -> anyhow::Result<()
   Ok(())
 }
 
-/// On SIGINT and bind failure, cancel each run launch and then each session consumer after `server.py:293-310`, as
-/// `asyncio.run` does (`asyncio/runners.py:66-75`). A cancelled launch leaves its run for the next boot
-/// (`TaskExecutionAdapter::let_go_launches`); each running turn follows `master_cc_run.py:648-664`. The launches go
-/// first so that a manager launch never reaches the stopped queue. SIGTERM skips this step because Uvicorn re-raises it
-/// first (`uvicorn/server.py:322-339`). A failure of the first half still runs the second.
+/// On SIGINT and bind failure, cancel each run launch and then each session consumer. A cancelled launch leaves its run
+/// for the next boot (`TaskExecutionAdapter::let_go_launches`); each running turn detaches when its record is durable
+/// and terminates otherwise. The launches go first so that a manager launch never reaches the stopped queue. SIGTERM
+/// skips this step: the server restores the default disposition and raises SIGTERM again. A failure of the first half
+/// still runs the second.
 pub fn let_go_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let adapter = features.startup.require::<TaskExecutionAdapter>()?;
@@ -660,8 +659,8 @@ async fn reconcile_node_inner(
     };
     replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records, stop).await?;
   } else {
-    // Python refreshes the records in `_replay_followups` (`task_execution.py:2846-2864`). Reusing this sorted
-    // snapshot is equivalent when steps 1 and 2 made no record changes, avoiding another run-directory scan per node.
+    // Reusing this sorted snapshot is equivalent when steps 1 and 2 made no record changes, and it avoids another
+    // run-directory scan per node.
     replay_followups_with_records(features, adapter, session_id, counters, &run_records, stop).await?;
   }
   if stop.is_some_and(StartupStop::is_cancelled) {
@@ -687,7 +686,7 @@ pub async fn replay_followups(
 }
 
 /// Replay from the current run-record snapshot, shared with the preceding reconcile steps when they changed no
-/// records. Python loads this list separately in `_replay_followups` (`task_execution.py:2846-2864`).
+/// records. `replay_followups` loads this list itself.
 async fn replay_followups_with_records(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
@@ -730,8 +729,8 @@ async fn replay_followups_with_records(
     if let Some(sequence) = &run.sequence_ref {
       match controller_for_sequence(features, &sequence.kind) {
         None => {
-          // The owning task's controller is not ported, so no terminal fact is written for this run. The interrupted
-          // finish below is Python's branch for a package that is gone.
+          // The owning task's controller has not landed, so no terminal fact is written for this run. The interrupted
+          // finish below is the branch for a package that is gone.
           if UNLANDED_SEQUENCE_KINDS.contains(&sequence.kind.as_str()) {
             let step = format!("the recovery of {} sequence run {}", sequence.kind, run.id);
             bail!(owner_not_landed(&sequence.kind, &step));
@@ -1046,9 +1045,8 @@ async fn enqueue_manager_resume(
         pid_start: Some(pid_start),
         started_at,
         raw_log,
-        // A resumed turn records no input ids: task_execution._resume_manager_turn builds its
-        // MasterRunRecord without them, and master_cc_queue.py only sets master_done input ids when
-        // the item has them.
+        // A resumed turn records no input ids: its MasterRunRecord is built without them, and master_done input ids
+        // are set only when the item has them.
         user_event_ids: Vec::new(),
       },
       callbacks,
@@ -1264,7 +1262,7 @@ impl SequenceSessionEvents for StoreSessionEvents {
   }
 }
 
-/// The sequence kinds whose controllers Python registers but the port has not landed: a run of one of these kinds fails
+/// The sequence kinds whose controllers have not landed: a run of one of these kinds fails
 /// the node pass by name. The owning task is named by the kind. Each task deletes its entry when it registers its
 /// controller.
 const UNLANDED_SEQUENCE_KINDS: &[&str] = &["improve"];
@@ -1299,7 +1297,7 @@ fn profile_name(profile: TaskProfile) -> &'static str {
   }
 }
 
-/// A file time as the store's UTC timestamp, truncated to microseconds as Python's datetime is.
+/// A file time as the store's UTC timestamp, truncated to microseconds.
 fn to_utc(value: OffsetDateTime) -> anyhow::Result<UtcDateTime> {
   let micros = value.replace_nanosecond(value.nanosecond() / 1_000 * 1_000)?;
   let text = micros.format(&Rfc3339)?;
@@ -1477,7 +1475,6 @@ mod tests {
 
   #[tokio::test]
   async fn a_retry_waits_for_its_triggering_run_to_leave_the_launch_set() {
-    // Python: tests/test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives.
     let driven = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let release = Arc::clone(&driven);
     tokio::spawn(async move {
@@ -1820,7 +1817,6 @@ mod tests {
     assert_eq!(large.folded_events, large_events as u64, "each event folds once: many={large:?}");
   }
 
-  /// Python: `test_marker_write_fsyncs_the_temp_file_before_the_rename`.
   #[cfg(feature = "test-hooks")]
   #[test]
   fn the_marker_write_syncs_the_temporary_file_once_before_the_rename() {
@@ -1839,7 +1835,6 @@ mod tests {
     assert!(!marker_path.with_extension("json.tmp").exists(), "the rename consumes the temporary file");
   }
 
-  /// Python: `test_mtime_slack_bounds_the_marker_comparison`.
   #[tokio::test]
   async fn a_file_up_to_the_mtime_slack_before_the_marker_keeps_its_node() {
     let (_home, features) = startup_features().await;

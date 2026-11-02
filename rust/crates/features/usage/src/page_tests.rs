@@ -1,4 +1,4 @@
-//! The usage page's tests (`tests/test_token_usage_page.py`): the rows, tiles and stamps of a seeded ledger, and of
+//! The usage page's tests: the rows, tiles and stamps of a seeded ledger, and of
 //! synthetic rows with no ledger behind them. The page never captures, so no test reads a real home or log.
 
 use std::collections::{BTreeMap, BTreeSet};

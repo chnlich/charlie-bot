@@ -1,4 +1,4 @@
-//! The session usage owner, ported from `session_usage.py`.
+//! The session usage owner.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -147,7 +147,7 @@ impl UsageFold {
     if self.unknown_cost || self.total_cost <= 0.0 {
       None
     } else {
-      // Python's round(total, 4) rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
+      // Rounding to four places rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
       Some(format!("{:.4}", self.total_cost).parse().expect("a formatted float parses back"))
     }
   }
@@ -388,7 +388,7 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, ru
     Some(limit) => {
       let input = limit.get("input").and_then(int_value);
       let output = limit.get("output").and_then(int_value);
-      // Python's `limit.get("output", 0)`: only a missing key defaults to zero.
+      // Only a missing key defaults to zero.
       let output_for_input = output.or_else(|| (!limit.contains_key("output")).then_some(0));
       let context = limit.get("context").and_then(int_value);
       if let (Some(input), Some(output)) = (input, output_for_input) {
@@ -432,7 +432,7 @@ fn subtract_reserve(full: Option<i64>, limits: ContextLimits) -> Option<i64> {
 
 /// The compaction line of a snapshot reading: `full` minus the registered reserve, bounded by the output cap.
 fn snapshot_compact_at(full: i64, output: i64, registry: &Registry, run_kind: RunKind) -> Option<i64> {
-  // The backend option selects only the claude limits, as in Python's `_snapshot_full_and_compact`.
+  // The backend option selects only the claude limits.
   let reserve =
     registry.reading_limits_for(SNAPSHOT_READING_KIND, run_kind, None).and_then(|limits| limits.compact_reserve);
   reserve.map(|reserve| full - i64::try_from(reserve).expect("compact reserve fits i64").min(output))
@@ -454,7 +454,7 @@ fn usage_value(
   })
 }
 
-/// CPython truthiness of one borrowed event field, `None` included.
+/// Truthiness of one borrowed event field, with `None` false.
 fn truthy_field<E: EventFields>(value: Option<&E>) -> bool {
   value.is_some_and(is_truthy)
 }
@@ -635,7 +635,6 @@ mod tests {
     assert_eq!(usage["total_cost_usd"], 0.25);
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py:111.
   #[test]
   fn anthropic_compatible_usage_uses_the_option_context_window() {
     let mut registry = Registry::new();
@@ -752,7 +751,7 @@ mod tests {
 
   #[test]
   fn total_cost_rounds_the_exact_binary_value() {
-    // Python: round(0.12345, 4) == 0.1235 and round(2.67895, 4) == 2.6789; scaling by 10_000 gets the first wrong.
+    // Rounding to four places gives 0.1235 for 0.12345 and 2.6789 for 2.67895; scaling by 10_000 gets the first wrong.
     for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
       let events = vec![json!({"type": "result", "total_cost_usd": cost})];
       assert_eq!(
@@ -862,7 +861,6 @@ mod tests {
     })
   }
 
-  // Python: tests/test_session_usage.py::test_snapshot_tier_window_and_compaction_line.
   #[test]
   fn snapshot_tier_uses_the_context_window_and_the_reserve_bounded_by_output() {
     let registry = registry_with_snapshot_limits(register_opencode_snapshot_limits);
@@ -891,7 +889,6 @@ mod tests {
     }
   }
 
-  // Python: tests/test_session_usage.py::test_snapshot_tier_reads_compaction_reserve.
   #[test]
   fn snapshot_tier_reads_the_registered_compaction_reserve() {
     let limit = json!({"context": 420_000, "output": 384_000});
@@ -1017,7 +1014,6 @@ mod tests {
     assert_eq!(replaced["total_cost_usd"], 0.4);
   }
 
-  // Python: tests/test_session_usage.py:334.
   #[test]
   fn context_compacted_post_tokens_becomes_the_claude_reading() {
     let now = UtcDateTime::parse("2026-09-06T20:00:00Z").unwrap();

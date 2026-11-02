@@ -1,6 +1,6 @@
-//! The trigger-file walk shared by sidebar probes and trigger readers. Its three stat-keyed memos follow
-//! `src/runtime/session_sidebar.py:94-145,193-226`: 1024 parsed files, 1024 directory verdicts, and 4096 walks.
-//! This module also owns the trigger record and its file: the record type, the one read and the one write.
+//! The trigger-file walk shared by sidebar probes and trigger readers. Its three stat-keyed memos hold 1024 parsed
+//! files, 1024 directory verdicts, and 4096 walks. This module also owns the trigger record and its file: the record
+//! type, the one read and the one write.
 
 #[cfg(test)]
 use std::collections::HashMap;
@@ -210,21 +210,21 @@ impl std::error::Error for TriggerReadError {}
 
 /// The trigger file at `path` as its JSON document: the store's one decode of the raw document, for the readers
 /// that check the record's fields one by one. A missing file is `Err` with `NotFound`, so the caller decides
-/// whether that means no record, and a document that is not one JSON value is the parse error of the file.
+/// whether that means no record. A document that is not one JSON value is the parse error of the file.
 pub fn read_trigger_value(path: &Path) -> Result<Value, TriggerReadError> {
   let text = fs::read_to_string(path).map_err(TriggerReadError::Io)?;
   serde_json::from_str(&text).map_err(TriggerReadError::Json)
 }
 
 /// The trigger file at `path` as its trigger record. A missing file fails the read with the io error, and a file
-/// that does not decode into a record fails with the parse error, each under the read's or the parse's context.
+/// that does not decode into a record fails with the parse error. Each error carries the read's or the parse's context.
 pub fn read_trigger(path: &Path) -> anyhow::Result<PendingTrigger> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
 }
 
 /// Write one trigger record to its file under the session directory's trigger directory, replacing the file, and
-/// mark the session's sidebar stale. Python writes `model_dump_json(indent=2)` as it is, with no trailing newline.
+/// mark the session's sidebar stale. The file is JSON indented by two spaces, with no trailing newline.
 pub fn write_trigger(session_dir: &Path, trigger: &PendingTrigger) -> anyhow::Result<()> {
   let path = trigger_path(session_dir, &trigger.id);
   let parent = path.parent().expect("trigger file path has a parent");
@@ -235,7 +235,7 @@ pub fn write_trigger(session_dir: &Path, trigger: &PendingTrigger) -> anyhow::Re
   Ok(())
 }
 
-/// A trigger status written by Python as a string enum.
+/// A trigger status, stored as its string value.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerStatus {
@@ -252,7 +252,7 @@ pub const LOCAL_PID_KIND: &str = "local_pid";
 pub const REMOTE_PID_KIND: &str = "remote_pid";
 pub const SLURM_JOB_KIND: &str = "slurm_job";
 
-/// A tagged watched target. The discriminator and field order match Python's `WatchTarget` models.
+/// A tagged watched target. The discriminator and field order match the stored file format.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 pub enum WatchTarget {
@@ -334,7 +334,6 @@ mod tests {
 
   #[test]
   fn walk_returns_trigger_files_sorted_by_name() {
-    // Python: src/runtime/trigger_files.py:24
     let root = tempfile::tempdir().unwrap();
     for name in ["e.json", "b.json", "h.json", "a.json", "g.json", "c.json", "f.json", "d.json"] {
       fs::write(root.path().join(name), "{}").unwrap();
@@ -376,7 +375,7 @@ mod tests {
   }
 
   /// The raw read: a missing file is `Err` with `NotFound`, and a file that is not one JSON value is the parse
-  /// error, so a reader that skips bad files decides from the error.
+  /// error. A reader that skips bad files therefore decides from the error.
   #[test]
   fn read_trigger_value_reports_a_missing_file_and_a_bad_file() {
     let root = tempfile::tempdir().unwrap();

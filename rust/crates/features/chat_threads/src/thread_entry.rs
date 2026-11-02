@@ -1,15 +1,15 @@
-//! The shared thread core (`src/features/chat_threads/thread_entry.py`): the platform description, the adapter surface,
+//! The shared thread core: the platform description, the adapter surface,
 //! the reply contract, and the entries the Slack and Discord listeners call. A listener builds one `ThreadPlatform`
 //! from its constants, implements `ThreadAdapter` over its client, and calls these entries with the adapter.
 //!
-//! Public API, each item with its Python anchor (names in `thread_entry.py` unless a path is given):
-//! - `ThreadPlatform` (`ThreadPlatform`): the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
+//! Public API:
+//! - `ThreadPlatform`: the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
 //!   derive the marker keys from `name`.
-//! - `IdOrdering` (`ThreadPlatform.id_key`): text order for Slack ts strings, integer order for Discord snowflakes.
-//! - `ThreadMessage` (`ThreadMessage`) and `ThreadAdapter` (`ThreadAdapter`): the message the round side reads, and the
+//! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes.
+//! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
 //!   platform face of the entries.
-//! - `ThreadReplyError` (`ThreadReplyError`) with `ThreadDetail`: a refusal with its HTTP status and detail; an
-//!   unplanned failure answers 500 "Internal Server Error", as Python's unhandled exception does.
+//! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
+//!   unplanned failure answers 500 "Internal Server Error".
 //! - `load_prompt_doc`, `thread_reply_contract`, `thread_reply_segment`: the reply contract (`LINKED_PAGES_LINE` joins
 //!   it for every platform).
 //! - Pure helpers: `follow_wake_label`, `follow_floor`, `chunk_text`, `event_by_id`, `summon_of`, `newest_thread_input`,
@@ -58,9 +58,9 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-/// The scope of a rule segment's sources (`task_prompts.SCOPE_BASE`).
+/// The scope of a rule segment's sources.
 const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment (`task_prompts.DELIVERY_FULL`).
+/// The delivery of a full text segment.
 const DELIVERY_FULL: &str = "full";
 /// The page-delivery sentence every platform's contract line carries: the reply path posts the text as written and
 /// refuses a file-server link (`LINKED_PAGES_LINE`).
@@ -72,24 +72,24 @@ pub const LINKED_PAGES_LINE: &str = concat!(
 const REDLINE_DOC: &str = "thread_reply_redline.md";
 /// The reply-format doc every platform's contract carries.
 const REPLY_FORMAT_DOC: &str = "thread_reply_format.md";
-/// Waits between the retries of one platform call (`_RETRY_DELAYS`); exhausting them logs an error, not a raise.
+/// Waits between the retries of one platform call; exhausting them logs an error, not a raise.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
-/// How much of an unread message's text the 412 refusal carries (`_TEXT_PREVIEW_CHARS`).
+/// How much of an unread message's text the 412 refusal carries.
 const TEXT_PREVIEW_CHARS: usize = 200;
-/// The reply budget the format contract states (`_REPLY_BUDGET_CHARS`): the depth goes to a page.
+/// The reply budget the format contract states: the depth goes to a page.
 const REPLY_BUDGET_CHARS: usize = 500;
-/// A thread-follow batch sleeps out this quiet delay from its newest message (`_FOLLOW_QUIET_SECONDS`).
+/// A thread-follow batch sleeps out this quiet delay from its newest message.
 const FOLLOW_QUIET_SECONDS: i64 = 10;
-/// A follow chain never runs past this cap from its first message (`_FOLLOW_CHAIN_CAP_SECONDS`).
+/// A follow chain never runs past this cap from its first message.
 const FOLLOW_CHAIN_CAP_SECONDS: i64 = 300;
-/// The house timezone of session display names (`config.HOUSE_TIMEZONE`).
+/// The house timezone of session display names.
 const HOUSE_TIMEZONE: Tz = chrono_tz::America::Los_Angeles;
-/// The notice a lost summon's thread receives (`_LOST_SUMMON_NOTICE`).
+/// The notice a lost summon's thread receives.
 const LOST_SUMMON_NOTICE: &str = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。";
-/// The notice a thread receives when neither its round nor its nudge round replied (`_NO_REPLY_NOTICE`).
+/// The notice a thread receives when neither its round nor its nudge round replied.
 const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details are in the session log. \
   Mention me again for a thread answer.";
-/// The follow-trigger floor the label carries (`_FOLLOW_FLOOR_RE`).
+/// The follow-trigger floor the label carries.
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
 static PARAGRAPH_SEPARATOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{2,}").expect("valid pattern"));
 static SESSION_LOCKS: LazyLock<StdMutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
@@ -117,7 +117,7 @@ pub struct ThreadPlatform {
   pub display_name: &'static str,
   /// The platform's reply event type.
   pub reply_event_type: &'static str,
-  /// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
+  /// The command the reply-format contract names for posting a reply.
   pub reply_command: &'static str,
   /// The platform's per-message character limit (`max_post_chars`).
   pub max_post_chars: usize,
@@ -158,12 +158,12 @@ impl ThreadPlatform {
   }
 }
 
-/// How a platform orders its message ids (`ThreadPlatform.id_key`).
+/// How a platform orders its message ids (`ThreadPlatform::id_key`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdOrdering {
   /// Slack's dotted ts strings, ordered as text (`str`).
   Text,
-  /// Discord's snowflakes, ordered as unsigned integers (`discord_client.snowflake_key`).
+  /// Discord's snowflakes, ordered as unsigned integers.
   Snowflake,
 }
 
@@ -175,7 +175,7 @@ pub enum IdKey<'a> {
 }
 
 impl IdOrdering {
-  /// The ordering key of `id`. A snowflake that is not an unsigned integer panics, as Python's `int()` raises.
+  /// The ordering key of `id`. A snowflake that is not an unsigned integer panics.
   pub fn key(self, id: &str) -> IdKey<'_> {
     match self {
       IdOrdering::Text => IdKey::Text(id),
@@ -273,7 +273,7 @@ pub trait ThreadAdapter: Send + Sync {
   fn log_fields(&self, address: &Value) -> Value;
 }
 
-/// The detail of a refusal: a plain text, or the structured 412 payload (`ThreadReplyError.detail`).
+/// The detail of a refusal: a plain text, or the structured 412 payload of `ThreadReplyError`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ThreadDetail {
   Text(String),
@@ -302,7 +302,7 @@ impl ThreadReplyError {
     Self { status, detail: ThreadDetail::Text(detail.into()) }
   }
 
-  /// An unplanned failure of a store or runtime call. It is logged here and answered as Python's unhandled exception
+  /// An unplanned failure of a store or runtime call. It is logged here and answered as an unhandled failure
   /// is: 500 with the text "Internal Server Error".
   pub fn failure(error: impl Display) -> Self {
     tracing::error!(error = %error, "thread_entry_failed");
@@ -330,8 +330,8 @@ impl From<anyhow::Error> for ThreadReplyError {
   }
 }
 
-/// Read one prompts doc fresh from disk, with universal newlines and Python's `str.strip()`
-/// (`load_prompt_doc`). A missing or unreadable doc fails with its name, its path and the likely cause.
+/// Read one prompts doc fresh from disk, with universal newlines and both-sided whitespace trimmed.
+/// A missing or unreadable doc fails with its name, its path and the likely cause.
 pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyhow::Result<String> {
   let path = repo.path().join("prompts").join(name);
   let bytes =
@@ -389,11 +389,11 @@ pub fn follow_floor(label: &str) -> Option<String> {
   FOLLOW_FLOOR_RE.captures(label).map(|captures| captures[1].to_string())
 }
 
-/// Split `text` into chunks of at most `limit` characters for sequential posting (`chunk_text`).
+/// Split `text` into chunks of at most `limit` characters for sequential posting.
 ///
 /// Greedy packing over paragraph units (a paragraph plus its trailing blank-line separator); a unit longer than
-/// `limit` falls to line units, and a line longer than `limit` is hard-cut. Lengths count characters, as Python's
-/// `len` counts code points. A whitespace-only chunk is dropped at return unless every chunk is whitespace.
+/// `limit` falls to line units, and a line longer than `limit` is hard-cut. Lengths count characters, as code
+/// points. A whitespace-only chunk is dropped at return unless every chunk is whitespace.
 pub fn chunk_text(text: &str, limit: usize) -> Vec<String> {
   if text.chars().count() <= limit {
     return vec![text.to_string()];
@@ -812,7 +812,7 @@ pub async fn post_reply_with_caller_context(
 
   let chars = text.chars().count();
   drop(bound);
-  // Python appends to its cached list in place (`chat_events.py:221-224`); release the Arc before the same write.
+  // The store appends to its cached event list in place; release the Arc before the same write.
   drop(chat_events);
   let payload = json!({"answers": answers, "chars": chars, "chunks": bodies.len()});
   let _event = if let (Some(request_id), Some(event_id)) = (request_id, event_id.as_deref()) {
@@ -1013,7 +1013,7 @@ pub async fn ack_messages(
   Ok(json!({"acked": ids.len(), format!("watermark_{}", platform.id_label): watermark}))
 }
 
-/// The nudge text the summon round's silence triggers (`_NUDGE_TEMPLATE`).
+/// The nudge text the summon round's silence triggers.
 fn nudge_text(platform: &ThreadPlatform) -> String {
   format!(
     "{} thread: the round answering this mention ended without posting a reply. Decide now:\n\
@@ -1723,7 +1723,7 @@ pub fn operator_only_note(links: &[String]) -> Option<String> {
   Some(format!("Application-route links stay as written; the operator alone can open them: {}", links.join(", ")))
 }
 
-/// The sessions' chat events in log order, read on a worker thread as `asyncio.to_thread` does.
+/// The sessions' chat events in log order, read on a worker thread.
 async fn load_chat_events(
   features: &FeatureContext,
   session_id: &str,
@@ -1743,7 +1743,7 @@ where
   Ok(joined.map_err(ThreadReplyError::failure)??)
 }
 
-/// Run `future` as its own task; a failure logs `background_task_failed` (`tasks.create_logged_task`).
+/// Run `future` as its own task; a failure logs `background_task_failed`.
 pub(crate) fn spawn_logged<E, F>(name: String, future: F) -> JoinHandle<()>
 where
   E: Display,
@@ -1798,7 +1798,7 @@ fn event_id(event: &Value) -> &str {
   event.get("id").and_then(Value::as_str).expect("a chat event carries a string id")
 }
 
-/// The house-timezone wall clock of a session name: `YYYY-MM-DD HH:MM` (`_local_time`).
+/// The house-timezone wall clock of a session name: `YYYY-MM-DD HH:MM`.
 fn local_time() -> String {
   chrono::Utc::now().with_timezone(&HOUSE_TIMEZONE).format("%Y-%m-%d %H:%M").to_string()
 }

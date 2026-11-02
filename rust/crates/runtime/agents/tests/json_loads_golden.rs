@@ -1,18 +1,18 @@
-//! `charliebot_compat::json_loads` against recorded `json.loads` outputs over one deterministic corpus.
+//! `charliebot_core::json_loads` against recorded decoder outputs over one deterministic corpus.
 //!
-//! The fixture records what `json.loads` returned at its base commit. The port must give the same outcome
-//! class and, for an error, the same `str(ValueError)` text, and for a value the same `json.dumps` rendering. The corpus
-//! must reach every message the JSON decoder and scanner raise.
+//! The fixture records the outcome the reference decoder gave when it was recorded. The loader must give the same
+//! outcome class and, for an error, the same message text, and for a value the same JSON rendering. The corpus must
+//! reach every message the JSON decoder and scanner raise.
 
-use charliebot_compat::json_loads::{self, LoadError};
+use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
 use serde_json::{Value, json};
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
-/// The messages `json.loads` raises, with the C scanner's wording (`_json.c`). The decoder's two `repr` forms, `Invalid
-/// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by `json/decoder.py`'s pure-Python
-/// scanner, which `json.loads` does not use, so no input reaches them through it.
+/// The messages a JSON decode raises, in the C scanner's wording. The decoder's two `repr` forms, `Invalid
+/// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by the pure scanner, which the
+/// decode path does not use, so no input reaches them.
 const REQUIRED_MESSAGES: [&str; 12] = [
   "Expecting value",
   "Expecting property name enclosed in double quotes",
@@ -28,7 +28,7 @@ const REQUIRED_MESSAGES: [&str; 12] = [
   "Unexpected UTF-8 BOM (decode using utf-8-sig)",
 ];
 
-/// The `UnicodeDecodeError` reasons a body that is not UTF-8 (or not its detected wide codec) can give.
+/// The decode-error reasons a body that is not UTF-8 (or not its detected wide codec) can give.
 const REQUIRED_CODEC_REASONS: [&str; 5] = [
   "invalid start byte",
   "invalid continuation byte",
@@ -107,7 +107,7 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
   (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect()
 }
 
-/// The outputs `json.loads` recorded for the deterministic input corpus.
+/// The recorded outputs for the deterministic input corpus.
 fn recorded_reference() -> Vec<Value> {
   let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");

@@ -1,4 +1,4 @@
-//! `src/features/host_auth/host_auth.py`: the state file, the probe round, the one-transition baseline and the estimate.
+//! The state file, the probe round, the one-transition baseline and the estimate.
 //!
 //! A round probes every host whose backoff has run out, publishes the result to `<home>/host_auth.json`, and holds
 //! the `probe_running` claim while it probes. The remote side sees one read-only command per probe.
@@ -8,16 +8,17 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::{fsutil, home, paths};
+use charliebot_registry::registry::HostLogin;
 use futures_util::future::join_all;
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
-use crate::probe::{STATUS_NEEDS_OKTA, STATUS_OK, build_detail, classify, probe_host};
+use crate::probe::{STATUS_NEEDS_OKTA, STATUS_OK, awaits_approval, build_detail, classify, probe_host};
 use crate::ssh_config;
 use crate::timestamps::{self, isoformat};
 
@@ -32,19 +33,22 @@ pub const STATE_FILENAME: &str = "host_auth.json";
 /// The state file's object, with its keys in file order.
 pub type State = Map<String, Value>;
 
-/// `json.dumps(state, ensure_ascii=False, indent=2) + "\n"`: the layout `write_json_atomically` gives the state file.
+/// The state file's layout: JSON with two-space indent, non-ASCII text literal and a trailing newline, written atomically.
 const STATE_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
 /// The state file of this profile and the operator's ssh config: the two paths a round reads.
 pub fn default_paths() -> anyhow::Result<(PathBuf, PathBuf)> {
-  let state_path = default_state_path()?;
-  let config_path = PathBuf::from(paths::expanduser("~")).join(".ssh").join("config");
-  Ok((state_path, config_path))
+  Ok((default_state_path()?, ssh_config_path()))
 }
 
 pub fn default_state_path() -> anyhow::Result<PathBuf> {
   Ok(home::charliebot_home_dir()?.join(STATE_FILENAME))
+}
+
+/// The operator's ssh config, whose `Host` blocks name the probed aliases.
+pub fn ssh_config_path() -> PathBuf {
+  PathBuf::from(paths::expanduser("~")).join(".ssh").join("config")
 }
 
 /// `empty_state`: the state a fresh install serves.
@@ -61,16 +65,21 @@ pub fn empty_state() -> State {
   state
 }
 
-/// `load_state`: the state file, or the empty state when it is absent. A file that is unreadable, not UTF-8 JSON, or
-/// not a state object is logged and answered with the empty state.
+/// `read_state`: the state file, or the empty state when it is absent. A file that is unreadable, not UTF-8 JSON, or
+/// not a state object is an error. A reader that decides on the hosts' verdicts must not take such a file for no hosts.
+pub fn read_state(path: &Path) -> anyhow::Result<State> {
+  match fs::read(path) {
+    Ok(bytes) => parse_state(&bytes).map_err(|error| anyhow::anyhow!("{}: {error}", path.display())),
+    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(empty_state()),
+    Err(error) => Err(anyhow::Error::from(error).context(format!("reading {}", path.display()))),
+  }
+}
+
+/// `load_state`: the state the page and the poller serve. A state file that `read_state` refuses is logged and answered
+/// with the empty state.
 pub fn load_state(path: &Path) -> State {
-  let parsed = match fs::read(path) {
-    Ok(bytes) => parse_state(&bytes),
-    Err(error) if error.kind() == io::ErrorKind::NotFound => return empty_state(),
-    Err(error) => Err(error.to_string()),
-  };
-  parsed.unwrap_or_else(|error| {
-    tracing::warn!(path = %path.display(), error = %error, "host_auth_state_read_failed");
+  read_state(path).unwrap_or_else(|error| {
+    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "host_auth_state_read_failed");
     empty_state()
   })
 }
@@ -165,6 +174,33 @@ fn alias_of(entry: &Map<String, Value>) -> anyhow::Result<&str> {
   entry.get("alias").and_then(Value::as_str).context("a host entry has no string alias")
 }
 
+/// The login record of a host that a probe has answered, or `None` for a host no probe has answered yet.
+fn host_login(entry: &Map<String, Value>) -> anyhow::Result<Option<HostLogin>> {
+  let alias = alias_of(entry)?;
+  let Some(status) = opt_str(entry, "status")? else {
+    return Ok(None);
+  };
+  let detail = opt_str(entry, "detail")?.with_context(|| format!("host {alias} has a status but no detail"))?;
+  let last_change_at =
+    opt_str(entry, "last_change_at")?.with_context(|| format!("host {alias} has a status but no last_change_at"))?;
+  Ok(Some(HostLogin {
+    alias: alias.to_string(),
+    status: status.to_string(),
+    detail: detail.to_string(),
+    last_change_at: last_change_at.to_string(),
+    awaits_approval: awaits_approval(status),
+  }))
+}
+
+/// The login records of the probed hosts, in state order.
+pub fn host_logins(state: &State) -> anyhow::Result<Vec<HostLogin>> {
+  let mut logins = Vec::new();
+  for entry in host_entries(state)? {
+    logins.extend(host_login(entry)?);
+  }
+  Ok(logins)
+}
+
 fn new_entry(alias: &str, hostname: &str) -> Map<String, Value> {
   let Value::Object(entry) = json!({
     "alias": alias,
@@ -181,7 +217,7 @@ fn new_entry(alias: &str, hostname: &str) -> Map<String, Value> {
   entry
 }
 
-/// `_merge_hosts`: rebuild the host list in config order. The config alone decides the set; an existing entry keeps
+/// Rebuild the host list in config order. The config alone decides the set; an existing entry keeps
 /// its history and takes the config's `HostName`.
 fn merge_hosts(state: &mut State, host_list: &[(String, String)]) -> anyhow::Result<()> {
   let mut previous: HashMap<String, Map<String, Value>> = HashMap::new();
@@ -235,7 +271,7 @@ fn read_config_hosts(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
 }
 
 /// `probe_running` held for the whole round. It is set before the probes and released on every path: `release`
-/// saves the finished state, and a drop saves the released claim when the round ends early, as Python's `finally`.
+/// saves the finished state, and a drop saves the released claim when the round ends early.
 struct ProbeClaim<'a> {
   path: &'a Path,
   state: State,
@@ -308,29 +344,63 @@ where
   Ok(state)
 }
 
-static ROUND_RUNNING: AtomicBool = AtomicBool::new(false);
+/// `probe_alias_now`: probe one host of the ssh config over a new connection, then write its verdict into the state
+/// and return the host's record. The verdict is written under the round slot, after the state is read there, so a
+/// round that holds the slot cannot publish a state that drops this verdict.
+pub async fn probe_alias_with<P, F>(
+  state_path: &Path,
+  config_path: &Path,
+  alias: &str,
+  probe: P,
+) -> anyhow::Result<HostLogin>
+where
+  P: Fn(String) -> F,
+  F: Future<Output = io::Result<(i32, String)>>,
+{
+  let host_list = read_config_hosts(config_path)?;
+  let index = host_list
+    .iter()
+    .position(|(name, _)| name == alias)
+    .with_context(|| format!("host alias {alias:?} is not in the ssh config"))?;
+  let (returncode, output) = probe(alias.to_string()).await?;
+  let verdict = classify(returncode, &output);
+  let detail = build_detail(returncode, &output);
+  let probed = isoformat(timestamps::utc_now());
+  let _slot = RoundSlot::wait().await;
+  let mut state = read_state(state_path)?;
+  merge_hosts(&mut state, &host_list)?;
+  apply_probe_result(host_entry_mut(&mut state, index)?, verdict, &detail, &probed);
+  let login = host_login(host_entries(&state)?[index])?.context("the probed host holds no verdict")?;
+  save_state(&state, state_path)?;
+  Ok(login)
+}
 
-/// The process-wide round flag (`_round_running`): a manual round and the poller's tick never run together. The
-/// claim is released when the guard drops, on every path.
-pub struct RoundSlot(());
+/// The process-wide round slot: a manual round, the poller's tick and the cron gate's write-back never change the state
+/// file together. `claim` takes it without waiting; `wait` waits while a round holds it. The slot is released when the
+/// guard drops, on every path.
+static ROUND_SLOT: Semaphore = Semaphore::const_new(1);
+
+/// A held round slot. Dropping it releases the slot.
+pub struct RoundSlot {
+  _permit: SemaphorePermit<'static>,
+}
 
 impl RoundSlot {
   /// The slot, or `None` while a round holds it.
   pub fn claim() -> Option<RoundSlot> {
-    ROUND_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).ok().map(|_| RoundSlot(()))
+    ROUND_SLOT.try_acquire().ok().map(|permit| RoundSlot { _permit: permit })
   }
-}
 
-impl Drop for RoundSlot {
-  fn drop(&mut self) {
-    ROUND_RUNNING.store(false, Ordering::Release);
+  /// The slot, once the round that holds it, if any, has released it.
+  pub async fn wait() -> RoundSlot {
+    RoundSlot { _permit: ROUND_SLOT.acquire().await.expect("the round slot is never closed") }
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::probe::STATUS_UNREACHABLE;
+  use crate::probe::{STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_UNREACHABLE, build_detail};
 
   fn entry(alias: &str, hostname: &str, overrides: &[(&str, Value)]) -> Map<String, Value> {
     let mut entry = new_entry(alias, hostname);
@@ -481,5 +551,104 @@ mod tests {
     let published = load_state(&state_path);
     assert_eq!(published["probe_running"], json!(false));
     assert!(host_entries(&published).expect("the hosts read").is_empty());
+  }
+
+  const LOGIN_CONFIG: &str = "Host host3\n  HostName host3.example.internal\n\n\
+                              Host gpu-box-1\n  HostName gpu-box-1.example.internal\n";
+  const CHECK_OUTPUT: &str =
+    "# Tailscale SSH requires an additional check.\nTo authenticate, visit: https://login.example.net/a\n";
+
+  #[tokio::test]
+  async fn a_gate_probe_writes_its_verdict_and_returns_the_host_record() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let config = dir.path().join("ssh_config");
+    fs::write(&config, LOGIN_CONFIG).expect("the config writes");
+    let state_path = dir.path().join("state.json");
+    let check = |_alias: String| async { Ok::<_, io::Error>((1, CHECK_OUTPUT.to_string())) };
+
+    let login = probe_alias_with(&state_path, &config, "host3", check).await.expect("the probe answers");
+    assert_eq!(login.status, STATUS_NEEDS_INTERACTIVE_AUTH);
+    assert!(login.awaits_approval);
+    assert_eq!(login.detail, build_detail(1, CHECK_OUTPUT));
+    // The state holds the verdict. gpu-box-1 has no record until a probe answers it, so the read lists host3 alone.
+    let state = read_state(&state_path).expect("the state reads");
+    assert_eq!(host_logins(&state).expect("the records read"), std::slice::from_ref(&login));
+
+    // The same verdict again keeps the time it first changed.
+    let again = probe_alias_with(&state_path, &config, "host3", check).await.expect("the probe answers");
+    assert_eq!(again.last_change_at, login.last_change_at);
+
+    let cleared = probe_alias_with(&state_path, &config, "host3", |_alias: String| async {
+      Ok::<_, io::Error>((0, String::new()))
+    })
+    .await
+    .expect("the probe answers");
+    assert_eq!(cleared.status, STATUS_OK);
+    assert!(!cleared.awaits_approval);
+    assert_eq!(cleared.detail, "exit 0");
+  }
+
+  #[tokio::test]
+  async fn a_gate_probe_refuses_an_alias_the_ssh_config_does_not_name_before_it_probes() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let config = dir.path().join("ssh_config");
+    fs::write(&config, LOGIN_CONFIG).expect("the config writes");
+    let state_path = dir.path().join("state.json");
+    let probed = std::sync::atomic::AtomicBool::new(false);
+    let probe = |_alias: String| {
+      probed.store(true, std::sync::atomic::Ordering::Relaxed);
+      async { Ok::<_, io::Error>((0, String::new())) }
+    };
+
+    let error = probe_alias_with(&state_path, &config, "host9", probe).await.expect_err("the alias is unknown");
+    assert!(format!("{error:#}").contains("host9"), "{error:#}");
+    assert!(!probed.load(std::sync::atomic::Ordering::Relaxed), "an unknown alias runs no probe");
+    assert!(!state_path.exists(), "an unknown alias writes no state");
+  }
+
+  #[tokio::test]
+  async fn a_gate_write_waits_for_the_round_that_holds_the_slot() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let config = dir.path().join("ssh_config");
+    fs::write(&config, LOGIN_CONFIG).expect("the config writes");
+    let state_path = dir.path().join("state.json");
+    let held = RoundSlot::wait().await;
+    let gate_state = state_path.clone();
+    let gate = tokio::spawn(async move {
+      let ok = |_alias: String| async { Ok::<_, io::Error>((0, String::new())) };
+      probe_alias_with(&gate_state, &config, "gpu-box-1", ok).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!gate.is_finished(), "the gate's write waits while a round holds the slot");
+    assert!(!state_path.exists(), "nothing is written while the slot is held");
+    drop(held);
+    let login = gate.await.expect("the gate task joins").expect("the gate write succeeds");
+    assert_eq!(login.status, STATUS_OK);
+  }
+
+  #[tokio::test]
+  async fn a_gate_write_refuses_a_state_file_it_cannot_read_and_leaves_it_as_it_is() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let config = dir.path().join("ssh_config");
+    fs::write(&config, LOGIN_CONFIG).expect("the config writes");
+    let state_path = dir.path().join("state.json");
+    fs::write(&state_path, "{not json").expect("the corrupt state writes");
+    let error = probe_alias_with(&state_path, &config, "host3", |_alias: String| async {
+      Ok::<_, io::Error>((0, String::new()))
+    })
+    .await
+    .expect_err("the state file is corrupt");
+    assert!(format!("{error:#}").contains(&state_path.display().to_string()), "{error:#}");
+    assert_eq!(fs::read_to_string(&state_path).expect("the state reads"), "{not json");
+  }
+
+  #[test]
+  fn read_state_refuses_a_corrupt_file_and_reads_an_absent_one_as_empty() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let path = dir.path().join(STATE_FILENAME);
+    fs::write(&path, "[1, 2]").expect("the fixture writes");
+    assert!(read_state(&path).is_err());
+    assert_eq!(read_state(&dir.path().join("absent.json")).expect("an absent state is empty"), empty_state());
   }
 }

@@ -91,6 +91,12 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 
 All six `##`-level headings are required (`## Goal / Source Files / Required Behavior / Acceptance Tests / Reviewer Checklist / Out of Scope`); `#`-level headings are rejected. `## Source Files` takes only existing absolute paths or `-` (new files created by a patch go in a side note instead). The verify task type requires `--keep-worktree` and does not accept `--repo`. Run `charliebot` subcommands inside the session dir, where a relative artifact path resolves and the session-dir check accepts it; session identity itself comes from the server-written environment.
 
+Specs must not forbid test edits: tests asserting removed behavior get updated or deleted with it.
+
+Spec precision follows the task kind: an exploratory or judgment-heavy task (a cleanup whose extent is a judgment call, a review, a comment or doc rewrite) states the goal, the reason in the requester's words, the judging standard, the invariants, and the scope, and stops there - an enumerated change list caps the result at what the master already found. A fixed mechanical contract keeps its executable contract and acceptance assertions: there the precision is the deliverable.
+
+A context-work delegation (`--context-work 1`) also carries the `## Requester Words` section; `charliebot delegate --help`, Context work, gives the rule and the line format.
+
 ### Task-Spec Amendments
 
 - `charliebot delegate` stores each task spec as JSON in `<child-session>/data/runs/<run>/task_spec.md`.

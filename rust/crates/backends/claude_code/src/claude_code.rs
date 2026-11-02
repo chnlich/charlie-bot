@@ -76,7 +76,7 @@ fn headless_command(run_kind: RunKind) -> Vec<String> {
 }
 
 /// The `--disallowed-tools` value the headless command carries, for the setup check
-/// (`setup_check::setup_step`); the errors name the flag the way Python's check did over `BASE_COMMAND`.
+/// (`setup_check::setup_step`); the errors name the flag and `BASE_COMMAND` in their text.
 pub fn base_disallowed_tools() -> Result<String, String> {
   let command = headless_command(RunKind::Work);
   let index = command
@@ -811,14 +811,14 @@ mod tests {
       settings,
       concat!(
         r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
-        r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}]}]},""#,
+        r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
+        r#",{"type":"command","command":"charliebot scan-guard"}]}]},""#,
         r#"fastMode":true}"#
       )
     );
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
   }
 
-  // Python: tests/test_claude_code_backend.py:234.
   #[test]
   fn manager_turn_settings_install_six_compaction_context_slots() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -859,7 +859,10 @@ mod tests {
       settings["hooks"]["PreToolUse"],
       serde_json::json!([{
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+        "hooks": [
+          {"type": "command", "command": "charliebot wait-guard"},
+          {"type": "command", "command": "charliebot scan-guard"}
+        ]
       }])
     );
   }
@@ -868,7 +871,10 @@ mod tests {
   fn headless_settings_install_wait_guard_except_for_scheduled_steps() {
     let expected = serde_json::json!([{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+      "hooks": [
+        {"type": "command", "command": "charliebot wait-guard"},
+        {"type": "command", "command": "charliebot scan-guard"}
+      ]
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
       let settings = claude_launch::headless_claude_settings(run_kind, Some("manager-session")).unwrap();
@@ -878,7 +884,6 @@ mod tests {
     assert!(settings.get("hooks").is_none());
   }
 
-  // Python: tests/test_claude_code_backend.py:249.
   #[test]
   fn manager_turn_settings_require_the_charliebot_session_id() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -898,7 +903,6 @@ mod tests {
     assert!(format!("{error:#}").contains("require a CharlieBot session id"), "{error:#}");
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py:37.
   #[test]
   fn anthropic_endpoint_sets_the_endpoint_and_pins_every_model_variable_without_a_flag() {
     let backend = AnthropicEndpointBackend::new(
@@ -944,7 +948,6 @@ mod tests {
     assert_eq!(env["PATH"], "/synthetic/bin");
   }
 
-  // Python: tests/test_claude_code_backend.py::test_prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env
   #[test]
   fn prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -973,7 +976,6 @@ mod tests {
     assert_eq!(env["UNRELATED"], "kept");
   }
 
-  // Python: tests/test_claude_code_backend.py::test_one_shot_text_spawns_claude_without_the_gateway_variables
   #[tokio::test]
   async fn one_shot_text_spawns_claude_without_the_gateway_variables() {
     let root = tempfile::tempdir().unwrap();
@@ -1066,7 +1068,6 @@ mod tests {
       .collect()
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_endpoint_env_overrides_every_inherited_gateway_variable
   #[test]
   fn endpoint_env_overrides_every_inherited_gateway_variable() {
     let backend = AnthropicEndpointBackend::new(
@@ -1093,12 +1094,10 @@ mod tests {
     for name in CLAUDE_MODEL_ENV_NAMES {
       assert_eq!(env[name], "synthetic/model-1");
     }
-    // Stronger than the Python case: an inherited headers variable must not survive the preparation either,
-    // so the test is red before the gateway strip lands.
+    // The headers variable is stripped too: an inherited one must not survive the preparation.
     assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_claude_model_env_sets_exactly_five_model_variables
   #[test]
   fn claude_model_env_sets_exactly_five_model_variables() {
     assert_eq!(
@@ -1213,7 +1212,8 @@ mod tests {
         "--settings",
         concat!(
           r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
-          r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}]}]}}"#
+          r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
+          r#",{"type":"command","command":"charliebot scan-guard"}]}]}}"#
         ),
       ]
     );

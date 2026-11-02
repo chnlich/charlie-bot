@@ -1,9 +1,10 @@
-//! The `slack` verbs (`src/features/slack/cli.py`): reply on a session's own Slack thread, acknowledge read thread
+//! The `slack` verbs: reply on a session's own Slack thread, acknowledge read thread
 //! messages, and send one authenticated Slack Web API request.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `ack`
 //! advances the session's read watermark and prints the readback; every read message's id must be passed. `request`
-//! reads the token inside this process, sends one request and prints the response body.
+//! reads the token inside this process, sends one request and prints the response body. The user token is read-only in
+//! this CLI: it admits only the read methods in `token::USER_READ_METHODS`, and the bot token keeps every method.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -97,11 +98,12 @@ fn run_request_at(home_dir: &Path, args: &RequestCommand) -> Result<(), CliExit>
   if token.trim().is_empty() {
     return Err(credential_failure(kind, Some(&path)));
   }
-  request::write_stdout(&execute_request(&args.request, &token)?)
+  request::write_stdout(&execute_request(&args.request, kind, &token)?)
 }
 
-fn execute_request(args: &RequestArgs, token: &str) -> Result<Vec<u8>, CliExit> {
+fn execute_request(args: &RequestArgs, kind: TokenKind, token: &str) -> Result<Vec<u8>, CliExit> {
   let request = args.prepare()?;
+  token::admit(kind, &args.url)?;
   let response = request::send(&request.bearer(token), &[token])?;
   if !(200..300).contains(&response.status) || slack_error(&response.body) {
     return Err(request::http_failure(response.status, &response.body, &[token]));
@@ -155,6 +157,8 @@ mod tests {
   const USER_TOKEN: &str = "synthetic-user-token";
   const BOT_TOKEN: &str = "synthetic-bot-token";
   const TIMEOUT: Duration = Duration::from_secs(2);
+  /// How long a refused call's stub waits for a connection that must never arrive.
+  const NO_CALL_TIMEOUT: Duration = Duration::from_millis(500);
 
   const TABLE: &str =
     concat!("slack:\n", "  user_token: synthetic-user-token\n", "  bot_token: synthetic-bot-token\n",);
@@ -228,14 +232,76 @@ mod tests {
     let (url, receiver) = stub(200, br#"{"ok":true,"user_id":"U1"}"#);
 
     let token = token::token(home.path(), token_kind("user")).unwrap();
-    let body = execute_request(&arguments(&url, "user").request, &token).unwrap();
+    let body =
+      execute_request(&arguments(&format!("{url}/auth.test"), "user").request, TokenKind::User, &token).unwrap();
     let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
 
     assert_eq!(token, USER_TOKEN);
     assert_eq!(body, br#"{"ok":true,"user_id":"U1"}"#.to_vec());
     assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
-    assert!(request.starts_with("GET /api HTTP/1.1"));
+    assert!(request.starts_with("GET /api/auth.test HTTP/1.1"));
     assert_no_token(&String::from_utf8_lossy(&body));
+  }
+
+  #[test]
+  fn every_read_method_reaches_the_send_step_with_the_user_token() {
+    let home = credentials_home(TABLE);
+    for method in token::USER_READ_METHODS {
+      let (url, receiver) = stub(200, br#"{"ok":true}"#);
+      let command = arguments(&format!("{url}/{method}"), "user");
+
+      run_request_at(home.path(), &command).unwrap();
+      let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
+
+      assert!(request.starts_with(&format!("GET /api/{method} HTTP/1.1")), "{request}");
+      assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
+    }
+  }
+
+  #[test]
+  fn a_user_token_write_is_refused_before_any_network_call() {
+    let home = credentials_home(TABLE);
+    for method in ["chat.postMessage", "reactions.add", "conversations.open", "files.upload"] {
+      let (url, receiver) = stub(200, br#"{"ok":true}"#);
+      let command = arguments(&format!("{url}/{method}"), "user");
+
+      let error = run_request_at(home.path(), &command).unwrap_err();
+      let text = error_text(&error);
+
+      assert_eq!(error.code, 1);
+      assert!(text.contains(method), "{text}");
+      assert!(text.contains("charliebot outbound draft") && text.contains("--token bot"), "{text}");
+      assert_no_token(&text);
+      // The stub channel stays empty: no connection, so no bot-token fallback either.
+      assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
+    }
+  }
+
+  #[test]
+  fn a_user_token_url_without_a_method_is_refused() {
+    let home = credentials_home(TABLE);
+    let (url, receiver) = stub(200, br#"{"ok":true}"#);
+    let command = arguments(&url, "user");
+
+    let error = run_request_at(home.path(), &command).unwrap_err();
+
+    assert_eq!(error.code, 1);
+    assert!(error_text(&error).contains("not a Slack Web API method URL"));
+    assert_no_token(&error_text(&error));
+    assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
+  }
+
+  #[test]
+  fn the_bot_token_keeps_every_method() {
+    let home = credentials_home(TABLE);
+    let (url, receiver) = stub(200, br#"{"ok":true}"#);
+    let command = arguments(&format!("{url}/chat.postMessage"), "bot");
+
+    run_request_at(home.path(), &command).unwrap();
+    let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
+
+    assert!(request.starts_with("GET /api/chat.postMessage HTTP/1.1"));
+    assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {BOT_TOKEN}")));
   }
 
   #[test]
@@ -244,7 +310,7 @@ mod tests {
     let (url, receiver) = stub(200, br#"{"ok":true}"#);
 
     let token = token::token(home.path(), token_kind("bot")).unwrap();
-    execute_request(&arguments(&url, "bot").request, &token).unwrap();
+    execute_request(&arguments(&url, "bot").request, TokenKind::Bot, &token).unwrap();
     let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
 
     assert_eq!(token, BOT_TOKEN);
@@ -255,7 +321,9 @@ mod tests {
   fn an_ok_false_body_exits_one_and_redacts_the_token() {
     let (url, receiver) = stub(200, format!(r#"{{"ok":false,"error":"invalid_auth {USER_TOKEN}"}}"#).as_bytes());
 
-    let error = execute_request(&arguments(&url, "user").request, USER_TOKEN).unwrap_err();
+    let error =
+      execute_request(&arguments(&format!("{url}/search.messages"), "user").request, TokenKind::User, USER_TOKEN)
+        .unwrap_err();
     let _ = receiver.recv_timeout(TIMEOUT);
     let text = error_text(&error);
 
@@ -269,7 +337,9 @@ mod tests {
   fn a_non_2xx_status_exits_one() {
     let (url, receiver) = stub(429, br#"{"error":"rate_limited"}"#);
 
-    let error = execute_request(&arguments(&url, "user").request, USER_TOKEN).unwrap_err();
+    let error =
+      execute_request(&arguments(&format!("{url}/conversations.history"), "user").request, TokenKind::User, USER_TOKEN)
+        .unwrap_err();
     let _ = receiver.recv_timeout(TIMEOUT);
 
     assert_eq!(error.code, 1);
@@ -292,7 +362,8 @@ mod tests {
   fn a_success_body_redacts_the_token() {
     let (url, receiver) = stub(200, format!(r#"{{"ok":true,"echo":"{USER_TOKEN}"}}"#).as_bytes());
 
-    let body = execute_request(&arguments(&url, "user").request, USER_TOKEN).unwrap();
+    let body =
+      execute_request(&arguments(&format!("{url}/users.list"), "user").request, TokenKind::User, USER_TOKEN).unwrap();
     let _ = receiver.recv_timeout(TIMEOUT);
 
     assert_eq!(body, br#"{"ok":true,"echo":"[redacted]"}"#.to_vec());
@@ -301,7 +372,7 @@ mod tests {
 
   #[test]
   fn usage_errors_exit_two_without_a_token() {
-    let error = execute_request(&arguments("relative/path", "user").request, USER_TOKEN).unwrap_err();
+    let error = execute_request(&arguments("relative/path", "user").request, TokenKind::User, USER_TOKEN).unwrap_err();
     assert_eq!(error.code, 2);
     assert_no_token(&error_text(&error));
   }

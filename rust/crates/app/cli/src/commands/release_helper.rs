@@ -1,7 +1,7 @@
 //! The release scripts' helper verbs: `charliebot release-helper <name>`.
 //!
-//! `scripts/release/trial.sh` and `scripts/release/switch-rehearsal.sh` ran these as embedded Python programs, and
-//! `scripts/release/sweep-check.py` was the third. Each verb keeps its arguments, its output format and its exit code.
+//! `scripts/release/trial.sh` and `scripts/release/switch-rehearsal.sh` call these verbs from the `charliebot` binary.
+//! Each verb keeps its arguments, its output format and its exit code.
 //! Both scripts run the `charliebot` of the release under test, so a release's checks and the server they check come
 //! from one commit.
 
@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
-/// `json.dumps(..., ensure_ascii=False, separators=(",", ":"))`: websocket frames and their signature list.
+/// The websocket frames and their signature list: raw UTF-8, compact separators.
 const COMPACT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
@@ -146,7 +146,7 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
   }
 }
 
-/// The exact arguments of one verb, or the argument-count error Python's helpers printed.
+/// The exact arguments of one verb, or the argument-count error.
 fn arguments<'a, const N: usize>(args: &'a [String], name: &str) -> Result<[&'a str; N], String> {
   if args.len() != N {
     return Err(format!("{name}: wrong number of arguments"));
@@ -172,7 +172,7 @@ fn run_state(run: &Value) -> String {
   or_default(run.get("state"))
 }
 
-/// A file's text with invalid UTF-8 replaced, as Python's `errors="replace"` reads it.
+/// A file's text with invalid UTF-8 replaced by replacement characters.
 fn read_text_lossy(path: &str) -> Result<String, String> {
   let bytes = fs::read(path).map_err(|error| format!("{path}: {error}"))?;
   Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -1092,7 +1092,7 @@ fn redact_stdin() -> Result<i32, String> {
   Ok(0)
 }
 
-/// `urllib.parse.quote(value, safe="")`: the characters Python leaves bare.
+/// Percent-encode every byte but the unreserved characters (`A-Z a-z 0-9 - . _ ~`).
 fn quote_component(value: &str) -> String {
   use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
   const UNSAFE: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
@@ -1538,7 +1538,7 @@ mod tests {
   #[test]
   fn a_reply_is_normalized_before_comparison() {
     assert_eq!(normalize_reply("  `HELLO`  "), "HELLO");
-    // The trailing punctuation strip runs after the backtick strip, as Python's `.strip("` ").rstrip(".! ")` does.
+    // The trailing punctuation strip runs after the backtick strip.
     assert_eq!(normalize_reply("`HELLO`."), "HELLO`");
     assert_eq!(normalize_reply("HELLO!"), "HELLO");
     assert_eq!(normalize_reply("two words"), "two words");

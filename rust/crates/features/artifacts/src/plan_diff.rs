@@ -7,10 +7,10 @@ use charliebot_core::str_methods;
 use charliebot_html::{EventKind, Opcode, OpcodeTag, StreamEvent, escape, opcodes, parse_with, unescape};
 use regex::Regex;
 
+/// The parser's void-element set, which the artifact check reads through this module.
+pub use charliebot_html::VOID_TAGS;
+
 const IGNORED_TAGS: &[&str] = &["head", "style", "script", "template", "noscript", "title"];
-/// HTML void elements that the tokenizer tree builder never pushes onto its open-element stack.
-pub const VOID_TAGS: &[&str] =
-  &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 const BLOCK_TAGS: &[&str] = &[
   "address",
   "article",
@@ -65,7 +65,7 @@ const HEADER_TEXT: &str = "This version · vs previous";
 const CJK_RANGES: &[(u32, u32)] = &[(0x3400, 0x4dbf), (0x4e00, 0x9fff), (0xf900, 0xfaff), (0x20000, 0x2fa1f)];
 static DISPLAY_RE: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"(?:^|;)\s*display\s*:\s*([^;]+)").expect("the display rule is a valid regex"));
-/// `_section_label`'s leading section number, and the revision badge a changed heading carries.
+/// The leading number of a `section_label` heading, and the revision badge a changed heading carries.
 static LEADING_DIGITS_RE: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"^\d+\s*").expect("the section-number pattern is a valid regex"));
 static TRAILING_CHANGED_RE: LazyLock<Regex> =
@@ -1148,7 +1148,7 @@ pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
   Ok(sections.join("\n\n"))
 }
 
-/// `_section_label`: the nearest `section`'s heading without its number or revision badge; a leaf outside any section
+/// The nearest `section`'s heading without its number or revision badge; a leaf outside any section
 /// takes the header chip marker for a `span.mtag`, else its tag.
 fn section_label(parser: &Parser, leaf: &Leaf) -> String {
   let mut current = Some(leaf.element);
@@ -1209,14 +1209,6 @@ mod tests {
       control.iter().zip(&expected).filter(|(actual, expected)| actual != expected).count(),
       1,
       "the planted control difference must produce one mismatch"
-    );
-  }
-
-  #[test]
-  fn void_tags_match_the_differ_set() {
-    assert_eq!(
-      VOID_TAGS,
-      &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",]
     );
   }
 

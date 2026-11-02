@@ -908,6 +908,6 @@ async fn test_deliver_done_skips_a_session_without_discord_origin() {
 
 #[test]
 fn the_discord_platform_name_is_a_thread_platform_key() {
-  // Python: tests/test_run_token.py:243.
+  // The platform name is a thread-platform key.
   assert!(event_types::THREAD_PLATFORM_KEYS.contains(&DISCORD.name));
 }

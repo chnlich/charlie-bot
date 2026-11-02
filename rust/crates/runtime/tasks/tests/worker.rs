@@ -1,5 +1,4 @@
-//! The task-run process manager (`src/runtime/worker.py`) over scripted `/bin/sh` backends. Each test names the Python
-//! case it ports in a `// Python:` comment.
+//! The task-run process manager over scripted `/bin/sh` backends.
 //!
 //! A scripted backend runs its script as the process of a run, and each build records the launch it was given. A
 //! registration is a plain function pointer, so the factory reaches its script queue through a token that rides in the
@@ -261,7 +260,7 @@ fn holds(events: &[Value]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Event fixtures (`tests/conftest.py`)
+// Event fixtures
 // ---------------------------------------------------------------------------
 
 fn assistant_text(text: &str) -> Value {
@@ -291,8 +290,7 @@ fn rate_limit(status: &str, utilization: f64) -> Value {
   json!({"type": ET::RATE_LIMIT_EVENT, "rate_limit_info": rate_limit_info(status, utilization)})
 }
 
-/// A reading taken at `minutes` before the fixed instant 2026-09-06 20:00 UTC that the relay tests observe at
-/// (`tests/test_worker_account_relay.py::NOW`).
+/// A reading taken at `minutes` before the fixed instant 2026-09-06 20:00 UTC, the instant the relay tests observe.
 fn reading_at(minutes_before: u32) -> UtcDateTime {
   let minutes = match minutes_before {
     0 => "00",
@@ -566,10 +564,9 @@ fn refusal(error: anyhow::Error) -> LaunchRefused {
 }
 
 // ---------------------------------------------------------------------------
-// The Worker's relay loop (`tests/test_worker_account_relay.py`)
+// The Worker's relay loop
 // ---------------------------------------------------------------------------
 
-// Python: tests/test_worker_account_relay.py::test_worker_relays_a_rejected_run_onto_another_account
 #[tokio::test]
 async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -603,7 +600,6 @@ async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Res
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_raises_pool_exhausted_when_no_account_is_left
 #[tokio::test]
 async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -622,7 +618,6 @@ async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_relay_stays_inside_the_option_pool
 #[tokio::test]
 async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -645,7 +640,6 @@ async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> 
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_pool_exhaustion_names_the_option_pool
 #[tokio::test]
 async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -668,7 +662,6 @@ async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<(
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_stops_after_the_relay_limit
 #[tokio::test]
 async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -688,7 +681,6 @@ async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_stays_armed_without_a_below_line_account_and_completes
 #[tokio::test]
 async fn test_worker_stays_armed_without_a_below_line_account_and_completes() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -719,7 +711,6 @@ async fn test_worker_stays_armed_without_a_below_line_account_and_completes() ->
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
 #[tokio::test]
 async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -741,9 +732,8 @@ async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes
 //
-// The Python case raises the target's reading between the gate and the move by stubbing `select`. Here a subscriber on
+// The reading of the target is raised between the gate and the move. Here a subscriber on
 // the thread channel raises it when the safe point's `user` frame is broadcast: the watch has already observed that
 // event (the gate), and the move reads the pool only after the process has exited.
 #[tokio::test]
@@ -781,7 +771,6 @@ async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_warning_relays_past_the_cap_with_below_line_destinations
 #[tokio::test]
 async fn test_worker_warning_relays_past_the_cap_with_below_line_destinations() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -804,7 +793,6 @@ async fn test_worker_warning_relays_past_the_cap_with_below_line_destinations() 
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_relay_limit_names_each_unavailable_account
 #[tokio::test]
 async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -830,7 +818,6 @@ async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Res
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_login_failure_marks_the_account_and_notifies_the_session
 #[tokio::test]
 async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -863,9 +850,8 @@ async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() 
   Ok(())
 }
 
-// Python: tests/test_worker_account_relay.py::test_worker_relay_does_not_compact_the_task_context
 //
-// The Python case spies on `compact_with_sonnet`. The port has no spy, so it checks the event log instead: a run whose
+// There is no spy on `compact_with_sonnet`, so the test checks the event log instead: a run whose
 // prompt crosses the compaction thresholds persists no compaction event.
 #[tokio::test]
 async fn test_worker_relay_does_not_compact_the_task_context() -> anyhow::Result<()> {
@@ -890,7 +876,7 @@ async fn test_worker_relay_does_not_compact_the_task_context() -> anyhow::Result
 }
 
 // ---------------------------------------------------------------------------
-// The build contract (`tests/test_worker_backend_build.py`)
+// The build contract
 // ---------------------------------------------------------------------------
 
 fn hidden_cli() -> CliHost {
@@ -916,7 +902,6 @@ fn register_hidden_binary_types(registry: &mut Registry) -> Result<(), RegistryE
   registry.register_package("test.codex", |registry| codex::register_with_host(registry, &hidden_codex()))
 }
 
-// Python: tests/test_worker_backend_build.py::test_launcher_build_still_fails_without_binaries
 #[tokio::test]
 async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -949,7 +934,6 @@ async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()
   Ok(())
 }
 
-// Python: tests/test_worker_backend_build.py::test_claude_resume_launch_still_passes_the_run_instructions_file
 #[tokio::test]
 async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -985,10 +969,9 @@ async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> a
 }
 
 // ---------------------------------------------------------------------------
-// The hang diagnostics (`tests/test_worker_diagnostics.py`)
+// The hang diagnostics
 // ---------------------------------------------------------------------------
 
-// Python: tests/test_worker_diagnostics.py::test_worker_writes_hang_diagnostics_and_emits_event
 #[tokio::test]
 async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1002,7 +985,7 @@ async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result
 
   let exit_code = task_worker.run().await?;
 
-  // The runner reports the signal that ended the process, where the Python case injects a fake with status 143.
+  // The runner reports the signal that ended the process; no fake with status 143 is injected.
   assert_eq!(exit_code, -15, "the hang path ends the process with SIGTERM");
   let diag_path = root.path().join("data").join(worker::HANG_DIAGNOSTICS_NAME);
   let written: Value = serde_json::from_str(&fs::read_to_string(&diag_path)?)?;
@@ -1026,7 +1009,6 @@ async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result
   Ok(())
 }
 
-// Python: tests/test_worker_diagnostics.py::test_worker_no_hang_diagnostics_does_not_write_file
 #[tokio::test]
 async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1041,7 +1023,6 @@ async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result
   Ok(())
 }
 
-// Python: src/runtime/worker.py:357-372
 #[tokio::test]
 async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1084,7 +1065,7 @@ async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> a
   assert_eq!(unsafe { libc::kill(-(pid as libc::pid_t), 0) }, -1, "the agent's process group is gone");
   assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
   // The events log ends with its last persisted terminal event, which carries the scanned exit code. The completion
-  // is only broadcast, as `worker.py` `_emit_terminal_events` broadcasts it, so the thread channel carries it.
+  // is only broadcast, so the thread channel carries it.
   let logged = read_events(&root.events_log())?;
   let persisted_terminal = logged.last().context("the events log ends with a terminal event")?;
   assert_eq!(persisted_terminal["type"], ET::SYSTEM);
@@ -1101,10 +1082,9 @@ async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> a
 }
 
 // ---------------------------------------------------------------------------
-// The event line and the quota scan (`tests/test_worker_event_line.py`, `tests/test_worker_quota_scan.py`)
+// The event line and the quota scan
 // ---------------------------------------------------------------------------
 
-// Python: tests/test_worker_quota_scan.py::test_error_event_with_quota_pattern_raises_and_persists
 #[tokio::test]
 async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1122,7 +1102,6 @@ async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Re
   Ok(())
 }
 
-// Python: tests/test_worker_quota_scan.py::test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_reset
 #[tokio::test]
 async fn test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_reset() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1143,7 +1122,6 @@ async fn test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_
   Ok(())
 }
 
-// Python: tests/test_worker_quota_scan.py::test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises
 #[tokio::test]
 async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1168,10 +1146,9 @@ async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> 
 }
 
 // ---------------------------------------------------------------------------
-// The task build for a non-Claude backend (`tests/test_backend_hooks.py`)
+// The task build for a non-Claude backend
 // ---------------------------------------------------------------------------
 
-// Python: tests/test_spawner_backend_propagation.py:50.
 #[test]
 fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint() -> anyhow::Result<()> {
   let root = Root::new()?;
@@ -1193,8 +1170,6 @@ fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint(
   Ok(())
 }
 
-// Python: tests/test_backend_hooks.py:174.
-// Python: tests/test_task_run_backend_types.py:30.
 #[tokio::test]
 async fn test_non_claude_task_build_receives_no_claude_account() -> anyhow::Result<()> {
   for backend_type in ["codex", "cc-anthropic-compatible"] {

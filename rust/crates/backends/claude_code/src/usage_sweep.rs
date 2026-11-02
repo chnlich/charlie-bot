@@ -1,4 +1,4 @@
-//! Claude Code's part of the cold-storage sweep (`src/backends/claude_code/usage_sweep.py`): the transcript directories.
+//! Claude Code's part of the cold-storage sweep: the transcript directories.
 //!
 //! A transcript directory belongs to CharlieBot when the cwd encoding the CLI applies (separators, dots and underscores
 //! become hyphens) leaves a session id in its name. Any other name encodes a cwd that CharlieBot never handed a claude
@@ -81,8 +81,8 @@ fn live_worktree_dir_names(cfg: &CharlieBotConfig) -> anyhow::Result<HashSet<Str
   Ok(names)
 }
 
-/// The newest file mtime under `root`, or the directory's own when it holds no file (`_newest_mtime`). A symlinked
-/// directory is not entered, as `os.walk` does not enter it. A listing or stat failure skips its entry.
+/// The newest file mtime under `root`, or the directory's own when it holds no file. A symlinked directory is not
+/// entered. A listing or stat failure skips its entry.
 fn newest_mtime(root: &Path) -> Option<f64> {
   let mut newest: Option<f64> = None;
   for entry in WalkDir::new(root).follow_links(false) {

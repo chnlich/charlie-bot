@@ -1,11 +1,11 @@
-//! `src/infra/human_size.py`: the byte counts the directory listing prints.
+//! The byte counts the directory listing prints.
 
-/// `human_size.format_size`: `"5 B"`, `"2.0 KB"`, and upward with one decimal above bytes.
+/// The formatted size: `"5 B"`, `"2.0 KB"`, and upward with one decimal above bytes.
 pub fn format_size(size: u64) -> String {
   if size < 1024 {
     return format!("{size} B");
   }
-  // Python divides the int once, then divides the float by 1024 at each unit.
+  // The integer divides once, then the float divides by 1024 at each unit.
   let mut value = size as f64 / 1024.0;
   for unit in ["KB", "MB", "GB", "TB"] {
     if value < 1024.0 {
@@ -38,7 +38,7 @@ mod tests {
 
   #[test]
   fn a_value_just_below_a_unit_boundary_rounds_up_into_the_smaller_unit() {
-    // 1023.999 KB prints as "1024.0 KB", as Python's `:.1f` does.
+    // 1023.999 KB prints as "1024.0 KB" under the one-decimal format.
     assert_eq!(format_size(1024 * 1024 - 1), "1024.0 KB");
   }
 

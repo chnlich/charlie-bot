@@ -1,4 +1,4 @@
-//! The `/api/code-server` route (`src/features/code_server/api.py`): open a folder in code-server, starting it when
+//! The `/api/code-server` route: open a folder in code-server, starting it when
 //! nothing listens on its port, and the template global that shows the diff page's open button.
 
 use std::collections::HashMap;
@@ -108,8 +108,8 @@ struct OpenSetup {
   port: u16,
 }
 
-/// `_resolve_code_server_executable`, `_resolve_folder_under_allowed_root` and config-file reads all run in the
-/// FastAPI sync endpoint's thread pool (`src/features/code_server/api.py:76-90`).
+/// `executable`, `resolve_folder` and config-file reads all run on the
+/// blocking pool (`tokio::task::spawn_blocking` at the caller).
 fn prepare_open(
   section: &CodeServerConfig,
   paths: &PathsConfig,
@@ -129,7 +129,7 @@ fn prepare_open(
       return Err(http_error(StatusCode::INTERNAL_SERVER_ERROR, &detail));
     }
   };
-  // `_is_listening` takes a socket port: a value beyond 0-65535 fails inside the socket call, unhandled.
+  // The listener check takes a socket port: a value beyond 0-65535 fails inside the socket call, unhandled.
   let Ok(port) = u16::try_from(port) else {
     return Err(responses::internal_error("OverflowError", "port must be 0-65535.".to_string()));
   };
@@ -161,12 +161,12 @@ fn return_code(status: ExitStatus) -> i32 {
   status.code().or(status.signal().map(|signal| -signal)).expect("an exit status has a code or a signal")
 }
 
-/// `_is_listening`: a connect to `127.0.0.1:<port>` within 0.2 s succeeds.
+/// A connect to `127.0.0.1:<port>` within 0.2 s succeeds.
 async fn is_listening(port: u16) -> bool {
   matches!(tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(("127.0.0.1", port))).await, Ok(Ok(_)))
 }
 
-/// `_start_code_server`: `<binary> --config <path>` in a new session, with stdin, stdout and stderr closed. The child
+/// `<binary> --config <path>` in a new session, with stdin, stdout and stderr closed. The child
 /// outlives the request.
 fn spawn(binary: &str, config_path: &Path) -> io::Result<Child> {
   let mut command = Command::new(binary);
@@ -183,7 +183,7 @@ fn spawn(binary: &str, config_path: &Path) -> io::Result<Child> {
   command.spawn()
 }
 
-/// `_resolve_code_server_executable`: `code_server.bin` (with `~` expanded) when set, else `code-server`.
+/// `code_server.bin` (with `~` expanded) when set, else `code-server`.
 pub(crate) fn executable(section: &CodeServerConfig) -> anyhow::Result<Option<String>> {
   let search_path = std::env::var_os("PATH").map(|path| path.to_string_lossy().into_owned());
   match section.bin.as_deref().filter(|bin| !bin.is_empty()) {
@@ -192,7 +192,7 @@ pub(crate) fn executable(section: &CodeServerConfig) -> anyhow::Result<Option<St
   }
 }
 
-/// `_resolve_folder_under_allowed_root`: the folder, resolved, when it is a directory under a workspace directory or
+/// The folder, resolved, when it is a directory under a workspace directory or
 /// the worktree directory.
 fn resolve_folder(folder: &str, paths: &PathsConfig) -> Result<PathBuf, Response> {
   let folder_path = paths::realpath(&PathBuf::from(paths::expanduser(&config::pathlib_text(folder))));

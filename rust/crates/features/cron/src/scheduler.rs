@@ -19,8 +19,8 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-use crate::config::ScheduledTaskConfig;
-use crate::{loader, steps};
+use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
+use crate::{host_gate, loader, steps};
 
 const TICK_SECONDS: u64 = 60;
 const AUTO_BIND_PREFIX: &str = "scheduled-node:";
@@ -227,31 +227,47 @@ impl CronScheduler {
     if due > now {
       return Ok(());
     }
-    if let Some(round) = self.round_in_flight(task, cfg)? {
-      let now_text = isoformat_text(&now)?;
-      update_cron_slots(
-        &self.features,
-        &session.id,
-        json!({"last_scheduled_run": now_text, "last_run_status": "skipped"}),
-      )
-      .await?;
-      self
-        .features
-        .store
-        .persist_and_broadcast(
-          &session.id,
-          json!({
-            "type": event_types::SCHEDULED_RUN_SKIPPED,
-            "task": task.name,
-            "skipped_at": now_text,
-            "reason": format!("previous round still running ({round})"),
-          }),
-        )
-        .await?;
+    let skip = match self.round_in_flight(task, cfg)? {
+      Some(round) => Some(format!("previous round still running ({round})")),
+      None => host_gate::hold_reason(&self.features, task, cfg).await?,
+    };
+    if let Some(reason) = skip {
+      self.record_skip(&session.id, &task.name, isoformat_text(&now)?, reason).await?;
       return Ok(());
     }
     self
       .execute_task(task.clone(), Some(isoformat_text(&due)?), true, cfg.clone(), now.with_timezone(&chrono::Utc))
+      .await?;
+    Ok(())
+  }
+
+  /// Use up one due fire of `task_name` on its bound session and record why it did not run. The slots take the fire as
+  /// used, so the next due fire is the next occurrence. No worker starts and no session is woken.
+  async fn record_skip(
+    &self,
+    session_id: &str,
+    task_name: &str,
+    skipped_at: String,
+    reason: String,
+  ) -> anyhow::Result<()> {
+    update_cron_slots(
+      &self.features,
+      session_id,
+      json!({"last_scheduled_run": skipped_at, "last_run_status": "skipped"}),
+    )
+    .await?;
+    self
+      .features
+      .store
+      .persist_and_broadcast(
+        session_id,
+        json!({
+          "type": event_types::SCHEDULED_RUN_SKIPPED,
+          "task": task_name,
+          "skipped_at": skipped_at,
+          "reason": reason,
+        }),
+      )
       .await?;
     Ok(())
   }
@@ -279,7 +295,7 @@ impl CronScheduler {
       Some(value) => value,
       None => UtcDateTime::now().to_isoformat_text(),
     };
-    if task.mode.as_deref() == Some("master") {
+    if task.mode == Some(TaskMode::Master) {
       let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
       let input_id = firing_ref(&task, &firing);
       dispatcher
@@ -477,7 +493,7 @@ impl CronScheduler {
     if self.features.store.task_state(session_id)? != "open" {
       anyhow::bail!("scheduled task '{}' bound task {session_id} is archived", task.name);
     }
-    if task.mode.as_deref() == Some("master") && meta.profile != TaskProfile::Manager {
+    if task.mode == Some(TaskMode::Master) && meta.profile != TaskProfile::Manager {
       anyhow::bail!("scheduled task '{}' (mode master) binds task {session_id}, which is not a manager", task.name);
     }
     Ok(meta)
@@ -651,23 +667,6 @@ async fn update_cron_slots(features: &FeatureContext, session_id: &str, values: 
   let values = values.as_object().cloned().ok_or_else(|| anyhow::anyhow!("cron slot updates must be an object"))?;
   features.store.update_slot_fields(session_id, "cron", values).await?;
   Ok(())
-}
-
-/// The backend a scheduled task fires on (`cron_sequence.effective_scheduled_task_backend`); the setup seed lists
-/// it per task.
-pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
-  if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
-    if cfg.get_backend_option(backend).is_none() {
-      anyhow::bail!("scheduled task backend '{backend}' is not in backends.options");
-    }
-    return Ok(backend.to_string());
-  }
-  cfg
-    .backends
-    .options
-    .first()
-    .map(|option| option.id.clone())
-    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))
 }
 
 fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
@@ -926,15 +925,12 @@ mod tests {
   use std::sync::Arc;
 
   use super::{CronExpression, CronScheduler, isoformat_text};
-  use crate::config::{ScheduledTaskConfig, StepConfig};
-  use crate::test_support::{FakeGit, GIT_PROGRAM_LOCK, HELD_ROUND_GOAL, ProcessGroupGuard, feature_context, manager};
-
-  fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
-    let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, charliebot_core::yaml::dump(body).unwrap()).unwrap();
-    path
-  }
+  use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
+  use crate::test_support::{
+    FakeGit, GIT_PROGRAM_LOCK, ProcessGroupGuard, child_manager, feature_context, feature_context_with_host_backends,
+    host_probe_count, manager, set_host_login, write_prompted_task, write_task,
+  };
+  use charliebot_registry::registry::HostLogin;
 
   #[test]
   fn cron_expression_uses_minute_grid_and_croniter_day_union() {
@@ -1253,7 +1249,7 @@ mod tests {
       project: None,
       allow_failure: false,
       session_id: Some(parent.id.clone()),
-      mode: Some("worker".to_string()),
+      mode: Some(TaskMode::Worker),
       prompt: None,
       handler: None,
       steps: Some(vec![
@@ -1638,7 +1634,7 @@ mod tests {
       project: None,
       allow_failure: false,
       session_id: Some(node_id.to_string()),
-      mode: Some("worker".to_string()),
+      mode: Some(TaskMode::Worker),
       prompt: Some("Synthetic scheduled work".to_string()),
       handler: None,
       steps: None,
@@ -1834,13 +1830,11 @@ mod tests {
   async fn held_worker_task(features: &Arc<FeatureContext>, name: &str) -> (std::path::PathBuf, SessionMetadata) {
     let node = manager(features, &format!("{name}-node")).await.unwrap();
     let home = features.config.get().unwrap().charliebot_home.clone();
-    let prompt = home.join(format!("{name}-prompt.md"));
-    std::fs::write(&prompt, format!("{HELD_ROUND_GOAL}\n")).unwrap();
-    let path = write_task(
+    let path = write_prompted_task(
       &home,
       name,
       &json!({
-        "cron": "* * * * *", "prompt_file": prompt, "mode": "worker", "enabled": true,
+        "cron": "* * * * *", "mode": "worker", "enabled": true,
         "timezone": "UTC", "session_id": node.id, "backend": "synthetic",
       }),
     );
@@ -2131,5 +2125,137 @@ mod tests {
       Err(_) => panic!("the manual run failed"),
     }
     assert_eq!(handler_results(&features, &node.id), 3);
+  }
+
+  const GATED_BACKEND: &str = "synthetic-host";
+  const GATED_ALIAS: &str = "synthetic-login-host";
+  const GATED_DETAIL: &str = "Synthetic login check\nhttps://login.example.internal/check";
+
+  /// The verdict the stub host reports for `GATED_ALIAS`, changed at `since`.
+  fn gate_verdict(status: &str, since: &str) -> HostLogin {
+    HostLogin {
+      alias: GATED_ALIAS.to_string(),
+      status: status.to_string(),
+      detail: GATED_DETAIL.to_string(),
+      last_change_at: since.to_string(),
+      awaits_approval: matches!(status, "needs-interactive-auth" | "needs-okta"),
+    }
+  }
+
+  /// A feature context whose `GATED_BACKEND` entry logs into `GATED_ALIAS`.
+  fn gated_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    feature_context_with_host_backends(&[(GATED_BACKEND, GATED_ALIAS)])
+  }
+
+  #[tokio::test]
+  async fn a_host_awaiting_approval_holds_each_due_fire_as_one_skip_and_the_first_fire_after_approval_runs() {
+    let (_home, features) = gated_context();
+    install_execution(&features).await;
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    set_host_login(&home, gate_verdict("needs-interactive-auth", "2026-06-01T00:00:00+00:00"));
+    let root = manager(&features, "gate-root").await.unwrap();
+    let node = child_manager(&features, &root.id, "gate-node").await.unwrap();
+    write_prompted_task(
+      &home,
+      "gated",
+      &json!({
+        "cron": "* * * * *", "mode": "worker", "enabled": true,
+        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+      }),
+    );
+    let root_facts = features.store.load_all_facts(&root.id).unwrap().len();
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+
+    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
+    let skips = skipped_events(&features, &node.id);
+    assert_eq!(skips.len(), 1, "{skips:?}");
+    let reason = skips[0].get("reason").and_then(CompactValue::as_str).unwrap();
+    assert_eq!(reason, format!("host {GATED_ALIAS} is needs-interactive-auth: {GATED_DETAIL}"));
+    assert_eq!(round_count(&features, &node.id), 0, "a held fire starts no worker");
+    assert_eq!(host_probe_count(&home, GATED_ALIAS), 1);
+    assert_eq!(features.store.load_all_facts(&root.id).unwrap().len(), root_facts, "the holder is not woken");
+
+    // The next due minute is held again: one more skip, still no worker.
+    scheduler.tick_at(utc_at(1, 30)).await.unwrap();
+    assert_eq!(skipped_events(&features, &node.id).len(), 2);
+    assert_eq!(round_count(&features, &node.id), 0);
+
+    // Approval lands: the next due minute probes ok, starts its worker and records no skip.
+    set_host_login(&home, gate_verdict("ok", "2026-06-01T00:02:10+00:00"));
+    scheduler.tick_at(utc_at(2, 30)).await.unwrap();
+    assert_eq!(skipped_events(&features, &node.id).len(), 2, "the fire that approval unblocks records no skip");
+    assert_eq!(round_count(&features, &node.id), 1, "the first fire after approval starts its worker");
+    let mut processes = ProcessGroupGuard::new();
+    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    end_round(&features, &round, &run).await;
+  }
+
+  #[tokio::test]
+  async fn an_unreachable_host_runs_the_fire_so_its_failure_reports_as_before() {
+    let (_home, features) = gated_context();
+    install_execution(&features).await;
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    set_host_login(&home, gate_verdict("unreachable", "2026-06-01T00:00:00+00:00"));
+    let node = manager(&features, "gate-unreachable-node").await.unwrap();
+    write_prompted_task(
+      &home,
+      "unreachable",
+      &json!({
+        "cron": "* * * * *", "mode": "worker", "enabled": true,
+        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+      }),
+    );
+    let mut processes = ProcessGroupGuard::new();
+    CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
+    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    assert!(skipped_events(&features, &node.id).is_empty());
+    assert_eq!(round_count(&features, &node.id), 1);
+    end_round(&features, &round, &run).await;
+  }
+
+  #[tokio::test]
+  async fn a_probe_that_errors_records_no_skip_and_starts_no_worker() {
+    let (_home, features) = gated_context();
+    install_execution(&features).await;
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let node = manager(&features, "gate-error-node").await.unwrap();
+    write_prompted_task(
+      &home,
+      "probe-error",
+      &json!({
+        "cron": "* * * * *", "mode": "worker", "enabled": true,
+        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+      }),
+    );
+    // No verdict is set, so the stub's probe errors, as the real probe does for an alias the ssh config lacks.
+    CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
+    assert_eq!(host_probe_count(&home, GATED_ALIAS), 1);
+    assert!(skipped_events(&features, &node.id).is_empty(), "an errored probe records no skip");
+    assert_eq!(round_count(&features, &node.id), 0, "an errored probe starts no worker");
+  }
+
+  #[tokio::test]
+  async fn a_task_whose_backend_names_no_host_and_a_handler_task_probe_no_host() {
+    let (_home, features) = gated_context();
+    install_execution(&features).await;
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    set_host_login(&home, gate_verdict("needs-okta", "2026-06-01T00:00:00+00:00"));
+    let (_path, plain) = held_worker_task(&features, "plain").await;
+    let handled = manager(&features, "handled-node").await.unwrap();
+    write_task(
+      &home,
+      "handled",
+      &json!({
+        "cron": "* * * * *", "handler": "synthetic_handler", "enabled": true,
+        "timezone": "UTC", "session_id": handled.id, "backend": GATED_BACKEND,
+      }),
+    );
+    let mut processes = ProcessGroupGuard::new();
+    CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
+    let (round, run) = wait_for_running_round(&features, &mut processes, &plain.id).await;
+    assert_eq!(host_probe_count(&home, GATED_ALIAS), 0, "no backend of these tasks names the host");
+    assert!(skipped_events(&features, &handled.id).is_empty());
+    assert_eq!(handler_results(&features, &handled.id), 1, "the handler runs despite the host's wait");
+    end_round(&features, &round, &run).await;
   }
 }

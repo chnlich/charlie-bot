@@ -262,7 +262,7 @@ pub fn judge(
       .chars()
       .take(200)
       .collect::<String>();
-    // The fallback applies to the stripped text, so a blank result reads as no result, as claude_compaction.py does.
+    // The fallback applies to the stripped text, so a blank result reads as no result.
     let detail = if detail.is_empty() { "run reported an error".to_string() } else { detail };
     return CompactionOutcome {
       ok: false,
@@ -548,7 +548,6 @@ mod tests {
 
   use super::*;
 
-  // Python: tests/test_claude_compaction.py:152.
   #[test]
   fn compaction_command_disables_skills_and_installs_the_compaction_context_hook() {
     let command = compaction_command("claude-session", "charlie-session");
@@ -743,7 +742,6 @@ mod tests {
     assert_eq!(events.lock().unwrap()[2]["type"], charliebot_core::event_types::CONTEXT_COMPACT_FAILED);
   }
 
-  // Python: tests/test_claude_idle_compaction.py:309.
   #[tokio::test]
   async fn generic_runner_judges_the_last_stream_json_result_and_returns_post_readings() {
     let root = tempfile::tempdir().unwrap();
@@ -811,7 +809,6 @@ mod tests {
     assert_eq!(events.lock().unwrap()[0]["compact_metadata"]["pre_tokens"], 120_000);
   }
 
-  // Python: src/backends/claude_code/claude_compaction.py:273.
   #[test]
   fn a_failed_run_whose_result_is_blank_reports_the_fallback_text() {
     let outcome = judge(1, br#"{"is_error":true,"result":"   "}"#, &Map::new(), 0, 0, "fable");

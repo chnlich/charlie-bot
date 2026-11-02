@@ -1,5 +1,4 @@
-//! The standing page (`src/features/host_auth/api.py` `host_auth_page`, `_page_rows`, `_summary`, `_format_remaining`):
-//! the template context built from the state and rendered through the shared template handle.
+//! The standing page: the template context built from the state and rendered through the shared template handle.
 
 use anyhow::Context;
 use axum::response::Response;
@@ -57,7 +56,7 @@ fn context(state: &State, now: OffsetDateTime) -> anyhow::Result<Value> {
   }))
 }
 
-/// `_page_rows`: one row for one state entry, with the deadline column's mode resolved. The column counts only for a
+/// One row for one state entry, with the deadline column's mode resolved. The column counts only for a
 /// host that answers and carries a baseline; a passed deadline stops counting and keeps its baseline.
 fn page_row(entry: &Map<String, Value>, now: OffsetDateTime) -> anyhow::Result<Value> {
   let alias = entry.get("alias").and_then(Value::as_str).context("a host entry has no string alias")?;
@@ -117,7 +116,7 @@ fn status_presentation(status: &str) -> anyhow::Result<(&'static str, &'static s
   }
 }
 
-/// `_summary`: the hosts held right now, and the `ok` host with the soonest positive estimate.
+/// The hosts held right now, and the `ok` host with the soonest positive estimate.
 fn summary(state: &State, now: OffsetDateTime) -> anyhow::Result<Value> {
   let entries = host_auth::host_entries(state)?;
   let mut blocked = Vec::new();
@@ -149,7 +148,7 @@ fn summary(state: &State, now: OffsetDateTime) -> anyhow::Result<Value> {
   }))
 }
 
-/// `_format_remaining`: the countdown in its two most significant units.
+/// The countdown in its two most significant units.
 pub fn format_remaining(seconds: f64) -> String {
   let total = seconds as i64;
   let (days, rest) = (total / 86400, total % 86400);

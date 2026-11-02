@@ -13,10 +13,10 @@ use reqwest::{RequestBuilder, Response};
 use serde_json::{Value, json};
 
 const API_BASE: &str = "https://slack.com/api/";
-// `src/infra/http.py::get_http_client` constructs `httpx.AsyncClient()` without an override.
+// The shared HTTP client's timeout; every Web API call takes it.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The Slack Web API wrapper (`slack_listener.SlackClient`).
+/// The Slack Web API wrapper.
 pub struct SlackClient {
   http: reqwest::Client,
   api_base: String,
@@ -131,7 +131,7 @@ impl SlackClient {
     }
   }
 
-  /// Resolve and cache a channel name, logging the same two failure classes as the Python client.
+  /// Resolve and cache a channel name, logging the two failure classes the listener watches.
   pub(crate) async fn get_channel_name(&self, channel_id: &str) -> Option<String> {
     if let Some(name) =
       self.channel_name_cache.lock().expect("the Slack channel-name cache is never poisoned").get(channel_id)

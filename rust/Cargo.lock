@@ -352,7 +352,6 @@ dependencies = [
  "charliebot-charlie-code",
  "charliebot-claude-code",
  "charliebot-codex",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-gemini",
  "charliebot-registry",
@@ -417,6 +416,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "charliebot-web-reply",
+ "futures-util",
  "http 1.5.0",
  "jiff",
  "serde_json",
@@ -579,6 +579,7 @@ dependencies = [
  "charliebot-store",
  "charliebot-switch-helper",
  "charliebot-tasks",
+ "charliebot-taste",
  "charliebot-triggers",
  "charliebot-voice",
  "charliebot-web-reply",
@@ -900,13 +901,18 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-shell-harness",
+ "charliebot-store",
  "futures-util",
  "http 1.5.0",
  "libc",
+ "regex",
+ "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "time",
  "tokio",
+ "tower",
  "tracing",
 ]
 
@@ -1084,6 +1090,7 @@ dependencies = [
  "charliebot-session-api",
  "charliebot-slack",
  "charliebot-tasks",
+ "charliebot-taste",
  "charliebot-terminal",
  "charliebot-trace",
  "charliebot-triggers",
@@ -1249,7 +1256,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-shell-harness",
@@ -1331,6 +1337,23 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "charliebot-taste"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-cli-common",
+ "charliebot-core",
+ "charliebot-html",
+ "charliebot-registry",
+ "charliebot-store",
+ "clap",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "time",
 ]
 
 [[package]]

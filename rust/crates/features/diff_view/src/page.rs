@@ -1,4 +1,4 @@
-//! The diff viewer page (`src/features/diff_view/page.py`): `GET /diff`.
+//! The diff viewer page: `GET /diff`.
 
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ pub(crate) fn matches(path: &str) -> bool {
   path == "/diff"
 }
 
-/// `diff_viewer`: `diff.html` with the host name and the static asset version.
+/// `diff.html` with the host name and the static asset version.
 async fn diff_viewer(State(features): State<Arc<FeatureContext>>, parts: Parts) -> Response {
   let templating = match features.startup.require::<Templating>() {
     Ok(templating) => templating,
@@ -42,7 +42,6 @@ async fn diff_viewer(State(features): State<Arc<FeatureContext>>, parts: Parts) 
   }
 }
 
-/// `socket.gethostname()`.
 fn hostname() -> Result<String, Response> {
   let name = nix::unistd::gethostname().map_err(|error| responses::internal_error("OSError", error.to_string()))?;
   name.into_string().map_err(|name| {

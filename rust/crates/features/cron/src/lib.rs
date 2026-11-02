@@ -3,6 +3,7 @@
 mod api;
 mod boundary;
 pub mod config;
+mod host_gate;
 mod loader;
 mod scheduler;
 pub mod seed;
@@ -53,6 +54,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     validate_cron_fields,
   )?;
   registry.startup_check("cron_backend_refs", loader::backend_refs_check)?;
+  registry.derived_waiting_items(host_gate::derived_waiting_rows)?;
   let (registry_sender, registry_receiver) = tokio::sync::watch::channel(None);
   registry.service(Arc::new(sequence_controller::BindingContextService::new(registry_sender)))?;
   registry.service(Arc::new(scheduler::SchedulerService::default()))?;

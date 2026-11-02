@@ -1,9 +1,9 @@
-//! The delegation route's gate, backend choice, and child record, ported from the Python delegate tests, and the
+//! The delegation route's gate, backend choice, and child record, plus the
 //! session-message relay that the same router serves. Each case drives `routes::routes` through `post_delegate` (or
 //! `post_delegate_as` for a run token, `post_internal` for the relay) on a synthetic task tree.
 //!
-//! Python disarms the launch of a delegated run in some cases; the adapter here starts the process at once. Those cases
-//! hold the process open with `HANG` and let the guard kill it, or run it to a terminal fact.
+//! The adapter starts a delegated run's process at once, so the cases that must hold it open use `HANG` and let
+//! the guard kill it, or run it to a terminal fact.
 
 #[allow(dead_code)]
 mod process_guard;
@@ -109,6 +109,21 @@ fn with_backend(mut body: Value, backend: &str) -> Value {
   body
 }
 
+/// A delegation body that declares context work.
+fn with_context_work(mut body: Value) -> Value {
+  body["context_work"] = json!(true);
+  body
+}
+
+/// A stack whose `backends.strong` names `strong`.
+async fn strong_stack(scripts: &Scripts, ids: &[&str], pool: &[&str], strong: &str) -> anyhow::Result<Stack> {
+  let stack = stack_with(scripts, ids, pool).await?;
+  let mut cfg = (*stack.cfg).clone();
+  cfg.backends.strong = Some(strong.to_string());
+  stack.replace_config(cfg)?;
+  Ok(stack)
+}
+
 /// A string field of a response body.
 fn text(body: &Value, key: &str) -> anyhow::Result<String> {
   Ok(body[key].as_str().ok_or_else(|| anyhow::anyhow!("the body names no {key}: {body}"))?.to_string())
@@ -174,10 +189,8 @@ fn run_token_header(session_id: &str, run_id: &str, agent: &str) -> anyhow::Resu
   Ok(format!("Bearer {}", run_token::sign_run_token(&claims, "synthetic-access-key")?))
 }
 
-/// `test_delegate_inherited_authorization.py::test_authorized_ancestor_delegates_without_a_local_user_message`: a
-/// child manager with no user message of its own delegates through an authorized ancestor. One leaf and one run
-/// are created, and a replay returns the same child and run without a second process.
-// Python: tests/test_delegate_inherited_authorization.py::test_authorized_ancestor_delegates_without_a_local_user_message
+/// A child manager with no user message of its own delegates through an authorized ancestor. One leaf and one run are
+/// created, and a replay returns the same child and run without a second process.
 #[tokio::test]
 async fn authorized_ancestor_delegates_without_a_local_user_message() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -212,11 +225,10 @@ async fn authorized_ancestor_delegates_without_a_local_user_message() -> anyhow:
   Ok(())
 }
 
-/// `test_delegate_inherited_authorization.py::test_user_questions_admit_root_and_child_delegations`: a question is a
-/// real user message, so the root and the child each delegate an implement worker under their own question.
+/// A question is a real user message, so the root and the child each delegate an implement worker under their own
+/// question.
 #[tokio::test]
 async fn user_questions_admit_root_and_child_delegations() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::test_user_questions_admit_root_and_child_delegations.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new((0..4).map(|n| result_script(&format!("done {n}"))).collect());
@@ -238,12 +250,10 @@ async fn user_questions_admit_root_and_child_delegations() -> anyhow::Result<()>
   Ok(())
 }
 
-/// `test_task_manager_authorization.py::test_summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not`: a
-/// root manager whose log holds a recorded thread summon delegates, and a root whose only input is an agent message
+/// A root manager whose log holds a recorded thread summon delegates, and a root whose only input is an agent message
 /// relayed through the session-message route is refused.
 #[tokio::test]
 async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not() -> anyhow::Result<()> {
-  // Python: tests/test_task_manager_authorization.py:492.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
 
@@ -294,11 +304,10 @@ async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not()
   Ok(())
 }
 
-/// `test_delegate_inherited_authorization.py::test_closed_ancestor_refuses_delegation`: the child holds its own user
-/// message, but the archived root closes the line. The route refuses and nothing is created.
+/// The child holds its own user message, but the archived root closes the line. The route refuses and nothing is
+/// created.
 #[tokio::test]
 async fn closed_ancestor_refuses_delegation() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::test_closed_ancestor_refuses_delegation.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -335,11 +344,9 @@ async fn closed_ancestor_refuses_delegation() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_delegate_inherited_authorization.py::test_worker_caller_cannot_delegate`: agents run only under a manager, so
-/// a worker cannot delegate.
+/// Agents run only under a manager, so a worker cannot delegate.
 #[tokio::test]
 async fn worker_caller_cannot_delegate() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::test_worker_caller_cannot_delegate.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -357,11 +364,9 @@ async fn worker_caller_cannot_delegate() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_delegate_inherited_authorization.py::test_foreign_run_token_cannot_delegate`: a run token bound to one node
-/// cannot create a worker under a different node.
+/// A run token bound to one node cannot create a worker under a different node.
 #[tokio::test]
 async fn foreign_run_token_cannot_delegate() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::test_foreign_run_token_cannot_delegate.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -382,11 +387,10 @@ async fn foreign_run_token_cannot_delegate() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_delegate_inherited_authorization.py::test_verify_exemption_on_the_v2_route_and_launch`: a verify delegation
-/// needs no user message and launches on the route, while a repo task under the same tree stays blocked.
+/// A verify delegation needs no user message and launches on the route, while a repo task under the same tree stays
+/// blocked.
 #[tokio::test]
 async fn verify_exemption_on_the_v2_route_and_launch() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::test_verify_exemption_on_the_v2_route_and_launch.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![result_script("verdict: no")]);
@@ -411,11 +415,10 @@ async fn verify_exemption_on_the_v2_route_and_launch() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_delegate_inherited_authorization.py::test_agent_run_token_delegates_verify_without_a_takeoff`: the CLI's run
-/// token delegates a read-only verify with no user instruction anywhere, and the repo-less child runs to a result.
+/// The CLI's run token delegates a read-only verify with no user instruction anywhere, and the repo-less child runs to
+/// a result.
 #[tokio::test]
 async fn agent_run_token_delegates_verify_without_a_takeoff() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::test_agent_run_token_delegates_verify_without_a_takeoff.
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let root = node(&stack, "root", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -438,11 +441,9 @@ async fn agent_run_token_delegates_verify_without_a_takeoff() -> anyhow::Result<
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_delegate_task_returns_403_when_takeoff_gate_blocks`: a manager with no user
-/// message delegates a repo task. The gate refuses, and no child or delegation fact is written.
+/// A manager with no user message delegates a repo task. The gate refuses, and no child or delegation fact is written.
 #[tokio::test]
 async fn delegate_task_returns_403_when_takeoff_gate_blocks() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_delegate_task_returns_403_when_takeoff_gate_blocks.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -461,11 +462,9 @@ async fn delegate_task_returns_403_when_takeoff_gate_blocks() -> anyhow::Result<
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_delegate_task_verify_rejects_repo_path`: a verify delegation names no
-/// repository, and the schema gate refuses one before the session is read.
+/// A verify delegation names no repository, and the schema gate refuses one before the session is read.
 #[tokio::test]
 async fn delegate_task_verify_rejects_repo_path() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_delegate_task_verify_rejects_repo_path.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -486,12 +485,10 @@ async fn delegate_task_verify_rejects_repo_path() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_delegate_task_repo_scoped_types_take_repo_and_base_together`: each
-/// repo-scoped type takes `repo_path` and `base_branch` together, so one of them alone is refused. Covers the six
+/// Each repo-scoped type takes `repo_path` and `base_branch` together, so one of them alone is refused. Covers the six
 /// parametrized cases (three types, two halves).
 #[tokio::test]
 async fn repo_scoped_types_take_repo_and_base_together() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_delegate_task_repo_scoped_types_take_repo_and_base_together.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -517,11 +514,9 @@ async fn repo_scoped_types_take_repo_and_base_together() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_delegate_task_repo_less_request_passes_the_schema_gate`: omitting
-/// `repo_path` and `base_branch` together is a valid repo-less delegation for each of the three types.
+/// Omitting `repo_path` and `base_branch` together is a valid repo-less delegation for each of the three types.
 #[tokio::test]
 async fn repo_less_request_passes_the_schema_gate() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_delegate_task_repo_less_request_passes_the_schema_gate.
   let scripts = Scripts::new((0..3).map(|n| result_script(&format!("done {n}"))).collect());
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -545,11 +540,9 @@ async fn repo_less_request_passes_the_schema_gate() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_delegate_task_returns_400_for_invalid_backend`: a backend the configuration
-/// does not name is refused, and nothing is created.
+/// A backend the configuration does not name is refused, and nothing is created.
 #[tokio::test]
 async fn delegate_task_returns_400_for_invalid_backend() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_delegate_task_returns_400_for_invalid_backend.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -565,11 +558,9 @@ async fn delegate_task_returns_400_for_invalid_backend() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_verify_no_backend_defaults_to_first_differing_preference`: a verify without
-/// a backend takes the first pool member that differs from the session's backend.
+/// A verify without a backend takes the first pool member that differs from the session's backend.
 #[tokio::test]
 async fn verify_no_backend_defaults_to_first_differing_preference() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_verify_no_backend_defaults_to_first_differing_preference.
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
@@ -580,11 +571,9 @@ async fn verify_no_backend_defaults_to_first_differing_preference() -> anyhow::R
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_verify_no_backend_session_backend_not_in_preference_uses_first_entry`: a
-/// session backend outside the pool leaves the first pool member.
+/// A session backend outside the pool leaves the first pool member.
 #[tokio::test]
 async fn verify_no_backend_session_backend_not_in_preference_uses_first_entry() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_verify_no_backend_session_backend_not_in_preference_uses_first_entry
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "kimi-k2.5").await?;
@@ -595,11 +584,9 @@ async fn verify_no_backend_session_backend_not_in_preference_uses_first_entry() 
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_verify_no_backend_empty_preference_keeps_session_backend`: with no pool, a
-/// verify keeps the session's backend.
+/// With no pool, a verify keeps the session's backend.
 #[tokio::test]
 async fn verify_no_backend_empty_preference_keeps_session_backend() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_verify_no_backend_empty_preference_keeps_session_backend.
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &[]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "codex-o3").await?;
@@ -610,11 +597,9 @@ async fn verify_no_backend_empty_preference_keeps_session_backend() -> anyhow::R
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_verify_explicit_backend_wins_over_preference`: a named backend wins over
-/// the pool's preference.
+/// A named backend wins over the pool's preference.
 #[tokio::test]
 async fn verify_explicit_backend_wins_over_preference() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_verify_explicit_backend_wins_over_preference.
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
@@ -626,11 +611,9 @@ async fn verify_explicit_backend_wins_over_preference() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_verify_unknown_explicit_backend_returns_400`: a named backend the
-/// configuration does not hold is refused.
+/// A named backend the configuration does not hold is refused.
 #[tokio::test]
 async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_verify_unknown_explicit_backend_returns_400.
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
@@ -643,13 +626,12 @@ async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_delegate_child_and_its_later_runs_keep_the_requested_backend` (partial):
-/// the requested backend stays on the child record, its first work run, and the next work run the dispatcher reserves.
-/// The review half (a review on a pool member other than the work run's backend) is not ported: the review spawn
+/// The requested backend stays on the child record, its first work run, and the next work run the dispatcher
+/// reserves.
+/// The review half (a review on a pool member other than the work run's backend) is not covered: the review spawn
 /// is private to the task execution adapter.
 #[tokio::test]
 async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_delegate_child_and_its_later_runs_keep_the_requested_backend.
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -679,11 +661,9 @@ async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyho
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_verify_delegate_child_records_the_cross_model_backend`: a verify without a
-/// backend takes the cross-model member, and the child record keeps the backend its first run got.
+/// A verify without a backend takes the cross-model member, and the child record keeps the backend its first run got.
 #[tokio::test]
 async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_verify_delegate_child_records_the_cross_model_backend.
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
@@ -696,11 +676,9 @@ async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Resu
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_implement_delegate_without_backend_resolves_to_the_parent_backend`: an
-/// implement without a backend resolves to the parent's backend, and the child record keeps it.
+/// An implement without a backend resolves to the parent's backend, and the child record keeps it.
 #[tokio::test]
 async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_implement_delegate_without_backend_resolves_to_the_parent_backend
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -716,12 +694,10 @@ async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> 
   Ok(())
 }
 
-/// `test_internal_delegate_takeoff.py::test_pool_runs_unnamed_workers_and_leaves_named_and_verify_routing`: an
-/// implement that names no backend takes the first pool member, a named backend is never pooled, and a verify takes
+/// An implement that names no backend takes the first pool member, a named backend is never pooled, and a verify takes
 /// the next member other than the session's own.
 #[tokio::test]
 async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::test_pool_runs_unnamed_workers_and_leaves_named_and_verify_routing
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -746,12 +722,123 @@ async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyh
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_delegation_from_a_manager_succeeds_without_takeoff`: a manager with no user
-/// message delegates a cold read. The read-only exemption admits it, the child is named after the page file, and its
-/// first run goes to the first pool member.
+/// Context work from a manager resolves to `backends.strong` for each task type that takes it, and the record keeps the
+/// declaration. A repo-less script-run takes the same path as a repo task.
+#[tokio::test]
+async fn context_work_resolves_to_backends_strong_for_each_task_type() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new((0..3).map(|_| HANG.to_string()).collect());
+  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+  let router = routes::routes(&stack.features);
+
+  let repo_less_script = json!({
+    "session_id": manager.id,
+    "description": "## Goal\n\nprofile the run\n",
+    "task_type": "script-run",
+    "repo_path": null,
+    "base_branch": null,
+    "context_work": true,
+  });
+  let bodies = [
+    repo_less_script,
+    with_context_work(delegate_body(&manager.id, &repo, "quick-edit")),
+    with_context_work(delegate_body(&manager.id, &repo, "implement")),
+  ];
+  for body in bodies {
+    let (status, response) = post_delegate(&router, body).await?;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_launched_on(&stack, &guard, &response, "kimi-k2.5").await?;
+    let child = session_of(&stack, &text(&response, "session_id")?).await?;
+    assert!(child.task.as_ref().is_some_and(|task| task.context_work), "the record keeps the declaration");
+  }
+  Ok(())
+}
+
+/// An explicit `--backend` wins over `backends.strong`, and the declaration is still recorded.
+#[tokio::test]
+async fn explicit_backend_wins_over_context_work_and_the_declaration_is_kept() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new(vec![HANG.to_string()]);
+  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+
+  let body = with_context_work(with_backend(delegate_body(&manager.id, &repo, "quick-edit"), "codex-o3"));
+  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{response}");
+  assert_launched_on(&stack, &guard, &response, "codex-o3").await?;
+  let child = session_of(&stack, &text(&response, "session_id")?).await?;
+  assert!(child.task.as_ref().is_some_and(|task| task.context_work), "the record keeps the declaration");
+  Ok(())
+}
+
+/// Context work with no `backends.strong` is refused with 400 naming the key, even when a backend is named, and nothing
+/// is created.
+#[tokio::test]
+async fn context_work_without_backends_strong_is_refused() -> anyhow::Result<()> {
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &OPTIONS, &["opus"]).await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+
+  let body = with_context_work(with_backend(delegate_body(&manager.id, &repo, "implement"), "codex-o3"));
+  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+  assert!(text(&response, "detail")?.contains("backends.strong"), "{response}");
+  assert!(stack.store().child_ids(&manager.id)?.is_empty());
+  assert!(scripts.builds().is_empty());
+  Ok(())
+}
+
+/// Verify refuses context work: the server holds verify to the pool whatever the declaration says.
+#[tokio::test]
+async fn context_work_on_verify_is_refused() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![]);
+  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
+
+  let (status, response) =
+    post_delegate(&routes::routes(&stack.features), with_context_work(verify_body(&manager.id))).await?;
+  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+  assert!(text(&response, "detail")?.contains("reject context_work"), "{response}");
+  assert!(stack.store().child_ids(&manager.id)?.is_empty());
+  Ok(())
+}
+
+/// A delegation that declares no context work takes the pool, even with `backends.strong` set, and its record reads as
+/// no context work.
+#[tokio::test]
+async fn context_work_zero_takes_the_pool_even_when_backends_strong_is_set() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new(vec![HANG.to_string()]);
+  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+
+  let mut body = delegate_body(&manager.id, &repo, "implement");
+  body["context_work"] = json!(false);
+  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{response}");
+  assert_launched_on(&stack, &guard, &response, "opus").await?;
+  let child = session_of(&stack, &text(&response, "session_id")?).await?;
+  assert!(child.task.as_ref().is_some_and(|task| !task.context_work), "no declaration is recorded");
+  Ok(())
+}
+
+/// A manager with no user message delegates a cold read. The read-only exemption admits it, the child is named after
+/// the page file, and its first run goes to the first pool member.
 #[tokio::test]
 async fn cold_read_delegation_from_a_manager_succeeds_without_takeoff() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_delegation_from_a_manager_succeeds_without_takeoff.
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -780,11 +867,9 @@ async fn cold_read_delegation_from_a_manager_succeeds_without_takeoff() -> anyho
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_delegation_with_a_repo_field_gets_400`: a cold-read delegation that names a
-/// repository or a base branch is refused with 400, and no child is written.
+/// A cold-read delegation that names a repository or a base branch is refused with 400, and no child is written.
 #[tokio::test]
 async fn cold_read_delegation_with_a_repo_field_gets_400() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_delegation_with_a_repo_field_gets_400.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -803,11 +888,9 @@ async fn cold_read_delegation_with_a_repo_field_gets_400() -> anyhow::Result<()>
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_delegation_requires_cold_read`: a cold-read delegation without its
-/// `cold_read` spec is refused with 400.
+/// A cold-read delegation without its `cold_read` spec is refused with 400.
 #[tokio::test]
 async fn cold_read_delegation_requires_cold_read() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_delegation_requires_cold_read.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -822,11 +905,9 @@ async fn cold_read_delegation_requires_cold_read() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_artifact_check.py::test_other_task_types_reject_cold_read`: a verify delegation that carries a `cold_read`
-/// spec is refused with 400.
+/// A verify delegation that carries a `cold_read` spec is refused with 400.
 #[tokio::test]
 async fn other_task_types_reject_cold_read() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_other_task_types_reject_cold_read.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![]);
@@ -860,11 +941,9 @@ fn admitted_messages(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Valu
   )
 }
 
-/// `test_agent_message.py::test_session_message_refuses_an_archived_task_node`: a relay to an archived task node is
-/// refused with 409 and the archived sentence, and the node stays archived.
+/// A relay to an archived task node is refused with 409 and the archived sentence, and the node stays archived.
 #[tokio::test]
 async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
-  // Python: tests/test_agent_message.py::test_session_message_refuses_an_archived_task_node.
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -888,11 +967,10 @@ async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_agent_message.py::test_session_message_relay_admits_and_dispatches_a_task_input`: a relay admits one
-/// `agent_message` into the target, carrying the sender's identity, and dispatch starts the target's turn with it.
+/// A relay admits one `agent_message` into the target, carrying the sender's identity, and dispatch starts the
+/// target's turn with it.
 #[tokio::test]
 async fn session_message_relay_admits_and_dispatches_a_task_input() -> anyhow::Result<()> {
-  // Python: tests/test_agent_message.py::test_session_message_relay_admits_and_dispatches_a_task_input.
   let scripts = Scripts::new(vec![result_script("status received")]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -914,11 +992,9 @@ async fn session_message_relay_admits_and_dispatches_a_task_input() -> anyhow::R
   Ok(())
 }
 
-/// `test_agent_message.py::test_session_message_request_rejects_extra_fields`: a field the request model does not name
-/// is refused with 422.
+/// A field the request model does not name is refused with 422.
 #[tokio::test]
 async fn session_message_request_rejects_extra_fields() -> anyhow::Result<()> {
-  // Python: tests/test_agent_message.py::test_session_message_request_rejects_extra_fields.
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -942,11 +1018,9 @@ async fn session_message_request_rejects_extra_fields() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_agent_message.py::test_session_message_accepts_a_message_at_the_weighted_limit`: 1000 CJK ideographs weigh
-/// exactly the limit, so the relay is accepted and admits one `agent_message`.
+/// 1000 CJK ideographs weigh exactly the limit, so the relay is accepted and admits one `agent_message`.
 #[tokio::test]
 async fn session_message_accepts_a_message_at_the_weighted_limit() -> anyhow::Result<()> {
-  // Python: tests/test_agent_message.py::test_session_message_accepts_a_message_at_the_weighted_limit.
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -962,11 +1036,10 @@ async fn session_message_accepts_a_message_at_the_weighted_limit() -> anyhow::Re
   Ok(())
 }
 
-/// `test_agent_message.py::test_session_message_refuses_a_message_over_the_weighted_limit`: 1001 CJK ideographs weigh
-/// 2002, so the relay answers 422 with the measured length and the limit, and the target gains no input.
+/// 1001 CJK ideographs weigh 2002, so the relay answers 422 with the measured length and the limit, and the target
+/// gains no input.
 #[tokio::test]
 async fn session_message_refuses_a_message_over_the_weighted_limit() -> anyhow::Result<()> {
-  // Python: tests/test_agent_message.py::test_session_message_refuses_a_message_over_the_weighted_limit.
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -988,11 +1061,9 @@ async fn session_message_refuses_a_message_over_the_weighted_limit() -> anyhow::
   Ok(())
 }
 
-/// `test_agent_message.py::test_session_message_refuses_an_over_limit_ascii_message`: 2001 ASCII characters weigh 2001,
-/// so the relay answers 422 and writes nothing to the target.
+/// 2001 ASCII characters weigh 2001, so the relay answers 422 and writes nothing to the target.
 #[tokio::test]
 async fn session_message_refuses_an_over_limit_ascii_message() -> anyhow::Result<()> {
-  // Python: tests/test_agent_message.py::test_session_message_refuses_an_over_limit_ascii_message.
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;

@@ -1,4 +1,4 @@
-//! The `charliebot plan` verbs (`src/features/artifacts/plan_cli.py`): present, amend, approve, close, diff, list.
+//! The `charliebot plan` verbs: present, amend, approve, close, diff, list.
 //!
 //! Every registering verb resolves the session, posts to `/api/internal/plan/<verb>` with a readback that answers a
 //! sent-but-lost call from the session's own plan registry, and adds the verb's next-step reminder. `diff` and `list`
@@ -27,9 +27,9 @@ The parent node or the root line approves the plan after both. Contract: the pla
 /// The next step `amend` prints: a later version takes only the checks.
 const AMEND_REMINDER: &str = "A verify round and the cold read check this version before approval. \
 Contract: the plan-approval skill.";
-/// The revision triggers `--trigger` accepts (`constants.PLAN_AMEND_TRIGGERS`).
+/// The revision triggers `--trigger` accepts.
 const AMEND_TRIGGERS: [&str; 2] = ["auto_amend", "feedback"];
-/// The close modes `--as` accepts (`constants.PLAN_CLOSE_MODES`).
+/// The close modes `--as` accepts.
 const CLOSE_MODES: [&str; 3] = ["superseded", "abandoned", "completed"];
 
 #[derive(Parser)]
@@ -284,7 +284,7 @@ fn readback_plan(session_id: &str, readback: impl FnOnce(&[Value]) -> Option<Val
   Ok(readback(&plans))
 }
 
-/// `_same_file`: path-string equality tolerant of normalization (`./` prefixes, duplicate slashes).
+/// Path-string equality tolerant of normalization (`./` prefixes, duplicate slashes).
 fn same_file(left: Option<&str>, right: Option<&str>) -> bool {
   match (left, right) {
     (Some(left), Some(right)) => plan_paths::posix_normpath(left) == plan_paths::posix_normpath(right),
@@ -292,7 +292,7 @@ fn same_file(left: Option<&str>, right: Option<&str>) -> bool {
   }
 }
 
-/// `_latest_version`: the version with the greatest `v`; a plan with no versions is a broken registry.
+/// The version with the greatest `v`; a plan with no versions is a broken registry.
 fn latest_version(plan: &Value) -> &Value {
   plan["versions"]
     .as_array()
@@ -300,7 +300,7 @@ fn latest_version(plan: &Value) -> &Value {
     .expect("a registered plan carries at least one version")
 }
 
-/// `_readback_verdict`: the response shape present/amend/approve return.
+/// The response shape present/amend/approve return.
 fn readback_verdict(plan: &Value) -> Value {
   json!({ "plan": plan["id"], "v": latest_version(plan)["v"], "state": plan["state"] })
 }
@@ -350,7 +350,7 @@ fn readback_close(plans: &[Value], plan_id: i64, close_as: &str) -> Option<Value
   })
 }
 
-/// `_build_diff`: the registry through the list endpoint, the two version files off disk, the diff local.
+/// The registry through the list endpoint, the two version files off disk, the diff local.
 fn build_diff(session_id: &str, args: &DiffArgs, lazy_host: &LazyHost) -> Result<Value, CliExit> {
   let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None)?;
   let plans: Vec<Value> = match listing.get("plans") {
@@ -406,7 +406,7 @@ fn resolve_diff_plan<'a>(plans: &'a [Value], args: &DiffArgs) -> Result<(&'a Val
   Ok((plan, from_version, to_version))
 }
 
-/// `_read_version_file`: the version's artifact, a registry path relative to the session dir, read as text.
+/// The version's artifact, a registry path relative to the session dir, read as text.
 fn read_version_file(session_dir: &Path, version: &Value) -> Result<String, String> {
   let file = version.get("file").and_then(Value::as_str).unwrap_or_default();
   let path = session_dir.join(file);

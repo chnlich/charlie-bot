@@ -1,9 +1,6 @@
-//! The `setup` command (`src/app/setup.py`): provision the `$CHARLIEBOT_HOME` layout, then run the registered
+//! The `setup` command: provision the `$CHARLIEBOT_HOME` layout, then run the registered
 //! setup steps — the cron seed, then the Claude Code check — in registration order. `--dry-run` writes nothing:
 //! the home block reports what exists and what it would create, and each step runs in its dry form.
-//!
-//! Python's `--step MODULE:ATTR` re-entry (one registered function in a fresh interpreter after `uv sync`) has no
-//! Rust form: the CLI has no interpreter to refresh, and no caller exists.
 
 use std::ffi::OsString;
 
@@ -22,7 +19,7 @@ struct SetupCli {
 }
 
 /// Parse the arguments and run the setup flow. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2).
+/// (help exits 0, a usage error exits 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(SetupCli::command());
   let argv = std::iter::once(OsString::from("charliebot setup")).chain(args.iter().cloned());
@@ -39,7 +36,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 /// The setup flow: provision the home, then the steps in registration order. A step failure exits 1 with its
-/// message on stderr, the way Python's `SystemExit` did.
+/// message on stderr.
 fn run(dry_run: bool) -> Result<(), String> {
   let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
   let repo = repo_root::RepoRoot::new(std::env::var_os(repo_root::REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
@@ -49,7 +46,7 @@ fn run(dry_run: bool) -> Result<(), String> {
   provision_home(&cfg, repo.path(), dry_run)?;
   println!("  Reminder: fill in the secret key charliebot_access_key before first start.");
   // The provisioning seeds config.yaml on a fresh home; the steps read the config the layout now holds,
-  // the way Python's process-wide cache hot-reloads the written file before the cron listing. A dry run
+  // reloaded after provisioning so the cron listing sees the written file. A dry run
   // writes nothing, so its config is the one it loaded.
   let cfg = if dry_run { cfg } else { registry.load_config(&home_dir).map_err(|error| error.to_string())? };
   charliebot_cron::seed::setup_step(&cfg, repo.path(), dry_run)?;
@@ -57,7 +54,7 @@ fn run(dry_run: bool) -> Result<(), String> {
   Ok(())
 }
 
-/// The home layout block (`_provision_home`): per-item created/exists for the layout
+/// The home layout block: per-item created/exists for the layout
 /// [`charliebot_core::home_init::init_charliebot_home`] provisions — the same path the server runs at startup.
 /// In a dry run nothing is written and an absent item reads `would-create`; otherwise the run created each item
 /// that did not exist before. The memory store creates its own scaffold at first use, so setup leaves the

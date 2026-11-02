@@ -5,8 +5,8 @@ static HTML5_ENTITIES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
   serde_json::from_str(include_str!("html5_entities.json")).expect("generated HTML5 entity table is valid JSON")
 });
 
-/// Escape ampersands, angle brackets, and optionally both quote characters, as CPython's `html.escape` does
-/// (`quote` selects between its `quote=True` and `quote=False` entity sets; `/` is never escaped).
+/// Escape ampersands, angle brackets, and optionally both quote characters (`quote` selects between the
+/// quoted-attribute and the text entity sets; `/` is never escaped).
 pub fn escape(input: &str, quote: bool) -> String {
   if quote {
     html_escape::encode_quoted_attribute(input).into_owned()
@@ -15,7 +15,7 @@ pub fn escape(input: &str, quote: bool) -> String {
   }
 }
 
-/// Decode the named and numeric character references recognized by CPython's HTML5 table.
+/// Decode the named and numeric character references in the HTML5 table.
 pub fn unescape(input: &str) -> String {
   if !input.contains('&') {
     return input.to_owned();
@@ -223,7 +223,7 @@ mod tests {
 
   #[test]
   fn escape_leaves_slashes_as_html_escape_does() {
-    // A diff path is full of slashes, and `html.escape` leaves them as they are under either quote setting.
+    // A diff path is full of slashes, and the escape leaves them as they are under either quote setting.
     assert_eq!(escape("src/app/a.py", true), "src/app/a.py");
     assert_eq!(escape("src/app/a.py", false), "src/app/a.py");
   }

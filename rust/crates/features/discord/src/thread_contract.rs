@@ -1,18 +1,18 @@
-//! The Discord part of the thread reply contract (`discord_listener.thread_contract_part`): the platform line and the read
+//! The Discord part of the thread reply contract: the platform line and the read
 //! sentences. The shared contract joins it with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
-/// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
+/// The command the reply-format contract names for posting a reply.
 pub const REPLY_COMMAND: &str = "charliebot discord reply";
-/// Discord's per-message text limit, which is also the chunking target (`_MAX_POST_CHARS`).
+/// Discord's per-message text limit, which is also the chunking target.
 pub const MAX_POST_CHARS: usize = 2000;
-/// The command the contract names for reading the thread server-side (`_READ_COMMAND`).
+/// The command the contract names for reading the thread server-side.
 pub const READ_COMMAND: &str = "charliebot discord read";
-/// The trigger-label prefix of a session's armed thread-follow record (`_FOLLOW_TRIGGER_PREFIX`).
+/// The trigger-label prefix of a session's armed thread-follow record.
 pub const FOLLOW_TRIGGER_PREFIX: &str = "discord-thread-follow";
 
-/// The Discord platform as the shared contract reads it (`discord_listener.DISCORD`).
+/// The Discord platform as the shared contract reads it.
 pub const DISCORD: ThreadPlatform = ThreadPlatform {
   name: "discord",
   display_name: "Discord",
@@ -42,7 +42,7 @@ pub fn thread_contract_part() -> String {
   )
 }
 
-/// The platform line every Discord contract part opens with (`_PLATFORM_LINE`).
+/// The platform line every Discord contract part opens with.
 fn platform_line() -> String {
   format!(
     "Platform: Discord. Reply command: `{REPLY_COMMAND} --file <path>`. \

@@ -14,12 +14,17 @@ charliebot-registry.workspace = true
 futures-util.workspace = true
 http.workspace = true
 libc.workspace = true
+regex.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 charliebot-shell-harness.workspace = true
+charliebot-store.workspace = true
 tempfile.workspace = true
+tower.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

@@ -1,4 +1,4 @@
-//! The shared opencode server and its turn ownership (`src/backends/opencode/server.py`).
+//! The shared opencode server and its turn ownership.
 
 use std::collections::HashMap;
 #[cfg(test)]
@@ -1670,8 +1670,8 @@ async fn read_events(
   reason
 }
 
-/// Visit each complete line once, then remove their shared prefix once per response chunk. This follows
-/// `src/backends/opencode/server.py:352-360` without rescanning or shifting the unread suffix for every line.
+/// Visit each complete line once, then remove their shared prefix once per response chunk, without rescanning or
+/// shifting the unread suffix for every line.
 fn visit_complete_lines(
   pending: &mut Vec<u8>,
   search_from: &mut usize,

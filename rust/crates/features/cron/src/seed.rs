@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use charliebot_core::config::CharlieBotConfig;
 use serde_json::Value;
 
+use crate::config::effective_backend;
 use crate::loader;
-use crate::scheduler::effective_backend;
 
 /// One seeded entry's report: the job name and whether its host file was `created`, already `exists`, or in a dry
 /// run `would-create`.
@@ -79,7 +79,7 @@ pub fn seed_default_cron_tasks(
   Ok(report)
 }
 
-/// Seed the default cron tasks, then list the effective scheduled tasks (`seed.setup_step`).
+/// Seed the default cron tasks, then list the effective scheduled tasks.
 pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Result<(), String> {
   println!("==> Seeding default cron tasks");
   // Per-task created/exists for repo-default cron entries, keyed on whether the

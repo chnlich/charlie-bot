@@ -10,7 +10,9 @@
     "--base-branch",
     "main",
     "--task-spec-file",
-    "{root}/task_spec.md"
+    "{root}/task_spec.md",
+    "--context-work",
+    "0"
   ],
   "cwd": "{root}",
   "files": {

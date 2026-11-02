@@ -53,7 +53,11 @@ if [[ -n ${SSH_APPROVAL_FILE:-} && -e $SSH_APPROVAL_FILE ]]; then
   sleep 30
   exit 255
 fi
-if [[ ${SSH_HANG_TAR:-0} == 1 && $remote == *' -cf - .'* ]]; then
+if [[ ${SSH_FAIL_EVIDENCE_LISTING:-0} == 1 && $remote == *'-mindepth 1 -printf'* ]]; then
+  printf 'stub ssh: the evidence listing failed\n' >&2
+  exit 7
+fi
+if [[ ${SSH_HANG_TAR:-0} == 1 && $remote == *'tar '*'-cf -'* ]]; then
   sleep 30
 fi
 environment=()
@@ -75,10 +79,12 @@ fi
 
 const CLAUDE: &str = r#"# Fake claude: record the arguments and environment it receives, then exit as the round asks.
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
-# The record keeps the token out of the evidence: a real claude holds its environment in memory only, so the record
-# carries the token's digest in its place.
-env | grep -v '^ANTHROPIC_AUTH_TOKEN=' >"$FAKE_CLAUDE_ENV"
-printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\n' "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
+# The record keeps the gateway variables out of the evidence: a real claude holds its environment in memory only, so
+# the record carries each variable's digest in its place.
+env | grep -v -e '^ANTHROPIC_AUTH_TOKEN=' -e '^CHARLIE_CODE_API_KEY=' >"$FAKE_CLAUDE_ENV"
+printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\n' \
+  "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
+  "$(printf '%s' "${CHARLIE_CODE_API_KEY-}" | sha256sum | cut -d' ' -f1)" \
   >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"

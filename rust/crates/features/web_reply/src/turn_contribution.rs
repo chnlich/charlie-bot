@@ -1,4 +1,4 @@
-//! The web-reply package's turn contribution (`src/features/web_reply/turn_contribution.py`). It carries the reply
+//! The web-reply package's turn contribution. It carries the reply
 //! rules in a web session's manager runs, runs the round-end audit after a turn that answers a user, renders the
 //! `web_reply`, `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for web
 //! sessions.
@@ -20,11 +20,11 @@ use serde_json::{Value, json};
 
 use crate::{audit, reply};
 
-/// The run kind that takes the manager contract (`task_prompts.MANAGER_KINDS`).
+/// The run kind that takes the manager contract.
 const MANAGER_KIND: &str = "manager_turn";
-/// The scope of a rule segment's sources (`task_prompts.SCOPE_BASE`).
+/// The scope of a rule segment's sources.
 const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment (`task_prompts.DELIVERY_FULL`).
+/// The delivery of a full text segment.
 const DELIVERY_FULL: &str = "full";
 
 /// The web-reply turn contribution.
@@ -98,29 +98,29 @@ impl TurnContribution for WebReplyTurnContribution {
   }
 }
 
-/// A prompts doc read as `read_text(encoding="utf-8").strip()` reads it: universal newlines, then Python's strip. A
+/// A prompts doc read as UTF-8 text: universal newlines, then both-sided whitespace trimmed. A
 /// missing or unreadable doc fails.
 fn rules_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   Ok(str_methods::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
 }
 
-/// `_web_reply_message`: the chat line of a `web_reply` event.
+/// The chat line of a `web_reply` event.
 fn web_reply_message(event: &Value) -> Value {
   json!({"role": WEB_REPLY, "content": content(event)})
 }
 
-/// `_web_reply_notice_message`: the chat line of a `web_reply_notice` event.
+/// The chat line of a `web_reply_notice` event.
 fn web_reply_notice_message(event: &Value) -> Value {
   json!({"role": WEB_REPLY_NOTICE, "content": content(event)})
 }
 
-/// `_web_status_message`: the chat line of a `web_status` event, with the event's status value, or `null`.
+/// The chat line of a `web_status` event, with the event's status value, or `null`.
 fn web_status_message(event: &Value) -> Value {
   json!({"role": WEB_STATUS, "content": content(event), (WEB_STATUS): event.get(WEB_STATUS)})
 }
 
-/// `_web_ask_check_message`: the chat line of a `web_ask_check` event.
+/// The chat line of a `web_ask_check` event.
 fn web_ask_check_message(event: &Value) -> Value {
   json!({"role": WEB_ASK_CHECK, "content": content(event)})
 }
@@ -171,7 +171,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),
@@ -329,7 +329,7 @@ mod tests {
   }
 
   /// The status reminders of the session's log, in log order: the agent messages a turn's missing status set or
-  /// confirm woke (`_status_reminders`).
+  /// confirm woke.
   fn status_reminders(home: &Home, session_id: &str) -> Vec<Value> {
     home.events(session_id).into_iter().filter(|event| event.get("web_status_reminder").is_some()).collect()
   }

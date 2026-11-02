@@ -1,11 +1,11 @@
-//! The cold-session storage sweep (`src/features/usage/storage_cool.py`) and its scheduled handler `cool_storage`: a real
+//! The cold-session storage sweep and its scheduled handler `cool_storage`: a real
 //! run with no dry run, no session scope and no vacuum.
 //!
 //! A session is cold when its metadata reads `archived` and its `updated_at` is at least `MIN_IDLE_DAYS` old. The sweep
 //! deletes the raw transport files of cold sessions (an allowlist of names inside two directory shapes), then lets each
 //! registered usage source delete its own store through `UsageSourceImpl::sweep`. A real run first captures this host's
 //! token usage into the usage ledger, and a capture error aborts before any deletion. A path that cannot be read logs
-//! or reads as absent, and the run goes on. Metadata that Python's loader or cold rule would raise on fails the run.
+//! or reads as absent, and the run goes on. Metadata the loader or the cold rule cannot read fails the run.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -33,11 +33,11 @@ use serde_json::{Map, Value};
 use crate::capture::capture_into_default_ledger;
 use crate::utc_datetime;
 
-/// `constants.MIN_IDLE_DAYS`: how long an archived session must sit idle to count as cold.
+/// How long an archived session must sit idle to count as cold.
 const MIN_IDLE_DAYS: i64 = 14;
-/// `storage_cool.ORPHAN_IDLE_DAYS`: how long an unreferenced backend record must sit idle before the sweep takes it.
+/// How long an unreferenced backend record must sit idle before the sweep takes it.
 const ORPHAN_IDLE_DAYS: i64 = 2;
-/// `RAW_TRANSPORT_NAMES`: the three agent-pipe names from `runs.py`, and the two tee names the backend writers use.
+/// The three agent-pipe names and the two tee names the backend writers use.
 const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, "stderr.log"];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
 const RUN_EVIDENCE_KEYS: [&str; 3] = ["raw_log_ref", "events_ref", "result_ref"];
@@ -58,7 +58,7 @@ pub fn run_handler(context: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::R
   .boxed()
 }
 
-/// One real sweep at `now` (`storage_cool.run_cool_sweep`). Returns the categories in report order: the raw transport
+/// One real sweep at `now`. Returns the categories in report order: the raw transport
 /// files, then each source's categories in registration order.
 pub fn run_cool_sweep(
   cfg: Arc<CharlieBotConfig>,
@@ -90,7 +90,7 @@ pub fn run_cool_sweep(
   for swept in registry.sweep_all(&scope)? {
     categories.extend(swept.categories);
   }
-  // Python passes each category as a keyword named for it. A tracing field name is fixed at compile time, so each category
+  // A tracing field name is fixed at compile time, so each category
   // that the registered sources report has a field here, and a category without one is missing from the log line.
   tracing::info!(
     dry_run = false,
@@ -125,7 +125,7 @@ fn gib(bytes: u64) -> f64 {
   bytes as f64 / (1024.0 * 1024.0 * 1024.0)
 }
 
-/// Every session's cold verdict and backend reference (`_scan_sessions`). A session whose metadata cannot be read is
+/// Every session's cold verdict and backend reference. A session whose metadata cannot be read is
 /// skipped; a document that is not a JSON object fails the run.
 fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMap<String, SessionFacts>> {
   let mut facts = HashMap::new();
@@ -156,14 +156,14 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
   Ok(facts)
 }
 
-/// The one cold rule (`storage_cool.is_cold_session`): archived, and idle at least `MIN_IDLE_DAYS`. A field that is
+/// The one cold rule: archived, and idle at least `MIN_IDLE_DAYS`. A field that is
 /// missing or unusable never qualifies.
 fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
-  // `str(status)` equals "archived" only for that string, so a status of any other JSON type never qualifies.
+  // A status of any JSON type other than the string never qualifies.
   if !matches!(meta.get("status"), Some(Value::String(status)) if *status == SESSION_ARCHIVED) {
     return false;
   }
-  // `if not raw_updated` drops the falsy values before `str()` reads the rest.
+  // The falsy values drop before the text read takes the rest.
   let Some(raw_updated) = meta.get("updated_at").filter(|value| text_repr::is_truthy(value)) else {
     return false;
   };
@@ -173,12 +173,12 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
   now.into_inner() - updated_at >= time::Duration::days(MIN_IDLE_DAYS)
 }
 
-/// `storage_cool._optional_str`: the Python `str()` text of a truthy value, and none for a falsy one.
+/// The text of a truthy value, and none for a falsy one.
 fn optional_text(value: Option<&Value>) -> Option<String> {
   value.filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str)
 }
 
-/// Backend session ids that metadata references, each with the sessions that reference it (`_scan_references`).
+/// Backend session ids that metadata references, each with the sessions that reference it.
 fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec<SessionFacts>> {
   let mut references: HashMap<String, Vec<SessionFacts>> = HashMap::new();
   for owner in facts.values() {
@@ -189,7 +189,7 @@ fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec
   references
 }
 
-/// Deletes the reserved transport names inside one cold session's managed run directories (`_sweep_raw_transport`).
+/// Deletes the reserved transport names inside one cold session's managed run directories.
 /// A file that a v2 run record references is kept.
 fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> anyhow::Result<()> {
   let referenced = run_referenced_transport(session_dir)?;
@@ -207,7 +207,7 @@ fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> an
   Ok(())
 }
 
-/// The two directory shapes whose direct children the transport rule governs (`_managed_transport_dirs`): each master
+/// The two directory shapes whose direct children the transport rule governs: each master
 /// run directory, and each thread's data directory. Symlinks are not followed.
 fn managed_transport_dirs(session_dir: &Path) -> Vec<PathBuf> {
   let mut managed = Vec::new();
@@ -232,7 +232,7 @@ fn managed_transport_dirs(session_dir: &Path) -> Vec<PathBuf> {
   managed
 }
 
-/// The transport files that a v2 run record of this session references (`_run_referenced_transport`). Migrated runs
+/// The transport files that a v2 run record of this session references. Migrated runs
 /// point at their original evidence, which must stay readable, so the sweep keeps it.
 fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
   let runs_dir = session_dir.join(DATA_DIR_NAME).join(RUNS_DIR_NAME);
@@ -244,7 +244,7 @@ fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBu
     if !is_real_dir(&run_dir) {
       continue;
     }
-    // A record that is not a JSON object references nothing, as `isinstance(meta, dict)` skips it.
+    // A record that is not a JSON object references nothing.
     let Some(Value::Object(meta)) =
       read_metadata(&run_dir.join(RUN_METADATA_NAME), "storage_cool_run_meta_read_failed")?
     else {
@@ -259,7 +259,7 @@ fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBu
   Ok(referenced)
 }
 
-/// One of the five reserved transport names, or its `<name>.<N>` rotation variant (`_is_transport_name`).
+/// One of the five reserved transport names, or its `<name>.<N>` rotation variant.
 fn is_transport_name(path: &Path) -> bool {
   let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
     return false;
@@ -273,7 +273,7 @@ fn is_transport_name(path: &Path) -> bool {
 }
 
 /// One directory's entries, sorted. A failed listing logs and yields None, so one unreadable directory never stops the
-/// run (`usage_sources.sorted_scan`).
+/// run.
 fn sorted_scan(root: &Path) -> Option<Vec<PathBuf>> {
   let listing = fs::read_dir(root)
     .and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<Result<Vec<_>, _>>());
@@ -289,7 +289,7 @@ fn sorted_scan(root: &Path) -> Option<Vec<PathBuf>> {
   }
 }
 
-/// `Path.is_dir()` and `Path.is_file()`: each follows links, and a failed stat reads as false, as `os.path.isdir` does.
+/// Each check follows links, and a failed stat reads as false.
 fn is_dir(path: &Path) -> bool {
   fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
@@ -304,7 +304,7 @@ fn is_real_dir(path: &Path) -> bool {
   fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
-/// The raw-transport category: files deleted, and their bytes (`usage_sources.SweepCounter` with the `files` unit).
+/// The raw-transport category: files deleted, and their bytes, counted with the `files` unit.
 #[derive(Default)]
 struct TransportCounter {
   count: u64,

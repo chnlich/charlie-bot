@@ -1,4 +1,4 @@
-//! `GET /token-usage` (`src/features/usage/api.py`): per-model token usage read from the usage ledger as of the last
+//! `GET /token-usage`: per-model token usage read from the usage ledger as of the last
 //! capture. Loading the page never captures. Its cards are the registered usage sources in registration order, then the
 //! sources whose usage lives only in CharlieBot's own run logs.
 
@@ -33,7 +33,7 @@ const TEMPLATE: &str = "token_usage.html";
 /// The template's series colours, `--series-1` to `--series-5`: one per usage source.
 const SERIES_COUNT: usize = 5;
 
-/// `json.dumps({"rows": ...}, ensure_ascii=False)`: the payload the page's script reads its rows from.
+/// The rows payload the page's script reads its rows from.
 const PAYLOAD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
@@ -47,8 +47,8 @@ pub fn matches(path: &str) -> bool {
   path == "/token-usage"
 }
 
-/// `token_usage_viewer`: the page from the ledger's rows. The read and the render run off the async runtime, as
-/// `_read_ledger` runs in a thread.
+/// The page from the ledger's rows. The read and the render run off the async runtime: `read_ledger` runs in a
+/// blocking thread.
 async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
   let rendered = tokio::task::spawn_blocking(move || -> Result<Response, (String, String)> {
     let read = read_ledger(&features).map_err(|error| ("Exception".to_string(), format!("{error:#}")))?;
@@ -62,7 +62,7 @@ async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request
   }
 }
 
-/// What `_read_ledger` returns: the all-time rows, the last Pacific week and the week before it, each source's native
+/// What `read_ledger` returns: the all-time rows, the last Pacific week and the week before it, each source's native
 /// start, the last capture of this host, the instant of the read with the week it names, the time the read took, and
 /// the config the rows' charlie-bot accounts attribute against.
 pub(crate) struct LedgerRead {
@@ -77,7 +77,7 @@ pub(crate) struct LedgerRead {
   pub config: Arc<CharlieBotConfig>,
 }
 
-/// `_read_ledger`: the rows and the last capture from the ledger alone, so the numbers survive the deletion of the logs
+/// The rows and the last capture from the ledger alone, so the numbers survive the deletion of the logs
 /// they were parsed from. A read error fails the request instead of rendering rows it could not read.
 fn read_ledger(features: &FeatureContext) -> anyhow::Result<LedgerRead> {
   read_ledger_at(features, Timestamp::now())
@@ -120,7 +120,7 @@ fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Resu
     .map_err(|error| (error.kind().to_string(), error.to_string()))
 }
 
-/// `_cards`: the registered sources in registration order, then the sources whose usage lives only in CharlieBot's run
+/// The registered sources in registration order, then the sources whose usage lives only in CharlieBot's run
 /// logs.
 pub(crate) fn cards(registry: &Registry) -> Vec<&UsageSource> {
   let (mut cards, run_logs_only): (Vec<&UsageSource>, Vec<&UsageSource>) =
@@ -129,7 +129,7 @@ pub(crate) fn cards(registry: &Registry) -> Vec<&UsageSource> {
   cards
 }
 
-/// `_token_usage_context`: the template context of one ledger read. `payload` is the JSON the page's script reads its
+/// The template context of one ledger read. `payload` is the JSON the page's script reads its
 /// rows from, and the other keys are the figures and stamps the template prints.
 pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> anyhow::Result<Value> {
   let cards = cards(registry);
@@ -207,7 +207,7 @@ fn change(current: Count, previous: Count) -> Value {
   }
 }
 
-/// The tiles of `_token_usage_context`: each card's attributed total, distinct models and share of the page total, and
+/// The tiles of `token_usage_context`: each card's attributed total, distinct models and share of the page total, and
 /// its source's native start. An account attributes to the card that ran its call, so every token lands in one tile.
 fn per_source(
   read: &LedgerRead,
@@ -282,7 +282,7 @@ impl Totals {
 }
 
 /// The page's window: the earliest first stamp and the latest last stamp, or two empty strings when no row has a first
-/// stamp. Python's `max()` of no last stamps fails the page, and so does this.
+/// stamp. An empty stamp set fails the page, and so does this.
 fn window(rows: &[LedgerRow]) -> anyhow::Result<(String, String)> {
   if !rows.iter().any(|row| !row.first.is_empty()) {
     return Ok((String::new(), String::new()));
@@ -305,7 +305,7 @@ fn ratio(part: Count, whole: Count) -> f64 {
   if whole == 0.0 { 0.0 } else { part.as_f64() / whole }
 }
 
-/// `_as_of`: the last capture's finish in Pacific time, or that none has run.
+/// The last capture's finish in Pacific time, or that none has run.
 fn as_of(last_capture: Option<OffsetDateTime>) -> anyhow::Result<String> {
   match last_capture {
     None => Ok("no capture yet".to_string()),

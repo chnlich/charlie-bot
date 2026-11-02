@@ -39,7 +39,7 @@ fn read_and_write_equal_trigger_records() {
     body.push(b'\n');
     fs::write(path, body).expect("write Rust trigger file");
   }
-  // The recorded Python read below holds for exactly these bytes, so Rust must still write them.
+  // The recorded read below holds for exactly these bytes, so Rust must still write them.
   for (name, text) in fixture["rust_written_files"].as_object().unwrap() {
     let written = fs::read_to_string(rust_dir.join(name)).expect("read Rust trigger file");
     assert_eq!(written, text.as_str().unwrap(), "Rust trigger file {name} differs from the recorded bytes");

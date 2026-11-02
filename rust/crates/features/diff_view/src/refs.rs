@@ -1,4 +1,4 @@
-//! The stat-only signatures of a repository's state (`src/features/diff_view/api.py`): the ref-state signature that
+//! The stat-only signatures of a repository's state: the ref-state signature that
 //! keys the branch memo, and the `.gitattributes` signature that keys the manifest memo.
 
 use std::fs::Metadata;
@@ -9,14 +9,14 @@ use std::path::{Path, PathBuf};
 use charliebot_core::paths;
 use walkdir::WalkDir;
 
-/// `(mtime_ns, size)` of one file. Python compares the nanosecond clock; a pair of seconds and nanoseconds compares
+/// `(mtime_ns, size)` of one file. The nanosecond clock and a pair of seconds and nanoseconds compare
 /// the same way.
 pub(crate) type FileStamp = (i64, i64, u64);
 
-/// `_RefSignature`: every file and directory that feeds ref resolution, sorted by path.
+/// Every file and directory that feeds ref resolution, sorted by path.
 pub(crate) type Signature = Vec<(String, FileStamp)>;
 
-/// `_attributes_signature`: the stamp of `<repo>/.gitattributes`, or `None` when the file is absent.
+/// The stamp of `<repo>/.gitattributes`, or `None` when the file is absent.
 pub(crate) fn attributes_signature(repo: &Path) -> io::Result<Option<FileStamp>> {
   match std::fs::metadata(repo.join(".gitattributes")) {
     Ok(metadata) => Ok(Some(stamp(&metadata))),
@@ -25,7 +25,7 @@ pub(crate) fn attributes_signature(repo: &Path) -> io::Result<Option<FileStamp>>
   }
 }
 
-/// `_refs_signature`: the git dir's top-level files, `packed-refs`, `shallow`, `info/grafts`, the shared refs tree
+/// The git dir's top-level files, `packed-refs`, `shallow`, `info/grafts`, the shared refs tree
 /// (its directories), and, in a linked worktree, the worktree's own refs tree.
 pub(crate) fn signature(repo: &Path) -> io::Result<Signature> {
   let (git_dir, common_dir) = git_dirs(repo)?;
@@ -53,7 +53,7 @@ pub(crate) fn signature(repo: &Path) -> io::Result<Signature> {
   Ok(sig)
 }
 
-/// `_git_dirs`: the git dir and the common dir, following a worktree's `.git` file and its `commondir` link.
+/// The git dir and the common dir, following a worktree's `.git` file and its `commondir` link.
 fn git_dirs(repo: &Path) -> io::Result<(PathBuf, PathBuf)> {
   let dot_git = repo.join(".git");
   let git_dir = if dot_git.is_file() {
@@ -80,14 +80,14 @@ fn git_dirs(repo: &Path) -> io::Result<(PathBuf, PathBuf)> {
   Ok((git_dir, common_dir))
 }
 
-/// `_stat_or_skip`: records `path` with its stamp when it exists; `stat` follows symbolic links.
+/// Records `path` with its stamp when it exists; `stat` follows symbolic links.
 fn stat_or_skip(path: &Path, sig: &mut Signature) {
   if let Ok(metadata) = std::fs::metadata(path) {
     sig.push((paths::display(path), stamp(&metadata)));
   }
 }
 
-/// `_walk_refs_dirs`: records `root` and every directory under it. Git publishes each ref by renaming a lockfile into
+/// Records `root` and every directory under it. Git publishes each ref by renaming a lockfile into
 /// its directory, which moves that directory's own stamp, so the directories carry every ref change.
 fn walk_refs_dirs(root: &Path, sig: &mut Signature) {
   for entry in WalkDir::new(root) {

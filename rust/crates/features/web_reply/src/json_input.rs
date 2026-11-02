@@ -1,10 +1,11 @@
-//! Keep Python JSON number types when the shared JSON reader cannot represent their values.
+//! Keep the JSON number shapes the routes' body reader distinguishes when the shared JSON reader cannot represent
+//! their values.
 
 /// Replace each JSON number, `NaN` or infinity token with zero, preserving the input's JSON shape.
 ///
-/// Callers use this only after `charliebot_compat::json_loads` has validated the entire document and reported a value
-/// it cannot represent. The exact numeric value is unused by these routes; Pydantic only needs to see a number so it
-/// can report the same field type error Python reports.
+/// Callers use this only after `charliebot_core::json_loads` has validated the entire document and reported a value
+/// it cannot represent. The exact numeric value is unused by these routes; the typed reader only needs to see a number
+/// there so a wrong-typed field still reports its type error.
 pub fn replace_unrepresentable_numbers(text: &str) -> String {
   let bytes = text.as_bytes();
   let mut result = String::with_capacity(text.len());

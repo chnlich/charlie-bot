@@ -1,6 +1,6 @@
-//! The labeled-entry memory store's server half (`src/features/memory/memory.py`): the entry grammar (format v2), the
+//! The labeled-entry memory store's server half: the entry grammar (format v2), the
 //! topics vocabulary, `ensure_store`, `load_store`, and the audience selections a run's instructions take. The `memory`
-//! CLI, its lint and `memory_proposal.py` stay in Python.
+//! CLI and its lint live in this crate's `cli` module.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -44,7 +44,7 @@ const KNOWN_FIELDS: &[&str] = &["scope", "topic", "audience", "title"];
 const SCOPES: &[&str] = &["user", "host"];
 const AUDIENCE_ELEMENTS: &[&str] = &["master", "worker"];
 
-/// A store file violates the entry or topic grammar. The text is the message of Python's `MemoryFormatError`.
+/// A store file violates the entry or topic grammar. The text is the refusal message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryFormatError(pub String);
 
@@ -60,14 +60,14 @@ fn format_error(message: String) -> anyhow::Error {
   MemoryFormatError(message).into()
 }
 
-/// One vocabulary line: its topic name and whether the topic is resident (`memory.Topic`).
+/// One vocabulary line: its topic name and whether the topic is resident.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Topic {
   pub name: String,
   pub resident: bool,
 }
 
-/// One parsed entry file (`memory.Entry`). A header field the file leaves out is `None`; validation rejects those.
+/// One parsed entry file. A header field the file leaves out is `None`; validation rejects those.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
   pub path: PathBuf,
@@ -90,7 +90,7 @@ impl Entry {
   }
 }
 
-/// One loaded store: the memory dir, the topics vocabulary and the parsed entries (`memory.Store`).
+/// One loaded store: the memory dir, the topics vocabulary and the parsed entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {
   pub memory_dir: PathBuf,
@@ -98,7 +98,7 @@ pub struct Store {
   pub entries: Vec<Entry>,
 }
 
-/// One selected entry's provenance and contribution (`memory.MemoryEntrySource`). `delivery` is `full` or `index`.
+/// One selected entry's provenance and contribution. `delivery` is `full` or `index`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryEntrySource {
   pub source_ref: String,
@@ -106,7 +106,7 @@ pub struct MemoryEntrySource {
   pub text: String,
 }
 
-/// One ordered segment of a selection (`memory.MemorySelection.segments`): its delivery, text and sources.
+/// One ordered segment of a selection: its delivery, text and sources.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemorySegment {
   pub delivery: &'static str,
@@ -114,7 +114,7 @@ pub struct MemorySegment {
   pub sources: Vec<MemoryEntrySource>,
 }
 
-/// The memory that one audience's selection produced (`memory.MemorySelection`). `usage_line` rides only on worker
+/// The memory that one audience's selection produced. `usage_line` rides only on worker
 /// selections, and `text` is the segments joined, or `None` when there are none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemorySelection {
@@ -125,11 +125,11 @@ pub struct MemorySelection {
   pub text: Option<String>,
 }
 
-/// Serializes `ensure_store` in the process (`_ENSURE_STORE_LOCK`): a `git init` that starts while another runs in the
+/// Serializes `ensure_store` in the process: a `git init` that starts while another runs in the
 /// same directory exits 128.
 static ENSURE_STORE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Creates the store scaffold under `memory_dir`, idempotently (`memory.ensure_store`). It runs `git init` when `.git`
+/// Creates the store scaffold under `memory_dir`, idempotently. It runs `git init` when `.git`
 /// is absent, seeds `topics` and `.gitignore` only when missing, and creates `entries/` and `staging/`.
 pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
   let _guard = ENSURE_STORE_LOCK.lock().expect("the memory store lock was poisoned by an earlier ensure_store");
@@ -165,7 +165,7 @@ fn seed_if_missing(path: &Path, content: &str) -> anyhow::Result<()> {
   fs::write(path, content).with_context(|| format!("write {}", path.display()))
 }
 
-/// `mkdir(exist_ok=True)`: an existing directory is fine, and an existing file at the path is an error.
+/// Creates the directory. An existing directory is fine, and an existing file at the path is an error.
 fn make_dir(path: &Path) -> anyhow::Result<()> {
   match fs::create_dir(path) {
     Ok(()) => Ok(()),
@@ -174,7 +174,7 @@ fn make_dir(path: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// Loads the topics vocabulary and every entry, failing on the first violation (`memory.load_store`). It runs
+/// Loads the topics vocabulary and every entry, failing on the first violation. It runs
 /// [`ensure_store`] first, so a missing store loads as the empty store with the seeded vocabulary.
 pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   ensure_store(memory_dir)?;
@@ -190,19 +190,19 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   Ok(Store { memory_dir: memory_dir.to_path_buf(), topics, entries })
 }
 
-/// Reads a text file the way Python's `Path.read_text` does: universal newlines turn `\r\n` and a lone `\r` into `\n`.
+/// Reads a text file with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
 fn read_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// Parses one entry file (`memory.parse_entry`).
+/// Parses one entry file.
 pub fn parse_entry(path: &Path) -> anyhow::Result<Entry> {
   let text = read_text(path)?;
   Ok(parse_entry_text(&text, path)?)
 }
 
-/// Parses one entry file's text (`memory.parse_entry_text`). Only the first header block is parsed; the body is the rest,
+/// Parses one entry file's text. Only the first header block is parsed; the body is the rest,
 /// so it may hold `---` lines. Structure only: `load_store` checks the semantic rules.
 pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFormatError> {
   let location = entry_path.display();
@@ -267,7 +267,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
   })
 }
 
-/// `^([a-z_]+): (.+)$` (`_HEADER_RE`): the field name and the value of one header line.
+/// `^([a-z_]+): (.+)$`: the field name and the value of one header line.
 fn split_header_line(line: &str) -> Option<(&str, &str)> {
   let key_len = line.bytes().take_while(|b| b.is_ascii_lowercase() || *b == b'_').count();
   if key_len == 0 {
@@ -277,12 +277,12 @@ fn split_header_line(line: &str) -> Option<(&str, &str)> {
   (!value.is_empty()).then(|| (&line[..key_len], value))
 }
 
-/// `^[A-Za-z0-9._-]+$` (`_SLUG_RE`).
+/// `^[A-Za-z0-9._-]+$`.
 fn is_slug(value: &str) -> bool {
   !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// `^[A-Za-z0-9._-]+( *, *[A-Za-z0-9._-]+)*$` (`_AUDIENCE_VALUE_RE`): slug elements separated by commas, with spaces
+/// `^[A-Za-z0-9._-]+( *, *[A-Za-z0-9._-]+)*$`: slug elements separated by commas, with spaces
 /// allowed around a comma but not at either end of the value.
 fn is_audience_value(value: &str) -> bool {
   let elements: Vec<&str> = value.split(',').collect();
@@ -301,7 +301,7 @@ fn is_topic_name(name: &str) -> bool {
     && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// One vocabulary line, `name` or `name resident` (`_TOPIC_LINE_RE`).
+/// One vocabulary line, `name` or `name resident`.
 fn parse_topic_line(raw: &str) -> Option<(&str, bool)> {
   let (name, resident) = match raw.strip_suffix(" resident") {
     Some(name) => (name, true),
@@ -341,7 +341,7 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
   Ok(topics)
 }
 
-/// The semantic violations of one entry against the vocabulary, in the order Python reports them (`_validate_entry`).
+/// The semantic violations of one entry against the vocabulary, in the order the validator reports them.
 /// Empty when the entry is valid.
 fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String> {
   let topic_label = entry.topic.as_deref().unwrap_or("?");
@@ -380,7 +380,7 @@ fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String
   violations
 }
 
-/// The sorted entry files: each `*.md` directly under a directory of `entries/` (`memory._iter_entry_files`).
+/// The sorted entry files: each `*.md` directly under a directory of `entries/`.
 fn iter_entry_files(memory_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   let entries_dir = memory_dir.join(ENTRIES_DIRNAME);
   if !entries_dir.is_dir() {
@@ -407,8 +407,7 @@ fn sorted_children(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   Ok(paths)
 }
 
-/// `# <title>` followed by a blank line and the body, or the body alone when it opens with its own `# ` heading
-/// (`memory.full_text`).
+/// `# <title>` followed by a blank line and the body, or the body alone when it opens with its own `# ` heading.
 pub fn full_text(entry: &Entry) -> String {
   let body = entry.body.trim_end_matches('\n');
   if body.starts_with("# ") { body.to_string() } else { format!("# {}\n\n{body}", entry.title) }
@@ -419,24 +418,24 @@ fn index_line(entry: &Entry) -> String {
   format!("{} · {}", entry.id(), entry.title)
 }
 
-/// Whether the entry's audience header names `audience` (`memory.audience_allows`). An entry without an audience
+/// Whether the entry's audience header names `audience`. An entry without an audience
 /// header admits nobody.
 pub fn audience_allows(entry: &Entry, audience: &str) -> bool {
   entry.audience.as_ref().is_some_and(|audiences| audiences.iter().any(|element| element == audience))
 }
 
-/// The store's canonical entry order, `(topic, slug)` (`memory.entry_order_key`).
+/// The store's canonical entry order, `(topic, slug)`.
 pub fn entry_order_key(entry: &Entry) -> (Option<&str>, &str) {
   (entry.topic.as_deref(), entry.slug.as_str())
 }
 
-/// The names of the store's resident topics (`memory.resident_topic_names`).
+/// The names of the store's resident topics.
 pub fn resident_topic_names(store: &Store) -> BTreeSet<&str> {
   store.topics.values().filter(|topic| topic.resident).map(|topic| topic.name.as_str()).collect()
 }
 
 /// The master selection: the full text of entries in resident topics, then the index lines of the other master
-/// entries. `None` when the audience has no entry (`memory.select_master_memory`).
+/// entries. `None` when the audience has no entry.
 pub fn select_master_memory(memory_dir: &Path) -> anyhow::Result<Option<MemorySelection>> {
   let store = load_store(memory_dir)?;
   let residents = resident_topic_names(&store);
@@ -456,7 +455,7 @@ pub fn select_master_memory(memory_dir: &Path) -> anyhow::Result<Option<MemorySe
 }
 
 /// The worker selection for `repo_basename`: the full text of worker entries whose topic is that repo, then the index
-/// lines of the other worker entries, then the usage line (`memory.select_worker_memory`).
+/// lines of the other worker entries, then the usage line.
 pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::Result<MemorySelection> {
   let store = load_store(memory_dir)?;
   let mut full = Vec::new();
@@ -471,7 +470,7 @@ pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::R
   Ok(selection_from_parts("worker", Some(repo_basename.to_string()), full, index, Some(WORKER_USAGE_LINE)))
 }
 
-/// The selection's segments, full then index, each sorted by [`entry_order_key`] (`memory._selection_from_parts`).
+/// The selection's segments, full then index, each sorted by [`entry_order_key`].
 fn selection_from_parts(
   audience: &'static str,
   repo_basename: Option<String>,

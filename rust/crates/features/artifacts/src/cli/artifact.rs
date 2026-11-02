@@ -1,4 +1,4 @@
-//! The `charliebot artifact` verbs (`src/features/artifacts/cli.py`).
+//! The `charliebot artifact` verbs.
 //!
 //! `check` runs a genre's mechanical assertions, prints one line per outcome, and — once every assertion passed and
 //! `--assertions-only` was not given — runs the cold read. The cold read follows the session's profile: a manager
@@ -92,7 +92,7 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let cli = ArtifactCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   match cli.command {
     ArtifactCommand::Check(args) => match check(&args, host)? {
-      // The assertion lines print before a later failure, as Python's per-line prints do.
+      // The assertion lines print before a later failure.
       CheckOutcome::Failed { stdout, exit } => {
         print!("{stdout}");
         flush_stdout()?;
@@ -129,7 +129,7 @@ impl CheckInputs {
   }
 }
 
-/// `_run_check`: the assertion lines, then the cold read the session's shape selects.
+/// The assertion lines, then the cold read the session's shape selects.
 fn check(args: &CheckArgs, lazy_host: &LazyHost) -> Result<CheckOutcome, CliExit> {
   if args.genre == "waiting" && !args.assertions_only {
     return Err(CliExit::usage(
@@ -244,7 +244,7 @@ fn resolve_path(path: &Path) -> Result<PathBuf, CliExit> {
   }
 }
 
-/// `_session_identity`: the server-written variable, else the cwd's name when the cwd is a session directory.
+/// The server-written variable, else the cwd's name when the cwd is a session directory.
 fn session_identity(config: &CharlieBotConfig, inputs: &CheckInputs) -> Option<String> {
   if let Some(session) = &inputs.session_env {
     return Some(session.clone());
@@ -257,7 +257,7 @@ fn session_identity(config: &CharlieBotConfig, inputs: &CheckInputs) -> Option<S
   cwd.file_name().map(|name| name.to_string_lossy().into_owned())
 }
 
-/// `_session_profile`: the requesting session's `profile` from its metadata.
+/// The requesting session's `profile` from its metadata.
 fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String, CliExit> {
   let path = config.sessions_dir().join(session_id).join(SESSION_METADATA_NAME);
   let unreadable = |detail: String| {
@@ -271,7 +271,7 @@ fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String
   }
 }
 
-/// `_delegate_cold_read`: POST the cold-read child and return the started line.
+/// POST the cold-read child and return the started line.
 fn delegate_cold_read(
   args: &CheckArgs,
   artifact: &Path,
@@ -329,7 +329,7 @@ struct ProbeResult {
   page_sha256: String,
 }
 
-/// `artifact_check.run_probe`: the page text and the eight questions to the light backends in rotation order.
+/// The page text and the eight questions to the light backends in rotation order.
 fn run_probe(
   runtime: &tokio::runtime::Runtime,
   host: &CliHost,
@@ -395,7 +395,7 @@ mod tests {
 
   #[test]
   fn test_cli_assertions_only_passes_a_page_over_the_height_target() {
-    // Python: tests/core/test_artifact_check.py. The fake Chrome is the chrome-stub helper; its measured height is
+    // The fake Chrome is the chrome-stub helper; its measured height is
     // injected, as `test_support::plan_session` does, so no renderer runs.
     let home = tempfile::tempdir().unwrap();
     let chrome = crate::test_support::chrome_program(home.path(), json!([{"exit": 0}]));

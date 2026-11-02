@@ -1,4 +1,4 @@
-//! The per-file manifest of a diff range (`src/features/diff_view/api.py` `diff_files`): the name-status and numstat
+//! The per-file manifest of a diff range: the name-status and numstat
 //! reads of `git diff -z`, and the rows they build.
 
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::git::{self, DIFF_TIMEOUT};
 
-/// `_range_spec`: `base...head` for three-dot, `base..head` for two-dot.
+/// `base...head` for three-dot, `base..head` for two-dot.
 pub(crate) fn range_spec(base: &str, head: &str, mode: &str) -> String {
   if mode == "three-dot" { format!("{base}...{head}") } else { format!("{base}..{head}") }
 }
@@ -65,7 +65,7 @@ pub(crate) async fn build(repo: &Path, range: &str) -> Result<Manifest, Response
   Ok(manifest)
 }
 
-/// `_parse_name_status_z`: each new path's status letter. A rename or copy carries two path tokens after its status,
+/// Each new path's status letter. A rename or copy carries two path tokens after its status,
 /// and the new path is keyed under `R` or `C`.
 fn parse_name_status(output: &str) -> Result<HashMap<String, char>, Response> {
   let tokens: Vec<&str> = output.split('\0').collect();
@@ -88,7 +88,7 @@ fn parse_name_status(output: &str) -> Result<HashMap<String, char>, Response> {
   Ok(statuses)
 }
 
-/// `_parse_numstat_z`: one record per file. A rename or copy is `added\tdeleted\t` with an empty path, followed by the
+/// One record per file. A rename or copy is `added\tdeleted\t` with an empty path, followed by the
 /// old and the new path. A binary file's `-` counts read as 0.
 fn parse_numstat(output: &str) -> Result<Vec<NumstatEntry>, Response> {
   let tokens: Vec<&str> = output.split('\0').collect();

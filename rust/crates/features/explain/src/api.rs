@@ -1,7 +1,7 @@
-//! The explain routes (`src/features/explain/api.py`): the body, the session check, the request validation, and the
+//! The explain routes: the body, the session check, the request validation, and the
 //! answers.
 //!
-//! FastAPI reads the body before it runs the session dependency, so malformed JSON answers 422 whatever the session is.
+//! The body is read before the session check runs, so malformed JSON answers 422 whatever the session is.
 //! The session check then runs before the body model is validated, so a well-formed body for a missing session answers
 //! 404.
 

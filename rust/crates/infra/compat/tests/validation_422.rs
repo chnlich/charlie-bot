@@ -1,4 +1,4 @@
-//! The 422 bodies against the bodies FastAPI answers for the same requests
+//! The 422 bodies against the recorded bodies for the same requests
 //! (`rust/fixtures/golden/validation_422_golden.json`).
 //!
 //! A query or path case replays its URL through the parsers, with the parameter declarations the fixture
@@ -26,7 +26,7 @@ fn decode(text: &str) -> String {
     .into_owned()
 }
 
-/// The query parameters of `query` as Starlette reads them: each name's last value wins.
+/// The query parameters of `query`: each name's last value wins.
 fn query_values(query: &str) -> HashMap<String, String> {
   query
     .split('&')

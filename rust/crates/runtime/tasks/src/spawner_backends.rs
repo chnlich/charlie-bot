@@ -9,7 +9,7 @@ use charliebot_store::Store;
 use charliebot_store::StoreError;
 use charliebot_store::metadata::{SessionMetadata, TaskType};
 
-/// Backend-resolution input errors that the improve route exposes as Python ValueError.
+/// Backend-resolution input errors that the improve route answers as bad requests.
 #[derive(Debug)]
 pub struct BackendResolutionValueError(String);
 
@@ -216,6 +216,7 @@ mod tests {
       backends: BackendsConfig {
         pool: Vec::new(),
         routing: None,
+        strong: None,
         options: vec![BackendOption {
           id: "synthetic".to_string(),
           label: "synthetic".to_string(),

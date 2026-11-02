@@ -12,6 +12,4 @@ package added here reaches both and the two lists cannot drift.
 | `PACKAGES` | the server's package list, one entry per package |
 | `registry` | the composition root both binaries share |
 
-The list began as the package list of `src/app/registrations.py` (its lines 16-46 at the port's start). The Python
-list now serves only the remaining Python scripts and no longer matches, so this crate owns the list: a package
-added to the server is added here.
+The list belongs to this crate: a package added to the server is added here.

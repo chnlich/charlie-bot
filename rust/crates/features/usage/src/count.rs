@@ -1,11 +1,11 @@
 //! A token count as the ledger stores and reads it.
 //!
-//! Python's capture adds each usage count through `... or 0` arithmetic and binds the result as it comes. An integer
+//! The capture adds each usage count and binds the result as it comes. An integer
 //! binds as an INTEGER, and a sum with a fractional operand is a float that binds as a REAL. The ledger's INTEGER
-//! columns keep either type, so the stored value and its type match Python's only when a `Count` keeps the variant
+//! columns keep either type, so the stored value and its type stay faithful only when a `Count` keeps the variant
 //! that the arithmetic produced.
 //!
-//! `Int` and `Real` follow Python's `int` and `float`: an operation on two integers gives an integer, and any real
+//! `Int` and `Real` follow integer and float arithmetic: an operation on two integers gives an integer, and any real
 //! operand makes the result a real.
 
 use std::cmp::Ordering;

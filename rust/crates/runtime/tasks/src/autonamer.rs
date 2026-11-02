@@ -55,7 +55,7 @@ pub async fn name_after_round(
   if !is_default_session_name(&meta.name) {
     return Ok(());
   }
-  // Python reads the cached event list in `asyncio.to_thread` (autonamer.py:215).
+  // The chat events are read on a blocking thread, because the store read is synchronous.
   let store = Arc::clone(&features.store);
   let history_session_id = session_id.to_string();
   let (user_message, assistant_response) = tokio::task::spawn_blocking(move || {
@@ -357,7 +357,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing, options },
+      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing, strong: None, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),
@@ -411,7 +411,6 @@ mod tests {
 
   #[test]
   fn session_naming_never_starts_the_router() {
-    // Python: tests/test_backend_router.py:474.
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("router-started");
     let command = vec![

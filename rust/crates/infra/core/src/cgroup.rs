@@ -25,7 +25,7 @@ pub const SESSION_CGROUP_OOM_SCORE_ADJ: i64 = 500;
 /// truncates to 15 characters.
 const BROWSER_EXE_NAMES: [&str; 6] =
   ["chrome", "chromium", "chromium-browser", "chrome-headless-shell", "headless_shell", "chrome_crashpad_handler"];
-/// How long a session browser sweep waits for the killed browsers to leave `cgroup.procs`, as the renderer close waits.
+/// How long a session browser sweep waits for the killed browsers to leave `cgroup.procs`.
 const SESSION_BROWSER_EXIT_WAIT: Duration = Duration::from_secs(5);
 
 /// The test base a unit test installed over the real cgroup base, which tests cannot write.

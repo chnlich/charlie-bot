@@ -1,5 +1,4 @@
-//! Atomic file publication (`src/infra/json_utils.py` `atomic_write_text` and `atomic_write_stream`) and the read-only
-//! mapping that the log walkers scan backward.
+//! Atomic file publication and the read-only mapping that the log walkers scan backward.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -104,8 +103,8 @@ pub fn atomic_write_stream<E: From<std::io::Error>>(
   result
 }
 
-/// The OS page size in bytes: the granularity at which Python's mmap walks fault a file in. A backward walk that
-/// reads page-aligned spans therefore touches the same pages Python does.
+/// The OS page size in bytes: the granularity at which a mapped-file walk faults a file in. A backward walk that
+/// reads page-aligned spans therefore touches those same pages.
 pub fn page_bytes() -> u64 {
   static PAGE_BYTES: OnceLock<NonZeroU64> = OnceLock::new();
   PAGE_BYTES
@@ -123,10 +122,10 @@ pub fn page_bytes() -> u64 {
 ///
 /// A backward walk over a mapped log faults the pages it crosses, while a `read` per page pays one syscall per page
 /// and gets none of the kernel's readahead. On a cold copy of a large log that is the difference between seconds and
-/// a minute (`python: src/infra/ndjson.py:405-470`).
+/// a minute.
 ///
 /// The mapping is safe against the writers these readers meet because they only append. A rotated log publishes
-/// through `rename` onto a new inode, and a truncating writer is no more allowed here than under Python's mapping.
+/// through `rename` onto a new inode, and a truncating writer is not allowed here.
 pub fn map_file(path: &Path) -> io::Result<Option<Mmap>> {
   let file = File::open(path)?;
   if file.metadata()?.len() == 0 {

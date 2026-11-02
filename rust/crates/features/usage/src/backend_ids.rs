@@ -1,4 +1,4 @@
-//! Usage's startup check (`src/features/usage/backend_ids.py`): every `backends.options` id attributes to its type's
+//! Usage's startup check: every `backends.options` id attributes to its type's
 //! usage source. The usage page attributes a charlie-bot row's account ids to the CLI that ran the call: a registered
 //! id through its config type, an id that left the config through the id prefix its source registers. An id outside
 //! every registered prefix would fail the page once it leaves the config, so the server refuses such an option at
@@ -41,7 +41,7 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
   ))
 }
 
-/// `str()` of a tuple of strings: each item in `repr` form, and a one-item tuple keeps its trailing comma.
+/// The `repr` form of a tuple of strings: each item quoted, and a one-item tuple keeps its trailing comma.
 fn tuple_repr(items: &[&str]) -> String {
   let reprs: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
   match reprs.as_slice() {

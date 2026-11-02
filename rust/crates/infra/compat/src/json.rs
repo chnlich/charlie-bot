@@ -1,10 +1,9 @@
-//! The JSON bodies the Python server writes: orjson's `dumps` (`src/infra/responses.py`) and Starlette's
-//! `JSONResponse.render`.
+//! The JSON bodies the server writes, in the fast rendering and the standard rendering.
 //!
-//! The two renderings differ only in float text. orjson writes the shortest round-trip digits in plain
-//! notation when the decimal exponent is -5 to 15. Outside that range it writes `e+N` or `e-N` notation, with
-//! no exponent padding. CPython's `repr`, which `json.dumps` uses, switches at -4 and 16 and pads the exponent to
-//! two digits. Strings, containers and integers render the same in both.
+//! The two renderings differ only in float text. The fast rendering writes the shortest round-trip digits in
+//! plain notation when the decimal exponent is -5 to 15. Outside that range it writes `e+N` or `e-N` notation,
+//! with no exponent padding. The standard rendering switches at -4 and 16 and pads the exponent to two digits.
+//! Strings, containers and integers render the same in both.
 
 use charliebot_core::text_repr;
 use serde::Serialize;
@@ -12,11 +11,10 @@ use serde_json::ser::Formatter as JsonFormatter;
 use serde_json::{Serializer, Value};
 use std::io;
 
-/// orjson's `dumps(value)`: compact separators, members in insertion order, raw UTF-8.
+/// The fast rendering of `value`: compact separators, members in insertion order, raw UTF-8.
 ///
-/// The bytes come from `serde_json`'s serializer, whose ESCAPE-table string scan and container walk are orjson's
-/// own semantics for strings and containers. [`OrjsonFormatter`] supplies the one form serde_json lacks, orjson's
-/// float text.
+/// The bytes come from `serde_json`'s serializer, whose string escaping and container walk already match for
+/// strings and containers. [`OrjsonFormatter`] supplies the one form serde_json lacks: the fast float text.
 pub fn fast_json_bytes(value: &Value) -> Vec<u8> {
   let mut buffer = Vec::new();
   value
@@ -25,12 +23,12 @@ pub fn fast_json_bytes(value: &Value) -> Vec<u8> {
   buffer
 }
 
-/// Starlette's `JSONResponse.render(value)`: `json.dumps(value, ensure_ascii=False, separators=(",", ":"))`.
+/// The standard rendering of `value`: compact separators, ASCII characters unescaped.
 pub fn starlette_bytes(value: &Value) -> Vec<u8> {
   text_repr::json_dumps(value, &text_repr::STARLETTE_JSON).into_bytes()
 }
 
-/// The formatter that adds orjson's float text to serde_json's writer.
+/// The formatter that adds the fast float text to serde_json's writer.
 struct OrjsonFormatter;
 
 impl JsonFormatter for OrjsonFormatter {
@@ -42,12 +40,12 @@ impl JsonFormatter for OrjsonFormatter {
   }
 }
 
-/// orjson's float text for a finite `value`. serde_json holds no NaN or infinity, so none reach here.
+/// The fast float text for a finite `value`. serde_json holds no NaN or infinity, so none reach here.
 fn orjson_float(value: f64) -> String {
   if value == 0.0 {
     return if value.is_sign_negative() { "-0.0" } else { "0.0" }.to_string();
   }
-  // `{:e}` prints the shortest round-trip digits, the digits CPython's repr also picks: `-1.5e-7`, `1e16`.
+  // `{:e}` prints the shortest round-trip digits: `-1.5e-7`, `1e16`.
   let scientific = format!("{value:e}");
   let (mantissa, exponent) = scientific.split_once('e').expect("LowerExp output carries an exponent");
   let exponent: i32 = exponent.parse().expect("LowerExp exponent is an integer");

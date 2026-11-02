@@ -1,4 +1,4 @@
-//! The `memory` CLI verbs (`src/features/memory/cli.py`).
+//! The `memory` CLI verbs.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -221,7 +221,7 @@ fn load_json_metadata(path: &Path) -> Result<Option<Value>, CliExit> {
   match metadata::read_metadata_value(path) {
     Ok(value) => Ok(Some(value)),
     Err(MetadataReadError::Io(error)) => Err(CliExit::error(format!("read {}: {error}", path.display()))),
-    // A file that is not JSON names no profile, the way `json_utils.load_json_meta` answers None for one.
+    // A file that is not JSON names no profile: the read answers None for one.
     Err(MetadataReadError::Json(_)) => Ok(None),
   }
 }
@@ -284,7 +284,7 @@ fn cli_clock() -> Result<OffsetDateTime, CliExit> {
 }
 
 fn session_slug8(sessions_root: &Path, cwd: &Path) -> String {
-  // Python compares against `sessions_dir.resolve()`: a symlinked CHARLIEBOT_HOME must not hide
+  // The comparison runs against the canonical sessions root: a symlinked CHARLIEBOT_HOME must not hide
   // the session directory, since the cwd a process reads is already symlink-free.
   let sessions_root = &fs::canonicalize(sessions_root).unwrap_or_else(|_| sessions_root.to_path_buf());
   if cwd.parent() == Some(sessions_root) {

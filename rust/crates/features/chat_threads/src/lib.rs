@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// Register in the order of `src/features/chat_threads/__init__.py`: the turn contribution, the router, then the
+/// `register`: the turn contribution, the router, then the
 /// sidebar contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.turn_contribution("chat_threads", Arc::new(turn_contribution::ChatThreadsTurn))?;

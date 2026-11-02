@@ -1,9 +1,9 @@
-//! Text renderings that reproduce CPython's: `repr(float)`, `repr(str)`, `str(...)` of a JSON value, and
-//! `json.dumps` under the option sets the Python server uses.
+//! Text renderings the wire formats need: the float text, the quoted text form, the text of a JSON value,
+//! and the JSON styles the server writes.
 //!
-//! The Python server's wire bytes come from these renderings: the Jinja `tojson` filter, the starlette
-//! JSON responses, the fence identity record, the static-file ETag. Each one follows the CPython 3.14
-//! algorithm it names rather than serde_json's own formatting.
+//! The server's wire bytes come from these renderings: the `tojson` filter, the standard JSON responses, the
+//! fence identity record, and the static-file ETag. Each one follows the pinned algorithm it names rather than
+//! serde_json's own formatting.
 
 use crate::printable_table::NON_PRINTABLE;
 use serde::Serialize;
@@ -11,45 +11,45 @@ use serde_json::ser::Formatter as JsonFormatter;
 use serde_json::{Serializer, Value};
 use std::io;
 
-/// One `json.dumps` option set.
+/// One JSON rendering option set.
 #[derive(Debug, Clone, Copy)]
 pub struct JsonStyle {
   /// `ensure_ascii`: escape every character outside `' '..='~'` as `\uXXXX`.
   pub ensure_ascii: bool,
   /// `sort_keys`: emit object members in key order instead of insertion order.
   pub sort_keys: bool,
-  /// The item separator (`separators[0]`).
+  /// The item separator.
   pub item_separator: &'static str,
-  /// The key separator (`separators[1]`).
+  /// The key separator.
   pub key_separator: &'static str,
   /// `indent`: spaces per nesting level, or `None` for a single line.
   pub indent: Option<usize>,
 }
 
-/// Jinja2's `tojson` filter: `json.dumps(value, sort_keys=True)` with the default separators.
+/// The `tojson` filter's style: `ensure_ascii`, sorted keys, and the default separators.
 pub const JINJA_TOJSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// starlette's `JSONResponse.render`: `ensure_ascii=False`, `separators=(",", ":")`, insertion order.
+/// The standard JSON response style: `ensure_ascii` off, compact separators, insertion order.
 pub const STARLETTE_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
-/// `json.dumps(value)` with every option at its default.
+/// The default JSON style: every option at its default.
 pub const DEFAULT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// `json.dumps(value, indent=2, sort_keys=True)`: the home writer fence identity record.
+/// The home writer fence identity record: indent 2 and sorted keys.
 pub const FENCE_RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: true, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
-/// `json.dumps(value, separators=(",", ":"), sort_keys=True)`: the run-token payload.
+/// The run-token payload: compact separators and sorted keys.
 pub const RUN_TOKEN_PAYLOAD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: true, item_separator: ",", key_separator: ":", indent: None };
 
 /// The shortest round-trip decimal digits of a finite, nonzero magnitude and the exponent of the first digit.
 ///
-/// CPython takes, among the shortest candidates, the one nearest the exact value, and breaks an exact tie
-/// toward the even digit. Rust's shortest form can break that tie the other way (`1743746592103460.25`
+/// Among the shortest candidates, the one nearest the exact value wins, and an exact tie
+/// breaks toward the even digit. Rust's shortest form can break that tie the other way (`1743746592103460.25`
 /// prints `...3`). So the digits come from the exact rounding to the same count when that rounding
 /// round-trips; Rust's shortest form is the fallback.
 fn shortest_digits(magnitude: f64) -> (String, i32) {
@@ -64,7 +64,7 @@ fn shortest_digits(magnitude: f64) -> (String, i32) {
   (digits.trim_end_matches('0').to_string(), exponent)
 }
 
-/// CPython `repr(float)`: the shortest round-trip digits, exponent form when the decimal point
+/// The float text: the shortest round-trip digits, exponent form when the decimal point
 /// position is below -3 or above 16, and a trailing `.0` on integral values.
 pub fn float_repr(x: f64) -> String {
   if x.is_nan() {
@@ -99,7 +99,7 @@ pub fn float_repr(x: f64) -> String {
   if negative { format!("-{body}") } else { body }
 }
 
-/// Python's `format(x, "g")` (`%g`): six significant digits with the trailing zeros dropped. The exponent form is used
+/// The `%g` text: six significant digits with the trailing zeros dropped. The exponent form is used
 /// when the exponent after rounding is below -4 or at least six, as C's `%g` chooses.
 pub fn format_g(x: f64) -> String {
   const PRECISION: i32 = 6;
@@ -125,9 +125,8 @@ pub fn format_g(x: f64) -> String {
   }
 }
 
-/// CPython's `'%.{precision}f' % x`, which `format(x, '.{precision}f')` shares: `x` in fixed notation with `precision`
-/// digits after the point. Rust's fixed form rounds the exact binary value and breaks an exact tie toward the even
-/// digit, as CPython does. NaN and the infinities print as CPython's lowercase words.
+/// The fixed text of `x` with `precision` digits after the point. Rust's fixed form rounds the exact binary
+/// value and breaks an exact tie toward the even digit. NaN and the infinities print as the lowercase words.
 pub fn format_f(x: f64, precision: usize) -> String {
   if x.is_nan() {
     return "nan".to_string();
@@ -143,9 +142,9 @@ fn trim_fraction_zeros(text: &str) -> String {
   if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text.to_string() }
 }
 
-/// pydantic's `model_dump_json` float form: the shortest round-trip digits in fixed notation when the decimal
+/// The model float form: the shortest round-trip digits in fixed notation when the decimal
 /// exponent is in `-5..16`. Otherwise it uses scientific notation, whose exponent has neither `+` nor padding
-/// (`1e16`, `1.5e-7`, `0.00001`). Checked against pydantic over random doubles; `repr` differs (`1e+16`).
+/// (`1e16`, `1.5e-7`, `0.00001`). It differs from [`float_repr`], which writes `1e+16`.
 /// `x` must be finite: `write_json` renders NaN and the infinities before a float reaches this function.
 pub fn pydantic_float_repr(x: f64) -> String {
   if x == 0.0 {
@@ -174,10 +173,10 @@ pub fn pydantic_float_repr(x: f64) -> String {
   if x < 0.0 { format!("-{body}") } else { body }
 }
 
-/// CPython `repr(str)` for the strings this server reports (purposes, paths, config keys).
+/// The quoted text form for the strings this server reports (purposes, paths, config keys).
 ///
 /// The quote is `'` unless the text holds `'` and no `"`. Backslash, the quote, `\t`, `\n` and `\r` are escaped,
-/// and so is every character that `str.isprintable()` rejects, as `\xNN`, `\uNNNN` or `\UNNNNNNNN`. Every other
+/// and so is every character that [`is_printable`] rejects, as `\xNN`, `\uNNNN` or `\UNNNNNNNN`. Every other
 /// character prints as itself.
 pub fn str_repr(text: &str) -> String {
   let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
@@ -201,14 +200,14 @@ pub fn str_repr(text: &str) -> String {
   out
 }
 
-/// `str.isprintable()` for one character: false exactly for the code points of `NON_PRINTABLE`.
+/// Whether one character is printable: false exactly for the code points of `NON_PRINTABLE`.
 fn is_printable(c: char) -> bool {
   let code = c as u32;
   let index = NON_PRINTABLE.partition_point(|&(_, high)| high < code);
   !NON_PRINTABLE.get(index).is_some_and(|&(low, _)| low <= code)
 }
 
-/// CPython's escape for one non-printable character: `\xNN` up to U+00FF, `\uNNNN` up to U+FFFF, else `\UNNNNNNNN`.
+/// The escape for one non-printable character: `\xNN` up to U+00FF, `\uNNNN` up to U+FFFF, else `\UNNNNNNNN`.
 fn repr_escape(c: char) -> String {
   let code = c as u32;
   if code <= 0xff {
@@ -220,7 +219,7 @@ fn repr_escape(c: char) -> String {
   }
 }
 
-/// CPython truthiness of a value `json.loads` produced: `None`, `False`, `0`, `""` and the empty containers are false,
+/// The truth value of a loaded JSON value: `None`, `False`, `0`, `""` and the empty containers are false,
 /// and every other value is true.
 pub fn is_truthy(value: &Value) -> bool {
   match value {
@@ -233,7 +232,7 @@ pub fn is_truthy(value: &Value) -> bool {
   }
 }
 
-/// CPython `str(value)` of a value `json.loads` produced: strings print bare, the rest as their repr.
+/// The text of a loaded JSON value: strings print bare, the rest as their repr.
 pub fn value_str(value: &Value) -> String {
   match value {
     Value::String(text) => text.clone(),
@@ -241,8 +240,8 @@ pub fn value_str(value: &Value) -> String {
   }
 }
 
-/// CPython `repr(value)` of a value `json.loads` produced: strings quoted by [`str_repr`], `None` with the
-/// booleans in their Python words, floats by [`float_repr`], and containers with Python's `, ` and `: ` separators.
+/// The repr of a loaded JSON value: strings quoted by [`str_repr`], `None`, booleans as `True` and `False`,
+/// floats by [`float_repr`], and containers with `, ` and `: ` separators.
 pub fn value_repr(value: &Value) -> String {
   match value {
     Value::Null => "None".to_string(),
@@ -265,14 +264,14 @@ pub fn value_repr(value: &Value) -> String {
   }
 }
 
-/// How a float prints: `json.dumps` writes `repr(float)`, pydantic's `model_dump_json` its own form.
+/// How a float prints: the float repr or the model float form.
 #[derive(Clone, Copy)]
 enum FloatForm {
   Python,
   Pydantic,
 }
 
-/// `json.dumps(value, ...)` under `style`. Styles that pass non-ASCII through serialize through
+/// The JSON text of `value` under `style`. Styles that pass non-ASCII through serialize through
 /// serde_json (see [`serde_style_dumps`]); the `ensure_ascii` forms keep the hand escaper, whose
 /// `\uXXXX` pairs no crate emits.
 pub fn json_dumps(value: &Value, style: &JsonStyle) -> String {
@@ -285,7 +284,7 @@ pub fn json_dumps(value: &Value, style: &JsonStyle) -> String {
   }
 }
 
-/// `model_dump_json(...)` of a pydantic model under `style`: the `json_dumps` layout with floats in pydantic's form.
+/// The JSON text of a model under `style`: the [`json_dumps`] layout with floats in the model form.
 pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
   if style.ensure_ascii {
     let mut out = String::new();
@@ -296,9 +295,9 @@ pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
   }
 }
 
-/// `json.dumps` under `style` through serde_json's serializer: the crate's ESCAPE-table string scan
-/// gives every string `json.dumps`'s escape set with non-ASCII passed through. The container walk is
-/// serde_json's. [`StyleFormatter`] supplies the forms serde_json lacks against Python: the separators,
+/// The JSON text under `style` through serde_json's serializer: the crate's ESCAPE-table string scan
+/// gives every string the JSON escape set with non-ASCII passed through. The container walk is
+/// serde_json's. [`StyleFormatter`] supplies the forms serde_json lacks: the separators,
 /// the indent, and the float text.
 fn serde_style_dumps(value: &Value, style: &JsonStyle, floats: FloatForm) -> String {
   let mut buffer = Vec::new();
@@ -314,8 +313,8 @@ fn serde_style_dumps(value: &Value, style: &JsonStyle, floats: FloatForm) -> Str
   String::from_utf8(buffer).expect("serde_json writes UTF-8")
 }
 
-/// Wraps a `Value` for serialization with every object's members in key order: `json.dumps`'s
-/// `sort_keys`, which serde_json does not offer (its maps keep their order).
+/// Wraps a `Value` for serialization with every object's members in key order: the sorted-keys style,
+/// which serde_json does not offer (its maps keep their order).
 struct SortedValue<'a> {
   value: &'a Value,
 }
@@ -419,8 +418,8 @@ fn push_unicode_escape(out: &mut String, unit: u16) {
   }
 }
 
-/// Appends one JSON string literal as `json.dumps(ensure_ascii=True)` writes it: the control set and the
-/// two structural characters escaped, and every character above `~` as CPython's `\uXXXX` pairs.
+/// Appends one JSON string literal with `ensure_ascii`: the control set and the
+/// two structural characters escaped, and every character above `~` as `\uXXXX` pairs.
 ///
 /// This escaper stays hand-written because no crate emits the `\uXXXX` pairs. serde_json's scan passes
 /// non-ASCII through: its ESCAPE table holds only the control set, quote and backslash. That is exactly
@@ -455,9 +454,9 @@ pub fn write_ascii_json_str(out: &mut String, text: &str) {
   out.push('"');
 }
 
-/// The serde_json `Formatter` of [`serde_style_dumps`]: Python's separators and indent between members,
-/// and Python's or pydantic's float text. The `current_indent`/`has_value` pair tracks the nesting the
-/// trait does not pass. The layout is `json.dumps`'s: an indented style opens each member on its own
+/// The serde_json `Formatter` of [`serde_style_dumps`]: the separators and indent between members,
+/// and the style's float text. The `current_indent`/`has_value` pair tracks the nesting the
+/// trait does not pass. The layout is the JSON one: an indented style opens each member on its own
 /// line and closes a non-empty container at its own level.
 struct StyleFormatter {
   style: JsonStyle,
@@ -583,7 +582,7 @@ mod tests {
 
   #[test]
   fn float_digits_break_exact_ties_toward_the_even_digit() {
-    // 1743746592103460.25 lies exactly between ...460.2 and ...460.3; CPython and pydantic print the even one.
+    // 1743746592103460.25 lies exactly between ...460.2 and ...460.3; the even one prints.
     let tie = 1_743_746_592_103_460.0_f64 + 0.25;
     assert_eq!(float_repr(tie), "1743746592103460.2");
     assert_eq!(pydantic_float_repr(tie), "1743746592103460.2");
@@ -653,7 +652,7 @@ mod tests {
     }
   }
 
-  /// The reference escaper: one char at a time, the form `json.dumps(ensure_ascii=True)` documents.
+  /// The reference escaper: one char at a time, with every character above `~` as `\uXXXX` pairs.
   fn reference_ascii_json_str(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {
@@ -733,8 +732,8 @@ mod tests {
 
   #[test]
   fn starlette_style_matches_ensure_ascii_false() {
-    // The bytes of `json.dumps(text, ensure_ascii=False)` in CPython: the control set escaped, DEL and
-    // the non-ASCII characters raw (the shapes the fixture `json_renders.json` pins at large).
+    // The bytes with `ensure_ascii` off: the control set escaped, DEL and
+    // the non-ASCII characters raw (the shapes the fixture `json_renders_golden.json` pins at large).
     assert_eq!(
       json_dumps(&json!("raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b} del\u{7f}"), &STARLETTE_JSON),
       "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b del\u{7f}\""

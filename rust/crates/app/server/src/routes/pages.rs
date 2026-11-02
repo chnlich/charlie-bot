@@ -1,4 +1,4 @@
-//! The chat page, home page and per-session events viewer (`src/app/pages.py`).
+//! The chat page, home page and per-session events viewer.
 
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -157,7 +157,30 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     Ok(credentials) => credentials,
     Err(error) => return responses::internal_error("ValueError", error.to_string()),
   };
+  let auth_enabled = credentials.access_key().is_some();
   let session = session_query(&request);
+  // The page reads the session row, its bootstrap, the sidebar rows and the rendered body, and a repeat request
+  // re-checks the memo of each. One blocking task runs every check and the render, so the request pays one
+  // blocking-pool round trip instead of one per piece.
+  let rendered = tokio::task::spawn_blocking(move || chat_page(&state, &request, cfg, auth_enabled, session))
+    .await
+    .expect("the chat page task does not panic");
+  match rendered {
+    Ok(response) => response,
+    Err(error) => responses::internal_error(&error.kind, error.detail),
+  }
+}
+
+/// Build the chat page: the session row, its bootstrap, the sidebar rows and the rendered body.
+///
+/// Runs on the blocking pool, because every read it makes is a blocking store or template read.
+fn chat_page(
+  state: &Arc<AppState>,
+  request: &Parts,
+  cfg: Arc<CharlieBotConfig>,
+  auth_enabled: bool,
+  session: Option<String>,
+) -> Result<Response, Failure> {
   let mut load_errors = Vec::new();
   let mut active_session = Value::Null;
   let mut pending_draft = Value::Null;
@@ -165,18 +188,11 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let mut bootstrap_text = None;
   let mut clear_unread = None;
   if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
-    match state.features.store.get_session(session_id).await {
+    match state.features.store.get_session_cached_or_read_sync(session_id) {
       Ok(Some(meta)) => {
         active_session = state.features.store.session_metadata_value(&meta);
-        let store = Arc::clone(&state.features.store);
-        let registry = Arc::clone(&state.features.registry);
-        let bootstrap_cfg = Arc::clone(&cfg);
-        let bootstrap = tokio::task::spawn_blocking(move || {
-          detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &store, &registry, &bootstrap_cfg, &meta)
-        })
-        .await
-        .map_err(|error| charliebot_store::StoreError::new(error.to_string()))
-        .and_then(|result| result);
+        let bootstrap =
+          detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &state.features.store, &state.features.registry, &cfg, &meta);
         match bootstrap {
           Ok(bootstrap) => {
             let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
@@ -189,7 +205,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
             pending_draft = bootstrap.pending_draft;
             event_count = bootstrap.event_count;
             bootstrap_text = Some(bootstrap.text);
-            // As Python's index: the active row is marked read only when its bootstrap loaded; a failed load keeps
+            // The active row is marked read only when its bootstrap loaded; a failed load keeps
             // the unread mark.
             clear_unread = Some(session_id.to_string());
           }
@@ -204,21 +220,18 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     }
   }
 
-  let features = Arc::clone(&state.features);
+  // A page opened without a session redirects to the first row before any row renders.
   let redirect_to_first = session.is_none();
-  let listing_result = tokio::task::spawn_blocking(move || -> StoreResult<PageListing> {
-    // As Python's index: a page opened without a session redirects to the first row before any row renders.
-    if redirect_to_first && let Some(first) = listing::first_page_row_id(&features.store)? {
+  let listing_result = (|| -> StoreResult<PageListing> {
+    if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
       return Ok(PageListing::Redirect(first));
     }
-    let page = listing::active_page_rows(&features.store, &features.registry)?;
-    listing::active_page_json_text(&features.store, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
+    let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
+    listing::active_page_json_text(&state.features.store, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
       .map(PageListing::Text)
-  })
-  .await
-  .expect("the chat page listing task does not panic");
+  })();
   let initial_sessions_json = match listing_result {
-    Ok(PageListing::Redirect(session_id)) => return responses::redirect(&format!("/?session={session_id}")),
+    Ok(PageListing::Redirect(session_id)) => return Ok(responses::redirect(&format!("/?session={session_id}"))),
     Ok(PageListing::Text(text)) => text,
     Err(error) => {
       tracing::error!(error = %error, "list_sessions_failed");
@@ -235,6 +248,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     .or_else(|| active_session.get("backend").and_then(Value::as_str).filter(|backend| !backend.is_empty()))
     .unwrap_or(default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
+  let backend_compact = compact_facts(&cfg, &state.features.registry)?;
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
@@ -245,29 +259,20 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
       .iter()
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
       .collect::<Vec<_>>(),
-    "backend_compact": match compact_facts(&cfg, &state.features.registry) {
-      Ok(facts) => Value::Object(facts),
-      Err(error) => return responses::internal_error(&error.kind, error.detail),
-    },
+    "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,
     "active_backend": active_backend,
     "active_backend_label": active_option.map_or(active_backend, |option| option.label.as_str()),
     "active_backend_type": active_option.map_or("", |option| option.backend_type.as_str()),
     "load_errors": load_errors,
   });
-  render_page(
+  render_page_blocking(
     state,
     request,
     "index.html",
     context,
-    PageRuntime::Index {
-      cfg,
-      auth_enabled: credentials.access_key().is_some(),
-      sidebar_text: initial_sessions_json,
-      bootstrap_text,
-    },
+    PageRuntime::Index { cfg, auth_enabled, sidebar_text: initial_sessions_json, bootstrap_text },
   )
-  .await
 }
 
 async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Response {
@@ -360,40 +365,51 @@ async fn render_page(
   state: Arc<AppState>,
   request: Parts,
   name: &'static str,
-  mut context: Value,
+  context: Value,
   runtime: PageRuntime,
 ) -> Response {
-  let accepts_gzip = Responder::for_request(&request.headers) == Responder::Gzip;
-  let rendered = tokio::task::spawn_blocking(move || {
-    let templating =
-      state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
-    let hostname = hostname()?;
-    let object = context.as_object_mut().expect("a page context is a JSON object");
-    object.insert("hostname".to_string(), Value::String(hostname));
-    match &runtime {
-      PageRuntime::Index { cfg, auth_enabled, .. } => {
-        let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
-        object.insert("sessions_root".to_string(), Value::String(paths::display(&cfg.sessions_dir())));
-        object.insert("version".to_string(), Value::String(templating.git_version().to_string()));
-        object.insert("static_asset_version".to_string(), Value::String(asset_version));
-        object.insert("auth_enabled".to_string(), Value::Bool(*auth_enabled));
-      }
-      PageRuntime::Home | PageRuntime::Events => {
-        let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
-        object.insert("static_asset_version".to_string(), Value::String(asset_version));
-      }
-    }
-    let template_html = templating
-      .render_page_template(&state.features, name, &context, &request)
-      .map_err(|error| failure(error.kind(), error))?;
-    page_body(name, &template_html, &runtime, accepts_gzip)
-  })
-  .await
-  .expect("rendering a page does not panic");
+  let rendered = tokio::task::spawn_blocking(move || render_page_blocking(&state, &request, name, context, runtime))
+    .await
+    .expect("rendering a page does not panic");
   match rendered {
-    Ok((body, gzip)) => page_response(body, gzip),
+    Ok(response) => response,
     Err(error) => responses::internal_error(&error.kind, error.detail),
   }
+}
+
+/// Render one page's body in the blocking pool: the blocking half of [`render_page`], so a handler that owns more
+/// blocking work renders the page in the same round trip.
+fn render_page_blocking(
+  state: &Arc<AppState>,
+  request: &Parts,
+  name: &'static str,
+  mut context: Value,
+  runtime: PageRuntime,
+) -> Result<Response, Failure> {
+  let accepts_gzip = Responder::for_request(&request.headers) == Responder::Gzip;
+  let templating =
+    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+  let hostname = hostname()?;
+  let object = context.as_object_mut().expect("a page context is a JSON object");
+  object.insert("hostname".to_string(), Value::String(hostname));
+  match &runtime {
+    PageRuntime::Index { cfg, auth_enabled, .. } => {
+      let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+      object.insert("sessions_root".to_string(), Value::String(paths::display(&cfg.sessions_dir())));
+      object.insert("version".to_string(), Value::String(templating.git_version().to_string()));
+      object.insert("static_asset_version".to_string(), Value::String(asset_version));
+      object.insert("auth_enabled".to_string(), Value::Bool(*auth_enabled));
+    }
+    PageRuntime::Home | PageRuntime::Events => {
+      let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+      object.insert("static_asset_version".to_string(), Value::String(asset_version));
+    }
+  }
+  let template_html = templating
+    .render_page_template(&state.features, name, &context, request)
+    .map_err(|error| failure(error.kind(), error))?;
+  let (body, gzip) = page_body(name, &template_html, &runtime, accepts_gzip)?;
+  Ok(page_response(body, gzip))
 }
 
 /// The finished body of a page, with its compressed form when a gzip client asked for it.

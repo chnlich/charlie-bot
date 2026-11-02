@@ -28,6 +28,7 @@
   .sess { font-size:12px; color:var(--mut) }
   .sess a { color:var(--acc); text-decoration:none }
   .sess a:hover { text-decoration:underline }
+  .age { font-size:11.5px; font-family:var(--mono); color:var(--mut); white-space:nowrap }
   .openlink { font-size:12px; margin-left:auto; white-space:nowrap }
   .openlink a { color:var(--acc); text-decoration:none }
   .openlink a:hover { text-decoration:underline }
@@ -38,6 +39,7 @@
 </style>
 </head>
 <body>
+{% include 'partials/concurrency_badge.html' %}
 <div class="wrap">
 <h1>Approvals</h1>
 <p class="sub">One Pacific day of the tiered approval: the ranked T0 queue, the day's login sheet, and the day's
@@ -71,6 +73,7 @@
       {% else %}
       <span class="tag tier">{{ item.tier or 'untiered' }}</span>
       {% endif %}
+      <span class="age">{{ item.age }}</span>
       <span class="text">{{ item.text }}</span>
       <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
     </div>
@@ -89,6 +92,7 @@
   <li>
     <div class="row1">
       <span class="tag tier">user-act</span>
+      <span class="age">{{ item.age }}</span>
       <span class="text">{{ item.text }}</span>
       <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
     </div>
@@ -128,5 +132,14 @@
 </ul>
 {% endif %}
 </div>
+{% if ctx.is_today %}
+<script>
+  // A tab that comes back after being hidden reloads today's view, so it shows current data. A past day's view
+  // stays as loaded.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') location.reload();
+  });
+</script>
+{% endif %}
 </body>
 </html>

@@ -150,7 +150,7 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
 // literal is an early error, so it would take this whole file's parse down
 // with it. Regenerate after a Unicode upgrade by re-running (output: the
 // table below, 4 ranges per line):
-//   curl -s https://www.unicode.org/Public/16.0.0/ucd/EastAsianWidth.txt | python3 -c "import re,sys;r=[(m[0],m[1] or m[0]) for m in re.findall(r'^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*[WF]',sys.stdin.read(),re.M)];print('\n'.join('  '+' '.join('[0x%s,0x%s],'%(r[j][0],r[j][1]) for j in range(i,min(i+4,len(r)))) for i in range(0,len(r),4)))"
+//   curl -s https://www.unicode.org/Public/16.0.0/ucd/EastAsianWidth.txt | awk '$2 == ";" && $3 ~ /^[WF]$/ { split($1, r, /\.\./); a[++n] = "[0x" r[1] ",0x" (r[2] == "" ? r[1] : r[2]) "]," } END { for (i = 1; i <= n; i++) { if (i % 4 == 1) printf "  "; printf "%s", a[i]; if (i % 4 == 0 || i == n) printf "\n"; else printf " " } }'
 var WC2CH_RANGES = [
   [0x1100,0x115F], [0x231A,0x231B], [0x2329,0x2329], [0x232A,0x232A],
   [0x23E9,0x23EC], [0x23F0,0x23F0], [0x23F3,0x23F3], [0x25FD,0x25FE],

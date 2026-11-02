@@ -1,4 +1,4 @@
-//! Transport gzip (`server._CharlieBotGZipMiddleware` over starlette's `GZipMiddleware`).
+//! Transport gzip.
 //!
 //! A request whose first `Accept-Encoding` value contains `gzip` takes the gzip responder; any other
 //! takes the identity responder. Both pass a response through untouched when it already sets

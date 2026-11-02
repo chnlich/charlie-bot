@@ -73,7 +73,7 @@ impl Block {
   }
 }
 
-/// `_unquote`: one pair of matching quotes around the whole value comes off.
+/// One pair of matching quotes around the whole value comes off.
 fn unquote(value: &str) -> &str {
   let bytes = value.as_bytes();
   let quoted = bytes.len() >= 2 && (bytes[0] == b'"' || bytes[0] == b'\'') && bytes[0] == bytes[bytes.len() - 1];

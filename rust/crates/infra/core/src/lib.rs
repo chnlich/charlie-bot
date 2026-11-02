@@ -1,5 +1,5 @@
 //! The CharlieBot server's foundation: profile home, configuration, credentials, the home writer
-//! fence, run tokens, structured logging, and the CPython text renderings the wire formats need.
+//! fence, run tokens, structured logging, and the text renderings the wire formats need.
 
 pub mod approval_digest;
 pub mod approval_policy;
@@ -13,6 +13,7 @@ pub mod git;
 pub mod home;
 pub mod home_init;
 pub mod hot_reload;
+pub mod json_loads;
 pub mod logging;
 pub mod logline;
 pub mod memo;

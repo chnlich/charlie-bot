@@ -1,12 +1,12 @@
-//! The query parameters of the `/api/git` routes, read as FastAPI reads them. A missing required name, a value outside
-//! `Literal[...]`, or a value that is not a boolean is one 422 entry. A handler collects its entries in declaration
+//! The query parameters of the `/api/git` routes. A missing required name, a value outside the allowed literals,
+//! or a value that is not a boolean is one 422 entry. A handler collects its entries in declaration
 //! order and answers them together.
 
 use std::collections::HashMap;
 
 use charliebot_compat::validation::{self, FieldError, Source};
 
-/// The decoded query string. A name that repeats keeps its last value, as Starlette's `QueryParams.get` does.
+/// The decoded query string. A name that repeats keeps its last value.
 pub(crate) type Params = HashMap<String, String>;
 
 /// A required text parameter.

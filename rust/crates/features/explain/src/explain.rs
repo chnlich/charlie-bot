@@ -1,4 +1,4 @@
-//! The explain generation, its results file and the stale-pending reap (`src/features/explain/explain.py`).
+//! The explain generation, its results file and the stale-pending reap.
 //!
 //! The results file `sessions/<sid>/data/explain_results.json` is the persisted truth: one entry per divider, keyed
 //! by the divider's event index. The live generations are memory-only, so a server restart leaves pending entries
@@ -34,7 +34,7 @@ const RESULTS_FILE: &str = "explain_results.json";
 const NO_ROUND_TEXT_ERROR: &str = "This round has no explainable answer text.";
 const REAPED_ERROR: &str = "interrupted: server restarted";
 const EMPTY_ANSWER_ERROR: &str = "backend returned an empty explanation";
-/// `str(TimeoutError())` is empty, so the class name is the error text.
+/// The timeout's own message is empty, so the error text is the class name.
 const TIMEOUT_ERROR: &str = "TimeoutError";
 
 /// The check-and-register critical section of `request_explain`: two racing requests on one divider register one
@@ -52,12 +52,12 @@ pub fn results_path(store: &Store, session_id: &str) -> PathBuf {
   store.chat_events_path(session_id).with_file_name(RESULTS_FILE)
 }
 
-/// Runs blocking file work on the blocking pool, where Python runs its `asyncio.to_thread` calls.
+/// Runs blocking file work on the blocking pool.
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> anyhow::Result<T> {
   spawn_blocking(work).await?
 }
 
-/// `json_utils.load_json_dict`: the document at `path`, or an empty one when the file does not exist yet.
+/// The document at `path`, or an empty one when the file does not exist yet.
 fn load_results(path: &Path) -> anyhow::Result<Results> {
   if !path.exists() {
     return Ok(Results::new());
@@ -68,7 +68,7 @@ fn load_results(path: &Path) -> anyhow::Result<Results> {
   }
 }
 
-/// `_write_entry`: replace the divider's entry and swap the whole document into place, indented as Python writes it.
+/// Replaces the divider's entry and swaps the whole document into place, in the file's pretty indentation.
 fn write_entry(path: &Path, upto: i64, entry: Map<String, Value>) -> anyhow::Result<()> {
   let mut results = load_results(path)?;
   results.insert(upto.to_string(), Value::Object(entry));
@@ -88,7 +88,7 @@ fn is_pending(entry: &Map<String, Value>) -> bool {
   entry.get("state").and_then(Value::as_str) == Some("pending")
 }
 
-/// `_is_stale`: a pending entry whose own request has outlived the one-shot budget.
+/// A pending entry whose own request has outlived the one-shot budget.
 fn is_stale(entry: &Map<String, Value>) -> anyhow::Result<bool> {
   let requested_at = field(entry, "requested_at")?.as_str().context("an explain entry's requested_at is not text")?;
   let requested = OffsetDateTime::parse(requested_at, &Rfc3339)?;
@@ -127,7 +127,7 @@ fn terminal_entry(
   new_entry(state, backend, answer, error, requested_at, Some(&timefmt::utc_now_iso()))
 }
 
-/// `_reap_stale_pending`: land a stale pending entry as an error, persist it, and log the reap.
+/// Land a stale pending entry as an error, persist it, and log the reap.
 async fn reap(
   features: &FeatureContext,
   session_id: &str,
@@ -145,9 +145,9 @@ async fn reap(
   Ok(reaped)
 }
 
-/// `extract_round_text`: the last assistant text in the events `[0, upto + 1)`, or `None` when there is none.
+/// The last assistant text in the events `[0, upto + 1)`, or `None` when there is none.
 fn extract_round_text(store: &Store, session_id: &str, upto: i64) -> anyhow::Result<Option<String>> {
-  // A divider below zero leaves an empty range, as Python's `range(0, upto + 1)` does.
+  // A divider below zero leaves an empty range.
   let end = usize::try_from(upto.saturating_add(1)).unwrap_or(0);
   let range = store.load_chat_events_shared_range_sync(session_id, 0, end)?;
   let events = &range.events[range.range];
@@ -173,7 +173,7 @@ struct HistoryCopy {
 }
 
 impl HistoryCopy {
-  /// `_make_ro_copy`: copy the session's events into a fresh temporary directory, then chmod the copy 0444.
+  /// Copy the session's events into a fresh temporary directory, then chmod the copy 0444.
   fn make(store: &Store, session_id: &str) -> anyhow::Result<Self> {
     let source = store.chat_events_path(session_id);
     let dir = tempdir::mkdtemp("charliebot-explain-")?;
@@ -201,7 +201,7 @@ enum Outcome {
 }
 
 impl Generation {
-  /// `_generate`: run the explain and land its entry. A failure lands as the entry's error text and is logged.
+  /// Run the explain and land its entry. A failure lands as the entry's error text and is logged.
   async fn generate(&self, timeout: Duration) {
     if let Err(error) = self.run(timeout).await {
       let text = exception_text(&error);
@@ -238,7 +238,7 @@ impl Generation {
     agent_one_shot_text(built, &base_env.values, &prompt, prompt::SYSTEM, Some(timeout)).await
   }
 
-  /// `_finish`: land the terminal entry, then broadcast the state the file now holds.
+  /// Land the terminal entry, then broadcast the state the file now holds.
   async fn finish(&self, outcome: Outcome) -> anyhow::Result<()> {
     let (state, answer, error) = match outcome {
       Outcome::Ready(answer) => ("ready", answer, None),

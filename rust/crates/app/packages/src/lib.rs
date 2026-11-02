@@ -2,10 +2,8 @@
 //! server's order.
 //!
 //! Each entry names a package by its `src.*` label and the `register` function that makes the package's
-//! contributions. This crate owns the list. It began as the package list of `src/app/registrations.py` (that file's
-//! lines 16-46 at the port's start); the Python list now serves only the remaining Python scripts and no longer
-//! matches, so a package added to the server is added here. The list keeps every package, so the page parts, the
-//! static mounts and the template search path keep their registration order.
+//! contributions. This crate owns the list: a package added to the server is added here. The list keeps every
+//! package, so the page parts, the static mounts and the template search path keep their registration order.
 //!
 //! One crate owns both lists, so the server binary and the CLI binary cannot drift: a package added here reaches
 //! both.
@@ -41,6 +39,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.explain", charliebot_explain::register),
   ("src.features.improve", charliebot_improve::register),
   ("src.features.memory", charliebot_memory::register),
+  ("src.features.taste", charliebot_taste::register),
   ("src.features.terminal", charliebot_terminal::register),
   ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage_page::register),

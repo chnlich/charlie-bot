@@ -35,7 +35,7 @@ pub enum LoopStatus {
   Interrupted,
 }
 
-/// The state of one loop (`improve_command.ImproveState`). The field order is the order `model_dump_json` writes.
+/// The state of one loop. The field order is the serialization order.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ImproveState {
   pub loop_id: i64,
@@ -275,7 +275,7 @@ pub fn stop_improve_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Re
   Ok(true)
 }
 
-/// Resolve a path the way Python's non-strict `Path.resolve()` does: symlinks in the existing prefix are followed and
+/// Resolve a path non-strictly: symlinks in the existing prefix are followed and
 /// the missing tail is kept as written.
 pub fn resolve_path(path: &Path) -> anyhow::Result<PathBuf> {
   let absolute = std::path::absolute(path).with_context(|| format!("absolute path of {}", path.display()))?;

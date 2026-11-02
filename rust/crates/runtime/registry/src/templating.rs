@@ -47,11 +47,11 @@ pub struct Templating {
   repo_root: PathBuf,
   /// The registered page packages in registration order, whose `templates/` and `static/` the page uses.
   packages: Vec<&'static str>,
-  /// `web/templates`, then each page package's `templates/`.
+  /// The template search path: `web/templates`, then each page package's `templates/`, in registration order.
   directories: Vec<PathBuf>,
-  /// Whether the unique-name check has passed once (Python checks when it first builds the engine).
+  /// Whether the unique-name check has passed once (it runs when the engine is first built).
   names_checked: AtomicBool,
-  /// `git_version()`, computed at the first render that asks for it.
+  /// The cached `git_version()` value, computed at the first render that asks for it.
   git_version: OnceLock<String>,
   asset_digest: Mutex<AssetDigestState>,
   /// The template source list and the watch revision it read.
@@ -127,7 +127,7 @@ impl Templating {
     }
   }
 
-  /// `templating.git_version()`: `"<short sha> · <MM-DD>"` of the checkout's HEAD, or `""` when git fails.
+  /// The checkout's HEAD version as `"<short sha> · <MM-DD>"`, or `""` when git fails.
   pub fn git_version(&self) -> &str {
     self.git_version.get_or_init(|| {
       let version = git::head_sha(&self.repo_root, git::VERSION_TIMEOUT).and_then(|sha| {
@@ -142,14 +142,14 @@ impl Templating {
     })
   }
 
-  /// `templating.static_asset_version()`: the git version plus the served static trees' content digest.
+  /// The static asset version: the git version plus the served static trees' content digest.
   pub fn static_asset_version(&self) -> io::Result<String> {
     let git_part = self.git_version().replace(" \u{b7} ", "-").replace(' ', "-");
     Ok(format!("{git_part}-{}", self.asset_tree_digest()?))
   }
 
-  /// `_asset_tree_digest`: sha1 over each served static file's URL path and content sha1, in path
-  /// order, as 12 hex digits. A file whose `(mtime_ns, size)` has not moved keeps its memoized sha1.
+  /// The sha1 over each served static file's URL path and content sha1, in path order, as 12 hex digits.
+  /// A file whose `(mtime_ns, size)` has not moved keeps its memoized sha1.
   fn asset_tree_digest(&self) -> io::Result<String> {
     let revision = self.watch.revision();
     {
@@ -199,8 +199,9 @@ impl Templating {
     Ok(value)
   }
 
-  /// `TemplateResponse(request, name, context)`: render `name` with `context`, the request under `request`, the
-  /// template globals of `features.registry` and the page parts. A failing global fails the render.
+  /// Renders template `name` with `context`, the request under `request`, the template globals of
+  /// `features.registry` and the page parts, as Starlette's `TemplateResponse(request, name, context)` does.
+  /// A failing global fails the render.
   pub fn render_page(
     &self,
     features: &FeatureContext,
@@ -397,7 +398,7 @@ pub enum RenderError {
 }
 
 impl RenderError {
-  /// The Python exception class the same failure raises, for the request log.
+  /// The exception class the same failure raises, for the request log.
   pub fn kind(&self) -> &'static str {
     match self {
       RenderError::DuplicateName(_) | RenderError::Global(_) => "ValueError",
@@ -514,7 +515,7 @@ fn walk_static_directory(
   Ok(())
 }
 
-/// `_assert_unique_template_names`: a name in two directories would let the first hide the second.
+/// Fails when one template name appears in two directories, because the first would hide the second.
 fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
   let mut holder: HashMap<String, &Path> = HashMap::new();
   for directory in directories {
@@ -536,8 +537,8 @@ fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
   Ok(())
 }
 
-/// The `*.html` names under `directory` as `Path.rglob` finds them: symlinked directories are not entered, and an
-/// unreadable entry is skipped as `rglob` skips it.
+/// The `*.html` names under `directory` as a recursive walk finds them: symlinked directories are not entered, and
+/// an unreadable entry is skipped.
 fn collect_html_names(directory: &Path, names: &mut Vec<String>) {
   for entry in filesystem_walk(directory, false).build() {
     let entry = match entry {

@@ -1,4 +1,4 @@
-//! The chat_threads package's turn contribution (`src/features/chat_threads/turn_contribution.py`): a thread session
+//! The chat_threads package's turn contribution: a thread session
 //! gets the thread brief.
 
 use charliebot_registry::turn::TurnContribution;

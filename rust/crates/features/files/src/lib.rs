@@ -1,8 +1,8 @@
-//! `src/features/files`: the file server at `/absolute_filepath/{path:path}`.
+//! The file server at `/absolute_filepath/{path:path}`.
 //!
 //! The route answers `GET` and `HEAD` for any path the server process can read. The registered file views are asked
-//! first. The path then resolves the way `pathlib.Path.resolve()` does, and the answer is a directory listing, a file,
-//! or the error that the Python route raises for that path.
+//! first. The path then resolves to its real path, and the answer is a directory listing, a file,
+//! or the error that the route raises for that path.
 
 mod human_size;
 mod listing;
@@ -29,10 +29,10 @@ use serde_json::json;
 /// `file_urls.FILE_SERVER_MOUNTS[0]`: the prefix the route is mounted under, without its trailing slash.
 pub const MOUNT: &str = charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 
-/// The `mimetypes` table of this process, read once as Python reads its table at first use.
+/// The `mimetypes` table of this process, read once at first use.
 static MIME_TYPES: LazyLock<MimeTypes> = LazyLock::new(MimeTypes::load);
 
-/// `register` (`src/features/files/__init__.py`): the router, then the home card.
+/// `register`: the router, then the home card.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
   registry.home_card(HomeCard {
@@ -84,10 +84,10 @@ async fn answer(features: &FeatureContext, parts: &Parts, path: &str) -> Respons
     .expect("the file server's blocking work does not panic")
 }
 
-/// The answer below the file views, on the blocking pool: a directory listing, a file, or the error the Python route
+/// The answer below the file views, on the blocking pool: a directory listing, a file, or the error the route
 /// raises for the path.
 fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Response {
-  // `(pathlib.Path("/") / path).resolve()`
+  // The path joined under the root, then resolved to its real path.
   let fs_path = paths::realpath(&FsPath::new("/").join(path));
   let url_prefix = if path.is_empty() { MOUNT.to_string() } else { format!("{MOUNT}/{path}") };
   match listing::dir_listing_page(&fs_path, &url_prefix) {
@@ -97,7 +97,7 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
     Err(ListingError::PermissionDenied) => return permission_denied(),
     Err(ListingError::Failed { kind, detail }) => return responses::internal_error(kind, detail),
   }
-  // Not a directory. `os.path.exists` decides between 404 and the file answer.
+  // Not a directory. The metadata read decides between 404 and the file answer.
   match fs::metadata(&fs_path) {
     Err(_) => not_found(),
     Ok(metadata) if !metadata.is_file() => {
@@ -107,8 +107,8 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
   }
 }
 
-/// `FileResponse` for a regular file. Starlette's `FileResponse` answers only the `Range` headers, so the conditional
-/// headers that `StaticFiles` reads are removed first; the static answer would otherwise send a 304 for them. The
+/// The file answer for a regular file. It honors only the `Range` headers, so the conditional
+/// headers the static views read are removed first; the static answer would otherwise send a 304 for them. The
 /// static root is `/`, so the answer serves the resolved path wherever it lies.
 fn answer_file(fs_path: &FsPath, method: &Method, headers: &HeaderMap) -> Response {
   let Some(route_path) = fs_path.to_str() else {

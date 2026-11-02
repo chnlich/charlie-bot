@@ -11,7 +11,7 @@ use crate::{StoreError, StoreResult};
 /// Sidebar channel shared by every connected session view.
 pub const SIDEBAR_CHANNEL: &str = "sidebar";
 
-/// The trailing stream-delta window used by the Python server.
+/// The trailing stream-delta window.
 pub const STREAM_COALESCE_INTERVAL: Duration = Duration::from_millis(200);
 
 const PREVIEW_HIDING_TYPES: &[&str] = &["message", event_types::ASSISTANT_ERROR, "error"];

@@ -848,8 +848,7 @@ impl TaskCompletion {
   }
 
   fn replay_close_request(&self, session_id: &str, request_id: &str) -> StoreResult<Option<(usize, Value)>> {
-    // Python's `_replay_close_request` scans `fact_history` (`task_completion.py:544-563`), which returns its shared
-    // cached event dictionaries. Keep the same full-history scan without cloning every event for each replayed run.
+    // Scans the full fact history through shared event views, so a replayed run does not clone every event.
     let events = self.store().load_all_facts_view_sync(session_id)?;
     for event in events.iter() {
       if event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CLOSE_REQUESTED)

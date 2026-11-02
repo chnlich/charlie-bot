@@ -1,4 +1,4 @@
-//! The quota panel's cache and poll loop (`src/features/usage/ext_usage.py`). The loop fetches one account per round-gap
+//! The quota panel's cache and poll loop. The loop fetches one account per round-gap
 //! sleep, in registration order. Each fetch rewrites that account's entry and broadcasts the whole panel on the sidebar
 //! channel.
 
@@ -11,11 +11,10 @@ use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
-/// `timeouts.EXT_USAGE_ROUND_GAP_SECONDS`: the sleep after each fetch, and the sleep of a round with no accounts.
+/// The sleep after each fetch, and the sleep of a round with no accounts.
 pub const EXT_USAGE_ROUND_GAP: Duration = Duration::from_secs(60);
 
-/// The panel the poller writes and `GET /api/ext-usage` reads. Process-wide, as the module globals `_cached_usage` and
-/// `_accounts` are in Python.
+/// The panel the poller writes and `GET /api/ext-usage` reads. Process-wide, shared by every caller.
 static PANEL: LazyLock<Arc<Panel>> = LazyLock::new(Arc::default);
 
 /// The process-wide panel as a handle that a spawned task can own.
@@ -126,7 +125,7 @@ fn cache_key(account: &dyn QuotaAccount) -> String {
   format!("{}:{}", account.provider(), account.label())
 }
 
-/// `_poll_loop`: rounds forever. A round that fails logs once, then sleeps one round gap before the next round.
+/// Rounds forever. A round that fails logs once, then sleeps one round gap before the next round.
 pub async fn poll_loop(panel: Arc<Panel>, host: Arc<dyn PollHost>) {
   loop {
     if let Err(error) = poll_round(&panel, host.as_ref()).await {

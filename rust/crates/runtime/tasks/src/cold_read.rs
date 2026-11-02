@@ -1,5 +1,4 @@
-//! The cold-read run's shared contract: the prompt texts, the probe input, and the report body
-//! (`src/runtime/cold_read.py`).
+//! The cold-read run's shared contract: the prompt texts, the probe input, and the report body.
 //!
 //! `prompts/cold_read.md` is the only home of the cold-reader instructions and the seven questions. The artifact check
 //! and the cold-read child session both build from here, so the foreground output and the completion report carry the
@@ -27,7 +26,7 @@ const SYSTEM_SECTION: &str = "system_prompt";
 const QUESTIONS_SECTION: &str = "questions";
 const ASK_SYSTEM_SECTION: &str = "ask_system_prompt";
 const ASK_QUESTIONS_SECTION: &str = "ask_questions";
-/// `json.dumps(item, ensure_ascii=False, indent=2)`: the item JSON an ask probe carries.
+/// The item JSON an ask probe carries: non-ASCII characters unescaped, two-space indentation.
 const ITEM_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 /// The placeholder in the questions that the trigger message replaces.
@@ -571,7 +570,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, options },
+      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, strong: None, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),
@@ -775,9 +774,7 @@ BBBB
 
   #[tokio::test]
   async fn test_probe_records_each_failed_attempt_with_its_exception_type() {
-    // `tests/core/test_artifact_check.py::test_probe_records_each_failed_attempt_with_its_exception_type`.
-    // Python records `TimeoutError: ` and `RuntimeError: kaput`; the Rust probe names its own failure class, so the
-    // records below are `RuntimeError` for both failures, the first with an empty message.
+    // The probe records both failures as `RuntimeError`, the first with an empty message.
     let mut registry = Registry::new();
     registry.register_package("tests.cold_read", register_failing).unwrap();
     let host = CliHost {

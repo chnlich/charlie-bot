@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 
 /// One CLI failure: the JSON object for stderr and the process exit code.
 ///
-/// A verb returns this instead of exiting, so library tests can assert on the object and code the
-/// way the Python tests catch `SystemExit`. The binary's `main` prints the body one-line and exits.
+/// A verb returns this instead of exiting, so library tests can assert on the object and code.
+/// The binary's `main` prints the body one-line and exits.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CliExit {
   pub code: i32,
@@ -13,7 +13,7 @@ pub struct CliExit {
 }
 
 impl CliExit {
-  /// A usage failure: `{"error": <message>}` on stderr, exit 2 — argparse-compatible.
+  /// A usage failure: `{"error": <message>}` on stderr, exit 2.
   pub fn usage(message: impl Into<String>) -> CliExit {
     CliExit { code: 2, body: json!({ "error": message.into() }) }
   }

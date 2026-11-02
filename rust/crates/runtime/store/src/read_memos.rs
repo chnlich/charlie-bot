@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 
 use charliebot_core::memo::BoundedMemo;
 
-/// The Python memo signature shared by the NDJSON, archive, and trigger readers.
+/// The memo signature shared by the NDJSON, archive, and trigger readers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileSignature {
   pub(crate) mtime_ns: i128,

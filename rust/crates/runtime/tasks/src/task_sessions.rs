@@ -1,4 +1,4 @@
-//! Task run creation helpers (`src/runtime/task_sessions.py`).
+//! Task run creation helpers.
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::run_records::{RetryRunFields, RunKind, RunRecord, run_not_found_in_task_text};

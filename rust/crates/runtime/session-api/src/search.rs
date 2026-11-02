@@ -7,6 +7,8 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_store::metadata::{SessionMetadata, SessionStatus};
@@ -24,11 +26,15 @@ const SEARCH_CHUNK_SIZE: usize = 1 << 18;
 /// sixteen threads cut the sweep's wall time by about two fifths against eight, and more threads than that gained
 /// nothing.
 const SIGNATURE_BATCH_WORKERS: usize = 16;
+/// The fewest paths one pool worker takes, so a short batch does not pay a message per worker.
+///
+/// A repeat query watches one file per returned row, 200 on the mock home. A chunk wakes its worker and the reply
+/// wakes the caller, so four chunks of 50 cost less CPU than eight of 25 while still cutting the batch's wall time.
+const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 /// The batch length below which the signatures are read on the calling thread.
 ///
-/// Starting a thread costs more than the `stat` calls a short batch makes, so only a batch that a
-/// production home produces takes the parallel path.
-const SIGNATURE_BATCH_MIN_PATHS: usize = 512;
+/// A dispatched chunk costs a message round trip, so only a batch long enough to pay it takes the pool.
+const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSignature {
@@ -37,7 +43,7 @@ struct FileSignature {
   inode: u64,
 }
 
-/// One file's needle roots, newest needles kept: the same bounded per-needle list Python's per-file memo holds.
+/// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
 type RootMemo = LruCache<String, FileSignature>;
 
 struct SearchFileRoots {
@@ -58,7 +64,9 @@ pub(crate) struct SearchMatch {
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
   /// The chat files a repeat query re-checks: every content candidate while the result is short of the cap, and only
   /// the candidates at or above the last returned row's `updated_at` once the result reaches it.
-  watched: Vec<PathBuf>,
+  ///
+  /// The batch shares this list instead of copying it, so a worker thread reads the memo's own paths.
+  watched: Arc<Vec<PathBuf>>,
   signatures: Vec<Option<FileSignature>>,
   /// The matched rows, newest first, capped at [`SEARCH_RESULT_LIMIT`].
   rows: Vec<Arc<SessionMetadata>>,
@@ -163,34 +171,35 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 
   let needle = query.to_lowercase();
   let (all, _) = store.load_session_metas_snapshot_versioned(None)?;
-  // Python checks the query result's listing identity, then each stored file signature, before doing name matching or
-  // content classification (`src/runtime/session_search.py:293-295`). Keep that hot path ahead of candidate rebuilds.
+  // The query result's listing identity is checked first, then each stored file signature, before name matching or
+  // content classification. Keep that hot path ahead of candidate rebuilds.
   if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
     && Arc::ptr_eq(&cached.corpus, &all)
   {
-    let watched: Vec<&Path> = cached.watched.iter().map(PathBuf::as_path).collect();
-    let signatures: Vec<Option<FileSignature>> = file_signatures(&watched).into_iter().map(Result::ok).collect();
+    let signatures: Vec<Option<FileSignature>> = file_signatures(&cached.watched).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
   }
 
   let mut names = Vec::new();
-  let mut content_candidates = Vec::new();
+  let mut content_metas = Vec::new();
+  let mut candidate_paths = Vec::new();
   for meta in all.iter() {
     if meta.name.to_lowercase().contains(&needle) {
       names.push(meta);
     } else if meta.status == SessionStatus::Active {
-      content_candidates.push((meta, store.chat_events_path(&meta.id)));
+      content_metas.push(meta);
+      candidate_paths.push(store.chat_events_path(&meta.id));
     }
   }
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
-  let candidate_paths: Vec<&Path> = content_candidates.iter().map(|(_, path)| path.as_path()).collect();
+  let candidate_paths = Arc::new(candidate_paths);
   let signatures: Vec<Option<FileSignature>> = file_signatures(&candidate_paths)
     .into_iter()
-    .zip(&content_candidates)
-    .map(|(result, (meta, _))| match result {
+    .zip(&content_metas)
+    .map(|(result, meta)| match result {
       Ok(signature) => Some(signature),
       Err(error) => {
         log_search_read_failed_once(memos, &meta.id, &error);
@@ -201,7 +210,8 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 
   let mut content_hits = Vec::new();
   let mut scan_failures = 0;
-  for ((meta, path), signature) in content_candidates.iter().zip(&signatures) {
+  for (index, (meta, signature)) in content_metas.iter().zip(&signatures).enumerate() {
+    let path = &candidate_paths[index];
     let Some(signature) = signature else { continue };
     let (miss_roots, hit_roots) = memos.lock().expect("session search memo mutex is not poisoned").roots(path);
     if hit_root_covers(&hit_roots, *signature, &needle) {
@@ -240,12 +250,13 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     let cutoff = names.get(SEARCH_RESULT_LIMIT - 1).map(|meta| meta.updated_at);
     let mut watched = Vec::new();
     let mut watched_signatures = Vec::new();
-    for ((meta, path), signature) in content_candidates.iter().zip(signatures) {
+    for (index, (meta, signature)) in content_metas.iter().zip(signatures).enumerate() {
       if cutoff.is_none_or(|cutoff| meta.updated_at >= cutoff) {
-        watched.push(path.clone());
+        watched.push(candidate_paths[index].clone());
         watched_signatures.push(signature);
       }
     }
+    let watched = Arc::new(watched);
     let rows: Vec<Arc<SessionMetadata>> = names.into_iter().cloned().collect();
     let source = memos.lock().expect("session search memo mutex is not poisoned").remember_match(
       &needle,
@@ -264,23 +275,81 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 
 /// The signature of every path, in the argument order.
 ///
-/// Each read is one `stat` and the answers do not depend on each other, so a batch a production home
-/// produces runs on several threads. A repeat query re-checks every watched candidate, and on the
-/// 7,160-session home those reads took about nine of the route's fourteen milliseconds.
-fn file_signatures(paths: &[&Path]) -> Vec<io::Result<FileSignature>> {
-  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SIGNATURE_BATCH_WORKERS);
-  if paths.len() < SIGNATURE_BATCH_MIN_PATHS || workers < 2 {
+/// Each read is one `stat` and the answers do not depend on each other, so a batch reads on the signature pool's
+/// threads. The pool lives for the process: a repeat query re-checks one `stat` per watched file, 200 on the mock
+/// home, and starting that many threads costs more than the reads they share.
+fn file_signatures(paths: &Arc<Vec<PathBuf>>) -> Vec<io::Result<FileSignature>> {
+  let pool = &*SIGNATURE_POOL;
+  if paths.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
     return paths.iter().map(|path| file_signature_unlogged(path)).collect();
   }
-  let chunk = paths.len().div_ceil(workers);
-  std::thread::scope(|scope| {
-    let chunks: Vec<_> = paths
-      .chunks(chunk)
-      .map(|chunk| scope.spawn(move || chunk.iter().map(|path| file_signature_unlogged(path)).collect::<Vec<_>>()))
-      .collect();
-    chunks.into_iter().flat_map(|chunk| chunk.join().expect("a signature chunk only stats files")).collect()
-  })
+  let chunk = paths.len().div_ceil(pool.senders.len()).max(SIGNATURE_BATCH_CHUNK_FLOOR);
+  let mut chunks: Vec<Option<Vec<io::Result<FileSignature>>>> = paths.chunks(chunk).map(|_| None).collect();
+  let (reply, answers) = mpsc::channel();
+  for (index, _) in chunks.iter().enumerate() {
+    let start = index * chunk;
+    let end = (start + chunk).min(paths.len());
+    pool.dispatch(SignatureJob { paths: Arc::clone(paths), start, end, reply: reply.clone() });
+  }
+  drop(reply);
+  for _ in 0..chunks.len() {
+    let (chunk_start, signatures) = answers.recv().expect("a signature worker answers every dispatched chunk");
+    chunks[chunk_start / chunk] = Some(signatures);
+  }
+  let mut out = Vec::with_capacity(paths.len());
+  for chunk in chunks {
+    out.extend(chunk.expect("every dispatched signature chunk answers"));
+  }
+  out
 }
+
+/// One chunk of one signature batch: the shared paths, the chunk's half-open range, and its reply channel.
+struct SignatureJob {
+  paths: Arc<Vec<PathBuf>>,
+  start: usize,
+  end: usize,
+  reply: Sender<(usize, Vec<io::Result<FileSignature>>)>,
+}
+
+/// The threads that read signature batches, one job queue per worker and a round-robin cursor over them.
+///
+/// A worker reads the chunks it is handed in order, so a batch that sends one chunk per worker pays no more than one
+/// message round trip per chunk.
+struct SignaturePool {
+  senders: Vec<Sender<SignatureJob>>,
+  next: AtomicUsize,
+}
+
+impl SignaturePool {
+  fn start() -> Self {
+    let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SIGNATURE_BATCH_WORKERS);
+    let mut senders = Vec::with_capacity(workers);
+    for index in 0..workers {
+      let (sender, receiver) = mpsc::channel();
+      std::thread::Builder::new()
+        .name(format!("search-signature-{index}"))
+        .spawn(move || signature_worker(receiver))
+        .expect("a signature worker thread starts");
+      senders.push(sender);
+    }
+    Self { senders, next: AtomicUsize::new(0) }
+  }
+
+  fn dispatch(&self, job: SignatureJob) {
+    let index = self.next.fetch_add(1, Ordering::Relaxed) % self.senders.len();
+    self.senders[index].send(job).expect("a signature worker lives as long as the pool");
+  }
+}
+
+fn signature_worker(jobs: Receiver<SignatureJob>) {
+  for job in jobs {
+    let signatures = job.paths[job.start..job.end].iter().map(|path| file_signature_unlogged(path)).collect();
+    // A batch that stopped waiting has no reader for this chunk.
+    let _ = job.reply.send((job.start, signatures));
+  }
+}
+
+static SIGNATURE_POOL: LazyLock<SignaturePool> = LazyLock::new(SignaturePool::start);
 
 fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
   let metadata = fs::metadata(path)?;
@@ -332,8 +401,8 @@ fn scan_content(path: &Path, needle: &str, start: u64) -> io::Result<bool> {
 
 fn scan_ascii(file: &mut File, needle: &[u8]) -> io::Result<bool> {
   let overlap = needle.len().saturating_sub(1);
-  // memchr's memmem is the two-way search behind Python's `needle in window`
-  // (src/runtime/session_search.py:188-194), built once per scan over the folded windows.
+  // memchr's memmem is the two-way search behind the substring test,
+  // built once per scan over the folded windows.
   let finder = memchr::memmem::Finder::new(needle);
   let mut tail = Vec::with_capacity(overlap);
   let mut chunk = vec![0_u8; SEARCH_CHUNK_SIZE];
@@ -461,10 +530,10 @@ mod tests {
       }
       paths.push(path);
     }
-    let refs: Vec<&std::path::Path> = paths.iter().map(std::path::PathBuf::as_path).collect();
-    let batch = super::file_signatures(&refs);
-    assert_eq!(batch.len(), refs.len());
-    for (index, (answer, path)) in batch.iter().zip(&refs).enumerate() {
+    let paths = Arc::new(paths);
+    let batch = super::file_signatures(&paths);
+    assert_eq!(batch.len(), paths.len());
+    for (index, (answer, path)) in batch.iter().zip(paths.iter()).enumerate() {
       if index % 97 == 0 {
         assert!(answer.is_err(), "path {index} is absent and its answer reports the failed read");
         continue;
@@ -576,7 +645,6 @@ mod tests {
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
   }
 
-  /// `test_archived_pagination.py::test_search_cap_keeps_content_hits_above_the_cap_line`.
   #[test]
   fn content_hits_compete_with_name_hits_at_the_two_hundred_row_cap() {
     let home = tempfile::tempdir().unwrap();
@@ -606,7 +674,6 @@ mod tests {
     assert!(!ids.contains(&"archived-000"));
   }
 
-  /// `test_archived_pagination.py::test_search_match_memo_refreshes_when_chat_content_or_names_move`.
   #[test]
   fn search_reads_new_chat_content_and_names_on_the_next_request() {
     let home = tempfile::tempdir().unwrap();

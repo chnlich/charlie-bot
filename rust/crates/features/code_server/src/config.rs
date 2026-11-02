@@ -1,4 +1,4 @@
-//! The `code_server:` config section (`src/features/code_server/config.py`) and the values read from the code-server
+//! The `code_server:` config section and the values read from the code-server
 //! config file that it names.
 
 use std::io;
@@ -72,7 +72,7 @@ pub(crate) fn listen_port(config_path: &Path) -> Result<i64, String> {
   parse_int(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
 }
 
-/// The document at `path`, as `yaml_utils.load_yaml` reads it: `Null` when the file is missing or holds no document.
+/// The document at `path`: `Null` when the file is missing or holds no document.
 fn read_document(path: &Path) -> Result<Value, String> {
   if !path.exists() {
     return Ok(Value::Null);
@@ -82,7 +82,7 @@ fn read_document(path: &Path) -> Result<Value, String> {
   serde_yaml::from_str(text).map_err(|error| error.to_string())
 }
 
-/// `str(OSError)`: `[Errno 13] Permission denied: '<path>'`.
+/// The failure text: `[Errno 13] Permission denied: '<path>'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
   let path = text_repr::str_repr(&paths::display(path));
   match error.raw_os_error() {
@@ -91,7 +91,7 @@ fn os_error_text(error: &io::Error, path: &Path) -> String {
   }
 }
 
-/// `str(UnicodeDecodeError)` for UTF-8: the first byte that cannot start or continue a sequence, and the reason.
+/// The decode-failure text: the first byte that cannot start or continue a sequence, and the reason.
 fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   let position = error.valid_up_to();
   let byte = bytes[position];
@@ -105,7 +105,7 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {position}: {reason}")
 }
 
-/// `int(text)` for a port: surrounding whitespace, an optional sign, and digits with single underscores between them.
+/// A port literal: surrounding whitespace, an optional sign, and digits with single underscores between them.
 /// A value beyond the i64 range reads as not an integer here.
 fn parse_int(text: &str) -> Option<i64> {
   let text = text.trim();
@@ -124,8 +124,8 @@ fn parse_int(text: &str) -> Option<i64> {
   Some(sign * magnitude)
 }
 
-/// `pathlib.PurePosixPath(text)` as text: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path
-/// is `.`.
+/// `text` normalized as a POSIX path: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path is
+/// `.`.
 pub(crate) fn pathlib_text(text: &str) -> String {
   let body: Vec<&str> = text.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
   match (text.starts_with('/'), body.is_empty()) {

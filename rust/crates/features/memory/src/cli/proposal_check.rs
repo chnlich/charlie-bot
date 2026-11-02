@@ -1,4 +1,4 @@
-//! The commit gate's writing checks (`memory_proposal.py`: `_prose_violations`, `_negation_warnings`). The prose check
+//! The commit gate's writing checks: the prose violations and the negation warnings. The prose check
 //! refuses a commit; the negation check only returns the warnings the commit prints and records.
 
 use std::collections::HashSet;

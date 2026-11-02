@@ -1,18 +1,18 @@
-//! `models.parse_utc_datetime` for the `updated_at` text the cold rule reads: `datetime.fromisoformat`, with a value that
-//! names no offset read as UTC (`ensure_utc`).
+//! The `updated_at` text the cold rule reads, parsed as an ISO timestamp, with a value that
+//! names no offset read as UTC.
 //!
-//! The grammar follows the C parser of CPython 3.14, which `datetime` runs. A calendar date is `YYYY-MM-DD` or `YYYYMMDD`,
+//! A calendar date is `YYYY-MM-DD` or `YYYYMMDD`,
 //! and one separator character may follow it before a time. The time is `HH`, `HH:MM` or `HH:MM:SS`, or the basic `HHMM`
 //! and `HHMMSS`, with an optional `.` or `,` fraction of any length, read to microseconds. An offset is `Z`, `±HH`,
 //! `±HHMM` or `±HH:MM`, with optional seconds. Hour 24 at zero minutes is the next day's midnight.
 //!
-//! Three parts of that grammar are not ported: ISO week dates, the parser's acceptance of a stray final character after
+//! Three parts of the ISO grammar this parser refuses: ISO week dates, a stray final character after
 //! the seconds, and a fraction of a second in an offset, which `UtcOffset` cannot hold. Text that uses one reads as None,
 //! so its session is not cold and keeps its files.
 
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
-/// The instant `text` names, or None where `fromisoformat` raises `ValueError`.
+/// The instant `text` names, or None where the grammar refuses.
 pub(crate) fn parse(text: &str) -> Option<OffsetDateTime> {
   if !text.is_ascii() {
     return None;
@@ -55,7 +55,7 @@ fn calendar_date(text: &[u8]) -> Option<Date> {
 }
 
 /// The clock fields of a time, and the offset it names: the offset starts at the first `-`, else the first `+`, else
-/// at the `Z` that must end the text (`_parse_isoformat_time`).
+/// at the `Z` that must end the text.
 fn time_and_offset(text: &[u8]) -> Option<(ClockFields, Option<UtcOffset>)> {
   let marker = b"-+Z".iter().find_map(|sign| text.iter().position(|byte| byte == sign));
   match marker {
@@ -70,8 +70,8 @@ fn time_and_offset(text: &[u8]) -> Option<(ClockFields, Option<UtcOffset>)> {
   }
 }
 
-/// `±HH[[:]MM[[:]SS]]`: a whole offset under a day. The fields add up, so minutes of 60 and seconds of 60 read as Python
-/// reads them.
+/// `±HH[[:]MM[[:]SS]]`: a whole offset under a day. The fields add up, so a minute or second value of 60 still parses
+/// and carries into the offset.
 fn offset(sign: u8, text: &[u8]) -> Option<UtcOffset> {
   let (hour, minute, second, microsecond) = clock(text)?;
   if microsecond != 0 {
@@ -85,7 +85,7 @@ fn offset(sign: u8, text: &[u8]) -> Option<UtcOffset> {
 }
 
 /// `HH[:MM[:SS]]` or `HHMM[SS]` with one separator kind throughout, then an optional `.` or `,` fraction after the
-/// seconds (`_parse_hh_mm_ss_ff`).
+/// seconds.
 fn clock(text: &[u8]) -> Option<ClockFields> {
   let mut fields = [0u8; 3];
   let mut pos = 0;

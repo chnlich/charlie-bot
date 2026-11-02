@@ -1,4 +1,4 @@
-//! The Claude Code side of live user-message delivery for web manager turns (`src/runtime/midturn_delivery.py`).
+//! The Claude Code side of live user-message delivery for web manager turns.
 //!
 //! The delivery state — the serialized stdin writes, the replay acknowledgements and the stdin close — lives in the
 //! runtime (`charliebot_registry::midturn_delivery`), which both this backend and the task queue use. This module
@@ -90,7 +90,6 @@ mod tests {
     }
   }
 
-  // Python: tests/test_claude_code_backend.py::test_replay_becomes_non_rendered_input_delivered_event
   #[test]
   fn replay_becomes_non_rendered_input_delivered_event() {
     let run_id = "11111111-2222-3333-4444-555555555560";
@@ -114,7 +113,6 @@ mod tests {
     );
   }
 
-  // Python: tests/test_claude_code_backend.py::test_replay_after_result_resets_post_result_timeout
   // A late replay keeps a same-process second turn alive across long silent tool work.
   #[tokio::test]
   async fn replay_after_result_resets_post_result_timeout() {

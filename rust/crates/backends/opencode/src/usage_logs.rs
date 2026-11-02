@@ -1,5 +1,4 @@
-//! The opencode usage source's log side (`src/backends/opencode/usage_logs.py`): the assistant rows of opencode's 2.0
-//! SQLite database that carry token counts.
+//! The opencode usage source's log side: the assistant rows of opencode's 2.0 SQLite database that carry token counts.
 //!
 //! Record id: `opencode:<message id>`, one per contributing row. Signature:
 //! `<main size>:<main mtime_ns>:<wal size>:<wal mtime_ns>:<max time_updated>`. A stored signature whose file state still
@@ -83,7 +82,7 @@ pub fn read(path: &Path, _account: &str, previous: Option<&str>) -> anyhow::Resu
   let mut statement = connection
     .prepare("select id, session_id, data from session_message where type = 'assistant' and time_updated >= ?")?;
   let mut records = Vec::new();
-  // Match `src/backends/opencode/usage_logs.py:131-140`: consume each SQLite row while building its records.
+  // Each SQLite row is consumed while its records are built.
   let rows = statement
     .query_map([floor], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?;
   for row in rows {
@@ -137,8 +136,8 @@ fn record(message_id: &str, session_id: &str, data: &str) -> anyhow::Result<Opti
   if !TOKENS_KEY.is_match(data) {
     return Ok(None);
   }
-  // A blob that is not strict JSON, or nests past the parser's limit, contributes nothing: Python's ValueError and
-  // RecursionError paths. A blob that is valid JSON but not an object contributes nothing too.
+  // A blob that is not strict JSON, or nests past the parser's limit, contributes nothing. A blob that is valid JSON
+  // but not an object contributes nothing too.
   let Ok(Value::Object(blob)) = serde_json::from_str::<Value>(data) else {
     return Ok(None);
   };
@@ -188,7 +187,7 @@ fn field<'a>(object: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a Va
   object?.get(key)
 }
 
-/// Python's `value or default` for a text field: a truthy value must be a string.
+/// A text field: a truthy value must be a string, and a falsy or absent one reads as `default`.
 fn text_or(value: Option<&Value>, default: &str) -> anyhow::Result<String> {
   match value {
     Some(value) if truthy(value) => Ok(value.as_str().with_context(|| format!("{value} is not a string"))?.to_string()),
@@ -196,7 +195,7 @@ fn text_or(value: Option<&Value>, default: &str) -> anyhow::Result<String> {
   }
 }
 
-/// Python's `value or 0` for a token count, which must be a JSON integer when truthy.
+/// A token count: a truthy value must be a JSON integer, and a falsy or absent one reads as 0.
 fn count(value: Option<&Value>) -> anyhow::Result<i64> {
   match value {
     Some(value) if truthy(value) => value.as_i64().with_context(|| format!("token count {value} is not an integer")),
@@ -241,7 +240,7 @@ mod tests {
 
   #[test]
   fn logs_names_the_database_only_when_it_exists() {
-    // tests/test_token_tally.py::test_opencode_capture_rows: a host without the database contributes nothing.
+    // A host without the database contributes nothing.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     let cfg = Registry::new().load_config(root.path()).unwrap();
@@ -254,8 +253,8 @@ mod tests {
 
   #[test]
   fn opencode_capture_rows() {
-    // tests/test_token_tally.py::test_opencode_capture_rows: every assistant row with tokens becomes one record. A
-    // zero-token row, an error row without a tokens key and a user row contribute nothing.
+    // Every assistant row with tokens becomes one record. A zero-token row, an error row without a tokens key and a
+    // user row contribute nothing.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     let zero = json!({"tokens": {"input": 0, "output": 0}}).to_string();
@@ -297,9 +296,8 @@ mod tests {
 
   #[test]
   fn capture_rereads_updated_rows_and_keeps_deleted_rows_stored() {
-    // tests/test_token_tally.py::test_capture_opencode_rereads_updated_rows_and_keeps_deleted_rows_stored: each read
-    // passes the signature of the one before. A row moved to a higher time_updated is read again alone, and rows
-    // deleted afterwards read nothing, so the ledger keeps the records it stored.
+    // Each read passes the signature of the one before. A row moved to a higher time_updated is read again alone, and
+    // rows deleted afterwards read nothing, so the ledger keeps the records it stored.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     create_store(
@@ -327,9 +325,8 @@ mod tests {
 
   #[test]
   fn capture_skips_an_unchanged_db_and_never_writes_to_it() {
-    // tests/test_token_tally.py::test_capture_opencode_skips_an_unchanged_db_and_never_writes_to_it: a database whose
-    // files sit still since the stored signature yields nothing, and the read leaves its bytes, mtime and directory
-    // untouched.
+    // A database whose files sit still since the stored signature yields nothing, and the read leaves its bytes, mtime
+    // and directory untouched.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     create_store(&db, &[assistant("m1", 100, &blob("model-a", "provider-a", 100, 10))]);
@@ -350,8 +347,8 @@ mod tests {
 
   #[test]
   fn old_format_signature_forces_one_reread() {
-    // tests/test_token_tally.py::test_old_format_opencode_signature_forces_one_reread: a stored signature in any other
-    // format reads the whole table once, and the new signature is in the current format and then skips.
+    // A stored signature in any other format reads the whole table once, and the new signature is in the current format
+    // and then skips.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     create_store(

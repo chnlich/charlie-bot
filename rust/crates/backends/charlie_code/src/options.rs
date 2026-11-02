@@ -1,4 +1,4 @@
-//! The charlie-code option fields. Each field carries the bound pydantic checks for it, and the type refuses any key
+//! The charlie-code option fields. Each field carries its bound checks, and the type refuses any key
 //! it does not name.
 
 use charliebot_core::config::{
@@ -89,7 +89,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
   CharlieCodeOption::from_fields(fields).map(|_| ())
 }
 
-/// The field's value when the option sets it to a value; pydantic reads an `Optional` field that is null as absent.
+/// The field's value when the option sets it to a value; a null field reads as absent.
 fn present<'a>(fields: &'a Mapping, name: &str) -> Option<&'a Value> {
   fields.get(name).filter(|value| !value.is_null())
 }
@@ -127,7 +127,7 @@ fn optional_float(
   }
 }
 
-/// A boolean field with its default. A null is refused, as pydantic refuses it for a non-optional `bool`.
+/// A boolean field with its default. A null is refused.
 fn flag(fields: &Mapping, name: &str, default: bool) -> Result<bool, String> {
   match fields.get(name) {
     None => Ok(default),

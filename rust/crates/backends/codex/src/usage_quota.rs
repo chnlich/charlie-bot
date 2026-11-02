@@ -460,8 +460,8 @@ fn codex_credits(raw: &Value, account: &str) -> Option<Map<String, Value>> {
   Some(emitted)
 }
 
-/// `float(value)` of a JSON value, as Python reads a balance: numbers and booleans convert, and so does a numeric
-/// string.
+/// The balance as a float: numbers and booleans convert, and so does a string that parses as one once its whitespace
+/// is stripped.
 fn float_value(value: Option<&Value>) -> Option<f64> {
   match value? {
     Value::Number(number) => number.as_f64(),
@@ -660,7 +660,7 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
   Ok(Some((observed, current_model.clone(), usage)))
 }
 
-/// A required integer token count. A boolean counts as its integer value, as Python's `int` check accepts it.
+/// A required integer token count. A boolean counts as 0 or 1.
 fn integer_field(map: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match map.get(key) {
     Some(Value::Number(number)) if number.is_i64() => Ok(number.as_i64().unwrap_or(0)),

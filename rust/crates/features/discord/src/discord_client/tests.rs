@@ -1,4 +1,4 @@
-//! The cases of `tests/test_discord_client.py`, run against a loopback server that answers as Discord's REST API does.
+//! The REST-client cases, run against a loopback server that answers as Discord's REST API does.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

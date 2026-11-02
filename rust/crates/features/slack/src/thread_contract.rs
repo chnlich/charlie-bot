@@ -1,11 +1,11 @@
-//! The Slack part of the thread reply contract (`src/features/slack/slack_listener.py`): the platform line, the
+//! The Slack part of the thread reply contract: the platform line, the
 //! thread's address, and the read and ack sentences. The shared contract joins it with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
 use crate::metadata::SlackOrigin;
 
-/// The Slack platform as the shared contract reads it (`slack_listener.SLACK`).
+/// The Slack platform as the shared contract reads it.
 pub const SLACK: ThreadPlatform = ThreadPlatform {
   name: "slack",
   display_name: "Slack",
@@ -23,11 +23,11 @@ pub const SLACK: ThreadPlatform = ThreadPlatform {
   summon_line: "Slack 线程召唤",
 };
 
-/// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
+/// The command the reply-format contract names for posting a reply.
 const REPLY_COMMAND: &str = "charliebot slack reply";
-/// Slack's per-message text limit, as the contract states it (`_MAX_POST_CHARS`).
+/// Slack's per-message text limit, as the contract states it.
 const MAX_POST_CHARS: usize = 40000;
-/// The trigger-label prefix of a session's armed thread-follow record (`_FOLLOW_TRIGGER_PREFIX`).
+/// The trigger-label prefix of a session's armed thread-follow record.
 const FOLLOW_TRIGGER_PREFIX: &str = "slack-thread-follow";
 
 /// The Slack part of the contract for the thread `origin` names (`thread_contract_part`).
@@ -46,7 +46,7 @@ pub fn thread_contract_part(origin: &SlackOrigin) -> String {
   )
 }
 
-/// The platform line every Slack contract part opens with (`_PLATFORM_LINE`).
+/// The platform line every Slack contract part opens with.
 fn platform_line() -> String {
   format!(
     "Platform: Slack. Reply command: `{REPLY_COMMAND} --file <path>`. \

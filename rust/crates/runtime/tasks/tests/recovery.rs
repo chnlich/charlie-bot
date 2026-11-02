@@ -1,7 +1,7 @@
-//! Startup recovery: the node pass and the boot pass over crash windows, ported from the Python startup-recovery tests.
+//! Startup recovery: the node pass and the boot pass over crash windows.
 //!
 //! A replay step whose owning task has not landed fails the node pass with the named error of `README.md`'s table, and
-//! the boot pass logs it as `task_recovery_node_failed`. Each ported test names its Python case; tests without a
+//! the boot pass logs it as `task_recovery_node_failed`. Tests without a
 //! store-level write-fault seam exercise the corresponding boot retry at the completion boundary.
 
 #[allow(dead_code)]
@@ -273,11 +273,9 @@ fn stage_raw_result(run_dir: &std::path::Path, age: Duration) -> anyhow::Result<
   Ok(stamped)
 }
 
-/// `test_task_recovery.py::test_stop_request_wins_over_launch_and_recovery`: a queued run with a durable stop request
-/// never launches and claims nothing, and a repeated pass changes nothing.
+/// A queued run with a durable stop request never launches and claims nothing, and a repeated pass changes nothing.
 #[tokio::test]
 async fn stop_request_wins_over_launch_and_recovery() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_stop_request_wins_over_launch_and_recovery.
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
   stack.queue_run(&worker.id, "run-stopped", RunKind::Work).await?;
@@ -302,7 +300,6 @@ async fn stop_request_wins_over_launch_and_recovery() -> anyhow::Result<()> {
 /// Run while persisting the task card in the manager's chat.
 #[tokio::test]
 async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_delegate_creates_one_child_and_replays_are_stable.
   let guard = ProcessGroupGuard::new();
   let stack =
     Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"Synthetic worker finished"}'"#)
@@ -392,7 +389,6 @@ async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Resul
 /// A failed worker Run reports its durable outcome and evidence once, then archives the stopped worker.
 #[tokio::test]
 async fn failed_worker_run_reports_to_parent_and_archives_worker() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_a_failed_worker_run_reports_once_and_archives_the_worker.
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 17").await?;
   std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
@@ -416,11 +412,9 @@ async fn failed_worker_run_reports_to_parent_and_archives_worker() -> anyhow::Re
   Ok(())
 }
 
-/// `test_task_recovery.py::test_reconcile_settles_a_queued_run_on_a_completed_node_once`: a completed node holding a
-/// queued run gets one closed-task stop request, and a repeated pass records nothing more.
+/// A completed node holding a queued run gets one closed-task stop request, and a repeated pass records nothing more.
 #[tokio::test]
 async fn reconcile_settles_a_queued_run_on_a_completed_node_once() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_reconcile_settles_a_queued_run_on_a_completed_node_once.
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
   stack.queue_run(&worker.id, "run-done", RunKind::Work).await?;
@@ -439,11 +433,9 @@ async fn reconcile_settles_a_queued_run_on_a_completed_node_once() -> anyhow::Re
   Ok(())
 }
 
-/// `test_task_recovery.py::test_restart_before_launch_requeues_through_the_same_launch_checks`: a claimed queued run
-/// re-enters the launch checks at boot and finishes through the worker adapter.
+/// A claimed queued run re-enters the launch checks at boot and finishes through the worker adapter.
 #[tokio::test]
 async fn restart_before_launch_requeues_through_the_same_launch_checks() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_restart_before_launch_requeues_through_the_same_launch_checks.
   let guard = ProcessGroupGuard::new();
   let stack =
     Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"Synthetic worker finished"}'"#)
@@ -466,11 +458,9 @@ async fn restart_before_launch_requeues_through_the_same_launch_checks() -> anyh
   Ok(())
 }
 
-/// `test_task_recovery.py::test_restart_after_launch_reattaches_live_process`: a recorded live process is followed,
-/// not relaunched, and its result settles the original Run.
+/// A recorded live process is followed, not relaunched, and its result settles the original Run.
 #[tokio::test]
 async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_restart_after_launch_reattaches_live_process.
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
@@ -726,7 +716,7 @@ fn wait_entered(hold: &'static Hold) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// The durable facts a cut launch leaves, which Python's next boot reads: no terminal fact, no error event in the run's
+/// The durable facts a cut launch leaves, which the next boot reads: no terminal fact, no error event in the run's
 /// events log, no report to the parent, no close, and an open task.
 fn assert_cut_launch_facts(cut: &DispatchedWorker) -> anyhow::Result<()> {
   let DispatchedWorker { stack, manager_id, worker_id, run_id } = cut;
@@ -771,10 +761,9 @@ async fn boot_after_cut(
   Ok(next)
 }
 
-/// A launch that the server's stop cuts before its agent starts, while the launch is still inside one poll. Python's
-/// cancel passes the launch's `except Exception` handlers, so the run keeps no process, no end and no terminal fact, and
-/// its task stays open (`task_execution.py:719`, `:861`, `:1488`). The next boot's dispatch launches the same run
-/// (`_reconcile_node` step 4, `session_dispatch.py:455-497`).
+/// A launch that the server's stop cuts before its agent starts, while the launch is still inside one poll. A cancelled
+/// launch runs none of its failure paths, so the run keeps no process, no end and no terminal fact, and its task stays
+/// open. The next boot's dispatch launches the same run (`reconcile_node` step 4).
 #[test]
 fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> anyhow::Result<()> {
   let runtime = server_runtime()?;
@@ -799,10 +788,9 @@ fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> any
   })
 }
 
-/// A launch requested after the let-go began starts no task. Its run keeps the state that Python's launch task leaves
-/// when `asyncio.run` cancels it before its first step (`task_execution.py:522`, `:731`; `asyncio/runners.py:72`): the
-/// run registered with its input claimed, no process, no terminal fact, and an open task. The next boot's dispatch
-/// launches it once.
+/// A launch requested after the let-go began starts no task. Its run keeps the state a launch leaves when its cancel
+/// arrives before its first step: the run registered with its input claimed, no process, no terminal fact, and an open
+/// task. The next boot's dispatch launches it once.
 #[test]
 fn a_launch_requested_after_the_let_go_runs_once_at_the_next_boot() -> anyhow::Result<()> {
   let log = LogCapture::default();
@@ -827,9 +815,9 @@ fn a_launch_requested_after_the_let_go_runs_once_at_the_next_boot() -> anyhow::R
   })
 }
 
-/// A launch whose agent runs when the server stops. Python's cancel leaves the agent running, with its process
-/// identity recorded and no terminal fact (`agent_process/base.py:994-1012`). The next boot re-attaches the run, and
-/// the agent's own result ends it (`_reconcile_node` step 2).
+/// A launch whose agent runs when the server stops. The cancel leaves the agent running, with its process
+/// identity recorded and no terminal fact. The next boot re-attaches the run, and
+/// the agent's own result ends it (`reconcile_node` step 2).
 #[test]
 fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() -> anyhow::Result<()> {
   let release = tempfile::tempdir()?;
@@ -874,11 +862,9 @@ fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() 
   })
 }
 
-/// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata` (the boot half): a terminal
-/// run whose end metadata is empty is repaired from its raw log's last write, once.
+/// The boot half: a terminal run whose end metadata is empty is repaired from its raw log's last write, once.
 #[tokio::test]
 async fn boot_reconcile_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata.
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
   stack.queue_run(&worker.id, "run-half-written", RunKind::Work).await?;
@@ -897,11 +883,9 @@ async fn boot_reconcile_repairs_a_half_written_end_record_from_the_raw_log() -> 
   Ok(())
 }
 
-/// `test_task_execution.py::test_repeat_finish_fills_only_empty_end_metadata`: a repeated finish fills the empty end
-/// fields of a terminal run and moves no value that is already written.
+/// A repeated finish fills the empty end fields of a terminal run and moves no value that is already written.
 #[tokio::test]
 async fn repeat_finish_fills_only_empty_end_metadata() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_repeat_finish_fills_only_empty_end_metadata.
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
   stack.queue_run(&worker.id, "run-half", RunKind::Work).await?;
@@ -936,12 +920,10 @@ async fn repeat_finish_fills_only_empty_end_metadata() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_execution.py::test_is_out_of_space_error_walks_cause_and_context_chain`: only ENOSPC and EDQUOT enter the
-/// retry, wherever they sit on the error's chain. Rust errors have a source chain and no context chain, and they cannot
-/// form a cycle, so the Python cycle case has no counterpart here.
+/// Only ENOSPC and EDQUOT enter the retry, wherever they sit on the error's chain. Rust errors have a source chain and
+/// no context chain, and they cannot form a cycle, so the cycle case has no counterpart here.
 #[test]
 fn is_out_of_space_error_walks_the_cause_chain() {
-  // Python: tests/test_task_execution.py::test_is_out_of_space_error_walks_cause_and_context_chain.
   let enospc = std::io::Error::from_raw_os_error(libc::ENOSPC);
   let edquot = std::io::Error::from_raw_os_error(libc::EDQUOT);
   assert!(is_out_of_space_error(&enospc));
@@ -957,11 +939,9 @@ fn is_out_of_space_error_walks_the_cause_chain() {
   assert!(!is_out_of_space_error(plain.as_ref()));
 }
 
-/// `test_task_execution.py::test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time`:
-/// a launched worker run whose process died unseen drains from its raw log and lands the durable result.
+/// A launched worker run whose process died unseen drains from its raw log and lands the durable result.
 #[tokio::test]
 async fn a_drained_worker_run_lands_its_result_and_raw_end_time() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time.
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
   stack.queue_run(&worker.id, "run-drained", RunKind::Work).await?;
@@ -1100,10 +1080,8 @@ fn result_script(summary: &str) -> String {
   format!("printf '%s\\n' '{}'", serde_json::to_string(&event).expect("JSON event serializes"))
 }
 
-/// `test_task_recovery.py::test_recovery_never_rereviews_a_successfully_reviewed_work_run`.
 #[tokio::test]
 async fn recovery_never_rereviews_a_successfully_reviewed_work_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_never_rereviews_a_successfully_reviewed_work_run
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
@@ -1119,10 +1097,8 @@ async fn recovery_never_rereviews_a_successfully_reviewed_work_run() -> anyhow::
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task`.
 #[tokio::test]
 async fn recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   stack.dispatch.set_executor(None);
@@ -1146,10 +1122,8 @@ async fn recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task() 
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task`.
 #[tokio::test]
 async fn recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
     vec![script_option("fake", "exit 0"), script_option("fake2", &result_script("review ok"))],
@@ -1194,10 +1168,8 @@ async fn recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task() 
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member`.
 #[tokio::test]
 async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -1216,10 +1188,8 @@ async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyh
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run`.
 #[tokio::test]
 async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with_min_free_disk_gib(
     vec![script_option(BACKEND_ID, "exit 0")],
@@ -1249,10 +1219,8 @@ async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> a
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_closed_task_skips_landing`.
 #[tokio::test]
 async fn recovery_closed_task_skips_landing() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_closed_task_skips_landing
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
@@ -1270,10 +1238,8 @@ async fn recovery_closed_task_skips_landing() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_reopened_task_reproves_landing`.
 #[tokio::test]
 async fn recovery_reopened_task_reproves_landing() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_reopened_task_reproves_landing
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
@@ -1293,10 +1259,8 @@ async fn recovery_reopened_task_reproves_landing() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_open_task_landing_unchanged`.
 #[tokio::test]
 async fn recovery_open_task_landing_unchanged() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_open_task_landing_unchanged
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -1317,10 +1281,8 @@ async fn recovery_open_task_landing_unchanged() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_after_a_failed_review_picks_the_next_preference_backend`.
 #[tokio::test]
 async fn recovery_after_a_failed_review_picks_the_next_preference_backend() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_after_a_failed_review_picks_the_next_preference_backend
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
     vec![
@@ -1373,12 +1335,10 @@ async fn cold_read_child(
   Ok((worker, page, charliebot_store::control_events::sha256_hex(text)))
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_delivery`: a cold-read run that succeeded and whose
-/// delivery a crash cut is replayed: the parent gets the report body and the child closes. A repeated pass lands nothing
-/// twice.
+/// A cold-read run that succeeded and whose delivery a crash cut is replayed: the parent gets the report body and the
+/// child closes. A repeated pass lands nothing twice.
 #[tokio::test]
 async fn recovery_replays_a_lost_cold_read_delivery() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_delivery.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let dir = tempfile::tempdir()?;
@@ -1444,12 +1404,10 @@ async fn recovery_accepts_native_user_events_with_string_content() -> anyhow::Re
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_failure_chain`: a failed cold-read run whose chain a
-/// crash cut with one backend left. The replay records the attempt, starts the retry on the next pool backend, and the
-/// retry's answer delivers the report.
+/// A failed cold-read run whose chain a crash cut with one backend left. The replay records the attempt, starts the
+/// retry on the next pool backend, and the retry's answer delivers the report.
 #[tokio::test]
 async fn recovery_replays_a_lost_cold_read_failure_chain() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_failure_chain.
   let stack = Stack::start_with(
     vec![script_option(BACKEND_ID, "exit 0"), script_option("fake2", &result_script("(1) answered."))],
     vec!["fake2".to_string()],
@@ -1484,12 +1442,10 @@ async fn recovery_replays_a_lost_cold_read_failure_chain() -> anyhow::Result<()>
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_all_failed_report`: with no backend left, the replay
-/// reports the parent with the attempt line and the all-failed trailer, and the report's delivery archives the child. A
-/// repeated pass lands nothing twice.
+/// With no backend left, the replay reports the parent with the attempt line and the all-failed trailer, and the
+/// report's delivery archives the child. A repeated pass lands nothing twice.
 #[tokio::test]
 async fn recovery_replays_a_lost_cold_read_all_failed_report() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_all_failed_report.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let dir = tempfile::tempdir()?;
@@ -1525,12 +1481,10 @@ async fn recovery_replays_a_lost_cold_read_all_failed_report() -> anyhow::Result
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_interrupted_report`: an interrupted cold-read run
-/// reports at replay exactly as the live chain's fall-through does, never through the next-backend retry. The report's
-/// delivery archives the child. A repeated pass lands nothing twice.
+/// An interrupted cold-read run reports at replay exactly as the live chain's fall-through does, never through the
+/// next-backend retry. The report's delivery archives the child. A repeated pass lands nothing twice.
 #[tokio::test]
 async fn recovery_replays_a_lost_cold_read_interrupted_report() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_interrupted_report.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let dir = tempfile::tempdir()?;
@@ -1556,12 +1510,10 @@ async fn recovery_replays_a_lost_cold_read_interrupted_report() -> anyhow::Resul
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries`: a failed
-/// cold-read run whose retry a crash left registered but unlaunched. The replay launches the queued retry and never
-/// re-drives the failed attempt's chain, so there is one retry run and one report.
+/// A failed cold-read run whose retry a crash left registered but unlaunched. The replay launches the queued retry and
+/// never re-drives the failed attempt's chain, so there is one retry run and one report.
 #[tokio::test]
 async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries.
   let stack = Stack::start_with(
     vec![script_option(BACKEND_ID, "exit 0"), script_option("fake2", &result_script("(1) answered."))],
     vec!["fake2".to_string()],
@@ -1593,11 +1545,9 @@ async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished`:
-/// a failed earlier run's report replay is idempotent, and a later successful run still owns the review follow-up.
+/// A failed earlier run's report replay is idempotent, and a later successful run still owns the review follow-up.
 #[tokio::test]
 async fn recovery_replays_failed_earlier_run_without_archiving_worker() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::
   //   test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished.
   let stack = Stack::start("exit 0").await?;
   std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
@@ -1619,11 +1569,9 @@ async fn recovery_replays_failed_earlier_run_without_archiving_worker() -> anyho
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds`: an
-/// existing parent report is not delivered or dispatched again, and recovery archives the worker exactly once.
+/// An existing parent report is not delivered or dispatched again, and recovery archives the worker exactly once.
 #[tokio::test]
 async fn recovery_archives_worker_after_deduplicating_its_existing_failure_report() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::
   //   test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -1658,10 +1606,8 @@ async fn recovery_archives_worker_after_deduplicating_its_existing_failure_repor
   Ok(())
 }
 
-/// `test_task_recovery.py::test_reconcile_replays_an_already_delivered_blocked_report_without_duplication`.
 #[tokio::test]
 async fn reconcile_replays_an_already_delivered_blocked_report_without_duplication() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_reconcile_replays_an_already_delivered_blocked_report_without_duplication
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -1787,12 +1733,10 @@ fn probe_step(session_id: &str, run_id: &str) -> RunRecord {
   }
 }
 
-/// `test_sequence_controller_runs.py::test_a_finished_sequence_run_asks_its_owning_controller_after_run`: a durable
-/// finish asks the owning controller's after-run duty. A cron step's finish re-drives its firing, and a running loop's
-/// iteration leaves its child open. No owned run logs the no-controller warning.
+/// A durable finish asks the owning controller's after-run duty. A cron step's finish re-drives its firing, and a
+/// running loop's iteration leaves its child open. No owned run logs the no-controller warning.
 #[tokio::test]
 async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyhow::Result<()> {
-  // Python: tests/test_sequence_controller_runs.py::test_a_finished_sequence_run_asks_its_owning_controller_after_run.
   let stack = Stack::start("exit 0").await?;
   // A running loop owes no close yet, so its close step returns and the child stays open.
   let (manager, child) = loop_child(&stack, marker("running", None)).await?;
@@ -1810,12 +1754,10 @@ async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyho
   Ok(())
 }
 
-/// `test_sequence_controller_runs.py::test_recovery_asks_the_owning_controller_and_counts_one_follow_up`: recovery
-/// replays a terminal step and an unlaunched one, one follow-up each, and leaves a launched, non-terminal step to the
-/// earlier pass.
+/// Recovery replays a terminal step and an unlaunched one, one follow-up each, and leaves a launched, non-terminal step
+/// to the earlier pass.
 #[tokio::test]
 async fn recovery_asks_the_owning_controller_and_counts_one_follow_up() -> anyhow::Result<()> {
-  // Python: tests/test_sequence_controller_runs.py::test_recovery_asks_the_owning_controller_and_counts_one_follow_up.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let child = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
@@ -1860,11 +1802,10 @@ fn assert_one_no_controller_warning(log: &LogCapture, session_id: &str, run_id: 
   assert!(warnings[0].contains(&format!("owner_ref={ORPHAN_OWNER}")), "the warning names the owner: {}", warnings[0]);
 }
 
-/// `test_sequence_controller_runs.py::test_a_finish_without_a_controller_warns_and_does_nothing_else`: a Run whose kind
-/// no controller owns logs the warning with the session, run and owner_ref, and its finish lands nothing.
+/// A Run whose kind no controller owns logs the warning with the session, run and owner_ref, and its finish lands
+/// nothing.
 #[tokio::test]
 async fn a_finish_without_a_controller_warns_and_does_nothing_else() -> anyhow::Result<()> {
-  // Python: tests/test_sequence_controller_runs.py::test_a_finish_without_a_controller_warns_and_does_nothing_else.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
@@ -1902,12 +1843,10 @@ fn run_finished_count(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::
   )
 }
 
-/// `test_sequence_controller_runs.py::test_recovery_without_a_controller_lands_interrupted_then_only_logs`: recovery of a
-/// registered, unlaunched Run whose controller is gone lands its interrupted finish once and logs the warning. A second
-/// pass finds the terminal fact and only logs.
+/// Recovery of a registered, unlaunched Run whose controller is gone lands its interrupted finish once and logs the
+/// warning. A second pass finds the terminal fact and only logs.
 #[tokio::test]
 async fn recovery_without_a_controller_lands_interrupted_then_only_logs() -> anyhow::Result<()> {
-  // Python: tests/test_sequence_controller_runs.py::test_recovery_without_a_controller_lands_interrupted_then_only_logs.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
@@ -1932,12 +1871,10 @@ async fn recovery_without_a_controller_lands_interrupted_then_only_logs() -> any
   Ok(())
 }
 
-/// `test_sequence_controller_runs.py::test_recovery_follows_a_live_sequence_run_without_its_controller`: a launched,
-/// non-terminal Run without its controller is followed like any other live Run, with no interrupted finish and no
-/// warning.
+/// A launched, non-terminal Run without its controller is followed like any other live Run, with no interrupted finish
+/// and no warning.
 #[tokio::test]
 async fn recovery_follows_a_live_sequence_run_without_its_controller() -> anyhow::Result<()> {
-  // Python: tests/test_sequence_controller_runs.py::test_recovery_follows_a_live_sequence_run_without_its_controller.
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -1965,12 +1902,10 @@ async fn recovery_follows_a_live_sequence_run_without_its_controller() -> anyhow
   Ok(())
 }
 
-/// `test_sequence_controller_runs.py::test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref`: a launch
-/// that reaches a controller-less sequence Run fails before any process starts. The error names the owner_ref, rides the
-/// run's own events log, and lands the failed finish.
+/// A launch that reaches a controller-less sequence Run fails before any process starts. The error names the owner_ref,
+/// rides the run's own events log, and lands the failed finish.
 #[tokio::test]
 async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> anyhow::Result<()> {
-  // Python: tests/test_sequence_controller_runs.py::test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref.
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
@@ -2000,11 +1935,9 @@ async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> an
   Ok(())
 }
 
-/// `test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller`: the registered
-/// controller marks a loop that a prior process left running as interrupted, during the boot pass.
+/// The registered controller marks a loop that a prior process left running as interrupted, during the boot pass.
 #[tokio::test]
 async fn restart_recovery_marks_a_running_loop_through_the_registered_controller() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller.
   let stack = Stack::start("exit 0").await?;
   let (_manager, child) = loop_child(&stack, marker("running", None)).await?;
 
@@ -2015,12 +1948,10 @@ async fn restart_recovery_marks_a_running_loop_through_the_registered_controller
   Ok(())
 }
 
-/// `test_task_sequences.py::test_a_reopened_child_stays_open_across_restarts`: the close step stopped the queued
-/// iteration and closed the child. After the operator reopens it, the boot pass leaves it open, adds no stop request,
-/// and writes no second close.
+/// The close step stopped the queued iteration and closed the child. After the operator reopens it, the boot pass
+/// leaves it open, adds no stop request, and writes no second close.
 #[tokio::test]
 async fn a_reopened_child_stays_open_across_restarts() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_a_reopened_child_stays_open_across_restarts.
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
     loop_child(&stack, marker("blocked", close_owed("blocked", "[Synthetic loop 1] blocked"))).await?;
@@ -2048,11 +1979,10 @@ async fn a_reopened_child_stays_open_across_restarts() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_sequences.py::test_startup_recovers_a_stop_requested_launched_iteration_and_closes`: a launched iteration
-/// with a durable stop request ends at startup, and its after-run closes the child with the loop's failed outcome.
+/// A launched iteration with a durable stop request ends at startup, and its after-run closes the child with the loop's
+/// failed outcome.
 #[tokio::test]
 async fn startup_closes_a_loop_whose_stop_requested_iteration_ended() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_startup_recovers_a_stop_requested_launched_iteration_and_closes.
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
@@ -2091,12 +2021,10 @@ async fn wait_for_exit(child: &mut std::process::Child) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_sequences.py::test_startup_closes_a_loop_that_crashed_between_final_state_and_close`: the loop's final
-/// state is on disk and its close is not. The boot pass closes the child with the loop's outcome and delivers one final
-/// report to the parent.
+/// The loop's final state is on disk and its close is not. The boot pass closes the child with the loop's outcome and
+/// delivers one final report to the parent.
 #[tokio::test]
 async fn startup_closes_a_loop_that_crashed_between_final_state_and_close() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_startup_closes_a_loop_that_crashed_between_final_state_and_close.
   let stack = Stack::start("exit 0").await?;
   let summary = "[Synthetic loop 1] Loop ran 2 iteration(s)\n\niter one report\n\niter two report";
   let (manager, child) = loop_child(&stack, marker("blocked", close_owed("blocked", summary))).await?;
@@ -2120,12 +2048,10 @@ async fn startup_closes_a_loop_that_crashed_between_final_state_and_close() -> a
   Ok(())
 }
 
-/// `test_task_sequences.py::test_startup_closes_a_failed_loop_and_reports_its_end_error`: a loop whose final failed
-/// state carries its end error and whose close a crash cut. The boot pass closes the child failed, and the parent's one
-/// final report carries the end error text.
+/// A loop whose final failed state carries its end error and whose close a crash cut. The boot pass closes the child
+/// failed, and the parent's one final report carries the end error text.
 #[tokio::test]
 async fn startup_closes_a_failed_loop_and_reports_its_end_error() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_startup_closes_a_failed_loop_and_reports_its_end_error.
   let stack = Stack::start("exit 0").await?;
   let summary = "[Synthetic loop 1] end error: synthetic failure";
   let (manager, child) = loop_child(&stack, marker("failed", close_owed("failed", summary))).await?;
@@ -2144,11 +2070,10 @@ async fn startup_closes_a_failed_loop_and_reports_its_end_error() -> anyhow::Res
   Ok(())
 }
 
-/// `test_task_sequences.py::test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_unlaunched`: a queued
-/// iteration never launches. The close step stops it first, so the child closes and the queued run stays unlaunched.
+/// A queued iteration never launches. The close step stops it first, so the child closes and the queued run stays
+/// unlaunched.
 #[tokio::test]
 async fn startup_closes_a_loop_with_an_unlaunched_iteration_stopped_first() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::
   //   test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_unlaunched.
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
@@ -2171,12 +2096,10 @@ async fn startup_closes_a_loop_with_an_unlaunched_iteration_stopped_first() -> a
   Ok(())
 }
 
-/// `test_task_sequences.py::test_startup_closes_a_loop_that_crashed_between_run_finished_and_after_run`:
-/// the iteration's finish landed and its after-run did not. The boot pass closes the child cancelled, and the parent
+/// The iteration's finish landed and its after-run did not. The boot pass closes the child cancelled, and the parent
 /// gets one report that carries the iteration's text.
 #[tokio::test]
 async fn startup_closes_a_loop_whose_iteration_finished_before_its_after_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_startup_closes_a_loop_that_crashed_between_run_finished_and_after_run.
   let stack = Stack::start("exit 0").await?;
   let summary = "[Synthetic loop 1] cancelled\n\niter one report";
   let (manager, child) = loop_child(&stack, marker("stopped", close_owed("cancelled", summary))).await?;
@@ -2198,7 +2121,6 @@ async fn startup_closes_a_loop_whose_iteration_finished_before_its_after_run() -
 /// A dead iteration drains its result after the sequence controller marks the loop interrupted and closes its child.
 #[tokio::test]
 async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_drain() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_startup_recovery_closes_an_interrupted_loop_whose_process_died.
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
     loop_child(&stack, marker("running", close_owed("failed", "[Synthetic loop 1] failed"))).await?;
@@ -2215,12 +2137,10 @@ async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_dr
   Ok(())
 }
 
-/// `test_task_sequences.py::test_startup_recovery_leaves_a_live_iterations_child_open_until_its_finish`:
-/// a live iteration keeps its child open. The boot pass marks the loop interrupted and leaves the process running, and
+/// A live iteration keeps its child open. The boot pass marks the loop interrupted and leaves the process running, and
 /// its re-attach runs in the background until the process finishes.
 #[tokio::test]
 async fn startup_leaves_a_live_iterations_child_open_until_its_finish() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_startup_recovery_leaves_a_live_iterations_child_open_until_its_finish.
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
@@ -2341,12 +2261,11 @@ async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()
   Ok(())
 }
 
-/// `test_task_execution.py::test_manager_turn_master_done_enospc_retries_through_master_queue`: the manager turn's
-/// MASTER_DONE write fails out of space, so the turn lands no terminal fact. The retry's node pass re-attaches the dead
-/// turn through the master queue, and the resumed follow lands the end record with the raw log's last write time.
+/// The manager turn's MASTER_DONE write fails out of space, so the turn lands no terminal fact. The retry's node pass
+/// re-attaches the dead turn through the master queue, and the resumed follow lands the end record with the raw log's
+/// last write time.
 #[tokio::test]
 async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_manager_turn_master_done_enospc_retries_through_master_queue.
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"turn result"}'"#).await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
   std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
@@ -2388,7 +2307,6 @@ async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyho
 
 #[tokio::test]
 async fn recovery_stops_a_launched_run_on_a_closed_worker() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_startup_recovery_stops_a_launched_run_on_a_closed_worker.
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
   let process_guard = ProcessGroupGuard::new();
@@ -2431,12 +2349,10 @@ async fn recovery_stops_a_launched_run_on_a_closed_worker() -> anyhow::Result<()
   Ok(())
 }
 
-/// `test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives`:
-/// a node pass that a retry runs skips worker and manager runs this process already drives, so no second follower or
+/// A node pass that a retry runs skips worker and manager runs this process already drives, so no second follower or
 /// review starts.
 #[tokio::test]
 async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives.
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -2480,12 +2396,10 @@ async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::R
   Ok(())
 }
 
-/// `test_task_prompt_change_durable.py::test_two_scope_patch_crash_between_scopes_repairs_cleanly`:
-/// a PATCH that crashed after its subtree scope swapped the metadata. The retry lands the interrupted subtree fact
+/// A PATCH that crashed after its subtree scope swapped the metadata. The retry lands the interrupted subtree fact
 /// before it applies the node scope, so each scope has exactly one fact, in order.
 #[tokio::test]
 async fn two_scope_prompt_patch_retry_repairs_a_crash_between_scopes() -> anyhow::Result<()> {
-  // Python: tests/test_task_prompt_change_durable.py::test_two_scope_patch_crash_between_scopes_repairs_cleanly.
   let stack = Stack::start("exit 0").await?;
   let leaf = stack.node("leaf", None, TaskProfile::Worker, None).await?;
   let subtree_ref = crash_after_subtree_swap(&stack, &leaf.id, "subtree rule\n")?;
@@ -2509,12 +2423,10 @@ async fn two_scope_prompt_patch_retry_repairs_a_crash_between_scopes() -> anyhow
   Ok(())
 }
 
-/// `test_task_prompt_change_durable.py::test_recovery_sweep_is_idempotent_and_does_not_duplicate`:
-/// the boot sweep lands the fact of an interrupted prompt edit once. Later passes find the fact in place and append
+/// The boot sweep lands the fact of an interrupted prompt edit once. Later passes find the fact in place and append
 /// nothing.
 #[tokio::test]
 async fn recovery_sweep_lands_an_interrupted_prompt_fact_once() -> anyhow::Result<()> {
-  // Python: tests/test_task_prompt_change_durable.py::test_recovery_sweep_is_idempotent_and_does_not_duplicate.
   let stack = Stack::start("exit 0").await?;
   let leaf = stack.node("leaf", None, TaskProfile::Worker, None).await?;
   let subtree_ref = crash_after_subtree_swap(&stack, &leaf.id, "rule\n")?;
@@ -2605,8 +2517,7 @@ async fn boot_past_a_refused_sequence_node(
 /// loop interrupted, and the boot pass drains the manager's turn past it.
 #[tokio::test]
 async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() -> anyhow::Result<()> {
-  // Python: tests/test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller. The
-  // loop kind is the synthetic controller's; the improve controller itself is registered by charliebot-improve.
+  // The loop kind is the synthetic controller's; the improve controller itself is registered by charliebot-improve.
   let stack = Stack::start("exit 0").await?;
   // The drain builds the manager run's child environment, which signs a run token with `charliebot.access_key`.
   stack.write_access_key()?;
@@ -2628,8 +2539,8 @@ async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() 
 }
 
 /// A refused `improve` run stops only its own node: the boot pass logs the named error and the manager node still
-/// recovers its dead turn, with the improve node first and with it second. There is no Python case, since Python runs
-/// the improve controller; this covers the interim refusal of `UNLANDED_SEQUENCE_KINDS`.
+/// recovers its dead turn, with the improve node first and with it second.
+/// This covers the interim refusal of `UNLANDED_SEQUENCE_KINDS`.
 #[tokio::test]
 async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
   for sequence_first in [true, false] {
@@ -2644,7 +2555,6 @@ async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::
 /// without launching it, while the manager node still drains its dead turn.
 #[tokio::test]
 async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
-  // Python: tests/test_cron_sequence.py::test_recovery_redrives_a_mid_chain_firing_from_durable_facts
   for sequence_first in [true, false] {
     boot_past_a_refused_sequence_node("cron", RunKind::ScheduledStep, sequence_first, true)
       .await
@@ -2656,7 +2566,6 @@ async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Res
 /// fills ended_at from the raw log's last write and exit_code from its result line, and writes no second end record.
 #[tokio::test]
 async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata.
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"work done"}'"#).await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
   stack.write_access_key()?;
@@ -2698,7 +2607,6 @@ async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::R
 /// delivers the failed report exactly once.
 #[tokio::test]
 async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry.
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2735,8 +2643,8 @@ fn write_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Result<()>
   Ok(())
 }
 
-/// Backdates a session's two durable files to `before` ahead of the boot marker, as Python's `_stamp_durable_files`
-/// does: a skip needs both files past the mtime slack before the marker.
+/// Backdates a session's two durable files to `before` ahead of the boot marker. A skip needs both files past the
+/// mtime slack before the marker.
 fn backdate_durable_files(stack: &Stack, session_id: &str, before: Duration) -> anyhow::Result<()> {
   let marker: Value = serde_json::from_slice(&std::fs::read(boot_marker_path(stack))?)?;
   let pass_started_at =
@@ -2812,7 +2720,6 @@ fn path_lexists(path: &Path) -> anyhow::Result<bool> {
 
 #[tokio::test]
 async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:95.
   let stack = Stack::start("exit 0").await?;
   let worker = add_recovery_worker(
     &stack,
@@ -2919,7 +2826,6 @@ async fn boot_replay_rechecks_close_requests_against_the_run_snapshot() -> anyho
 /// marker reads as absent: both nodes get a full check, one `boot_recovery_marker_unreadable` line names the byte size
 /// and `error_type`, and the clean pass rewrites the marker with the start time it ran under.
 async fn assert_unreadable_boot_marker_reads_as_absent(content: &[u8], error_type: &str) -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py::test_unreadable_marker_checks_every_node_then_is_rewritten.
   let stack = Stack::start("exit 0").await?;
   add_recovery_worker(
     &stack,
@@ -2985,19 +2891,18 @@ async fn a_boot_marker_with_a_bad_timestamp_reads_as_absent() -> anyhow::Result<
 
 #[tokio::test]
 async fn a_boot_marker_with_a_non_string_timestamp_reads_as_absent() -> anyhow::Result<()> {
-  // No Python test case: the TypeError that src/runtime/task_recovery.py:58-74 raises for a non-string timestamp.
+  // The marker reader reports a TypeError for a non-string timestamp.
   assert_unreadable_boot_marker_reads_as_absent(br#"{"pass_started_at": 5}"#, "TypeError").await
 }
 
 #[tokio::test]
 async fn a_boot_marker_that_is_not_utf8_reads_as_absent() -> anyhow::Result<()> {
-  // No Python test case: the UnicodeDecodeError that src/runtime/task_recovery.py:58-74 raises before parsing.
+  // The UnicodeDecodeError the marker reader reports before parsing.
   assert_unreadable_boot_marker_reads_as_absent(b"\xff\xfe{}", "UnicodeDecodeError").await
 }
 
 #[tokio::test]
 async fn failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:114.
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -3037,7 +2942,6 @@ async fn failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries() 
 
 #[tokio::test]
 async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:144.
   for condition in
     ["state_open", "file_after_marker", "run_unended", "sequence_ref", "worktree_exists", "cold_read_failed"]
   {
@@ -3092,7 +2996,7 @@ async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() 
 
 #[tokio::test]
 async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> anyhow::Result<()> {
-  // No Python test case: os.path.lexists in src/runtime/task_recovery.py:119 (23de57ca8).
+  // The probe reads the link itself, so a dangling symlink counts as an existing worktree.
   use std::os::unix::fs::symlink;
 
   let stack = Stack::start("exit 0").await?;
@@ -3122,7 +3026,6 @@ async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> a
 
 #[tokio::test]
 async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_continues() -> anyhow::Result<()> {
-  // Python: src/runtime/task_recovery.py:119.
   let stack = Stack::start("exit 0").await?;
   let blocker = stack.home.path().join("regular-file");
   std::fs::write(&blocker, "synthetic")?;
@@ -3157,7 +3060,6 @@ async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_co
 
 #[tokio::test]
 async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:191.
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(20));
   let worker = add_recovery_worker(
@@ -3182,7 +3084,7 @@ async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::
 
 #[tokio::test]
 async fn rust_reads_isoformat_marker_with_and_without_microseconds() -> anyhow::Result<()> {
-  // No Python test case: the marker text that src/runtime/task_recovery.py:58-74 reads and writes.
+  // The marker text that the boot pass reads and writes.
   for timestamp in ["2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05.123456+00:00"] {
     let stack = Stack::start("exit 0").await?;
     std::fs::create_dir_all(stack.cfg.sessions_dir())?;
@@ -3196,7 +3098,7 @@ async fn rust_reads_isoformat_marker_with_and_without_microseconds() -> anyhow::
 
 #[tokio::test]
 async fn fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result<()> {
-  // No Python test case: the marker text that src/runtime/task_recovery.py:58-74 reads and writes.
+  // The marker text that the boot pass reads and writes.
   let stack = Stack::start("exit 0").await?;
   std::fs::create_dir_all(stack.cfg.sessions_dir())?;
   recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
@@ -3209,7 +3111,7 @@ async fn fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result
 
 #[tokio::test]
 async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::Result<()> {
-  // No Python test case: one done line per pass (src/runtime/task_recovery.py:189-190, server.py:214-223).
+  // One done line per pass.
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -3237,7 +3139,7 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
 
 #[tokio::test]
 async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() -> anyhow::Result<()> {
-  // No Python test case: the boot pass's cheap rule-out of a session whose history holds no task boundary.
+  // The boot pass's cheap rule-out of a session whose history holds no task boundary.
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -3269,7 +3171,7 @@ async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() ->
 
 #[tokio::test]
 async fn a_session_whose_probe_fails_fails_its_node_and_the_walk_goes_on() -> anyhow::Result<()> {
-  // No Python test case: a node-absence probe that cannot read the session's files is a node failure like any other.
+  // A node-absence probe that cannot read the session's files is a node failure like any other.
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -3297,7 +3199,7 @@ async fn a_session_whose_probe_fails_fails_its_node_and_the_walk_goes_on() -> an
 
 #[tokio::test]
 async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
-  // No Python test case: the display warm-up of src/runtime/task_recovery.py:166-168.
+  // The display warm-up of the boot pass.
   let stack = Stack::start("exit 0").await?;
   let worker = add_recovery_worker(
     &stack,

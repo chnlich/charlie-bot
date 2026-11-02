@@ -1,4 +1,4 @@
-//! The opencode session protocol (`src/backends/opencode/opencode.py`).
+//! The opencode session protocol.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -199,7 +199,7 @@ impl AgentBackend for OpenCodeBackend {
   }
 }
 
-/// The OpenCode factory (`src/backends/opencode/factory.py`).
+/// The OpenCode factory.
 pub struct OpenCodeFactory {
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
@@ -900,11 +900,11 @@ impl OpenCodeTranslator {
             content.push(part.get("name").map(value_str).unwrap_or(mime.to_string()));
           }
         }
-        Ok(vec![json!({"type": event_types::TOOL_RESULT, "tool_use_id": id, "content": content.join("\n")})])
+        Ok(vec![json!({"type": event_types::TOOL_RESULT, event_types::TOOL_USE_ID: id, "content": content.join("\n")})])
       }
       "session.tool.failed" => Ok(vec![json!({
         "type": event_types::TOOL_RESULT,
-        "tool_use_id": required_string(data, "id")?,
+        event_types::TOOL_USE_ID: required_string(data, "id")?,
         "content": error_text(data.get("error"))
       })]),
       "session.step.ended" => {
@@ -998,8 +998,8 @@ struct OpenCodeOneShotRequest {
   timeout: Option<Duration>,
 }
 
-/// The one-shot XDG root, matching Python's `charliebot-opencode-oneshot-*` mkdtemp in
-/// src/backends/opencode/opencode.py; removing it is the Drop of the returned TempDir.
+/// The one-shot XDG root, a temporary directory named `charliebot-opencode-oneshot-*`. Removing it is the Drop of the
+/// returned TempDir.
 fn oneshot_root() -> anyhow::Result<tempfile::TempDir> {
   Ok(tempfile::Builder::new().prefix("charliebot-opencode-oneshot-").tempdir()?)
 }

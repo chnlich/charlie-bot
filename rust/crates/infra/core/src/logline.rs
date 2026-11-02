@@ -2,7 +2,7 @@
 //! millisecond and the location the file and line of the tracing call. `render` writes a line and `parse` reads one
 //! back. `parse` also reads the two forms the server wrote before this one. The first is the text form without a
 //! location column, which a release before this grammar writes after a rollback. The second is the JSON lines the
-//! Python server wrote.
+//! previous server wrote.
 //!
 //! ```text
 //! line     := stamp SP "[" level "]" SP location SP event [SP field]*

@@ -216,7 +216,7 @@ pub fn prepare_session_cgroup(
   Ok(Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb: config.memory_max_mb }))
 }
 
-/// Move a spawned process into its cgroup and set its OOM priority; failures match the Python warnings and do not fail
+/// Move a spawned process into its cgroup and set its OOM priority; failures log their warnings and do not fail
 /// the spawn.
 pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
   let path = cgroup.path.join(PROCS_FILE_NAME);
@@ -484,7 +484,6 @@ mod tests {
 
   #[test]
   fn classify_cap_kill_on_max_growth() {
-    // Python: tests/test_session_cgroup.py::test_classify_cap_kill_on_max_growth.
     let message = classify_cgroup_exit(Some(-9), Some((0, 0)), Some((1, 0)), 12288).unwrap();
     assert!(message.contains("session 内存上限触发"));
     assert!(message.contains("12288"));
@@ -493,7 +492,6 @@ mod tests {
 
   #[test]
   fn classify_group_limit_kill_on_oom_kill_growth_with_a_flat_max() {
-    // Python: tests/test_session_cgroup.py::test_classify_group_limit_kill_on_oom_kill_growth_with_a_flat_max.
     let message = classify_cgroup_exit(Some(-9), Some((0, 0)), Some((0, 1)), 12288);
     assert_eq!(
       message.as_deref(),

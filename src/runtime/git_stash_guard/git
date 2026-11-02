@@ -1,8 +1,8 @@
 #!/bin/sh
 # git - stash-write guard for CharlieBot's worker and reviewer agents.
 #
-# Worker.run (src/runtime/worker.py) puts this directory first on the PATH of
-# every agent child. The script refuses the direct git stash write forms -
+# The worker runtime (rust/crates/runtime/tasks/src/worker.rs) puts this directory first on the PATH
+# of every agent child. The script refuses the direct git stash write forms -
 # every worktree of a repository shares one stash stack (refs/stash lives in
 # the common .git directory), so one task's `git stash pop` can take another
 # task's entry - and hands every other command to real git unchanged.

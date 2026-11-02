@@ -1,4 +1,4 @@
-//! The `ext_usage` service (`src/features/usage/ext_usage.py` `_poller`, `start_service` and `stop_service`): the
+//! The `ext_usage` service: the
 //! poll loop runs for the server's lifetime, and the server's own config, registry and store feed each round.
 
 use std::sync::{Arc, Mutex};

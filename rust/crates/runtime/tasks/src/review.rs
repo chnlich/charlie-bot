@@ -1,4 +1,4 @@
-//! Review-chain reads: worker log summaries and reviewer backend selection (`src/runtime/review.py`).
+//! Review-chain reads: worker log summaries and reviewer backend selection.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -11,7 +11,7 @@ use serde_json::Value;
 /// A selected backend, its resolved model, and the updated reviewer-attempt list.
 pub type ReviewerBackendSelection = (String, Option<String>, Vec<String>);
 
-/// Read the worker summary for review, logging Python's two warning events when evidence is unavailable.
+/// Read the worker summary for review, logging two warning events when evidence is unavailable.
 pub async fn extract_review_context(session_id: &str, run_id: &str, worker_log_path: &Path) -> Option<String> {
   let session_id = session_id.to_string();
   let run_id = run_id.to_string();

@@ -22,8 +22,8 @@ pub fn claude_config_dir() -> anyhow::Result<PathBuf> {
   }
 }
 
-/// Expand a leading `~` or `~/` in an account configuration path against the supplied home, as `Path.expanduser`
-/// does. The home's trailing slashes go first, as `os.path.expanduser` strips them; `~user` stays as written.
+/// Expand a leading `~` or `~/` in an account configuration path against the supplied home, dropping the home's
+/// trailing slashes first. `~user` stays as written.
 pub fn expanduser(path: &str, home: Option<&str>) -> anyhow::Result<PathBuf> {
   if path == "~" || path.starts_with("~/") {
     let home = home.ok_or_else(|| anyhow::anyhow!("HOME is required to expand {path}"))?;
@@ -56,7 +56,7 @@ impl ClaudeHost {
     self.home.join(".claude")
   }
 
-  /// `Path(raw).expanduser()` against this host's home: a leading `~` or `~/` names the home.
+  /// Expand a leading `~` or `~/` in `raw` against this host's home.
   pub fn expand(&self, raw: &str) -> PathBuf {
     match raw.strip_prefix('~') {
       Some("") => self.home.clone(),

@@ -1,6 +1,7 @@
 //! Scheduled-task request and file models.
 
 use charliebot_compat::request_body::{BodyModel, Field, FieldType};
+use charliebot_core::config::CharlieBotConfig;
 use serde::{Deserialize, Serialize};
 
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
@@ -19,6 +20,15 @@ pub struct StepConfig {
   pub backend: Option<String>,
   #[serde(default)]
   pub distinct_backend_from: Option<String>,
+}
+
+/// How a bound task's round reaches its session: admitted to the bound manager (`Master`), or started as the
+/// task's own worker run (`Worker`). An absent `mode` starts worker work.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskMode {
+  Master,
+  Worker,
 }
 
 /// A complete scheduled task after prompt pointers have been resolved.
@@ -44,7 +54,7 @@ pub struct ScheduledTaskConfig {
   #[serde(default)]
   pub session_id: Option<String>,
   #[serde(default)]
-  pub mode: Option<String>,
+  pub mode: Option<TaskMode>,
   #[serde(default)]
   pub prompt: Option<String>,
   #[serde(default)]
@@ -64,9 +74,6 @@ pub struct ScheduledTaskError {
 
 /// Validate the source, mode and sequence invariants shared with the YAML loader.
 pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
-  if task.mode.as_deref().is_some_and(|mode| !matches!(mode, "master" | "worker")) {
-    return Err("mode must be 'master' or 'worker'".to_string());
-  }
   let source_count = usize::from(task.prompt.as_ref().is_some_and(|value| !value.is_empty()))
     + usize::from(task.steps.as_ref().is_some_and(|value| !value.is_empty()))
     + usize::from(task.handler.as_ref().is_some_and(|value| !value.is_empty()));
@@ -76,7 +83,7 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   if task.mode.is_some() && task.session_id.as_deref().unwrap_or_default().is_empty() {
     return Err("'mode' requires 'session_id' (mode selects how a bound task fires)".to_string());
   }
-  if task.mode.as_deref() == Some("master") {
+  if task.mode == Some(TaskMode::Master) {
     if task.prompt.as_deref().unwrap_or_default().is_empty() {
       return Err("mode 'master' requires a prompt source ('prompt' or 'prompt_file')".to_string());
     }
@@ -130,6 +137,23 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   Ok(())
 }
 
+/// The backend a scheduled task fires on: its own `backend`, else the first configured option. The setup seed lists it
+/// per task.
+pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
+  if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
+    if cfg.get_backend_option(backend).is_none() {
+      anyhow::bail!("scheduled task backend '{backend}' is not in backends.options");
+    }
+    return Ok(backend.to_string());
+  }
+  cfg
+    .backends
+    .options
+    .first()
+    .map(|option| option.id.clone())
+    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))
+}
+
 fn default_timezone() -> String {
   DEFAULT_TIMEZONE.to_string()
 }
@@ -152,7 +176,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("mode", FieldType::NullableLiteral(&["master", "worker"])),
 ];
 
-/// The HTTP create-field model, with Pydantic's default extra-key ignore behavior.
+/// The HTTP create-field model; unknown extra keys are ignored.
 pub const CREATE_MODEL: BodyModel = BodyModel::required(CREATE_FIELDS);
 
 /// The patch body model; omitted and nullable values remain distinguishable in the validated object.

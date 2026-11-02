@@ -19,7 +19,8 @@ pub const SYNC_CLAUDE_AI_SKILLS_SETTINGS_KEY: &str = "syncClaudeAiSkills";
 pub const DISABLE_BUNDLED_SKILLS_SETTINGS_KEY: &str = "disableBundledSkills";
 pub const FAST_MODE_SETTINGS_KEY: &str = "fastMode";
 
-/// The PreToolUse hook event: the backend registers `charliebot wait-guard` under it, and the CLI's answer must name it.
+/// The PreToolUse hook event: the backend registers `charliebot wait-guard` and `charliebot scan-guard` under it, and
+/// the CLI's answer must name it.
 pub const PRE_TOOL_USE_HOOK_EVENT: &str = "PreToolUse";
 /// The SessionStart hook event: the backend registers `charliebot compaction-context` under it, and the CLI's answer
 /// names it.
@@ -28,7 +29,7 @@ pub const SESSION_START_HOOK_EVENT: &str = "SessionStart";
 pub const HEADLESS_FORWARDED_ENV: [&str; 4] =
   [AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV, AUTO_COMPACT_WINDOW_ENV, SIMPLE_SYSTEM_PROMPT_ENV];
 
-/// The declared Claude window for a run kind at the Python baseline.
+/// The declared Claude window for a run kind: every run kind declares `AUTO_COMPACT_DEFAULT`.
 pub fn declared_window_by_run_kind(run_kind: RunKind) -> u64 {
   match run_kind {
     RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration | RunKind::ScheduledStep => {
@@ -37,7 +38,8 @@ pub fn declared_window_by_run_kind(run_kind: RunKind) -> u64 {
   }
 }
 
-/// Quote *value* the way Python's `shlex.quote` does, for the hook command line.
+/// Quote *value* for a POSIX shell: safe characters pass through bare, and any other value, the empty one included,
+/// is single-quoted.
 fn shlex_quote(value: &str) -> String {
   if value.is_empty() {
     return "''".to_string();
@@ -64,13 +66,16 @@ pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> 
   settings
 }
 
-fn add_wait_guard_hook(settings: &mut Map<String, Value>) {
+fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>) {
   let hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
   hooks.as_object_mut().expect("Claude hook settings are an object").insert(
     PRE_TOOL_USE_HOOK_EVENT.to_string(),
     json!([{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "charliebot wait-guard"}]
+      "hooks": [
+        {"type": "command", "command": "charliebot wait-guard"},
+        {"type": "command", "command": "charliebot scan-guard"}
+      ]
     }]),
   );
 }
@@ -109,7 +114,9 @@ fn headless_claude_settings_for(
   }
   if use_wait_guard {
     match run_kind {
-      RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => add_wait_guard_hook(&mut settings),
+      RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => {
+        add_pre_tool_use_hooks(&mut settings)
+      }
       RunKind::ScheduledStep => {}
     }
   }

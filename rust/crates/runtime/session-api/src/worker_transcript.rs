@@ -76,9 +76,9 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   }
 
   let cfg = store.config();
-  // The transcript events stay in the compact form from parse to projection fold: Python's builder
-  // (src/runtime/worker_transcript.py) shares its parsed dicts between the summary, the map, and the
-  // projection input, and the compact form is the one tree the fold and the summary read in place.
+  // The transcript events stay in the compact form from parse to projection fold. The builder shares its parsed
+  // objects between the summary, the map, and the projection input. The compact form is the one tree that the fold
+  // and the summary read in place.
   let mut transcript: Vec<SharedChatEvent> = Vec::new();
   let mut run_events_map = HashMap::new();
   let mut run_tools = HashMap::new();
@@ -116,8 +116,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       (!SIGNALLABLE_STATES.contains(&state.as_str())).then_some(tool_calls),
     ))));
     for event in shared {
-      // The rewrite replaces the transcript's copy only: the summary map keeps the raw event, as
-      // Python's `{**event, "type": ET.RUN_ERROR}` does.
+      // The rewrite replaces the transcript's copy only: the summary map keeps the raw event.
       let event = if event.get("type").and_then(CompactValue::as_str) == Some(event_types::ERROR) {
         let mut value = event.as_ref().to_value();
         value["type"] = json!(event_types::RUN_ERROR);

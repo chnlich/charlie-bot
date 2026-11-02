@@ -1,6 +1,5 @@
-//! The module-level helpers of `src/runtime/agent_process/base.py` that the CLI backend types share. They are the
-//! binary lookup, the child PATH and proxy edits, the Google key strip, and the Python value semantics of their
-//! translators.
+//! The module-level helpers that the CLI backend types share: the binary lookup, the child PATH and proxy edits, the
+//! Google key strip, and the value semantics of their translators.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -26,7 +25,7 @@ const GOOGLE_API_KEY_VARS: [&str; 2] = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
 const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
 /// The MIME type of an upload filename's extension, or `None` when the backend does not pass it as an image. The
-/// extension is the text after the last dot, lowercased, as the Python map's lookup is.
+/// extension is the text after the last dot, lowercased.
 pub fn image_mime(extension: &str) -> Option<&'static str> {
   let extension = extension.to_ascii_lowercase();
   if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
@@ -44,7 +43,7 @@ pub struct CliHost {
 }
 
 impl CliHost {
-  /// The host of the running server. HOME must be set, as `Path.home()` needs it.
+  /// The host of the running server. HOME must be set.
   pub fn from_process() -> anyhow::Result<Self> {
     let home = std::env::var_os("HOME").context("HOME must be set for the CLI backend types")?;
     let path = match std::env::var("PATH") {
@@ -66,7 +65,7 @@ impl CliHost {
   }
 }
 
-/// `Path.home() / ".local" / "bin"`: the directory the child PATH gains, and a binary's fallback directory.
+/// The home's `.local/bin`: the directory the child PATH gains, and a binary's fallback directory.
 pub fn user_local_bin(home: &Path) -> PathBuf {
   home.join(".local").join("bin")
 }
@@ -150,7 +149,7 @@ pub fn strip_google_api_keys(env: &Env) -> Env {
   stripped
 }
 
-/// Python truthiness of a JSON value: null, false, zero, and empty strings, arrays and objects are false.
+/// Truthiness of a JSON value: null, false, zero, and empty strings, arrays and objects are false.
 pub fn truthy(value: &Value) -> bool {
   match value {
     Value::Null => false,
@@ -162,7 +161,7 @@ pub fn truthy(value: &Value) -> bool {
   }
 }
 
-/// The string field `key` of a JSON object, or `default` when the object lacks it (`ev.get(key, default)`).
+/// The string field `key` of a JSON object, or `default` when the object lacks it.
 pub fn str_field<'a>(fields: &'a Map<String, Value>, key: &str, default: &'a str) -> anyhow::Result<&'a str> {
   match fields.get(key) {
     None => Ok(default),
@@ -180,8 +179,8 @@ pub fn required_str<'a>(fields: &'a Map<String, Value>, key: &str) -> anyhow::Re
   }
 }
 
-/// The integer field `key` of a JSON object, or 0 when the object lacks it (`stats.get(key, 0)`). A value that is not an
-/// integer is an error, where Python would carry it into the event.
+/// The integer field `key` of a JSON object, or 0 when the object lacks it. A value that is not an
+/// integer is an error.
 pub fn int_field(fields: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match fields.get(key) {
     None => Ok(0),

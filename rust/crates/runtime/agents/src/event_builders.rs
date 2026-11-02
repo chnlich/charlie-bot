@@ -21,7 +21,7 @@ pub fn make_master_done_event(exit_code: i32, still_thinking: bool) -> Value {
 }
 
 /// The result event of one call. `cost` is the JSON value of `total_cost_usd`: a float, null, or an integer such as the
-/// `0` that Python's default carries, which a float would serialize as `0.0`.
+/// `0` that the default carries, which a float would serialize as `0.0`.
 pub fn make_result_event(
   input_tokens: i64,
   output_tokens: i64,

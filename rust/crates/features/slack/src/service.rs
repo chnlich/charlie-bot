@@ -1,4 +1,4 @@
-//! The Slack entrypoint service and its Python `service.py` configuration gate.
+//! The Slack entrypoint service and its configuration gate.
 
 use charliebot_chat_threads::channel_service::ChannelService;
 use charliebot_core::credentials::{CredentialValue, Credentials};

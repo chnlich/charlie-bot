@@ -284,7 +284,7 @@ impl BackendPool {
     self.state.lock().expect("backend pool mutex is not poisoned").cooling_until.get(backend_id).copied()
   }
 
-  /// Return the stored cooldown deadline in Python's minute-resolution event format.
+  /// Return the stored cooldown deadline in the minute-resolution event format.
   pub fn cooling_until_minutes(&self, backend_id: &str) -> Option<String> {
     self.cooling_until(backend_id).map(format_minutes)
   }
@@ -542,6 +542,7 @@ mod tests {
       backends: BackendsConfig {
         pool: pool.iter().map(|member| (*member).to_string()).collect(),
         routing: None,
+        strong: None,
         options,
       },
       ui: UiConfig { home_services: Vec::new() },
@@ -650,7 +651,6 @@ mod tests {
 
   #[test]
   fn pick_ordered_takes_the_first_available_route_member() {
-    // Python: tests/test_backend_router.py:154-157.
     let cfg = config(&["a", "b", "c"]);
     let selected = BackendPool::default().pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &[]).unwrap();
     assert_eq!(selected.map(|option| option.id), Some("b".to_string()));
@@ -658,7 +658,6 @@ mod tests {
 
   #[test]
   fn pick_ordered_skips_cooling_and_excluded_members() {
-    // Python: tests/test_backend_router.py:160-171.
     let cfg = config(&["a", "b", "c"]);
     let pool = BackendPool::default();
     pool.cool("b", None);
@@ -671,7 +670,6 @@ mod tests {
 
   #[test]
   fn pick_ordered_shares_the_pool_cooldown_table() {
-    // Python: tests/test_backend_router.py:174-179.
     let cfg = config(&["a", "b"]);
     let pool = BackendPool::default();
     pool.cool("a", None);

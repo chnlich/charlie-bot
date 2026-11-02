@@ -590,8 +590,6 @@ mod tests {
     assert_eq!(claude_metadata::account_of(&ctx.session_meta.lock().unwrap()).as_deref(), Some("b"));
   }
 
-  // Python: tests/test_backend_hooks.py:104.
-  // Python: tests/test_backend_hooks.py:145.
   #[test]
   fn cli_variants_and_unpooled_cc_claude_reuse_transcript_checked_flag_launches() {
     // The cc-anthropic-compatible and cc-openai-compatible registrations share ClaudeCliLifecycle.
@@ -687,7 +685,6 @@ mod tests {
     assert!(rendered["content"].as_str().is_some_and(|content| !content.is_empty()));
   }
 
-  // Python: tests/test_claude_idle_compaction.py:237.
   #[tokio::test]
   async fn a_turn_start_cancels_the_pending_idle_timer() {
     let root = tempfile::tempdir().unwrap();
@@ -712,7 +709,6 @@ mod tests {
     assert!(timer.is_finished(), "the pending timer is cancelled");
   }
 
-  // Python: tests/test_claude_idle_compaction.py:256.
   #[tokio::test]
   async fn place_waits_for_a_running_idle_compaction_before_it_starts_the_turn() {
     let root = tempfile::tempdir().unwrap();
@@ -760,7 +756,6 @@ mod tests {
     compaction.await.unwrap();
   }
 
-  // Python: tests/test_backend_hooks.py::test_pooled_relay_turn_uses_the_same_midturn_launch_arguments
   #[test]
   fn pooled_relay_turn_uses_the_same_midturn_launch_arguments() {
     let root = tempfile::tempdir().unwrap();
@@ -782,7 +777,6 @@ mod tests {
     assert_eq!(relay.backend_kwargs["midturn_run_id"], json!(run_id));
   }
 
-  // Python: tests/test_backend_hooks.py::test_thread_turn_keeps_plain_text_stdin_and_queues_later_messages
   #[tokio::test]
   async fn thread_turn_keeps_plain_text_stdin_and_queues_later_messages() {
     for (field, origin) in [

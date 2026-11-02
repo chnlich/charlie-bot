@@ -1,4 +1,4 @@
-//! The cases of `tests/core/test_discord_commands.py`, run through the thread core and the internal routes against the
+//! The cases of the Discord server-side commands, run through the thread core and the internal routes against the
 //! loopback Discord fake in `test_support`.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ fn origin() -> Value {
   json!({"guild_id": GUILD, "parent_channel_id": PARENT, "thread_id": THREAD})
 }
 
-/// A Discord-backed session like a summon leaves it, with an optional read watermark (`_make_session`).
+/// A Discord-backed session like a summon leaves it, with an optional read watermark.
 async fn make_session(home: &Home, watermark: Option<String>) -> String {
   home.thread_session(&summon_session_id(GUILD, THREAD), origin(), watermark.as_deref()).await
 }
@@ -449,9 +449,8 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
 
 /// A guild missing ADD_REACTIONS names it, the intent off reads false, and ok is false.
 ///
-/// Python's answer for this case is pinned by `test_check_reports_missing_permissions_and_intent_off`
-/// (`tests/core/test_discord_commands.py:609`). There the intent is read at
-/// `src/features/discord/discord_commands.py:253` and the answer is built at `:268`.
+/// The pinned answer for this case names the missing permission and the intent state, so a change in either
+/// read or in the answer's build order breaks this test.
 #[tokio::test]
 async fn check_reports_missing_permissions_and_intent_off() {
   let every_permission_but_reactions: u64 =

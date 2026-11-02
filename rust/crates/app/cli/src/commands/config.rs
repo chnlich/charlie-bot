@@ -1,4 +1,4 @@
-//! The `config get` command (`src/runtime/cli/config.py`): print one top-level config value on stdout.
+//! The `config get` command: print one top-level config value on stdout.
 //!
 //! `config.yaml` holds the whole sectioned mapping and the loader is its only reader, so the command resolves the
 //! key through the same load, validation and defaults the server uses rather than opening the file itself:
@@ -7,10 +7,9 @@
 //! charliebot config get <key>
 //! ```
 //!
-//! Stdout carries exactly the value — scalars as Python's `print` writes them, lists, mappings and models as
-//! `json.dumps(value, indent=None, ensure_ascii=False)` — so a caller can substitute
-//! `$(charliebot config get <key>)` into a command. Diagnostics go to stderr: an unknown key exits 2, an unset
-//! (null) value exits 1.
+//! Stdout carries exactly the value — a scalar as its plain text, lists, mappings and models as compact JSON — so a
+//! caller can substitute `$(charliebot config get <key>)` into a command. Diagnostics go to stderr: an unknown key
+//! exits 2, an unset (null) value exits 1.
 
 use std::ffi::OsString;
 
@@ -40,8 +39,8 @@ enum ConfigVerb {
   },
 }
 
-/// A `config get` failure: the stderr line and the exit code. The Python command writes these diagnostics as plain
-/// text, not as the CLI's shared JSON failure object.
+/// A `config get` failure: the stderr line and the exit code. These diagnostics are plain text, not the CLI's
+/// shared JSON failure object.
 #[derive(Debug)]
 struct Failure {
   message: String,
@@ -65,14 +64,14 @@ impl Failure {
   }
 }
 
-/// One resolved value: Python's `print` text, or a value `json.dumps(indent=None)` writes.
+/// One resolved value: plain text, or a JSON value.
 enum Rendered {
   Scalar(String),
   Json(Value),
 }
 
 /// Parse the arguments and print the key's value. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2).
+/// (help exits 0, a usage error exits 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(ConfigCli::command());
   let argv = std::iter::once(OsString::from("charliebot config")).chain(args.iter().cloned());
@@ -84,8 +83,8 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let ConfigVerb::Get { key } = cli.verb;
 
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(error.to_string()))?;
-  // The key check takes the schema only, as Python's does: an unknown key is a usage error even when
-  // `config.yaml` itself would fail to load.
+  // The key check takes the schema only: an unknown key is a usage error even when `config.yaml`
+  // itself would fail to load.
   if !known_key(&key, &registry) {
     let failure = Failure::unknown_key(&key);
     eprintln!("{}", failure.message);
@@ -124,7 +123,7 @@ fn get(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<String,
   render(key, value(key, cfg, registry)?)
 }
 
-/// The stdout text for one resolved value, or the failure that exits. `None` is a value Python holds as `None`:
+/// The stdout text for one resolved value, or the failure that exits. `None` is a null value:
 /// no top-level field or registered section of `CharlieBotConfig` at `f2b57d3f8` can be null (every field is
 /// non-optional and every section defaults to a model), so the command's unset branch is the loader's safety net
 /// for a future nullable key; the test calls this function directly because no `config.yaml` reaches it.
@@ -156,7 +155,7 @@ fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Optio
       Rendered::Json((section.dump)(raw).map_err(Failure::value)?)
     }
   };
-  // `None` (unset) is what Python's command refuses to print, so a null section dump takes the same exit.
+  // `None` (unset) is what the command refuses to print, so a null section dump takes the same exit.
   Ok(match rendered {
     Rendered::Json(value) if value.is_null() => None,
     other => Some(other),
@@ -199,8 +198,8 @@ fn telegram_json(cfg: &CharlieBotConfig) -> Value {
   json!({ "chat_id": cfg.telegram.chat_id })
 }
 
-/// `backends`, with each option rendered as its pydantic model dumps it: the shared fields, then the type's own
-/// fields in declaration order, each present whether the entry set it or takes the model's default.
+/// `backends`, with each option rendered from its registered schema: the shared fields, then the type's own
+/// fields in declaration order, each present whether the entry set it or takes the field's default.
 fn backends_json(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Value, String> {
   let backends = &cfg.backends;
   let routing = match &backends.routing {
@@ -208,7 +207,7 @@ fn backends_json(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Value, S
     Some(routing) => json!({ "command": routing.command }),
   };
   let options = backends.options.iter().map(|option| option_json(option, registry)).collect::<Result<Vec<_>, _>>()?;
-  Ok(json!({ "pool": backends.pool, "routing": routing, "options": options }))
+  Ok(json!({ "pool": backends.pool, "routing": routing, "strong": backends.strong, "options": options }))
 }
 
 fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, String> {
@@ -239,7 +238,7 @@ fn option_field_json(raw: &serde_yaml::Value, kind: OptionFieldKind) -> Result<V
   }
   match kind {
     OptionFieldKind::AsIs => config::yaml_to_json(raw),
-    // A `float` field: pydantic dumps an integer entry as a float (`1` prints `1.0`).
+    // A `float` field: an integer entry prints as a float (`1` prints `1.0`).
     OptionFieldKind::Float => {
       let number = raw.as_f64().ok_or_else(|| format!("expected a number, got {}", config::yaml_value_kind(raw)))?;
       serde_json::Number::from_f64(number)
@@ -264,7 +263,7 @@ mod tests {
     home
   }
 
-  /// The recorded Python stdout, with the provenance header lines dropped.
+  /// The recorded stdout, with the provenance header lines dropped.
   fn recorded(text: &str) -> String {
     let body: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).collect();
     format!("{}\n", body.join("\n"))
@@ -284,7 +283,7 @@ mod tests {
     let expected_text = recorded(include_str!("../../tests/fixtures/config_get/backends_golden.txt"));
     let expected: Value = serde_json::from_str(expected_text.trim_end()).expect("the recorded Python line is JSON");
     assert_eq!(printed, expected);
-    for key in ["pool", "routing", "options"] {
+    for key in ["pool", "routing", "strong", "options"] {
       assert!(printed.get(key).is_some(), "backends output lacks {key}");
     }
   }

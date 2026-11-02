@@ -1,11 +1,16 @@
 //! `src/features/host_auth`: the host login panel. A standing poller probes every ssh alias in the operator's config,
-//! keeps the result in `<home>/host_auth.json`, and serves it at `/host-auth` and `/api/host-auth/*`.
+//! keeps the result in `<home>/host_auth.json`, and serves it at `/host-auth` and `/api/host-auth/*`, with the
+//! browser-login page at `/host-auth/logins`.
 
 mod api;
+mod browser_login;
+mod config;
 mod host_auth;
+mod login_page;
 mod page;
 mod poller;
 mod probe;
+mod readers;
 mod ssh_config;
 mod timestamps;
 
@@ -14,11 +19,14 @@ use std::sync::Arc;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register` (`src/features/host_auth/__init__.py`): the router, the `host_auth` service in phase Ready, then the
-/// home card.
+/// `register`: the config section, the router, the `host_auth` service in phase Ready, the host readers the cron gate
+/// and the Waiting on you read use, then the home card.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.config_section(config::section())?;
   registry.router(api::routes, api::matches)?;
   registry.service(Arc::new(poller::HostAuthPoller::default()))?;
+  registry.host_logins(readers::host_logins)?;
+  registry.host_probe(readers::probe_alias_now)?;
   registry.home_card(HomeCard {
     name: "Host login authorization",
     url: "/host-auth",

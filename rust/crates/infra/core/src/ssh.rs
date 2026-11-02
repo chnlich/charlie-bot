@@ -1,4 +1,4 @@
-//! The batch-mode ssh invocation that the remote probes and the CLI's remote launcher share (`src/infra/ssh.py`).
+//! The batch-mode ssh invocation that the remote probes and the CLI's remote launcher share.
 
 use std::fs::DirBuilder;
 use std::io;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::paths;
 
-/// `timeouts.SSH_CONNECT_TIMEOUT`: the ssh `ConnectTimeout`, in seconds.
+/// The ssh `ConnectTimeout`, in seconds.
 pub const CONNECT_TIMEOUT_SECONDS: u32 = 10;
 
 /// How long a ControlMaster stays up after its last use, in seconds.
@@ -18,7 +18,7 @@ pub fn control_dir() -> PathBuf {
   PathBuf::from(paths::expanduser("~")).join(".ssh").join("controlmasters")
 }
 
-/// Create `dir` with mode 0700 when it is absent. Its parents get the default mode, as `os.makedirs` gives them,
+/// Create `dir` with mode 0700 when it is absent. Its parents get the default mode,
 /// and an existing directory at `dir` is kept as it is.
 pub fn ensure_control_dir(dir: &Path) -> io::Result<()> {
   if let Some(parent) = dir.parent() {
@@ -58,6 +58,24 @@ pub fn ssh_cmd(host: &str, remote_argv: &[&str]) -> io::Result<Vec<String>> {
   Ok(argv(host, remote_argv, &dir))
 }
 
+/// The argv that runs `remote_argv` on `host` over a new connection, with the options of the remote launcher's
+/// preflight. It names no ControlMaster socket, so a reused connection cannot answer for a login that the preflight
+/// would have to make again.
+pub fn fresh_argv(host: &str, remote_argv: &[&str]) -> Vec<String> {
+  let mut argv = vec![
+    "ssh".to_string(),
+    "-T".to_string(),
+    "-o".to_string(),
+    "BatchMode=yes".to_string(),
+    "-o".to_string(),
+    format!("ConnectTimeout={CONNECT_TIMEOUT_SECONDS}"),
+    "-n".to_string(),
+    host.to_string(),
+  ];
+  argv.extend(remote_argv.iter().map(|arg| arg.to_string()));
+  argv
+}
+
 #[cfg(test)]
 mod tests {
   use std::os::unix::fs::PermissionsExt;
@@ -93,6 +111,14 @@ mod tests {
         .collect();
       assert_eq!(argv(host, &remote, &control_dir), expected, "argv for {host}");
     }
+  }
+
+  #[test]
+  fn fresh_argv_is_the_launch_preflight_without_a_control_socket() {
+    assert_eq!(
+      fresh_argv("host3", &["true"]),
+      ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", "host3", "true"]
+    );
   }
 
   #[test]

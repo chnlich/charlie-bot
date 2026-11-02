@@ -1,4 +1,4 @@
-//! The built-in content-type table against CPython's `mimetypes.guess_type` for every built-in suffix and
+//! The built-in content-type table against the recorded guesses for every built-in suffix and
 //! for the paths that combine them (`rust/fixtures/golden/mimetypes_golden.json`).
 
 use charliebot_compat::mimetypes::MimeTypes;

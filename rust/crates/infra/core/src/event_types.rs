@@ -8,6 +8,8 @@ pub const RESULT: &str = "result";
 pub const SYSTEM: &str = "system";
 pub const TOOL_USE: &str = "tool_use";
 pub const TOOL_RESULT: &str = "tool_result";
+/// The id that pairs a `tool_result` block with the `tool_use` block it answers.
+pub const TOOL_USE_ID: &str = "tool_use_id";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";
@@ -198,7 +200,7 @@ impl EventFields for serde_json::Value {
   }
 }
 
-/// Python's truth value of a JSON value: `None`, `False`, zero, and empty strings, arrays and objects are false.
+/// The truth value of a JSON value: `None`, `False`, zero, and empty strings, arrays and objects are false.
 pub fn is_truthy(value: &impl EventFields) -> bool {
   if value.is_null() {
     return false;
@@ -225,7 +227,7 @@ pub fn is_real_user_message(event: &impl EventFields) -> bool {
 }
 
 /// The thread platforms that can summon a session. Each platform listener writes its summon block under its
-/// `ThreadPlatform.name`; the Slack and Discord tests pin both names to this list.
+/// platform key; the Slack and Discord tests pin both keys to this list.
 pub const THREAD_PLATFORM_KEYS: &[&str] = &["slack", "discord"];
 
 /// Return whether an event is a thread platform summon: an `agent_message` whose `slack` or `discord` block has no

@@ -1,4 +1,4 @@
-//! The `discord:` config section (`src/features/discord/config.py`): the account map of the summon entrypoint.
+//! The `discord:` config section: the account map of the summon entrypoint.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
-/// Parse the section, naming the retired `allowed_user_ids` list as its successor does (`_reject_legacy_allow_list`).
+/// Parse the section, naming the retired `allowed_user_ids` list as its successor does.
 fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
   if raw.as_mapping().is_some_and(|mapping| mapping.contains_key("allowed_user_ids")) {
     return Err(

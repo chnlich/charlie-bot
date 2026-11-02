@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // The worker session's summary card (the For-you view's one row).
 //
-// The server computes the summary (src/runtime/worker_transcript.py) and sends
+// The server computes the summary (rust/crates/runtime/session-api/src/worker_transcript.rs) and sends
 // it two ways: as ``worker_summary`` in the bootstrap payload and as
 // ``summary`` on every transcript poll. This file paints that one object into
 // the card, side by side with the incremental messages — the card never

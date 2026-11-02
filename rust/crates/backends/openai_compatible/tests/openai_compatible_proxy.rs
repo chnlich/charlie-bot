@@ -1,11 +1,11 @@
-//! The Anthropic proxy route of the cc-openai-compatible backend, checked against the Python route.
+//! The Anthropic proxy route of the cc-openai-compatible backend, checked against its recorded output.
 //!
-//! The recorded Python route ran over one case matrix and printed what it did for each case.
+//! The recorded route ran over one case matrix and printed what it did for each case.
 //! This test serves each case's upstream from a loopback server. The server answers with the case's status and
 //! chunks, and records the request it was sent. The test posts the case's body to the Rust route and compares four
 //! results. It checks the status, the body with message ids masked, the request sent upstream, and whether a stream
 //! reached its message_stop frame. The route's own cases (the backend checks, the missing credential, the type
-//! factory, the raw separators) follow, as ports of the Python tests.
+//! factory, the raw separators) follow.
 
 use std::collections::HashMap;
 use std::fs;
@@ -43,7 +43,7 @@ const DONE_FRAME: &[u8] = b"data: [DONE]\n\n";
 const MESSAGE_STOP_FRAME: &[u8] = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/openai_compatible_golden.json");
 
-/// One case of the matrix, as the Python reference printed it.
+/// One case of the matrix, as the recorded reference printed it.
 struct Case {
   name: String,
   index: usize,
@@ -89,7 +89,7 @@ fn hex(text: &str) -> Vec<u8> {
   (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
 }
 
-/// The matrix the Python route answered, one record per case.
+/// The matrix the recorded route answered, one record per case.
 fn golden_reference() -> Vec<Case> {
   let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
@@ -238,7 +238,7 @@ fn write_matrix_home(home: &Path, cases: &[Case], upstream_port: u16) {
 }
 
 /// The comparison's form of a body: the credentials file's path is `<credentials>` and each message id is `msg_MASKED`,
-/// as the Python side writes them.
+/// as the recorded side writes them.
 fn normalize(body: &[u8], credentials_path: &str) -> Vec<u8> {
   let credentials = Regex::new(&regex::escape(credentials_path)).unwrap();
   let message_id = Regex::new("msg_[0-9a-f]{32}").unwrap();

@@ -1,8 +1,8 @@
 //! WebSocket upgrades: `/ws/sessions/{session_id}`, `/ws/terminal` and `/ws/voice/{session_id}`.
 //!
-//! uvicorn hands a request whose `Connection` tokens include `upgrade` and whose `Upgrade` is
-//! `websocket` to its WebSocket protocol, outside the HTTP middleware: no auth gate, no request log, no
-//! gzip. An unknown path, or a route whose `token` query parameter fails `check_ws_auth`, closes before
+//! A request whose `Connection` tokens include `upgrade` and whose `Upgrade` is
+//! `websocket` goes to the WebSocket protocol, outside the HTTP middleware: no auth gate, no request log, no
+//! gzip. An unknown path, or a route whose `token` query parameter fails the WebSocket check, closes before
 //! accepting, which the protocol answers as a bare 403. Each package registers its path, so the
 //! registry's `websocket_match` is the one owner of the set: a path no package registers closes here.
 
@@ -19,7 +19,7 @@ use crate::auth;
 use crate::request_path;
 use crate::state::AppState;
 
-/// uvicorn's `_get_upgrade`: the last `Upgrade` value, lowercased, when the last `Connection` header's
+/// The upgrade test: the last `Upgrade` value, lowercased, when the last `Connection` header's
 /// comma-separated tokens include `upgrade`.
 pub fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
   let last_text = |name: header::HeaderName| {

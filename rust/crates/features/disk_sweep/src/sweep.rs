@@ -537,7 +537,7 @@ fn tree_latest_mtime(path: &Path) -> Result<f64> {
 
 fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
   let mut repositories = Vec::new();
-  // `_nested_repositories` reports the candidate itself when it holds `.git`, and never walks into one.
+  // The scan reports the candidate itself when it holds `.git`, and never walks into one.
   let walk = WalkDir::new(path)
     .sort_by_file_name()
     .into_iter()
@@ -557,7 +557,7 @@ fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
   Ok(repositories)
 }
 
-/// `os.walk(path, followlinks=False, onerror=_raise_walk_error)` over the scratch trees: every entry below `path`
+/// A walk over the scratch trees: every entry below `path`
 /// (never the root, which the caller lstats itself), symlinked directories listed but not descended, in sorted
 /// order, with inspection errors raised.
 fn scratch_walk(path: &Path) -> Result<impl Iterator<Item = Result<DirEntry>>> {
@@ -566,12 +566,12 @@ fn scratch_walk(path: &Path) -> Result<impl Iterator<Item = Result<DirEntry>>> {
 }
 
 /// The filesystem error behind a walk error: the walk does not follow links, so only the filesystem fails it. The
-/// callers classify it by its `io::Error` kind, as the Python walk's `OSError` is.
+/// callers classify it by its `io::Error` kind.
 fn walk_error(error: walkdir::Error) -> io::Error {
   error.into_io_error().expect("a walk that does not follow links only fails on the filesystem")
 }
 
-/// `onerror=_raise_walk_error`: an entry that cannot be listed stops the walk with its filesystem error.
+/// An entry that cannot be listed stops the walk with its filesystem error.
 fn walk_io_error(error: walkdir::Error) -> anyhow::Error {
   let path = error.path().map(|path| format!("reading directory {}", path.display()));
   let error = walk_error(error);

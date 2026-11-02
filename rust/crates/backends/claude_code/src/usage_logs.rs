@@ -1,4 +1,4 @@
-//! Claude Code's usage log, read for the "Claude Code" usage source (`src/backends/claude_code/usage_logs.py`).
+//! Claude Code's usage log, read for the "Claude Code" usage source.
 //!
 //! Each Claude login directory keeps its transcripts at `<config_dir>/projects/**/*.jsonl`, and every assistant line
 //! carries `message.usage` and `message.model`. The login directories are the default `~/.claude` plus each
@@ -102,8 +102,8 @@ fn account_label(dir: &Path) -> String {
   name.strip_prefix(".claude-").unwrap_or(&name).to_string()
 }
 
-/// `_login_dirs()`: the login directories that hold transcripts, by account label. Two directories with one label keep
-/// the later one, as a dict does, in the position of the first.
+/// The login directories that hold transcripts, by account label. Two directories with one label keep the later one,
+/// in the position of the first.
 fn labeled_login_dirs(dirs: &[PathBuf]) -> Vec<(String, PathBuf)> {
   let mut labeled: Vec<(String, PathBuf)> = Vec::new();
   for dir in dirs.iter().filter(|dir| dir.join("projects").is_dir()) {
@@ -193,7 +193,7 @@ pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Ve
 
 /// The JSON object a marker line holds. A line that does not parse is skipped with a debug event.
 fn parse_marker_line(raw: &[u8], path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
-  // Invalid UTF-8 decodes with replacement, as the Python reader's fallback parse does.
+  // Invalid UTF-8 decodes with replacement characters.
   let text = String::from_utf8_lossy(raw);
   match serde_json::from_str::<Value>(&text) {
     Ok(Value::Object(line)) => Ok(Some(line)),
@@ -210,8 +210,8 @@ fn parse_marker_line(raw: &[u8], path: &Path) -> anyhow::Result<Option<Map<Strin
   }
 }
 
-/// The response's key: the message id, else the line's `requestId`, else its `uuid`. When all are falsy, Python's `or`
-/// chain yields the `uuid` itself.
+/// The response's key: the first truthy one of the message id, the line's `requestId` and its `uuid`. When none is
+/// truthy, the key is the line's `uuid` as text, or `None` when the line has no `uuid`.
 fn usage_key(message: &Map<String, Value>, line: &Map<String, Value>) -> String {
   let candidates: [Option<&Value>; 3] = [message.get("id"), line.get("requestId"), line.get("uuid")];
   match candidates.into_iter().flatten().find(|value| is_truthy(value)) {
@@ -228,7 +228,7 @@ fn timestamp_of(line: &Map<String, Value>) -> String {
   }
 }
 
-/// `usage.get(key, 0) or 0`: a missing, null or zero count is 0.
+/// A count field: a missing or falsy value is 0, and a truthy one must be an integer.
 fn usage_count(usage: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match usage.get(key) {
     Some(value) if is_truthy(value) => {

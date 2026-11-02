@@ -1,4 +1,1 @@
-src/features/router/routing.py
-src/features/router/cli.py
 configs/router.example.yaml
-tests/test_cli_router.py

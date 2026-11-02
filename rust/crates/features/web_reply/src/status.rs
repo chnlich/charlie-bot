@@ -1,4 +1,4 @@
-//! A web session's status (`src/features/web_reply/status.py`): the Goal, Now, Waiting on you and Remaining items
+//! A web session's status: the Goal, Now, Waiting on you and Remaining items
 //! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
 //! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded; the
 //! read tiers the item against the approval policy table, and with the table's refusal switch on a set refuses an
@@ -12,9 +12,9 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
-use charliebot_compat::json_loads::{self, LoadError};
 use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
+use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
@@ -30,16 +30,16 @@ use crate::plan_links::{self, PlanLinks};
 use crate::reply;
 pub use crate::reply::WebReplyError;
 
-/// The owner the web reply package registers its metadata under (`status.OWNER`).
+/// The owner the web reply package registers its metadata under.
 pub const OWNER: &str = WEB_REPLY;
 
 /// The metadata field that holds the status, under the owner.
 const STATUS_FIELD: &str = WEB_STATUS;
 
-/// The status items in the order a set lists them and the status line names them (`status.ITEMS`).
+/// The status items in the order a set lists them and the status line names them.
 const ITEMS: [&str; 4] = ["goal", "now", "waiting", "remaining"];
 
-/// The label of each item in the event's content (`status.LABELS`).
+/// The label of each item in the event's content.
 fn label(item: &str) -> &'static str {
   match item {
     "goal" => "Goal",
@@ -52,7 +52,7 @@ fn label(item: &str) -> &'static str {
 /// The non-persisted frame an ancestor's page receives when a descendant sets its status (`SUBTREE_NOTICE_TYPE`).
 const SUBTREE_NOTICE_TYPE: &str = "web_status_subtree";
 
-/// The pydantic messages a status file can break, as `StatusPatch` and `WaitingItem` raise them.
+/// The validation messages a status file can break, as the `StatusPatch` and `WaitingItem` readers raise them.
 const MUST_NOT_BE_BLANK: &str = "Value error, must not be blank";
 const NOT_A_STRING: &str = "Input should be a valid string";
 const NOT_A_LIST: &str = "Input should be a valid list";
@@ -63,15 +63,15 @@ const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
 const NOW_BUDGET_CHARS: usize = 200;
 const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
 const ITEM_SHA256: &str = "item_sha256";
-/// The item fields that only the server writes; a set file carries neither (`status._refuse_server_fields`).
+/// The item fields that only the server writes; a set file carries neither.
 const SERVER_WRITTEN_ITEM_FIELDS: [&str; 4] = ["since", "since_exact", "tier", "rule"];
-/// The pydantic message a since field that is not a datetime raises.
+/// The message a since field that is not a datetime raises.
 const NOT_A_DATETIME: &str = "Input should be a valid datetime";
-/// The pydantic message a since_exact field that is not a boolean raises.
+/// The message a since_exact field that is not a boolean raises.
 const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 
-/// The session status: Goal, Now, Waiting on you and Remaining, and the time the last set stored them
-/// (`metadata.WebStatus`). A status without Remaining serializes without either Remaining key.
+/// The session status: Goal, Now, Waiting on you and Remaining, and the time the last set stored them.
+/// A status without Remaining serializes without either Remaining key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebStatus {
   goal: Option<String>,
@@ -115,13 +115,13 @@ impl StatusPatch {
   }
 }
 
-/// One validation failure: the location pydantic reports (`waiting.0.text`) and its message.
+/// One validation failure: the location the reader reports (`waiting.0.text`) and its message.
 struct Problem {
   loc: String,
   msg: &'static str,
 }
 
-/// The status a session stores, or `None` before its first set (`status._stored`).
+/// The status a session stores, or `None` before its first set.
 fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyError> {
   match meta.extra.get(STATUS_FIELD) {
     None | Some(Value::Null) => Ok(None),
@@ -131,12 +131,12 @@ fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyEr
   }
 }
 
-/// CPython's `JSONDecodeError.msg`: the message without the `: line L column C (char P)` that the error text adds.
+/// The JSON error's message without the `: line L column C (char P)` suffix the error text adds.
 fn json_message(error_text: &str) -> &str {
   error_text.rsplit_once(": line ").map_or(error_text, |(msg, _)| msg)
 }
 
-/// The patch that the JSON `text` holds (`status.parse_patch`). A refusal is a 422 whose detail an agent reads.
+/// The patch that the JSON `text` holds. A refusal is a 422 whose detail an agent reads.
 pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   let raw = match json_loads::loads_text(text) {
     Ok(raw) => raw,
@@ -157,7 +157,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   };
   refuse_server_fields(&fields)?;
   let mut problems = Vec::new();
-  // pydantic validates the fields in declaration order, each with its nested errors, then the object's extra keys.
+  // The fields validate in declaration order, each with its nested errors, then the object's extra keys.
   let goal = fields.get("goal").map(|value| nullable_text(value, "goal", &mut problems));
   let now = fields.get("now").map(|value| nullable_text(value, "now", &mut problems));
   let waiting = fields.get("waiting").map(|value| waiting_items(value, &mut problems));
@@ -182,7 +182,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   Ok(patch)
 }
 
-/// Refuse a set file that names a field only the server writes (`status._refuse_server_fields`): the status's
+/// Refuse a set file that names a field only the server writes: the status's
 /// `remaining_updated_at`, or a waiting item's `since` and `since_exact`. Only a list `waiting` is examined, and only
 /// its object items.
 fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError> {
@@ -209,7 +209,7 @@ fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError
   Ok(())
 }
 
-/// The status's waiting items with `since` and `since_exact` filled in (`status.effective_waiting`).
+/// The status's waiting items with `since` and `since_exact` filled in.
 ///
 /// An item stored before the fields existed has no start time of its own; the status's `updated_at` is the lower
 /// bound, so the item reads with `since_exact` false.
@@ -228,8 +228,7 @@ fn effective_waiting(status: &WebStatus) -> Vec<WaitingItem> {
     .collect()
 }
 
-/// The status as the API and the CLI return it, with each waiting item's start time filled in
-/// (`status.status_payload`).
+/// The status as the API and the CLI return it, with each waiting item's start time filled in.
 fn status_payload(status: &WebStatus) -> Value {
   let mut payload = payload_of(status);
   payload["waiting"] = serde_json::to_value(effective_waiting(status)).expect("waiting items serialize to JSON");
@@ -237,7 +236,7 @@ fn status_payload(status: &WebStatus) -> Value {
 }
 
 /// Refuse `items` when any of their links names an older version of a registered plan or a closed plan, before the
-/// cold read runs; return the lookup the since pairing then uses (`status._require_current_plan_links`).
+/// cold read runs; return the lookup the since pairing then uses.
 fn require_current_plan_links(
   features: &FeatureContext,
   items: &[WaitingItem],
@@ -252,7 +251,7 @@ fn require_current_plan_links(
   Ok(links)
 }
 
-/// The new items with each one's start time kept from the stored item it continues (`status._assign_since`).
+/// The new items with each one's start time kept from the stored item it continues.
 ///
 /// An item whose text equals a stored item's text keeps that item's time. The remaining items pair in order within
 /// groups of one link target: a registered plan lineage, another link, or no link at all.
@@ -301,8 +300,8 @@ fn assign_since(
   Ok(result)
 }
 
-/// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches
-/// (`status._assign_tiers`). An item whose check predates the tier keeps neither field.
+/// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches.
+/// An item whose check predates the tier keeps neither field.
 fn assign_tiers(
   items: Vec<WaitingItem>,
   ask_tiers: &HashMap<String, (String, Option<String>)>,
@@ -319,7 +318,7 @@ fn assign_tiers(
     .collect()
 }
 
-/// One `WaitingItem` parsed with the `item` model's refusal (`status.parse_item`).
+/// One `WaitingItem` parsed with the `item` model's refusal.
 pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
   let mut problems = Vec::new();
   let item = waiting_item(raw, "", &mut problems);
@@ -333,7 +332,7 @@ pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
   Ok(item.expect("a valid waiting item has text"))
 }
 
-/// `json.dumps({...}, sort_keys=True, ensure_ascii=False)`: the item payload that the digest covers.
+/// The item payload the digest covers: JSON with the keys sorted and non-ASCII text literal.
 const ITEM_DIGEST_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
@@ -351,8 +350,7 @@ fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
   Ok(charliebot_store::control_events::sha256_bytes_hex(&bytes))
 }
 
-/// The tier and rule each `web_ask_check` event gave its item digest, the latest event per digest winning
-/// (`status._read_ask_tiers`). A check recorded before the tier existed contributes no entry.
+/// The tier and rule each `web_ask_check` event gave its item digest, the latest event per digest winning. A check recorded before the tier existed contributes no entry.
 async fn read_ask_tiers(
   features: &FeatureContext,
   session_id: &str,
@@ -372,8 +370,7 @@ async fn read_ask_tiers(
   Ok(tiers)
 }
 
-/// The table as the server reads it, with a changed read recording its `policy_table_changed` record
-/// (`status._load_approval_policy`).
+/// The table as the server reads it, with a changed read recording its `policy_table_changed` record.
 fn load_approval_policy(
   features: &FeatureContext,
 ) -> Result<charliebot_core::approval_policy::LoadedTable, WebReplyError> {
@@ -405,7 +402,7 @@ fn unread_items(items: &[WaitingItem], read_digests: &HashSet<String>) -> Result
     .collect()
 }
 
-/// Record one cold read of `raw_item` and return its digest (`status.record_ask_check`). The answer's last line
+/// Record one cold read of `raw_item` and return its digest. The answer's last line
 /// tiers the item against the approval policy table; an answer without a parsable tier line records nothing.
 pub async fn record_ask_check(
   features: &FeatureContext,
@@ -481,7 +478,7 @@ fn nullable_text(value: &Value, loc: &str, problems: &mut Vec<Problem>) -> Optio
   }
 }
 
-/// `list[WaitingItem]` for a present `waiting` value: each item validated, invalid items reported with their index.
+/// The `waiting` list: each item validated, invalid items reported with their index.
 fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem> {
   let Value::Array(items) = value else {
     problems.push(Problem { loc: "waiting".to_string(), msg: NOT_A_LIST });
@@ -494,7 +491,7 @@ fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem>
     .collect()
 }
 
-/// `list[RemainingItem]` for a present `remaining` value: each item validated, invalid items reported with their
+/// The `remaining` list: each item validated, invalid items reported with their
 /// index.
 fn remaining_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<RemainingItem> {
   let Value::Array(items) = value else {
@@ -614,7 +611,7 @@ fn optional_item_string(
   }
 }
 
-/// A nested Pydantic location, including the root model's empty location.
+/// A nested validation location, including the root's empty location.
 fn nested_loc(prefix: &str, field: &str) -> String {
   if prefix.is_empty() { field.to_string() } else { format!("{prefix}.{field}") }
 }
@@ -630,11 +627,10 @@ fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
   texts
 }
 
-/// `status.set_status`: store the items the JSON `text` names, record one `web_status` event and notify the
-/// ancestors. Waiting items need a non-blank context and a matching cold-read digest, whose tier and rule the stored
-/// item carries; with the approval policy table's refusal switch on, an item tiered t1 or t2 refuses the set. A
-/// stale plan link refuses the set before the cold read. The return adds the Now length; a refusal stores and
-/// records nothing.
+/// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
+/// a non-blank context and a matching cold-read digest, whose tier and rule the stored item carries; with the
+/// approval policy table's refusal switch on, an item tiered t1 or t2 refuses the set. A stale plan link refuses the
+/// set before the cold read. The return adds the Now length; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_web_session(features, session_id).await?;
@@ -737,7 +733,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   Ok(Value::Object(result))
 }
 
-/// `status.confirm_status`: confirm that the stored status needs no change and return it.
+/// Confirm that the stored status needs no change and return it.
 ///
 /// A stale plan link in a stored item refuses the confirmation with 409 and names the newest file. A confirmation
 /// records one web_status_confirmed event and cold reads nothing.
@@ -761,7 +757,26 @@ pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Resu
   Ok(status_payload(&status))
 }
 
-/// The sessions among `session_ids` with a status, an open task and no archived marker.
+/// The session's metadata when the session is open: not archived, not in `archived`, and with an open task. A session
+/// deleted since the task-tree index was read is absent.
+async fn open_meta(
+  store: &Arc<Store>,
+  session_id: &str,
+  archived: &HashSet<String>,
+) -> Result<Option<SessionMetadata>, WebReplyError> {
+  let Some(meta) = store.get_session(session_id).await? else {
+    return Ok(None);
+  };
+  if meta.status == SessionStatus::Archived || archived.contains(session_id) {
+    return Ok(None);
+  }
+  if task_state(store, session_id).await? != "open" {
+    return Ok(None);
+  }
+  Ok(Some(meta))
+}
+
+/// The sessions among `session_ids` that are open and hold a status.
 async fn open_statuses(
   store: &Arc<Store>,
   session_ids: Vec<String>,
@@ -769,29 +784,71 @@ async fn open_statuses(
 ) -> Result<Vec<(String, SessionMetadata, WebStatus)>, WebReplyError> {
   let mut statuses = Vec::new();
   for session_id in session_ids {
-    let Some(meta) = store.get_session(&session_id).await? else {
-      continue; // deleted between the task-tree index read and this metadata read
+    let Some(meta) = open_meta(store, &session_id, archived).await? else {
+      continue;
     };
     let Some(status) = stored_status(&meta)? else {
       continue;
     };
-    if meta.status == SessionStatus::Archived || archived.contains(&session_id) {
-      continue;
-    }
-    if task_state(store, &session_id).await? != "open" {
-      continue;
-    }
     statuses.push((session_id, meta, status));
   }
   Ok(statuses)
 }
 
-/// `status.read_status`: the session's status, waiting items of open descendants and Now items of open children, newest
-/// first. A descendant needs waiting items; a child needs a Now value.
+/// The derived Waiting on you items that the registry's reader gives: those held by a session in `holders`, or all of
+/// them when `holders` is `None`. The status read and the approval view both list them through this function, and no
+/// stored status holds them.
+async fn derived_items(
+  features: &FeatureContext,
+  holders: Option<&HashSet<String>>,
+) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
+  let read = features.registry.derived_waiting_items_reader().map_err(WebReplyError::Failed)?;
+  let rows = read(features).await.map_err(WebReplyError::Failed)?;
+  Ok(
+    rows
+      .into_iter()
+      .filter(|row| holders.is_none_or(|holders| holders.contains(&row.session_id)))
+      .map(|row| OpenWaitingItem {
+        session_id: row.session_id,
+        session_name: row.session_name,
+        text: row.text,
+        context: row.context,
+        link: row.link,
+        tier: row.tier,
+        rule: row.rule,
+        since: row.since,
+      })
+      .collect(),
+  )
+}
+
+/// A derived item as the status read returns it: its holder, its text and the fields a stored item carries.
+fn derived_payload(item: &OpenWaitingItem) -> Value {
+  json!({
+    "session_id": item.session_id,
+    "text": item.text,
+    "context": item.context,
+    "link": item.link,
+    "tier": item.tier,
+    "rule": item.rule,
+    "since": item.since.to_str(),
+  })
+}
+
+/// The session's status, waiting items of open descendants and Now items of open children, newest
+/// first. A descendant needs waiting items; a child needs a Now value. The derived items the session holds ride
+/// beside the stored ones, under `derived_waiting`.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
   let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
+  let mut holders = HashSet::from([session_id.to_string()]);
+  for descendant_id in descendant_ids(&features.store, session_id).await? {
+    if open_meta(&features.store, &descendant_id, &archived).await?.is_some() {
+      holders.insert(descendant_id);
+    }
+  }
+  let derived = derived_items(features, Some(&holders)).await?;
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
   for (descendant_id, child, child_status) in
     open_statuses(&features.store, descendant_ids(&features.store, session_id).await?, &archived).await?
@@ -831,17 +888,18 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   Ok(json!({
     "session_id": session_id,
     (WEB_STATUS): stored.as_ref().map(status_payload),
+    "derived_waiting": derived.iter().map(derived_payload).collect::<Vec<_>>(),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
     "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
   }))
 }
 
-/// The status as `model_dump(mode="json")` renders it.
+/// The status as its JSON serialization renders it.
 fn payload_of(status: &WebStatus) -> Value {
   serde_json::to_value(status).expect("a web status serializes to JSON")
 }
 
-/// One open session's Waiting on you item with the session that holds it (`status.OpenWaitingItem`). The start time
+/// One open session's Waiting on you item with the session that holds it. The start time
 /// is resolved, as the status read resolves it.
 #[derive(Clone, Debug, Serialize)]
 pub struct OpenWaitingItem {
@@ -855,8 +913,8 @@ pub struct OpenWaitingItem {
   pub since: UtcDateTime,
 }
 
-/// Every open session's Waiting on you items, in metadata-listing order (`status.open_waiting_items`). The approval
-/// day view reads the whole home through this, where the status read reads one task tree.
+/// Every open session's Waiting on you items, the stored ones in metadata-listing order and then the derived ones. The
+/// approval day view reads the whole home through this, where the status read reads one task tree.
 pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
   let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
   let metas = tree_read(&features.store, |store| store.load_session_metas(None)).await?;
@@ -885,10 +943,11 @@ pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWai
       });
     }
   }
+  rows.extend(derived_items(features, None).await?);
   Ok(rows)
 }
 
-/// The registry's reader for every open session's Waiting on you items (`registry.OpenWaitingItemsFn`), which the
+/// The registry's reader for every open session's Waiting on you items (`charliebot_registry::OpenWaitingItemsFn`), which the
 /// approval view looks up on the registry instead of importing this feature.
 pub fn open_waiting_rows<'a>(
   features: &'a FeatureContext,
@@ -916,7 +975,7 @@ pub fn open_waiting_rows<'a>(
   })
 }
 
-/// The task-tree reads run off the runtime's worker threads, as the Python tree reads run in `asyncio.to_thread`.
+/// The task-tree reads run off the runtime's worker threads, never on the async worker.
 async fn tree_read<T, F>(store: &Arc<Store>, read: F) -> Result<T, WebReplyError>
 where
   T: Send + 'static,
@@ -957,7 +1016,8 @@ mod tests {
   use serde_json::json;
 
   use super::*;
-  use crate::test_support::{self, Home};
+  use crate::test_support::{self, Home, set_derived_waiting};
+  use charliebot_registry::registry::OpenWaitingRow;
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
 
@@ -1038,7 +1098,7 @@ mod tests {
     format!("https://synthetic.invalid{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
   }
 
-  /// The bare file-server path an agent writes as an item link (`_host_file_link`).
+  /// The bare file-server path an agent writes as an item link.
   fn host_link(path: &std::path::Path) -> String {
     format!("{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
   }
@@ -1962,7 +2022,7 @@ mod tests {
   // Stale plan links: an old version or a closed lineage is refused in set and confirm
   // -------------------------------------------------------------------------
 
-  /// The waiting items without the start-time fields that the server writes (`_without_item_times`).
+  /// The waiting items without the start-time fields that the server writes.
   fn without_item_times(items: &Value) -> Value {
     Value::Array(
       items
@@ -1984,7 +2044,7 @@ mod tests {
     home.root().join("sessions")
   }
 
-  /// A session artifact page whose bytes are the file name (`_session_artifact`).
+  /// A session artifact page whose bytes are the file name.
   fn session_artifact(home: &Home, session_id: &str, name: &str) -> PathBuf {
     let path = sessions_dir(home).join(session_id).join("artifacts").join(name);
     fs::create_dir_all(path.parent().expect("the artifact directory")).expect("the artifact directory writes");
@@ -1992,7 +2052,7 @@ mod tests {
     path
   }
 
-  /// One plan-registry version row (`_plan_version`).
+  /// One plan-registry version row.
   fn plan_version(v: i64, relative: &str) -> Value {
     json!({
       "v": v,
@@ -2004,12 +2064,12 @@ mod tests {
     })
   }
 
-  /// One plan-registry plan row (`_plan`).
+  /// One plan-registry plan row.
   fn plan(plan_id: i64, versions: Value, closed: Value) -> Value {
     json!({"id": plan_id, "title": format!("Plan {plan_id}"), "versions": versions, "takeoff": null, "closed": closed})
   }
 
-  /// Writes `plans` as the session's plan registry (`_write_plans`).
+  /// Writes `plans` as the session's plan registry.
   fn write_plans(home: &Home, session_id: &str, plans: Value) {
     let path = sessions_dir(home).join(session_id).join("plans.json");
     fs::create_dir_all(path.parent().expect("the session directory")).expect("the session directory writes");
@@ -2029,7 +2089,7 @@ mod tests {
       .expect("the stored status writes");
   }
 
-  /// A status file whose one waiting item names `text`, `context` and `link` (`_waiting_with_link`).
+  /// A status file whose one waiting item names `text`, `context` and `link`.
   fn waiting_with_link(text: &str, link: Value) -> String {
     json!({"waiting": [{
       "text": text,
@@ -2222,8 +2282,8 @@ mod tests {
     })
   }
 
-  /// Records a cold read of `item`, then stores the one-item status file that names it
-  /// (`_set_after_reads`). Answers the stored status.
+  /// Records a cold read of `item`, then stores the one-item status file that names it.
+  /// Answers the stored status.
   async fn set_after_reads(home: &Home, session_id: &str, item: Value) -> Value {
     record_ask_check(
       &home.features,
@@ -2364,5 +2424,60 @@ mod tests {
     read_status(&home.features, &root).await.expect("the status reads again");
     assert_eq!(home.features.store.task_tree_index_build_count(), index_after_first);
     assert_eq!(home.features.store.history_work().full_folds, state_after_first);
+  }
+
+  /// The derived item one holder carries, as the host gate's reader gives it.
+  fn derived_row(session_id: &str) -> OpenWaitingRow {
+    OpenWaitingRow {
+      session_id: session_id.to_string(),
+      session_name: "Synthetic holder".to_string(),
+      text: "Approve the ssh login to synthetic-login-host on /host-auth".to_string(),
+      context: Some("Synthetic login check".to_string()),
+      link: Some("/host-auth".to_string()),
+      tier: Some("user-act".to_string()),
+      rule: None,
+      since: UtcDateTime::parse("2026-11-01T21:43:00-07:00").expect("the fixture time parses"),
+    }
+  }
+
+  #[tokio::test]
+  async fn a_derived_item_rides_the_status_of_its_open_holders_and_no_set_stores_it() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let child = home.child(&root, "child").await;
+    let unrelated = home.manager("unrelated", None).await;
+    set_derived_waiting(&home.root(), vec![derived_row(&root), derived_row(&child), derived_row(&unrelated)]);
+
+    let read = read_status(&home.features, &root).await.expect("the status reads");
+    let held = |read: &Value| -> Vec<String> {
+      read["derived_waiting"]
+        .as_array()
+        .expect("the status lists its derived items")
+        .iter()
+        .map(|item| item["session_id"].as_str().expect("an item names its holder").to_string())
+        .collect()
+    };
+    assert_eq!(
+      held(&read),
+      [root.clone(), child.clone()],
+      "the holder and its open descendants, not the other session"
+    );
+    assert_eq!(
+      held(&read_status(&home.features, &child).await.expect("the child reads")),
+      std::slice::from_ref(&child)
+    );
+
+    // A set stores its own items and leaves the derived ones where the reader gives them.
+    set_status(&home.features, &root, VALID_SET).await.expect("the set stores");
+    assert_eq!(stored(&home, &root).await["waiting"], json!([]));
+    let after = read_status(&home.features, &root).await.expect("the status reads after the set");
+    assert_eq!(held(&after), [root.clone(), child.clone()]);
+    assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
+
+    // The approval view lists every open holder's derived item with the stored ones.
+    let rows = open_waiting_items(&home.features).await.expect("the approval rows read");
+    let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
+    assert_eq!(listed, [root.as_str(), child.as_str(), unrelated.as_str()]);
+    assert!(rows.iter().all(|row| row.tier.as_deref() == Some("user-act") && row.rule.is_none()));
   }
 }

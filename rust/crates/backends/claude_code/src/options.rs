@@ -12,7 +12,7 @@ pub const EFFORT_KEY: &str = "effort";
 pub const CLI_BINARY_KEY: &str = "cli_binary";
 
 /// The `cc-claude` option's type-specific fields in `CcClaudeBackend`'s declaration order, each with the value the
-/// Python model holds when an entry omits it. `charliebot config get backends` renders them.
+/// option model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(EFFORT_KEY, OptionFieldDefault::Null),
   OptionField::field("fast_mode", OptionFieldDefault::Bool(false)),

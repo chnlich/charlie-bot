@@ -22,7 +22,7 @@ use charliebot_agents::event_builders::{
 pub const FILE_WRITE: &str = "file_write";
 
 /// Codex item types that translate to one fixed tool event: (item type, (tool name, payload field carrying the input,
-/// whether the completed output is `str()`-wrapped)). The output is `aggregated_output` first (codex-cli 0.157.0
+/// whether the completed output is turned into text)). The output is `aggregated_output` first (codex-cli 0.157.0
 /// writes a command's output there), and `output` when that key is absent or null.
 const TOOL_ITEM_SPECS: &[(&str, (&str, &str, bool))] =
   &[("command_execution", ("Bash", "command", false)), ("web_search", ("WebSearch", "query", true))];
@@ -35,8 +35,8 @@ pub struct CodexTranslator {
   last_todo_text: HashMap<ItemKey, String>,
 }
 
-/// Hashable Python dictionary keys accepted from a JSON item's `id` field. JSON arrays and objects are unhashable in
-/// Python and fail at the corresponding cache access.
+/// The keys an item's `id` field can take: null, a boolean (which shares the key of 0 or 1), a number, or a string.
+/// An array or an object fails the item's cache access.
 #[derive(Eq, Hash, PartialEq)]
 enum ItemKey {
   Null,
@@ -233,7 +233,7 @@ fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
   map.get(key).and_then(Value::as_str)
 }
 
-/// The item's Python dictionary key in the delta caches. An item without an id shares the empty-string key.
+/// The item's key in the delta caches. An item without an id shares the empty-string key.
 fn item_key(item: &Map<String, Value>) -> anyhow::Result<ItemKey> {
   match item.get("id") {
     None => Ok(ItemKey::String(String::new())),
@@ -396,7 +396,7 @@ fn failure_message(event_type: &str, event: &Map<String, Value>) -> String {
   format!("Codex {event_type} with no message. Full event: {}", full_event(event))
 }
 
-/// `json.dumps(event, default=str)`: the event text the logs and messages carry.
+/// The event as JSON text, with spaces after separators and non-ASCII escaped: the text the logs and messages carry.
 fn full_event(event: &Map<String, Value>) -> String {
   json_dumps(&Value::Object(event.clone()), &DEFAULT_JSON)
 }

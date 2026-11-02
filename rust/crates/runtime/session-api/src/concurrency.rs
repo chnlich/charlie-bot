@@ -524,7 +524,7 @@ struct Bucket {
 
 /// Sweep the spans once and record each bucket's maximum and the instant it first held.
 ///
-/// Events at one instant apply ends before starts, as Python's `concurrency.py` orders them. A session counts once
+/// Events at one instant apply ends before starts. A session counts once
 /// however many of its runs are open, so the sweep counts sessions with any open run and sessions with an open
 /// manager turn, and a point's workers are the difference.
 fn bucket_peaks(spans: &[Span], from: OffsetDateTime, to: OffsetDateTime, bucket_seconds: i64) -> Vec<Bucket> {

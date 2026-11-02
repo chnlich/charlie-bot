@@ -1,6 +1,6 @@
 //! The leak gate the improve round and the repository's git hooks run:
 //! `tools/improve/github-post.sh`, `tools/check-skills-host-leak.sh`, `tools/leak-patterns.sh` and
-//! `tools/git-hooks/`. Ports `tests/test_github_post.py` and `tests/test_host_leak_hooks.py`.
+//! `tools/git-hooks/`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -111,7 +111,7 @@ fn body_file(sandbox: &Sandbox, name: &str, text: &str) -> PathBuf {
   path
 }
 
-// -- github-post.sh (tests/test_github_post.py) --
+// -- github-post.sh --
 
 fn post(sandbox: &Sandbox) -> (Env, PathBuf, PathBuf) {
   let home = pattern_home(sandbox);
@@ -366,7 +366,7 @@ fn the_stdin_mode_exit_codes() {
   assert_eq!(clean.code, 0, "{}", clean.describe());
 }
 
-// -- the git hooks and the host scan (tests/test_host_leak_hooks.py) --
+// -- the git hooks and the host scan --
 
 /// Copies the leak tools and the two hooks into `checkout`, at the paths a real checkout uses.
 fn copy_leak_tools(checkout: &Path) {

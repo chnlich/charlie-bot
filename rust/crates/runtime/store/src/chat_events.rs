@@ -1,7 +1,7 @@
-//! The chat-events file rules. The live log `data/chat_events.jsonl` and its archives are one file kind: this module
-//! owns their names, the line rules that split them, the one decoder for a line, the append of one event, and the
-//! readers that the other crates call. `find_in_log` is the first-match reader that backends use to find one value in a
-//! session's live log.
+//! The chat-events file rules. The live log `data/chat_events.jsonl` and its archives are one file kind.
+//! This module owns their names and the line rules that split them. It also owns the one decoder for a line, the
+//! append of one event, and the readers that the other crates call. `find_in_log` is the first-match reader that
+//! backends use to find one value in a session's live log.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -18,8 +18,7 @@ use crate::{StoreError, StoreResult};
 const INVALID_UTF8_MESSAGE: &str = "stream did not contain valid UTF-8";
 
 /// Whether a file name in a session's `data/archives/` directory is a chat-events archive, matching
-/// Python's `src/runtime/chat_events.py:47` `ARCHIVE_FILE_GLOB` (`chat_events.*.jsonl`): a bare
-/// `chat_events.jsonl` carries the live log's name, not an archive's.
+/// `chat_events.*.jsonl`: a bare `chat_events.jsonl` carries the live log's name, not an archive's.
 pub fn is_chat_events_archive(file_name: &str) -> bool {
   file_name.strip_prefix("chat_events.").and_then(|rest| rest.strip_suffix(".jsonl")).is_some()
 }
@@ -36,8 +35,8 @@ pub enum LineRule {
   PerLine,
   /// `split_inclusive('\n')` over the whole file, read as strict UTF-8: each line keeps its `\n`.
   Terminated,
-  /// Python universal newlines over the whole file, read as strict UTF-8: `\r\n` and a lone `\r` end a line as `\n`
-  /// does, and a final line without a terminator is a line.
+  /// Universal newlines over the whole file, read as strict UTF-8: `\r\n` and a lone `\r` end a line as `\n`
+  /// does. A final line without a terminator is a line.
   Universal,
 }
 
@@ -134,7 +133,7 @@ fn split_whole(text: &str, rule: LineRule) -> Vec<String> {
   }
 }
 
-/// The text of a live or archived log with Python's universal newlines: `\r\n` and a lone `\r` end a line as `\n`
+/// The text of a live or archived log with universal newlines: `\r\n` and a lone `\r` end a line as `\n`
 /// does. A reader that polls a growing log calls this on each read and passes the result to `take_complete_lines`.
 pub fn read_universal_text(path: &Path) -> Result<String, LogReadError> {
   let bytes = fs::read(path).map_err(LogReadError::Io)?;
@@ -432,8 +431,8 @@ mod tests {
   }
 
   /// The store's two chat line decoders — this module's `decode_line` and the compact mmap fast path's
-  /// `parse_line_compact` — agree on every line both can read, and differ today only on bytes that are not
-  /// UTF-8: the strict decode fails them and the compact decode repairs them to U+FFFD first. A change to one
+  /// `parse_line_compact` — agree on every line both can read. They differ today only on bytes that are not
+  /// UTF-8: the strict decode fails them, and the compact decode repairs them to U+FFFD first. A change to one
   /// decoder fails here until the other follows.
   #[test]
   fn compact_and_value_line_decoders_agree_over_the_line_corpus() {

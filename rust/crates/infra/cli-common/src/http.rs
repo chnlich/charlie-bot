@@ -1,5 +1,5 @@
-//! The production transport: reqwest on one current-thread tokio runtime, with the failure classes
-//! and error messages the Python raw-socket client produces.
+//! The production transport: reqwest on one current-thread tokio runtime, mapping each failure to
+//! the wire contract's phase and error message.
 
 use std::sync::OnceLock;
 
@@ -30,8 +30,8 @@ pub fn send_http(request: &WireRequest) -> Result<WireResponse, TransportError> 
 async fn send_async(request: &WireRequest) -> Result<WireResponse, TransportError> {
   ensure_crypto_provider();
   let client = reqwest::Client::builder()
-    // The base URL is the config-owned internal server on loopback: no proxy, as Python's raw
-    // socket client that ignores the proxy environment entirely.
+    // The base URL is the config-owned internal server on loopback, so the proxy environment
+    // does not apply.
     .no_proxy()
     .timeout(request.timeout)
     .build()
@@ -56,20 +56,20 @@ async fn send_async(request: &WireRequest) -> Result<WireResponse, TransportErro
 }
 
 /// Classify a failure of the response-head phase. A connect that never established is the retry
-/// class; a connection closed before any status line is Python's missing-status-line parse failure.
+/// class; a connection closed before any status line is a missing-status-line failure.
 fn map_response_head_error(error: reqwest::Error) -> TransportError {
   if error.is_connect() {
     return TransportError::ConnectPhase(os_error_message(&error));
   }
   if source_chain_contains(&error, "connection closed before message completed") {
-    // hyper's message for a connection closed before the response head; Python's raw client
-    // reports the same condition as its missing-or-oversized status line parse failure.
+    // hyper's message for a connection closed before the response head: report it as the
+    // missing-or-oversized status line failure.
     return TransportError::SentButLost("missing or oversized status line".to_string());
   }
   TransportError::SentButLost(error.to_string())
 }
 
-/// CPython `str(OSError)`: `[Errno <errno>] <strerror>`, read off the deepest OS error in the chain.
+/// The `[Errno <errno>] <strerror>` text, read off the deepest OS error in the chain.
 fn os_error_message(error: &reqwest::Error) -> String {
   let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
   while let Some(current) = source {

@@ -1,9 +1,9 @@
-//! `config.yaml` loading: the typed mirror of `src/infra/config.py`.
+//! `config.yaml` loading: the typed configuration model.
 //!
 //! The file is a mapping of sections. The core sections (`server`, `paths`, `backends`, `ui`,
 //! `telegram`) and `headless_chrome_bin` parse into the structs below, each refusing unknown keys.
 //! A section a package registered ([`ConfigSchema::sections`]) parses with the package's own parser, and
-//! the type-specific fields of a backend option stay raw until their backend type's port stage types
+//! the type-specific fields of a backend option stay raw until their backend type's package parses
 //! them. The schema comes from the registered packages (`charliebot-registry` builds it). The checks
 //! that run before validation (stray `config.d/*.yaml` files, retired keys, a `charliebot_home` key)
 //! and their messages follow `load_config`.
@@ -26,7 +26,7 @@ pub const SESSIONS_DIR_NAME: &str = "sessions";
 /// The profile home's directory of configuration fragments, one YAML file per job or section.
 pub const CONFIG_D_DIR_NAME: &str = "config.d";
 
-/// A legacy-key value under this prefix names a `credentials.yaml` key path (`config_registry.CREDENTIALS_PREFIX`).
+/// A legacy-key value under this prefix names a `credentials.yaml` key path (`CREDENTIALS_PREFIX`).
 pub const CREDENTIALS_PREFIX: &str = "credentials: ";
 
 /// The `api_base` key of a `backends.options[]` entry: the upstream endpoint several backend types read. They import
@@ -56,7 +56,7 @@ const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 const FIELD_NAMES: &[&str] =
   &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "github"];
 
-/// `config.LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
+/// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
 const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
   ("server_host", "server.host"),
   ("server_port", "server.port"),
@@ -93,7 +93,7 @@ const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
 /// A parsed package section: the value its parser returned. [`CharlieBotConfig::section`] downcasts it.
 pub type SectionValue = Arc<dyn Any + Send + Sync>;
 
-/// A top-level config key a package owns (`config_registry.register_config_section`). The loader keeps the
+/// A top-level config key a package owns. The loader keeps the
 /// key's raw YAML and calls `parse` on it; an omitted key arrives as an empty mapping, which yields the
 /// model's defaults. A parse error fails the load.
 #[derive(Clone, Copy)]
@@ -102,24 +102,24 @@ pub struct ConfigSection {
   /// The retired top-level keys this section replaced, each with its new location.
   pub legacy_keys: &'static [(&'static str, &'static str)],
   pub parse: fn(&Value) -> Result<SectionValue, String>,
-  /// Renders the parsed section the way Python's `model_dump()` dumps it. `charliebot config get <key>`
+  /// Renders the parsed section as the configuration model dumps it. `charliebot config get <key>`
   /// prints this, so a section's defaults appear the same as the server's own model holds them.
   pub dump: fn(&SectionValue) -> Result<serde_json::Value, String>,
 }
 
-/// The value a backend option's Python model holds for a type-specific field the entry omits.
+/// The value a backend option's model holds for a type-specific field the entry omits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionFieldDefault {
   /// A required field: the loader has already refused an entry that omits it.
   Required,
   Null,
   Bool(bool),
-  /// An empty mapping, like pydantic's `dict` default factory.
+  /// An empty mapping, the shape a default factory produces.
   EmptyMap,
 }
 
 impl OptionFieldDefault {
-  /// The JSON value Python's model dumps for the absent field; `None` for a required field.
+  /// The JSON value the model dumps for the absent field; `None` for a required field.
   pub fn json(self) -> Option<serde_json::Value> {
     match self {
       OptionFieldDefault::Required => None,
@@ -135,13 +135,13 @@ impl OptionFieldDefault {
 pub enum OptionFieldKind {
   /// The value as YAML loads it.
   AsIs,
-  /// A `float` field: pydantic dumps an integer entry as a float (`1` prints `1.0`).
+  /// A `float` field: an integer entry dumps as a float (`1` prints `1.0`).
   Float,
 }
 
-/// One type-specific field of a `backends.options[]` entry, in its Python model's declaration order. A
+/// One type-specific field of a `backends.options[]` entry, in its model's declaration order. A
 /// backend package owns its type's fields; `charliebot config get backends` reads them so an option's dump
-/// carries the same fields and defaults as the type's pydantic model.
+/// carries the same fields and defaults as the type's model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OptionField {
   pub name: &'static str,
@@ -155,7 +155,7 @@ impl OptionField {
     OptionField { name, default, kind: OptionFieldKind::AsIs }
   }
 
-  /// A `float` field; `default` is its Python default.
+  /// A `float` field; `default` is its default.
   pub const fn float_field(name: &'static str, default: OptionFieldDefault) -> OptionField {
     OptionField { name, default, kind: OptionFieldKind::Float }
   }
@@ -165,9 +165,9 @@ impl OptionField {
 #[derive(Clone, Default)]
 pub struct ConfigSchema {
   pub sections: Vec<ConfigSection>,
-  /// Retired top-level keys that no section owns (`config_registry.register_legacy_keys`).
+  /// Retired top-level keys that no section owns.
   pub legacy_keys: Vec<(&'static str, &'static str)>,
-  /// The registered backend type names (`backend_type_registration.register_backend_type`).
+  /// The registered backend type names.
   pub backend_types: Vec<&'static str>,
 }
 
@@ -213,7 +213,7 @@ pub struct ServerConfig {
   pub min_free_disk_gib: i64,
 }
 
-// The schema defaults of `ServerConfig` in src/infra/config.py.
+// The schema defaults of `ServerConfig`.
 fn default_host() -> String {
   "127.0.0.1".to_string()
 }
@@ -264,7 +264,7 @@ pub struct BackendOption {
   pub prompt_overlay: Option<String>,
   /// The registered backend type, one of [`ConfigSchema::backend_types`].
   pub backend_type: String,
-  /// The type-specific keys, raw until the backend package's port stage types them.
+  /// The type-specific keys, raw until the backend package parses them.
   pub type_fields: Mapping,
 }
 
@@ -287,11 +287,13 @@ pub struct RoutingConfig {
   pub command: Vec<String>,
 }
 
-/// `backends:` section: the rotation pool, optional router command, and model-switch options.
+/// `backends:` section: the rotation pool, optional router command, the strong option id, and model-switch options.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendsConfig {
   pub pool: Vec<String>,
   pub routing: Option<RoutingConfig>,
+  /// The option id that a context-work delegation runs on. Config load checks it names a `options` entry.
+  pub strong: Option<String>,
   pub options: Vec<BackendOption>,
 }
 
@@ -390,7 +392,7 @@ impl CharlieBotConfig {
   }
 }
 
-/// The retired top-level key `key` moved to, as the Python loader prints it, or `None` for a live key.
+/// The retired top-level key `key` moved to, as the loader prints it, or `None` for a live key.
 ///
 /// A structure key maps to its dotted location; a secret maps to `credentials.yaml <key path>`. The schema's
 /// legacy keys include every package section's keys.
@@ -529,7 +531,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
 }
 
 /// Refuse a config whose backend catalog is broken: no options, an id listed twice, or a pool entry
-/// naming no option. One error lists every violation (`config.require_backends`).
+/// naming no option. One error lists every violation (`require_backends`).
 pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
   if cfg.backends.options.is_empty() {
     return Err(ConfigError(
@@ -630,7 +632,7 @@ fn parse_backends(
 ) -> Result<BackendsConfig, ConfigError> {
   let mapping = match value {
     None => {
-      return Ok(BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() });
+      return Ok(BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() });
     }
     Some(Value::Mapping(mapping)) => mapping,
     Some(other) => {
@@ -641,7 +643,7 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if !matches!(key.as_str(), Some("pool" | "options" | "routing")) {
+    if !matches!(key.as_str(), Some("pool" | "options" | "routing" | "strong")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
     }
@@ -663,10 +665,16 @@ fn parse_backends(
       )));
     }
   };
-  Ok(BackendsConfig { pool, routing, options })
+  let strong: Option<String> = typed_section(config_path, "backends.strong", mapping.get("strong").cloned(), || None)?;
+  if let Some(strong_id) = &strong
+    && !options.iter().any(|option| option.id == *strong_id)
+  {
+    return Err(ConfigError(format!("{config_path}: backends.strong '{strong_id}' is not in backends.options")));
+  }
+  Ok(BackendsConfig { pool, routing, strong, options })
 }
 
-/// One backend entry, validated as the option model its `type` names would (`backend_models.parse_option`).
+/// One backend entry, validated as the option model its `type` names would (`parse_option`).
 fn parse_option(
   config_path: &str,
   index: usize,
@@ -718,7 +726,7 @@ fn parse_option(
   Ok(BackendOption { id, label, model, prompt_overlay, backend_type, type_fields })
 }
 
-/// A YAML mapping key as CPython's `repr` prints the value PyYAML loaded for it.
+/// A YAML mapping key as its repr prints the value loaded for it.
 pub fn yaml_key_repr(key: &Value) -> String {
   match key {
     Value::String(text) => text_repr::str_repr(text),
@@ -923,6 +931,18 @@ mod tests {
     let home = home_with("backends:\n  routing:\n    command: [synthetic-router]\n    extra: refused\n");
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("backends.routing.extra") && error.contains("unknown field"), "{error}");
+  }
+
+  #[test]
+  fn strong_must_name_a_backends_option() {
+    let home = home_with(
+      "backends:\n  strong: synthetic-strong\n  options:\n    - {id: synthetic-strong, label: S, type: codex, model: m}\n",
+    );
+    assert_eq!(load(&home).unwrap().backends.strong.as_deref(), Some("synthetic-strong"));
+
+    let home = home_with("backends:\n  strong: ghost\n  options:\n    - {id: a, label: A, type: codex, model: m}\n");
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.ends_with("backends.strong 'ghost' is not in backends.options"), "{error}");
   }
 
   #[test]

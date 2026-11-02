@@ -81,7 +81,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ## CLI at a glance
 
 The Rust `charliebot` binary is the only CLI. It ships beside `charliebot-server` in the same
-release, and each subcommand keeps the argv, stdout and exit codes of the Python CLI it replaced.
+release.
 
 - `charliebot artifact` — check a page's genre DOM assertions and cold-read probe, or wrap a content fragment into a genre page
 - `charliebot compaction-context` — restore the skills a manager session read before Claude compacted its context
@@ -98,8 +98,7 @@ release, and each subcommand keeps the argv, stdout and exit codes of the Python
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
 
-A subcommand name the binary does not carry — the deleted Python-only `disk-sweep`, `storage`,
-`usage-ledger` and `voice-replay-eval` among them — answers with the unknown-subcommand error.
+A subcommand name the binary does not carry answers with the unknown-subcommand error.
 
 ## Repository layout
 

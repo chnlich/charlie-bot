@@ -570,7 +570,6 @@ mod tests {
 
   #[tokio::test(flavor = "current_thread")]
   async fn the_removed_archive_delete_route_answers_405() {
-    // Python: tests/test_archive_api.py::test_removed_close_routes_are_absent.
     let (_home, features) = feature_context();
     add_task(&features, "removed-delete").await;
     let router = crate::routes::routes(&features);

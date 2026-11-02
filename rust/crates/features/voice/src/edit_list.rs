@@ -1,8 +1,8 @@
 //! The edit list of an MP4 file's first audio track.
 //!
 //! symphonia 0.6's isomp4 reader parses the `elst` box but does not apply it, so a decoded AAC track still holds the
-//! encoder's priming frames. libavformat applies the box, and PyAV is built on libavformat, so this reader takes the
-//! same two numbers: where playback starts in the track, and how long it runs.
+//! encoder's priming frames. This reader applies the box, so it takes two numbers from it: where playback starts in the
+//! track, and how long it runs.
 
 const FTYP: &[u8; 4] = b"ftyp";
 const MOOV: &[u8; 4] = b"moov";

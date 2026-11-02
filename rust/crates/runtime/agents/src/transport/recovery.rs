@@ -32,7 +32,7 @@ impl TypeLineFilter {
     if !rest.starts_with(b"\"") {
       return false;
     }
-    // `RawValue` finds the end of the quoted token without decoding it, as Python's first-quote scan does.
+    // `RawValue` finds the end of the quoted token without decoding it.
     let text = String::from_utf8_lossy(rest);
     let Some(Ok(token)) = serde_json::Deserializer::from_str(&text).into_iter::<Box<RawValue>>().next() else {
       return false;
@@ -148,7 +148,7 @@ pub fn result_exit_code(events: &[Value]) -> i32 {
   if subtype_success && error_absent { 0 } else { -1 }
 }
 
-/// Scan a raw log that may be missing and return its events, last result, and Python-compatible exit code.
+/// Scan a raw log that may be missing and return its events, last result, and exit code.
 pub fn scan_result_exit<T>(raw_path: &Path, translate: T) -> anyhow::Result<(Vec<Value>, Option<Value>, i32)>
 where
   T: FnMut(Value) -> anyhow::Result<Vec<Value>>,

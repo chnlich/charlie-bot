@@ -1,5 +1,5 @@
 //! The opencode option fields and the `providers` block their context limits and fixed request-body fields add to an
-//! opencode config (`src/backends/opencode/options.py`).
+//! opencode config.
 
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ use serde_yaml::{Mapping, Value};
 const CONTEXT_LIMIT: &str = "context_limit";
 
 /// The `opencode` option's type-specific fields in `OpencodeBackend`'s declaration order, each with the value the
-/// Python model holds when an entry omits it. `charliebot config get backends` renders them.
+/// option model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(PROXY_URL_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_LIMIT, OptionFieldDefault::Null),
@@ -67,8 +67,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
   OpenCodeOption::from_fields(fields).map(|_| ())
 }
 
-/// The config keys that the options' `context_limit` and `extra_body` values add, as Python's
-/// `model_overrides_config` builds them. The keys are
+/// The config keys that the options' `context_limit` and `extra_body` values add. The keys are
 /// `{"providers": {provider: {"models": {model: {"limit": {"context": n}, "body": {...}}}}}}`, or an empty map when no
 /// option sets either field. Options for one model must agree on each field they both set; a disagreement fails with
 /// both option ids.
@@ -166,7 +165,6 @@ mod tests {
     assert!(OpenCodeOption::from_fields(&fields("proxy_url: 4\n")).unwrap_err().contains("proxy_url"));
   }
 
-  // Python: tests/test_opencode_backend.py::test_opencode_option_rejects_invalid_fields
   #[test]
   fn option_model_accepts_a_positive_context_limit_and_rejects_zero_and_negative() {
     assert!(OpenCodeOption::from_fields(&fields("context_limit: 420000\n")).is_ok());
@@ -174,7 +172,6 @@ mod tests {
     assert!(OpenCodeOption::from_fields(&fields("context_limit: -1\n")).is_err());
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_overrides_only_context
   #[test]
   fn model_overrides_config_overrides_only_context() {
     let other = BackendOption {
@@ -195,7 +192,6 @@ mod tests {
     assert_eq!(model_overrides_config(&[]).unwrap(), Map::new());
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_rejects_conflicts_naming_both_options
   #[test]
   fn model_overrides_config_rejects_conflicts_naming_both_options() {
     for (first_fields, second_fields, field) in [
@@ -211,7 +207,6 @@ mod tests {
     }
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_carries_extra_body_at_the_model_body_key
   #[test]
   fn model_overrides_config_carries_extra_body_at_the_model_body_key() {
     let option = option("oc", MODEL, "extra_body:\n  cache:\n    no-store: true\n    no-cache: true\n");
@@ -222,7 +217,6 @@ mod tests {
     );
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_keeps_context_and_extra_body_of_two_options_on_one_model
   #[test]
   fn model_overrides_config_keeps_context_and_extra_body_of_two_options_on_one_model() {
     let limited = option("limited", MODEL, "context_limit: 420000\n");
@@ -234,7 +228,6 @@ mod tests {
     );
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_merges_equal_limits_and_distinct_models
   #[test]
   fn model_overrides_config_merges_equal_limits_and_distinct_models() {
     let entries = [

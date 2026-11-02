@@ -8,12 +8,9 @@ use charliebot_core::memo::BoundedMemo;
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::read_memos::StatSignatureMemo;
 
-// Match src/infra/ndjson.py:_COUNT_MEMO_LIMIT and its (mtime_ns, size) signatures.
 pub(crate) const EVENT_COUNT_MEMO_LIMIT: usize = 64;
 pub(crate) const EVENT_TAIL_MEMO_LIMIT: usize = 64;
-// Match src/runtime/chat_events.py:_ARCHIVE_MEMO_LIMIT for both archive memos.
 pub(crate) const ARCHIVE_MEMO_LIMIT: usize = 16;
-// Match src/runtime/chat_events.py:_LIVE_RANGE_MEMO_LIMIT and _WALK_BYTE_BUDGET.
 pub(crate) const LIVE_RANGE_MEMO_LIMIT: usize = 4;
 pub(crate) const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 pub(crate) const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
@@ -25,7 +22,7 @@ pub(crate) struct LiveRangeMemo {
   pub(crate) mtime_ns: i128,
   pub(crate) size: u64,
   pub(crate) inode: u64,
-  // Python's BoundedMemo returns the cached list by reference. Arc keeps a live-range hit just as cheap.
+  // The bounded memo returns the cached list by reference. Arc keeps a live-range hit just as cheap.
   pub(crate) lines: Arc<Vec<Option<Arc<ChatEvent>>>>,
   pub(crate) covered_byte_end: usize,
   pub(crate) ends_on_boundary: bool,
@@ -44,7 +41,7 @@ pub(crate) struct TailLineWalk {
   pub(crate) bytes_read: usize,
 }
 
-/// Bounded file-signature memos for the Python-equivalent event readers.
+/// Bounded file-signature memos for the event readers.
 pub(crate) struct EventReadCaches {
   pub(crate) count: StatSignatureMemo<PathBuf, usize>,
   pub(crate) tail: StatSignatureMemo<(PathBuf, usize), TailPage>,

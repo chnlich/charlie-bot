@@ -1,6 +1,6 @@
-//! Cross-implementation checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
-//! The recorded reference (`fixtures/cli_backends_golden.json`) holds
-//! every Python section's answer over the synthetic inputs built here. The test fails with every section that differs.
+//! Golden checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
+//! The recorded reference (`fixtures/cli_backends_golden.json`) holds every section's recorded answer over the
+//! synthetic inputs built here. The test fails with every section that differs.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases); the translator
 //! streams of gemini and charlie-code (2); and the antigravity finish cases, each run through the `AgentRunner`
@@ -63,7 +63,7 @@ impl Fixture {
     CliHost { path: self.path(), home: self.home.clone() }
   }
 
-  /// The host environment of both sides. The Python reference's os.environ is exactly this map, and the Claude headless
+  /// The host environment of both sides. The reference environment is exactly this map, and the Claude headless
   /// names in it are the ones `headless_claude_env` forwards, one of them overriding CharlieBot's default window.
   fn env_base(&self) -> Value {
     json!({
@@ -101,7 +101,7 @@ impl Fixture {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),
@@ -110,8 +110,6 @@ impl Fixture {
   }
 }
 
-// Python: tests/test_anthropic_compatible_backend.py:37.
-// Python: tests/test_anthropic_compatible_backend.py:72.
 #[test]
 fn cli_backends_match_the_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
@@ -418,8 +416,8 @@ fn spec(id: &'static str, stdout: String, stderr: &'static str, exit: i32, resum
   FinishSpec { id, stdout, stderr, exit, resume }
 }
 
-/// The fake `agy` runs. A non-string `response` and a non-object `usage` are left out: Python raises TypeError (from
-/// `re.sub`) or AttributeError (from `.get`) on them, and the port reports a named envelope guard instead.
+/// The fake `agy` runs. A non-string `response` and a non-object `usage` are left out: the Rust code reports a
+/// named envelope guard for them instead.
 fn finish_specs() -> Vec<FinishSpec> {
   vec![
     spec(
@@ -641,7 +639,6 @@ fn option_of(case: &Value) -> BackendOption {
   }
 }
 
-// Python: tests/test_anthropic_compatible_backend.py:83.
 #[test]
 fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
   let root = tempfile::tempdir().unwrap();
@@ -668,7 +665,6 @@ fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
   assert!(registry.load_config(&home).unwrap_err().to_string().contains("api_base"));
 }
 
-// Python: tests/test_anthropic_compatible_backend.py:90.
 #[test]
 fn anthropic_compatible_registration_matches_traits_and_usage_attribution() {
   use charliebot_registry::backend::{BackendTraits, ResumeStyle};
@@ -706,7 +702,6 @@ fn anthropic_compatible_registration_matches_traits_and_usage_attribution() {
   assert_eq!(registry.usage_source_for("cc-anthropic-compatible").unwrap().unwrap().name, "Claude Code");
 }
 
-// Python: tests/test_backend_hooks.py:129.
 #[test]
 fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
   let mut registry = Registry::new();
@@ -733,7 +728,7 @@ fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
 }
 
 fn launch_of(case: &Value) -> LaunchArgs {
-  // The Python fixture predates this Rust-only operational hook, so compare the shared CLI behavior without it.
+  // The recorded fixture predates this Rust-only operational hook, so compare the shared CLI behavior without it.
   let mut backend_kwargs = serde_json::Map::new();
   if case["backend_type"] == "cc-anthropic-compatible" {
     backend_kwargs.insert("use_wait_guard".to_string(), Value::Bool(false));

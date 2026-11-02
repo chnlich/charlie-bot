@@ -1,4 +1,4 @@
-//! The `preflight-charlie-code` command (the Python inside `scripts/preflight-charlie-code.sh`): assert every
+//! The `preflight-charlie-code` command: assert every
 //! mechanism a `type: charlie-code` backend option's session depends on — the config entry exists, the
 //! charlie-code binary resolves and runs, the CLI contract matches what the backend emits, and the endpoint
 //! serves the configured model — so one run covers the whole fault class before a session or delegation is
@@ -27,7 +27,7 @@ use wait_timeout::ChildExt;
 const CONTRACT_FLAGS: [&str; 6] =
   [flags::TASK_FILE, flags::JSON, flags::MODEL, flags::API_BASE, flags::RESUME, flags::CONTEXT_WINDOW];
 
-/// The install command both failure lines carry; Python's `binary-missing` line is the bare command, and its
+/// The install command both failure lines carry; the `binary-missing` line is the bare command, and the
 /// `binary-broken` line prefixes the reinstall instruction.
 const INSTALL_HINT: &str = "uv tool install -e ~/workspace/charlie-code";
 
@@ -42,7 +42,7 @@ struct PreflightCli {
 }
 
 /// Parse the arguments and run the checks. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2); the launcher script gates its own usage exit 2.
+/// (help exits 0, a usage error exits 2); the launcher script gates its own usage exit 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(PreflightCli::command());
   let argv = std::iter::once(OsString::from("charliebot preflight-charlie-code")).chain(args.iter().cloned());
@@ -127,7 +127,7 @@ fn preflight(backend_id: &str) -> Result<(), String> {
   // The litellm provider prefix is stripped at request time; the endpoint serves the bare id.
   let served_model = option.model.split_once('/').map_or(option.model.as_str(), |(_, bare)| bare);
   if !served_ids.iter().any(|id| id == served_model) {
-    // The list prints the way Python's `str(list)` wrote it: quoted ids inside brackets.
+    // The list prints with quoted ids inside brackets.
     let listed = served_ids.iter().map(|id| format!("'{id}'")).collect::<Vec<_>>().join(", ");
     return Err(format!("model-not-served: {url} lists [{listed}]; fix the model field or the endpoint"));
   }
@@ -143,7 +143,7 @@ fn parsed_api_base(option: &BackendOption) -> String {
   fields.api_base.unwrap_or_default()
 }
 
-/// Run `<bin> --help` under the backend's child env with Python's 60 s budget; the error is a
+/// Run `<bin> --help` under the backend's child env with a 60 s budget; the error is a
 /// `binary-broken` line naming the first stderr line on a nonzero exit.
 fn run_help(bin: &std::path::Path, child_env: &Env) -> Result<String, String> {
   let mut child = Command::new(bin)
@@ -177,7 +177,7 @@ fn run_help(bin: &std::path::Path, child_env: &Env) -> Result<String, String> {
   Ok(help_text)
 }
 
-/// The model ids the endpoint's `/models` lists, sorted, under Python's 15 s budget; any failure of the
+/// The model ids the endpoint's `/models` lists, sorted, under a 15 s budget; any failure of the
 /// request, the body read or the payload shape is an unreachable endpoint.
 fn fetch_served_models(url: &str) -> Result<Vec<String>, String> {
   charliebot_cli_common::http::ensure_crypto_provider();

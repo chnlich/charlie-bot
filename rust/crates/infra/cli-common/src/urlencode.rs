@@ -1,4 +1,4 @@
-//! Query-parameter encoding: Python `urllib.parse.urlencode`'s wire form.
+//! Query-parameter encoding: `key=value` pairs, `&`-joined, percent-quoted.
 
 /// The wire form of an ordered mapping: `quote_plus` over each key and value, `&`-joined in the
 /// mapping's order.
@@ -6,9 +6,8 @@ pub fn urlencode(params: &[(String, String)]) -> String {
   params.iter().map(|(key, value)| format!("{}={}", quote_plus(key), quote_plus(value))).collect::<Vec<_>>().join("&")
 }
 
-/// The quoted form of one text component: a space becomes `+`, as `urllib.parse.quote_plus` does
-/// with the default `safe=''`. Every byte outside ASCII letters, digits and `_.-~` becomes one
-/// uppercase `%XX` pair of its UTF-8 form.
+/// The quoted form of one text component: a space becomes `+`, and every byte outside ASCII
+/// letters, digits and `_.-~` becomes one uppercase `%XX` pair of its UTF-8 form.
 fn quote_plus(text: &str) -> String {
   let mut out = String::with_capacity(text.len());
   for byte in text.bytes() {

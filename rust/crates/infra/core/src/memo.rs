@@ -1,4 +1,4 @@
-//! The bounded LRU memo of `src/infra/memo.py`: a hit refreshes the key's recency, and a store evicts the least
+//! The bounded LRU memo: a hit refreshes the key's recency, and a store evicts the least
 //! recently used entries past the limit. The caller holds it behind the lock its own sharing needs.
 
 use std::hash::Hash;
@@ -6,8 +6,8 @@ use std::num::NonZeroUsize;
 
 use lru::LruCache;
 
-/// The memo of `src/infra/memo.py` `BoundedMemo`, a map over `collections.OrderedDict`: `get` moves the key to the
-/// most recent end, and `store` evicts past the limit. `lru::LruCache` is that primitive in Rust.
+/// The memo's map: `get` moves the key to the most recent end, and `store` evicts past the limit.
+/// `lru::LruCache` is that primitive in Rust.
 pub struct BoundedMemo<K, V> {
   entries: LruCache<K, V>,
 }

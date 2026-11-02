@@ -35,7 +35,7 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
   let (mut sender, mut receiver) = socket.split();
   tracing::info!(session_id, "session_ws_connected");
 
-  // The replay cursor rides the handshake query (`server.py` `session_websocket`): an absent, overlong or
+  // The replay cursor rides the handshake query: an absent, overlong or
   // non-decimal value closes with 4400 before the subscription starts.
   let raw_cursor = raw_cursor(&query);
   let cursor = match parse_handshake_cursor(raw_cursor.as_deref()) {
@@ -153,7 +153,7 @@ async fn current_asset_version(features: &FeatureContext) -> Result<String, Stri
   Ok(version)
 }
 
-/// The replay cursor the handshake check accepts (`server.py` `session_websocket`): the value is present,
+/// The replay cursor the handshake check accepts: the value is present,
 /// at most 19 characters, ASCII and decimal. `int` then parses it without a digit-limit error, and a
 /// 19-digit value above `i64::MAX` stays valid and lies past every event total.
 fn parse_handshake_cursor(raw: Option<&str>) -> Option<i128> {
@@ -462,7 +462,7 @@ mod tests {
 
   #[test]
   fn handshake_cursor_query_cases_follow_recorded() {
-    // Python accepts a non-empty run of at most 19 ASCII decimal digits (`server.py` `session_websocket`),
+    // A non-empty run of at most 19 ASCII decimal digits is accepted,
     // so leading zeros stay valid and a 19-digit value above i64::MAX parses.
     assert_eq!(parse_handshake_cursor(Some("9")), Some(9));
     assert_eq!(parse_handshake_cursor(Some("007")), Some(7));
@@ -848,8 +848,7 @@ mod tests {
     let _ = server.await;
   }
 
-  /// Port of `tests/test_session_ws_catchup.py` `test_invalid_handshake_cursor_closes_before_subscription`
-  /// (main `4521a51b2`): every cursor value that test parametrizes, sent in the handshake query. The close
+  /// Every cursor value that the handshake check rejects, sent in the handshake query. The close
   /// code 4400 is the first and only frame, so no catch-up replay or subscription frame preceded it.
   #[tokio::test]
   async fn invalid_handshake_cursor_closes_before_subscription() {
@@ -868,9 +867,8 @@ mod tests {
     }
   }
 
-  /// Port of `tests/test_session_ws_catchup.py` `test_handshake_cursor_controls_replay_after_delayed_accept`
-  /// (main `4521a51b2`): the client sends no frame at all, so the replay the query cursor controls must start
-  /// without waiting for one. Cursor 9 lies past the seeded session's three events, so the replay sends
+  /// The client sends no frame at all, so the replay the query cursor controls must start without waiting for one.
+  /// Cursor 9 lies past the seeded session's three events, so the replay sends
   /// nothing and `catchup_complete` is the first frame.
   #[tokio::test]
   async fn handshake_cursor_controls_replay_after_delayed_accept() {

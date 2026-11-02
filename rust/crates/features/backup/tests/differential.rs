@@ -1,4 +1,4 @@
-//! Compare this crate's archive with the recorded Python `tarfile` output.
+//! Compare this crate's archive with the recorded reference archive.
 
 use std::ffi::OsStr;
 use std::io::Read;
@@ -29,7 +29,7 @@ fn build_fixture_home(home: &Path) {
   write(home, OsStr::from_bytes(b"nested/a/bad-\xc3(.txt"), b"a nested name with a truncated sequence\n");
   write(home, OsStr::from_bytes(b"nested/raw-dir-\xff/inner-\x80.txt"), b"inside a directory that is not UTF-8\n");
   write(home, "nested/a/café-日本.txt", b"a non-ASCII UTF-8 name\n");
-  // Python sorts names by code point: the raw `\xf0` byte is U+DCF0, below U+E000, so the raw name comes first.
+  // Names sort by code point: the raw `\xf0` byte is U+DCF0, below U+E000, so the raw name comes first.
   // Byte order would put the private-use name first.
   write(home, OsStr::from_bytes(b"\xf0-raw.txt"), b"sorts before the private-use name\n");
   write(home, "\u{e000}-private.txt", b"sorts after the raw name\n");
@@ -50,8 +50,8 @@ fn build_fixture_home(home: &Path) {
 
 /// Builds the fixture under `root` and archives it on the Rust side. The home is `root/charliebot`, and the
 /// Rust side reads it through the symlink `root/rust/charliebot`, so both sides see the same metadata and
-/// write into different backup directories: `root/charliebot_backup` for Python, `root/rust/charliebot_backup`
-/// for this crate.
+/// write into different backup directories: `root/charliebot_backup` for the recorded reference side,
+/// `root/rust/charliebot_backup` for this crate.
 fn archive_fixture(root: &Path) -> (PathBuf, PathBuf) {
   let home = root.join("charliebot");
   std::fs::create_dir(&home).unwrap();

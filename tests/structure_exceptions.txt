@@ -1,4 +1,0 @@
-# Rows are the reverse imports that predate the package structure.
-# Rows only leave this table.
-#
-# One row per pair: importer file -> imported file. Paths are repo-relative and the rows are sorted.

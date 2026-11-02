@@ -15,7 +15,7 @@
 # (one cron job per file); any other yaml under config.d/ fails startup.
 # `charliebot config get <key>` prints a key's value wherever it lives.
 
-# Server: the bind address uvicorn listens on.
+# Server: the bind address the server listens on.
 server:
   host: 127.0.0.1
   port: 18498
@@ -67,6 +67,9 @@ backends:
   # subcommand in rust/crates/app/cli/src/commands/router.rs, which reads <charliebot home>/router.yaml.
   # routing:
   #   command: [charliebot, router]
+  # Option id that a delegation declared with `charliebot delegate --context-work 1` runs on (see its help).
+  # Unset, such a delegation fails with HTTP 400 naming backends.strong. Must name an options id.
+  # strong: claude-opus
   options:
     - id: claude-fable
       label: "CC · Fable 5.1"

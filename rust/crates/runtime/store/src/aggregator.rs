@@ -424,7 +424,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       "backend": preferred_value(event, "backend", "resolved_backend"),
       "model": preferred_value(event, "model", "resolved_model"),
       "route": event.field("route").map(EventFields::to_owned_value).unwrap_or(Value::Null),
-      // Python's `or` yields the fallback's own value, so both fields absent give null.
+      // A falsy timestamp falls back to created_at, so both fields absent give null.
       "timestamp": event.field("timestamp").filter(|value| is_truthy(*value)).or_else(|| event.field("created_at")).map(EventFields::to_owned_value).unwrap_or(Value::Null),
     }),
     event_types::WORKER_SUMMARY => {
@@ -686,12 +686,12 @@ fn render_task_input_acknowledged<E: EventFields>(event: &E) -> StoreResult<Valu
   Ok(json!({"role": "system", "content": content.trim_end()}))
 }
 
-/// The content blocks Python iterates for a message field.
+/// The content blocks of a message field.
 ///
-/// Python iterates a string's characters or an object's keys when `content` is not a list, and
-/// none of those values is a block object, so those shapes contribute no blocks. A scalar that
-/// Python cannot iterate still fails, while an assistant field treats a falsy value as empty
-/// because Python's `content or []` replaces it.
+/// A string's characters or an object's keys are iterated when `content` is not a list.
+/// None of those values is a block object, so those shapes contribute no blocks. A scalar that
+/// cannot be iterated still fails, while an assistant field treats a falsy value as empty,
+/// because a falsy value is replaced by an empty list.
 fn message_blocks<'a, E: EventFields>(
   content: Option<&'a E>,
   field: &str,
@@ -985,8 +985,7 @@ fn required_field<'a, E: EventFields>(event: &'a E, key: &str) -> StoreResult<&'
   event.field(key).ok_or_else(|| StoreError::new(format!("event renderer requires field {key}")))
 }
 
-/// Python's `", ".join(value or [])`: an array joins its strings, while a string or object
-/// contributes its characters or keys, matching how Python iterates those values.
+/// Joins with `, `: an array joins its strings, while a string or object contributes its characters or keys.
 fn join_strings<E: EventFields>(value: Option<&E>, field: &str) -> StoreResult<String> {
   let Some(value) = value.filter(|value| is_truthy(*value)) else {
     return Ok(String::new());
@@ -1011,7 +1010,7 @@ fn join_strings<E: EventFields>(value: Option<&E>, field: &str) -> StoreResult<S
   Err(StoreError::new(format!("{field} must be an array, string or object")))
 }
 
-/// Python's `int(value)` for the JSON shapes a tool-call count can carry.
+/// The integer a tool-call count reads as, for each JSON shape a count can carry.
 fn event_int<E: EventFields>(value: &E) -> Option<String> {
   if let Some(flag) = value.as_bool_field() {
     return Some(if flag { "1" } else { "0" }.to_string());
@@ -1060,7 +1059,7 @@ fn parse_int_string(value: &str) -> Option<String> {
   Some(if negative { format!("-{digits}") } else { digits.to_string() })
 }
 
-/// Python's `str(value)`. A string is read in place; other shapes take the text `text_repr::value_str` renders.
+/// The text of a field value. A string is read in place; other shapes take the text `text_repr::value_str` renders.
 fn event_str<E: EventFields>(value: &E) -> String {
   match value.as_str_field() {
     Some(text) => text.to_string(),
@@ -1144,7 +1143,7 @@ mod tests {
 
   #[test]
   fn parity_fixture_matches_frames_for_chat_logs_and_synthetic_sequences() {
-    // Python: src/runtime/message_aggregator.py:539-559 includes the nullable route on every delegation card.
+    // Every delegation card in the parity fixture includes the nullable route.
     let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/message_aggregator.json")).unwrap();
     let renderers = parity_renderers();
 
@@ -1359,7 +1358,7 @@ mod tests {
 
   #[test]
   fn task_delegated_message_exposes_metadata_without_full_description_body() {
-    // Python: src/runtime/message_aggregator.py:539-559 carries the event route onto the delegation card.
+    // The event route rides the delegation card.
     let mut aggregator = MessageAggregator::new(0, true);
     let long_description = "## Goal\nDo a long task spec that belongs in Workers.";
     let invocation = json!({
@@ -1408,7 +1407,7 @@ mod tests {
 
   #[test]
   fn quota_failover_renders_the_backend_and_recovery_time() {
-    // Python: src/runtime/message_aggregator.py:367-375 renders the same recovery line.
+    // The recovery line names the backend and the time it recovers.
     let mut aggregator = MessageAggregator::new(0, true);
     let deltas = aggregator
       .feed(&json!({

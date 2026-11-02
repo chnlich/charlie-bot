@@ -21,6 +21,7 @@ page_packages	src.features.diff_view	src.features.diff_view
 page_packages	src.features.explain	src.features.explain
 page_packages	src.features.improve	src.features.improve
 page_packages	src.features.memory	src.features.memory
+page_packages	src.features.taste	src.features.taste
 page_packages	src.features.terminal	src.features.terminal
 page_packages	src.features.trace	src.features.trace
 page_packages	src.features.usage	src.features.usage
@@ -82,6 +83,7 @@ config section	src.features.artifacts	publish
 config section	src.features.code_server	code_server
 config section	src.features.slack	slack
 config section	src.features.discord	discord
+config section	src.features.host_auth	host_auth
 config section	src.features.voice	voice
 config section	src.backends.claude_code	accounts
 legacy config key	src.features.artifacts	publish_dir
@@ -127,6 +129,7 @@ turn contribution	src.features.slack	slack
 turn contribution	src.features.discord	discord
 turn contribution	src.features.web_reply	web_reply
 turn contribution	src.features.memory	memory
+turn contribution	src.features.taste	taste
 turn contribution	src.features.voice	voice
 turn contribution	src.backends.claude_code	claude_code
 sidebar contribution	src.features.artifacts	artifacts
@@ -168,6 +171,10 @@ sequence controller	src.features.cron	cron
 sequence controller	src.features.improve	improve
 plan registry	src.features.artifacts	plan_registry
 open waiting items reader	src.features.web_reply	open_waiting_items
+derived waiting items reader	src.features.cron	derived_waiting_items
+backend host alias	src.backends.anthropic_compatible	cc-anthropic-compatible
+host login reader	src.features.host_auth	host_logins
+host probe	src.features.host_auth	host_probe
 fork assertions	src.features.artifacts	fork_assertions
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups

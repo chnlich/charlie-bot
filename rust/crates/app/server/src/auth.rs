@@ -1,4 +1,4 @@
-//! The access-key gate (`src/runtime/api/auth.py`).
+//! The access-key gate.
 //!
 //! Every HTTP request passes when no access key is configured, when its decoded path is public (`/`,
 //! `/api/auth/status`, anything under `/static/`), or when it presents the key. The key arrives as an
@@ -30,10 +30,10 @@ pub const AUTH_STATUS_PATH: &str = "/api/auth/status";
 const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH];
 const PUBLIC_PREFIXES: &[&str] = &["/static/"];
 
-/// The self-contained page an unauthenticated browser navigation receives (`auth._LOGIN_PAGE`).
+/// The self-contained page an unauthenticated browser navigation receives (`login_page.html`).
 const LOGIN_PAGE: &str = include_str!("login_page.html");
 
-/// The JSON 401 body: `json.dumps({"detail": "Unauthorized"})`, default separators.
+/// The JSON 401 body: `{"detail": "Unauthorized"}`.
 const UNAUTHORIZED_JSON: &str = r#"{"detail": "Unauthorized"}"#;
 
 /// What the gate does with one request.
@@ -44,12 +44,11 @@ pub enum Decision {
   JsonUnauthorized,
 }
 
-/// A credential that CPython's `hmac.compare_digest` refuses to compare: a `str` with non-ASCII
-/// characters raises `TypeError`, which fails the request with a 500.
+/// A credential the constant-time comparison refuses: non-ASCII text, which fails the request with a 500.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonAsciiCredential;
 
-/// `hmac.compare_digest(candidate, key)` for two `str` values: constant-time equality, refusing non-ASCII text.
+/// Constant-time equality of two credentials, refusing non-ASCII text.
 pub fn credential_matches(candidate: &str, key: &str) -> Result<bool, NonAsciiCredential> {
   if !candidate.is_ascii() || !key.is_ascii() {
     return Err(NonAsciiCredential);
@@ -107,12 +106,12 @@ fn cookie_key(headers: &HeaderMap) -> String {
   }
 }
 
-/// The WebSocket check (`auth.check_ws_auth`): the `token` query parameter must equal the key.
+/// The WebSocket check: the `token` query parameter must equal the key.
 pub fn websocket_authorized(query: Option<&str>, key: Option<&str>) -> Result<bool, NonAsciiCredential> {
   let Some(key) = key else {
     return Ok(true);
   };
-  // starlette's QueryParams.get returns the last value of a repeated parameter.
+  // A repeated query parameter's last value is the one read.
   let token = query
     .map(|query| {
       url_pairs(query).into_iter().rev().find(|(name, _)| name == "token").map(|(_, value)| value).unwrap_or_default()
@@ -121,7 +120,7 @@ pub fn websocket_authorized(query: Option<&str>, key: Option<&str>) -> Result<bo
   credential_matches(&token, key)
 }
 
-/// `urllib.parse.parse_qsl(query, keep_blank_values=True)`: `&`-separated, `+` as space, percent-decoded.
+/// A query split on `&`, with `+` as space and percent escapes decoded.
 fn url_pairs(query: &str) -> Vec<(String, String)> {
   query
     .split('&')

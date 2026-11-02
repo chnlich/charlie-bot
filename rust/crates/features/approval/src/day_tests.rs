@@ -5,10 +5,12 @@ use std::fs;
 
 use axum::http::Method;
 use charliebot_core::pacific::{day_of, zone};
+use charliebot_store::metadata::UtcDateTime;
 use jiff::civil::Date;
 use jiff::{Span, Timestamp};
 use serde_json::{Value, json};
 
+use super::age_text;
 use crate::test_support::Home;
 
 /// The PT day the seeds fall in: the stamps below name UTC instants whose Pacific day is 2026-10-30 (PDT, UTC-7).
@@ -325,4 +327,20 @@ async fn a_mistyped_date_refuses_with_the_expected_form() {
     assert_eq!(status, 422, "{query}: {body}");
     assert!(body["detail"].as_str().unwrap().contains("YYYY-MM-DD"), "{query}: {body}");
   }
+}
+
+#[test]
+fn the_age_reads_the_span_before_the_clock() {
+  let now: Timestamp = "2026-11-02T17:00:00Z".parse().expect("the fixed clock parses");
+  let at = |stamp: &str| age_text(UtcDateTime::parse(stamp).expect("the stamp parses"), now);
+
+  assert_eq!(at("2026-11-02T17:00:00Z"), "just now");
+  assert_eq!(at("2026-11-02T16:59:00Z"), "1 min ago");
+  assert_eq!(at("2026-11-02T16:00:00Z"), "1 h ago");
+  assert_eq!(at("2026-11-02T12:00:00Z"), "5 h ago");
+  assert_eq!(at("2026-10-30T17:00:00Z"), "3 d ago");
+  assert_eq!(at("2026-09-03T17:00:00Z"), "2 mo ago");
+  assert_eq!(at("2025-11-02T17:00:00Z"), "1 y ago");
+  // A stamp after the clock reads as just now rather than a negative span.
+  assert_eq!(at("2026-11-02T17:05:00Z"), "just now");
 }

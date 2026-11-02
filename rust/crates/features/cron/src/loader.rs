@@ -175,15 +175,21 @@ pub fn valid_name(name: &str) -> bool {
     && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-/// Return the unchanged YAML and prompt snapshot until one of its file mtimes moves.
+/// Return the unchanged YAML and prompt snapshot until one of its file mtimes moves. A reload that finds broken files
+/// raises their alert.
 pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> anyhow::Result<CronSnapshot> {
-  let repo = repo_root(features);
-  let directory = cron_dir(cfg);
-  let (snapshot, reloaded) = load_snapshot_for_paths(&directory, repo.path())?;
+  let (snapshot, reloaded) = read_snapshot(features, cfg)?;
   if reloaded {
     fire_error_alert(features, cfg, &snapshot.errors);
   }
   Ok(snapshot)
+}
+
+/// The snapshot of the cron files, and whether it was reloaded, without raising the alert: a read that is not the
+/// scheduler's tick takes its tasks from here.
+pub(crate) fn read_snapshot(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<(CronSnapshot, bool)> {
+  let repo = repo_root(features);
+  load_snapshot_for_paths(&cron_dir(cfg), repo.path())
 }
 
 /// Load one shared cron snapshot, rereading it when a cron YAML appears, disappears or changes mtime, or a prompt
@@ -667,15 +673,22 @@ mod tests {
     write_task(&cfg, "valid", &json!({"cron":"0 8 * * *", "prompt_file":prompt}));
     write_task(&cfg, "inline", &json!({"cron":"0 8 * * *", "prompt":"inline body"}));
     write_task(&cfg, "missing", &json!({"cron":"0 8 * * *"}));
+    write_task(&cfg, "bad-mode", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"boss"}));
 
     let snapshot = load_snapshot(&features, &cfg).unwrap();
 
     assert_eq!(snapshot.tasks.len(), 1);
     assert_eq!(snapshot.tasks[0].prompt.as_deref(), Some("Synthetic body\n"));
     assert_eq!(snapshot.tasks[0].prompt_file.as_deref(), Some(prompt.to_str().unwrap()));
-    assert_eq!(snapshot.errors.iter().map(|error| error.name.as_str()).collect::<Vec<_>>(), ["inline", "missing"]);
-    assert!(snapshot.errors[0].error.contains("inline 'prompt'"));
-    assert!(snapshot.errors[1].error.contains("prompt_file"));
+    assert_eq!(
+      snapshot.errors.iter().map(|error| error.name.as_str()).collect::<Vec<_>>(),
+      ["bad-mode", "inline", "missing"]
+    );
+    let error_of =
+      |name: &str| snapshot.errors.iter().find(|error| error.name == name).expect("the task's error").error.as_str();
+    assert!(error_of("inline").contains("inline 'prompt'"));
+    assert!(error_of("missing").contains("prompt_file"));
+    assert!(error_of("bad-mode").contains("boss"), "the unknown mode is refused: {}", error_of("bad-mode"));
   }
 
   #[test]

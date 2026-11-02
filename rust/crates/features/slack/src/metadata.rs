@@ -1,4 +1,4 @@
-//! The Slack fields of a session (`src/features/slack/metadata.py`).
+//! The Slack fields of a session.
 
 use anyhow::Context;
 use charliebot_store::metadata::SessionMetadata;

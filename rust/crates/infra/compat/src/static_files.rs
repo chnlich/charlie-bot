@@ -1,10 +1,10 @@
-//! Starlette's `StaticFiles` and `FileResponse`, as the Python app serves a directory of files.
+//! Serving a directory of files: static file responses with validators, ranges and content-type guessing.
 //!
-//! A served file carries the content type `mimetypes` guesses, `accept-ranges`, `content-length`,
+//! A served file carries the content type the MIME table guesses, `accept-ranges`, `content-length`,
 //! `last-modified` and an `etag` of `md5("<st_mtime>-<st_size>")`. A matching `If-None-Match` or a newer
 //! `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked per
 //! request until the check first passes, so a directory that appears later serves without a restart. A missing one
-//! answers 500 as the Python mount's `RuntimeError` does.
+//! answers 500.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
@@ -23,14 +23,14 @@ use crate::headers::header_text;
 use crate::mimetypes::MimeTypes;
 use crate::responses;
 
-/// `FileResponse.chunk_size`: a body at least this long goes out in more than one message.
+/// A body at least this long goes out in more than one message.
 const CHUNK_SIZE: usize = 64 * 1024;
 
-/// One served directory: the `StaticFiles(directory=...)` a Python mount holds.
+/// One served directory.
 pub struct StaticDirectory {
-  /// The served directory as the Python app names it (unresolved).
+  /// The served directory as the caller names it (unresolved).
   path: PathBuf,
-  /// Whether the directory check has passed once (`StaticFiles.config_checked`).
+  /// Whether the directory check has passed once.
   checked: AtomicBool,
 }
 
@@ -82,7 +82,7 @@ pub fn serve(
   file_response(&full_path, &metadata, mime_types, None, method, headers)
 }
 
-/// Serve one known file with Starlette `FileResponse` validators and a caller-selected media type.
+/// Serve one known file with its validators and a caller-selected media type.
 pub fn serve_file(path: &Path, content_type: &str, method: &Method, headers: &HeaderMap) -> Response {
   if method != Method::GET && method != Method::HEAD {
     return responses::http_exception(StatusCode::METHOD_NOT_ALLOWED);
@@ -106,7 +106,7 @@ pub fn serve_file(path: &Path, content_type: &str, method: &Method, headers: &He
   file_response(path, &metadata, &MimeTypes::builtin(), Some(content_type), method, headers)
 }
 
-/// `StaticFiles.check_config`: the 500 a mount answers while its directory is missing or not a directory.
+/// The 500 a mount answers while its directory is missing or not a directory.
 fn directory_failure(directory: &Path) -> Option<Response> {
   match std::fs::metadata(directory) {
     Ok(metadata) if metadata.is_dir() => None,
@@ -122,7 +122,7 @@ fn directory_failure(directory: &Path) -> Option<Response> {
   }
 }
 
-/// `posixpath.normpath` of a relative path: `.` and empty parts drop, `..` cancels a preceding name.
+/// Normalize a relative path: `.` and empty parts drop, `..` cancels a preceding name.
 fn normpath(path: &str) -> String {
   let mut parts: Vec<&str> = Vec::new();
   for part in path.split('/') {
@@ -247,7 +247,6 @@ fn file_response(
   multipart_response(path, &file_headers, &ranges, head_only)
 }
 
-/// `StaticFiles.is_not_modified`.
 fn is_not_modified(file_headers: &FileHeaders, request: &HeaderMap) -> bool {
   let if_none_match = header_text(request, &header::IF_NONE_MATCH);
   if !if_none_match.is_empty() {
@@ -267,9 +266,8 @@ fn is_not_modified(file_headers: &FileHeaders, request: &HeaderMap) -> bool {
   }
 }
 
-/// `email.utils.parsedate` for the forms HTTP clients send (`Sun, 18 Oct 2026 07:15:40 GMT`, with or
-/// without the weekday). It returns the `(year, month, day, hour, minute, second)` tuple CPython compares.
-/// The zone is ignored as `parsedate` ignores it.
+/// Parse an HTTP date (`Sun, 18 Oct 2026 07:15:40 GMT`, with or without the weekday) into a
+/// `(year, month, day, hour, minute, second)` tuple. The zone is ignored.
 fn parse_http_date(text: &str) -> Option<(i64, i64, i64, i64, i64, i64)> {
   const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
   let mut words: Vec<&str> = text.split_whitespace().collect();
@@ -299,7 +297,7 @@ enum RangeError {
   NotSatisfiable,
 }
 
-/// `FileResponse._parse_range_header`: the requested `[start, end)` ranges, merged when several.
+/// The requested `[start, end)` ranges, merged when several.
 fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, RangeError> {
   let (units, spec) = range.split_once('=').ok_or(RangeError::Malformed("Malformed range header."))?;
   if units.trim().to_lowercase() != "bytes" {
@@ -349,7 +347,7 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
   Ok(ranges.into_iter().map(|(start, end)| (start as u64, end as u64)).collect())
 }
 
-/// CPython `int(text)` for decimal text: optional sign, digits with single underscores between them.
+/// Parse decimal text: optional sign, digits with single underscores between them.
 fn parse_int(text: &str) -> Option<i128> {
   let text = text.trim();
   let (negative, digits) = match text.as_bytes().first()? {
@@ -404,15 +402,15 @@ fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u
   response
 }
 
-/// `secrets.token_hex(count)`: the multipart boundary.
+/// `count` random bytes in hex: the multipart boundary.
 fn random_hex(count: usize) -> std::io::Result<String> {
   let mut bytes = vec![0u8; count];
   std::io::Read::read_exact(&mut std::fs::File::open("/dev/urandom")?, &mut bytes)?;
   Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// The bytes `[start, end)` of `path` as starlette sends them: one message when the first chunk ends
-/// the body, a stream of `CHUNK_SIZE` messages otherwise. `whole_file` selects `_handle_simple`'s rule
+/// The bytes `[start, end)` of `path`: one message when the first chunk ends
+/// the body, a stream of `CHUNK_SIZE` messages otherwise. `whole_file` selects the whole-file rule
 /// (a full first chunk always announces more) over the range rule (more only while bytes remain).
 fn read_body(path: &Path, start: u64, end: u64, whole_file: bool) -> std::io::Result<Body> {
   let slice = if whole_file { Bytes::from(std::fs::read(path)?) } else { read_file_range(path, start, end)? };
@@ -430,7 +428,7 @@ fn read_body(path: &Path, start: u64, end: u64, whole_file: bool) -> std::io::Re
   Ok(Body::from_stream(stream::iter(messages.into_iter().map(Ok::<_, std::io::Error>))))
 }
 
-/// Seek to `[start, end)` and read only that range, as Starlette's `FileResponse` does for range requests.
+/// Seek to `[start, end)` and read only that range.
 fn read_file_range(path: &Path, start: u64, end: u64) -> std::io::Result<Bytes> {
   let mut file = std::fs::File::open(path)?;
   read_range(&mut file, start, end)

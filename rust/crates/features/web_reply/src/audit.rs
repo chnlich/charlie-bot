@@ -1,4 +1,4 @@
-//! The round-end audit of a web session (`src/features/web_reply/audit.py`): the status reminder, the reply nudge and
+//! The round-end audit of a web session: the status reminder, the reply nudge and
 //! the reply notice.
 //!
 //! The status reminder covers every finished turn of an open task, background turns included. A turn that ran
@@ -26,19 +26,19 @@ use serde_json::{Value, json};
 
 use crate::reply;
 
-/// The status instruction that ends a status reminder (`audit.STATUS_SENTENCES`).
+/// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
   "Run `charliebot web status set` when Goal, Now or Waiting on you differs from the state that turn read back. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 
-/// The reminder a turn gets when it recorded no status set or confirm (`audit.status_reminder_text`).
+/// The reminder a turn gets when it recorded no status set or confirm.
 fn status_reminder_text() -> String {
   format!("Session status reminder: your last turn ended without a status set or confirm. {STATUS_SENTENCES}")
 }
 
 /// The one reminder that a turn gets when it missed both its web reply and its status, for the unanswered user message
-/// `user_event_id` (`audit.combined_reminder_text`).
+/// `user_event_id`.
 fn combined_reminder_text(user_event_id: &str) -> String {
   format!(
     "Web reply and session status reminder: your last turn woke on a user message and ended without a web reply and \
@@ -46,15 +46,15 @@ fn combined_reminder_text(user_event_id: &str) -> String {
     reply::answer_request(user_event_id)
   )
 }
-/// The sender name a status reminder carries in the chat log (`audit.STATUS_REMINDER_SENDER_NAME`).
+/// The sender name a status reminder carries in the chat log.
 pub const STATUS_REMINDER_SENDER_NAME: &str = "Session status";
 
-/// Whether `event` is a reminder that a turn ended without a status set or confirm (`audit.is_status_reminder`).
+/// Whether `event` is a reminder that a turn ended without a status set or confirm.
 pub fn is_status_reminder(event: &impl EventFields) -> bool {
   event.field(WEB_STATUS_REMINDER).is_some()
 }
 
-/// Audit one finished turn of a web session for its status and its web reply (`audit.audit_turn`).
+/// Audit one finished turn of a web session for its status and its web reply.
 ///
 /// The status reminder needs a session that is not archived, an open task, no pending close request, a turn without a
 /// status event and a turn that no status reminder woke. The reply steps are [`reply_steps`]'s. A turn that needs both
@@ -98,8 +98,8 @@ pub async fn audit_turn(
 }
 
 /// Audit one finished turn's web reply alone: a nudge for each unanswered user message, then a notice for each nudge
-/// that went unanswered (`audit.audit_reply`). The production hook audits the turn through [`audit_turn`]; the tests
-/// drive this reply-only step directly, as Python's tests drive `audit.audit_reply`.
+/// that went unanswered. The production hook audits the turn through [`audit_turn`]; the tests
+/// drive this reply-only step directly.
 #[cfg(test)]
 pub async fn audit_reply(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<()> {
   let input_ids = features.store.master_done_input_event_ids(done);
@@ -128,7 +128,7 @@ struct ReplyStep {
   user_event_id: String,
 }
 
-/// The reply steps of one turn, in log order (`audit._reply_steps`). Each input of the turn, a user message or a nudge,
+/// The reply steps of one turn, in log order. Each input of the turn, a user message or a nudge,
 /// is judged on the user message it answers: a user message that no web reply answers gets a nudge, unless a nudge was
 /// already posted for it; a nudge whose user message no web reply answers gets a notice, unless one was posted. A user
 /// message named by several inputs gets one step.
@@ -161,7 +161,7 @@ fn reply_steps(loaded: &[charliebot_store::SharedChatEvent], input_ids: &[String
   steps
 }
 
-/// The events one turn recorded, from the previous round end to `done` (`audit._turn_events`).
+/// The events one turn recorded, from the previous round end to `done`.
 ///
 /// The done event is already in the log when the hook runs. A caller that passes an unpersisted done has only this
 /// log to judge, so the whole log stands for the turn.
@@ -188,20 +188,20 @@ fn turn_events<'a>(
   loaded
 }
 
-/// Whether one turn recorded a status set or a status confirm (`audit._status_recorded`).
+/// Whether one turn recorded a status set or a status confirm.
 fn status_recorded(turn_events: &[charliebot_store::SharedChatEvent]) -> bool {
   turn_events.iter().any(|event| {
     matches!(event.get("type").and_then(CompactValue::as_str), Some(WEB_STATUS) | Some(WEB_STATUS_CONFIRMED))
   })
 }
 
-/// Whether a status reminder for the turn `turn_id` is already in the log (`audit._reminder_already_posted`).
+/// Whether a status reminder for the turn `turn_id` is already in the log.
 fn reminder_already_posted(loaded: &[charliebot_store::SharedChatEvent], turn_id: Option<&str>) -> bool {
   let Some(turn_id) = turn_id else { return false };
   loaded.iter().any(|event| event.get(WEB_STATUS_REMINDER).and_then(CompactValue::as_str) == Some(turn_id))
 }
 
-/// Whether one of the turn's inputs is a status reminder (`audit._woken_by_status_reminder`).
+/// Whether one of the turn's inputs is a status reminder.
 fn woken_by_status_reminder(loaded: &[charliebot_store::SharedChatEvent], input_ids: &[String]) -> bool {
   let wanted: HashSet<&str> = input_ids.iter().map(String::as_str).collect();
   loaded.iter().any(|event| {
@@ -210,7 +210,7 @@ fn woken_by_status_reminder(loaded: &[charliebot_store::SharedChatEvent], input_
   })
 }
 
-/// Whether the session's newest run left a close request pending (`audit._has_pending_close_request`). A request that a
+/// Whether the session's newest run left a close request pending. A request that a
 /// later run owns was voided by the wake that started that run, so it does not count.
 async fn close_request_pending(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<bool> {
   let store = Arc::clone(&features.store);
@@ -230,7 +230,7 @@ async fn close_request_pending(features: &Arc<FeatureContext>, session_id: &str)
   .context("the task-tree read stopped")?
 }
 
-/// Whether one turn needs one status reminder (`audit._status_reminder_needed`).
+/// Whether one turn needs one status reminder.
 async fn status_reminder_needed(
   features: &Arc<FeatureContext>,
   session_id: &str,
@@ -259,7 +259,7 @@ async fn status_reminder_needed(
   Ok(!reminder_already_posted(loaded, done.get("id").and_then(Value::as_str)))
 }
 
-/// Persist one status reminder for `turn_id` and wake a new turn with it (`audit._post_status_reminder`).
+/// Persist one status reminder for `turn_id` and wake a new turn with it.
 ///
 /// `nudge_of` is the user message a combined reminder also answers without a web reply.
 async fn post_status_reminder(
@@ -285,7 +285,7 @@ async fn post_status_reminder(
   Ok(())
 }
 
-/// Persist the nudge for `user_event_id`, then wake a new turn with it as its own task (`audit._nudge`). A failed wake
+/// Persist the nudge for `user_event_id`, then wake a new turn with it as its own task. A failed wake
 /// is logged in that task.
 async fn nudge(features: &Arc<FeatureContext>, session_id: &str, user_event_id: &str) -> anyhow::Result<()> {
   let text = reply::nudge_text(user_event_id);
@@ -301,7 +301,7 @@ async fn nudge(features: &Arc<FeatureContext>, session_id: &str, user_event_id: 
   Ok(())
 }
 
-/// Wake one turn with `text` as its own logged background task (`master_trigger.spawn_master_turn`). A failed wake is
+/// Wake one turn with `text` as its own logged background task (`charliebot_tasks::master_trigger::trigger_master`). A failed wake is
 /// logged in that task.
 fn spawn_wake(
   features: &Arc<FeatureContext>,
@@ -334,7 +334,7 @@ fn spawn_wake(
   });
 }
 
-/// Persist the no-reply notice for `user_event_id`, then mark the session unread (`audit._notice`).
+/// Persist the no-reply notice for `user_event_id`, then mark the session unread.
 async fn notice(features: &Arc<FeatureContext>, session_id: &str, user_event_id: &str) -> anyhow::Result<()> {
   features
     .store

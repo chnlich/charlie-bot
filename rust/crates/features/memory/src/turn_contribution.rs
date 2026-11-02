@@ -1,4 +1,4 @@
-//! The memory package's turn contribution (`src/features/memory/turn_contribution.py`): the applicable memory joins a
+//! The memory package's turn contribution: the applicable memory joins a
 //! run's managed instructions.
 
 use anyhow::Result;
@@ -11,14 +11,14 @@ use charliebot_store::metadata::SessionMetadata;
 use crate::memory::{self, MemorySelection};
 use crate::store_root;
 
-/// The run kinds whose managed instructions are the manager contract (`task_prompts.MANAGER_KINDS`). Every other kind
+/// The run kinds whose managed instructions are the manager contract. Every other kind
 /// takes the worker audience.
 const MANAGER_KINDS: &[&str] = &["manager_turn"];
 
-/// The scope of a memory source (`task_prompts.SCOPE_MEMORY`).
+/// The scope of a memory source.
 const SCOPE_MEMORY: &str = "memory";
 
-/// The memory package's turn contribution (`turn_contribution.MemoryTurnContribution`).
+/// The memory package's turn contribution.
 pub struct MemoryTurn;
 
 impl TurnContribution for MemoryTurn {
@@ -38,7 +38,7 @@ impl TurnContribution for MemoryTurn {
   }
 }
 
-/// The audience mapping (`turn_contribution.memory_selection_for`): a manager takes the master selection, and every
+/// The audience mapping: a manager takes the master selection, and every
 /// other kind the worker selection for its repo.
 fn memory_selection_for(meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig) -> Result<Option<MemorySelection>> {
   let memory_dir = store_root::memory_dir(cfg);
@@ -56,8 +56,7 @@ fn repo_basename(meta: &SessionMetadata) -> &str {
   }
 }
 
-/// The selection's segments as ordered rule segments, each source with scope `memory`
-/// (`turn_contribution._memory_rule_segments`).
+/// The selection's segments as ordered rule segments, each source with scope `memory`.
 fn rule_segments(selection: &MemorySelection) -> Vec<RuleSegment> {
   selection
     .segments
@@ -114,7 +113,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),

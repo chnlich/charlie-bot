@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# Replay the taste table: a model re-chooses each held-out row, first from its situation and options alone
+# (condition A), then with the domain's rows that were active when the row was decided (condition B). A match
+# measures agreement with the user's recorded choice; the held-out row is never shown to the model.
+#
+# Every model call runs with the repo's one-shot argv (tools disabled, no session persistence) in a new empty
+# directory, so the model sees only its prompt. The model is the manager default backend's model:
+# `backends.options[0].model` from `charliebot config get backends`.
+#
+# Usage: scripts/taste-replay <output-dir>
+# Environment: CHARLIEBOT_BIN names the charliebot CLI to run. Without it, the release CLI under
+# CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases) runs.
+set -euo pipefail
+
+DISALLOWED_TOOLS="Bash,Read,Write,Edit,Glob,Grep,Agent"
+CALL_TIMEOUT_SECONDS=300
+SYSTEM_PROMPT="You are helping reproduce a user's past choice. Read the question, then answer with exactly one option, copied verbatim, and nothing else."
+ISOLATION="Each call runs with tools disabled (--disallowed-tools $DISALLOWED_TOOLS) and --no-session-persistence, in a new empty directory. The model sees only the prompt."
+AS_OF_RULE="Condition B adds the domain's rows decided before the held-out row's decided_at, minus rows that a row decided before that moment supersedes, minus retracted rows. Covered rows stay in."
+
+# Each answer's match: the first non-empty line, without its list marker, equals the chosen option after whitespace
+# collapse, quote stripping and lowercasing.
+MATCH_PROGRAM='
+def norm:
+  gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")
+  | sub("^[\"'"'"'“”「」]+"; "") | sub("[\"'"'"'“”「」]+$"; "") | ascii_downcase;
+($answer | split("\n") | map(select(test("\\S"))) | (.[0] // "")
+  | sub("^\\s*(?:[0-9]+[.)]|[-*])\\s*"; "")) as $first
+| ($first | norm) == ($chosen | norm)
+'
+
+RESULTS_PROGRAM='
+def rate($hits; $total):
+  {matches: $hits, total: $total, rate: (if $total == 0 then null else ((($hits / $total) * 10000 | round) / 10000) end)};
+def tally($answers; $condition):
+  ($answers | map(select(.condition == $condition))) as $selected
+  | rate(($selected | map(select(.match)) | length); ($selected | length));
+def domain_block($answers; $domain):
+  ($answers | map(select(.domain == $domain))) as $selected
+  | {rows: ($selected | map(.row) | unique | length), A: tally($selected; "A"), B: tally($selected; "B")};
+. as $answers
+| {
+    model: $model,
+    model_source: "backends.options[0].model from `charliebot config get backends`",
+    generated_at: $generated,
+    isolation: $isolation,
+    as_of_rule: $as_of,
+    rows: ($answers | map(.row) | unique | length),
+    conditions: {A: tally($answers; "A"), B: tally($answers; "B")},
+    domains: ($answers | map(.domain) | unique | map({key: ., value: domain_block($answers; .)}) | from_entries),
+    answers: $answers
+  }
+'
+
+# The results page's table rows, escaped by jq's @html.
+PAGE_BODY_PROGRAM='
+def pct: if . == null then "n/a" else (((. * 1000) | round) / 10 | tostring) + "%" end;
+def cell($stats): "<td>\($stats.matches)/\($stats.total)</td><td>\($stats.rate | pct)</td>";
+"<h1>Taste replay</h1>\n"
++ "<p class=\"note\">Model: <code>\(.model | @html)</code> (the manager default backend'"'"'s model, "
++ "<code>backends.options[0]</code>). Rows replayed: \(.rows).</p>\n"
++ "<table>\n<tr><th>Condition</th><th>Matches</th><th>Agreement</th></tr>\n"
++ "<tr><td>A: situation and options only</td>\(cell(.conditions.A))</tr>\n"
++ "<tr><td>B: A plus the rows active at the decision time</td>\(cell(.conditions.B))</tr>\n"
++ "</table>\n"
++ "<p class=\"note\">\(.isolation | @html)<br>\(.as_of_rule | @html)</p>\n"
++ "<h2>By domain</h2>\n<table>\n"
++ "<tr><th>Domain</th><th>Rows</th><th>A matches</th><th>A agreement</th><th>B matches</th><th>B agreement</th></tr>\n"
++ (.domains | to_entries | map("<tr><td>\(.key | @html)</td><td>\(.value.rows)</td>\(cell(.value.A))\(cell(.value.B))</tr>\n") | join(""))
++ "</table>\n<h2>Mismatches</h2>\n<table>\n"
++ "<tr><th>Row</th><th>Domain</th><th>Condition</th><th>Chosen</th><th>Model answer</th></tr>\n"
++ ([.answers[] | select(.match | not)
+    | "<tr><td>\(.row | @html)</td><td>\(.domain | @html)</td><td>\(.condition)</td><td>\(.chosen | @html)</td><td><pre>\(.answer | @html)</pre></td></tr>\n"]
+   | if length == 0 then "<tr><td colspan=\"5\">none</td></tr>\n" else join("") end)
++ "</table>\n"
+'
+
+die() {
+  echo "taste-replay: $*" >&2
+  exit 1
+}
+
+resolve_cli() {
+  if [[ -n "${CHARLIEBOT_BIN:-}" ]]; then
+    echo "$CHARLIEBOT_BIN"
+    return
+  fi
+  local current="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}/current/charliebot"
+  [[ -x "$current" ]] || die "no release CLI at $current; install one with scripts/release.sh <sha>"
+  echo "$current"
+}
+
+# The preflight: one real headless call, which fails when the login is dead.
+preflight() {
+  local call_dir reply
+  call_dir=$(mktemp -d)
+  reply=$(cd "$call_dir" && claude -p --max-turns 1 'Reply with the single word OK.' </dev/null) || {
+    rm -rf "$call_dir"
+    die "preflight model call failed; the login check failed"
+  }
+  rm -rf "$call_dir"
+  [[ -n "$reply" ]] || die "preflight model call returned no text; the login check failed"
+}
+
+# One model call: the prompt on stdin, the answer on stdout, in a new empty directory.
+ask() {
+  local model=$1 prompt=$2 call_dir answer
+  call_dir=$(mktemp -d)
+  answer=$(cd "$call_dir" && printf '%s' "$prompt" | timeout "$CALL_TIMEOUT_SECONDS" claude -p \
+    --output-format text --no-session-persistence --model "$model" --system-prompt "$SYSTEM_PROMPT" \
+    --disallowed-tools "$DISALLOWED_TOOLS") || {
+    rm -rf "$call_dir"
+    die "model call failed"
+  }
+  rm -rf "$call_dir"
+  printf '%s' "$answer"
+}
+
+# The rows of a domain as JSON lines: its active rows, or the rows active at a moment when one is given.
+query_rows() {
+  if [[ $# -ge 2 ]]; then
+    "$CLI" taste query --domain "$1" --as-of "$2" --json
+  else
+    "$CLI" taste query --domain "$1" --json
+  fi
+}
+
+# Condition A's prompt, from one row's JSON on stdin.
+base_prompt() {
+  jq -r '"Situation: \(.situation)\n\nOptions:\n" + (.options | map("- " + .) | join("\n"))
+    + "\n\nWhich option did the user choose? Reply with exactly one option, copied verbatim."'
+}
+
+# The earlier rows of condition B, from their JSON lines on stdin.
+context_block() {
+  jq -rs 'if length == 0 then "(none)" else
+    map("- \(.situation)\n  options: \(if (.options | length) == 0 then "(no options recorded)" else (.options | join(" | ")) end)\n  the user chose: \(.chosen)\n  reason: \(.reason)")
+    | join("\n") end'
+}
+
+answer_matches() {
+  jq -n --arg answer "$1" --arg chosen "$2" "$MATCH_PROGRAM"
+}
+
+main() {
+  if [[ $# -ne 1 || "$1" == -h || "$1" == --help ]]; then
+    echo "usage: $0 <output-dir>" >&2
+    exit 2
+  fi
+  local output_dir=$1
+  command -v jq > /dev/null || die "jq is required on PATH"
+  command -v claude > /dev/null || die "claude is required on PATH"
+  CLI=$(resolve_cli)
+  MODEL=$("$CLI" config get backends | jq -r '.options[0].model // empty') || die "charliebot config get backends failed"
+  [[ -n "$MODEL" ]] || die "backends.options[0] names no model"
+
+  echo "taste-replay: preflight model call" >&2
+  preflight
+
+  local index_text domain rows held row id chosen decided_at context prompt answer match condition
+  local held_rows=0
+  index_text=$("$CLI" taste index)
+  mapfile -t DOMAINS < <(printf '%s\n' "$index_text" | grep -E '^[^[:space:]]+$' || true)
+  [[ ${#DOMAINS[@]} -gt 0 ]] || die "the taste table has no active row to replay"
+
+  WORK=$(mktemp -d)
+  trap 'rm -rf "$WORK"' EXIT
+  : > "$WORK/answers.jsonl"
+  for domain in "${DOMAINS[@]}"; do
+    rows=$(query_rows "$domain")
+    held=$(printf '%s\n' "$rows" | jq -c 'select((.options | length) >= 2)')
+    while IFS= read -r row; do
+      [[ -n "$row" ]] || continue
+      held_rows=$((held_rows + 1))
+      id=$(jq -r '.id' <<< "$row")
+      chosen=$(jq -r '.chosen' <<< "$row")
+      decided_at=$(jq -r '.decided_at' <<< "$row")
+      for condition in A B; do
+        if [[ $condition == A ]]; then
+          prompt=$(base_prompt <<< "$row")
+        else
+          context=$(query_rows "$domain" "$decided_at")
+          prompt="$(base_prompt <<< "$row")"$'\n\n'"Earlier choices by the user in this domain:"$'\n'"$(context_block <<< "$context")"
+        fi
+        echo "taste-replay: $id condition $condition" >&2
+        answer=$(ask "$MODEL" "$prompt")
+        match=$(answer_matches "$answer" "$chosen")
+        jq -cn --arg row "$id" --arg domain "$domain" --arg condition "$condition" --arg chosen "$chosen" \
+          --arg answer "$answer" --argjson match "$match" \
+          '{row: $row, domain: $domain, condition: $condition, chosen: $chosen, answer: $answer, match: $match}' \
+          >> "$WORK/answers.jsonl"
+      done
+    done <<< "$held"
+  done
+  [[ $held_rows -gt 0 ]] || die "no active row has two or more options to replay"
+
+  mkdir -p "$output_dir"
+  jq -s --arg model "$MODEL" --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg isolation "$ISOLATION" --arg as_of "$AS_OF_RULE" "$RESULTS_PROGRAM" "$WORK/answers.jsonl" \
+    > "$output_dir/results.json"
+  {
+    cat <<'HTML_HEAD'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Taste replay</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; color: #1b2430; }
+  table { border-collapse: collapse; margin: 12px 0; }
+  th, td { border: 1px solid #d9dfe6; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef1f5; }
+  pre { margin: 0; white-space: pre-wrap; }
+  .note { color: #5b6774; max-width: 900px; }
+</style>
+</head>
+<body>
+HTML_HEAD
+    jq -r "$PAGE_BODY_PROGRAM" "$output_dir/results.json"
+    cat <<'HTML_TAIL'
+</body>
+</html>
+HTML_TAIL
+  } > "$output_dir/results.html"
+  jq -r '"taste-replay: \(.rows) rows; A \(.conditions.A.matches)/\(.conditions.A.total), B \(.conditions.B.matches)/\(.conditions.B.total)"' \
+    "$output_dir/results.json" >&2
+  echo "taste-replay: wrote $output_dir/results.html and $output_dir/results.json" >&2
+}
+
+main "$@"

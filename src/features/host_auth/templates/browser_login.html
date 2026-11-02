@@ -6,7 +6,9 @@
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
   .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
   .login h2 { margin:0 0 10px; padding-bottom:0; border-bottom:0 }
-  .btn { font:inherit; font-size:13px; background:var(--acc); color:#fff; border:0; border-radius:8px;
+  /* The label takes --panel, the surface ink: the dark theme's accent is a light blue, where white
+     text renders 2.49:1, and --panel reads 7.0:1 on it. */
+  .btn { font:inherit; font-size:13px; background:var(--acc); color:var(--panel); border:0; border-radius:8px;
     padding:8px 15px; cursor:pointer }
   .state { font-size:13px; margin:14px 0 0; padding-top:12px; border-top:1px solid var(--bd) }
   .k { color:var(--mut); font-size:11.5px; font-weight:620; text-transform:uppercase; letter-spacing:.4px }

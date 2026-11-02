@@ -1,9 +1,8 @@
-//! One `http_request` event per HTTP response (`server._RequestLogMiddleware`).
+//! One `http_request` event per HTTP response.
 //!
-//! The event fires once the response body has been sent or dropped, as the Python middleware logs
-//! when the inner app returns after its last body message. Its fields are `method`, the decoded
+//! The event fires once the response body has been sent or dropped. Its fields are `method`, the decoded
 //! `path` without the query string (the terminal WebSocket carries its credential there), `status`,
-//! `duration_ms` and `client`; a failed request adds `error`, the failure's Python exception class.
+//! `duration_ms` and `client`; a failed request adds `error`, the failure's kind.
 //! The layer sits outside the auth gate, so the gate's refusals are logged too.
 
 use std::pin::Pin;
@@ -33,7 +32,7 @@ struct PendingEvent {
 
 impl Drop for PendingEvent {
   fn drop(&mut self) {
-    // Python's round() rounds half to even.
+    // Round half to even.
     let duration_ms = (self.started.elapsed().as_secs_f64() * 1000.0).round_ties_even() as u64;
     match &self.error {
       None => tracing::info!(

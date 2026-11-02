@@ -1,4 +1,4 @@
-//! The profile backup (`src/features/backup/backup.py`): a `.tar.gz` of the CharlieBot home in a
+//! The profile backup: a `.tar.gz` of the CharlieBot home in a
 //! sibling directory, pruned by a tiered retention policy.
 
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ const BACKUP_SUFFIX: &str = ".tar.gz";
 pub(crate) const DAILY_THRESHOLD: i64 = 3;
 pub(crate) const WEEKLY_THRESHOLD: i64 = 15;
 
-/// The state directory being backed up: this profile's home (`config.charliebot_home_dir`).
+/// The state directory being backed up: this profile's home (`charliebot_core::home::charliebot_home_dir`).
 pub fn charliebot_dir() -> anyhow::Result<PathBuf> {
   Ok(charliebot_core::home::charliebot_home_dir()?)
 }
@@ -41,8 +41,8 @@ pub fn backup_dir(home: &Path) -> anyhow::Result<PathBuf> {
   Ok(home.with_file_name(backup_name))
 }
 
-/// True if the archive member (a relative path) should be excluded (`_should_exclude`). The name is judged
-/// as bytes: a byte outside UTF-8 never equals an ASCII name part, so the decision matches Python's.
+/// True if the archive member (a relative path) should be excluded. The name is judged
+/// as bytes: a byte outside UTF-8 never equals an ASCII name part.
 pub fn should_exclude(arcname: &[u8]) -> bool {
   let parts: Vec<&[u8]> = arcname.split(|byte| *byte == b'/').collect();
   // The profile's opencode store is the top-level directory only; a deeper part with the same name stays.
@@ -68,8 +68,8 @@ pub(crate) fn archive_name(moment: NaiveDateTime) -> String {
   format!("{BACKUP_PREFIX}{}{BACKUP_SUFFIX}", moment.format("%Y%m%d-%H%M%S"))
 }
 
-/// Parses the naive local datetime of a backup filename like `charliebot-20260101-120000.tar.gz`
-/// (`_parse_backup_date`), validating each field as `strptime` does.
+/// Parses the naive local datetime of a backup filename like `charliebot-20260101-120000.tar.gz`,
+/// requiring 15 characters whose only non-digit is the dash at index 8.
 pub(crate) fn parse_backup_date(name: &str) -> Option<NaiveDateTime> {
   let ts = name.strip_prefix(BACKUP_PREFIX).and_then(|ts| ts.strip_suffix(BACKUP_SUFFIX))?;
   let bytes = ts.as_bytes();
@@ -80,29 +80,29 @@ pub(crate) fn parse_backup_date(name: &str) -> Option<NaiveDateTime> {
     return None;
   }
   let parsed = NaiveDateTime::parse_from_str(ts, "%Y%m%d-%H%M%S").ok()?;
-  // Python datetime rejects year 0, which chrono accepts.
+  // Year 0 parses in chrono but a real timestamp never carries it; reject it.
   if parsed.year() < 1 {
     return None;
   }
   Some(parsed)
 }
 
-/// The user's login name for a uid, or "" when no passwd entry exists (`KeyError`), as Python's `tarfile` does.
+/// The user's login name for a uid, or "" when no passwd entry exists.
 fn user_name(uid: u32) -> anyhow::Result<String> {
   let user = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
     .with_context(|| format!("looking up the passwd entry of uid {uid}"))?;
   Ok(user.map(|user| user.name).unwrap_or_default())
 }
 
-/// The group's name for a gid, or "" when no group entry exists (`KeyError`), as Python's `tarfile` does.
+/// The group's name for a gid, or "" when no group entry exists.
 fn group_name(gid: u32) -> anyhow::Result<String> {
   let group = nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
     .with_context(|| format!("looking up the group entry of gid {gid}"))?;
   Ok(group.map(|group| group.name).unwrap_or_default())
 }
 
-/// The names in a directory, sorted as Python sorts `iterdir()` (`sorted(path.iterdir())`): by the code points
-/// of each name, so a name that is not UTF-8 lands where Python puts it. A read error anywhere in the listing fails it.
+/// The names in a directory, sorted by the code points of each name as `code_points` maps them, so a name
+/// that is not UTF-8 keeps a stable place. A read error anywhere in the listing fails it.
 fn sorted_names(dir: &Path) -> std::io::Result<Vec<OsString>> {
   let mut names =
     fs::read_dir(dir)?.map(|entry| entry.map(|entry| entry.file_name())).collect::<std::io::Result<Vec<_>>>()?;
@@ -115,7 +115,7 @@ fn mtime_fields(metadata: &fs::Metadata) -> (i64, u32) {
   (secs, metadata.mtime_nsec() as u32)
 }
 
-/// Creates a compressed backup of this profile's state directory (`create_backup`): the archive
+/// Creates a compressed backup of this profile's state directory: the archive
 /// `charliebot-<YYYYMMDD-HHMMSS>.tar.gz` (local time) in the sibling backup directory.
 pub fn create_backup() -> anyhow::Result<PathBuf> {
   create_backup_in(&charliebot_dir()?)
@@ -130,8 +130,8 @@ pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
 
   let raw_out =
     fs::File::create(&archive_path).with_context(|| format!("creating the archive {}", archive_path.display()))?;
-  // The tar stream rides one gzip stream at the fast level, as isal's `igzip` level 1 does in Python;
-  // the compressed bytes may differ, the members may not.
+  // The tar stream rides one gzip stream at the fast level;
+  // the recorded reference archives may differ in compressed bytes, their members do not.
   let mut out = GzEncoder::new(raw_out, Compression::new(1));
   let mut bytes_written: u64 = 0;
   let mut hardlinks: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
@@ -155,8 +155,8 @@ pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
   Ok(archive_path)
 }
 
-/// Adds one entry without recursion, then descends when the path is a directory
-/// (`_add_recursive`; `is_dir` follows symlinks, as in Python).
+/// Adds one entry without recursion, then descends when the path is a directory.
+/// The directory check follows symlinks.
 fn add_recursive<W: Write>(
   out: &mut W,
   bytes_written: &mut u64,
@@ -198,7 +198,7 @@ fn add_recursive<W: Write>(
   }
 }
 
-/// Adds one archive member with the metadata Python's `tarfile.add` records (`tarfile.gettarinfo`).
+/// Adds one archive member with the filesystem metadata it records.
 fn add_member<W: Write>(
   out: &mut W,
   bytes_written: &mut u64,
@@ -215,7 +215,7 @@ fn add_member<W: Write>(
   } else if metadata.is_dir() {
     (b'5', Vec::new(), 0)
   } else if metadata.is_file() {
-    // A hard link to an already archived inode becomes a LNKTYPE member, as Python's `tarfile` does.
+    // A hard link to an already archived inode becomes a LNKTYPE member.
     let inode = (metadata.dev(), metadata.ino());
     if metadata.nlink() > 1 {
       if let Some(first) = hardlinks.get(&inode) {
@@ -235,10 +235,10 @@ fn add_member<W: Write>(
   } else if file_type.is_fifo() {
     (b'6', Vec::new(), 0)
   } else {
-    // gettarinfo returns None for a socket, and tar.add skips it.
+    // A socket is not archived: the member is skipped.
     return Ok(());
   };
-  // Python's `get_info` writes a directory's name with its trailing slash.
+  // A directory's name carries its trailing slash.
   let mut name = arcname.to_vec();
   if typeflag == b'5' {
     name.push(b'/');
@@ -271,7 +271,7 @@ fn add_member<W: Write>(
   Ok(())
 }
 
-/// Applies the tiered retention policy to this profile's backups (`apply_retention`).
+/// Applies the tiered retention policy to this profile's backups.
 pub fn apply_retention() -> anyhow::Result<()> {
   apply_retention_in(&charliebot_dir()?)
 }
@@ -320,7 +320,7 @@ pub fn apply_retention_in_with_now(home: &Path, now: i64) {
       continue;
     };
     let backup_naive = parsed.and_utc().timestamp();
-    // Python's `timedelta.days` floors toward negative infinity.
+    // The age in whole days floors toward negative infinity.
     let age = (now - backup_naive).div_euclid(86_400);
     let keep = if age < DAILY_THRESHOLD {
       true

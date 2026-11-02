@@ -70,7 +70,7 @@ pub async fn agent_one_shot_text(
 }
 
 /// The backend's one-shot text: its CLI-native one-shot when the backend has one, else the tool-capable
-/// [`agent_one_shot_text`]. This is Python's polymorphic `backend.one_shot_text(...)`.
+/// [`agent_one_shot_text`].
 pub async fn one_shot_text(
   mut built: BuiltBackend,
   base_env: &charliebot_registry::backend::Env,
@@ -233,7 +233,7 @@ mod tests {
     assert_eq!(answer, "first");
     assert!(!instructions_file.exists());
 
-    // The run's throwaway transport dir (`charliebot-run-*`, Python base.py's temp_log_dir) and the
+    // The run's throwaway transport dir (`charliebot-run-*`) and the
     // one-shot cwd (`charliebot-oneshot-*`) are both gone once the call returns.
     let log_dir = seen_log_dir
       .lock()

@@ -28,7 +28,7 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 use turn_contribution::WebReplyTurnContribution;
 
-/// `register` (`src/features/web_reply/__init__.py`): the `/api/internal` router, then the turn contribution, then the
+/// `register`: the `/api/internal` router, then the turn contribution, then the
 /// web-reply status field of each session.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
@@ -90,7 +90,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
       Some(_) => return false,
     }
     // `since` and `since_exact` are written by the server; an item stored before they existed carries neither, so a
-    // null reads as absent, as the model's exclude-if-None fields do.
+    // null reads as absent, the same as a key the item leaves out.
     match item.get("since") {
       None => {}
       Some(Value::Null) => {
@@ -114,7 +114,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
 }
 
 /// The web reply routes, with the feature context as their state. The reply and dialog paths have one method each; the
-/// status path answers POST and GET, and Starlette's 405 names the first route of the path, which is the POST route.
+/// status path answers POST and GET, and the 405 body names the first route of the path, which is the POST route.
 fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/internal/web/reply", post_only(api::post_reply))

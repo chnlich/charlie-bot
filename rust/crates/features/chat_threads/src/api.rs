@@ -1,4 +1,4 @@
-//! `GET /api/sessions/chat-threads`: the sidebar Threads view's list (`src/features/chat_threads/api.py`).
+//! `GET /api/sessions/chat-threads`: the sidebar Threads view's list.
 
 use std::sync::{Arc, LazyLock};
 
@@ -72,7 +72,7 @@ mod tests {
   const SLACK: (&str, RegisterFn) = ("src.features.slack", charliebot_slack::register);
   const DISCORD: (&str, RegisterFn) = ("src.features.discord", charliebot_discord::register);
   /// The server's order: the session-api's listing and per-session routes, this package, then the Slack and Discord
-  /// packages that own the origin slots (`src/app/registrations.py` lists them after the chat-threads package).
+  /// packages that own the origin slots.
   const SERVER: [(&str, RegisterFn); 4] = [LISTING, CHAT_THREADS, SLACK, DISCORD];
 
   /// The server's composition in miniature: the packages register in the given order, and the app merges their

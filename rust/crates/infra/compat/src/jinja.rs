@@ -1,11 +1,10 @@
-//! The Jinja2 environment the Python app renders its pages with, as minijinja configures it.
+//! The Jinja2 template environment, as minijinja configures it.
 //!
-//! Starlette's `Jinja2Templates` builds a Jinja2 environment with autoescaping, and a page prints values
-//! through it: markup prints as is, anything else prints as Python's `str()` escaped with markupsafe's table.
-//! Three filters carry bytes the pages depend on, so they are Jinja2's own. They are `tojson`
-//! (`htmlsafe_json_dumps` with `sort_keys`), `urlencode` (`do_urlencode`) and `format` (`do_format` with one
-//! positional argument, the `%` operator on the value). minijinja's `tojson`, `urlencode` and `format` are replaced
-//! here.
+//! A page prints values through it with autoescaping: markup prints as is, anything else prints its text
+//! rendering escaped with the HTML escape table. Three filters carry bytes the pages depend on, so they match
+//! Jinja2's own. They are `tojson` (HTML-safe JSON with sorted keys), `urlencode`, and `format` (one
+//! positional argument, the `%` operator on the value). minijinja's `tojson`, `urlencode` and `format` are
+//! replaced here.
 
 use std::path::PathBuf;
 
@@ -16,8 +15,7 @@ use percent_encoding::{AsciiSet, utf8_percent_encode};
 
 use crate::urlquote::quote_set;
 
-/// A loader that serves each name from the first of `directories` that holds it, as Jinja2's
-/// `FileSystemLoader` does.
+/// A loader that serves each name from the first of `directories` that holds it.
 pub fn file_system_loader(
   directories: Vec<PathBuf>,
 ) -> impl Fn(&str) -> Result<Option<String>, Error> + Send + Sync + 'static {
@@ -33,7 +31,7 @@ pub fn environment(
   environment.set_auto_escape_callback(|_| AutoEscape::Html);
   environment.set_formatter(markupsafe_formatter);
   environment.set_unknown_method_callback(|state, value, method, args| {
-    // Page contexts keep Python's datetime.isoformat() call after serializing datetimes as ISO strings.
+    // Page contexts call `isoformat()` on a value already serialized as an ISO string.
     if method == "isoformat" && value.kind() == ValueKind::String && args.is_empty() {
       return Ok(value.clone());
     }
@@ -45,7 +43,7 @@ pub fn environment(
   environment
 }
 
-/// Jinja2 `FileSystemLoader.get_source`: the first search directory holding the name wins; a `..`
+/// Load a template by name: the first search directory holding the name wins; a `..`
 /// segment names no template. The text is read as UTF-8 with universal newlines.
 fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, Error> {
   let mut pieces = Vec::new();
@@ -72,8 +70,8 @@ fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, 
   Ok(None)
 }
 
-/// Print a value as Jinja2 does under autoescaping: markup prints as is; anything else prints as
-/// Python's `str()` of it, escaped with markupsafe's table.
+/// Print a value under autoescaping: markup prints as is; anything else prints its text
+/// rendering, escaped with the HTML escape table.
 fn markupsafe_formatter(out: &mut Output, state: &State, value: &Value) -> Result<(), Error> {
   if value.is_safe() || state.auto_escape() == AutoEscape::None {
     return out.write_str(&value_str(value)?).map_err(Error::from);
@@ -81,7 +79,7 @@ fn markupsafe_formatter(out: &mut Output, state: &State, value: &Value) -> Resul
   out.write_str(&markupsafe_escape(&value_str(value)?)).map_err(Error::from)
 }
 
-/// `markupsafe.escape`: `& < > ' "` as `&amp; &lt; &gt; &#39; &#34;`.
+/// The HTML escape table: `& < > ' "` as `&amp; &lt; &gt; &#39; &#34;`.
 fn markupsafe_escape(text: &str) -> String {
   let mut out = String::with_capacity(text.len());
   for c in text.chars() {
@@ -97,7 +95,7 @@ fn markupsafe_escape(text: &str) -> String {
   out
 }
 
-/// Python's `str()` of a template value; an undefined value prints as nothing (Jinja2 `Undefined`).
+/// The text of a template value; an undefined value prints as nothing.
 fn value_str(value: &Value) -> Result<String, Error> {
   Ok(match value.kind() {
     ValueKind::Undefined => String::new(),
@@ -139,8 +137,7 @@ fn html_safe_json(json: String) -> String {
   out
 }
 
-/// Jinja2's `tojson` (`htmlsafe_json_dumps` with `sort_keys=True`): `json.dumps` text with `< > & '`
-/// escaped as JSON unicode escapes, marked safe.
+/// The `tojson` filter: JSON text with `< > & '` escaped as JSON unicode escapes, marked safe.
 fn tojson(value: Value) -> Result<Value, Error> {
   if value.is_undefined() {
     return Err(Error::new(ErrorKind::BadSerialization, "Object of type Undefined is not JSON serializable"));
@@ -148,7 +145,7 @@ fn tojson(value: Value) -> Result<Value, Error> {
   Ok(Value::from_safe_string(tojson_text(&to_json(&value)?)))
 }
 
-/// The text [`tojson`] renders: `json.dumps(sort_keys=True)` with the `htmlsafe_json_dumps` escapes.
+/// The text [`tojson`] renders: JSON with sorted keys and the HTML-safe escapes.
 ///
 /// A page that carries a large value as text renders this once in the handler. The filter's path walks the
 /// value into the template engine's value tree and back out again, which costs one pass per element.
@@ -156,9 +153,9 @@ pub fn tojson_text(value: &serde_json::Value) -> String {
   html_safe_json(text_repr::json_dumps(value, &text_repr::JINJA_TOJSON))
 }
 
-/// Jinja2's `do_urlencode`. A scalar's text is quoted with `/` kept (`urllib.parse.quote`). A mapping, or a
+/// The `urlencode` filter. A scalar's text is quoted with `/` kept. A mapping, or a
 /// sequence of `(key, value)` pairs, joins `key=value` with `&`, each side quoted for a query string: `/` is
-/// quoted and a space is `+`. An undefined value is empty, since Jinja2's `Undefined` iterates as nothing.
+/// quoted and a space is `+`. An undefined value is empty, since an undefined value iterates as nothing.
 fn urlencode(value: Value) -> Result<String, Error> {
   match value.kind() {
     ValueKind::Undefined => Ok(String::new()),
@@ -193,12 +190,12 @@ fn query_pair(key: &Value, value: &Value) -> Result<String, Error> {
   Ok(format!("{}={}", query_quote(&value_str(key)?), query_quote(&value_str(value)?)))
 }
 
-/// Jinja2's `url_quote(text, for_qs=True)`: `urllib.parse.quote` with no safe characters, then `%20` as `+`.
+/// Quote a query-string side: no safe characters, then `%20` as `+`.
 fn query_quote(text: &str) -> String {
   quote(text, &QUERY_QUOTE).replace("%20", "+")
 }
 
-/// Jinja2's `format` filter (`do_format`): `soft_str(value) % (kwargs or args)` with the one positional argument the
+/// The `format` filter: the value's text applied to the template with the one positional argument the
 /// pages pass. The conversions are `%f` and `%.Nf`, `%d`, `%s` and `%%`; any other conversion fails the render.
 fn percent_format(template: Value, argument: Value) -> Result<String, Error> {
   let template = value_str(&template)?;
@@ -244,7 +241,7 @@ fn convert(spec: &str, conversion: char, value: &serde_json::Value) -> Result<St
   }
 }
 
-/// The digits after the point of a `%f` spec: `.N`, `.` alone for zero, or nothing for Python's default of six.
+/// The digits after the point of a `%f` spec: `.N`, `.` alone for zero, or nothing for the default of six.
 fn precision(spec: &str, conversion: char) -> Result<usize, Error> {
   match spec.strip_prefix('.') {
     None if spec.is_empty() => Ok(6),
@@ -265,7 +262,7 @@ fn real(value: &serde_json::Value, conversion: char) -> Result<f64, Error> {
   }
 }
 
-/// The argument of a `%d` conversion as an integer: a float truncates toward zero, as `int()` does.
+/// The argument of a `%d` conversion as an integer: a float truncates toward zero.
 fn integer(value: &serde_json::Value) -> Result<String, Error> {
   match value {
     serde_json::Value::Number(number) if number.is_f64() => {
@@ -273,7 +270,7 @@ fn integer(value: &serde_json::Value) -> Result<String, Error> {
       if !float.is_finite() {
         return Err(format_error(format!("cannot convert float {float} to integer")));
       }
-      // The sign of a zero truncation is dropped: `int(-0.5)` is `0`, not `-0`.
+      // The sign of a zero truncation is dropped: -0.5 truncates to `0`, not `-0`.
       let truncated = float.trunc();
       Ok(format!("{:.0}", if truncated == 0.0 { 0.0 } else { truncated }))
     }
@@ -287,12 +284,12 @@ fn format_error(detail: String) -> Error {
   Error::new(ErrorKind::InvalidOperation, detail)
 }
 
-/// `urllib.parse.quote(text, "/")`, Jinja2's `do_urlencode` for a scalar.
+/// The safe set for a scalar's query text: `/`.
 static URLENCODE_QUOTE: AsciiSet = quote_set(b"/");
-/// `urllib.parse.quote(text, "")`, the key and value sides of `url_quote(for_qs=True)`.
+/// The safe set for a query-key or query-value side: none.
 static QUERY_QUOTE: AsciiSet = quote_set(b"");
 
-/// `urllib.parse.quote(text, safe)`: the unreserved characters and `safe` pass, every other byte is `%XX`.
+/// The quoted form: the unreserved characters and `safe` pass, every other byte is `%XX`.
 fn quote(text: &str, safe: &'static AsciiSet) -> String {
   utf8_percent_encode(text, safe).to_string()
 }

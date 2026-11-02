@@ -162,7 +162,7 @@ mod tests {
 
   use super::*;
 
-  /// A fixture clip and the PyAV reference the decoder must match: the reference's sample count and SHA-256, as
+  /// A fixture clip and the reference the decoder must match: the reference's sample count and SHA-256, as
   /// recorded when the reference was made (`tests/fixtures/audio/README.md`).
   struct Clip {
     file: &'static str,
@@ -205,7 +205,7 @@ mod tests {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio").join(name)
   }
 
-  /// Decode the clip, and check its length and its correlation with the PyAV reference.
+  /// Decode the clip, and check its length and its correlation with the reference.
   fn assert_decodes_like_pyav(clip: &Clip) {
     let reference = fs::read(fixture(&format!("{}.pyav16k.s16", clip.file))).expect("the PyAV reference is committed");
     assert_eq!(format!("{:x}", Sha256::digest(&reference)), clip.sha256, "{} reference changed", clip.file);

@@ -678,7 +678,7 @@ impl std::fmt::Display for TurnCancelled {
 impl std::error::Error for TurnCancelled {}
 
 /// The error a covered cancellation leaves on its turn. The process keeps running in its detached transport, and the
-/// next boot's reconcile settles the run, so the launch path records no failure for it (`master_cc_run.py:648-691`).
+/// next boot's reconcile settles the run, so the launch path records no failure for it.
 #[derive(Debug)]
 pub(crate) struct TurnLetGo;
 
@@ -920,7 +920,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   }
   let cancel = item.cancel.clone();
   // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do. The item keeps its
-  // own ids so a failing follow leaves the binding as Python's in-place mutation does.
+  // own ids: the follow's acknowledgements go to a copy, so the item keeps its ids when the follow fails.
   let ack_run_id = item.task_run.run_id.clone();
   let ack_ids = Arc::new(std::sync::Mutex::new(item.user_event_ids.clone()));
   let stream_tracker = Arc::clone(&tracker);
@@ -1130,7 +1130,6 @@ mod tests {
     assert_eq!(context_state().await.unwrap(), (Some(17), None));
   }
 
-  // Python: tests/test_claude_idle_compaction.py:186.
   #[tokio::test]
   async fn idle_argv_matches_the_master_turn_except_for_wait_guard_and_json_mode() {
     let root = tempfile::tempdir().unwrap();

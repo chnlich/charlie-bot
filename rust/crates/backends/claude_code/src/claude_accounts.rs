@@ -546,7 +546,7 @@ fn to_utc_datetime(value: OffsetDateTime) -> UtcDateTime {
 }
 
 /// The transcripts a config directory holds for `session_id`: `projects/<slug>/<session_id>.jsonl`. The config root is
-/// a literal path, and the session id joins the pattern as Python's `Path.glob` interpolates it.
+/// a literal path, and the session id joins the pattern unescaped, so its glob characters take effect.
 pub fn transcript_matches(config_dir: &Path, session_id: &str) -> anyhow::Result<Vec<PathBuf>> {
   let root = expand_account_path(&config_dir.to_string_lossy())?.join("projects");
   let pattern = format!("{}/*/{session_id}.jsonl", glob::Pattern::escape(&root.to_string_lossy()));

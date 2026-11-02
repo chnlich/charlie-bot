@@ -1,5 +1,4 @@
-//! `charliebot memory user-digest`: the memory curator's cross-session user-message digest
-//! (`prompts/cron/memory_curator/user_message_digest.py`).
+//! `charliebot memory user-digest`: the memory curator's cross-session user-message digest.
 //!
 //! One line per user message from the last 7 days: `<YYYY-MM-DD> <session-short-id> [NEW] <text>`,
 //! `NEW` marking messages from the last 24 hours. Read-only, capped at 120K characters with the
@@ -133,8 +132,8 @@ fn system_time_seconds(time: SystemTime) -> f64 {
   }
 }
 
-/// `datetime.datetime.fromisoformat` after the script's `Z` replacement; a value without an offset is
-/// local time, as Python reads it.
+/// An ISO timestamp with an offset parses as RFC 3339; a value without an offset reads as
+/// local time.
 fn parse_timestamp(text: &str) -> Option<f64> {
   if let Ok(moment) = DateTime::parse_from_rfc3339(text) {
     return Some(moment.timestamp_micros() as f64 / 1_000_000.0);

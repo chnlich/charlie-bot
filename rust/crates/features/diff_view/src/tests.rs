@@ -1,4 +1,4 @@
-//! The cases of `tests/test_git_diff_api.py` against real git repositories, and the route answers that the memo, the
+//! The cases against real git repositories, and the route answers that the memo, the
 //! repository list and the 400, 422, 405 and 500 paths give.
 
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use crate::api::{self, BranchKey, GitState, ManifestKey};
 use crate::manifest::Manifest;
 use crate::refs;
 
-/// `_build_repo`: a repository under `workspace` with a `main` and a `feature` branch covering add, modify, delete and
+/// A repository under `workspace` with a `main` and a `feature` branch covering add, modify, delete and
 /// rename.
 fn build_repo(workspace: &Path) -> PathBuf {
   let repo = workspace.join("repo");
@@ -60,7 +60,7 @@ fn register_memory_root(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.diff_root("memory", memory_root)
 }
 
-/// `memory.store_root.memory_dir`: the memory store under the home.
+/// The memory store under the home.
 fn memory_root(cfg: &CharlieBotConfig) -> PathBuf {
   cfg.charliebot_home.join("memory")
 }

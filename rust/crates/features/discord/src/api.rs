@@ -1,5 +1,5 @@
-//! The internal Discord routes (`src/features/discord/api.py`) behind `charliebot discord reply`, `read` and `check`.
-//! FastAPI validates each body before the handler runs, so a malformed request answers 422 whatever the session is. A
+//! The internal Discord routes behind `charliebot discord reply`, `read` and `check`.
+//! Each body is validated before the handler runs, so a malformed request answers 422 whatever the session is. A
 //! refusal of the handler answers its status with `{"detail": ...}`, and an unhandled failure answers 500.
 
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use crate::discord_client::BASE_URL;
 use crate::discord_commands;
 use crate::discord_listener::{self, Bot};
 
-/// `DiscordReadRequest.limit`'s default (`pydantic.Field(50, ge=1, le=100)`).
+/// `DiscordReadRequest.limit`'s default: 50, bounded to 1..=100.
 const DEFAULT_READ_LIMIT: u64 = 50;
 
 /// `DiscordReplyRequest`: the calling session's id and the reply text.

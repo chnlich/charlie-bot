@@ -32,8 +32,7 @@ pub fn boot_time() -> Result<i64> {
     .ok_or_else(|| anyhow!("/proc/stat has no btime line"))
 }
 
-/// Whether the run's recorded start is after this boot. A start at the boot second's fraction counts as after it, as
-/// Python's float `timestamp()` compares.
+/// Whether the run's recorded start is after this boot. A start at the boot second's fraction counts as after it.
 pub fn started_after_boot(started_at: &str, boot: i64) -> Result<bool> {
   let started = DateTime::parse_from_rfc3339(started_at).with_context(|| format!("parse started_at {started_at:?}"))?;
   Ok(started.timestamp_millis() > boot.saturating_mul(1000))

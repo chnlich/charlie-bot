@@ -304,7 +304,7 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   assert!(timeout(Duration::from_millis(100), socket.next()).await.is_err());
   send_frame(&mut socket, json!([])).await;
   let message = timeout(Duration::from_secs(5), socket.next()).await.expect("non-object JSON ends the handler");
-  // uvicorn drops the transport without a close frame, so the client sees the reset rather than a Close message.
+  // The handler ends the transport without a close frame, so the client sees the reset rather than a Close message.
   assert!(
     matches!(message, Some(Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)))),
     "uvicorn sends no close frame, observed {message:?}"

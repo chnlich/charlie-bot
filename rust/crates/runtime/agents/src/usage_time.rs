@@ -1,10 +1,10 @@
-//! Timestamp text of the usage sources, in the form Python's `datetime` writes it.
+//! Timestamp text of the usage sources, in the form the sources write it.
 
 use anyhow::Context;
 use charliebot_core::timefmt;
 use time::{Duration, OffsetDateTime};
 
-/// `datetime.fromtimestamp(seconds, tz=UTC).isoformat()`.
+/// The UTC time of *seconds*, in ISO 8601 text with microseconds.
 pub fn utc_isoformat(seconds: f64) -> anyhow::Result<String> {
   let whole = seconds.floor();
   let mut micros = ((seconds - whole) * 1e6).round_ties_even() as i64;

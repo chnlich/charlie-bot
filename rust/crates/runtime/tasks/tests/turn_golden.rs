@@ -282,7 +282,7 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, options },
+    backends: BackendsConfig { pool, routing: None, strong: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     github: Default::default(),
@@ -932,11 +932,9 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
     tokio::time::timeout(Duration::from_secs(30), async {
       loop {
         let facts = features.store.load_all_facts(SESSION_ID)?;
-        // Python does not order these two writes. The master queue persists MASTER_DONE when the CC
-        // round ends (src/runtime/master_cc_queue.py:298-309), while the stop path records the
-        // interrupted run_finished only after the child process exits (src/runtime/runs.py:1218-1224).
-        // The chat cancel takes the same stop path (src/runtime/api/chat.py:106). The two writers race,
-        // so accept either order and check both events once both exist.
+        // The two writes are not ordered. The master queue persists MASTER_DONE when the CC round ends, and the stop
+        // path records the interrupted run_finished only after the child process exits. The chat cancel takes the same
+        // stop path, so the two writers race, so accept either order and check both events once both exist.
         let done = facts.iter().position(|event| {
           event["type"] == event_types::MASTER_DONE && event["input_event_ids"].to_value() == json!([input_event_id])
         });
@@ -1592,7 +1590,6 @@ fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow:
 
 #[tokio::test]
 async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> anyhow::Result<()> {
-  // Python: tests/test_turn_contributions.py::test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn.
   let temp = tempfile::tempdir()?;
   let guard = Arc::new(ProcessGroupGuard::new());
   let registry = registry();
@@ -1844,7 +1841,6 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
 
 #[tokio::test]
 async fn execution_shutdown_cancellation_keeps_both_run_shapes_nonterminal() -> anyhow::Result<()> {
-  // Python: tests/test_turn_contributions.py::test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn.
   // The execution adapter must also avoid turning an uncovered shutdown into a launch failure.
   assert_task_run_shutdown_shape("covered_script", false).await?;
   assert_task_run_shutdown_shape("uncovered_script", true).await?;

@@ -12,10 +12,11 @@ use axum::extract::{FromRequestParts, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::form_body::{self, Field, FormModel};
+use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_compat::{json_loads, responses};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
+use charliebot_core::json_loads;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use serde_json::{Value, json};
@@ -259,7 +260,7 @@ pub(crate) fn log_voice_transcribed(line: &Transcribed<'_>) {
 }
 
 /// One device field's text as the parity log comparison reads it from both servers.
-/// A string reads as itself, a scalar in its JSON spelling (null, true, 3), a container in Python's repr, and an
+/// A string reads as itself, a scalar in its JSON spelling (null, true, 3), a container in its repr spelling, and an
 /// absent field as null.
 fn device_text(value: Option<&Value>) -> String {
   match value {

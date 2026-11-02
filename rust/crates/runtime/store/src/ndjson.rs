@@ -15,12 +15,11 @@ const APPEND_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// Parse one NDJSON line. Blank and malformed lines are skipped. Invalid UTF-8 is replaced with U+FFFD before
-/// the parse, as `src/infra/ndjson.py::parse_ndjson_line` repairs it, so such a line can still parse. A final
-/// partial line is parsed just like any other line.
+/// the parse, so such a line can still parse. A final partial line is parsed just like any other line.
 ///
 /// One pass: the line deserializes straight into [`CompactValue`] — the reader's only event form —
-/// through the visitor in `compact`, which produces the same value a `serde_json::Value` round trip
-/// would have.
+/// through the visitor in `compact`. That visitor produces the same value a `serde_json::Value`
+/// round trip would have.
 pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
   if raw.iter().all(u8::is_ascii_whitespace) {
     return None;
@@ -40,8 +39,7 @@ thread_local! {
 
 /// Parse every physical line into the compact event form, including a final line without `\n`.
 ///
-/// The file maps once and memchr supplies the line boundaries, the mechanism
-/// `src/infra/ndjson.py:237-271 parse_ndjson_events` runs (an mmap plus zero-copy line slices); no
+/// The file maps once and memchr supplies the line boundaries (an mmap plus zero-copy line slices); no
 /// per-line buffer is allocated.
 pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
   let map = match open_log_map(path)? {
@@ -102,14 +100,14 @@ fn parse_mapped_lines(bytes: &[u8], should_stop: &mut impl FnMut() -> bool) -> O
   Some(events)
 }
 
-/// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.
+/// One event as an NDJSON line: its JSON with non-ASCII kept as is, and the newline.
 pub(crate) fn encode_line(value: &Value) -> String {
   let mut line = text_repr::json_dumps(value, &APPEND_JSON);
   line.push('\n');
   line
 }
 
-/// Append one Python `json.dumps(..., ensure_ascii=False)` line and sync its data to disk.
+/// Append one JSON line with non-ASCII kept as is, and sync its data to disk.
 pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
   let parent = path.parent().expect("an event-log path has a parent directory");
   fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;
@@ -160,7 +158,7 @@ mod tests {
     assert_eq!(fs::read_to_string(path).unwrap(), "{\"text\": \"你好\", \"id\": \"a\"}\n");
   }
 
-  /// `core/test_ndjson.py::test_parse_ndjson_line_applies_the_skip_contract_per_line`.
+  /// The skip contract applies per line.
   #[test]
   fn parse_line_compact_applies_the_skip_contract_per_line() {
     let value_path = |line: &[u8]| parse_line_compact(line).map(|value| value.to_value());
@@ -172,7 +170,7 @@ mod tests {
     assert_eq!(value_path(br#"{"a": NaN}"#), None);
   }
 
-  /// `core/test_ndjson.py::test_parse_ndjson_line_bytes_torn_multibyte_parses_as_replacement_char`.
+  /// A line with a torn multibyte character parses with U+FFFD in its place.
   #[test]
   fn parse_line_compact_repairs_a_torn_multibyte_char_to_the_replacement_char() {
     assert_eq!(
@@ -228,7 +226,7 @@ mod tests {
     }
   }
 
-  /// `core/test_ndjson.py::test_parse_ndjson_file_multi_megabyte_lines_parse_whole`.
+  /// A multi-megabyte line parses whole.
   #[test]
   fn read_file_compact_parses_a_multi_megabyte_line_whole() {
     let path = tempfile::NamedTempFile::new().unwrap();

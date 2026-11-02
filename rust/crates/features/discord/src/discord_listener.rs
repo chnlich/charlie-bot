@@ -1,4 +1,4 @@
-//! The Discord side of the shared thread entrypoint (`src/features/discord/discord_listener.py`): the gateway listener,
+//! The Discord side of the shared thread entrypoint: the gateway listener,
 //! summon handler, `DISCORD` platform and `DiscordThreadAdapter` the shared thread core works through.
 
 use std::collections::BTreeMap;
@@ -75,7 +75,7 @@ impl Bot {
     Self { features, base_url: base_url.into() }
   }
 
-  /// The client every outbound call posts through, built on `credentials.discord.bot_token` (`_bot_client`). A missing
+  /// The client every outbound call posts through, built on `credentials.discord.bot_token`. A missing
   /// token fails the call.
   pub fn client(&self) -> anyhow::Result<DiscordClient> {
     let credentials = self.features.credentials.get()?;
@@ -396,7 +396,7 @@ fn eligible_gateway_message(message: &Value, allowed_users: &BTreeMap<String, St
   !bot && !webhook && matches!(kind, Some(0 | 19)) && user.is_some_and(|user| allowed_users.contains_key(user))
 }
 
-/// The user ids in the message's `mentions` objects (`_mention_ids`).
+/// The user ids in the message's `mentions` objects.
 fn mention_ids(message: &Value) -> Vec<&str> {
   message
     .get("mentions")
@@ -407,7 +407,7 @@ fn mention_ids(message: &Value) -> Vec<&str> {
     .collect()
 }
 
-/// The thread name made from the mention's content (`_thread_name`).
+/// The thread name made from the mention's content.
 fn thread_name(content: &str) -> String {
   let stripped = MENTION_TOKEN_RE.replace_all(content, "");
   let name: String = str_methods::collapse_whitespace(&stripped).chars().take(THREAD_NAME_CHARS).collect();
@@ -431,7 +431,7 @@ pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> anyhow::Re
   Ok(thread_entry::backfill_lost_summons(&adapter(&bot), features).await?)
 }
 
-/// Check the gateway intent and per-guild permissions once for a service start (`_preflight`).
+/// Check the gateway intent and per-guild permissions once for a service start.
 async fn preflight(client: &DiscordClient) -> anyhow::Result<bool> {
   let application = client.get_current_application().await?;
   if !crate::discord_client::message_content_intent_enabled(application.flags) {
@@ -689,7 +689,7 @@ fn next_backoff(backoff: Duration) -> Duration {
   backoff.saturating_mul(2).min(MAX_BACKOFF)
 }
 
-/// Re-run the shared thread follow backfill after each gateway READY (`_backfill_followed_threads`).
+/// Re-run the shared thread follow backfill after each gateway READY.
 async fn backfill_followed_threads(
   features: &Arc<FeatureContext>,
   client: Arc<DiscordClient>,

@@ -21,7 +21,7 @@ fn routes() -> Router<Arc<AppState>> {
   Router::new().route(AUTH_STATUS_PATH, get_only(auth_status)).route(VERSION_PATH, get_only(version))
 }
 
-/// `pages.auth_status`: whether access-key auth is on. A public path, so the login page can ask.
+/// Whether access-key auth is on. A public path, so the login page can ask.
 async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
   match state.access_key() {
     Ok(key) => responses::json(StatusCode::OK, &json!({"auth_enabled": key.is_some()})),

@@ -1,4 +1,4 @@
-//! The Discord REST client (`src/features/discord/discord_client.py`): one method per v10 endpoint, the bot token in an
+//! The Discord REST client: one method per v10 endpoint, the bot token in an
 //! `Authorization: Bot` header, the 429 policy in one place, and `DiscordAPIError` for a failed call. The helpers that
 //! reason about ids, links, the intent and the permission bits are pure functions.
 
@@ -50,21 +50,19 @@ const MESSAGE_PAGE_LIMIT: usize = 100;
 /// The `User-Agent` every call sends.
 const USER_AGENT_VALUE: &str = "DiscordBot (https://discord.com, charlie-bot)";
 
-/// The timeout of each REST call. Python's `DiscordClient` passes none, so every call takes the shared httpx client's
-/// default: `httpx.AsyncClient()` in `src/infra/http.py:18-21`, which is `Timeout(5.0)` in httpx 0.28.1 (checked in the
-/// worktree `.venv`). httpx bounds each phase of a call; reqwest's timeout bounds the whole call.
+/// The timeout of each REST call: 5 seconds. reqwest's timeout bounds the whole call.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Characters `urllib.parse.quote(emoji, safe='')` leaves unencoded: ASCII letters, digits and `_.-~`.
+/// Characters that stay unencoded in the percent-encoding of an emoji: ASCII letters, digits and `_.-~`.
 const QUOTE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
 
-/// `^https://discord\.com/channels/(\d+)/(\d+)(?:/(\d+))?$`, with Python's `$` also matching before a final newline.
+/// The guild, channel and optional message id of a discord.com link, with an optional trailing newline before the end.
 static MESSAGE_LINK: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"^https://discord\.com/channels/([0-9]+)/([0-9]+)(?:/([0-9]+))?\n?$").expect("the link pattern is valid")
 });
 
 /// A Discord id as an integer. Ids are compared and sorted as numbers, never as strings, whose order flips whenever the
-/// digit counts differ. A non-numeric id panics, as Python's `int()` raises.
+/// digit counts differ. A non-numeric id panics.
 pub fn snowflake_key(snowflake: &str) -> u64 {
   snowflake.parse().unwrap_or_else(|error| panic!("a Discord id is an unsigned integer, got {snowflake:?}: {error}"))
 }
@@ -77,7 +75,7 @@ pub struct MessageLink {
   pub message_id: Option<String>,
 }
 
-/// Parse one discord.com channel or message link. Any other text fails with the `ValueError` message Python prints.
+/// Parse one discord.com channel or message link. Any other text fails with the message below.
 pub fn parse_message_link(url: &str) -> anyhow::Result<MessageLink> {
   let Some(captures) = MESSAGE_LINK.captures(url) else {
     bail!("not a discord.com channel/message link: {}", text_repr::str_repr(url));
@@ -129,8 +127,8 @@ impl Display for DiscordAPIError {
 
 impl std::error::Error for DiscordAPIError {}
 
-/// The wait a 429 asks for: the body's `retry_after` seconds, else the `Retry-After` header, else zero
-/// (`_retry_after_seconds`). A header that is not a number fails the call.
+/// The wait a 429 asks for: the body's `retry_after` seconds, else the `Retry-After` header, else zero.
+/// A header that is not a number fails the call.
 pub fn retry_after_seconds(body: &[u8], retry_after_header: Option<&str>) -> anyhow::Result<f64> {
   if let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(body)
     && let Some(seconds) = object.get("retry_after").and_then(Value::as_f64)
@@ -404,7 +402,7 @@ impl DiscordClient {
   }
 }
 
-/// The reaction path of one message, the emoji percent-encoded as `urllib.parse.quote(emoji, safe='')` writes it.
+/// The reaction path of one message, the emoji percent-encoded with the safe set above.
 fn reaction_path(channel_id: &str, message_id: &str, emoji: &str) -> String {
   let emoji = utf8_percent_encode(emoji, QUOTE_SET);
   format!("/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me")

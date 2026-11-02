@@ -841,7 +841,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/registry",
     hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",
   },
-  OwnerRow { name: "task.md", owner: "backends/charlie_code", hint: "Use `charliebot_charlie_code::TASK_FILE_NAME`." },
+  OwnerRow {
+    name: "task.md",
+    owner: "backends/charlie_code",
+    hint: "Use the `TASK_FILE_NAME` of `backends/charlie_code/src/charlie_code_cli.rs`.",
+  },
   OwnerRow {
     name: "PreToolUse",
     owner: "backends/claude_code",
@@ -1332,7 +1336,7 @@ impl FunctionRecord {
 }
 
 /// The codec of a call by its callee path. A serde decoder or encoder is named through `serde_json` or `serde_yaml`,
-/// a Python-style decoder through `json_loads`, and a bare name, or a method name, counts as the name alone.
+/// a text decoder through `json_loads`, and a bare name, or a method name, counts as the name alone.
 fn codec_of_call(path: &[String]) -> Option<Codec> {
   let last = path.last()?.as_str();
   let serde = path.iter().any(|segment| segment == "serde_json" || segment == "serde_yaml");

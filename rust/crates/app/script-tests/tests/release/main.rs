@@ -1,7 +1,7 @@
 //! The release entry point (scripts/release.sh) and the scripts it runs, for real, against a stub gh and stub stage
 //! commands.
 //!
-//! These are the eleven test functions of tests/test_release.py, with every parametrized case as its own test. Each
+//! Every parametrized case is its own test. Each
 //! test builds a throwaway git repository, release root and log root in a sandbox, so nothing touches
 //! ~/charliebot-releases or the live home.
 

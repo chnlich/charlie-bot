@@ -127,21 +127,49 @@ resolve_direction() {
 
 # Copy the evidence that the previous launch of this direction did not finish copying. A killed
 # launch leaves evidence on the host, and the next launch brings it back before the round starts.
+# The host lists its tree first, and only the entries that the local copy lacks transfer: an absent
+# directory, a file whose local copy is absent or of another size, and any other kind of entry.
+# A copy that the bound stops therefore leaves the local tree closer, and the next copy transfers
+# only what is still missing; a tree that is already complete costs one listing.
 copy_evidence() {
   local limit=$1
   local local_evidence="$HOME/improve/$direction/evidence"
   mkdir -p -- "$local_evidence"
   local remote_evidence='$HOME/improve/'"$direction"'/evidence'
+  local work
+  work=$(mktemp -d "${TMPDIR:-/tmp}/improve-evidence.XXXXXXXX") || fail 1 'cannot make the evidence copy directory'
+  local status=0
   set +e
   timeout --kill-after=5 "$limit" bash -c '
-    set -o pipefail
+    set -euo pipefail
+    # The local tree as kind, size and relative path, each field NUL-terminated, so a name with a
+    # space or a newline stays one field.
+    find "$3" -mindepth 1 -printf "%y\0%s\0%P\0" >"$4"
+    declare -A sizes=()
+    while IFS= read -r -d "" kind && IFS= read -r -d "" size && IFS= read -r -d "" name; do
+      if [[ $kind == f ]]; then sizes["$name"]=$size; fi
+    done <"$4"
     ssh -n -T -o BatchMode=yes -o ConnectTimeout=10 "$1" \
-      "if [ -d \"$2\" ]; then tar -C \"$2\" -cf - .; else tar -cf - --files-from=/dev/null; fi" \
-      | tar -C "$3" -xf -
-  ' copy "$REMOTE_HOST" "$remote_evidence" "$local_evidence" 3>&-
-  local status
+      "if [ -d \"$2\" ]; then find \"$2\" -mindepth 1 -printf \"%y\0%s\0%P\0\"; fi" >"$5"
+    : >"$6"
+    while IFS= read -r -d "" kind && IFS= read -r -d "" size && IFS= read -r -d "" name; do
+      if [[ $kind == d ]]; then
+        [[ -d "$3/$name" ]] || printf "%s\0" "$name" >>"$6"
+      elif [[ $kind == f ]]; then
+        [[ ${sizes["$name"]-} == "$size" ]] || printf "%s\0" "$name" >>"$6"
+      else
+        printf "%s\0" "$name" >>"$6"
+      fi
+    done <"$5"
+    if [[ -s $6 ]]; then
+      ssh -T -o BatchMode=yes -o ConnectTimeout=10 "$1" \
+        "tar -C \"$2\" -cf - --null --no-recursion -T -" <"$6" | tar -C "$3" -xf -
+    fi
+  ' copy "$REMOTE_HOST" "$remote_evidence" "$local_evidence" \
+        "$work/local.list" "$work/remote.list" "$work/transfer.list" 3>&-
   status=$?
   set -e
+  rm -rf -- "$work"
   if (( status != 0 )); then
     printf '%s the evidence copy stopped (status %s); the next launch copies the rest\n' "$STDERR_PREFIX" "$status" >&2
   fi

@@ -1,4 +1,4 @@
-//! Signed run tokens: the agent caller identity (`src/runtime/run_token.py`).
+//! Signed run tokens: the agent caller identity.
 //!
 //! A token is `<payload>.<signature>`, both unpadded base64url. The payload is the compact, key-sorted
 //! JSON of `{"agent", "run_id", "session_id"}`; the signature is HMAC-SHA256 over the payload's base64
@@ -17,15 +17,15 @@ use crate::text_repr;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// `constants.RUN_TOKEN_ENV`: the environment variable that carries a run's token into its agent process, and the
+/// `RUN_TOKEN_ENV`: the environment variable that carries a run's token into its agent process, and the
 /// bearer the CLIs present.
 pub const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 
-/// `constants.SESSION_ID_ENV_VAR`: the server writes the master's session id into every spawned process environment,
+/// `SESSION_ID_ENV`: the server writes the master's session id into every spawned process environment,
 /// and the CLIs read it back.
 pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 
-/// `base64.urlsafe_b64decode` tolerance: missing padding and nonzero trailing bits both decode.
+/// URL-safe base64 with lenient decoding: missing padding and nonzero trailing bits both decode.
 const LENIENT_URL_SAFE: GeneralPurpose = GeneralPurpose::new(
   &base64::alphabet::URL_SAFE,
   GeneralPurposeConfig::new()
@@ -41,7 +41,7 @@ pub struct RunTokenClaims {
   pub agent: String,
 }
 
-/// Any verification failure; the message is the Python `RunTokenError` text.
+/// Any verification failure; the message is the error text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunTokenError(pub &'static str);
 
@@ -60,8 +60,8 @@ pub fn b64url_encode(raw: &[u8]) -> String {
 
 /// The decode side of [`b64url_encode`].
 ///
-/// CPython's decoder also skips characters outside the alphabet before decoding; this decoder refuses
-/// them, so a token padded with junk characters fails here where Python could accept it.
+/// The decoder refuses characters outside the alphabet, so a token padded with junk characters fails
+/// instead of being accepted.
 pub fn b64url_decode(text: &str) -> Result<Vec<u8>, base64::DecodeError> {
   LENIENT_URL_SAFE.decode(text.trim_end_matches('='))
 }
@@ -126,7 +126,6 @@ mod tests {
   #[test]
   fn a_signed_token_verifies_and_matches_the_wire_form() {
     let token = sign_run_token(&claims(), "k").unwrap();
-    // `run_token.sign_run_token(RunTokenClaims("s-1", "r-1", "worker"), "k")` in the Python baseline.
     assert_eq!(
       token,
       "eyJhZ2VudCI6IndvcmtlciIsInJ1bl9pZCI6InItMSIsInNlc3Npb25faWQiOiJzLTEifQ.oK3czuAVKmjjcdikPLcWwQCe_8bZzTAXJyirCd5LGtg"

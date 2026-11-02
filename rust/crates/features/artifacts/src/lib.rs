@@ -21,7 +21,7 @@ use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::future::BoxFuture;
 
-/// `register` (`src/features/artifacts/__init__.py`): the file view, the sessions router, the `publish:` section, then
+/// `register`: the file view, the sessions router, the `publish:` section, then
 /// the sidebar contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.file_view("artifacts", Arc::new(artifact_view::ArtifactView))?;
@@ -73,12 +73,12 @@ fn sweep_headless_renderer_orphans_at_startup(
   })
 }
 
-/// A config section kept as its YAML value until the owning package's port types it.
+/// A config section kept as its YAML value until the owning package's reader types it.
 fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
   Ok(Arc::new(value.clone()))
 }
 
-/// Render the raw section the way Python's `PublishConfig` dumps it (`charliebot config get publish`): the entry's
+/// Render the raw section the way `charliebot config get publish` prints it: the entry's
 /// keys plus the model's three defaults, with `dir`'s `~` expanded as its validator does.
 fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   let raw = value.downcast_ref::<serde_yaml::Value>().ok_or("the publish section holds an unexpected value")?;

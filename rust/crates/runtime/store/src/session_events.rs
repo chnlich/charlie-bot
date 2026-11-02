@@ -110,7 +110,7 @@ impl Store {
   }
 
   /// Best-effort sidebar notification for one node's durable task fact. Call it after the fact is durable: a failure is
-  /// logged and never fails the write (`control_sink.py::ControlEventSink.notify_tree_changed`).
+  /// logged and never fails the write.
   pub async fn notify_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) {
     if let Err(error) = self.broadcast_task_tree_changed(session_id, event_type).await {
       tracing::error!(session_id, event_type = ?event_type, %error, "task_tree_changed_broadcast_failed");
@@ -253,7 +253,7 @@ impl Store {
       {
         return Ok(aggregator);
       }
-      // Python's `_load_aggregator_init_inputs` runs the full history read in `asyncio.to_thread`.
+      // The full history read runs through the async store call.
       let events = self.load_chat_events_shared_async(session_id).await?;
       let archive_offset = self.read_archive_offset(session_id)?;
       let mut aggregator = self.new_message_aggregator(archive_offset, false);
@@ -791,7 +791,7 @@ mod tests {
     let (home, store) = make_test_store();
     write_test_session(&store, "synthetic");
     // Root-session creation writes this fact before the three chat events in
-    // the Python fixture, so the new user event has global index 4.
+    // the recorded fixture, so the new user event has global index 4.
     store.append_chat_event("synthetic", json!({"type": "task_created"})).await.unwrap();
     store
       .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "t1"}))

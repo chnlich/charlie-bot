@@ -35,7 +35,7 @@ use crate::usage::{QuotaAccount, SourceSweep, SweepScope, UsageSource};
 /// A package's `register` function: the package's contributions, made through the registry's typed methods.
 pub type RegisterFn = fn(&mut Registry) -> Result<(), RegistryError>;
 
-/// A registration that fails startup. Python raises `ValueError` at the same point; the message names the
+/// A registration that fails startup. The message names the
 /// package whose `register` made the registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryError {
@@ -165,6 +165,15 @@ pub struct Registry {
   pub(crate) plan_registry: Ledger<PlanRegistryFn>,
   /// The one reader of every open session's Waiting on you items, which `features/web_reply` registers.
   pub(crate) open_waiting_items: Ledger<OpenWaitingItemsFn>,
+  /// The one reader of the derived Waiting on you items, which `features/cron` registers. Its rows have the open
+  /// items' shape, and `features/web_reply` reads them through the registry.
+  pub(crate) derived_waiting_items: Ledger<OpenWaitingItemsFn>,
+  /// The host each backend type's entries log into, keyed by the backend type, which the type's package registers.
+  pub(crate) backend_host_aliases: Ledger<BackendHostAliasFn>,
+  /// The one reader of the host login records, which `features/host_auth` registers.
+  pub(crate) host_logins: Ledger<HostLoginsFn>,
+  /// The one probe of a host, which `features/host_auth` registers.
+  pub(crate) host_probes: Ledger<HostProbeFn>,
   /// The one fork-assertion runner of a page, which `features/artifacts` registers.
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
   /// The lifecycle of a backend type that registered none: one process per run.
@@ -213,6 +222,10 @@ impl Registry {
       sequence_controllers,
       plan_registry,
       open_waiting_items,
+      derived_waiting_items,
+      backend_host_aliases,
+      host_logins,
+      host_probes,
       fork_assertions,
       default_lifecycle: _,
       default_lifecycle_name,
@@ -267,6 +280,10 @@ impl Registry {
     append_ledger_inventory(&mut inventory, sequence_controllers);
     append_ledger_inventory(&mut inventory, plan_registry);
     append_ledger_inventory(&mut inventory, open_waiting_items);
+    append_ledger_inventory(&mut inventory, derived_waiting_items);
+    append_ledger_inventory(&mut inventory, backend_host_aliases);
+    append_ledger_inventory(&mut inventory, host_logins);
+    append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, fork_assertions);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
@@ -401,12 +418,11 @@ impl Registry {
     Ok(())
   }
 
-  /// Register a backend type's `backends.options[]` field schema: its type-specific fields in the Python
-  /// option model's declaration order, with the value each holds when the entry omits it.
+  /// Register a backend type's `backends.options[]` field schema: its type-specific fields in declaration order,
+  /// with the value each holds when the entry omits it.
   ///
-  /// `charliebot config get backends` renders an option from this schema, so the output carries the same
-  /// fields and defaults as the type's pydantic model. A backend package registers its own schema next to
-  /// its [`Registry::backend_type`] registration.
+  /// `charliebot config get backends` renders an option from this schema. A backend package registers its own
+  /// schema next to its [`Registry::backend_type`] registration.
   pub fn option_schema(
     &mut self,
     backend_type: &'static str,
@@ -460,7 +476,7 @@ pub struct BackendTraits {
   pub compact_hint: Option<&'static str>,
 }
 
-/// Validates one `backends.options[]` entry's type-specific keys (the pydantic option model of Python).
+/// Validates one `backends.options[]` entry's type-specific keys.
 pub type OptionModel = fn(&serde_yaml::Mapping) -> Result<(), String>;
 
 /// One backend type (`backend_type_registration.register_backend_type`). `translate_fallback` marks the one type that
@@ -470,7 +486,7 @@ pub struct BackendTypeRegistration {
   pub traits: BackendTraits,
   pub option_model: OptionModel,
   pub factory: Arc<dyn BackendFactory>,
-  /// `None` gives the default lifecycle: one process per run.
+  /// The type's lifecycle override; `None` gives the default of one process per run.
   pub lifecycle: Option<Arc<dyn BackendLifecycle>>,
   pub translate_fallback: bool,
 }
@@ -500,6 +516,31 @@ pub struct OpenWaitingRow {
 
 /// Read every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).
 pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
+
+/// Read the host that a backend type's entry logs into from the entry's type-specific keys: `Some(alias)` for an entry
+/// that names a host (`host_auth_alias`), `None` for one that names none.
+pub type BackendHostAliasFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
+
+/// One probed host's login record as `features/host_auth` keeps it in `host_auth.json`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostLogin {
+  pub alias: String,
+  /// The last probe's verdict: `ok`, `needs-okta`, `needs-interactive-auth` or `unreachable`.
+  pub status: String,
+  /// The probe output's first line, with the first URL line after it.
+  pub detail: String,
+  /// When the verdict last changed, as an ISO timestamp.
+  pub last_change_at: String,
+  /// True when the verdict waits for the user to approve the host's login.
+  pub awaits_approval: bool,
+}
+
+/// Read the login record of every probed host (`host_auth.host_logins`). An unreadable state file is an error.
+pub type HostLoginsFn = fn(&FeatureContext) -> anyhow::Result<Vec<HostLogin>>;
+
+/// Probe one host now over a new connection, write the result back, and return the host's record
+/// (`host_auth.probe_alias_now`).
+pub type HostProbeFn = for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, anyhow::Result<HostLogin>>;
 
 /// Run one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file name
 /// carries no genre prefix, so no assertion set applies to it.
@@ -563,7 +604,7 @@ pub struct LaunchArgs {
 
 /// Builds the per-process backend of one launch (`factory(option, cfg, **launch_kwargs)`).
 pub trait BackendFactory: Send + Sync {
-  /// `option` is `None` only for the translate-fallback type.
+  /// Builds one process's backend for a launch. `option` is `None` only for the translate-fallback type.
   fn build(
     &self,
     option: Option<&BackendOption>,
@@ -799,7 +840,7 @@ pub struct Launch {
 pub trait LaunchWatch: Send {
   /// Records one event. `true` stops the process now, at a safe relay point.
   fn observe(&mut self, event: &Value) -> bool;
-  /// `true`: the run continues in a next process, which `next_launch` plans.
+  /// Whether the run continues in a next process, which `next_launch` plans; `true` continues.
   fn wants_next(&self, exit_code: i32, stderr: &str) -> bool;
 }
 
@@ -971,7 +1012,7 @@ pub struct ServeTurnArgs {
   pub process_id: u32,
   /// The directory of the session cgroup that the process runs in, when it runs in one.
   pub cgroup_path: Option<PathBuf>,
-  /// `None` while the turn process runs; then its exit code, or the error that ended it.
+  /// The turn process's exit: `None` while it runs, then its exit code or the error that ended it.
   pub exit: watch::Receiver<Option<Result<i32, String>>>,
   pub on_event: EmitFn,
 }
@@ -1225,7 +1266,7 @@ pub trait Service: Send + Sync {
 
 /// A file view (`wiring.register_file_view`). The file server asks each view, in registration order, before it
 /// serves a path; `path` is the absolute path without its leading "/". `Ok(Some)` answers the request, `Ok(None)`
-/// passes it on, and `Err` is the error response (Python raises `HTTPException`).
+/// passes it on, and `Err` is the error response.
 pub trait FileView: Send + Sync {
   fn view<'a>(
     &'a self,
@@ -1327,6 +1368,64 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the open Waiting on you reader"))
+  }
+
+  /// Register the reader of the derived Waiting on you items. `web_reply` lists them beside the stored items.
+  pub fn derived_waiting_items(&mut self, read: OpenWaitingItemsFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.derived_waiting_items.insert_single(package, "derived_waiting_items", read)
+  }
+
+  /// The registered derived Waiting on you reader; a server with none fails rather than hiding the host waits.
+  pub fn derived_waiting_items_reader(&self) -> anyhow::Result<OpenWaitingItemsFn> {
+    self
+      .derived_waiting_items
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the derived Waiting on you reader"))
+  }
+
+  /// Register the host alias reader of a backend type (`host_auth_alias`).
+  pub fn backend_host_alias(
+    &mut self,
+    backend_type: &'static str,
+    read: BackendHostAliasFn,
+  ) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.backend_host_aliases.insert(package, backend_type, read)
+  }
+
+  /// The host alias reader of a backend type, or `None` when the type registered none: its entries name no host.
+  pub fn backend_host_alias_reader(&self, backend_type: &str) -> Option<BackendHostAliasFn> {
+    self.backend_host_aliases.get(backend_type).copied()
+  }
+
+  /// Register the reader of the host login records.
+  pub fn host_logins(&mut self, read: HostLoginsFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.host_logins.insert_single(package, "host_logins", read)
+  }
+
+  /// The registered host login reader; a server with none fails rather than gating a fire without host state.
+  pub fn host_logins_reader(&self) -> anyhow::Result<HostLoginsFn> {
+    self
+      .host_logins
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the host login reader"))
+  }
+
+  /// Register the probe of one host.
+  pub fn host_probe(&mut self, probe: HostProbeFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.host_probes.insert_single(package, "host_probe", probe)
+  }
+
+  /// The registered host probe; a server with none fails rather than starting a fire that it cannot check.
+  pub fn host_probe_reader(&self) -> anyhow::Result<HostProbeFn> {
+    self.host_probes.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the host probe"))
   }
 
   /// Register the fork-assertion runner. `web_reply`'s status gate runs a linked page through it.
@@ -1472,7 +1571,7 @@ pub type EventRenderer = fn(&Value) -> Value;
 
 /// One package's part in a master turn. Every step defaults to adding nothing.
 pub trait TurnContribution: Send + Sync {
-  /// The Python class this contribution ports, named as `type(contribution).__name__` names it. The store names the
+  /// The class name of this contribution. The store names the
   /// contribution's after-turn task by it: `after-turn-<class name>-<session id>`.
   fn class_name(&self) -> &'static str;
 
@@ -1531,8 +1630,8 @@ pub trait TurnContribution: Send + Sync {
 }
 
 impl Registry {
-  /// Register a turn contribution (`turn_contributions.register_turn_contribution`). A chat renderer type that an
-  /// earlier contribution, or this one, already renders fails here: Python fails at the aggregator's build.
+  /// Register a turn contribution. A chat renderer type that an
+  /// earlier contribution, or this one, already renders fails here, at the aggregator's build.
   pub fn turn_contribution(
     &mut self,
     name: &'static str,
@@ -1810,9 +1909,9 @@ impl Registry {
 
 /// The handles a feature uses at request time and in its services.
 pub struct FeatureContext {
-  /// `config.yaml`, reloaded when the file moves. A reload that fails keeps the previous config.
+  /// The configuration read from `config.yaml`, reloaded when the file moves; a failed reload keeps the previous value.
   pub config: Arc<HotReload<CharlieBotConfig>>,
-  /// `credentials.yaml`, reloaded when the file moves.
+  /// The credentials read from `credentials.yaml`, reloaded when the file moves.
   pub credentials: Arc<HotReload<Credentials>>,
   /// The sole owner of session metadata and chat-event writes.
   pub store: Arc<Store>,

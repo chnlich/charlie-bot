@@ -1,8 +1,7 @@
-//! The worker-run cases of `tests/test_task_execution.py` over the task-execution stack: a worker Run launches through
-//! the adapter, its process is a `/bin/sh` script, and its delivery chain runs on the real store. Each test names the
-//! Python case it ports in a `// Python:` comment.
+//! The worker-run cases over the task-execution stack: a worker Run launches through
+//! the adapter, its process is a `/bin/sh` script, and its delivery chain runs on the real store.
 //!
-//! The review spawn and follow-up of an implement Run run for real (the review chain is ported). The work and verify
+//! The review spawn and follow-up of an implement Run run for real. The work and verify
 //! launches are asserted here; the review launch itself, iteration and scheduled-step launches stay with their
 //! owners' test files.
 
@@ -89,7 +88,7 @@ impl Drop for StackProcessGuard<'_> {
   }
 }
 
-/// The Python `_task_spec` shape: a goal and a task type, no repository.
+/// The task spec shape: a goal and a task type, no repository.
 fn spec(goal: &str, task_type: Option<TaskType>) -> TaskSpec {
   TaskSpec { goal: goal.to_string(), task_type, ..TaskSpec::default() }
 }
@@ -147,7 +146,7 @@ fn error_text(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<S
 
 /// Wait until a node has no run without a terminal fact (`_settle_parent`, over the durable views).
 /// Waits until every run of `session_id` is terminal and no input is pending on it, so no launch of the test's
-/// making sits at the gate when the stack drops (`tests/test_task_execution.py` `_settle_parent`).
+/// making sits at the gate when the stack drops.
 ///
 /// A delivered child report schedules the parent's manager turn in the background. Its run record may not exist yet
 /// when the state above already holds, so the node also waits for one manager turn per delivered report.
@@ -170,12 +169,10 @@ async fn settle_node(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
   .await
 }
 
-/// `test_task_execution.py::test_bare_branch_base_with_unpushed_local_commit_launch_fails`: a repository whose local
-/// base branch holds a commit origin lacks fails the base check before any process starts. The Run lands the durable
-/// failed fact with the error as its evidence, and the parent receives the failure report.
+/// A repository whose local base branch holds a commit origin lacks fails the base check before any process starts. The
+/// Run lands the durable failed fact with the error as its evidence, and the parent receives the failure report.
 #[tokio::test]
 async fn bare_branch_base_with_unpushed_local_commit_launch_fails() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_bare_branch_base_with_unpushed_local_commit_launch_fails.
   let dir = tempfile::tempdir()?;
   let scripts = Scripts::new(vec![result_script("never runs")]);
   let stack = scripted_stack(&scripts).await?;
@@ -237,13 +234,11 @@ fn advance_origin(dir: &Path, origin: &Path, file: &str) -> anyhow::Result<Strin
   synthetic_git(&second, &["rev-parse", "HEAD"])
 }
 
-/// `test_task_execution.py::test_bare_branch_base_behind_starts_from_origin_tip`: the bare base form when the shared
-/// checkout's local main is only behind origin. The Run launches anyway, its work branch starts at the origin tip, and
-/// the local main ref is untouched. The review that lands the work runs on the review chain, so the case asserts the
-/// work Run's launch and success.
+/// The bare base form when the shared checkout's local main is only behind origin. The Run launches anyway, its work
+/// branch starts at the origin tip, and the local main ref is untouched. The review that lands the work runs on the
+/// review chain, so the case asserts the work Run's launch and success.
 #[tokio::test]
 async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_bare_branch_base_behind_starts_from_origin_tip.
   let dir = tempfile::tempdir()?;
   let marker = dir.path().join("cwd.txt");
   let scripts = Scripts::new(vec![format!("pwd > '{}'; {}", marker.display(), result_script("implemented"))]);
@@ -276,11 +271,9 @@ async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> 
   Ok(())
 }
 
-/// `test_task_execution.py::test_an_interrupted_worker_run_reports_once_and_archives_the_worker`: an interrupted run
-/// reports on the spot through the failure entry, and the report's delivery archives the worker.
+/// An interrupted run reports on the spot through the failure entry, and the report's delivery archives the worker.
 #[tokio::test]
 async fn an_interrupted_worker_run_reports_once_and_archives_the_worker() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_an_interrupted_worker_run_reports_once_and_archives_the_worker.
   let scripts = Scripts::new(vec![result_script("stop noted")]);
   let stack = scripted_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -318,7 +311,6 @@ async fn an_interrupted_worker_run_reports_once_and_archives_the_worker() -> any
 
 #[tokio::test]
 async fn a_late_failure_report_is_skipped_after_worker_cancellation() -> anyhow::Result<()> {
-  // Python: tests/test_task_completion.py::test_failure_report_reaching_lock_after_cancel_is_skipped.
   let scripts = Scripts::new(vec![result_script("manager noted the close")]);
   let stack = scripted_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -340,7 +332,6 @@ async fn a_late_failure_report_is_skipped_after_worker_cancellation() -> anyhow:
 
 #[tokio::test]
 async fn successful_work_on_a_closed_worker_does_not_register_a_review() -> anyhow::Result<()> {
-  // Python: tests/test_task_completion.py::test_successful_work_on_closed_worker_does_not_register_review.
   let scripts = Scripts::new(vec![result_script("manager noted the close"); 4]);
   let stack = failover_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -361,11 +352,10 @@ async fn successful_work_on_a_closed_worker_does_not_register_a_review() -> anyh
   Ok(())
 }
 
-/// `test_task_execution.py::test_repo_less_quick_edit_closes_without_review`: a repo-less quick edit closes completed
-/// when its work Run succeeds, spawns no review, and reports completed to the parent, which takes one turn.
+/// A repo-less quick edit closes completed when its work Run succeeds, spawns no review, and reports completed to the
+/// parent, which takes one turn.
 #[tokio::test]
 async fn repo_less_quick_edit_closes_without_review() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_repo_less_quick_edit_closes_without_review.
   let scripts = Scripts::new(vec![result_script("modified /etc/cron.d/sweep"), result_script("manager noted it")]);
   let stack = scripted_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -394,12 +384,10 @@ async fn repo_less_quick_edit_closes_without_review() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_execution.py::test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt`: an upload
-/// admitted while a worker run holds its slot waits for that run's end. The continuation resumes the run's native
-/// conversation, and its prompt names the upload's path.
+/// An upload admitted while a worker run holds its slot waits for that run's end. The continuation resumes the run's
+/// native conversation, and its prompt names the upload's path.
 #[tokio::test]
 async fn a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt.
   let dir = tempfile::tempdir()?;
   let started = dir.path().join("started");
   let gate = dir.path().join("gate");
@@ -445,7 +433,7 @@ async fn a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt() -
   assert_eq!(record.input_event_ids, vec![admitted_id.to_string()]);
   let builds = scripts.builds();
   // The scripted type resumes by CLI flag, so the held native id reaches the continuation as `--resume <id>`
-  // (`route_resume_session_style`); the Python case reads the same id from its `resume_session_id` keyword.
+  // (`route_resume_session_style`); the case reads the same id from its `resume_session_id` keyword.
   assert_eq!(builds[1].launch.extra_flags, ["--resume", "native-1"]);
   assert!(builds[1].prompt_contains(&upload_path), "the continuation prompt names the upload");
   Ok(())
@@ -469,13 +457,11 @@ fn snapshot_source_refs(snapshot: &Value) -> Vec<String> {
     .collect()
 }
 
-/// `test_task_execution.py::test_worker_run_kinds_deliver_snapshot_bytes_and_task_context`: a script-run work launch
-/// and a verify launch ride the same assembler with their own contracts. The work launch carries the worker contract,
-/// the goal and the input in its launch text, and a repository sandbox; the verify launch carries the verify contract
-/// only.
+/// A script-run work launch and a verify launch ride the same assembler with their own contracts. The work launch
+/// carries the worker contract, the goal and the input in its launch text, and a repository sandbox; the verify launch
+/// carries the verify contract only.
 #[tokio::test]
 async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_worker_run_kinds_deliver_snapshot_bytes_and_task_context.
   let scripts = Scripts::new(vec![
     result_script("worker done"),
     result_script("report noted"),
@@ -546,13 +532,11 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   Ok(())
 }
 
-/// `test_task_execution.py::test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent`: a repository
-/// whose local base is ahead of origin fails worktree preparation after the Run was admitted. The Run lands its durable
-/// failed fact with the actual error as evidence in its own events log, and the parent receives a failure report naming
-/// it. The report's delivery archives the worker.
+/// A repository whose local base is ahead of origin fails worktree preparation after the Run was admitted. The Run
+/// lands its durable failed fact with the actual error as evidence in its own events log, and the parent receives a
+/// failure report naming it. The report's delivery archives the worker.
 #[tokio::test]
 async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent.
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"failure noted"}'"#).await?;
   stack.write_access_key()?;
   let dir = tempfile::tempdir()?;
@@ -613,12 +597,10 @@ async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -
   Ok(())
 }
 
-/// `test_task_execution.py::test_recovery_after_rule_deletion_uses_the_original_snapshot`: a manager turn's stored
-/// snapshot reads on after its rule body is deleted, and an explicit retry is a new Run that assembles from the current
-/// sources.
+/// A manager turn's stored snapshot reads on after its rule body is deleted, and an explicit retry is a new Run that
+/// assembles from the current sources.
 #[tokio::test]
 async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_recovery_after_rule_deletion_uses_the_original_snapshot.
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"turn"}'"#).await?;
   stack.write_access_key()?;
   let guard = ProcessGroupGuard::new();
@@ -651,11 +633,9 @@ async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Re
   Ok(())
 }
 
-/// `test_task_execution.py::test_a_worker_launch_failure_writes_no_turn_launch_error`: a worker Run whose backend
-/// cannot be resolved fails at launch, and no manager-turn launch notice is written for it.
+/// A worker Run whose backend cannot be resolved fails at launch, and no manager-turn launch notice is written for it.
 #[tokio::test]
 async fn a_worker_launch_failure_writes_no_turn_launch_error() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_a_worker_launch_failure_writes_no_turn_launch_error.
   let scripts = Scripts::new(vec![]);
   let stack = scripted_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -721,12 +701,10 @@ fn launched_run_id(decision: &Value) -> anyhow::Result<String> {
   Ok(decision["run_id"].as_str().ok_or_else(|| anyhow::anyhow!("the dispatch names no run: {decision}"))?.to_string())
 }
 
-/// `test_task_execution.py::test_worker_run_finished_enospc_retries_and_lands_without_restart`: the `run_finished`
-/// write of a successful worker run fails out of space. The end-landing retry drains the run from its raw log and lands
-/// the end record, the parent gets exactly one completed report, and no second process starts.
+/// The `run_finished` write of a successful worker run fails out of space. The end-landing retry drains the run from
+/// its raw log and lands the end record, the parent gets exactly one completed report, and no second process starts.
 #[tokio::test]
 async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_worker_run_finished_enospc_retries_and_lands_without_restart.
   let scripts = Scripts::new(vec![result_script("work done"), result_script("report consumed")]);
   let stack = scripted_stack(&scripts).await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
@@ -762,7 +740,6 @@ async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyho
 /// and the completion follow-up closes it with one completed report.
 #[tokio::test]
 async fn unset_task_type_success_takes_the_non_implement_branch() -> anyhow::Result<()> {
-  // Python: src/runtime/task_execution.py:2190
   let scripts = Scripts::new(vec![result_script("work done")]);
   let stack = scripted_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -779,12 +756,10 @@ async fn unset_task_type_success_takes_the_non_implement_branch() -> anyhow::Res
   Ok(())
 }
 
-/// `test_task_execution.py::test_parent_report_enospc_retry_delivers_report_once`: a successful run's delivery write
-/// fails out of space. The end record is already on disk, the retry delivers the success-based report exactly once,
-/// and the run's live end time survives the retry.
+/// A successful run's delivery write fails out of space. The end record is already on disk, the retry delivers the
+/// success-based report exactly once, and the run's live end time survives the retry.
 #[tokio::test]
 async fn parent_report_enospc_retry_delivers_report_once() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_parent_report_enospc_retry_delivers_report_once.
   let scripts = Scripts::new(vec![result_script("work done"), result_script("report consumed")]);
   let stack = scripted_stack(&scripts).await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
@@ -815,12 +790,10 @@ async fn parent_report_enospc_retry_delivers_report_once() -> anyhow::Result<()>
   Ok(())
 }
 
-/// `test_task_execution.py::test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn`: below the disk
-/// threshold a worker-class run stays queued with one blocked report, while a manager turn still launches. A zero
-/// threshold skips the check and the queued worker launches.
+/// Below the disk threshold a worker-class run stays queued with one blocked report, while a manager turn still
+/// launches. A zero threshold skips the check and the queued worker launches.
 #[tokio::test]
 async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn.
   let scripts = Scripts::new(vec![result_script("work done"), result_script("report consumed")]);
   let stack = Stack::start_with_min_free_disk_gib(
     vec![scripts.option(BACKEND_ID, BACKEND_TYPE)],
@@ -889,12 +862,10 @@ fn withheld_reason(stack: &Stack, session_id: &str) -> anyhow::Result<Option<Str
   )
 }
 
-/// `test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry`: a non-space failure in
-/// the end path lands the run at once and starts no retry. A success fact whose delivery hits EIO sends no failed
-/// report.
+/// A non-space failure in the end path lands the run at once and starts no retry. A success fact whose delivery hits
+/// EIO sends no failed report.
 #[tokio::test]
 async fn non_space_end_failure_lands_immediately_and_starts_no_retry() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry.
   let scripts =
     Scripts::new(vec![result_script("work done"), result_script("more work done"), result_script("report consumed")]);
   let stack = scripted_stack(&scripts).await?;
@@ -1142,11 +1113,9 @@ fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<
     .collect()
 }
 
-/// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run and its
-/// spawned review on a pooled cc-claude option both launch on the account the pool selects.
+/// A fresh work Run and its spawned review on a pooled cc-claude option both launch on the account the pool selects.
 #[tokio::test]
 async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account.
   let root = Root::new()?;
   let state = Arc::new(ClaudeAccountState::new());
   let scripts = Scripts::new(vec![
@@ -1189,12 +1158,10 @@ async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow:
   Ok(())
 }
 
-/// `test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool`: with pools defined, the launch
-/// picks an account of its option's pool. The untouched beta accounts hold more headroom than the alpha member, and
-/// stay unused.
+/// With pools defined, the launch picks an account of its option's pool. The untouched beta accounts hold more headroom
+/// than the alpha member, and stay unused.
 #[tokio::test]
 async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool.
   let root = Root::new()?;
   let state = Arc::new(ClaudeAccountState::new());
   // main sits at half a window; across all accounts an untouched beta account wins.
@@ -1215,11 +1182,10 @@ async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result
   Ok(())
 }
 
-/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over an empty pool: the cc-claude
-/// option runs on no account, so its launch carries no `claude_account` and runs on the default login.
+/// Over an empty pool: the cc-claude option runs on no account, so its launch carries no `claude_account` and runs on
+/// the default login.
 #[tokio::test]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account.
   let root = Root::new()?;
   let state = Arc::new(ClaudeAccountState::new());
   let scripts = Scripts::new(vec![exits(&[assistant_text("done"), result()], 0)]);
@@ -1233,11 +1199,9 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> a
   Ok(())
 }
 
-/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over a non-Claude backend: the
-/// launch carries no `claude_account` either.
+/// Over a non-Claude backend: the launch carries no `claude_account` either.
 #[tokio::test]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account.
   let scripts = Scripts::new(vec![result_script("done")]);
   let stack = scripted_stack(&scripts).await?;
   let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
@@ -1249,12 +1213,10 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend
   Ok(())
 }
 
-/// `test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process`: with no account
-/// left to select, the Run fails before any process starts. Its events log carries the pool-exhausted error, which
-/// names the earliest reset, and the error event is flagged as quota exhaustion.
+/// With no account left to select, the Run fails before any process starts. Its events log carries the pool-exhausted
+/// error, which names the earliest reset, and the error event is flagged as quota exhaustion.
 #[tokio::test]
 async fn pool_exhausted_launch_fails_the_run_with_evidence_and_no_process() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process.
   let root = Root::new()?;
   let state = Arc::new(ClaudeAccountState::new());
   for label in ["main", "ext-1", "ext-2"] {
@@ -1283,12 +1245,10 @@ async fn pool_exhausted_launch_fails_the_run_with_evidence_and_no_process() -> a
   Ok(())
 }
 
-/// `test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds`: a Run launched
-/// through task execution relays like a directly driven worker. The first process's rejected reading moves the run to
-/// the account with the most headroom, on the same Claude conversation, and the Run ends successfully.
+/// A Run launched through task execution relays like a directly driven worker. The first process's rejected reading
+/// moves the run to the account with the most headroom, on the same Claude conversation, and the Run ends successfully.
 #[tokio::test]
 async fn rejected_first_process_relays_to_another_pool_account_and_succeeds() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds.
   let root = Root::new()?;
   let state = Arc::new(ClaudeAccountState::new());
   let gate = root.path().join("gate");
@@ -1379,11 +1339,10 @@ fn quick_edit_body(manager_id: &str) -> Value {
   json!({"session_id": manager_id, "description": "run the quick edit", "task_type": "quick-edit"})
 }
 
-/// `test_backend_router.py` empty route: the route list is empty, so the pool picks the backend and the node records
+/// Empty route: the route list is empty, so the pool picks the backend and the node records
 /// the empty route with its pool flag.
 #[tokio::test]
 async fn an_empty_route_list_uses_the_pool() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:241.
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
@@ -1399,11 +1358,10 @@ async fn an_empty_route_list_uses_the_pool() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_backend_router.py` cooling route: the route's first member is cooling, so the next routed member runs the
+/// Cooling route: the route's first member is cooling, so the next routed member runs the
 /// work and the delegation still answers 200.
 #[tokio::test]
 async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:269.
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
@@ -1417,11 +1375,10 @@ async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_backend_router.py` no member available: every pool member is cooling, so the delegation answers 400 and the
+/// No member available: every pool member is cooling, so the delegation answers 400 and the
 /// detail names each member's recovery time.
 #[tokio::test]
 async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:281.
   let scripts = Scripts::new(vec![result_script("unused")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
@@ -1436,10 +1393,9 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
   Ok(())
 }
 
-/// `test_backend_router.py` no routing section: with `backends.routing` unset, no router starts and the pool decides.
+/// No routing section: with `backends.routing` unset, no router starts and the pool decides.
 #[tokio::test]
 async fn without_a_routing_section_no_router_starts_and_the_pool_decides() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:293.
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
@@ -1456,10 +1412,9 @@ async fn without_a_routing_section_no_router_starts_and_the_pool_decides() -> an
   Ok(())
 }
 
-/// `test_backend_router.py` pinned delegation: a delegation that names its backend never asks the router.
+/// Pinned delegation: a delegation that names its backend never asks the router.
 #[tokio::test]
 async fn a_pinned_delegation_never_calls_the_router() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:305.
   let scripts = Scripts::new(vec![result_script("pinned work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
@@ -1476,10 +1431,9 @@ async fn a_pinned_delegation_never_calls_the_router() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_backend_router.py` cold read: a cold-read delegation never asks the router, and its node carries no route.
+/// Cold read: a cold-read delegation never asks the router, and its node carries no route.
 #[tokio::test]
 async fn a_cold_read_delegation_never_calls_the_router() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:318.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![answer_script("(1) answered.")]);
@@ -1494,11 +1448,10 @@ async fn a_cold_read_delegation_never_calls_the_router() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_backend_router.py` delegation cases: one routed verify request carries the chosen backend and route through
+/// Delegation cases: one routed verify request carries the chosen backend and route through
 /// both the worker node metadata and its delegation card, and the router sees the manager's backend excluded.
 #[tokio::test]
 async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_backend() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:221-237, 331-346.
   let scripts = Scripts::new(vec![result_script("verified")]);
   let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
   let stack = Stack::start_with(options, vec!["fake".to_string()]).await?;
@@ -1548,7 +1501,6 @@ async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_ba
 /// A router failure is returned before the delegation handler creates a worker child.
 #[tokio::test]
 async fn router_failure_returns_502_without_creating_a_worker() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:254-266.
   let scripts = Scripts::new(vec![result_script("unused")]);
   let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
   let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
@@ -1661,38 +1613,33 @@ async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> any
   Ok(())
 }
 
-/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over an implement task.
+/// A quota failure on an implement task's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_an_implement_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
   quota_failure_fails_over_to_the_next_member(TaskType::Implement).await
 }
 
-/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over a quick edit.
+/// A quota failure on a quick edit's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_a_quick_edit_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
   quota_failure_fails_over_to_the_next_member(TaskType::QuickEdit).await
 }
 
-/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over a script run.
+/// A quota failure on a script run's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_a_script_run_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
   quota_failure_fails_over_to_the_next_member(TaskType::ScriptRun).await
 }
 
-/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over a verify task.
+/// A quota failure on a verify task's pool node fails over to the next member.
 #[tokio::test]
 async fn quota_failure_on_a_verify_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
   quota_failure_fails_over_to_the_next_member(TaskType::Verify).await
 }
 
 /// A quota retry checks the remaining route order before asking the pool for a backend.
 #[tokio::test]
 async fn quota_failover_walks_the_route_before_the_pool_and_writes_one_system_event() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:354-386.
   let scripts = Scripts::new(vec![result_script("route retry"), result_script("parent noted")]);
   let stack = failover_stack(&scripts).await?;
   let manager = stack.node("route-failover-parent", None, TaskProfile::Manager, None).await?;
@@ -1738,11 +1685,10 @@ async fn quota_failover_walks_the_route_before_the_pool_and_writes_one_system_ev
   Ok(())
 }
 
-/// `test_backend_router.py` spent route: the route names only the member that ran out, so the failover takes the pool's
+/// Spent route: the route names only the member that ran out, so the failover takes the pool's
 /// first free member, and the retry runs there.
 #[tokio::test]
 async fn quota_failover_uses_the_pool_once_the_route_is_spent() -> anyhow::Result<()> {
-  // Python: tests/test_backend_router.py:390.
   let scripts = Scripts::new(vec![result_script("retry done"), result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -1795,12 +1741,10 @@ async fn quota_failover_uses_the_pool_once_the_route_is_spent() -> anyhow::Resul
   Ok(())
 }
 
-/// `test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled`: a node whose
-/// delegation named its backend keeps the quota behavior of before: the failure is reported, nothing retries, and the
-/// pool is untouched.
+/// A node whose delegation named its backend keeps the quota behavior of before: the failure is reported, nothing
+/// retries, and the pool is untouched.
 #[tokio::test]
 async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled.
   let scripts = Scripts::new(vec![result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -1820,11 +1764,9 @@ async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> an
   Ok(())
 }
 
-/// `test_task_execution.py::test_failover_with_every_member_cooling_reports_each_recovery_time`: with the next member
-/// cooling too, no retry starts, and the parent's report names each member's recovery time.
+/// With the next member cooling too, no retry starts, and the parent's report names each member's recovery time.
 #[tokio::test]
 async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_failover_with_every_member_cooling_reports_each_recovery_time.
   let scripts = Scripts::new(vec![result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -1855,7 +1797,7 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
 }
 
 // ---------------------------------------------------------------------------
-// Temporary backend failures over the backend pool (the worker-path cases of `tests/test_backend_router.py`)
+// Temporary backend failures over the backend pool (the worker-path cases)
 // ---------------------------------------------------------------------------
 
 /// The capacity message that a backend's `error` event carries, and the message of the named-backend cases.
@@ -1894,7 +1836,11 @@ fn claude_error_result(api_error_status: Value, result: &str) -> Value {
 /// Launch an implement worker's first run, which prints `first_events` and exits 1, and wait for it to end. A
 /// pool-chosen worker takes the pool's first member; a named worker takes `fake`. The retry on the next member prints
 /// one assistant line and exits 1, and the manager's turn after the failure report prints one result.
-async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) -> anyhow::Result<ErrorEventRun> {
+async fn launch_error_event_worker(
+  first_events: &[Value],
+  pool_chosen: bool,
+  context_work: bool,
+) -> anyhow::Result<ErrorEventRun> {
   let retry_events =
     [json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": "retry stopped"}]}})];
   let scripts =
@@ -1922,6 +1868,7 @@ async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) ->
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
+    context_work,
     ..TaskSpec::default()
   };
   let worker = stack
@@ -2031,7 +1978,7 @@ async fn assert_no_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
   settle_node(stack, &error.manager_id).await
 }
 
-/// The named-backend worker: its delegation named the backend, so it is not pool-chosen and has no route.
+/// The worker whose backend the delegation named, or `backends.strong` resolved: not pool-chosen, and no route.
 async fn assert_named_worker(error: &ErrorEventRun) -> anyhow::Result<()> {
   let meta = error.stack.store().load_task_meta(&error.worker_id).await?;
   assert_ne!(meta.extra("backend_from_pool"), Some(&Value::Bool(true)), "a named worker is not pool-chosen");
@@ -2049,151 +1996,163 @@ fn assert_result_logged(error: &ErrorEventRun, result: &str) -> anyhow::Result<(
   Ok(())
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (capacity).
+// A capacity error fails over on the worker path.
 #[tokio::test]
 async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (no output).
+// A run with no output fails over on the worker path.
 #[tokio::test]
 async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true).await?;
+  let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (bad gateway).
+// A bad gateway error fails over on the worker path.
 #[tokio::test]
 async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (connection).
+// A connection error fails over on the worker path.
 #[tokio::test]
 async fn internal_server_error_with_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (500).
+// A 500 error fails over on the worker path.
 #[tokio::test]
 async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true).await?;
+  let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (SSE stall).
+// An SSE stall fails over on the worker path.
 #[tokio::test]
 async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "OpenCode backend failed: OpenCode SSE stream carried no session progress for 3600.0 s \
     (heartbeats during silence: 359)";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (closed peer).
+// A closed peer fails over on the worker path.
 #[tokio::test]
 async fn opencode_closed_peer_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "OpenCode backend failed: peer closed connection without sending complete message body \
     (incomplete chunked read)";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_stderr_tail_and_request_id_do_not_trigger_backend_failover, the step case.
+// A stderr tail and request id do not trigger failover: the step case.
 #[tokio::test]
 async fn step_limit_error_with_bad_gateway_content_does_not_fail_over() -> anyhow::Result<()> {
   let error = launch_error_event_worker(
     &[error_event("Step limit (1000) exceeded without task completion.", "Bad Gateway")],
     true,
+    false,
   )
   .await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_stderr_tail_and_request_id_do_not_trigger_backend_failover, the 400 case.
+// A stderr tail and request id do not trigger failover: the 400 case.
 #[tokio::test]
 async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()> {
-  let error =
-    launch_error_event_worker(&[error_event("Error code: 400 - invalid request (request id req_502ab1)", "")], true)
-      .await?;
+  let error = launch_error_event_worker(
+    &[error_event("Error code: 400 - invalid request (request id req_502ab1)", "")],
+    true,
+    false,
+  )
+  .await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_non_error_event_with_temporary_backend_message_does_not_fail_over
 #[tokio::test]
 async fn system_event_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
   let event = json!({"type": event_types::SYSTEM, "message": CAPACITY_MESSAGE, "content": ""});
-  let error = launch_error_event_worker(&[event], true).await?;
+  let error = launch_error_event_worker(&[event], true, false).await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_a_named_backend_capacity_error_reports_failure_without_failover
 #[tokio::test]
 async fn a_named_backend_capacity_error_reports_failure_without_failover() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false).await?;
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false, false).await?;
   assert_named_worker(&error).await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, status 502.
+/// A backend that `backends.strong` resolved behaves like a named one: a quota failure fails the run to the parent, and
+/// the record keeps the context-work declaration.
+#[tokio::test]
+async fn a_strong_backend_capacity_error_reports_failure_without_failover() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false, true).await?;
+  assert_named_worker(&error).await?;
+  let meta = error.stack.store().load_task_meta(&error.worker_id).await?;
+  assert_eq!(meta.task.as_ref().map(|task| task.context_work), Some(true), "the record keeps the declaration");
+  assert_no_failover(&error).await
+}
+
+// A 502 result error fails over on the worker path.
 #[tokio::test]
 async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
-  let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, status 529.
+// A 529 result error fails over on the worker path.
 #[tokio::test]
 async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
-  let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, status 429.
+// A 429 result error fails over on the worker path.
 #[tokio::test]
 async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded";
-  let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, no status.
+// A result error with no status fails over on the worker path.
 #[tokio::test]
 async fn claude_result_without_status_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: Connection error.";
-  let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_bad_request_claude_result_errors_do_not_fail_over, the reasoning case.
+// Bad request result errors do not fail over: the reasoning case.
 #[tokio::test]
 async fn claude_result_400_reasoning_error_does_not_fail_over() -> anyhow::Result<()> {
   let result = "API Error: 400 litellm.BadRequestError: OpenAIException - The `reasoning_content` in the thinking mode \
     must be passed back to the API. (request_id: f69ad0ec-cd32-4570-917d-7689ec630120)";
-  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true, false).await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_bad_request_claude_result_errors_do_not_fail_over, the bad gateway case.
+// Bad request result errors do not fail over: the bad gateway case.
 #[tokio::test]
 async fn claude_result_400_mentioning_bad_gateway_does_not_fail_over() -> anyhow::Result<()> {
   let result = "API Error: 400 litellm.BadRequestError: upstream reported Bad Gateway";
-  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true, false).await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_non_error_claude_result_with_temporary_message_does_not_fail_over
 #[tokio::test]
 async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
   let event = json!({
@@ -2203,16 +2162,15 @@ async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> 
     "api_error_status": null,
     "result": "Fixed the Bad Gateway handler.",
   });
-  let error = launch_error_event_worker(&[event], true).await?;
+  let error = launch_error_event_worker(&[event], true, false).await?;
   assert_no_failover(&error).await
 }
 
-// Python: tests/test_backend_router.py::test_a_named_backend_claude_result_error_reports_failure_without_failover
 #[tokio::test]
 async fn a_named_backend_claude_result_error_reports_failure_without_failover() -> anyhow::Result<()> {
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let event = claude_error_result(json!(502), result);
-  let error = launch_error_event_worker(&[event], false).await?;
+  let error = launch_error_event_worker(&[event], false, false).await?;
   assert_named_worker(&error).await?;
   assert_no_failover(&error).await
 }
@@ -2261,13 +2219,11 @@ fn repo_checkout() -> anyhow::Result<&'static Path> {
   Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).ok_or_else(|| anyhow::anyhow!("no repository root"))
 }
 
-/// `test_artifact_check.py::test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions`:
-/// the run's managed instructions hold the cold-reader system prompt alone, and its input is the page with the seven
+/// The run's managed instructions hold the cold-reader system prompt alone, and its input is the page with the seven
 /// questions.
 #[tokio::test]
 async fn cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions()
 -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![answer_script("(1) fine.")]);
@@ -2292,12 +2248,10 @@ async fn cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_success_report_carries_attempts_backend_and_answers`: a first reader that
-/// fails and a second that answers. The report states the page, the failed attempt, the answering backend and its
-/// answer, and the child completes.
+/// A first reader that fails and a second that answers. The report states the page, the failed attempt, the answering
+/// backend and its answer, and the child completes.
 #[tokio::test]
 async fn cold_read_success_report_carries_attempts_backend_and_answers() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_success_report_carries_attempts_backend_and_answers.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts =
@@ -2324,11 +2278,9 @@ async fn cold_read_success_report_carries_attempts_backend_and_answers() -> anyh
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_empty_answer_counts_as_a_failed_run`: a reader that exits with an empty answer
-/// is a failed attempt, and the next backend answers.
+/// A reader that exits with an empty answer is a failed attempt, and the next backend answers.
 #[tokio::test]
 async fn cold_read_empty_answer_counts_as_a_failed_run() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_empty_answer_counts_as_a_failed_run.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![answer_script(""), answer_script("(1) answered.")]);
@@ -2346,12 +2298,11 @@ async fn cold_read_empty_answer_counts_as_a_failed_run() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_retry_selects_the_next_backend_with_the_tried_list`: the retry passes the
-/// failed run's backend as tried, so the selection skips it and the next pool member takes the work. Python spies the
-/// selection's tried list; here the selection is called with the same lists, and the retry's run is checked.
+/// The retry passes the failed run's backend as tried, so the selection skips it and the next pool member takes the
+/// work. There is no spy on the selection's tried list. Here the selection is called with the same lists, and the
+/// retry's run is checked.
 #[tokio::test]
 async fn cold_read_retry_selects_the_next_backend_with_the_tried_list() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_retry_selects_the_next_backend_with_the_tried_list.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![error_script("alpha exploded", 1), answer_script("(1) answered.")]);
@@ -2383,11 +2334,9 @@ async fn cold_read_retry_selects_the_next_backend_with_the_tried_list() -> anyho
   Ok(())
 }
 
-/// `test_artifact_check.py::test_cold_read_every_backend_failed_reports_and_the_child_is_archived`: every reader fails,
-/// so the report names each attempt and the trailer, and its delivery archives the child once.
+/// Every reader fails, so the report names each attempt and the trailer, and its delivery archives the child once.
 #[tokio::test]
 async fn cold_read_every_backend_failed_reports_and_the_child_is_archived() -> anyhow::Result<()> {
-  // Python: tests/core/test_artifact_check.py::test_cold_read_every_backend_failed_reports_and_the_child_is_archived.
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
   let scripts = Scripts::new(vec![

@@ -1,11 +1,11 @@
-//! Session and thread metadata models with Python-compatible key ordering, and the `metadata.json` file rules every
+//! Session and thread metadata models with the stored key ordering, and the `metadata.json` file rules every
 //! reader and writer of the file kind shares.
 
 use std::fmt;
 use std::path::Path;
 
 use anyhow::Context as _;
-use charliebot_compat::json_loads;
+use charliebot_core::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;
@@ -49,12 +49,12 @@ pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
 /// The session-metadata field holding the next instant a waiting trigger fires.
 pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
 
-/// Datetime stored as UTC with Python's Pydantic `Z` and microsecond format.
+/// Datetime stored as UTC with a `Z` suffix and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UtcDateTime(OffsetDateTime);
 
 impl UtcDateTime {
-  /// Return the current UTC time, truncated to Python's microsecond precision.
+  /// Return the current UTC time, truncated to microseconds.
   pub fn now() -> Self {
     let now = OffsetDateTime::now_utc();
     let nanos = (now.nanosecond() / 1_000) * 1_000;
@@ -70,7 +70,7 @@ impl UtcDateTime {
     OffsetDateTime::parse(&with_utc, &Rfc3339).map(|datetime| Self(datetime.to_offset(time::UtcOffset::UTC)))
   }
 
-  /// Render the UTC datetime with Python's Pydantic microsecond rule.
+  /// Render the UTC datetime with microsecond precision.
   pub fn to_str(self) -> String {
     let value = self.0.to_offset(time::UtcOffset::UTC);
     let base = format!(
@@ -86,7 +86,7 @@ impl UtcDateTime {
     if microseconds == 0 { format!("{base}Z") } else { format!("{base}.{microseconds:06}Z") }
   }
 
-  /// Render the same UTC instant using Python `datetime.isoformat()`'s `+00:00` suffix.
+  /// Render the same UTC instant with a `+00:00` suffix.
   pub fn to_isoformat_text(self) -> String {
     format!("{}+00:00", self.to_str().trim_end_matches('Z'))
   }
@@ -129,7 +129,7 @@ impl fmt::Display for UtcDateTime {
   }
 }
 
-/// Session lifecycle state (`src/infra/models.py::SessionStatus`).
+/// Session lifecycle state.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
@@ -187,7 +187,7 @@ pub enum RoundRating {
   ThumbsDown,
 }
 
-/// Round ratings in source order, matching Python dictionary serialization.
+/// Round ratings in source order, the order the serialized object keeps.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RoundRatings(Vec<(String, RoundRating)>);
 
@@ -259,6 +259,12 @@ pub struct ColdReadSpec {
   pub trigger: String,
 }
 
+/// Whether a flag is off. A task record leaves an off `context_work` out. A task without context work therefore
+/// keeps its canonical text, and the spec hash it names, as they were before the flag existed.
+fn is_false(value: &bool) -> bool {
+  !*value
+}
+
 /// Task body carried by a v2 session.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -277,6 +283,9 @@ pub struct TaskSpec {
   pub task_type: Option<TaskType>,
   #[serde(default)]
   pub keep_worktree: bool,
+  /// The delegation's context-work declaration. The route resolves a true record's backend from `backends.strong`.
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub context_work: bool,
   #[serde(default)]
   pub cold_read: Option<ColdReadSpec>,
   #[serde(default, skip_serializing_if = "TaskApprover::is_user")]
@@ -306,6 +315,8 @@ impl<'de> Deserialize<'de> for TaskSpec {
       #[serde(default)]
       keep_worktree: bool,
       #[serde(default)]
+      context_work: bool,
+      #[serde(default)]
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
@@ -326,6 +337,7 @@ impl<'de> Deserialize<'de> for TaskSpec {
       base_branch: fields.base_branch,
       task_type: fields.task_type,
       keep_worktree: fields.keep_worktree,
+      context_work: fields.context_work,
       cold_read: fields.cold_read,
       approver: fields.approver,
     })
@@ -353,7 +365,7 @@ pub enum ThreadStatus {
   Cancelled,
 }
 
-/// Legacy thread metadata (`src/infra/models.py::ThreadMetadata`).
+/// Legacy thread metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ThreadMetadata {
   #[serde(default = "fresh_uuid")]
@@ -426,7 +438,7 @@ impl ThreadMetadata {
   }
 }
 
-/// Session metadata (`src/infra/models.py::SessionMetadata`).
+/// Session metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SessionMetadata {
   #[serde(default = "fresh_uuid")]
@@ -520,7 +532,7 @@ fn schema_version() -> u8 {
 }
 
 impl SessionMetadata {
-  /// Construct metadata with Python model defaults and the required session identity fields.
+  /// Construct metadata with the model defaults and the required session identity fields.
   pub fn new(id: impl Into<String>, name: impl Into<String>, profile: TaskProfile) -> Self {
     Self {
       id: id.into(),
@@ -567,7 +579,7 @@ impl SessionMetadata {
     }
   }
 
-  /// Serialize the public Python model shape, including defaults for registered session metadata slots.
+  /// Serialize the public model shape, including defaults for registered session metadata slots.
   pub fn to_response_value(&self, slots: &[MetadataSlot]) -> Value {
     let mut value = serde_json::to_value(self).expect("session metadata serializes to JSON");
     let object = value.as_object_mut().expect("session metadata serializes to an object");
@@ -606,7 +618,7 @@ impl SessionMetadata {
     })
   }
 
-  /// Render metadata in Python model field order, excluding runtime-only fields used by saves.
+  /// Render metadata in model field order, excluding runtime-only fields used by saves.
   pub fn to_json_string(&self, slots: &[MetadataSlot], exclude_transient: bool) -> String {
     let mut declared = Vec::new();
     push(&mut declared, "id", &self.id);
@@ -669,8 +681,8 @@ impl SessionMetadata {
   }
 }
 
-// The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns: the
-// readers below open, read and decode the file for every caller, so a change to the format, the location or the
+// The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns.
+// The readers below open, read and decode the file for every caller, so a change to the format, the location or the
 // bad-file handling happens here.
 
 /// Why a metadata file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of
@@ -742,12 +754,11 @@ pub fn read_session_metadata(path: &Path) -> Result<Option<SessionMetadata>, Met
     .map_err(|error| MetadataReadError::Json(error.to_string()))
 }
 
-/// `json_utils.load_json_meta`: the document at `path` under Python's `json.load`, or `None` when the file does not
-/// exist, cannot be read, or is not JSON, or when it is JSON null. Invalid UTF-8 fails the read, as Python's
-/// uncaught `UnicodeDecodeError` does, and so does a document the port cannot hold (Python's NaN, for one). A read
-/// or a parse that Python answers `None` for logs `log_event` at debug level and answers `None`.
+/// The document at `path`, or `None` when the file does not exist, cannot be read, or is not JSON, or when it is JSON
+/// null. Invalid UTF-8 fails the read, and so does a document the store cannot hold, such as `NaN`. A read or a parse
+/// that answers `None` logs `log_event` at debug level and answers `None`.
 pub fn read_metadata(path: &Path, log_event: &str) -> anyhow::Result<Option<Value>> {
-  // `Path.exists()` reads a failed stat as absent, and Python logs nothing for that.
+  // `Path::exists` reads a failed stat as absent, and nothing is logged for that.
   if std::fs::metadata(path).is_err() {
     return Ok(None);
   }
@@ -1001,7 +1012,7 @@ mod tests {
 
   #[test]
   fn floats_render_as_pydantic_model_json() {
-    // Pinned from pydantic's model_dump_json, the Python baseline's metadata writer.
+    // Pinned to the bytes the metadata writer produces.
     let cases = [
       ("1e16", "1e16"),
       ("1.5e-7", "1.5e-7"),

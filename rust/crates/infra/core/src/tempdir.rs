@@ -1,4 +1,4 @@
-//! Python-compatible temporary directories: 8 characters from `abcdefghijklmnopqrstuvwxyz0123456789_` after the
+//! Temporary directories: 8 characters from `abcdefghijklmnopqrstuvwxyz0123456789_` after the
 //! caller's prefix, created with mode `0700` and removed when the guard drops.
 
 use std::env;
@@ -12,11 +12,11 @@ use std::sync::Mutex;
 const NAME_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
 const NAME_LENGTH: usize = 8;
 const ACCEPTED_RANDOM_BYTE_LIMIT: u8 = 222;
-// Python's `tempfile.TMP_MAX`: the name retries for one candidate directory.
+// The name retries for one candidate directory.
 const TEST_FILE_ATTEMPTS: usize = 20;
 static TEMPFILE_DIRECTORY_CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Create a temporary directory using Python `tempfile.mkdtemp` naming and permissions.
+/// Create a temporary directory with the `mkdtemp` naming and permissions.
 pub fn mkdtemp(prefix: &str) -> io::Result<TempDir> {
   mkdtemp_with(prefix, &tempfile_directory()?, random_suffix)
 }
@@ -52,7 +52,7 @@ fn tempfile_directory() -> io::Result<PathBuf> {
   let cwd = match env::current_dir() {
     Ok(cwd) => cwd,
     Err(error) => {
-      // Python keeps "." as the last candidate when the working directory cannot be read.
+      // Keep "." as the last candidate when the working directory cannot be read.
       tracing::debug!(error = %error, "temporary_directory_cwd_unreadable");
       PathBuf::from(".")
     }

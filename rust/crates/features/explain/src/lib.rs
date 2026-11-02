@@ -19,12 +19,12 @@ use axum::routing::post;
 use charliebot_compat::routing::{get_only, refuse_other_methods};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 
-/// `register` (`src/features/explain/__init__.py`): the router under `/api/sessions`.
+/// `register`: the router under `/api/sessions`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)
 }
 
-/// The explain routes, with the feature context as their state. Starlette's 405 names the first route of a path that
+/// The explain routes, with the feature context as their state. The 405 body names the first route of a path that
 /// matches it, so the POST route's allow list answers the explain path, and the status path names its GET.
 fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()

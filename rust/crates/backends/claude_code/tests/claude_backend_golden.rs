@@ -31,7 +31,7 @@ fn main_module() -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+    backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     github: Default::default(),

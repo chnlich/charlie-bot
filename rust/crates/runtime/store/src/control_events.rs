@@ -159,7 +159,7 @@ pub fn derived_delegate_request_id(session_id: &str, task_type: &str, descriptio
   format!("delegate-{}", &sha256_hex(&material)[..24])
 }
 
-/// Build a control event in Python header and payload insertion order.
+/// Build a control event in header and payload insertion order.
 pub fn build_control_event(
   event_type: &str,
   actor: &str,

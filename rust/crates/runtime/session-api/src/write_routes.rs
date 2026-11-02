@@ -1,5 +1,5 @@
 //! Session write routes: create (a v2 task node or the operator's manager root), backend switch, and PATCH (rename or the
-//! v2 task metadata mutations). Each body is checked the way FastAPI checks its request model.
+//! v2 task metadata mutations). Each body is checked against its request model.
 
 // Each step answers a refused request with the response itself, so its error is the response (as `caller::resolve_caller`).
 #![allow(clippy::result_large_err)]
@@ -474,7 +474,7 @@ fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Respo
   Ok(detail)
 }
 
-/// Validate a body against `model` and return its declared fields. FastAPI's 422 answers any other shape.
+/// Validate a body against `model` and return its declared fields. Any other shape answers 422.
 fn validated_object(body: &RequestBody, model: &BodyModel) -> Result<Map<String, Value>, Response> {
   match body.validate(model) {
     Ok(Some(Value::Object(values))) => Ok(values),
@@ -574,7 +574,7 @@ fn profile_name(profile: TaskProfile) -> &'static str {
   }
 }
 
-/// Python's repr of a list of strings, as the Python detail texts print it.
+/// The repr of a list of strings, as the detail texts print it.
 fn list_repr(items: &[&str]) -> String {
   let quoted: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
   format!("[{}]", quoted.join(", "))

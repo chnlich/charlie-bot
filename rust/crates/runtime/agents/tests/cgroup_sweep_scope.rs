@@ -35,7 +35,6 @@ impl Visit for FieldText<'_> {
 
 #[test]
 fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
-  // Python: tests/test_session_cgroup.py::test_sweep_removes_only_empty_cgroups_of_this_home_across_the_slices.
   use_fake_cgroup_hierarchy();
   let base = tempfile::tempdir().unwrap();
   let home = tempfile::tempdir().unwrap();

@@ -1,4 +1,4 @@
-//! The golden-case harness: replay the recorded Python CLI behavior against the built Rust binary.
+//! The golden-case harness: replay the recorded cases against the built Rust binary.
 //!
 //! Every case under `tests/golden/<subcommand>/<case>.json` runs once per test binary invocation and
 //! replays against the built `charliebot` binary; every `expect` field is checked. `README.md`
@@ -42,7 +42,7 @@ fn golden_cases() {
   assert!(failures.is_empty(), "{} golden case(s) failed:\n{}", failures.len(), failures.join("\n"));
 }
 
-/// Python test names backed by golden cases, each pinned by a case file whose name starts with it.
+/// Test names backed by golden cases, each pinned by a case file whose name starts with it.
 /// `test_connect_never_established_retries_with_backoff_then_exhausts` and
 /// `test_post_sends_json_body_content_type_and_auth_header_over_the_real_client` are Rust tests in
 /// `charliebot-cli-common`, and `test_port_cache_hit_serves_the_cached_port_in_a_fresh_process` has
@@ -118,7 +118,7 @@ const GOLDEN_CASE_TESTS: &[&str] = &[
   "test_command_lane_checks_the_artifact_before_running_the_program",
   "test_lane_options_on_the_directory_lane_are_refused_before_any_write",
   "test_usage_errors",
-  // The compaction hook and the trash purge run through golden cases too; the Python tests that
+  // The compaction hook and the trash purge run through golden cases too; the tests that
   // call private functions instead are Rust tests in the command modules:
   // `test_reads_bash_read_skill_and_split_path_inputs_in_latest_read_order`,
   // `test_parts_obey_character_limit_and_split_only_at_line_ends`,
@@ -633,8 +633,8 @@ fn indent_two_style() -> charliebot_core::text_repr::JsonStyle {
 
 /// The run's temp root reads as `{root}` so a case file does not bake one run's path in.
 ///
-/// The Python CLI's structlog console lines carry a wall-clock stamp and a pid, so they can never replay; they are
-/// the Python process's own chatter, not the command's answer, and the Rust CLI prints none.
+/// A line that starts with a wall-clock stamp and a bracketed log level carries a pid, so it can never replay:
+/// it is the process's own chatter, not the command's answer, and the Rust CLI prints none.
 fn normalize(text: &str, root: &str) -> String {
   static LOG_LINE: OnceLock<Regex> = OnceLock::new();
   let log_line = LOG_LINE.get_or_init(|| {
@@ -698,8 +698,7 @@ fn root_placed_value(value: &Value, root: &str) -> Value {
 }
 
 /// A changed `server.port` in config.yaml takes effect on the next call: the port is read from the
-/// config on every call, and there is no port cache to serve a stale one (Python's
-/// `test_port_cache_hit_serves_the_cached_port_in_a_fresh_process` has no Rust counterpart).
+/// config on every call, and there is no port cache to serve a stale one.
 #[test]
 fn changed_server_port_takes_effect_on_the_next_call() {
   let temp = tempfile::tempdir().unwrap();

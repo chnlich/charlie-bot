@@ -77,7 +77,7 @@ pub struct SharedChatEventRange {
 }
 
 impl Store {
-  /// Append one event, injecting its id and Python `datetime.isoformat()` timestamp when absent.
+  /// Append one event, injecting its id and an ISO 8601 timestamp when absent.
   pub async fn append_chat_event(&self, session_id: &str, mut event: Value) -> StoreResult<ChatEvent> {
     let object = event.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
     if !object.contains_key("id") {
@@ -185,8 +185,8 @@ impl Store {
   ///
   /// The live log is read backward from byte `live_end`, the size an identity stat reported, so the walk sees the
   /// history that identity names. Each archive segment follows whole, newest first. Nothing is cached: the walk holds
-  /// one line at a time and parses only the lines whose type it keeps, so a fact read from a long history costs the
-  /// bytes back to that fact, not the history.
+  /// one line at a time and parses only the lines whose type it keeps. A fact read from a long history therefore costs
+  /// the bytes back to that fact, not the history.
   pub(crate) fn visit_chat_facts_from_end<T>(
     &self,
     session_id: &str,
@@ -264,7 +264,7 @@ impl Store {
   /// Read archived facts and retain the live event cache as a shared segment.
   ///
   /// Task paths that only scan history use this view so an archived prefix does not force a deep clone of every live
-  /// JSON value. Python's `fact_history` returns shared event dictionaries in both its cached and concatenated cases.
+  /// JSON value. The fact history returns shared event dictionaries in both its cached and concatenated cases.
   pub fn load_all_facts_view_sync(&self, session_id: &str) -> StoreResult<ChatEventHistory> {
     self.history_work.event_history_views.fetch_add(1, Ordering::Relaxed);
     let cache_entry = self.events_cache_entry(session_id);
@@ -278,9 +278,9 @@ impl Store {
 
   /// Read one NDJSON file's parsed events in the compact form, blank and malformed lines skipped.
   ///
-  /// This is `src/runtime/worker_transcript.py::_read_events`'s parse for the run event logs, which
-  /// the worker transcript folds in place rather than retaining a second `Value` tree of. The parsed
-  /// byte count rides the history-work census, the count the transcript latency tests pin.
+  /// This parses the run event logs, which the worker transcript folds in place rather than
+  /// retaining a second `Value` tree of. The parsed byte count rides the history-work census, the
+  /// count the transcript latency tests pin.
   pub fn read_ndjson_compact(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
     let events = ndjson::read_file_compact(path)?;
     let bytes = fs::metadata(path).map(|metadata| metadata.size()).unwrap_or(0);
@@ -288,9 +288,8 @@ impl Store {
     Ok(events)
   }
 
-  /// Read the latest live-log events without priming the event cache. It follows
-  /// `src/infra/ndjson.py:332-381`: key the page by `(path, limit)` and `(mtime_ns, size)`, then seek from EOF in the
-  /// same 512 KiB window.
+  /// Read the latest live-log events without priming the event cache. The page is keyed by
+  /// `(path, limit)` and `(mtime_ns, size)`, then read by seeking from EOF in the same 512 KiB window.
   pub fn load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)> {
     let path = self.chat_events_path(session_id);
     let Some((metadata, signature)) = file_signature(&path)? else { return Ok((Vec::new(), 0, false)) };
@@ -329,8 +328,8 @@ impl Store {
   }
 
   /// Read all durable facts, archived segments first and the live log last, composed the way
-  /// `task_sessions.fact_history` composes it: the archived count is the total event count minus
-  /// the live event count, the archived events are the range read from 0 to that count, and
+  /// `task_sessions.fact_history` composes it. The archived count is the total event count minus
+  /// the live event count. The archived events are the range read from 0 to that count, and
   /// archive files beyond that count stay unread.
   pub fn load_all_facts(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
     let live = self.load_chat_events_sync(session_id)?;
@@ -347,9 +346,9 @@ impl Store {
   /// Read the global event-index range `[start, end)` and say whether earlier indices exist.
   ///
   /// Global indices are `archive_offset + line_in_live_file`. With a positive archive offset the live
-  /// half numbers physical lines — a blank or a malformed line consumes its index and parses to nothing,
-  /// the same inconsistency `ndjson.parse_ndjson_range`'s islice shows on the unarchived cold path. An
-  /// unarchived warm cache instead numbers its own parsed-event indices, matching Python's cache branch.
+  /// half numbers physical lines: a blank or a malformed line consumes its index and parses to nothing.
+  /// `ndjson.parse_ndjson_range`'s islice shows the same inconsistency on the unarchived cold path. An
+  /// unarchived warm cache instead numbers its own parsed-event indices, matching the cached branch.
   pub fn load_chat_events_range(
     &self,
     session_id: &str,
@@ -425,9 +424,8 @@ impl Store {
     }
   }
 
-  /// Read one archive's parsed events. This uses `src/runtime/chat_events.py:354-392`'s directory/file stat memos and
-  /// 16-file bound. An unreadable file logs and contributes nothing, the pre-memo reader's behavior on open failure in
-  /// `_archive_file_events`.
+  /// Read one archive's parsed events. The directory and file stats ride the archive memos, which hold 16 entries.
+  /// An unreadable file logs and contributes nothing.
   fn read_archive_file(&self, path: &Path, session_id: &str) -> Arc<Vec<SharedChatEvent>> {
     let metadata = match fs::metadata(path) {
       Ok(metadata) => metadata,
@@ -569,11 +567,10 @@ impl Store {
     Ok(Some(events))
   }
 
-  /// Read the live log as parsed events with one slot per physical line. This follows
-  /// `src/runtime/chat_events.py:395-451`: four path-keyed entries, same-inode append extension, backward 512 KiB
-  /// walks, and the same 32 MiB fallback bound. It splits the way Python's
-  /// universal-newline reader splits (`\r\n` and a lone `\r` terminate a line too). A read
-  /// failure logs and answers an empty page, the `_live_range_lines` behavior on an OSError.
+  /// Read the live log as parsed events with one slot per physical line. The range memo holds four
+  /// path-keyed entries, extends an append on the same inode, walks backward in 512 KiB windows, and
+  /// falls back to a 32 MiB bound. Lines split on universal newlines (`\r\n` and a lone `\r`
+  /// terminate a line too). A read failure logs and answers an empty page.
   fn live_range_lines(&self, session_id: &str, rel_start: usize) -> StoreResult<(SharedLiveLines, usize)> {
     let path = self.chat_events_path(session_id);
     let (metadata, signature) = match file_signature(&path) {
@@ -753,7 +750,7 @@ impl Store {
     Ok(offset + self.count_chat_event_lines(&path, signature)?)
   }
 
-  /// Count physical lines with `src/infra/ndjson.py:312-328`'s 64-file `(mtime_ns, size)` memo.
+  /// Count physical lines through the 64-entry `(mtime_ns, size)` count memo.
   fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
     if let Some(count) = self
       .event_read_caches
@@ -811,10 +808,10 @@ impl Store {
 
   /// Drop a node's parsed live events and folded facts after a node pass releases its local references.
   ///
-  /// The per-session cache entry stays in the map: an append or cold read that holds its lock keeps its exclusion, so
-  /// the next read sees every event that the file holds. The node's task state stays keyed by the log file's identity
+  /// The per-session cache entry stays in the map. An append or cold read that holds its lock keeps its exclusion,
+  /// so the next read sees every event that the file holds. The node's task state stays keyed by the log file's identity
   /// when a fold covers the whole cached list (see [`Store::seal_node_state`]). The run-facts memo keeps the current
-  /// event list under its bounded identity key, like Python, so a later reload has a new key.
+  /// event list under its bounded identity key, so a later reload has a new key.
   pub fn evict_recovery_history(&self, session_id: &str) {
     let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
     match cache_entry {
@@ -944,7 +941,7 @@ impl Store {
 
   /// Archive the oldest consecutive events before `cutoff` and advance metadata `archive_offset`.
   ///
-  /// The live log is decoded as strict UTF-8 before any write, as Python's `open(encoding="utf-8")` does. Invalid
+  /// The live log is decoded as strict UTF-8 before any write. Invalid
   /// UTF-8, a non-object line, or a truthy non-string `timestamp` before the split point fails before any write, so
   /// the live log, the archive and `archive_offset` stay unchanged.
   pub async fn archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>> {
@@ -1032,7 +1029,7 @@ impl Store {
   }
 
   /// The session's archive files in chronological (filename) order, memoized on the archive directory's
-  /// `(mtime_ns, size)` like `src/runtime/chat_events.py:354-379`.
+  /// `(mtime_ns, size)`.
   pub(crate) fn archive_paths(&self, session_id: &str) -> StoreResult<Arc<Vec<PathBuf>>> {
     let dir = layout::archives_dir(&self.session_dir(session_id));
     let metadata = match fs::metadata(&dir) {
@@ -1126,8 +1123,8 @@ fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignatur
 
 /// Visit one NDJSON file's lines whose type is in `types`, newest first, from byte `end` back to the file's start.
 ///
-/// The mapped walk follows Python's mmap/rfind mechanism in src/infra/ndjson.py:405-470, keeping its line order and
-/// early stop while letting the kernel fault the pages it crosses instead of issuing one read per chunk.
+/// The mapped walk uses mmap and rfind, keeping its line order and early stop. It lets the kernel fault the
+/// pages it crosses instead of issuing one read per chunk.
 fn visit_file_facts_from_end<T>(
   path: &Path,
   end: u64,
@@ -1175,7 +1172,7 @@ impl<'a> ReverseFactLines<'a> {
       let newline = memchr::memrchr(b'\n', &self.bytes[..pos]);
       let start = newline.map_or(0, |index| index + 1);
       if start == pos {
-        // A trailing or doubled newline leaves an empty segment, which Python's reader also skips.
+        // A trailing or doubled newline leaves an empty segment, which the reader also skips.
         let newline = newline.unwrap_or(0);
         #[cfg(test)]
         {
@@ -1251,7 +1248,7 @@ fn mapped_span(file_len: usize, lowest: usize, scan_end: usize) -> usize {
   page_end.min(file_len) - page_start
 }
 
-/// `Some(false)` when the `type` string that the head's first bytes serialize is not one of `types`; `None` when the
+/// `Some(false)` when the `type` string that the head's first bytes serialize is not one of `types`. `None` when the
 /// head cannot prove it (a string that runs past the head, or an escape).
 fn type_head_verdict(head: &[u8], types: &[&str]) -> Option<bool> {
   let (event_type, _) = if head.starts_with(b"{\"type\"") {
@@ -1337,11 +1334,10 @@ fn read_live_range_suffix(path: &Path, start: usize, size: usize) -> std::io::Re
   Ok(bytes)
 }
 
-/// Split decoded log bytes on universal newlines and parse each segment, as
-/// `src/runtime/chat_events.py:52-68` `_universal_newline_segments` does with its decode/replace/split.
+/// Split decoded log bytes on universal newlines and parse each segment.
 ///
 /// `\n` and `\r` never occur inside a UTF-8 multibyte sequence, so the byte-boundary split yields the same
-/// segments a per-character walk would; the file still must decode strictly, and the error keeps its path.
+/// segments a per-character walk would. The file still must decode strictly, and the error keeps its path.
 fn parse_universal_newline_lines(path: &Path, bytes: &[u8]) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
   std::str::from_utf8(bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   let mut lines = Vec::new();
@@ -1464,7 +1460,7 @@ fn event_timestamp(value: UtcDateTime) -> String {
 
 /// Whether a non-blank line before the split point is an event older than `cutoff`. A line that is not JSON, or
 /// whose `timestamp` is missing, falsy or unparsable, is not archived and starts the kept part. A JSON value that
-/// is not an object, or a truthy `timestamp` that is not a string, fails the archive, as Python raises on it.
+/// is not an object, or a truthy `timestamp` that is not a string, fails the archive.
 fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number: usize) -> StoreResult<bool> {
   let Ok(event) = decode_line(str_methods::strip(line).as_bytes()) else {
     tracing::debug!(path = %live_path.display(), line = line_number, "chat_event_archive_parse_skip");
@@ -1997,8 +1993,7 @@ mod tests {
       events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect()
     }
 
-    /// `test_recycle.py::test_recycle_archives_old_chat_events_and_advances_offset` at store level:
-    /// the old head lands in a weekly archive file, the live file keeps the retained tail, the
+    /// The old head lands in a weekly archive file, the live file keeps the retained tail, the
     /// offset advances, and the next append continues the global numbering.
     #[tokio::test]
     async fn archiving_the_old_head_advances_the_offset_and_continues_global_indexes() {
@@ -2051,8 +2046,7 @@ mod tests {
       assert_eq!(store.load_chat_events_range(session_id, 9, 10).unwrap().0[0]["id"].as_str(), Some("after-1"));
     }
 
-    /// `test_recycle.py::test_recycle_noop_when_nothing_old` at store level: nothing archived, no
-    /// archive file, the offset stays 0.
+    /// Nothing archived, no archive file, the offset stays 0.
     #[tokio::test]
     async fn archiving_without_old_events_is_a_noop() {
       let home = tempfile::tempdir().unwrap();
@@ -2069,9 +2063,8 @@ mod tests {
       assert_eq!(store.load_chat_events_sync(session_id).unwrap().len(), 1);
     }
 
-    /// `test_recycle.py::test_live_range_walk_matches_full_build_across_line_shapes`: blank and
-    /// malformed lines consume an index, a CRLF pair terminates one line, and the final line
-    /// carries no newline.
+    /// Blank and malformed lines consume an index, a CRLF pair terminates one line, and the final
+    /// line carries no newline.
     #[tokio::test]
     async fn range_reads_number_physical_lines_when_archive_offset_is_positive() {
       let home = tempfile::tempdir().unwrap();
@@ -2133,7 +2126,7 @@ mod tests {
     }
 
     /// `fact_history` composition: the archived count is the total event count minus the live
-    /// count, archive files beyond that count stay unread — one stale archive row beyond the
+    /// count. Archive files beyond that count stay unread — one stale archive row beyond the
     /// offset never reaches the facts.
     #[tokio::test]
     async fn load_all_facts_stops_reading_archives_at_the_archive_offset() {
@@ -2189,8 +2182,8 @@ mod tests {
       assert_eq!(store.history_work().owned_event_clones - before.owned_event_clones, 0);
     }
 
-    /// `core/test_ndjson.py`'s count contract through the store: the total is the archive offset
-    /// plus the live file's physical lines, an unterminated final line included.
+    /// The count is the archive offset plus the live file's physical lines, an unterminated final
+    /// line included.
     #[tokio::test]
     async fn event_count_is_the_offset_plus_physical_live_lines() {
       let home = tempfile::tempdir().unwrap();
@@ -2203,8 +2196,7 @@ mod tests {
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 4);
     }
 
-    /// `core/test_ndjson.py::test_count_ndjson_lines_memo_recounts_after_append` at store level: the
-    /// count follows a line appended outside the store.
+    /// The count follows a line appended outside the store.
     #[tokio::test]
     async fn event_count_recounts_after_an_external_append() {
       let home = tempfile::tempdir().unwrap();

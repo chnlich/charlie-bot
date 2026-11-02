@@ -1,9 +1,9 @@
-//! FastAPI's form body parsing and `File`/`Form` validation.
+//! Form body parsing and `File`/`Form` field validation.
 //!
-//! `read` runs before route dependencies. A multipart body is parsed by a port of python-multipart's state machine, so
-//! that every truncated or malformed body reaches the same error as Starlette does. File parts stream into temporary
-//! files. A urlencoded body is parsed the way Starlette's `FormParser` does. `FormBody::validate` runs after
-//! dependencies and reports required or mistyped fields at `body.<field>`, like `request_body::RequestBody`.
+//! `read` runs before route dependencies. A multipart body is parsed by a state machine, so that every truncated or
+//! malformed body reaches the same error. File parts stream into temporary files. A urlencoded body is parsed into
+//! name and value pairs. `FormBody::validate` runs after dependencies and reports required or mistyped fields at
+//! `body.<field>`, like `request_body::RequestBody`.
 
 use crate::responses;
 use crate::validation::{self, FieldError, Kind, Loc};
@@ -19,7 +19,7 @@ const MAX_FILES: usize = 1000;
 const MAX_FIELDS: usize = 1000;
 const MAX_PART_SIZE: usize = 1024 * 1024;
 
-/// A multipart field declared by a FastAPI endpoint.
+/// A multipart field declared by a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldType {
   File,
@@ -58,7 +58,7 @@ pub struct FormModel {
 }
 
 impl FormModel {
-  /// Declare the fields accepted by a route, in FastAPI parameter order.
+  /// Declare the fields accepted by a route, in declaration order.
   pub const fn new(fields: &'static [Field]) -> Self {
     Self { fields }
   }
@@ -110,8 +110,7 @@ impl FormBody {
   pub fn validate(&self, model: &FormModel) -> Result<(), Box<Response>> {
     let mut errors = Vec::new();
     for field in model.fields {
-      // FastAPI's `_get_multidict_value` reads an empty string as an absent value for every `Form` field, and `File` is
-      // a `Form` field.
+      // An empty string reads as an absent value for every `Form` field, and `File` is a `Form` field.
       let value = self.value(field.name).filter(|value| !matches!(value, PartValue::Form(text) if text.is_empty()));
       match (field.field_type, value) {
         (_, None) if field.required => errors.push(field_error(field.name, Value::Null, Kind::Missing)),
@@ -130,7 +129,7 @@ impl FormBody {
     if errors.is_empty() { Ok(()) } else { Err(Box::new(validation::response(&errors))) }
   }
 
-  /// Return the last file value for `name`, as Starlette's `FormData.get` does.
+  /// Return the last file value for `name`.
   pub fn file(&self, name: &str) -> Option<&UploadedFile> {
     match self.value(name)? {
       PartValue::File(file) => Some(file),
@@ -138,7 +137,7 @@ impl FormBody {
     }
   }
 
-  /// Return the last text value for `name`, as Starlette's `FormData.get` does.
+  /// Return the last text value for `name`.
   pub fn form(&self, name: &str) -> Option<&str> {
     match self.value(name)? {
       PartValue::File(_) => None,
@@ -168,8 +167,7 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Respo
   }
 }
 
-/// Read a urlencoded body the way Starlette's `FormParser` does: each name and value is latin-1 decoded, then
-/// percent-decoded with `urllib.parse.unquote_plus`.
+/// Read a urlencoded body: each name and value is latin-1 decoded, then percent-decoded, with `+` as a space.
 async fn read_urlencoded(body: Body) -> Result<FormBody, Box<Response>> {
   let mut bytes = Vec::new();
   let mut stream = body.into_data_stream();
@@ -184,11 +182,10 @@ async fn read_urlencoded(body: Body) -> Result<FormBody, Box<Response>> {
   Ok(form)
 }
 
-/// Split a urlencoded body into raw name and value pairs the way python-multipart's `QuerystringParser` does, which
-/// Starlette's `FormParser` uses. Both `&` and `;` separate fields, and repeated separators are skipped. A name ends at
-/// the first `=` before the next separator. A value ends at the next separator, where `&` is looked for before `;`. A
-/// bare name is kept only when a separator follows it, because python-multipart finishes a field at the end of the
-/// body only once its value has started.
+/// Split a urlencoded body into raw name and value pairs. Both `&` and `;` separate fields, and repeated separators are
+/// skipped. A name ends at the first `=` before the next separator. A value ends at the next separator, where `&` is
+/// looked for before `;`. A bare name is kept only when a separator follows it, because a field finishes at the end of
+/// the body only once its value has started.
 fn querystring_fields(data: &[u8]) -> Vec<(&[u8], &[u8])> {
   let ampersands = positions_of(data, b'&');
   let semicolons = positions_of(data, b';');
@@ -227,8 +224,8 @@ fn next_position(positions: &[usize], from: usize) -> Option<usize> {
   positions.get(positions.partition_point(|position| *position < from)).copied()
 }
 
-/// Decode a name or value the way Starlette's `FormParser` does: each byte is a latin-1 character, and the characters
-/// are percent-decoded with `urllib.parse.unquote_plus`. Escapes in a run of ASCII characters decode as UTF-8 with
+/// Decode a name or value: each byte is a latin-1 character, and the characters
+/// are percent-decoded, with `+` as a space. Escapes in a run of ASCII characters decode as UTF-8 with
 /// replacement characters, and every other character stays as it is.
 fn unquote_plus(bytes: &[u8]) -> String {
   let mut text = String::with_capacity(bytes.len());
@@ -331,7 +328,7 @@ mod tests {
   }
 }
 
-/// Decode a string with Starlette's `_user_safe_decode`: an unknown codec or an invalid sequence falls back to
+/// Decode a string: an unknown codec or an invalid sequence falls back to
 /// latin-1, which never fails. Only the codecs that need no table are known here, so any other charset also falls back
 /// to latin-1.
 fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
@@ -345,7 +342,7 @@ fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
   decoded.unwrap_or_else(|| latin1(bytes))
 }
 
-/// Normalize a codec name the way Python's `encodings.normalize_encoding` does before its alias lookup. Letters and
+/// Normalize a codec name before its alias lookup. Letters and
 /// digits and dots are kept in lower case, and each run of other characters becomes one underscore between names.
 fn normalize_codec_name(name: &str) -> String {
   let mut normalized = String::new();
@@ -374,7 +371,7 @@ fn latin1_bytes(value: &str) -> Vec<u8> {
   value.chars().map(|character| character as u32 as u8).collect()
 }
 
-/// Parse a header the way python-multipart's `parse_options_header` does through `email.message`: a value without a
+/// Parse an options header: a value without a
 /// semicolon is lowered, and otherwise the first segment is the media type as written. A parameter with a value has
 /// its name lowered, and a later parameter with the same name wins.
 fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
@@ -389,7 +386,7 @@ fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
   let mut params: Vec<(String, String)> = Vec::new();
   for (key, value) in segments {
     let mut value = value;
-    // python-multipart fixes the IE6 bug of sending the full file path as the filename.
+    // Browsers may send the full file path as the filename; keep only the last component.
     if key == "filename"
       && (value.chars().nth(1) == Some(':') && value.chars().nth(2) == Some('\\') || value.starts_with("\\\\"))
     {
@@ -401,8 +398,8 @@ fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
   (media_type, params)
 }
 
-/// Split a header value at the semicolons outside quoted strings. python-multipart's `_parseparam` takes a semicolon as
-/// a separator when the quotes before it, not counting escaped quotes, are balanced.
+/// Split a header value at the semicolons outside quoted strings: a semicolon separates
+/// when the quotes before it, not counting escaped quotes, are balanced.
 fn split_parameters(value: &str) -> Vec<&str> {
   let mut segments = Vec::new();
   let mut start = 0;
@@ -423,7 +420,7 @@ fn split_parameters(value: &str) -> Vec<&str> {
   segments
 }
 
-/// Unquote a header value the way `email.utils.unquote` does. A quoted value loses its quotes, with `\\` read as `\`
+/// Unquote a header value. A quoted value loses its quotes, with `\\` read as `\`
 /// before `\"` is read as `"`. An angle-bracketed value loses its brackets.
 fn unquote_header_value(value: &str) -> String {
   if value.len() > 1 && value.starts_with('"') && value.ends_with('"') {
@@ -435,7 +432,7 @@ fn unquote_header_value(value: &str) -> String {
   value.to_string()
 }
 
-/// Return the value of the last parameter named `key`, the way a Python dict of parameters does.
+/// Return the value of the last parameter named `key`.
 fn last_param(params: &[(String, String)], key: &str) -> Option<String> {
   params.iter().rev().find(|(name, _)| name == key).map(|(_, value)| value.clone())
 }
@@ -444,12 +441,12 @@ fn field_error(name: &str, input: Value, kind: Kind) -> FieldError {
   FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(name.to_string())], input, kind }
 }
 
-/// A Starlette `MultiPartException` becomes a 400 whose detail is the message.
+/// A multipart parsing failure becomes a 400 whose detail is the message.
 fn starlette_error(message: &str) -> Box<Response> {
   multipart_error_with(message)
 }
 
-/// A python-multipart `MultipartParseError` becomes FastAPI's catch-all body parsing error.
+/// A multipart parse failure becomes the catch-all body parsing error.
 fn multipart_error() -> Box<Response> {
   multipart_error_with("There was an error parsing the body")
 }
@@ -458,7 +455,7 @@ fn multipart_error_with(detail: &str) -> Box<Response> {
   Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail })))
 }
 
-/// The states of python-multipart's `MultipartParser`, ported byte for byte so that every malformed body reaches the
+/// The states of the multipart parser, so that every malformed body reaches the
 /// same error and every truncated body leaves the same parts behind.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum MultipartState {
@@ -670,7 +667,7 @@ impl MultipartMachine {
     }
   }
 
-  /// Match part data against the boundary, byte for byte, the way python-multipart does. A byte that starts a
+  /// Match part data against the boundary, byte for byte. A byte that starts a
   /// potential boundary is withheld in `match_len` until the match fails or a part boundary confirms.
   fn part_data_byte(&mut self, byte: u8) -> Result<(), Box<Response>> {
     if self.match_len == 0 {
@@ -735,7 +732,7 @@ impl MultipartMachine {
     self.header_value.clear();
   }
 
-  /// Finish the headers of a part the way Starlette's `on_headers_finished` does: read the disposition, count the
+  /// Finish a part's headers: read the disposition, count the
   /// part, and open the temporary file for a file part.
   fn headers_finished(&mut self) -> Result<(), Box<Response>> {
     let disposition = self.content_disposition.take().unwrap_or_default();
@@ -767,7 +764,7 @@ impl MultipartMachine {
     Ok(())
   }
 
-  /// Close the part being read, the way Starlette's `on_part_end` does.
+  /// Close the part being read.
   fn end_part(&mut self) -> Result<(), Box<Response>> {
     let name = self.part_name.take().unwrap_or_default();
     match std::mem::replace(&mut self.sink, Sink::None) {
@@ -792,7 +789,7 @@ fn is_token_byte(byte: u8) -> bool {
     )
 }
 
-/// Read a multipart body with the ported python-multipart state machine.
+/// Read a multipart body with the multipart state machine.
 async fn read_multipart(boundary: &str, charset: &str, body: Body) -> Result<FormBody, Box<Response>> {
   let mut machine = MultipartMachine::new(boundary, charset);
   let mut stream = body.into_data_stream();
@@ -802,6 +799,6 @@ async fn read_multipart(boundary: &str, charset: &str, body: Body) -> Result<For
       machine.step(*byte)?;
     }
   }
-  // A body that ends before the current part closes leaves that part behind, as Starlette does when the stream ends.
+  // A body that ends before the current part closes leaves that part behind.
   Ok(FormBody { parts: std::mem::take(&mut machine.parts) })
 }

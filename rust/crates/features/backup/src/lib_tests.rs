@@ -1,5 +1,5 @@
-//! The behavior cases of `tests/test_backup.py`, retention cases pinned to calendar dates at each age
-//! boundary, and the member fields Python's `tarfile` records.
+//! The behavior cases of the backup, retention cases pinned to calendar dates at each age
+//! boundary, and the member fields the archive records.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -98,7 +98,7 @@ fn create_backup_archives_names_that_are_not_utf8_as_their_bytes() {
   fs::create_dir(home.join("nested")).unwrap();
   fs::write(home.join("nested").join(OsStr::from_bytes(b"bad-\xc3(.txt")), "nested\n").unwrap();
 
-  // Every entry is present, in Python's order: a read that skips or fails on a name would drop one of them.
+  // Every entry is present, in code-point order: a read that skips or fails on a name would drop one of them.
   let archive = create_backup_in(&home).unwrap();
   assert_eq!(
     member_name_bytes(&archive),
@@ -174,7 +174,7 @@ fn create_backup_records_the_permission_bits_and_directory_slashes() {
     members.push((entry.path_bytes().into_owned(), entry.header().mode().unwrap()));
   }
 
-  // Python's `get_info` stores the permission bits only, and a directory's name ends with a slash.
+  // The stored mode holds the permission bits only, and a directory's name ends with a slash.
   assert!(members.contains(&(b"config.yaml".to_vec(), 0o640)));
   assert!(members.iter().any(|(name, _)| name.as_slice() == b"sub/"));
 }

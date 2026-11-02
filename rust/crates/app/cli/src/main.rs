@@ -1,8 +1,8 @@
-//! The `charliebot` CLI dispatcher (`src/app/main.py`).
+//! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 29 subcommands with callers. No argument, `-h` or `--help` prints the
-//! usage block and exits 0; an unknown name exits 2; a name this port has not reached yet prints
-//! the not-ported JSON error and exits 1 — it never calls the Python CLI.
+//! The vocabulary is the 30 subcommands with callers. No argument, `-h` or `--help` prints the
+//! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
+//! the not-ported JSON error and exits 1.
 
 mod commands;
 mod host;
@@ -15,9 +15,9 @@ use std::process::exit;
 use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::json_out;
 
-/// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
-/// caller; the caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 29] = [
+/// The subcommand vocabulary, sorted: every registered command with a
+/// caller. A caller-less name is an unknown name here.
+const COMMANDS: [&str; 30] = [
   "artifact",
   "compaction-context",
   "config",
@@ -29,7 +29,6 @@ const COMMANDS: [&str; 29] = [
   "gc-trash",
   "google",
   "improve",
-  "improve-review",
   "improve-stop",
   "linear",
   "memory",
@@ -40,10 +39,12 @@ const COMMANDS: [&str; 29] = [
   "release-helper",
   "router",
   "schedule-trigger",
+  "scan-guard",
   "session",
   "setup",
   "slack",
   "switch-helper",
+  "taste",
   "voice",
   "wait-guard",
   "web",
@@ -114,7 +115,6 @@ fn run_subcommand(
     "gc-trash" => commands::gc_trash::main(args, host),
     "google" => commands::google::main(args),
     "improve" => charliebot_improve::cli::improve_main(args),
-    "improve-review" => commands::improve_review::main(args),
     "improve-stop" => charliebot_improve::cli::stop_main(args),
     "linear" => commands::linear::main(args),
     "memory" => charliebot_memory::cli::main(args),
@@ -127,11 +127,19 @@ fn run_subcommand(
       commands::router::main(args);
       Ok(())
     }
+    "scan-guard" => commands::scan_guard::main(args),
     "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
     "setup" => commands::setup::main(args),
     "slack" => charliebot_slack::cli::main(args),
     "switch-helper" => charliebot_switch_helper::main(args),
+    "taste" => {
+      // The plan registry is composed only when `candidates` reads a session's notes.
+      let read_plans = |session_dir: &Path| -> anyhow::Result<Option<Vec<serde_json::Value>>> {
+        host.get()?.registry.plan_registry_reader()?(session_dir)
+      };
+      charliebot_taste::cli::main(args, read_plans)
+    }
     "voice" => commands::voice::main(args, host),
     "wait-guard" => commands::wait_guard::main(args),
     "web" => charliebot_web_reply::cli::main(args, host),

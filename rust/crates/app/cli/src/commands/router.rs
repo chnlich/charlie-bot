@@ -1,4 +1,4 @@
-//! The backend router (`src/features/router/routing.py` and its CLI wrapper).
+//! The backend router and its CLI wrapper.
 //!
 //! `charliebot router` answers one backend-choice question per process: the caller writes one JSON
 //! object on stdin and reads one back on stdout.
@@ -58,8 +58,8 @@ pub(crate) struct Limits {
 )]
 struct RouterCli {}
 
-/// Parse the arguments and run one routing call. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2).
+/// Parse the arguments and run one routing call. Parser errors print and exit on their own: help
+/// exits 0, a usage error exits 2.
 pub fn main(args: &[OsString]) {
   let command = with_infer_long_args(RouterCli::command());
   let argv = std::iter::once(OsString::from("charliebot router")).chain(args.iter().cloned());
@@ -84,8 +84,7 @@ pub fn main(args: &[OsString]) {
   }
 }
 
-/// `routing.route`: config first, then the stdin request, so a broken `router.yaml` wins over a
-/// broken request, as in Python.
+/// Config first, then the stdin request, so a broken `router.yaml` wins over a broken request.
 fn route(raw: &str, limits: &Limits, sleep: &mut dyn FnMut(Duration)) -> Result<Value, String> {
   let home_dir = home::charliebot_home_dir().map_err(|error| error.to_string())?;
   route_in_home(&home_dir, raw, limits, sleep)
@@ -247,7 +246,7 @@ fn post(
     .map_err(|error| format!("{url}: request failed: {error}"))?;
   runtime.block_on(async {
     let client = reqwest::Client::builder()
-      // `httpx.Client()` does not follow redirects: an unexpected one surfaces as its status.
+      // Redirects are not followed: an unexpected one surfaces as its status.
       .redirect(reqwest::redirect::Policy::none())
       .timeout(limits.request_timeout)
       .build()
@@ -284,12 +283,12 @@ fn post(
   })
 }
 
-/// `str(httpx.HTTPError)` has no Rust twin; reqwest's Display carries the URL and the cause.
+/// An HTTP error as its Display text: the URL and the cause.
 fn request_error(error: &reqwest::Error) -> String {
   error.to_string()
 }
 
-/// Python `json.dumps(payload)`: escaped non-ASCII, `", "` between items.
+/// Compact JSON: escaped non-ASCII, `", "` between items.
 fn dumps_payload(payload: &Value) -> String {
   text_repr::json_dumps(payload, &text_repr::DEFAULT_JSON)
 }

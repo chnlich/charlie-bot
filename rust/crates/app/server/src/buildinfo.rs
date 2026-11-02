@@ -1,4 +1,4 @@
-//! The running server's build identity, captured once at startup (`src/infra/buildinfo.py`).
+//! The running server's build identity, captured once at startup.
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ pub struct BuildInfo {
   /// `git rev-parse --short HEAD` in the repository root, or `"unknown"` when git fails: the CLI's
   /// version-skew hint reads this field and treats `"unknown"` as "cannot tell".
   pub sha: String,
-  /// `datetime.now(UTC).isoformat()` at capture.
+  /// The UTC start time in ISO 8601, at capture.
   pub started_at: String,
 }
 

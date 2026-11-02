@@ -1,4 +1,6 @@
-//! Python-value stringification for event fields: `str(value)` and `str(value or '')`.
+//! Text form of event field values. `value_str` writes null as `None`, booleans as `True` and `False`, strings as
+//! themselves and other JSON values as JSON text. `truthy_string` gives the same text for a truthy value and the
+//! empty string for a falsy one.
 
 use charliebot_core::text_repr::is_truthy;
 use serde_json::Value;

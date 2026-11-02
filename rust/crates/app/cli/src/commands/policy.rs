@@ -1,4 +1,4 @@
-//! The `policy` command (`src/runtime/cli/policy.py`): print the approval policy table as the server reads it.
+//! The `policy` command: print the approval policy table as the server reads it.
 //!
 //! ```text
 //! charliebot policy show
@@ -29,8 +29,8 @@ enum PolicyVerb {
   Show,
 }
 
-/// Parse the policy arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
-/// help 0, usage error 2).
+/// Parse the policy arguments and run one verb. Parser errors print and exit on their own: help
+/// exits 0, a usage error exits 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(PolicyCli::command());
   let argv = std::iter::once(OsString::from("charliebot policy")).chain(args.iter().cloned());

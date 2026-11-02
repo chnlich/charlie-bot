@@ -1,5 +1,6 @@
-//! CPython's `str` methods on Unicode text, for the ports to match: `isalnum`, `isdigit`, the decimal value of a decimal
-//! digit, `isspace`, `split()` with its `" ".join` collapse, and the slicing `s[:n]`, `s[n:]` and `len(s)`.
+//! String methods on Unicode text: `isalnum`, `isdigit`, the decimal value of a decimal
+//! digit, `isspace`, `strip()`, `split()` with its single-space collapse, the first-n and from-n slices,
+//! and the code point count.
 
 use std::sync::LazyLock;
 
@@ -107,12 +108,12 @@ const DECIMAL_ZEROES: &[u32] = &[
   0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e5f1, 0x1e950, 0x1fbf0,
 ];
 
-// Python's alphanumeric set uses Unicode Letter and Number categories. Rust's char predicate also accepts
+// The alphanumeric set uses Unicode Letter and Number categories. Rust's char predicate also accepts
 // Other_Alphabetic.
 static ALPHANUMERIC: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"^[\p{L}\p{N}]$").expect("the Python alphanumeric character pattern is valid"));
 
-/// Whether CPython's `str.isalnum()` accepts this character.
+/// Whether the `isalnum` predicate accepts this character.
 pub fn is_alphanumeric(character: char) -> bool {
   let mut buffer = [0; 4];
   ALPHANUMERIC.is_match(character.encode_utf8(&mut buffer))
@@ -123,7 +124,7 @@ pub fn is_digit(character: char) -> bool {
   DIGIT_RANGES.iter().any(|&(start, end)| (start..=end).contains(&code_point))
 }
 
-/// Python's `str.isdigit`: a non-empty string whose every character is a digit.
+/// `isdigit`: a non-empty string whose every character is a digit.
 pub fn isdigit(text: &str) -> bool {
   !text.is_empty() && text.chars().all(is_digit)
 }
@@ -141,7 +142,7 @@ pub fn is_whitespace(character: char) -> bool {
   )
 }
 
-/// Python's `str.strip()` with no argument: trims the characters that `is_whitespace` accepts from both ends.
+/// `strip()` with no argument: trims the characters that `is_whitespace` accepts from both ends.
 pub fn strip(text: &str) -> &str {
   text.trim_matches(is_whitespace)
 }
@@ -168,7 +169,7 @@ pub fn collapse_whitespace(text: &str) -> String {
   split_whitespace(text).join(" ")
 }
 
-/// Python's `str.splitlines()`: every line of `text` without its terminator. CPython breaks on `\r`, `\n`, a
+/// `splitlines()`: every line of `text` without its terminator. The breaks are `\r`, `\n`, a
 /// `\r\n` pair, `\v`, `\f`, `\x1c`-`\x1e`, `\x85`, `\u{2028}` and `\u{2029}`; `str::lines` breaks on fewer.
 /// A final terminator adds no empty line after it.
 pub fn splitlines(text: &str) -> Vec<&str> {
@@ -195,17 +196,17 @@ pub fn splitlines(text: &str) -> Vec<&str> {
   lines
 }
 
-/// Python's `s[:count]`: the first `count` characters of `text`.
+/// The first `count` characters of `text`.
 pub fn take_chars(text: &str, count: usize) -> String {
   text.chars().take(count).collect()
 }
 
-/// Python's `s[skip:]`: the characters of `text` after its first `skip`.
+/// The characters of `text` after its first `skip`.
 pub fn slice_from(text: &str, skip: usize) -> String {
   text.chars().skip(skip).collect()
 }
 
-/// `len(text)` for a Python string: its code point count.
+/// The code point count of a string.
 pub fn code_point_len(text: &str) -> usize {
   text.chars().count()
 }

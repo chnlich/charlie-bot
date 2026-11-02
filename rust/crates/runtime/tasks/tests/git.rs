@@ -1,8 +1,7 @@
-//! Ports of the Python git-helper test suites (`tests/test_git_worktree_base.py` and
-//! `tests/test_git_worktree_remove.py`).
+//! Tests of the git helpers: worktree base resolution and worktree removal.
 //!
 //! The repositories and their `origin` remotes are built in temporary directories with the
-//! real `git`, as the Python fixtures do. A test that needs a hung or failing git writes a
+//! real `git`. A test that needs a hung or failing git writes a
 //! `/bin/sh` script (no execute bit) that intercepts one verb and delegates every other
 //! command to `/usr/bin/git`, and routes the module's subprocesses through it via the
 //! crate's `test-hooks` program override. The hook values also shrink the worktree-add and
@@ -81,7 +80,7 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
   String::from_utf8(run_git(dir, args).stdout).expect("git stdout is UTF-8").trim().to_string()
 }
 
-/// Write a file, commit it, and return the new commit's SHA (Python `_commit`).
+/// Write a file, commit it, and return the new commit's SHA.
 fn commit(cwd: &Path, filename: &str, content: &str, message: &str) -> String {
   fs::write(cwd.join(filename), content).expect("synthetic file is written");
   git(cwd, &["add", filename]);
@@ -273,7 +272,6 @@ fn worktree_head(wt_path: &Path) -> String {
 
 #[tokio::test]
 async fn local_equals_origin_uses_origin_tip() {
-  // Python: tests/test_git_worktree_base.py::test_local_equals_origin_uses_origin_tip.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
@@ -296,7 +294,6 @@ async fn local_equals_origin_uses_origin_tip() {
 
 #[tokio::test]
 async fn local_behind_origin_starts_from_origin_tip() {
-  // Python: tests/test_git_worktree_base.py::test_local_behind_origin_starts_from_origin_tip.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let origin_tip = commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
@@ -326,7 +323,6 @@ async fn local_behind_origin_starts_from_origin_tip() {
 
 #[tokio::test]
 async fn merge_base_unexpected_exit_code_raises() {
-  // Python: tests/test_git_worktree_base.py::test_merge_base_unexpected_exit_code_raises.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
@@ -352,7 +348,6 @@ async fn merge_base_unexpected_exit_code_raises() {
 
 #[tokio::test]
 async fn worktree_add_retries_a_transient_config_lock() {
-  // Python: tests/test_git_worktree_base.py::test_worktree_add_retries_a_transient_config_lock.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
@@ -376,7 +371,6 @@ async fn worktree_add_retries_a_transient_config_lock() {
 
 #[tokio::test]
 async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
-  // Python: tests/test_git_worktree_base.py::test_concurrent_worktree_adds_in_one_repo_never_overlap.
   let _guard = GIT_TEST_LOCK.lock().await;
   // Each timed add runs the probe's 0.1 s sleep before a real git call, which leaves the 300 ms hook value about
   // 200 ms for git. This test alone raises the write limit so that a loaded host does not time out an add.
@@ -411,7 +405,6 @@ async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
 
 #[tokio::test]
 async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
-  // Python: tests/test_git_worktree_base.py::test_worktree_add_persistent_lock_error_raises_after_three_retries.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
@@ -435,7 +428,6 @@ async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
 
 #[tokio::test]
 async fn worktree_add_non_lock_failure_raises_immediately() {
-  // Python: tests/test_git_worktree_base.py::test_worktree_add_non_lock_failure_raises_immediately.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
@@ -463,7 +455,6 @@ async fn worktree_add_non_lock_failure_raises_immediately() {
 
 #[tokio::test]
 async fn baseless_launch_starts_at_remote_default_tip() {
-  // Python: tests/test_git_worktree_base.py::test_baseless_launch_starts_at_remote_default_tip.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RemoteDefaultRepo::create();
   let origin_tip = commit(&repo.seed, "advance.txt", "advance\n", "advance origin main");
@@ -496,7 +487,6 @@ async fn baseless_launch_starts_at_remote_default_tip() {
 
 #[tokio::test]
 async fn remote_op_hung_first_attempt_succeeds_on_retry() {
-  // Python: tests/test_git_worktree_base.py::test_remote_op_hung_first_attempt_succeeds_on_retry.
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
   let sha = "a".repeat(40);
@@ -522,7 +512,6 @@ async fn remote_op_hung_first_attempt_succeeds_on_retry() {
 
 #[tokio::test]
 async fn remote_op_failing_every_attempt_returns_timeout_error() {
-  // Python: tests/test_git_worktree_base.py::test_remote_op_failing_every_attempt_returns_single_attempt_error[hang].
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
   let fake = FakeGit::new(&FakeGitOptions { verb: "fetch", hangs: 99, fails: 99, ..Default::default() });
@@ -547,7 +536,6 @@ async fn remote_op_failing_every_attempt_returns_timeout_error() {
 
 #[tokio::test]
 async fn remote_op_failing_every_attempt_returns_last_stderr() {
-  // Python: tests/test_git_worktree_base.py::test_remote_op_failing_every_attempt_returns_single_attempt_error[exit].
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
   let fake = FakeGit::new(&FakeGitOptions { verb: "fetch", fails: 99, code: 128, ..Default::default() });
@@ -571,7 +559,6 @@ async fn remote_op_failing_every_attempt_returns_last_stderr() {
 
 #[tokio::test]
 async fn worktree_add_keeps_the_write_limit() {
-  // Python: tests/test_git_worktree_base.py::test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limit.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let _fake = FakeGit::new(&FakeGitOptions { verb: "worktree add", hangs: 99, ..Default::default() });
@@ -586,7 +573,6 @@ async fn worktree_add_keeps_the_write_limit() {
 
 #[tokio::test]
 async fn ls_remote_takes_the_attempt_limit() {
-  // Python: tests/test_git_worktree_base.py::test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limit.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   let _fake = FakeGit::new(&FakeGitOptions { verb: "ls-remote", hangs: 99, ..Default::default() });
@@ -606,7 +592,6 @@ async fn ls_remote_takes_the_attempt_limit() {
 
 #[tokio::test]
 async fn fetch_takes_the_attempt_limit() {
-  // Python: tests/test_git_worktree_base.py::test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limit.
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
   commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
@@ -639,7 +624,6 @@ async fn remove_worktree(tmp: &Path, wt_path: &Path, expected_residue_name: &str
 
 #[tokio::test]
 async fn git_worktree_remove_does_not_delete_residue_after_git_failure() {
-  // Python: tests/test_git_worktree_remove.py::test_git_worktree_remove_does_not_delete_residue_after_git_failure.
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
   // The fake git runs with the repo path as its working directory, so the directory exists.
@@ -664,7 +648,6 @@ async fn git_worktree_remove_does_not_delete_residue_after_git_failure() {
 
 #[tokio::test]
 async fn git_worktree_remove_refuses_path_outside_allowed_parent() {
-  // Python: tests/test_git_worktree_remove.py::test_git_worktree_remove_refuses_path_outside_allowed_parent.
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
   let wt_path = tmp.path().join("other").join("charliebot-task-elsewhere");
@@ -678,7 +661,6 @@ async fn git_worktree_remove_refuses_path_outside_allowed_parent() {
 
 #[tokio::test]
 async fn git_worktree_remove_refuses_repo_root() {
-  // Python: tests/test_git_worktree_remove.py::test_git_worktree_remove_refuses_repo_root.
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
   let worktree_parent = tmp.path().join("worktrees");
@@ -701,7 +683,6 @@ async fn git_worktree_remove_refuses_repo_root() {
 
 #[tokio::test]
 async fn git_worktree_remove_refuses_symlink_target() {
-  // Python: tests/test_git_worktree_remove.py::test_git_worktree_remove_refuses_symlink_target.
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
   let worktree_parent = tmp.path().join("worktrees");
@@ -720,6 +701,6 @@ async fn git_worktree_remove_refuses_symlink_target() {
 
 #[test]
 fn worktree_dir_name_replaces_slashes() {
-  // Python: tests/test_git_worktree_base.py resolves worktree names through git_worktree_dir_name.
+  // Worktree names resolve through git_worktree_dir_name.
   assert_eq!(git_worktree_dir_name("charliebot/task-equal"), "charliebot-task-equal");
 }

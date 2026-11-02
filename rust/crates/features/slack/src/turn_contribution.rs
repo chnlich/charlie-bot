@@ -16,7 +16,7 @@ use crate::event_types::SLACK_REPLY;
 use crate::metadata::slack_origin;
 use crate::thread_contract::{SLACK, thread_contract_part};
 
-/// The run kind that takes the manager contract (`task_prompts.MANAGER_KINDS`).
+/// The run kind that takes the manager contract.
 const MANAGER_KIND: &str = "manager_turn";
 
 /// The Slack turn contribution.
@@ -64,12 +64,12 @@ impl TurnContribution for SlackTurnContribution {
   }
 }
 
-/// `_slack_reply_message`: the chat line of a `slack_reply` event.
+/// The chat line of a `slack_reply` event.
 fn slack_reply_message(event: &Value) -> Value {
   json!({"role": "system", "content": format!("Posted to Slack: {}", content_text(event))})
 }
 
-/// The event's `content` as Python text, or `""` when the event has none (`event.get("content", "")`).
+/// The event's `content` as text, or `""` when the event has none.
 fn content_text(event: &Value) -> String {
   event.get("content").map(text_repr::value_str).unwrap_or_default()
 }
@@ -128,7 +128,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),

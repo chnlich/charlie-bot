@@ -7,7 +7,7 @@ use crate::event_types::SharedChatEvent;
 
 /// Run terminal outcomes, stop requests and withheld launches folded from one node history.
 ///
-/// Recovery and dispatch read the same outcome and stop-request maps as Python's bounded run-facts memo.
+/// Recovery and dispatch read the same outcome and stop-request maps as the bounded run-facts memo.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RunFacts {
   pub(crate) outcomes: HashMap<String, Option<String>>,
@@ -26,10 +26,10 @@ pub(crate) struct CachedRunFacts {
   pub(crate) facts: Arc<RunFacts>,
 }
 
-/// A bounded memo keyed by the event list's identity (`Arc<()>`), which `runs.py::_RunFactsMemo` keeps as a plain
-/// dict keyed by `id(events)`: lookups never touch the order, a replacement keeps its position, and eviction pops
-/// the oldest insertion. That is a bounded FIFO, not the LRU `src/infra/memo.py` provides, so `lru::LruCache`
-/// would move entries Python keeps in place, and no crate hashes by pointer identity. The struct stays hand-written.
+/// A bounded memo keyed by the event list's identity (`Arc<()>`): lookups never touch the order, a replacement
+/// keeps its position, and eviction pops the oldest insertion. That is a bounded FIFO, not an LRU, so
+/// `lru::LruCache` would move entries that stay in place, and no crate hashes by pointer identity. The struct stays
+/// hand-written.
 #[derive(Default)]
 pub(crate) struct RunFactsMemo {
   entries: VecDeque<CachedRunFacts>,

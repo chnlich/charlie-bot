@@ -1,4 +1,4 @@
-//! Plan-registry lookup for a Waiting on you item's file links (`src/features/web_reply/plan_links.py`).
+//! Plan-registry lookup for a Waiting on you item's file links.
 //!
 //! A link to a registered plan version names its plan lineage and version. The check refuses a link to a version
 //! below the lineage's newest version or to a closed lineage. The since pairing groups items of one lineage together,
@@ -18,8 +18,7 @@ use serde_json::Value;
 use crate::metadata::WaitingItem;
 use crate::reply::WebReplyError;
 
-/// A bare file-server path inside prose: the context and text fields carry these without a Markdown target
-/// (`plan_links._MOUNT_PATH`).
+/// A bare file-server path inside prose: the context and text fields carry these without a Markdown target.
 static MOUNT_PATH: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(&format!(r#"{}[^\s<>"'`)]*"#, regex::escape(file_urls::FILE_SERVER_MOUNT))).expect("valid pattern")
 });
@@ -28,7 +27,7 @@ static MOUNT_PATH: LazyLock<Regex> = LazyLock::new(|| {
 static TRAILING_PUNCTUATION: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"[.,;:!?*。！？；，、：．]+$").expect("valid pattern"));
 
-/// One item link bound to a registered plan version (`plan_links.Binding`).
+/// One item link bound to a registered plan version.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
   pub session_id: String,
@@ -40,20 +39,20 @@ pub struct Binding {
 }
 
 impl Binding {
-  /// Whether the link names an older version than the newest or a version of a closed lineage (`Binding.stale`).
+  /// Whether the link names an older version than the newest or a version of a closed lineage.
   pub fn stale(&self) -> bool {
     self.closed.is_some() || self.version < self.newest_version
   }
 }
 
-/// One item link the registry refuses with the newest file the user should read instead (`plan_links.StaleLink`).
+/// One item link the registry refuses with the newest file the user should read instead.
 #[derive(Clone, Debug)]
 pub struct StaleLink {
   pub link: String,
   pub binding: Binding,
 }
 
-/// Read the plan registries that item links name, once per session for one status command (`plan_links.PlanLinks`).
+/// Read the plan registries that item links name, once per session for one status command.
 pub struct PlanLinks {
   sessions_dir: PathBuf,
   root: PathBuf,
@@ -67,8 +66,7 @@ impl PlanLinks {
     Self { sessions_dir, root, registries: HashMap::new(), read_plans }
   }
 
-  /// The session id and session-relative posix path that `path` names, or None outside the sessions directory
-  /// (`PlanLinks._relative`).
+  /// The session id and session-relative posix path that `path` names, or None outside the sessions directory.
   fn relative(&self, path: &Path) -> Option<(String, String)> {
     let resolved = paths::realpath(path);
     let relative = resolved.strip_prefix(&self.root).ok()?;
@@ -81,7 +79,7 @@ impl PlanLinks {
     Some((session_id, posix_normpath(&rest.join("/"))))
   }
 
-  /// The plans of `session_id`, or None when its registry is missing (`PlanLinks._registry`). The registered reader
+  /// The plans of `session_id`, or None when its registry is missing. The registered reader
   /// decides what a registry that does not read means.
   fn registry(&mut self, session_id: &str) -> Result<Option<Vec<Value>>, WebReplyError> {
     if !self.registries.contains_key(session_id) {
@@ -91,7 +89,7 @@ impl PlanLinks {
     Ok(self.registries.get(session_id).expect("the registry was just read").clone())
   }
 
-  /// The registered plan version that `path` names, or None for any other file (`PlanLinks.binding`).
+  /// The registered plan version that `path` names, or None for any other file.
   pub fn binding(&mut self, path: &Path) -> Result<Option<Binding>, WebReplyError> {
     let Some((session_id, file_relative)) = self.relative(path) else {
       return Ok(None);
@@ -161,8 +159,7 @@ impl PlanLinks {
     Ok(None)
   }
 
-  /// The pairing target of `item`: its plan lineage, its other link, or the one group for items without a link
-  /// (`PlanLinks.target`).
+  /// The pairing target of `item`: its plan lineage, its other link, or the one group for items without a link.
   pub fn target(&mut self, item: &WaitingItem) -> Result<String, WebReplyError> {
     let Some(link) = item.link.clone() else {
       return Ok("no-link".to_string());
@@ -178,7 +175,7 @@ impl PlanLinks {
     })
   }
 
-  /// The link text and local file path of each file link `value` names (`PlanLinks._links`).
+  /// The link text and local file path of each file link `value` names.
   fn links(&self, value: Option<&str>, scan_context: &ScanContext) -> Result<Vec<(String, PathBuf)>, WebReplyError> {
     let Some(value) = value else {
       return Ok(Vec::new());
@@ -202,7 +199,7 @@ impl PlanLinks {
     Ok(links)
   }
 
-  /// Every stale registered-plan link in the text, context and link of `items` (`PlanLinks.stale_links`).
+  /// Every stale registered-plan link in the text, context and link of `items`.
   pub fn stale_links(
     &mut self,
     items: &[WaitingItem],
@@ -235,17 +232,17 @@ impl PlanLinks {
   }
 }
 
-/// The link's host file, as `file_urls.host_file` returns it; a malformed link fails as Python's urlsplit does.
+/// The link's host file, as `file_urls::host_file` returns it; a malformed link fails with its message.
 fn host_path(link: Option<&str>) -> Result<Option<PathBuf>, WebReplyError> {
   file_urls::host_file(link).map_err(|message| WebReplyError::Failed(anyhow!("{message}")))
 }
 
-/// The `file` string of one plan-registry version row; a version without one fails as Python's indexing does.
+/// The `file` string of one plan-registry version row; `None` when the row has none.
 fn version_file(version: &Value) -> Option<String> {
   version.get("file").and_then(Value::as_str).map(str::to_string)
 }
 
-/// The `v` integer of one plan-registry version row; a version without one fails as Python's indexing does.
+/// The `v` integer of one plan-registry version row; a version without one fails the read.
 fn version_number(version: &Value) -> Result<i64, WebReplyError> {
   version
     .get("v")
@@ -253,7 +250,7 @@ fn version_number(version: &Value) -> Result<i64, WebReplyError> {
     .ok_or_else(|| WebReplyError::Failed(anyhow!("a plan version has no integer v: {version}")))
 }
 
-/// `posixpath.normpath` for the session-relative and registry-file paths the lookup compares.
+/// The normalization the session-relative and registry-file paths the lookup compares go through.
 fn posix_normpath(text: &str) -> String {
   let absolute = text.starts_with('/');
   let mut parts: Vec<&str> = Vec::new();
@@ -280,7 +277,7 @@ fn posix_normpath(text: &str) -> String {
   }
 }
 
-/// The 409 detail that names each stale link and its lineage's newest file (`plan_links.stale_detail`).
+/// The 409 detail that names each stale link and its lineage's newest file.
 pub fn stale_detail(stale: &[StaleLink]) -> String {
   let mut lines = vec!["Stale plan links; nothing was stored.".to_string()];
   for entry in stale {

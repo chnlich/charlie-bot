@@ -3,7 +3,7 @@
 //! An agent rearranges its own subtree only: the moved task sits below the caller's task, and the new parent is the
 //! caller's task or below it. The move keeps each moved session's subtree rules word for word, because the user alone
 //! sets the rules that a session reads. Only the chain above the moved task changes, so the check compares the old
-//! chain with the new one below their shared prefix: a rule the new chain adds refuses the move, and one rule the old
+//! chain with the new one below their shared prefix. A rule the new chain adds refuses the move. One rule the old
 //! chain drops moves onto the moved task (the carry) when that task holds no subtree rule of its own.
 
 use charliebot_core::event_types;
@@ -47,8 +47,8 @@ pub(crate) fn check_agent_scope(
 }
 
 /// The prompt blockers of moving `session_id` under `new_parent`, and the rule the move carries when it drops exactly
-/// one rule onto a task without its own. Each subtree rule applies to its holder and every node below it, so the old
-/// chain (root to old parent) and the new chain (root to new parent) differ only below their shared prefix.
+/// one rule onto a task without its own. Each subtree rule applies to its holder and every node below it. The old
+/// chain (root to old parent) and the new chain (root to new parent) therefore differ only below their shared prefix.
 pub(crate) fn prompt_check(
   index: &TreeIndex,
   session_id: &str,

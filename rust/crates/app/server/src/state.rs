@@ -22,7 +22,7 @@ pub struct StaticMount {
 }
 
 impl StaticMount {
-  /// The Python app's `/static` mounts in its route order: one per page package in registration order, then
+  /// The `/static` mounts in route order: one per page package in registration order, then
   /// `web/static` when it exists at startup.
   pub fn app_mounts(repo_root: &Path, packages: &[&str]) -> Vec<StaticMount> {
     let mut mounts: Vec<StaticMount> = packages
@@ -39,7 +39,7 @@ impl StaticMount {
     mounts
   }
 
-  /// The path below this mount when `path` falls under it (starlette `Mount` matching), else `None`.
+  /// The path below this mount when `path` falls under it, else `None`.
   pub fn route_path<'a>(&self, path: &'a str) -> Option<&'a str> {
     path.strip_prefix(&self.prefix).filter(|rest| rest.starts_with('/'))
   }
@@ -49,7 +49,7 @@ pub struct AppState {
   /// The handles the registered features share: the live config and credentials, the store, the registry.
   pub features: Arc<FeatureContext>,
   pub build_info: BuildInfo,
-  /// The `/static` mounts in the Python app's route order.
+  /// The `/static` mounts in route order.
   pub static_mounts: Vec<StaticMount>,
   pub mime_types: MimeTypes,
 }

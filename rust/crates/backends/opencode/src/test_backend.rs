@@ -611,7 +611,6 @@ fn held_script(prompts: &[&str]) -> Value {
 
 #[test]
 fn headless_config_denies_the_three_tools_and_pins_bash() {
-  // Python: tests/test_opencode_backend.py::test_headless_config_denies_the_three_tools_and_pins_bash
   let config = super::headless_config(&[]).unwrap();
   assert_eq!(config["shell"], "bash");
   assert_eq!(config["permission"]["question"], "deny");
@@ -619,7 +618,6 @@ fn headless_config_denies_the_three_tools_and_pins_bash() {
   assert_eq!(config["permission"]["opencode_session_move"], "deny");
 }
 
-// Python: tests/test_opencode_backend.py:114.
 #[test]
 fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   let harness = Harness::new(json!({}));
@@ -653,7 +651,6 @@ fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   assert!(env["NO_PROXY"].ends_with("::1"));
 }
 
-// Python: tests/test_opencode_backend.py:462.
 #[tokio::test]
 async fn claim_is_held_before_start_and_dropped_after_start_failure() {
   let harness = Harness::with_settings(json!({"prompts": {}}), Some("1.18.18"), ServerTimeouts::default(), None);
@@ -668,13 +665,11 @@ async fn claim_is_held_before_start_and_dropped_after_start_failure() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:345.
 #[test]
 fn process_rss_reads_the_process_own_resident_memory() {
   assert!(server::OpenCodeServer::process_rss_mb_test(std::process::id()).unwrap() > 10.0);
 }
 
-// Python: tests/test_opencode_backend.py:350.
 #[tokio::test]
 async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() {
   let timeouts = ServerTimeouts {
@@ -700,7 +695,6 @@ async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() 
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:364.
 #[tokio::test]
 async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
   let timeouts = ServerTimeouts {
@@ -733,7 +727,6 @@ async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:377.
 #[tokio::test]
 async fn a_claimed_directory_keeps_the_server_running() {
   let timeouts = ServerTimeouts {
@@ -771,7 +764,6 @@ async fn a_claimed_directory_keeps_the_server_running() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:491.
 #[tokio::test]
 async fn dropping_the_last_claim_rearms_the_idle_exit() {
   let timeouts = ServerTimeouts {
@@ -798,7 +790,6 @@ async fn dropping_the_last_claim_rearms_the_idle_exit() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:391.
 #[tokio::test]
 async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops() {
   let timeouts = ServerTimeouts {
@@ -865,7 +856,6 @@ async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops(
 
 #[test]
 fn translation_maps_text_tool_and_usage_events() {
-  // Python: tests/test_opencode_backend.py::test_translation_maps_text_tool_and_usage_events
   let mut translator = OpenCodeTranslator::new(MODEL.to_string());
   assert!(
     translator.translate_event(&json!({"type": "session.step.started", "data": {"started": 1234}})).unwrap().is_empty()
@@ -920,7 +910,6 @@ fn translation_maps_text_tool_and_usage_events() {
 
 #[test]
 fn tool_call_without_a_started_name_fails_the_translation() {
-  // Python: tests/test_opencode_backend.py::test_tool_call_without_a_started_name_fails_the_translation
   let mut translator = OpenCodeTranslator::new(MODEL.to_string());
   let error =
     translator.translate_event(&json!({"type": "session.tool.called", "data": {"id": "c9", "input": {}}})).unwrap_err();
@@ -929,7 +918,6 @@ fn tool_call_without_a_started_name_fails_the_translation() {
 
 #[test]
 fn model_limit_is_read_from_the_2_0_model_list() {
-  // Python: tests/test_opencode_backend.py::test_model_limit_is_read_from_the_2_0_model_list
   let payload = json!({"data": [{"id": "m", "providerID": "p", "limit": {"context": 9, "output": 3}}]});
   assert_eq!(
     extract_model_limit(&payload, "p", "m").unwrap(),
@@ -940,7 +928,6 @@ fn model_limit_is_read_from_the_2_0_model_list() {
 
 #[test]
 fn image_attachments_become_data_urls_and_other_files_are_skipped() {
-  // Python: tests/test_opencode_backend.py::test_image_attachments_become_data_urls_and_other_files_are_skipped
   let root = tempfile::tempdir().unwrap();
   let image = root.path().join("a.png");
   fs::write(&image, b"\x89PNG").unwrap();
@@ -965,9 +952,6 @@ fn snapshot_reading_limits_keep_the_opencode_reserve() {
 
 #[tokio::test]
 async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
-  // Python: tests/test_opencode_backend.py::test_turn_translates_events_sets_the_environment_and_ends_with_result
-  // Python: tests/test_backend_pid_start_contract.py::test_every_backend_subclass_has_a_harness
-  // Python: tests/test_backend_pid_start_contract.py::test_pid_start_pinned_at_spawn_notification
   let script = json!({
     "event_subscribe_delay": 0.05,
     "prompts": {
@@ -1461,7 +1445,6 @@ async fn reused_run_directory_sends_only_the_new_prompt() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:666.
 #[tokio::test]
 async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
   let harness = Harness::new(json!({"prompts": {"work": {"shells": [{}], "events": [
@@ -1501,8 +1484,6 @@ async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:765.
-// Python: tests/test_opencode_backend.py:322.
 #[tokio::test]
 async fn terminate_releases_only_unclaimed_directories_once_before_returning() {
   let harness = Harness::new(json!({
@@ -1552,7 +1533,6 @@ async fn terminate_releases_only_unclaimed_directories_once_before_returning() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:504.
 #[tokio::test]
 async fn failed_release_is_reported_as_a_turn_error_event() {
   let harness = Harness::with_settings(
@@ -1575,7 +1555,6 @@ async fn failed_release_is_reported_as_a_turn_error_event() {
 
 #[tokio::test]
 async fn concurrent_turns_share_one_server_process() {
-  // Python: tests/test_opencode_backend.py::test_concurrent_turns_share_one_server_process
   let harness = Harness::new(json!({"prompts": {
     "one": {"events": [text_event("first")]},
     "two": {"events": [text_event("second")]}
@@ -1596,7 +1575,6 @@ async fn concurrent_turns_share_one_server_process() {
 
 #[tokio::test]
 async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
-  // Python: tests/test_opencode_backend.py::test_cancel_signals_only_its_turn_and_the_other_turn_completes
   let harness = Harness::new(held_script(&["held", "quick"]));
   let (_, cancelled_events, cancelled_task) =
     harness.start_run("held", LaunchArgs::default(), None, vec![], Env::new());
@@ -1645,7 +1623,6 @@ async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
 
 #[tokio::test]
 async fn permission_request_fails_only_its_turn() {
-  // Python: tests/test_opencode_backend.py::test_permission_request_fails_only_its_turn
   let harness = Harness::new(json!({"prompts": {
     "risky": {"events": [{"type": "permission.asked", "data": {"permission": "shell", "patterns": ["rm -rf *"]}}]},
     "calm": {"events": [text_event("fine")]}
@@ -1664,7 +1641,6 @@ async fn permission_request_fails_only_its_turn() {
 
 #[tokio::test]
 async fn manager_turn_reloads_locations_before_the_prompt() {
-  // Python: tests/test_opencode_backend.py::test_manager_turn_reloads_locations_before_the_prompt
   let harness = Harness::new(json!({"prompts": {"manage": {"events": [text_event("managed")]}}}));
   let (_, output, task) = harness.start_run(
     "manage",
@@ -1690,7 +1666,6 @@ async fn manager_turn_reloads_locations_before_the_prompt() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:856.
 #[tokio::test]
 async fn stream_loss_ends_running_turns_before_the_server_stops() {
   let harness = Harness::new(json!({
@@ -1727,7 +1702,6 @@ async fn stream_loss_ends_running_turns_before_the_server_stops() {
 
 #[tokio::test]
 async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restarts() {
-  // Python: tests/test_opencode_backend.py::test_server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restarts
   let harness = Harness::new(json!({"prompts": {
     "crash": {"events": [], "hold": true},
     "after": {"events": [text_event("back")]}
@@ -1760,7 +1734,6 @@ async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restar
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:922.
 #[tokio::test]
 async fn idle_server_exits_after_the_idle_limit() {
   let timeouts = ServerTimeouts {
@@ -1784,7 +1757,6 @@ async fn idle_server_exits_after_the_idle_limit() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:937.
 #[tokio::test]
 async fn wrong_major_version_fails_the_turn_naming_the_binary() {
   let harness = Harness::with_settings(json!({"prompts": {}}), Some("1.18.18"), ServerTimeouts::default(), None);
@@ -1799,7 +1771,6 @@ async fn wrong_major_version_fails_the_turn_naming_the_binary() {
   harness.clear_finished_turn_pids();
 }
 
-// Python: tests/test_opencode_backend.py:950.
 #[tokio::test]
 async fn missing_resume_session_fails_the_turn_naming_the_id() {
   let harness = Harness::new(json!({"prompts": {}}));
@@ -1837,7 +1808,6 @@ async fn missing_resume_session_fails_the_turn_naming_the_id() {
 
 #[tokio::test]
 async fn missing_join_script_fails_before_the_environment_is_set() {
-  // Python: tests/test_opencode_backend.py::test_missing_join_script_fails_before_the_environment_is_set
   let missing_repo = tempfile::tempdir().unwrap();
   let harness = Harness::with_settings(
     json!({"prompts": {}}),
@@ -1857,7 +1827,6 @@ async fn missing_join_script_fails_before_the_environment_is_set() {
 
 #[tokio::test]
 async fn silent_session_fails_after_the_progress_timeout() {
-  // Python: tests/test_opencode_backend.py::test_silent_session_fails_after_the_progress_timeout
   let timeouts = ServerTimeouts { progress: Duration::from_millis(50), ..ServerTimeouts::default() };
   let harness = Harness::with_settings(held_script(&["quiet"]), None, timeouts, None);
   let (_, output, task) = harness.start_run("quiet", LaunchArgs::default(), None, vec![], Env::new());
@@ -1872,7 +1841,6 @@ async fn silent_session_fails_after_the_progress_timeout() {
 
 #[tokio::test]
 async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
-  // Python: tests/test_opencode_backend.py::test_prompt_waits_for_an_earlier_interrupt_to_settle
   let harness = Harness::new(json!({
     "interrupt_event_delay": 0.12,
     "prompts": {"warm": {"events": [text_event("warm")]}, "next": {"events": [text_event("answered")]}}
@@ -1905,7 +1873,6 @@ async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
 
 #[tokio::test]
 async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line() {
-  // Python: tests/test_opencode_backend.py::test_one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line
   let harness = Harness::new(json!({
     "run_lines": [{"type": "text", "part": {"text": "  answer  "}}],
     "run_exit": 0
@@ -2020,8 +1987,6 @@ async fn recovered_translator_keeps_the_original_model_after_settings_change() {
 
 #[tokio::test]
 async fn context_limit_reaches_the_one_shot_and_the_shared_server_configs() {
-  // Python: tests/test_opencode_backend.py::test_one_shot_config_uses_its_option_and_denies_tools
-  // Python: tests/test_opencode_backend.py::test_headless_config_keeps_existing_keys_and_reads_live_options
   let harness = Harness::new(json!({"run_lines": [{"type": "text", "part": {"text": "answer"}}], "run_exit": 0}));
   let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
   let plain = opencode_option("plain", MODEL, "{}");
@@ -2050,7 +2015,6 @@ async fn context_limit_reaches_the_one_shot_and_the_shared_server_configs() {
 
 #[test]
 fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options() {
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_rejects_conflicts_naming_both_options
   let harness = Harness::new(json!({}));
   let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
   let first = opencode_option("oc-first", MODEL, "context_limit: 420000\n");
@@ -2065,7 +2029,6 @@ fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options()
 
 #[test]
 fn headless_providers_merge_equal_limits_and_keep_distinct_models() {
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_merges_equal_limits_and_distinct_models
   let harness = Harness::new(json!({}));
   let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
   let options = vec![
@@ -2084,8 +2047,6 @@ fn headless_providers_merge_equal_limits_and_keep_distinct_models() {
 
 #[tokio::test]
 async fn opencode_prepare_cwd_writes_agents_md_even_when_config_exists() {
-  // Python: tests/test_backend_prepare_cwd_contract.py::test_opencode_prepare_cwd_writes_agents_md_even_when_config_exists
-  // Python: tests/test_backend_prepare_cwd_contract.py::test_prepare_cwd_writes_instructions_file_when_provided
   let harness = Harness::new(json!({"prompts": {"manager": {"events": [text_event("ok")]}}}));
   let work = harness.root.path().join("work");
   fs::create_dir_all(work.join(".opencode")).unwrap();
@@ -2105,8 +2066,6 @@ async fn opencode_prepare_cwd_writes_agents_md_even_when_config_exists() {
 
 #[tokio::test]
 async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
-  // Python: tests/test_backend_prepare_cwd_contract.py::test_opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare
-  // Python: tests/test_backend_prepare_cwd_contract.py::test_run_instructions_land_in_run_dir_and_tracked_guides_stay_untouched
   let framed = "<system-instructions>\nworker instructions\n</system-instructions>\n\nwork";
   let harness = Harness::new(json!({"prompts": {
     framed: {"events": [text_event("worker")]},
@@ -2150,7 +2109,6 @@ async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
 
 #[tokio::test]
 async fn opencode_prepare_cwd_skips_agents_md_when_instructions_are_unset() {
-  // Python: tests/test_backend_prepare_cwd_contract.py::test_prepare_cwd_skips_instructions_file_when_unset
   let harness = Harness::new(json!({"prompts": {"plain": {"events": [text_event("ok")]}}}));
   let (_, _, task) = harness.start_run("plain", LaunchArgs::default(), None, vec![], Env::new());
   assert_eq!(task.await.unwrap().unwrap().exit_code, Some(0));
@@ -2161,7 +2119,6 @@ async fn opencode_prepare_cwd_skips_agents_md_when_instructions_are_unset() {
 
 #[tokio::test]
 async fn unclaimed_execution_is_interrupted() {
-  // Python: tests/test_opencode_backend.py::test_unclaimed_execution_is_interrupted
   let harness = Harness::new(json!({"interrupt_event_delay": 0.01, "prompts": {}}));
   harness.server.ensure_running().await.unwrap();
   let response = harness
@@ -2195,7 +2152,6 @@ async fn unclaimed_execution_is_interrupted() {
 
 #[tokio::test]
 async fn earlier_interrupt_wait_times_out_with_the_session_id() {
-  // Python: tests/test_opencode_backend.py::test_waiting_for_earlier_interrupts_times_out
   let timeouts = ServerTimeouts { interrupt_settle: Duration::from_millis(20), ..ServerTimeouts::default() };
   let harness = Harness::with_settings(json!({}), None, timeouts, None);
   harness.server.add_pending_test("ses_x");
@@ -2206,7 +2162,6 @@ async fn earlier_interrupt_wait_times_out_with_the_session_id() {
 
 #[tokio::test]
 async fn dispatch_routes_to_the_claimed_turn_and_settles_pending_interrupts() {
-  // Python: tests/test_opencode_backend.py::test_dispatch_routes_to_the_claimed_turn_and_settles_pending_interrupts
   let harness = Harness::new(json!({}));
   let turn = harness.server.register("ses_1", "/synthetic/work", 999_999).unwrap();
   harness.server.add_pending_test("ses_1");
@@ -2279,7 +2234,6 @@ async fn iter_ndjson_events_parses_and_skips() {
 
 #[test]
 fn opencode_join_script_moves_the_shell_and_sets_its_oom_priority() {
-  // Python: tests/test_session_cgroup.py::test_opencode_join_script_moves_the_shell_and_sets_its_oom_priority
   let root = tempfile::tempdir().unwrap();
   let procs = root.path().join("cgroup.procs");
   fs::write(&procs, "").unwrap();

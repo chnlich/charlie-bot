@@ -192,8 +192,8 @@ fn should_start_sweep(running: bool, last_started: Option<Instant>, now: Instant
   last_started.is_none_or(|started| now.duration_since(started) >= interval)
 }
 
-/// Recheck every clean active session off the request path on the periodic poll, as Python's
-/// `schedule_sidebar_sweep` does. Dirty rows stay with the synchronous poll that consumes their mark.
+/// Recheck every clean active session off the request path on the periodic poll.
+/// Dirty rows stay with the synchronous poll that consumes their mark.
 fn schedule_sidebar_sweep(
   store: Arc<Store>,
   registry: Arc<Registry>,

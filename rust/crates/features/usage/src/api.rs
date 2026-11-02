@@ -1,4 +1,4 @@
-//! `GET /api/ext-usage` (`src/features/usage/ext_usage.py` `get_ext_usage`): the quota panel's snapshot.
+//! `GET /api/ext-usage`: the quota panel's snapshot.
 
 use std::sync::Arc;
 

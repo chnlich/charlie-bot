@@ -1,24 +1,21 @@
 //! Outbound WebSocket connections with the TLS roots and HTTPS proxy rules shared with `http_client`.
 //!
-//! The voice relay can forward the returned error text to the browser. These mappings match the `str()` output of the
-//! corresponding websockets 16 exception:
+//! The voice relay can forward the returned error text to the browser. Each failure maps to its display text:
 //!
-//! | Failure | Websockets 16 exception | Display text |
-//! | --- | --- | --- |
-//! | The server answers the opening request with a non-101 status | `InvalidStatus` | `server rejected WebSocket connection: HTTP {status}` |
-//! | The proxy rejects `CONNECT` | `InvalidProxyStatus` | `proxy rejected connection: HTTP {status}` |
-//! | The opening timeout expires during connect, `CONNECT`, TLS, or handshake | `TimeoutError` | `timed out during opening handshake` |
-//! | A peer closes with a normal close frame | `ConnectionClosedOK` | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
-//! | A peer closes with an error close frame | `ConnectionClosedError` | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
-//! | An incoming message exceeds `max_size` | `ConnectionClosedError` | `sent 1009 (message too big) frame with {size} bytes exceeds limit of {max_size} bytes; no close frame received` |
-//! | A keepalive ping receives no pong before `ping_timeout` | `ConnectionClosedError` | `sent 1011 (internal error) keepalive ping timeout; no close frame received` |
+//! | Failure | Display text |
+//! | --- | --- |
+//! | The server answers the opening request with a non-101 status | `server rejected WebSocket connection: HTTP {status}` |
+//! | The proxy rejects `CONNECT` | `proxy rejected connection: HTTP {status}` |
+//! | The opening timeout expires during connect, `CONNECT`, TLS, or handshake | `timed out during opening handshake` |
+//! | A peer closes with a normal close frame | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
+//! | A peer closes with an error close frame | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
+//! | An incoming message exceeds `max_size` | `sent 1009 (message too big) frame with {size} bytes exceeds limit of {max_size} bytes; no close frame received` |
+//! | A keepalive ping receives no pong before `ping_timeout` | `sent 1011 (internal error) keepalive ping timeout; no close frame received` |
 //!
-//! Close-frame text includes its code and reason; `ConnectionClosedOK` and `ConnectionClosedError` have the same
-//! base `ConnectionClosed` display format. TLS, socket, proxy-configuration, and other protocol errors retain their
-//! Rust transport error text.
+//! Close-frame text includes its code and reason; the normal and error close cases share one base display
+//! format. TLS, socket, proxy-configuration, and other protocol errors retain their Rust transport error text.
 //!
-//! The handshake omits the `User-Agent` header and doesn't offer `permessage-deflate`. The Python client sends both
-//! by default, and the parity harness that ignored them on its fakes was removed on 2026-10-27.
+//! The handshake omits the `User-Agent` header and doesn't offer `permessage-deflate`.
 
 use std::fmt;
 use std::future::pending;
@@ -47,7 +44,7 @@ use tokio_tungstenite::{WebSocketStream, client_async_with_config};
 
 pub use crate::http_client::Settings;
 
-/// The websockets 16 client defaults used by Python call sites that omit an option.
+/// The client defaults used when a call site omits an option.
 pub const WEBSOCKETS_16_DEFAULTS: Options = Options {
   open_timeout: Some(Duration::from_secs(10)),
   close_timeout: Some(Duration::from_secs(10)),
@@ -81,7 +78,7 @@ pub enum Message {
   Close(Option<CloseFrame>),
 }
 
-/// A WebSocket connection failure, displayed with websockets 16 text for matching failures.
+/// A WebSocket connection failure. The display text follows the module table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
   InvalidUri(String, String),

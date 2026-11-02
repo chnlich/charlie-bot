@@ -241,9 +241,10 @@
 const DATA = {{ payload|safe }};
 const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)'];
 // Legend order is the server's source display order (slot 1..n); each payload row's segments carry their own slot
-// numbers, so the colour of a source is its slot's entry in SERIES. The legend key only exists on the python this page
-// ships with: the template reloads from disk while the serving process runs the python it started with, so the key
-// stays absent until that process restarts, and an absent key renders an empty legend instead of failing the report.
+// numbers, so the colour of a source is its slot's entry in SERIES. The legend key only exists on the server build
+// this page ships with: the template reloads from disk while the serving process runs the build it started with, so
+// the key stays absent until that process restarts, and an absent key renders an empty legend instead of failing the
+// report.
 const LEG = {{ (ctx.usage_sources or []) | tojson }}.map((name, i) => [i + 1, name]);
 const colour = slot => SERIES[slot - 1];
 const sourceName = slot => LEG[slot - 1][1];

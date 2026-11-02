@@ -22,21 +22,21 @@ use crate::paths;
 use crate::text_repr::{JsonStyle, json_dumps};
 use crate::timefmt;
 
-/// The table's path under the CharlieBot home (`approval_policy.TABLE_PATH`). It sits in a `config.d/` subdirectory,
+/// The table's path under the CharlieBot home (`TABLE_RELATIVE_PATH`). It sits in a `config.d/` subdirectory,
 /// because the config loader refuses any `.yaml` file directly in `config.d/`.
 pub const TABLE_RELATIVE_PATH: &str = "config.d/approval.d/policy.yaml";
 
-/// The title the manager prompts and the ask probe carry the table under (`approval_policy.SECTION_TITLE`).
+/// The title the manager prompts and the ask probe carry the table under (`SECTION_TITLE`).
 pub const SECTION_TITLE: &str = "Approval policy table";
 
-/// The ids a consequence test row may carry, each exactly once (`approval_policy.CONSEQUENCE_TEST_IDS`).
+/// The ids a consequence test row may carry, each exactly once (`CONSEQUENCE_TEST_IDS`).
 pub const CONSEQUENCE_TEST_IDS: [&str; 6] =
   ["irreversible", "chao-name", "money", "authority", "reading", "rule-named"];
 
-/// The tier values a cold-read answer's machine-readable line may give (`approval_policy.ASK_TIERS`).
+/// The tier values a cold-read answer's machine-readable line may give (`ASK_TIERS`).
 pub const ASK_TIERS: [&str; 5] = ["t0", "t1", "t2", "user-act", "review"];
 
-/// The exact form of the machine-readable line the ask cold read ends with (`approval_policy.TIER_LINE_FORM`).
+/// The exact form of the machine-readable line the ask cold read ends with (`TIER_LINE_FORM`).
 pub const TIER_LINE_FORM: &str = "tier: <tier> rule: <rule>";
 
 /// The host-level record store of table changes, next to the other host-level state records.
@@ -45,11 +45,11 @@ pub const CHANGES_RELATIVE_PATH: &str = "state/policy_table_changes.jsonl";
 /// The file that holds the last recorded table content, the baseline the change records diff against.
 pub const RECORDED_RELATIVE_PATH: &str = "state/policy_table_recorded.yaml";
 
-/// `json.dumps(..., ensure_ascii=False)` with the default separators: one NDJSON record line.
+/// One NDJSON record line, with non-ASCII passed through and the default separators.
 const RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// One consequence test: a T0 criterion with its sort rank and its text (`approval_policy.ConsequenceTest`).
+/// One consequence test: a T0 criterion with its sort rank and its text (`ConsequenceTest`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsequenceTest {
@@ -59,7 +59,7 @@ pub struct ConsequenceTest {
 }
 
 /// One standing policy: what it covers, its per-PT-day cap (`None` when uncapped), and its expiry date
-/// (`approval_policy.StandingPolicy`).
+/// (`StandingPolicy`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct StandingPolicy {
@@ -69,7 +69,7 @@ pub struct StandingPolicy {
   pub expires: String,
 }
 
-/// The parsed approval policy table as the server reads it (`approval_policy.ApprovalPolicyTable`).
+/// The parsed approval policy table as the server reads it (`ApprovalPolicyTable`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalPolicyTable {
@@ -79,7 +79,7 @@ pub struct ApprovalPolicyTable {
 }
 
 /// The table as read: the parsed table, the raw file text, and the SHA-256 of that text
-/// (`approval_policy.LoadedTable`).
+/// (`LoadedTable`).
 #[derive(Debug)]
 pub struct LoadedTable {
   pub table: ApprovalPolicyTable,
@@ -87,7 +87,7 @@ pub struct LoadedTable {
   pub sha256: String,
 }
 
-/// A table read or a tier-line parse that refused, with its message (`approval_policy.ApprovalPolicyError`).
+/// A table read or a tier-line parse that refused, with its message (`PolicyError`).
 #[derive(Debug)]
 pub struct PolicyError(String);
 
@@ -99,17 +99,17 @@ impl std::fmt::Display for PolicyError {
 
 impl std::error::Error for PolicyError {}
 
-/// The table's path under `home` (`approval_policy.table_path`).
+/// The table's path under `home` (`table_path`).
 pub fn table_path(home: &Path) -> PathBuf {
   home.join(TABLE_RELATIVE_PATH)
 }
 
-/// The changes record store's path under `home` (`approval_policy.changes_path`).
+/// The changes record store's path under `home` (`changes_path`).
 pub fn changes_path(home: &Path) -> PathBuf {
   home.join(CHANGES_RELATIVE_PATH)
 }
 
-/// The `policy_table_changed` records in the store, in append order (`approval_policy.change_records`). A blank line
+/// The `policy_table_changed` records in the store, in append order (`change_records`). A blank line
 /// is skipped; any other line that does not hold a record refuses the read with the store's path and the line number.
 pub fn change_records(home: &Path) -> Result<Vec<Value>, PolicyError> {
   let store = changes_path(home);
@@ -145,7 +145,7 @@ fn sha256_text(text: &str) -> String {
   sha256_bytes(text.as_bytes())
 }
 
-/// Read and validate the table fresh from `home` (`approval_policy.load`). The error names the path and, for an
+/// Read and validate the table fresh from `home` (`load`). The error names the path and, for an
 /// invalid field, the field.
 pub fn load(home: &Path) -> Result<LoadedTable, PolicyError> {
   let path = table_path(home);
@@ -174,7 +174,7 @@ pub fn load(home: &Path) -> Result<LoadedTable, PolicyError> {
   Ok(LoadedTable { table, sha256: sha256_text(&raw), raw })
 }
 
-/// The checks serde cannot express: known ids, each exactly once (`approval_policy._validate`).
+/// The checks serde cannot express: known ids, each exactly once.
 fn validate(path_text: &str, table: &ApprovalPolicyTable) -> Result<(), PolicyError> {
   let mut seen = Vec::new();
   for (index, test) in table.consequence_tests.iter().enumerate() {
@@ -220,7 +220,7 @@ fn validate(path_text: &str, table: &ApprovalPolicyTable) -> Result<(), PolicyEr
   Ok(())
 }
 
-/// The canonical `YYYY-MM-DD` date `text` holds, or `None` (`approval_policy._parse_date`).
+/// The canonical `YYYY-MM-DD` date `text` holds, or `None`.
 pub fn parse_date(text: &str) -> Option<Date> {
   let (year, rest) = text.split_once('-')?;
   let (month, day) = rest.split_once('-')?;
@@ -234,14 +234,14 @@ pub fn parse_date(text: &str) -> Option<Date> {
 }
 
 /// The titled section the manager prompts and the ask probe carry: the table rendered back to YAML
-/// (`approval_policy.prompt_section`).
+/// (`prompt_section`).
 pub fn prompt_section(table: &ApprovalPolicyTable) -> String {
   let yaml = serde_yaml::to_string(table).expect("the parsed approval policy table serializes");
   format!("## {SECTION_TITLE}\n\n{yaml}")
 }
 
 /// Read the table and append one `policy_table_changed` record when its content differs from the last recorded
-/// content (`approval_policy.load_and_record`). Server-side reads use this; the CLI's reads use [`load`], which
+/// content (`load_and_record`). Server-side reads use this; the CLI's reads use [`load`], which
 /// records nothing.
 pub fn load_and_record(home: &Path) -> Result<LoadedTable, PolicyError> {
   let loaded = load(home)?;
@@ -249,7 +249,7 @@ pub fn load_and_record(home: &Path) -> Result<LoadedTable, PolicyError> {
   Ok(loaded)
 }
 
-/// The check-and-append one read performs, serialized per process (`approval_policy._record_if_changed`). The first
+/// The check-and-append one read performs, serialized per process. The first
 /// read on a home records the baseline content and no record; a later read whose content hash differs appends one
 /// record and becomes the new baseline.
 pub fn record_if_changed(home: &Path, loaded: &LoadedTable) -> Result<bool, PolicyError> {
@@ -295,7 +295,7 @@ pub fn record_if_changed(home: &Path, loaded: &LoadedTable) -> Result<bool, Poli
   Ok(true)
 }
 
-/// The last recorded content's file, written after each read that sees content (`approval_policy._write_recorded`).
+/// The last recorded content's file, written after each read that sees content.
 fn write_recorded(path: &Path, raw: &str) -> Result<(), PolicyError> {
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent).map_err(|error| PolicyError(format!("{}: {error}", paths::display(parent))))?;
@@ -308,14 +308,14 @@ fn write_recorded(path: &Path, raw: &str) -> Result<(), PolicyError> {
 static RECORD_LOCK: Mutex<()> = Mutex::new(());
 
 /// One tiered ask cold read: the tier and the rule that names it, `None` for no rule
-/// (`approval_policy.AskTier`).
+/// (`AskTier`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AskTier {
   pub tier: String,
   pub rule: Option<String>,
 }
 
-/// Parse the machine-readable tier line the ask cold read ends with (`approval_policy.parse_ask_tier`). The line is
+/// Parse the machine-readable tier line the ask cold read ends with (`parse_ask_tier`). The line is
 /// the answer's last non-blank line in [`TIER_LINE_FORM`]; the rule must be a consequence test id, a standing policy
 /// id, `out-of-scope:<policy id>` for a known policy id, or `none`.
 pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTier, PolicyError> {
@@ -362,7 +362,7 @@ fn require_policy(table: &ApprovalPolicyTable, id: &str) -> Result<(), PolicyErr
 }
 
 /// The line-level difference of `new` from `old`: removed lines prefixed `-`, added lines prefixed `+`, shared
-/// lines prefixed two spaces (`approval_policy._unified_diff`).
+/// lines prefixed two spaces.
 fn unified_diff(old: &str, new: &str) -> String {
   let old_lines: Vec<&str> = old.lines().collect();
   let new_lines: Vec<&str> = new.lines().collect();

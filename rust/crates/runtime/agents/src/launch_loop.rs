@@ -89,7 +89,7 @@ pub fn child_env_with_policy(inherited: &Env, registry: &Registry, policy: Child
   values
 }
 
-/// Build one child environment in Python launch order: package edits, session id, then per-run additions.
+/// Build one child environment in launch order: package edits, session id, then per-run additions.
 pub fn build_child_env(
   inherited: &Env,
   registry: &Registry,

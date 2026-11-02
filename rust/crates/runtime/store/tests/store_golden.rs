@@ -302,9 +302,9 @@ fn read_optional(path: &Path) -> Option<Vec<u8>> {
   }
 }
 
-/// `src/runtime/chat_events.py::archive_old_chat_events_sync` and `Store::archive_events_before` on the same live-log
-/// bytes, one input per case. Each case must match in the failure outcome, the archived count, and the live and
-/// archive bytes; a failed call must also leave the live log, the archive and `archive_offset` unchanged.
+/// `Store::archive_events_before` runs on the same live-log bytes, one input per case. Each case must match in the
+/// failure outcome, the archived count, and the live and archive bytes. A failed call must also leave the live log,
+/// the archive and `archive_offset` unchanged.
 #[tokio::test]
 async fn archive_events_before_matches_archive_old_chat_events_sync() {
   let cutoff = UtcDateTime::parse("2025-02-03T00:00:00Z").unwrap();
@@ -1124,8 +1124,7 @@ async fn stop_request_overrides_a_later_successful_finish() {
   assert_eq!(terminal_outcome(&events, "run-stop-finish").unwrap(), Some(RunOutcomeKind::Interrupted));
 }
 
-// Python's record_finish_locked keeps the first write: a later finish fills only an empty ended_at, so the stopper's
-// interrupted record without an exit code stays (runs.py:1036-1047, the stopper's write at runs.py:1161).
+// A later finish fills only an empty ended_at, so the stopper's interrupted record without an exit code stays.
 #[tokio::test]
 async fn stopped_run_keeps_its_null_exit_code_after_a_late_process_finish() {
   let root = tempfile::tempdir().unwrap();
@@ -1897,7 +1896,7 @@ fn assert_recorded_tree(root: &Path, expected_files: &[Value]) {
   }
 }
 
-/// Copy one seeded home to a Python copy and a Rust copy, then read each copy through its own implementation.
+/// Copy one seeded home to a reference copy and a Rust copy, then read each copy through its own implementation.
 fn read_on_copies(root: &Path, seed_home: &Path, case: &str, rust_read: fn(&Store) -> Value) -> (Value, Value) {
   let case_root = root.join(case);
   copy_tree(seed_home, &case_root.join("python-home"));
@@ -2119,7 +2118,7 @@ fn gate_cases() -> Vec<Value> {
     {"type": "child_report", "content": "take off"},
     {"type": "user", "content": [{"type": "tool_result", "content": "take off"}]}
   ]);
-  // Python: tests/test_run_token.py:188. A recorded thread summon on the root is a user request for the chain below it.
+  // A recorded thread summon on the root is a user request for the chain below it.
   let slack_summon = json!({
     "type": "agent_message",
     "content": "Slack 线程召唤",
@@ -2148,8 +2147,8 @@ fn gate_cases() -> Vec<Value> {
       manager_profiles.clone(),
     );
   }
-  // Python: tests/test_run_token.py:226. A thread nudge, a plain agent message, a web-reply nudge, a scheduled trigger
-  // and a child report each leave the chain without a user request.
+  // A thread nudge, a plain agent message, a web-reply nudge, a scheduled trigger and a child report each leave the
+  // chain without a user request.
   let refusals = [
     (
       "slack-nudge-only",
@@ -2176,8 +2175,7 @@ fn gate_cases() -> Vec<Value> {
       manager_profiles.clone(),
     );
   }
-  // Python: tests/test_run_token.py:233. A summon before the node's newest clone_start belongs to the source; one after
-  // it counts.
+  // A summon before the node's newest clone_start belongs to the source; one after it counts.
   add(
     "summon-before-clone-marker",
     "child",
@@ -2363,8 +2361,8 @@ fn write_session_metadata(home: &Path, session_id: &str, archive_offset: i64) {
   fs::write(path, meta.to_json_string(&slots(), true)).unwrap();
 }
 
-/// Run one read-parity case: the Rust test builds one fixture home, copies it for Python and Rust,
-/// asks the Python helper for its answer, and compares the store's results against it.
+/// Run one read-parity case: the Rust test builds one fixture home and copies it for the reference and Rust.
+/// It asks the reference helper for its answer, and compares the store's results against it.
 fn parity_case_dir(root: &Path, case: &str) -> PathBuf {
   let case_dir = root.join(case);
   fs::create_dir_all(&case_dir).unwrap();
@@ -2492,11 +2490,9 @@ async fn load_all_facts_matches_fact_history_over_a_stale_archive_file() {
   assert_eq!(Value::Array(facts.iter().map(|event| event.to_value()).collect()), Value::Array(expected));
 }
 
-// The legacy layouts Python's readers still walk: a master run's raw log under
+// The legacy layouts the readers still walk: a master run's raw log under
 // `data/master_runs/<started_at>/` and a pre-task-tree thread's event log under
-// `threads/<tid>/data/` (src/runtime/runs.py's DATA_DIR_NAME / MASTER_RUNS_DIR_NAME /
-// THREADS_DIR_NAME). The store's readers (Python runs.py, Rust run_records.rs) must keep
-// agreeing on these names.
+// `threads/<tid>/data/`. The store's readers must keep agreeing on these names.
 #[test]
 fn legacy_master_run_and_thread_log_readers_walk_the_layouts() {
   let home = tempfile::tempdir().unwrap();
@@ -2518,11 +2514,11 @@ fn legacy_master_run_and_thread_log_readers_walk_the_layouts() {
   assert_eq!(store.thread_event_log_paths_sync().unwrap(), vec![thread_log]);
 }
 
-/// Every content and metadata shape that Python's aggregator iterates must feed the Rust port too.
+/// Every content and metadata shape that the aggregator iterates must feed the Rust code too.
 ///
 /// A native transcript event carries `message.content` as a plain string rather than a list of
-/// blocks; Python iterates the characters and ignores them, and the port likewise reads the string
-/// as no blocks. The other fields here follow the same `or []` and truthiness rules.
+/// blocks. The characters are iterated and ignored, and the Rust code likewise reads the string
+/// as no blocks. The other fields here follow the same empty-list and truthiness rules.
 #[test]
 fn message_aggregator_accepts_every_recorded_shape() {
   let events = json!([
@@ -2626,7 +2622,7 @@ fn sleep_stub(directory: &Path, name: &str) -> (Child, PathBuf) {
   (child, binary)
 }
 
-/// The delete runs the session's browser sweep to completion: the chrome stub in the session's fake cgroup is dead
+/// The delete runs the session's browser sweep to completion. The chrome stub in the session's fake cgroup is dead
 /// when `delete_session_permanently` returns, and the plain sleep beside it is not.
 #[tokio::test]
 async fn delete_session_permanently_ends_the_session_browsers_before_the_cgroup_cleanup() {

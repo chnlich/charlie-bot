@@ -80,7 +80,7 @@ pub fn agent_base_environment(server_bin_dir: &Path, gh_wrapper_dir: &Path) -> a
 }
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
-/// limits are logged as they are, as Python's startup does; each spawn applies them as well.
+/// limits are logged as they are; each spawn applies them as well.
 pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) -> anyhow::Result<()> {
   run_session_cgroup_startup_inner(base_dir, sessions_dir, server, None)
 }
@@ -417,7 +417,7 @@ mod tests {
 
   #[test]
   fn runtime_cgroup_startup_sweeps_the_injected_base_at_zero_and_negative_limits() {
-    // Python starts with each of these and sweeps the same way, so none of them refuses the start.
+    // Each of these starts and sweeps the same way, so none of them refuses the start.
     for (memory, swap, tasks) in [(0, 0, 4096), (-1, 0, 4096), (12288, -1, 4096), (12288, 0, -1)] {
       let base = tempfile::tempdir().unwrap();
       let home = tempfile::tempdir().unwrap();

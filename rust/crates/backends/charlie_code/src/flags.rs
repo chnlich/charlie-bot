@@ -1,8 +1,8 @@
 //! The `charlie-code` command-line option names the workspace passes or checks.
 //!
-//! Three readers name these options: this crate's backend builds the child command, the CLI's
-//! `improve-review` command builds the same command for one review, and `preflight-charlie-code` checks the
-//! installed CLI's `--help` for them. A renamed option must reach every reader, so the names live here once.
+//! Two readers name these options: this crate's backend builds the child command, and `preflight-charlie-code`
+//! checks the installed CLI's `--help` for them. A renamed option must reach every reader, so the names live here
+//! once.
 
 /// Print one JSON event per line on stdout.
 pub const JSON: &str = "--json";

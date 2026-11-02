@@ -42,7 +42,8 @@ pub fn matches(path: &str) -> bool {
     .is_some_and(|backend_id| !backend_id.is_empty() && !backend_id.contains('/'))
 }
 
-/// How a failed request is answered: a FastAPI `HTTPException` with its detail, or an unhandled exception.
+/// How a failed request is answered: a status with its `detail`, or an internal error with the failure's kind and
+/// message.
 enum Refusal {
   Detail(StatusCode, String),
   Unhandled { kind: String, message: String },
@@ -74,7 +75,7 @@ fn detail(status: StatusCode, text: impl Into<String>) -> Refusal {
   Refusal::Detail(status, text.into())
 }
 
-/// A failed upstream request: httpx's class names for the two failures a request can meet.
+/// A failed upstream request: its kind is `ConnectError` for a failed connection, and `RequestError` otherwise.
 fn upstream_failure(error: reqwest::Error) -> Refusal {
   let kind = if error.is_connect() { "ConnectError" } else { "RequestError" };
   unhandled(kind, error.to_string())
@@ -155,7 +156,7 @@ fn answer_refusal(fault: Fault) -> Refusal {
   }
 }
 
-/// The upstream's error status with its body as the detail. The body decodes with replacement, as httpx's text does.
+/// The upstream's error status with its body as the detail. The body decodes with replacement characters.
 async fn upstream_error(upstream: reqwest::Response) -> Refusal {
   let status = upstream.status();
   match upstream.bytes().await {
@@ -305,7 +306,7 @@ fn fault_failure(fault: Fault) -> (String, String) {
   }
 }
 
-/// `bytes.strip()`: the ASCII whitespace of a Python bytes value, which includes the vertical tab.
+/// Strips the ASCII whitespace at both ends: space, tab, newline, carriage return, vertical tab and form feed.
 fn trim_space(raw: &[u8]) -> &[u8] {
   raw.trim_with(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'))
 }

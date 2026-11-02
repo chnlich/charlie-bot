@@ -37,7 +37,7 @@ pub enum Start {
   EmptyFailure,
 }
 
-/// An error whose message is empty; the entry's error text falls back to its name, as Python's class name does.
+/// An error whose message is empty; the entry's error text falls back to its type name.
 #[derive(Debug)]
 pub struct EmptyFailure;
 

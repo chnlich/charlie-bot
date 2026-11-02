@@ -15,6 +15,8 @@ use charliebot_core::approval_policy::{self};
 use charliebot_core::pacific::{self, date_text, day_of_stamp};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::OpenWaitingRow;
+use charliebot_store::metadata::UtcDateTime;
+use jiff::Timestamp;
 use jiff::civil::Date;
 use serde_json::{Value, json};
 
@@ -39,29 +41,53 @@ pub fn parse_date_param(text: &str) -> Result<Date, DayError> {
   })
 }
 
-/// The day view as the API answers it and the page renders it. A `None` date is today's Pacific day. The table read
+/// A day view: the Pacific day it renders, the Pacific day it read as today, and the JSON the API answers. The page
+/// uses `today` to refresh only today's view when its tab becomes visible again.
+pub struct DayView {
+  pub date: Date,
+  pub today: Date,
+  pub body: Value,
+}
+
+/// The day view as the API answers it. A `None` date is today's Pacific day. The table read
 /// is a server-side read, so a changed table records its change before the view lists it.
 pub async fn approval_day(features: &FeatureContext, date: Option<Date>) -> Result<Value, DayError> {
-  let today = pacific::day_of(jiff::Timestamp::now()).map_err(|error| DayError::Failed(error.into()))?;
+  Ok(approval_day_view(features, date).await?.body)
+}
+
+/// The day view the page renders. A `None` date is today's Pacific day.
+pub(crate) async fn approval_day_view(features: &FeatureContext, date: Option<Date>) -> Result<DayView, DayError> {
+  approval_day_view_at(features, date, Timestamp::now()).await
+}
+
+/// The day view read at one clock: `now` dates the ages and decides today's Pacific day, so the page's rows and its
+/// refresh condition both read one clock.
+pub(crate) async fn approval_day_view_at(
+  features: &FeatureContext,
+  date: Option<Date>,
+  now: Timestamp,
+) -> Result<DayView, DayError> {
+  let today = pacific::day_of(now).map_err(|error| DayError::Failed(error.into()))?;
   let date = date.unwrap_or(today);
   let cfg = features.config.get().map_err(|error| DayError::Failed(error.into()))?;
   let home = cfg.charliebot_home.clone();
   let loaded = approval_policy::load_and_record(&home).map_err(|error| DayError::Failed(error.into()))?;
   let reader = features.registry.open_waiting_items_reader().map_err(DayError::Failed)?;
   let rows = reader(features).await.map_err(DayError::Failed)?;
-  let queue = queue_rows(&rows, &loaded.table);
-  let login_sheet = login_sheet_rows(&rows, date, today)?;
+  let queue = queue_rows(&rows, &loaded.table, now);
+  let login_sheet = login_sheet_rows(&rows, date, today, now)?;
   let digest = digest_rows(&home, date)?;
-  Ok(json!({
+  let body = json!({
     "date": date_text(date),
     "queue": queue,
     "login_sheet": login_sheet,
     "digest": digest,
-  }))
+  });
+  Ok(DayView { date, today, body })
 }
 
-/// One open item's row, with the session that holds it.
-fn row_json(row: &OpenWaitingRow) -> Value {
+/// One open item's row, with the session that holds it and how long ago it started.
+fn row_json(row: &OpenWaitingRow, now: Timestamp) -> Value {
   json!({
     "session_id": row.session_id,
     "session_name": row.session_name,
@@ -71,7 +97,35 @@ fn row_json(row: &OpenWaitingRow) -> Value {
     "tier": row.tier,
     "rule": row.rule,
     "since": row.since.to_str(),
+    "age": age_text(row.since, now),
   })
+}
+
+const MINUTE: i64 = 60;
+const HOUR: i64 = 60 * MINUTE;
+const DAY: i64 = 24 * HOUR;
+const MONTH: i64 = 30 * DAY;
+const YEAR: i64 = 365 * DAY;
+
+/// How long ago an item started, in a form a reader takes in at a glance: `just now`, `12 min ago`, `5 h ago`,
+/// `3 d ago`, `2 mo ago`, `1 y ago`.
+fn age_text(since: UtcDateTime, now: Timestamp) -> String {
+  let seconds = now.as_second() - since.into_inner().unix_timestamp();
+  if seconds < MINUTE {
+    return "just now".to_string();
+  }
+  let (count, unit) = if seconds < HOUR {
+    (seconds / MINUTE, "min")
+  } else if seconds < DAY {
+    (seconds / HOUR, "h")
+  } else if seconds < MONTH {
+    (seconds / DAY, "d")
+  } else if seconds < YEAR {
+    (seconds / MONTH, "mo")
+  } else {
+    (seconds / YEAR, "y")
+  };
+  format!("{count} {unit} ago")
 }
 
 /// The tier's order in the queue: the T0 items first, the review items after them, and everything else last.
@@ -96,13 +150,13 @@ fn rule_rank(rule: Option<&str>, table: &approval_policy::ApprovalPolicyTable) -
 
 /// The queue: every open item once, T0 ranked, then review, then the rest, arrival order within one rank. Each T0
 /// row carries its rule's rank; a rule the table carries no rank of reads as null.
-fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTable) -> Vec<Value> {
+fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTable, now: Timestamp) -> Vec<Value> {
   let mut keyed: Vec<(u8, i64, charliebot_store::metadata::UtcDateTime, Value)> = rows
     .iter()
     .map(|row| {
       let group = tier_group(row.tier.as_deref());
       let rank = if group == 0 { rule_rank(row.rule.as_deref(), table) } else { 0 };
-      (group, rank, row.since, row_json(row))
+      (group, rank, row.since, row_json(row, now))
     })
     .collect();
   keyed.sort_by_key(|keyed| (keyed.0, keyed.1, keyed.2));
@@ -117,7 +171,7 @@ fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTa
 
 /// The login sheet: today's holds every open user-act item, whatever day judged it, because the panels list those
 /// items only through this sheet. A past day's holds the items whose start time falls in it.
-fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date) -> Result<Vec<Value>, DayError> {
+fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date, now: Timestamp) -> Result<Vec<Value>, DayError> {
   let mut sheet = Vec::new();
   for row in rows {
     if row.tier.as_deref() != Some("user-act") {
@@ -129,7 +183,7 @@ fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date) -> Result<
         continue;
       }
     }
-    sheet.push(row_json(row));
+    sheet.push(row_json(row, now));
   }
   Ok(sheet)
 }

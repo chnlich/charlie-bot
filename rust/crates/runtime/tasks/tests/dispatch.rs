@@ -143,12 +143,10 @@ async fn worker_agent_messages_require_parent_identity_and_authorization() {
   assert_eq!(harness.dispatcher.pending_inputs(&worker.id).unwrap().len(), 1);
 }
 
-/// `test_artifact_check.py::test_agent_message_to_a_read_only_child_passes_without_takeoff`: a parent's agent message
-/// reaches a verify or cold-read child with no user message anywhere, and the same message to an implement child is
-/// refused without that takeoff.
+/// A parent's agent message reaches a verify or cold-read child with no user message anywhere, and the same message to
+/// an implement child is refused without that takeoff.
 #[tokio::test]
 async fn agent_message_to_a_read_only_child_passes_without_takeoff() {
-  // Python: tests/core/test_artifact_check.py::test_agent_message_to_a_read_only_child_passes_without_takeoff.
   let harness = Harness::new();
   let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
   let parent_fields = json!({"from_session": root.id, "from_session_name": "Root"});
@@ -302,7 +300,6 @@ async fn stopped_queued_run_releases_its_claim_and_is_not_launched() {
 
 #[tokio::test]
 async fn dispatcher_never_launches_a_queued_sequence_run() {
-  // Python: tests/test_sequence_controller_runs.py::test_dispatcher_never_launches_a_queued_sequence_run.
   let harness = Harness::new();
   let manager = harness.create_task("root", None, TaskProfile::Manager, "PM").await;
   let leaf = harness.create_task("leaf", Some(&manager.id), TaskProfile::Worker, "leaf").await;
@@ -597,9 +594,8 @@ fn listing_ids(rows: &[SessionMetadata]) -> Vec<String> {
   rows.iter().map(|row| row.id.clone()).collect()
 }
 
-/// `tests/test_session_dispatch.py::test_user_admission_lifts_only_the_target_node`: a real user message lifts the
-/// node it was sent to, forward only; its ancestors keep their places, and a message to an archived node reopens
-/// the chain and lifts only the reopened target.
+/// A real user message lifts the node it was sent to, forward only; its ancestors keep their places, and a message to
+/// an archived node reopens the chain and lifts only the reopened target.
 #[tokio::test]
 async fn user_admission_lifts_only_the_target_node() {
   let harness = Harness::new();
@@ -690,8 +686,7 @@ async fn user_admission_lifts_only_the_target_node() {
   assert_eq!(updated_at_of(&harness, &archived_root.id).await, archived_root_at);
 }
 
-/// `tests/test_session_dispatch.py::test_a_user_message_lift_is_stored_before_its_tree_changed_broadcast`: the
-/// append broadcasts `task_tree_changed`, so the lift must be durable by the time that append runs. The harness's
+/// The append broadcasts `task_tree_changed`, so the lift must be durable by the time that append runs. The harness's
 /// anchor reconciler observes the metadata save itself: at that point the user event is still absent from the log.
 #[tokio::test]
 async fn a_user_message_lift_is_stored_before_its_tree_changed_broadcast() {
@@ -724,8 +719,7 @@ async fn a_user_message_lift_is_stored_before_its_tree_changed_broadcast() {
   );
 }
 
-/// `tests/test_session_dispatch.py::test_a_messaged_child_lists_ahead_of_its_siblings_and_roots_keep_their_order`:
-/// a user message moves only the row it was sent to; the siblings and the root rows keep their relative order.
+/// A user message moves only the row it was sent to; the siblings and the root rows keep their relative order.
 #[tokio::test]
 async fn a_messaged_child_lists_ahead_of_its_siblings_and_roots_keep_their_order() {
   let harness = Harness::new();
@@ -851,7 +845,6 @@ fn input_blocker_truncates_after_eight_ids() {
   );
 }
 
-// Python: tests/test_task_execution.py::test_manager_finish_claims_only_echoed_pending_user_ids
 #[tokio::test]
 async fn manager_finish_claims_only_echoed_pending_user_ids() {
   let harness = Harness::new();
@@ -952,8 +945,7 @@ async fn manager_finish_claims_only_echoed_pending_user_ids() {
   assert_eq!(pending_ids, [queued_id, agent_id].into_iter().collect());
 }
 
-// Python: tests/test_task_execution.py::test_input_admitted_during_active_run_dispatches_after_its_finish
-// The Python case is parametrized over the session kind and the later input's type; a thread session keeps queueing,
+// The case covers the session kind and the later input's type; a thread session keeps queueing,
 // and a web session with no live stream-json process queues the same way.
 #[tokio::test]
 async fn input_admitted_during_an_active_run_dispatches_after_its_finish_for_every_session_kind() {

@@ -1,9 +1,7 @@
 //! Git helpers for task runs, the delivery chain and the improve loop.
 //!
-//! Ported from `src/infra/git.py`: base-branch resolution, worktree creation and
-//! removal, and the remote push/fetch probes. One subprocess path (`git_proc_bytes`,
-//! Python `_git_proc_bytes`) serves the whole module; every caller keeps its own
-//! timeout policy and error text.
+//! Base-branch resolution, worktree creation and removal, and the remote push/fetch probes. One subprocess path
+//! (`git_proc_bytes`) serves the whole module; every caller keeps its own timeout policy and error text.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -16,33 +14,33 @@ use ignore::WalkBuilder;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-/// `src/infra/timeouts.py:14` — read-class git subprocesses (`SUBPROCESS_GIT_READ_TIMEOUT_ASYNC`).
+/// Timeout for each read-class git subprocess (`SUBPROCESS_GIT_READ_TIMEOUT_ASYNC`).
 const SUBPROCESS_GIT_READ_TIMEOUT_ASYNC: Duration = Duration::from_secs(30);
-/// `src/infra/timeouts.py:20` — worktree creation and other write-class git subprocesses.
+/// Timeout for worktree creation and other write-class git subprocesses.
 #[cfg(not(feature = "test-hooks"))]
 const SUBPROCESS_GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
-/// `src/infra/timeouts.py:27` — one attempt of a remote git operation.
+/// Timeout for one attempt of a remote git operation.
 #[cfg(not(feature = "test-hooks"))]
 const SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
-/// `src/infra/timeouts.py:28` — attempts per remote operation, the first included.
+/// Attempts per remote git operation, the first included.
 const GIT_REMOTE_MAX_ATTEMPTS: usize = 3;
 
-/// `src/infra/git.py:15` — cache/env/build artifact directory names removed from a worktree before `git worktree remove`.
+/// Cache, env and build directory names removed from a worktree before `git worktree remove`.
 const WORKTREE_LOCAL_ARTIFACT_NAMES: [&str; 6] = [".pixi", ".pixi-cache", ".uv-cache", ".venv", ".local", "build"];
-/// `src/infra/git.py:27` — stderr markers of git's lock-class errors, the only worktree-add failures that retry.
+/// Stderr markers of git's lock-class errors, the only worktree-add failures that retry.
 const WORKTREE_LOCK_RETRY_MARKERS: [&str; 3] = ["could not lock", "unable to create", "file exists"];
-/// `src/infra/git.py:28` — the first invocation plus 3 retries.
+/// The first invocation plus 3 retries.
 const WORKTREE_ADD_ATTEMPTS: usize = 4;
-/// `src/infra/git.py:29` — retry backoff base, doubled per retry: 100ms, 200ms, 400ms.
+/// Retry backoff base, doubled per retry: 100ms, 200ms, 400ms.
 const WORKTREE_RETRY_BACKOFF_S: f64 = 0.1;
 
-/// `ref: refs/heads/` — the symref prefix `git ls-remote --symref` reports the default branch with (`src/infra/git.py:138`).
+/// `ref: refs/heads/` — the symref prefix `git ls-remote --symref` reports the default branch with.
 const SYMREF_PREFIX: &str = "ref: refs/heads/";
 
 // Test hooks (`test-hooks` feature, dev-dependency only): the hook values keep the
 // hung-git tests under a second, and the git program override routes the module's
-// subprocesses through a test's `/bin/sh` script. Production builds keep the Python
-// values and run plain `git`.
+// subprocesses through a test's `/bin/sh` script. Production builds keep the limits
+// above and run plain `git`.
 #[cfg(feature = "test-hooks")]
 static GIT_PROGRAM_OVERRIDE: Mutex<Option<(String, Vec<String>)>> = Mutex::new(None);
 
@@ -125,12 +123,12 @@ fn subprocess_git_remote_attempt_timeout() -> Duration {
   SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT
 }
 
-/// A timeout's seconds the way Python's f-string prints its float value: `0.3s`, `30.0s`, `120.0s`.
+/// A timeout's seconds with one decimal place: `0.3s`, `30.0s`, `120.0s`.
 fn secs_text(limit: Duration) -> String {
   format!("{:.1}", limit.as_secs_f64())
 }
 
-/// The result of resolving a `--base-branch` value into a worktree start point (`src/infra/git.py:68`).
+/// The result of resolving a `--base-branch` value into a worktree start point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseResolution {
   /// Bare branch name, or the 40-hex SHA itself.
@@ -141,7 +139,7 @@ pub struct BaseResolution {
   pub detail: String,
 }
 
-/// Raised when a `--base-branch` value is ambiguous or unresolvable (`src/infra/git.py:44`).
+/// Raised when a `--base-branch` value is ambiguous or unresolvable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseBranchResolutionError {
   message: String,
@@ -177,7 +175,7 @@ enum GitProcError {
 impl GitProcError {
   fn text(&self) -> String {
     match self {
-      // Python's bare `TimeoutError()` stringifies to the empty string.
+      // A timeout has no message, so its text is empty.
       Self::TimedOut => String::new(),
       Self::Spawn(error) => error.clone(),
     }
@@ -185,7 +183,7 @@ impl GitProcError {
 }
 
 /// Spawn git in *repo_path*, read both pipes under *limit*, and kill the process on timeout
-/// (`src/infra/git.py:76`). The timeout surfaces as [`GitProcError::TimedOut`] so each caller
+/// The timeout surfaces as [`GitProcError::TimedOut`] so each caller
 /// keeps its own timeout policy.
 async fn git_proc_bytes(repo_path: &Path, args: &[&str], limit: Duration) -> Result<GitProc, GitProcError> {
   let (program, prefix_args) = git_program();
@@ -206,7 +204,7 @@ async fn git_proc_bytes(repo_path: &Path, args: &[&str], limit: Duration) -> Res
   }
 }
 
-/// Spawn `git -C <repo> <args>` with piped output under *limit* (`src/infra/git.py:665`).
+/// Spawn `git -C <repo> <args>` with piped output under *limit*.
 async fn git_c_proc_bytes(repo_path: &Path, args: &[&str], limit: Duration) -> Result<GitProc, GitProcError> {
   let (program, prefix_args) = git_program();
   let mut command = Command::new(program);
@@ -231,7 +229,7 @@ fn trimmed(bytes: &[u8]) -> String {
   String::from_utf8_lossy(bytes).trim().to_string()
 }
 
-/// Run a git command with a timeout; returns `(success, stdout, stderr)` (`src/infra/git.py:102`).
+/// Run a git command with a timeout; returns `(success, stdout, stderr)`.
 /// A timeout reports `"<label> timed out after <limit>s"` in its stderr slot.
 pub(crate) async fn git_stdout(
   repo_path: &Path,
@@ -246,7 +244,7 @@ pub(crate) async fn git_stdout(
   }
 }
 
-/// Resolve a ref to a commit SHA; `None` when it does not resolve (`src/infra/git.py:118`).
+/// Resolve a ref to a commit SHA; `None` when it does not resolve.
 pub(crate) async fn git_rev_parse_optional(repo_path: &Path, reference: &str) -> Option<String> {
   let (ok, out, _) = git_stdout(
     repo_path,
@@ -259,7 +257,7 @@ pub(crate) async fn git_rev_parse_optional(repo_path: &Path, reference: &str) ->
 }
 
 /// Run a git command that talks to a remote, retrying failed attempts at once
-/// (`src/infra/git.py:631`). Each attempt runs under the per-attempt limit; a hung
+/// Each attempt runs under the per-attempt limit; a hung
 /// connection never recovers, so a wait before the retry buys nothing. Returns
 /// [`git_stdout`]'s triple from the first successful attempt, or from the last one.
 async fn git_remote(repo_path: &Path, args: &[&str], label: &str) -> (bool, String, String) {
@@ -285,18 +283,17 @@ async fn git_remote(repo_path: &Path, args: &[&str], label: &str) -> (bool, Stri
   }
 }
 
-/// The ref a branch lives at: `refs/heads/<branch>` (`src/infra/git.py:142`).
+/// The ref a branch lives at: `refs/heads/<branch>`.
 fn heads_ref(branch: &str) -> String {
   format!("refs/heads/{branch}")
 }
 
-/// The remote-tracking ref origin holds for a published branch (`src/infra/git.py:147`).
+/// The remote-tracking ref origin holds for a published branch.
 fn origin_tracking_ref(branch: &str) -> String {
   format!("refs/remotes/origin/{branch}")
 }
 
-/// Parse the symref line of `git ls-remote --symref` output into the default branch name
-/// (`src/infra/git.py:152`).
+/// Parse the symref line of `git ls-remote --symref` output into the default branch name.
 fn default_branch_from_ls_remote(
   out: &str,
   source: &str,
@@ -317,8 +314,7 @@ fn default_branch_from_ls_remote(
   )))
 }
 
-/// The SHA ls-remote reported for exactly *reference*, or `None` when it listed no such line
-/// (`src/infra/git.py:164`).
+/// The SHA ls-remote reported for exactly *reference*, or `None` when it listed no such line.
 fn ls_remote_ref_sha(out: &str, reference: &str) -> Option<String> {
   for line in out.lines() {
     let (sha, listed) = line.split_once('\t').unwrap_or((line, ""));
@@ -329,12 +325,12 @@ fn ls_remote_ref_sha(out: &str, reference: &str) -> Option<String> {
   None
 }
 
-/// Return the directory name CharlieBot uses for a git worktree branch (`src/infra/git.py:32`).
+/// Return the directory name CharlieBot uses for a git worktree branch.
 pub fn git_worktree_dir_name(branch_name: &str) -> String {
   branch_name.replace('/', "-")
 }
 
-/// Get the current branch of the repo (`src/infra/git.py:37`).
+/// Get the current branch of the repo.
 pub async fn git_current_branch(repo_path: &Path) -> anyhow::Result<String> {
   let proc =
     match git_proc_bytes(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
@@ -364,7 +360,7 @@ pub async fn git_current_branch(repo_path: &Path) -> anyhow::Result<String> {
   Ok(trimmed(&proc.stdout))
 }
 
-/// The full commit sha *rev* resolves to, or `None` when it does not exist (`src/infra/git.py:658`).
+/// The full commit sha *rev* resolves to, or `None` when it does not exist.
 pub async fn git_rev_parse(repo_path: &Path, rev: &str) -> Option<String> {
   let commit_object = format!("{rev}^{{commit}}");
   match git_c_proc_bytes(repo_path, &["rev-parse", "--verify", &commit_object], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await
@@ -399,7 +395,7 @@ pub async fn git_rev_list_count(repo_path: &Path, range: &str) -> Option<i64> {
 }
 
 /// The remote's default branch and its tip SHA from ONE `git ls-remote --symref origin`
-/// (`src/infra/git.py:173`). Never consults `refs/remotes/origin/HEAD` or any local branch.
+/// Never consults `refs/remotes/origin/HEAD` or any local branch.
 /// The tip is `None` when the listing names a default branch without listing its ref.
 pub async fn git_remote_default_branch_and_tip(
   repo_path: &Path,
@@ -417,8 +413,8 @@ pub async fn git_remote_default_branch_and_tip(
   Ok((branch, tip))
 }
 
-/// Resolve a `--base-branch` value to a worktree start point, failing loudly on ambiguity
-/// (`src/infra/git.py:200`). Resolution matrix:
+/// Resolve a `--base-branch` value to a worktree start point, failing loudly on ambiguity.
+/// Resolution matrix:
 /// - 40-hex SHA → pinned base, verified present; no freshness semantics, no network.
 /// - `origin/<b>` → explicit remote: must exist on origin; start at its freshly resolved tip.
 /// - `<b>` (bare) → if the remote branch exists, start at the freshly resolved `origin/<b>`
@@ -595,7 +591,7 @@ pub async fn resolve_base_branch(
 }
 
 /// The bare-branch resolution for a branch origin does not publish (or when no origin remote
-/// is configured): the branch must exist locally (`src/infra/git.py:337`).
+/// is configured): the branch must exist locally.
 async fn unpublished_branch_resolution(
   repo_path: &Path,
   branch: &str,
@@ -621,17 +617,17 @@ async fn unpublished_branch_resolution(
   })
 }
 
-/// Whether *raw* is exactly 40 lowercase hex digits (Python `_FULL_SHA_RE`).
+/// Whether *raw* is exactly 40 lowercase hex digits.
 fn is_full_sha(raw: &str) -> bool {
   raw.len() == 40 && raw.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-/// Whether *commit* matches Python `_COMMIT_REV_RE`: 7 to 40 lowercase hex digits.
+/// Whether *commit* is 7 to 40 lowercase hex digits.
 fn is_commit_rev(commit: &str) -> bool {
   (7..=40).contains(&commit.len()) && commit.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-/// The per-repository `git worktree add` locks (`src/infra/git.py:18`): concurrent adds in one
+/// The per-repository `git worktree add` locks: concurrent adds in one
 /// repository race on shared git state, and a call that loses the config lock exits non-zero
 /// after it created its branch, so no retry recovers that loss — this process runs the adds of
 /// one repository one at a time.
@@ -643,7 +639,7 @@ fn worktree_add_lock(repo_path: &Path) -> Arc<tokio::sync::Mutex<()>> {
   locks.get_or_insert_with(HashMap::new).entry(resolved).or_default().clone()
 }
 
-/// The backoff before the retry after *attempt* (1-based), doubled per retry (`src/infra/git.py:29`).
+/// The backoff before the retry after *attempt* (1-based), doubled per retry.
 fn worktree_retry_backoff(attempt: usize) -> Duration {
   Duration::from_secs_f64(WORKTREE_RETRY_BACKOFF_S * 2f64.powi(attempt as i32 - 1))
 }
@@ -654,7 +650,7 @@ pub fn test_worktree_retry_backoff(attempt: usize) -> Duration {
   worktree_retry_backoff(attempt)
 }
 
-/// Create a git worktree and fail loudly if git reports an error (`src/infra/git.py:360`).
+/// Create a git worktree and fail loudly if git reports an error.
 ///
 /// Resolves the start-point via [`resolve_base_branch`] so that a stale local copy of
 /// `<base_branch>` can never silently become a worker's base; ambiguous input raises
@@ -747,12 +743,12 @@ pub async fn git_create_worktree(
   Ok(resolution)
 }
 
-/// `os.path.lexists`: true also for a broken symlink.
+/// Whether the path exists, counting a broken symlink.
 fn lexists(path: &Path) -> bool {
   path.symlink_metadata().is_ok()
 }
 
-/// A non-strict `Path.resolve`: canonicalize when the path exists, else absolutize it.
+/// A non-strict resolve: canonicalize when the path exists, else absolutize it.
 fn resolve_path(path: &Path) -> PathBuf {
   path.canonicalize().unwrap_or_else(|_| {
     if path.is_absolute() {
@@ -763,7 +759,7 @@ fn resolve_path(path: &Path) -> PathBuf {
   })
 }
 
-/// Validate the worktree path before removing anything inside it (`src/infra/git.py:436`).
+/// Validate the worktree path before removing anything inside it.
 fn assert_safe_worktree_cleanup_target(
   repo_path: &str,
   wt_path: &Path,
@@ -799,7 +795,7 @@ fn assert_safe_worktree_cleanup_target(
   Ok(resolved_wt)
 }
 
-/// True when *path* contains any `.git` marker without following symlinks (`src/infra/git.py:464`). An entry that
+/// True when *path* contains any `.git` marker without following symlinks. An entry that
 /// cannot be read is not a marker.
 fn contains_git_marker(path: &Path) -> bool {
   worktree_walk(path).build().flatten().any(|entry| entry.file_name() == ".git")
@@ -817,7 +813,7 @@ fn worktree_walk(path: &Path) -> WalkBuilder {
   walker
 }
 
-/// Yields paths of known cache/env/build artifact dirs inside the worktree (`src/infra/git.py:472`).
+/// Yields paths of known cache/env/build artifact dirs inside the worktree.
 /// Walks without following symlinks. An artifact dir is yielded but not read, and a nested git worktree (a dir below
 /// the root that holds a `.git` marker) is neither yielded nor read.
 fn collect_local_worktree_artifacts(wt_path: &Path, artifacts: &mut Vec<PathBuf>) {
@@ -843,7 +839,7 @@ fn collect_local_worktree_artifacts(wt_path: &Path, artifacts: &mut Vec<PathBuf>
   artifacts.extend(std::mem::take(&mut *found_artifacts));
 }
 
-/// Pre-clean known local cache/env/build artifacts inside the worktree (`src/infra/git.py:489`).
+/// Pre-clean known local cache/env/build artifacts inside the worktree.
 /// A symlinked artifact is skipped rather than treated as an error: deleting a symlink never
 /// touches its target, and `git worktree remove --force` removes the entry on its own.
 async fn remove_local_worktree_artifacts(wt_path: &Path, thread_id: &str) {
@@ -884,8 +880,7 @@ async fn remove_local_worktree_artifacts(wt_path: &Path, thread_id: &str) {
   }
 }
 
-/// Delete a git-detached residual worktree directory after explicit safety checks
-/// (`src/infra/git.py:506`).
+/// Delete a git-detached residual worktree directory after explicit safety checks.
 async fn remove_worktree_residue(
   wt_path: &Path,
   thread_id: &str,
@@ -911,7 +906,7 @@ async fn remove_worktree_residue(
   Ok(())
 }
 
-/// Remove a git worktree and any safe git-detached residual directory (`src/infra/git.py:532`).
+/// Remove a git worktree and any safe git-detached residual directory.
 /// Returns whether git reported the remove as done.
 pub async fn git_worktree_remove(
   repo_path: &str,
@@ -960,7 +955,7 @@ pub async fn git_worktree_remove(
   Ok(true)
 }
 
-/// Remove a finished flow's worktree, reporting failure as a message (`src/infra/git.py:575`).
+/// Remove a finished flow's worktree, reporting failure as a message.
 ///
 /// Returns an error message string when the remove fails so the caller can surface it in its
 /// own flow, or `None` on success and when the flow has no worktree to clean. `label`,
@@ -968,7 +963,7 @@ pub async fn git_worktree_remove(
 /// the remove/prune primitives' `thread_id` log field. A worktree without a branch raises
 /// instead of reporting: the residue name and the prune both derive from the branch, so a
 /// missing one is corrupt state, not a cleanup miss.
-#[allow(clippy::too_many_arguments)] // the Python signature has the same nine parameters
+#[allow(clippy::too_many_arguments)] // the function takes nine parameters
 pub async fn git_worktree_remove_reporting(
   repo_path: Option<&str>,
   worktree_path: Option<&str>,
@@ -1021,7 +1016,7 @@ pub async fn git_worktree_remove_reporting(
   }
 }
 
-/// Prune stale worktree refs (`src/infra/git.py:623`).
+/// Prune stale worktree refs.
 pub async fn git_worktree_prune(repo_path: &str, thread_id: &str) {
   match git_proc_bytes(Path::new(repo_path), &["worktree", "prune"], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
     Ok(_) => {}
@@ -1032,20 +1027,20 @@ pub async fn git_worktree_prune(repo_path: &str, thread_id: &str) {
   }
 }
 
-/// Run `git fetch <remote> <branch>`; returns `(success, stderr)` (`src/infra/git.py:721`).
+/// Run `git fetch <remote> <branch>`; returns `(success, stderr)`.
 async fn git_fetch(repo_path: &Path, remote: &str, branch: &str) -> (bool, String) {
   let (ok, _, err) = git_remote(repo_path, &["fetch", remote, branch], "git fetch").await;
   (ok, err)
 }
 
-/// Run `git push origin <branch>`; returns `(success, stderr)` (`src/infra/git.py:727`).
+/// Run `git push origin <branch>`; returns `(success, stderr)`.
 pub async fn git_push_branch(repo_path: &Path, branch: &str) -> (bool, String) {
   let (ok, _, err) = git_remote(repo_path, &["push", "origin", branch], "git push").await;
   (ok, err)
 }
 
 /// Run `git push origin <local>:refs/heads/<remote>`; returns `(success, stderr)`
-/// (`src/infra/git.py:733`). Git rejects non-fast-forward pushes by default, so this is
+/// Git rejects non-fast-forward pushes by default, so this is
 /// implicitly an FF-only push.
 pub async fn git_push_refspec(repo_path: &Path, local_branch: &str, remote_branch: &str) -> (bool, String) {
   let (ok, _, err) = git_remote(
@@ -1057,8 +1052,7 @@ pub async fn git_push_refspec(repo_path: &Path, local_branch: &str, remote_branc
   (ok, err)
 }
 
-/// Whether *commit* exists in *repo_path* and is an ancestor of (or equal to) *branch*'s tip
-/// (`src/infra/git.py:683`).
+/// Whether *commit* exists in *repo_path* and is an ancestor of (or equal to) *branch*'s tip.
 ///
 /// The completion evidence check behind every `landed:<branch>@<commit>` claim: a commit that
 /// does not exist, a real commit the target branch does not contain, or an unresolvable target
@@ -1085,7 +1079,7 @@ pub async fn git_verify_commit_landed(repo_path: &Path, branch: &str, commit: &s
       Ok(proc) if proc.returncode == 0 => {}
       Ok(proc) => {
         let detail = trimmed(&proc.stderr);
-        // Python reports `detail or proc.returncode` when the check fails.
+        // The detail is stderr when it is non-empty, else the exit code.
         let detail = if detail.is_empty() { proc.returncode.to_string() } else { detail };
         return (false, format!("{label} check failed in {} ({branch}): {detail}", repo_path.display()));
       }
@@ -1153,7 +1147,6 @@ mod tests {
 
   #[tokio::test]
   async fn synthetic_repository_verifies_landed_and_unlanded_commits() {
-    // Python: tests/test_task_execution.py::test_landing_verification_negative_cases.
     let root = tempfile::tempdir().expect("temporary directory is available");
     let repo = root.path().join("repo");
     let origin = root.path().join("origin.git");
@@ -1200,7 +1193,6 @@ mod tests {
 
   #[tokio::test]
   async fn invalid_hash_reports_str_repr() {
-    // Python: tests/test_task_execution.py::test_landing_verification_negative_cases.
     let root = tempfile::tempdir().expect("temporary directory is available");
     let (verified, reason) = git_verify_commit_landed(root.path(), "main", "not-a-hash").await;
     assert!(!verified);

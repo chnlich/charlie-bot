@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
-/// `git rev-parse --short HEAD` timeout at startup (`timeouts.SUBPROCESS_GIT_SHA_TIMEOUT`).
+/// The `git rev-parse --short HEAD` timeout at startup.
 pub const SHA_TIMEOUT: Duration = Duration::from_secs(2);
-/// The page version's git timeout (`timeouts.SUBPROCESS_GIT_VERSION_TIMEOUT`).
+/// The page version's git timeout.
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The quarantine directory name under `paths.worktree_dir`. The live-worktree list skips it, and
@@ -45,7 +45,7 @@ pub fn run(repo_root: &Path, args: &[&str], timeout: Duration) -> Option<String>
   if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }
 
-/// `buildinfo.read_repo_head_sha`: the short HEAD sha.
+/// The short HEAD sha.
 pub fn head_sha(repo_root: &Path, timeout: Duration) -> Option<String> {
   run(repo_root, &["rev-parse", "--short", "HEAD"], timeout)
 }

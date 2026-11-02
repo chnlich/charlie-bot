@@ -1,9 +1,9 @@
-//! The plan registry's read side (`src/features/artifacts/plans.py`): the derived state of a plan, the projection of a
+//! The plan registry's read side: the derived state of a plan, the projection of a
 //! registry to the schema it persists and emits, and the tolerant read of a session's `plans.json`.
 //!
 //! The tolerant read is the one reader of `plans.json` for the plan listing and the sidebar. A corrupt file becomes
-//! error entries. Python's read lets a few failures escape as exceptions: a `plans` value that is not iterable, and a
-//! number the port cannot hold. Those come back as [`EscapedError`], and each caller fails as Python's does.
+//! error entries. A few failures escape the read as exceptions: a `plans` value that is not iterable, and a
+//! number the JSON reader cannot hold. Those come back as [`EscapedError`], and each caller fails with them.
 
 use std::fmt;
 use std::fs;
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::str::Utf8Error;
 
 use anyhow::anyhow;
-use charliebot_compat::json_loads;
+use charliebot_core::json_loads;
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::{Map, Value, json};
 
@@ -24,7 +24,7 @@ pub const PLANS_FILE: &str = "plans.json";
 /// The derived state of a plan with no approved version. The sidebar flag matches this spelling.
 pub const AWAITING_APPROVAL_STATE: &str = "awaiting approval";
 const APPROVED_STATE: &str = "approved";
-// A closed plan's state is its close mode's spelling (`constants.py`).
+// A closed plan's state is its close mode's spelling.
 pub(crate) const PLAN_CLOSE_SUPERSEDED: &str = "superseded";
 pub(crate) const PLAN_CLOSE_ABANDONED: &str = "abandoned";
 pub(crate) const PLAN_CLOSE_COMPLETED: &str = "completed";
@@ -62,10 +62,10 @@ impl PlansRead {
   }
 }
 
-/// A Python exception the tolerant read does not catch. It escapes the read and fails the caller.
+/// A failure the tolerant read does not catch. It escapes the read and fails the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscapedError {
-  /// The Python exception class that raises the failure.
+  /// The exception class name the failure reports.
   pub kind: &'static str,
   pub detail: String,
 }
@@ -91,7 +91,7 @@ impl fmt::Display for LoadFailure {
   }
 }
 
-/// `derive_state_str(plan)`: the display state of a projected plan.
+/// The display state of a projected plan.
 pub fn derive_state_str(plan: &Map<String, Value>) -> Result<&'static str, String> {
   let has_versions = plan.get("versions").and_then(Value::as_array).is_some_and(|versions| !versions.is_empty());
   if !has_versions {
@@ -101,8 +101,8 @@ pub fn derive_state_str(plan: &Map<String, Value>) -> Result<&'static str, Strin
   derive_state(plan.get("closed").unwrap_or(&Value::Null), plan.get("takeoff").unwrap_or(&Value::Null))
 }
 
-/// `_derive_state(closed, takeoff)`: a closed plan shows its close mode, an unapproved plan awaits approval, and an
-/// approved plan shows approved. A value of the wrong type is the error Python raises for it.
+/// The display state of one plan: a closed plan shows its close mode, an unapproved plan awaits approval, and an
+/// approved plan shows approved. A value of the wrong type fails with its type name.
 fn derive_state(closed: &Value, takeoff: &Value) -> Result<&'static str, String> {
   if !closed.is_null() {
     let Value::Object(closed) = closed else {
@@ -133,7 +133,7 @@ pub fn require_plan(plans: &[Value], plan_id: i64) -> Result<&Value, String> {
     .ok_or_else(|| format!("plan {plan_id} not found in session"))
 }
 
-/// `_project_version(ver)`: the version's registry fields, `null` where it has none.
+/// The version's registry fields, `null` where it has none.
 fn project_version(version: &Value) -> Result<Value, String> {
   let Value::Object(version) = version else {
     return Err(format!("version must be a dict, got {}", type_name(version)));
@@ -141,7 +141,7 @@ fn project_version(version: &Value) -> Result<Value, String> {
   Ok(Value::Object(picked(version, &VERSION_FIELDS)))
 }
 
-/// `_project_plan(plan)`: the plan's registry fields, with each version projected.
+/// The plan's registry fields, with each version projected.
 fn project_plan(plan: &Value) -> Result<Map<String, Value>, String> {
   let Value::Object(plan) = plan else {
     return Err(format!("plan must be a dict, got {}", type_name(plan)));
@@ -157,7 +157,7 @@ fn project_plan(plan: &Value) -> Result<Map<String, Value>, String> {
   Ok(projected)
 }
 
-/// `_project_plan` and `derive_state_str` together: the enriched plan the read returns, or the error it reports.
+/// `project_plan` and `derive_state_str` together: the enriched plan the read returns, or the error it reports.
 fn project_and_derive(plan: &Value) -> Result<Map<String, Value>, String> {
   let mut projected = project_plan(plan)?;
   let state = derive_state_str(&projected)?;
@@ -187,11 +187,11 @@ pub fn read_session_plans(session_dir: &Path) -> anyhow::Result<Option<Vec<Value
   Ok(Some(plans))
 }
 
-/// `read_plans_tolerant(plans_path, session_id)`: the session's plans as the listing and the sidebar read them.
+/// The session's plans as the listing and the sidebar read them.
 ///
 /// A missing file reads as no plans. An unreadable file, invalid UTF-8, invalid JSON, or a top level that is not an
 /// object is one file-level error entry. A plan that does not project or derive is skipped with its own entry, and the
-/// other plans are still returned. An `Err` is a failure Python's read does not catch.
+/// other plans are still returned. An `Err` is a failure the read does not catch.
 pub fn read_plans_tolerant(plans_path: &Path, session_id: &str) -> Result<PlansRead, EscapedError> {
   let mut read = PlansRead::default();
   if !plan_paths::exists(plans_path).map_err(|error| os_escape(&error, plans_path))? {
@@ -228,17 +228,16 @@ pub fn read_plans_tolerant(plans_path: &Path, session_id: &str) -> Result<PlansR
   Ok(read)
 }
 
-/// `plans_path.read_text(encoding="utf-8")` and `json.loads`: the registry document, or the failure that decides the
-/// read's answer.
+/// The registry document, read as UTF-8 text and parsed as JSON, or the failure that decides the read's answer.
 pub(crate) fn load_registry(plans_path: &Path) -> Result<Value, LoadFailure> {
   let bytes = fs::read(plans_path).map_err(|error| LoadFailure::Caught(os_error_text(&error, plans_path)))?;
   decode_registry(&bytes)
 }
 
-/// `read_text(encoding="utf-8")` of the file's bytes, then `json.loads`: the registry document, or the decode failure.
+/// The registry document decoded from the file's bytes, or the decode failure.
 pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
   let text = std::str::from_utf8(bytes).map_err(|error| LoadFailure::Caught(utf8_error_text(&error, bytes)))?;
-  // Python's text-mode read translates every line ending to "\n", and the JSON error positions count that text.
+  // The text-mode read translates every line ending to "\n", and the JSON error positions count that text.
   let text = text.replace("\r\n", "\n").replace('\r', "\n");
   json_loads::loads_text(&text).map_err(|error| match error {
     json_loads::LoadError::Value(text) => LoadFailure::Caught(text),
@@ -248,25 +247,25 @@ pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
   })
 }
 
-/// `_project_registry(data)`: the registry a save writes. Each plan is projected to the persisted fields, and the top
+/// The registry a save writes. Each plan is projected to the persisted fields, and the top
 /// level keeps only `plans`, so keys the schema does not know are dropped on save.
 pub(crate) fn project_registry(plans: &[Value]) -> Result<Value, String> {
   let projected = plans.iter().map(|plan| project_plan(plan).map(Value::Object)).collect::<Result<Vec<_>, _>>()?;
   Ok(json!({"plans": projected}))
 }
 
-/// `json_utils.write_json_atomically(path, registry, indent=2)`: the bytes of a registry file. The fork copy and the
+/// The bytes of a registry file. The fork copy and the
 /// plan verbs both write through it, so a registry has one spelling on disk.
 pub(crate) fn registry_text(registry: &Value) -> String {
   text_repr::json_dumps(registry, &REGISTRY_JSON)
 }
 
-/// `json.dumps(registry, ensure_ascii=False, indent=2)`: the registry's JSON style.
+/// The registry's JSON style: non-ASCII text stays literal, keys keep their order, and the output indents by two.
 const REGISTRY_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
-/// The items `for item in value` yields for a registry list. A dict yields its keys and a string its characters. A
-/// number, `null` or a boolean is not iterable, which raises `TypeError` out of the read.
+/// The items a registry list yields: an array's elements, an object's keys, a string's characters. A number, `null`
+/// or a boolean fails the read with a `TypeError`.
 fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
   match value {
     Value::Array(items) => Ok(items.clone()),
@@ -276,7 +275,7 @@ fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
   }
 }
 
-/// The `plan_id` of an error entry: the plan's raw `id` when the plan is a dict that has one.
+/// The `plan_id` of an error entry: the plan's raw `id` when the plan is a JSON object that has one.
 fn plan_id_of(plan: &Value) -> Value {
   match plan {
     Value::Object(plan) => plan.get("id").cloned().unwrap_or(Value::Null),
@@ -288,7 +287,7 @@ fn file_error(session_id: &str, error: String) -> ReadError {
   ReadError { session_id: session_id.to_string(), plan_id: Value::Null, error }
 }
 
-/// An `OSError` the read does not catch, as `Path.exists()` raises it.
+/// A filesystem failure the read does not catch, as a failing `Path::exists` raises it.
 pub(crate) fn os_escape(error: &io::Error, path: &Path) -> EscapedError {
   let kind = match error.kind() {
     io::ErrorKind::PermissionDenied => "PermissionError",
@@ -297,7 +296,7 @@ pub(crate) fn os_escape(error: &io::Error, path: &Path) -> EscapedError {
   EscapedError { kind, detail: os_error_text(error, path) }
 }
 
-/// Python's `str(OSError)` for a failed call on `path`: `[Errno N] strerror: 'path'`.
+/// The failure text for a failed call on `path`: `[Errno N] strerror: 'path'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
   let errno = error.raw_os_error().expect("a filesystem call fails with an errno");
   let message = error.to_string();
@@ -305,7 +304,7 @@ fn os_error_text(error: &io::Error, path: &Path) -> String {
   format!("[Errno {errno}] {strerror}: {}", text_repr::str_repr(&path.to_string_lossy()))
 }
 
-/// Python's `UnicodeDecodeError` text for the UTF-8 failure at `error` in `bytes`.
+/// The decode-failure text for the UTF-8 failure at `error` in `bytes`.
 fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
   let start = error.valid_up_to();
   let (end, reason) = match error.error_len() {
@@ -323,7 +322,7 @@ fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
   }
 }
 
-/// The Python type name of a JSON value, as `type(x).__name__` gives it for the value `json.loads` produced.
+/// The type name of a JSON value, as the error messages spell it.
 pub(crate) fn type_name(value: &Value) -> &'static str {
   match value {
     Value::Null => "NoneType",
@@ -336,7 +335,7 @@ pub(crate) fn type_name(value: &Value) -> &'static str {
   }
 }
 
-/// `repr(value)` of a JSON value that `json.loads` produced: strings quoted, the rest as `str` prints them.
+/// The repr form of a JSON value: strings quoted, the rest in their value spelling.
 pub(crate) fn value_repr(value: &Value) -> String {
   match value {
     Value::String(text) => text_repr::str_repr(text),

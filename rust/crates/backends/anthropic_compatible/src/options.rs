@@ -9,12 +9,21 @@ use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
 const HEADERS: &str = "headers";
-const FIELDS: [&str; 7] =
-  [API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EFFORT_KEY, CLI_BINARY_KEY, HEADERS, EXTRA_BODY_KEY];
+const HOST_AUTH_ALIAS: &str = "host_auth_alias";
+const FIELDS: [&str; 8] = [
+  API_BASE_KEY,
+  CONTEXT_WINDOW_KEY,
+  CREDENTIAL_KEY,
+  EFFORT_KEY,
+  CLI_BINARY_KEY,
+  HEADERS,
+  EXTRA_BODY_KEY,
+  HOST_AUTH_ALIAS,
+];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
-/// them. `cli_binary` has no Python reference: the Python option model refused the field.
+/// them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Required),
@@ -23,6 +32,7 @@ pub const SCHEMA: &[OptionField] = &[
   OptionField::field(CLI_BINARY_KEY, OptionFieldDefault::Null),
   OptionField::field(HEADERS, OptionFieldDefault::EmptyMap),
   OptionField::field(EXTRA_BODY_KEY, OptionFieldDefault::EmptyMap),
+  OptionField::field(HOST_AUTH_ALIAS, OptionFieldDefault::Null),
 ];
 
 /// The type-specific fields of one Anthropic-compatible backend option.
@@ -42,6 +52,9 @@ pub struct CcAnthropicCompatibleOption {
   pub headers: Vec<(String, String)>,
   /// The JSON object Claude Code merges into the body of every request to the endpoint.
   pub extra_body: Map<String, JsonValue>,
+  /// The ssh alias of the host this entry's login rides on. The scheduler probes it before each fire, and a fire
+  /// waits while the host awaits the user's approval. `None` for an entry that names no host.
+  pub host_auth_alias: Option<String>,
 }
 
 impl CcAnthropicCompatibleOption {
@@ -110,11 +123,41 @@ impl CcAnthropicCompatibleOption {
         .map_err(|error| format!("cc-anthropic-compatible option extra_body: {error}"))?,
       Some(_) => return Err("cc-anthropic-compatible option extra_body must be a mapping".to_string()),
     };
-    Ok(Self { api_base, context_window, credential, effort, cli_binary, headers, extra_body })
+    let host_auth_alias = match fields.get(HOST_AUTH_ALIAS) {
+      None | Some(Value::Null) => None,
+      Some(Value::String(alias)) if !alias.is_empty() => Some(alias.clone()),
+      Some(_) => {
+        return Err("cc-anthropic-compatible option host_auth_alias must be a non-empty string or null".to_string());
+      }
+    };
+    Ok(Self { api_base, context_window, credential, effort, cli_binary, headers, extra_body, host_auth_alias })
   }
 }
 
 /// Validate the fields of a `cc-anthropic-compatible` config entry.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
   CcAnthropicCompatibleOption::from_fields(fields).map(|_| ())
+}
+
+/// The host alias an entry declares, read through the registry by the scheduler's host gate.
+pub fn host_auth_alias(fields: &Mapping) -> Result<Option<String>, String> {
+  Ok(CcAnthropicCompatibleOption::from_fields(fields)?.host_auth_alias)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn fields(text: &str) -> Mapping {
+    serde_yaml::from_str(text).expect("the fixture is YAML")
+  }
+
+  #[test]
+  fn host_auth_alias_parses_and_other_unknown_keys_stay_refused() {
+    let base = "api_base: https://upstream.example\ncontext_window: 200000\n";
+    assert_eq!(host_auth_alias(&fields(&format!("{base}host_auth_alias: host3\n"))), Ok(Some("host3".to_string())));
+    assert_eq!(host_auth_alias(&fields(&format!("{base}host_auth_alias: null\n"))), Ok(None));
+    assert!(host_auth_alias(&fields(&format!("{base}host_auth_alias: ''\n"))).is_err());
+    assert!(option_model(&fields(&format!("{base}host: host3\n"))).is_err());
+  }
 }

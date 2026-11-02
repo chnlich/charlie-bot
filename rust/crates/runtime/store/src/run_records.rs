@@ -67,17 +67,17 @@ pub fn read_run_record_file(path: &Path) -> Result<RunRecord, MetadataReadError>
 }
 
 /// Write one run's metadata file as `record` rendered under `style`, replacing the file. The release helper's seed
-/// writes its own check's record this way, as Python's `json.dumps` one-liner; the store's own saves write the model
+/// writes its own check's record this way, as a one-line JSON dump; the store's own saves write the model
 /// dump through `Store::write_run_record`.
 pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std::io::Result<()> {
   fs::write(path, text_repr::json_dumps(record, style))
 }
 
 // The run event log (`events.jsonl`, `RUN_EVENTS_NAME`): one JSON value per line. This module owns the line's
-// bytes, its two decodes — the strict one, which fails a line that is not one JSON value, and the skip contract,
-// which drops such a line — and the newest-first walk of a log.
+// bytes, its two decodes and the newest-first walk of a log. The strict decode fails a line that is not one JSON
+// value; the skip contract drops such a line.
 
-/// One persisted event as its log line: compact UTF-8 JSON and a newline (`worker.py` `_event_line`).
+/// One persisted event as its log line: compact UTF-8 JSON and a newline.
 pub fn event_line(event: &Value) -> Vec<u8> {
   let mut line = serde_json::to_vec(event).expect("a JSON value serializes");
   line.push(b'\n');
@@ -90,9 +90,9 @@ pub fn decode_event_line(line: &str) -> Result<Value, serde_json::Error> {
   serde_json::from_str(line)
 }
 
-/// Decode one run event line under the skip contract: a blank line and a line that is not JSON give `None`, and a
-/// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse, as `src/infra/ndjson.py`
-/// `parse_ndjson_line` repairs it. A final partial line decodes like any other line.
+/// Decode one run event line under the skip contract. A blank line and a line that is not JSON give `None`, and a
+/// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse. A final partial line decodes like any
+/// other line.
 pub fn parse_event_line(raw: &[u8]) -> Option<Value> {
   if raw.is_empty() || raw.iter().all(u8::is_ascii_whitespace) {
     return None;
@@ -133,7 +133,7 @@ impl fmt::Display for EventReadError {
   }
 }
 
-/// The run event log at `path` as its event values, oldest first, under the strict decode: the file reads as text
+/// The run event log at `path` as its event values, oldest first, under the strict decode. The file reads as text,
 /// and every line, a blank one included, must be one JSON value, so a bad line fails the read with that line's
 /// parse error. A missing file is `Err` with `NotFound`, so the caller decides whether that means no events.
 pub fn read_event_values(path: &Path) -> Result<Vec<Value>, EventReadError> {
@@ -161,10 +161,8 @@ pub fn visit_events_from_end<T>(
 }
 
 /// The events of one run event log, newest first, read through one read-only mapping. Only a provable mismatch in
-/// the first 256 bytes skips a line without parsing it, matching Python's `iter_ndjson_events_from_end` and
-/// `type_line_filter` (`src/infra/ndjson.py:404-547`). Each line's start is one backward `memrchr` from the
-/// previous line's start, so a walk that stops at a line leaves the older bytes unscanned, as Python's mmap walk
-/// does.
+/// the first 256 bytes skips a line without parsing it. Each line's start is one backward `memrchr` from the
+/// previous line's start, so a walk that stops at a line leaves the older bytes unscanned.
 pub struct NewestFirstEvents<'k> {
   map: Option<Mmap>,
   end: usize,
@@ -294,7 +292,7 @@ pub struct SequenceRef {
   pub position: i64,
 }
 
-/// One run's persisted identity and evidence, in Python model field order.
+/// One run's persisted identity and evidence, in model field order.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunRecord {
@@ -348,7 +346,7 @@ pub struct RunRecord {
   pub result_ref: Option<String>,
 }
 
-/// The record fields a retry caller passes, in Python's keyword order. `input_event_ids` is empty for a worker
+/// The record fields a retry caller passes, in keyword order. `input_event_ids` is empty for a worker
 /// retry, which consumes whatever input is pending when it launches.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetryRunFields {
@@ -463,8 +461,8 @@ impl RunFacts {
   /// One run's display state, as [`Store::run_display_state`] derives it from the history these facts fold.
   ///
   /// `withheld` answers whether the history records a `run_launch_withheld` reason for this run. Only a queued run
-  /// that no stop request settled asks it, as `runs.run_display_state` asks `withheld_reason` only on that branch;
-  /// every settled run answers from the outcome and stop-request maps, so a node's display-state pass never walks
+  /// that no stop request settled asks it, as `runs.run_display_state` asks `withheld_reason` only on that branch.
+  /// Every settled run answers from the outcome and stop-request maps, so a node's display-state pass never walks
   /// its history once per run.
   pub fn display_state(
     &self,
@@ -584,8 +582,8 @@ pub struct StopResult {
 /// The result of a new stop request.
 pub type StopRequest = StopResult;
 
-/// The boundary of a run page cursor. Python's cursor is `s`, `i`, and `d` (only when descending); unknown keys are
-/// ignored, as Python ignores them.
+/// The boundary of a run page cursor. The cursor is `s`, `i`, and `d` (only when descending); unknown keys are
+/// ignored.
 #[derive(Deserialize)]
 struct RunCursor {
   s: Value,
@@ -612,8 +610,8 @@ fn run_cursor(run: &RunRecord, order: RunOrder) -> String {
   run_token::b64url_encode(serde_json::to_string(&value).expect("a run cursor serializes").as_bytes())
 }
 
-/// Decode a cursor into its boundary and the order it was minted under. The error text is Python's `ValueError`,
-/// which does not carry the decoding cause.
+/// Decode a cursor into its boundary and the order it was minted under. The error text names the cursor, and it
+/// does not carry the decoding cause.
 fn decode_run_cursor(cursor: &str) -> StoreResult<((UtcDateTime, String), RunOrder)> {
   let malformed = || StoreError::new(format!("malformed run page cursor: {}", text_repr::str_repr(cursor)));
   let decoded = run_token::b64url_decode(cursor).map_err(|_| malformed())?;
@@ -797,7 +795,7 @@ impl Store {
         .ok_or_else(|| StoreError::new("run_finished fact has no string timestamp"))?;
       let parsed = UtcDateTime::parse(timestamp)
         .map_err(|error| StoreError::new(format!("run_finished fact timestamp is invalid: {error}")))?;
-      // The last fact per run wins, as Python's dict assignment in last_ended_run_id does.
+      // The last fact per run wins, as a map insert does.
       fact_times.insert(run_id.to_string(), parsed);
     }
     let runs = self.list_run_records_sync(session_id)?;
@@ -826,7 +824,7 @@ impl Store {
     if descending {
       records.reverse();
     }
-    // An empty cursor reads as no cursor, as Python's `if cursor` does.
+    // An empty cursor reads as no cursor.
     if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
       let (boundary, cursor_order) = decode_run_cursor(cursor)?;
       if cursor_order != order {
@@ -851,14 +849,14 @@ impl Store {
   /// Derive one run's display state from its record, facts and current process identity.
   ///
   /// A caller that derives the states of several runs reads [`Store::node_state`] once and asks
-  /// [`RunFacts::display_state`] for each run, as Python passes one event list to `run_display_state`.
+  /// [`RunFacts::display_state`] for each run, from one event list.
   pub fn run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState> {
     let run = require_run(self, session_id, run_id)?;
     self.node_state(session_id)?.display_state(&run, &mut HostBoot::default())
   }
 
   /// Return every structural-change blocker in chronological run order; an empty list means none.
-  /// Callers collect all of them, as Python's `_structural_blockers` does.
+  /// Callers collect all of them.
   pub fn run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>> {
     let mut blockers = Vec::new();
     let runs = self.list_run_records_sync(session_id)?;
@@ -1073,8 +1071,8 @@ impl Store {
     let run_facts = &node_state.runs;
     let mut run = require_run(self, session_id, run_id)?;
     if run_facts.terminal_outcome(run_id)?.is_some() {
-      // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
-      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
+      // The outcome is the last fact's and the payload is the first fact's. An empty `ended_at` is the half-written end
+      // record: the caller's `ended_at`
       // and `exit_code` fill it, and values already written stay.
       let events = self.load_all_facts_shared_sync(session_id)?;
       let input_event_ids = events
@@ -1404,9 +1402,8 @@ pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> Stor
   }
 }
 
-/// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. The pure
-/// fact scan behind the stop checks of `RunStore.stop_requested` (`runs.py::stop_requested_in_events`); the task tree
-/// reads the same facts through it.
+/// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. This is
+/// the pure fact scan behind the stop checks; the task tree reads the same facts through it.
 pub fn stop_requested_in_events<T: AsRef<ChatEvent>>(events: &[T], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
     let event = event.as_ref();
@@ -1470,7 +1467,6 @@ mod tests {
   use super::*;
   use std::fs;
 
-  // Python: tests/test_worker_event_line.py::test_event_line_round_trips_the_event
   #[test]
   fn test_event_line_round_trips_the_event() {
     let event = json!({
@@ -1788,8 +1784,8 @@ mod tests {
     assert_eq!(stats.lines_visited, forward.len() as u64);
   }
 
-  /// The strict read: a missing file is the caller's no-events decision, and a blank line or a line that is not
-  /// JSON fails the read with that line's parse error, while a value that is not an object is still a value.
+  /// The strict read: a missing file is the caller's no-events decision. A blank line or a line that is not JSON
+  /// fails the read with that line's parse error. A value that is not an object is still a value.
   #[test]
   fn read_event_values_reports_a_missing_file_and_fails_a_bad_line() {
     let directory = tempfile::tempdir().unwrap();
@@ -1807,7 +1803,7 @@ mod tests {
     assert_eq!(events, [serde_json::json!({"type": "system"}), serde_json::json!([1, 2])]);
   }
 
-  /// The skip contract: a blank line and a line that is not JSON give `None`, and a line whose bytes are not UTF-8
+  /// The skip contract: a blank line and a line that is not JSON give `None`. A line whose bytes are not UTF-8
   /// is repaired with U+FFFD before the parse.
   #[test]
   fn parse_event_line_applies_the_skip_contract_per_line() {

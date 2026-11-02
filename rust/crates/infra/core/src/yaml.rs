@@ -1,7 +1,7 @@
-//! The `yaml_utils.save_yaml` writer (`src/infra/yaml_utils.py`).
+//! The YAML writer.
 //!
-//! Scalar style follows PyYAML 6's resolver and block-context scalar analysis. Quoted scalars use its escaping and
-//! width-80 folding rules, and floating-point numbers use its `represent_float` spelling.
+//! Scalar style follows the YAML resolver and block-context scalar analysis. Quoted scalars use the escape table and
+//! width-80 folding rules, and floating-point numbers use the `represent_float` spelling.
 
 use std::sync::OnceLock;
 
@@ -9,7 +9,7 @@ use crate::text_repr;
 use regex::Regex;
 use serde_json::{Map, Value};
 
-/// PyYAML's `Emitter.best_width`.
+/// The emitter's best width.
 const BEST_WIDTH: usize = 80;
 
 /// Dump a mapping or a sequence, the shapes that cron files hold.
@@ -52,7 +52,7 @@ fn write_sequence(output: &mut String, items: &[Value], indent: usize) {
 }
 
 /// Writes `key:` and its value, with the key at column `indent`. A nested mapping is indented by two, while a sequence
-/// under a key stays at `indent`, because PyYAML leaves it unindented. A scalar's folded lines continue at
+/// under a key stays at `indent`, because the emitter leaves it unindented. A scalar's folded lines continue at
 /// `indent + 2`.
 fn write_pair(output: &mut String, key: &str, value: &Value, indent: usize) {
   write_string(output, key, true, indent);
@@ -90,7 +90,7 @@ fn write_scalar(output: &mut String, value: &Value, indent: usize) {
   }
 }
 
-/// Writes a floating-point value using PyYAML's `represent_float` format.
+/// Writes a floating-point value using the `represent_float` format.
 fn write_float(output: &mut String, value: f64) {
   if value.is_nan() {
     output.push_str(".nan");
@@ -109,8 +109,8 @@ fn write_float(output: &mut String, value: f64) {
   }
 }
 
-/// Writes a string in the style that PyYAML's emitter picks: plain when the text reads back as a string, single-quoted
-/// when it allows it. Otherwise it is double-quoted, with PyYAML escapes and folding.
+/// Writes a string in the style the emitter picks: plain when the text reads back as a string, single-quoted
+/// when it allows it. Otherwise it is double-quoted, with the escape table and folding.
 fn write_string(output: &mut String, value: &str, key: bool, indent: usize) {
   let analysis = analyze_scalar(value);
   if analysis.allow_block_plain && implicit_tag(value).is_none() {
@@ -122,7 +122,7 @@ fn write_string(output: &mut String, value: &str, key: bool, indent: usize) {
   }
 }
 
-/// Writes a double-quoted scalar using PyYAML's escape table and column-80 folding rules.
+/// Writes a double-quoted scalar using the escape table and column-80 folding rules.
 fn write_double_quoted(output: &mut String, text: &str, indent: usize, split: bool) {
   let chars: Vec<char> = text.chars().collect();
   let mut line = Line::new(output, indent);
@@ -163,13 +163,13 @@ fn write_double_quoted(output: &mut String, text: &str, indent: usize, split: bo
   line.push_str("\"");
 }
 
-/// Whether PyYAML's double-quoted writer escapes the character with its replacement or a hexadecimal escape.
+/// Whether the double-quoted writer escapes the character with its replacement or a hexadecimal escape.
 fn requires_double_quoted_escape(ch: char) -> bool {
   matches!(ch, '"' | '\\' | '\u{85}' | '\u{2028}' | '\u{2029}' | '\u{feff}')
     || !((' '..='~').contains(&ch) || ('\u{a0}'..='\u{d7ff}').contains(&ch) || ('\u{e000}'..='\u{fffd}').contains(&ch))
 }
 
-/// Returns the escape PyYAML writes for a character that cannot appear directly in a double-quoted scalar.
+/// Returns the escape for a character that cannot appear directly in a double-quoted scalar.
 fn double_quoted_escape(ch: char) -> String {
   match ch {
     '\0' => "\\0".to_string(),
@@ -193,8 +193,8 @@ fn double_quoted_escape(ch: char) -> String {
   }
 }
 
-/// PyYAML's `write_plain`. Plain text holds no line break, so a fold happens only at a single space, and only once the
-/// line is past `BEST_WIDTH`. A key passes `split` as false, because PyYAML never folds a simple key.
+/// The plain-scalar writer. Plain text holds no line break, so a fold happens only at a single space, and only once the
+/// line is past `BEST_WIDTH`. A key passes `split` as false, because a simple key never folds.
 fn write_plain(output: &mut String, text: &str, indent: usize, split: bool) {
   let chars: Vec<char> = text.chars().collect();
   let mut line = Line::new(output, indent);
@@ -212,7 +212,7 @@ fn write_plain(output: &mut String, text: &str, indent: usize, split: bool) {
   }
 }
 
-/// PyYAML's `write_single_quoted`. A single space folds once the line is past `BEST_WIDTH`, except at either end of the
+/// The single-quoted writer. A single space folds once the line is past `BEST_WIDTH`, except at either end of the
 /// text. Each line break in the text becomes an empty line, and each quote is doubled.
 fn write_single_quoted(output: &mut String, text: &str, indent: usize, split: bool) {
   let chars: Vec<char> = text.chars().collect();
@@ -265,7 +265,7 @@ struct ScalarAnalysis {
   multiline: bool,
 }
 
-/// Returns the scalar style flags used by PyYAML's block-context emitter.
+/// Returns the scalar style flags used by the block-context emitter.
 fn analyze_scalar(value: &str) -> ScalarAnalysis {
   let chars: Vec<char> = value.chars().collect();
   let is_yaml_whitespace = |ch| matches!(ch, '\0' | ' ' | '\t' | '\r' | '\n' | '\u{85}' | '\u{2028}' | '\u{2029}');
@@ -346,14 +346,14 @@ fn analyze_scalar(value: &str) -> ScalarAnalysis {
   ScalarAnalysis { allow_block_plain, allow_single_quoted, multiline: line_breaks }
 }
 
-/// The characters that PyYAML's emitter treats as line breaks.
+/// The characters the emitter treats as line breaks.
 fn is_break(ch: char) -> bool {
   matches!(ch, '\n' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }
 
-/// The tag that PyYAML's resolver gives a plain scalar, or `None` when the scalar reads back as a string.
+/// The tag the resolver gives a plain scalar, or `None` when the scalar reads back as a string.
 fn implicit_tag(value: &str) -> Option<&'static str> {
-  // PyYAML tries only the resolvers registered for the first character. An empty scalar is tried against all of
+  // Only the resolvers registered for the first character are tried. An empty scalar is tried against all of
   // them, and only the null pattern matches the empty string.
   implicit_resolvers()
     .iter()
@@ -363,15 +363,15 @@ fn implicit_tag(value: &str) -> Option<&'static str> {
     .map(|resolver| resolver.tag)
 }
 
-/// One of PyYAML's implicit resolvers (`yaml/resolver.py` in PyYAML 6.0): a plain scalar that matches `pattern` reads
-/// back as `tag`. `first` lists the first characters that PyYAML tries the pattern on.
+/// One of the implicit resolvers: a plain scalar that matches `pattern` reads
+/// back as `tag`. `first` lists the first characters that the resolver tries the pattern on.
 struct ImplicitResolver {
   tag: &'static str,
   pattern: Regex,
   first: &'static str,
 }
 
-/// PyYAML's implicit resolvers in registration order. The `yaml` resolver is left out: its pattern matches `!`, `&` and
+/// The implicit resolvers in registration order. The `yaml` resolver is left out: its pattern matches `!`, `&` and
 /// `*`, which a plain scalar cannot start with.
 fn implicit_resolvers() -> &'static [ImplicitResolver] {
   static RESOLVERS: OnceLock<Vec<ImplicitResolver>> = OnceLock::new();
@@ -427,7 +427,7 @@ fn implicit_resolvers() -> &'static [ImplicitResolver] {
     .as_slice()
 }
 
-/// The output line that a scalar is written onto. `column` counts characters from the line start, as PyYAML's emitter
+/// The output line that a scalar is written onto. `column` counts characters from the line start, as the emitter
 /// does, and folded lines continue at `indent`.
 struct Line<'a> {
   output: &'a mut String,
@@ -498,7 +498,6 @@ mod tests {
 
   #[test]
   fn malformed_yaml_remains_an_error() {
-    // Python: tests/test_yaml_utils.py::test_malformed_document_raises_yaml_error
     assert!(serde_yaml::from_str::<serde_json::Value>("a: [1, 2\nb: {c").is_err());
   }
 

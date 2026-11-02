@@ -30,7 +30,7 @@ const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profil
 const REDIRECT_URI: &str = "http://localhost";
 const SCOPES: &str = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents \
   https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.readonly \
-  https://www.googleapis.com/auth/calendar.readonly";
+  https://www.googleapis.com/auth/calendar";
 
 /// The two endpoints this command calls. Tests point them at local stubs.
 #[derive(Debug, Clone)]
@@ -203,7 +203,7 @@ fn list_output(table: &AccountTable, check: bool, endpoints: &Endpoints) -> Resu
   Ok(output)
 }
 
-/// Wrap a per-account failure the way the Python list check does.
+/// Wrap a per-account failure as `account <name>: <message>`.
 fn account_failure(name: &str, error: CliExit) -> CliExit {
   let message =
     error.body.get("error").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| error.body.to_string());
@@ -231,7 +231,7 @@ struct AccountTable {
   path: PathBuf,
   raw_bytes: Vec<u8>,
   raw_text: String,
-  /// The parsed document, with repeated Google keys resolved the way PyYAML does (last wins).
+  /// The parsed document, with repeated Google keys resolved last-wins.
   document: Mapping,
   accounts: Vec<Account>,
   by_name: HashMap<String, Account>,
@@ -330,9 +330,8 @@ fn table_from_bytes(path: PathBuf, raw_bytes: &[u8]) -> Result<AccountTable, Cli
   Ok(AccountTable { path, raw_bytes: raw_bytes.to_vec(), raw_text, document, accounts, by_name, google })
 }
 
-/// The Python script composes the YAML tree and names a repeated `google` section; serde_yaml
-/// refuses every repeated key, so the section names are scanned before the parse to keep the
-/// specific message.
+/// serde_yaml refuses every repeated key, so the section names are scanned before the parse to
+/// keep the specific message.
 fn duplicate_google_section(raw_text: &str) -> Option<String> {
   let mut seen: Vec<&str> = Vec::new();
   for line in raw_text.lines() {
@@ -354,7 +353,7 @@ fn duplicate_google_section(raw_text: &str) -> Option<String> {
   None
 }
 
-/// PyYAML's `safe_load` keeps the last of repeated keys, and `add` relies on that when it refuses a
+/// A repeated key keeps its last value, and `add` relies on that when it refuses a
 /// repeated `refresh_token` line with its own message; serde_yaml refuses every repeated key, so
 /// repeated key lines inside Google sections are dropped (last wins) before the parse. Keys in the
 /// other sections keep serde_yaml's refusal.
@@ -636,7 +635,7 @@ fn add_account(
   let refresh_token = required_response_string(&payload, "refresh_token", "Google authorization-code exchange")?;
   let access_token = required_response_string(&payload, "access_token", "Google authorization-code exchange")?;
   let actual_email = profile_email(&access_token, &endpoints.profile_url)?;
-  // Python `str.casefold`; the compared addresses are ASCII.
+  // ASCII case folding; the compared addresses are ASCII.
   if !actual_email.eq_ignore_ascii_case(email.trim()) {
     return Err(CliExit::error(format!("email mismatch: Google returned {actual_email}")));
   }
@@ -662,9 +661,8 @@ fn redirect_code(redirect_url: &str, name: &str) -> Result<String, CliExit> {
   Ok(codes[0].to_string())
 }
 
-/// `urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)`: one
-/// `(key, value)` pair per query parameter, in order, `+` and percent escapes decoded on both
-/// sides. `urlsplit`'s unbalanced-bracket refusal is the only URL error the script can hit.
+/// One `(key, value)` pair per query parameter, in order, with `+` and percent escapes decoded on
+/// both sides. An unbalanced bracket in the netloc is the only URL error here.
 fn urlsplit_query(url: &str) -> Result<Vec<(String, String)>, ()> {
   let netloc_end = url.find(['/', '?', '#']).unwrap_or(url.len());
   let netloc = &url[..netloc_end];
@@ -685,8 +683,7 @@ fn urlsplit_query(url: &str) -> Result<Vec<(String, String)>, ()> {
   )
 }
 
-/// `urllib.parse.unquote_plus`: `+` becomes a space, then `%XX` bytes decode as UTF-8 with
-/// undecodable bytes replaced, matching the default `errors='replace'`.
+/// `+` becomes a space, then `%XX` bytes decode as UTF-8 with undecodable bytes replaced.
 fn unquote_plus(text: &str) -> String {
   fn hex_digit(byte: u8) -> Option<u8> {
     match byte {
@@ -819,8 +816,8 @@ fn write_refresh_token(
   owner: Option<&str>,
 ) -> Result<(), CliExit> {
   let (new_bytes, expected) = updated_content(table, account, refresh_token, description, owner)?;
-  // The Python script writes the temporary file and reparses it before the rename; the same check
-  // on the bytes in memory refuses an edit that would not read back as the expected document.
+  // The edit is reparsed before the rename: the same check on the bytes in memory refuses an edit
+  // that would not read back as the expected document.
   let written = std::str::from_utf8(&new_bytes).expect("the edit only rearranges UTF-8 lines");
   let reparsed = serde_yaml::from_str::<Yaml>(&drop_repeated_google_keys(written))
     .map_err(|_| CliExit::error("temporary credentials file is not valid YAML"))?;
@@ -968,14 +965,14 @@ fn section_edit_plan(raw_text: &str, section_name: &str, keys: &[&str]) -> Resul
 }
 
 // ---------------------------------------------------------------------------
-// The PyYAML emitter's block-mapping scalars
+// The block-mapping scalar renderings
 // ---------------------------------------------------------------------------
 
-/// Render one string the way `yaml.safe_dump` prints it as a block mapping's value: plain when the
-/// text reads back as a string, single-quoted when plain style would change the value, double-
-/// quoted with escapes when the text needs them. `start_column` is the column the value starts at;
-/// `fold_indent` folds long values at single spaces once the column passes the emitter's
-/// 80-column width (the script's `width=1_000_000` dumps pass `None` and stay on one line).
+/// Render one string as a block mapping's value: plain when the text reads back as a string,
+/// single-quoted when plain style would change the value, double-quoted with escapes when the text
+/// needs them. `start_column` is the column the value starts at; `fold_indent` folds long values at
+/// single spaces once the column passes the 80-column width (the `width=1_000_000` dumps pass
+/// `None` and stay on one line).
 fn dump_scalar(value: &str, start_column: usize, allow_unicode: bool, fold_indent: Option<&str>) -> String {
   let analysis = analyze_scalar(value, allow_unicode);
   if !analysis.special && !analysis.edge_space && !analysis.block_indicators && !plain_resolves_to_non_string(value) {
@@ -1042,8 +1039,8 @@ struct AnalyzedScalar {
   block_indicators: bool,
 }
 
-/// Whether PyYAML's 1.1 implicit resolution would read the plain form back as something other than
-/// a string: null, bool, int, float, timestamp, merge or value.
+/// Whether the plain form would read back as something other than a string: null, bool, int,
+/// float, timestamp, merge or value.
 fn plain_resolves_to_non_string(value: &str) -> bool {
   const BOOLS: [&str; 18] = [
     "yes", "Yes", "YES", "no", "No", "NO", "true", "True", "TRUE", "false", "False", "FALSE", "on", "On", "ON", "off",
@@ -1121,8 +1118,8 @@ fn write_folded(value: &str, start_column: usize, fold_indent: Option<&str>, sin
   folded
 }
 
-/// `yaml.safe_dump({section: values}, sort_keys=False, allow_unicode=True)`: the section key at the
-/// margin, each pair on its own line at indent 2, long values folded with continuation indent 4.
+/// The section key at the margin, each pair on its own line at indent 2, long values folded with
+/// continuation indent 4.
 fn dump_section(section: &str, write_values: &[(&str, &str)]) -> String {
   let mut dumped = format!("{section}:\n");
   for (key, value) in write_values {
@@ -1357,8 +1354,8 @@ mod tests {
       .collect()
   }
 
-  // The ported account-selection tests: `token` is now a request against a stub token endpoint and
-  // a stub API server.
+  // The account-selection tests: `token` is a request against a stub token endpoint and a stub API
+  // server.
 
   #[test]
   fn request_uses_default_account() {
@@ -1683,9 +1680,8 @@ mod tests {
     assert!(!error_text(&error).contains("default-refresh"));
   }
 
-  // The ported consent-url and add tests: the token exchange and the profile read run against the
-  // stub endpoints, and the file-bytes expectations were recorded from the Python script at the
-  // port's base commit.
+  // The consent-url and add tests: the token exchange and the profile read run against the stub
+  // endpoints, and the file bytes are the recorded expectations.
 
   /// The exact file `add` writes when it appends a section to the default table.
   const APPEND_REFERENCE_BYTES: &str = concat!(
@@ -1723,7 +1719,7 @@ mod tests {
     "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments",
     "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file",
     "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly",
-    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.readonly",
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar",
     "&access_type=offline",
     "&prompt=consent+select_account",
     "&state=default",
@@ -1812,9 +1808,7 @@ appointments and the tax paperwork of the household";
     assert_eq!(parameter(&query, "login_hint"), "person@example.invalid");
     assert_eq!(parameter(&query, "state"), "personal");
     assert_eq!(parameter(&query, "redirect_uri"), "http://localhost");
-    assert!(
-      parameter(&query, "scope").split(' ').any(|scope| scope == "https://www.googleapis.com/auth/calendar.readonly")
-    );
+    assert!(parameter(&query, "scope").split(' ').any(|scope| scope == "https://www.googleapis.com/auth/calendar"));
   }
 
   #[test]
@@ -2310,8 +2304,7 @@ appointments and the tax paperwork of the household";
     assert_eq!(std::fs::read(credentials_path(&home)).unwrap(), original);
   }
 
-  /// The block-mapping scalar renderings `yaml.safe_dump` prints for the values `add` can write,
-  /// recorded from PyYAML at the port's base commit.
+  /// The block-mapping scalar renderings `add` writes for each value.
   #[test]
   fn the_block_mapping_scalar_dumper_prints_pyyaml_forms() {
     for (value, expected) in [

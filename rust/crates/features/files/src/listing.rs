@@ -1,4 +1,4 @@
-//! `_dir_listing_page` (`src/features/files/api.py`): the HTML page of one directory.
+//! The HTML page of one directory.
 //!
 //! The walk lists the directory and stats each child; a child that cannot be stat-ed is left out. The rows sort
 //! directories first, then by lowercase name, and each row is escaped, quoted and appended in turn.
@@ -52,7 +52,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   };
   let mut children = Vec::new();
   for entry in entries {
-    // `except OSError: continue`: a child that cannot be stat-ed is skipped, not reported.
+    // A child that cannot be stat-ed is skipped, not reported.
     let Ok(metadata) = fs::metadata(entry.path()) else { continue };
     let name =
       entry.file_name().into_string().map_err(|name| failed("UnicodeEncodeError", format!("{name:?} is not UTF-8")))?;
@@ -93,7 +93,7 @@ fn row(child: &Child, base: &str) -> Result<String, ListingError> {
   ))
 }
 
-/// The page around the rows. Its markup is `_DIR_LISTING_TEMPLATE`, with its doubled braces read as single ones.
+/// The page around the rows. The format reads the markup's doubled braces as single ones.
 fn page(display_path: &str, rows: &str) -> String {
   format!(
     r#"<!DOCTYPE html>
@@ -118,7 +118,7 @@ fn page(display_path: &str, rows: &str) -> String {
   )
 }
 
-/// `datetime.fromtimestamp(seconds, tz=UTC).strftime("%Y-%m-%d %H:%M")`. CPython rounds the fraction to whole
+/// The modified minute of a timestamp, printed as `"%Y-%m-%d %H:%M"` in UTC. The fraction rounds to whole
 /// microseconds half to even, and a rounding carry of 1e6 microseconds moves the whole seconds on by one.
 fn modified_minute(seconds: f64) -> Result<String, ListingError> {
   let micros = (seconds.fract() * 1e6).round_ties_even();
@@ -141,12 +141,12 @@ fn modified_minute(seconds: f64) -> Result<String, ListingError> {
   ))
 }
 
-/// `html.escape(text)` with `quote=True`: the five characters that end an attribute value or a text node.
+/// Escapes `&`, `<`, `>`, `"` and `'`: the five characters that end an attribute value or a text node.
 fn escape(text: &str) -> String {
   html_escape::encode_quoted_attribute(text).into_owned()
 }
 
-/// `urllib.parse.quote(name, safe='')`: every byte but ASCII letters, digits and `_.-~` becomes `%XX`.
+/// Every byte but ASCII letters, digits and `_.-~` becomes `%XX`.
 fn quote(name: &str) -> String {
   utf8_percent_encode(name, FILENAME_SET).to_string()
 }

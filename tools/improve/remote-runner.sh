@@ -391,15 +391,17 @@ record_memory_peak() {
   fi
 }
 
-# Export the gateway token that claude reads as ANTHROPIC_AUTH_TOKEN. The prepare step wrote the token to the
-# round's credentials file, and the launcher keeps it out of the environment file, so this is the one place it enters
-# the round: the environment of claude, with no argument and no other file that carries it.
+# Export the one gateway token under each round tool's documented variable: ANTHROPIC_AUTH_TOKEN for claude,
+# CHARLIE_CODE_API_KEY for charlie-code. The prepare step wrote the token to the round's credentials file, and the
+# launcher keeps it out of the environment file, so this is the one place the token enters the round: the environment,
+# with no argument and no other file that carries it.
 export_gateway_token() {
   local tokens token
   tokens=$(sed -n 's/^[[:space:]]*api_key:[[:space:]]*//p' "$ROUND_HOME/credentials.yaml")
   token=${tokens%%$'\n'*}
   [[ -n $token ]] || fail 1 "the round's credentials file holds no gateway token: $ROUND_HOME/credentials.yaml"
   export ANTHROPIC_AUTH_TOKEN=$token
+  export CHARLIE_CODE_API_KEY=$token
 }
 
 run_in_scope() {

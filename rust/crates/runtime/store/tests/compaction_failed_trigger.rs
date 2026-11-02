@@ -1,7 +1,6 @@
 use charliebot_store::MessageAggregator;
 use serde_json::json;
 
-// Python: tests/test_message_aggregator.py:270.
 #[test]
 fn idle_compaction_failure_line_names_its_trigger() {
   let mut aggregator = MessageAggregator::new(0, false);

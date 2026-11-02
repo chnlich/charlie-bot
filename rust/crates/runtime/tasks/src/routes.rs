@@ -68,6 +68,7 @@ pub const DELEGATE_BASE_BRANCH_FIELD: &str = "base_branch";
 pub const DELEGATE_TASK_SPEC_FILE_FIELD: &str = "task_spec_file";
 pub const DELEGATE_REVIEWER_CONTEXT_FILE_FIELD: &str = "reviewer_context_file";
 pub const DELEGATE_KEEP_WORKTREE_FIELD: &str = "keep_worktree";
+pub const DELEGATE_CONTEXT_WORK_FIELD: &str = "context_work";
 pub const DELEGATE_BACKEND_FIELD: &str = "backend";
 pub const DELEGATE_REQUEST_ID_FIELD: &str = "request_id";
 
@@ -155,6 +156,7 @@ const DELEGATE_INVOCATION_FIELDS: &[Field] = &[
   Field::optional(DELEGATE_TASK_SPEC_FILE_FIELD, FieldType::NullableString),
   Field::optional(DELEGATE_REVIEWER_CONTEXT_FILE_FIELD, FieldType::NullableString),
   Field::required(DELEGATE_KEEP_WORKTREE_FIELD, FieldType::Boolean),
+  Field::optional(DELEGATE_CONTEXT_WORK_FIELD, FieldType::Boolean),
   Field::optional(DELEGATE_BACKEND_FIELD, FieldType::NullableString),
 ];
 const DELEGATE_INVOCATION_BODY: BodyModel = BodyModel::required(DELEGATE_INVOCATION_FIELDS).forbid_extra();
@@ -166,6 +168,7 @@ const DELEGATE_BODY_FIELDS: &[Field] = &[
   Field::optional(DELEGATE_REPO_PATH_FIELD, FieldType::NullableString),
   Field::optional(DELEGATE_TASK_TYPE_FIELD, FieldType::Enum(DELEGATE_TASK_TYPE)),
   Field::optional(DELEGATE_KEEP_WORKTREE_FIELD, FieldType::Boolean),
+  Field::optional(DELEGATE_CONTEXT_WORK_FIELD, FieldType::Boolean),
   Field::optional(
     event_types::DELEGATE_INVOCATION,
     FieldType::NullableModel { class_name: "DelegateInvocationMetadata", model: &DELEGATE_INVOCATION_BODY },
@@ -183,6 +186,7 @@ struct DelegateRequest {
   repo_path: Option<String>,
   task_type: TaskType,
   keep_worktree: bool,
+  context_work: bool,
   delegate_invocation: Option<Value>,
   request_id: Option<String>,
   cold_read: Option<ColdReadSpec>,
@@ -211,6 +215,7 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     repo_path: optional_string(&values, DELEGATE_REPO_PATH_FIELD),
     task_type,
     keep_worktree: values.get(DELEGATE_KEEP_WORKTREE_FIELD).and_then(Value::as_bool).unwrap_or(false),
+    context_work: values.get(DELEGATE_CONTEXT_WORK_FIELD).and_then(Value::as_bool).unwrap_or(false),
     delegate_invocation: values.get(event_types::DELEGATE_INVOCATION).filter(|value| !value.is_null()).cloned(),
     request_id: optional_string(&values, DELEGATE_REQUEST_ID_FIELD),
     cold_read,
@@ -239,6 +244,9 @@ fn delegate_field_contract(request: &DelegateRequest) -> Result<(), String> {
   if request.task_type != TaskType::ColdRead && request.cold_read.is_some() {
     return Err(format!("{task_type} delegations reject cold_read"));
   }
+  if request.context_work && matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) {
+    return Err(format!("{task_type} delegations reject context_work"));
+  }
   if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) {
     if request.repo_path.is_some() {
       return Err(format!("{task_type} delegations are repo-less; omit repo_path"));
@@ -261,6 +269,7 @@ fn delegate_task_spec(request: &DelegateRequest) -> TaskSpec {
     base_branch: request.base_branch.clone(),
     task_type: Some(request.task_type),
     keep_worktree: request.keep_worktree,
+    context_work: request.context_work,
     cold_read: request.cold_read.clone(),
     ..TaskSpec::default()
   }
@@ -286,6 +295,7 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
       (DELEGATE_TASK_SPEC_FILE_FIELD): null,
       (DELEGATE_REVIEWER_CONTEXT_FILE_FIELD): null,
       (DELEGATE_KEEP_WORKTREE_FIELD): request.keep_worktree,
+      (DELEGATE_CONTEXT_WORK_FIELD): request.context_work,
       (DELEGATE_BACKEND_FIELD): request.backend,
     });
   }
@@ -298,6 +308,7 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
       .get(DELEGATE_REVIEWER_CONTEXT_FILE_FIELD)
       .filter(|value| !value.is_null()),
     (DELEGATE_KEEP_WORKTREE_FIELD): invocation.get(DELEGATE_KEEP_WORKTREE_FIELD),
+    (DELEGATE_CONTEXT_WORK_FIELD): invocation.get(DELEGATE_CONTEXT_WORK_FIELD).filter(|value| !value.is_null()),
     (DELEGATE_BACKEND_FIELD): invocation.get(DELEGATE_BACKEND_FIELD).filter(|value| !value.is_null()),
   })
 }
@@ -339,8 +350,21 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(pool) => pool,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let strong_backend = match (request.context_work, cfg.backends.strong.as_deref()) {
+    (true, None) => {
+      return responses::json(
+        StatusCode::BAD_REQUEST,
+        &json!({ "detail": "context work runs on backends.strong, which config.yaml does not set" }),
+      );
+    }
+    (true, Some(strong)) => Some(strong),
+    (false, _) => None,
+  };
+  // An explicit --backend names the backend; context work without one takes backends.strong. A named backend skips
+  // the router and the pool.
+  let named_backend = request.backend.as_deref().or(strong_backend);
   let mut route = None;
-  let routed = if request.backend.is_none()
+  let routed = if named_backend.is_none()
     && matches!(request.task_type, TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun | TaskType::Verify)
     && cfg.backends.routing.is_some()
   {
@@ -386,7 +410,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   };
   let resolved = if let Some(routed) = routed {
     Ok(Some(routed))
-  } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && request.backend.is_none() {
+  } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && named_backend.is_none() {
     crate::spawner_backends::select_verify_backend(
       &cfg,
       &features.store,
@@ -407,7 +431,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       &cfg,
       &features.store,
       &request.session_id,
-      request.backend.as_deref(),
+      named_backend,
       request.task_type.into(),
       &pool,
     )
@@ -748,7 +772,7 @@ fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageReq
 }
 
 /// The agent relay behind `charliebot session send`: one `agent_message` admitted into the target session, then
-/// dispatched (`src/runtime/api/internal.py` `session_message`). An over-limit message is refused before any lookup.
+/// dispatched. An over-limit message is refused before any lookup.
 async fn session_message(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -988,7 +1012,7 @@ async fn cancel_run(
   )
 }
 
-/// The POST /api/sessions/{session_id}/archive body model (`src/infra/models.py::ArchiveTaskRequest`).
+/// The POST /api/sessions/{session_id}/archive body model.
 const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::optional("summary", FieldType::String),
@@ -997,20 +1021,20 @@ const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::optional(ARCHIVE_NON_CHILD_FIELD, FieldType::Boolean),
 ]);
 
-/// The POST /api/sessions/{session_id}/cancel body model (`src/infra/models.py::CancelTaskRequest`).
+/// The POST /api/sessions/{session_id}/cancel body model.
 const CANCEL_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::required("reason", FieldType::String),
 ]);
 
-/// The task-inputs/acknowledge body model (`src/infra/models.py::AcknowledgeTaskInputsRequest`).
+/// The task-inputs/acknowledge body model.
 const ACKNOWLEDGE_TASK_INPUTS_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::required("input_ids", FieldType::StringList),
   Field::optional("note", FieldType::String),
 ]);
 
-/// Read the body first, then the session and caller dependencies, as FastAPI resolves a body-bearing route.
+/// Read the body first, then the session and caller dependencies.
 #[allow(clippy::result_large_err)]
 async fn body_session_caller(
   features: &Arc<FeatureContext>,
@@ -1333,7 +1357,7 @@ mod tests {
     }
   }
 
-  /// Assert the 202 body Python returns for a valid chat message when no executor launches a run.
+  /// Assert the 202 body returned for a valid chat message when no executor launches a run.
   async fn assert_accepted(response: Response) {
     let status = response.status();
     let body = response_json(response).await;
@@ -1485,7 +1509,7 @@ mod tests {
   async fn task_routes_refuse_head_and_put_and_serve_post() {
     let (_home, features) = feature_context();
     let router = routes(&features);
-    // Python: src/runtime/api/sessions.py:1747-1823 resolves the session dependency before the caller, so
+    // The session dependency resolves before the caller, so
     // the four completion routes answer 404 for an unknown session before any credential check.
     let route_cases = [
       ("/api/chat/synthetic-session/message", r#"{"content":"synthetic message"}"#, StatusCode::NOT_FOUND),
@@ -1531,7 +1555,7 @@ mod tests {
       assert_eq!(post.status(), expected_status, "POST {path} must reach its handler");
     }
 
-    // The removed close route is absent, as Python's archive-only contract leaves it.
+    // The removed close route is absent.
     let removed =
       send(&router, Method::POST, "/api/sessions/synthetic-session/complete", r#"{"request_id":"gone"}"#).await;
     assert_eq!(removed.status(), StatusCode::NOT_FOUND);
@@ -1552,7 +1576,6 @@ mod tests {
 
   #[tokio::test]
   async fn delegate_field_contract_and_unknown_session_match_recorded() {
-    // Python: tests/test_task_execution.py::test_delegate_creates_one_child_and_replays_are_stable.
     let (_home, features) = feature_context();
     let router = routes(&features);
     let missing_cold_read = send_operator(
@@ -1585,7 +1608,6 @@ mod tests {
 
   #[tokio::test]
   async fn delegate_checks_the_runtime_gate_before_creating_a_child() {
-    // Python: tests/test_task_manager_authorization.py::test_implementation_blocked_until_real_user_authorizes_then_delegates_from_depth.
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-manager").await;
     let before_children = features.store.child_ids("synthetic-manager").unwrap();
@@ -1715,9 +1737,9 @@ mod tests {
 
   #[tokio::test]
   async fn send_message_model_reads_valid_utf16_and_defaulted_fields() {
-    // Python: src/runtime/api/chat.py:48-80 answers 202 for a valid body; without an executor the
+    // A valid body answers 202; without an executor the
     // dispatch records "execution adapters register in the next stage"
-    // (src/runtime/session_dispatch.py:430-502), so the body carries launch false with that reason.
+    // so the body carries launch false with that reason.
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-session").await;
     install_dispatcher(&features);
@@ -1727,12 +1749,12 @@ mod tests {
     let response = send_operator(&router, path, valid.as_bytes().to_vec(), Some("application/json")).await;
     assert_accepted(response).await;
 
-    // Python: src/infra/models.py:635 defaults uploaded_files to an empty list when the key is absent.
+    // An absent uploaded_files key defaults to an empty list.
     let utf16 = utf16le_json(r#"{"content":"synthetic UTF-16 message","request_id":"synthetic-send-2"}"#);
     let response = send_operator(&router, path, utf16, Some("application/json")).await;
     assert_accepted(response).await;
 
-    // Python: SendMessageRequest ignores extra keys (pydantic's default extra behavior).
+    // Extra keys in the body are ignored.
     let response = send_operator(
       &router,
       path,
@@ -1742,7 +1764,7 @@ mod tests {
     .await;
     assert_accepted(response).await;
 
-    // Python: src/infra/models.py:635 accepts two files, and UploadedFileRef ignores an item's extra keys.
+    // Two files are accepted, and an uploaded file ignores its extra keys.
     let two_files = r#"{"content":"synthetic message","request_id":"synthetic-send-4","uploaded_files":[{"filename":"first.txt","path":"/tmp/first.txt","size":2},{"filename":"second.txt","path":"/tmp/second.txt","unknown":1}]}"#;
     let response = send_operator(&router, path, two_files.as_bytes().to_vec(), Some("application/json")).await;
     assert_accepted(response).await;
@@ -1750,8 +1772,7 @@ mod tests {
 
   #[tokio::test]
   async fn send_message_reports_every_uploaded_file_error_with_the_content_error() {
-    // Python: src/infra/models.py:630-640 validates content and each uploaded_files item in declaration
-    // order, so a wrong content and a bad item give two errors in one 422 body.
+    // Fields are validated in declaration order, so a wrong content and a bad item give two errors in one 422 body.
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-session").await;
     let router = routes(&features);
@@ -1771,8 +1792,7 @@ mod tests {
     assert_eq!(body["detail"][1]["type"], "string_type");
     assert_eq!(body["detail"][1]["loc"], json!(["body", "uploaded_files", 0, "filename"]));
 
-    // Python: a non-list uploaded_files reports list_type at the field
-    // (pydantic's list check runs before the items).
+    // A non-list uploaded_files reports list_type at the field: the list check runs before the items.
     assert_validation(
       send_operator(
         &router,
@@ -1786,8 +1806,8 @@ mod tests {
     )
     .await;
 
-    // Python: a non-object item reports model_attributes_type at its index, with no trailing field
-    // (FastAPI validates each list item as the model).
+    // A non-object item reports model_attributes_type at its index, with no trailing field: each list item is
+    // validated as the model.
     assert_validation(
       send_operator(
         &router,
@@ -1801,7 +1821,7 @@ mod tests {
     )
     .await;
 
-    // Python: UploadedFileRef requires path (src/infra/models.py:631-633).
+    // An uploaded file requires path.
     assert_validation(
       send_operator(
         &router,
@@ -2042,7 +2062,7 @@ mod tests {
       json!(["body", "extra"]),
     )
     .await;
-    // pydantic reports the field error and the extra key together, fields first.
+    // The body validator reports the field error and the extra key together, fields first.
     let response =
       send_operator(&router, path, br#"{"request_id":1,"run_id":"x","extra":true}"#.to_vec(), Some("application/json"))
         .await;
@@ -2125,7 +2145,7 @@ mod tests {
       json!(["body", "extra"]),
     )
     .await;
-    // pydantic reports the field error and the extra key together, fields first.
+    // The body validator reports the field error and the extra key together, fields first.
     let response =
       send_operator(&router, path, br#"{"request_id":1,"extra":true}"#.to_vec(), Some("application/json")).await;
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);

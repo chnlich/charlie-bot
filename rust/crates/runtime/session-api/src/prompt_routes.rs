@@ -1,5 +1,4 @@
-//! The prompt-inspection routes: the next-start preview of a task and the stored context of one past run
-//! (`get_effective_prompt` and `get_run_context` in `src/runtime/api/sessions.py`).
+//! The prompt-inspection routes: the next-start preview of a task and the stored context of one past run.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::route_support::store_error;
 
-/// `EMPTY_BACKENDS_OPTIONS_REFUSAL` (`src/runtime/spawner_backends.py:46`): a preview refuses a config with no backend.
+/// `EMPTY_BACKENDS_OPTIONS_REFUSAL`: a preview refuses a config with no backend.
 const EMPTY_BACKENDS_OPTIONS_REFUSAL: &str = "session backend resolution requires a configured backends.options entry";
 
 /// The two prompt routes below `/api/sessions`.
@@ -41,7 +40,7 @@ pub(crate) fn matches(path: &str) -> bool {
 }
 
 /// `GET /api/sessions/{session_id}/effective-prompt`: the snapshot-shaped preview of the next start of a task node.
-/// The checks run in the Python handler's order: the session, the run kind, the backend, then the assembly.
+/// The checks run in this order: the session, the run kind, the backend, then the assembly.
 async fn effective_prompt(
   State(features): State<Arc<FeatureContext>>,
   Path(session_id): Path<String>,
@@ -55,7 +54,7 @@ async fn effective_prompt(
     TaskProfile::Manager => "manager_turn",
     TaskProfile::Worker => "work",
   };
-  // Python's `kind or default_kind`: an empty `kind` selects the default.
+  // An empty `kind` selects the default.
   let kind = match params.get("kind").filter(|kind| !kind.is_empty()) {
     Some(kind) if !is_run_kind(kind) => {
       return detail(StatusCode::BAD_REQUEST, format!("unknown run kind: {}", str_repr(kind)));
@@ -110,7 +109,7 @@ async fn effective_prompt(
       "error": coherent.overlay_error.as_ref().map(|error| error.class_name()),
     },
   });
-  // Python's `payload.update(snapshot)`: the snapshot's keys join the envelope.
+  // The snapshot's keys join the envelope.
   let Value::Object(snapshot) = coherent.snapshot.to_json_dict() else {
     unreachable!("a prompt snapshot serializes to an object")
   };
@@ -135,12 +134,12 @@ async fn run_context(
   }
 }
 
-/// `src/infra/models.py` `RunKind`: the manager kinds and the worker kinds make up the literal together.
+/// The run kinds: the manager kinds and the worker kinds make up the literal together.
 fn is_run_kind(kind: &str) -> bool {
   prompts::MANAGER_KINDS.contains(&kind) || prompts::WORKER_KINDS.contains(&kind)
 }
 
-/// FastAPI's `HTTPException(status, detail=text)` answer: the status and `{"detail": text}`.
+/// The error answer: the status and `{"detail": text}`.
 fn detail(status: StatusCode, text: impl Into<String>) -> Response {
   responses::json(status, &json!({"detail": text.into()}))
 }

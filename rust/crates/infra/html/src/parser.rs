@@ -1,4 +1,4 @@
-//! HTMLParser callback events with Python code-point positions and UTF-8 byte offsets.
+//! HTML tokenizer events with code-point positions and UTF-8 byte offsets.
 
 use std::error::Error;
 use std::fmt;
@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use crate::entities::{unescape, unescape_attribute};
 
-// These patterns port tagfind_tolerant, attrfind_tolerant, and locatetagend from CPython.
-// ATTRFIND and LOCATETAGEND retain the fixed-width lookbehind at attribute boundaries.
+// The tag, attribute and tag-end patterns. ATTRFIND and LOCATETAGEND retain the fixed-width lookbehind at
+// attribute boundaries.
 static TAGFIND_TOLERANT: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"([a-zA-Z][^\t\n\r\x0c />]*)(?:[\t\n\r\x0c ]|/(?!>))*").expect("valid tagfind_tolerant pattern")
 });
@@ -36,14 +36,14 @@ static LOCATETAGEND: LazyLock<Regex> = LazyLock::new(|| {
   .expect("valid locatetagend pattern")
 });
 
-/// A one-based line and zero-based Unicode code-point column from `HTMLParser.getpos()`.
+/// A one-based line and zero-based Unicode code-point column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Position {
   pub line: usize,
   pub column: usize,
 }
 
-/// The `HTMLParser` callback represented by an event.
+/// The kind of an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -79,7 +79,7 @@ pub struct StreamEvent {
   pub starttag_text: Option<String>,
 }
 
-/// A Python exception category and message produced while tokenizing a document.
+/// An error category and message produced while tokenizing a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
   pub exception: String,
@@ -185,7 +185,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
         if let Some(position) = self.source[i..].find('<') {
           Some(i + position)
         } else {
-          // CPython's n-34 tail window counts Unicode code points, while this scanner uses byte offsets.
+          // The n-34 tail window counts Unicode code points, while this scanner uses byte offsets.
           let tail_start = i.max(char_offset_from_end(self.source, 34));
           let amp = self.source[tail_start..].rfind('&').map(|position| tail_start + position);
           if amp.is_some_and(|position| !self.source[position..].chars().skip(1).any(is_reference_delimiter)) {
@@ -475,7 +475,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
   }
 
   fn parse_html_declaration(&mut self, i: usize) -> Option<usize> {
-    // HTMLParser dispatches declarations here; ParserBase.parse_declaration is not its declaration path.
+    // Declarations are dispatched here rather than through the general declaration path.
     let tail = &self.source[i..];
     if !tail.starts_with("<!") {
       return None;
@@ -516,7 +516,7 @@ struct SourcePositions {
 
 impl SourcePositions {
   fn new(source: &str) -> Self {
-    // `HTMLParser.getpos()` measures a column from its line's first character, so `line_starts` records one
+    // A column is measured from its line's first character, so `line_starts` records one
     // start offset per line.
     let line_count = source.bytes().filter(|byte| *byte == b'\n').count() + 1;
     let mut line_starts = Vec::with_capacity(line_count);

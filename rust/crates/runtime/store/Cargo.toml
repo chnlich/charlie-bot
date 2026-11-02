@@ -8,7 +8,6 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 bytes.workspace = true
-charliebot-compat.workspace = true
 charliebot-core.workspace = true
 lru.workspace = true
 memchr.workspace = true
@@ -28,7 +27,7 @@ uuid.workspace = true
 write-faults = []
 
 [dev-dependencies]
-# The cross-implementation task-tree tests drive the completion owner that now writes archive facts.
+# The task-tree tests drive the completion owner that now writes archive facts.
 charliebot-registry.workspace = true
 charliebot-shell-harness.workspace = true
 charliebot-tasks.workspace = true

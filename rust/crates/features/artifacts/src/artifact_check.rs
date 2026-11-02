@@ -39,8 +39,7 @@ const TRACKER_ID_NEARBY: &str = user_text_checks::TRACKER_ID_NEARBY;
 const SESSION_LINKED: &str = user_text_checks::SESSION_LINKED;
 const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 
-/// The registered genres in the order the parser states them. Python's `constants.ARTIFACT_GENRES` lists the first
-/// five; `waiting` exists only here.
+/// The registered genres in the order the parser states them; `waiting` exists only here.
 pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
 
 const GOAL_WEIGHTED_BUDGET: usize = 240;
@@ -87,16 +86,16 @@ const ORDINAL_BLOCK_TAGS: &[&str] =
 const ORDINAL_SKIP_TAGS: &[&str] = &["style", "script", "pre"];
 const EXPLAINER_BODY_TAGS: &[&str] = &["li", "p", "table", "pre"];
 
-/// `_FACT_ANCESTOR_TAGS`: a fact label's block, which must also carry a `span.src`.
+/// A fact label's block, which must also carry a `span.src`.
 const FACT_ANCESTOR_TAGS: &[&str] = &["p", "li", "td", "blockquote", "h3"];
-/// `_REQ_BLOCK_TAGS`: the blocks that can hold a requirement chip's gloss.
+/// The blocks that can hold a requirement chip's gloss.
 const REQ_BLOCK_TAGS: &[&str] = &["p", "li", "td", "th", "dt", "dd", "blockquote", "h1", "h2", "h3", "h4"];
-/// `_REQ_START` / `_REQ_END`: the sentinels that fence a requirement chip inside its block's text.
+/// The sentinels that fence a requirement chip inside its block's text.
 const REQ_START: char = '\u{0003}';
 const REQ_END: char = '\u{0004}';
-/// `_SENTENCE_END_RE`: the terminators that end the sentence holding a requirement chip.
+/// The terminators that end the sentence holding a requirement chip.
 const SENTENCE_END: [char; 5] = ['.', '。', '!', '?', '！'];
-/// `_KATEX_*_HINT`: the math render path's resource names.
+/// The math render path's resource names.
 const KATEX_CSS_HINT: &str = "katex.min.css";
 const KATEX_JS_HINT: &str = "katex.min.js";
 const KATEX_AUTO_RENDER_HINT: &str = "auto-render.min.js";
@@ -124,7 +123,7 @@ pub(crate) fn genre_template(genre: &str) -> &'static str {
   }
 }
 
-/// `_SECTION_COUNT_RULES`: the numbered-h2 count per genre, and whether it is exact.
+/// The numbered-h2 count per genre, and whether it is exact.
 fn section_count_rule(genre: &str) -> (usize, bool) {
   match genre {
     "plan" => (6, true),
@@ -135,7 +134,7 @@ fn section_count_rule(genre: &str) -> (usize, bool) {
   }
 }
 
-/// `_ASSERTION_SETS`: the assertions of one genre, in the order their outcomes print.
+/// The assertions of one genre, in the order their outcomes print.
 fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
   match genre {
     "plan" => Some(&[
@@ -286,7 +285,7 @@ pub struct AssertionOutcome {
 struct Element {
   tag: String,
   classes: HashSet<String>,
-  /// Every attribute's raw value; a bare attribute is `None`, as Python's parser reports it.
+  /// Every attribute's raw value; a bare attribute is `None`.
   attrs: HashMap<String, Option<String>>,
   parent: Option<usize>,
   children: Vec<Child>,
@@ -999,8 +998,8 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
   }
 }
 
-/// The inner error is a renderer failure, which Python reports as a failed assertion. Any other error,
-/// such as a probe that cannot be written, propagates as Python's `OSError` does.
+/// The inner error is a renderer failure; the check reports it as a failed assertion. Any other error,
+/// such as a probe that cannot be written, propagates and fails the check run.
 fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<Result<i32, String>> {
   let probe = artifact
     .parent()
@@ -1293,7 +1292,7 @@ fn trim_chars<'a>(text: &'a str, characters: &str) -> &'a str {
   text.trim_matches(|character| characters.contains(character))
 }
 
-/// `_presence_check`: the page carries a `tag` with these classes.
+/// The page carries a `tag` with these classes.
 fn check_explain_triad(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   if find(&context.nodes, 0, "div", &["triad"]).is_empty() {
     Ok(vec![outcome(EXPLAIN_TRIAD, false, "no div.triad on the page")])
@@ -1394,7 +1393,7 @@ fn check_explain_examples(context: &Context<'_>) -> anyhow::Result<Vec<Assertion
   if failures.is_empty() { Ok(vec![outcome(EXPLAIN_EXAMPLES, true, "")]) } else { Ok(failures) }
 }
 
-/// `_check_fact_anchored`: every `span.tag.fact` label sits in a block that also carries a `span.src`.
+/// Every `span.tag.fact` label sits in a block that also carries a `span.src`.
 fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let mut failures = Vec::new();
   for (index, fact) in find(&context.nodes, 0, "span", &["tag", "fact"]).into_iter().enumerate() {
@@ -1428,12 +1427,12 @@ fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
   if failures.is_empty() { Ok(vec![outcome(FACT_ANCHORED, true, "")]) } else { Ok(failures) }
 }
 
-/// `_has_readable_text`: the text carries a Unicode letter or digit; punctuation alone is not a gloss.
+/// The text carries a Unicode letter or digit; punctuation alone is not a gloss.
 fn has_readable_text(text: &str) -> bool {
   text.chars().any(str_methods::is_alphanumeric)
 }
 
-/// `_marked_element_text`: the block's text with the target element fenced by the requirement sentinels, so the text
+/// The block's text with the target element fenced by the requirement sentinels, so the text
 /// after the chip is unambiguous.
 fn marked_element_text(nodes: &[Element], element: usize, target: usize) -> String {
   fn walk(nodes: &[Element], element: usize, target: usize, output: &mut String) {
@@ -1454,7 +1453,7 @@ fn marked_element_text(nodes: &[Element], element: usize, target: usize) -> Stri
   output
 }
 
-/// `_check_req_chips`: each `span.req` chip carries a gloss, readable text after the chip in the sentence that holds
+/// Each `span.req` chip carries a gloss, readable text after the chip in the sentence that holds
 /// it, before that sentence's terminator.
 fn check_req_chips(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let chips = find(&context.nodes, 0, "span", &["req"]);
@@ -1501,7 +1500,7 @@ fn check_req_chips(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome
   }
 }
 
-/// `_table_rows`: one text chunk per td/th cell of each row descendant.
+/// One text chunk per td/th cell of each row descendant.
 fn table_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
   let mut rows = Vec::new();
   for row in find(nodes, block, "tr", &[]) {
@@ -1522,7 +1521,7 @@ fn table_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
   rows
 }
 
-/// `_dl_rows`: one chunk list per dl entry, the dt text followed by the dd texts that belong to it.
+/// One chunk list per dl entry, the dt text followed by the dd texts that belong to it.
 fn dl_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
   let mut rows = Vec::new();
   let mut chunks: Option<Vec<String>> = None;
@@ -1544,7 +1543,7 @@ fn dl_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
   rows
 }
 
-/// `_run_row_role`: `held` or `changed` when a row names that role and carries readable text besides it.
+/// `held` or `changed` when a row names that role and carries readable text besides it.
 fn run_row_role(chunks: &[String]) -> Option<&'static str> {
   for (role, pattern) in [("held", &*RUN_HELD_RE), ("changed", &*RUN_CHANGED_RE)] {
     for (index, chunk) in chunks.iter().enumerate() {
@@ -1566,7 +1565,7 @@ fn run_row_role(chunks: &[String]) -> Option<&'static str> {
   None
 }
 
-/// `_check_run_stated`: a page that shows a decimal in a table cell states its run's changed and held-fixed factors,
+/// A page that shows a decimal in a table cell states its run's changed and held-fixed factors,
 /// in another table or in a dl.
 fn check_run_stated(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let mut cells = find(&context.nodes, 0, "td", &[]);
@@ -1627,7 +1626,7 @@ fn check_run_stated(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcom
   )])
 }
 
-/// `_check_render_path`: pre-rendered `class="katex"` markup, or the full KaTeX script injection.
+/// Pre-rendered `class="katex"` markup, or the full KaTeX script injection.
 fn check_render_path(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let all = descendants(&context.nodes, 0);
   if all.iter().any(|&element| context.nodes[element].classes.contains("katex")) {
@@ -1762,7 +1761,7 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates the fork assertions, so those outcomes have no recorded Python counterpart to compare
+      // The fixture predates the fork assertions, so those outcomes have no recorded counterpart to compare
       // with.
       let actual = outcomes
         .iter()
@@ -2381,7 +2380,7 @@ mod tests {
     assert_eq!(failures, [SECTIONS_NUMBERED, FOOT_PRESENT].into_iter().collect());
   }
 
-  /// `tests/core/test_artifact_check.py::_genre_doc`: the genre template's `<style>` block verbatim plus `body`.
+  /// A page in the genre's template: the `<style>` block verbatim plus `body`.
   fn genre_doc(genre: &str, body: &str) -> String {
     let template = fs::read_to_string(repo_root().join("prompts").join(genre_template(genre))).unwrap();
     let start = template.find("<style>").expect("the template carries a style block");
@@ -2389,7 +2388,7 @@ mod tests {
     format!("<html><head>{}</head><body>{body}</body></html>", &template[start..end])
   }
 
-  /// `tests/core/test_artifact_check.py::_sitrep_ok_doc`: a sitrep page that passes every sitrep assertion.
+  /// A sitrep page that passes every sitrep assertion.
   fn sitrep_ok_doc() -> String {
     genre_doc(
       "sitrep",
@@ -2411,7 +2410,7 @@ mod tests {
     "<tbody><tr><td>10</td><td>0.002378</td></tr></tbody></table>",
   );
 
-  /// `tests/core/test_artifact_check.py::_sitrep_run_doc`: the sitrep page with a measured table and `variable_block`.
+  /// The sitrep page with a measured table and `variable_block`.
   fn sitrep_run_doc(variable_block: &str) -> String {
     sitrep_ok_doc().replace(
       r#"<p>Done. <span class="src">s</span></p>"#,

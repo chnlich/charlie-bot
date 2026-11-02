@@ -1,7 +1,7 @@
-//! FastAPI request-body reading and pydantic model validation.
+//! Request-body reading and typed model validation.
 //!
 //! A route reads the body before resolving dependencies, then validates the model after them. The reader preserves
-//! raw bytes unless the strict content-type rule selects JSON; JSON bytes use CPython-compatible decoding.
+//! raw bytes unless the strict content-type rule selects JSON; JSON bytes use the JSON loader's decoding.
 //!
 //! ```ignore
 //! async fn update(request: Request<Body>) -> Response {
@@ -24,33 +24,32 @@
 
 //! ## Model options
 //!
-//! `BodyModel::forbid_extra()` matches pydantic's `extra='forbid'`. A `Field` accepts `ge`, `gt` and `le` bounds
+//! `BodyModel::forbid_extra()` makes an undeclared key an error. A `Field` accepts `ge`, `gt` and `le` bounds
 //! for integer and float fields, and `min_length` and `max_length` bounds for string and list fields. Number bounds
 //! must use the corresponding `validation::Bound` variant. A bound applies only when an optional field has a value.
 //!
-//! The error order follows pydantic 2.12.5 (pydantic-core 2.41.5 in the worktree `.venv`): declared fields in
-//! declaration order, then forbidden extra keys in input order. A number that violates multiple bounds reports the
-//! first violated bound in the order `le`, `ge`, `gt`. Lists report `max_length` before their items and
-//! `min_length` after their items.
+//! The error order: declared fields in declaration order, then forbidden extra keys in input order. A number that
+//! violates multiple bounds reports the first violated bound in the order `le`, `ge`, `gt`. Lists report `max_length`
+//! before their items and `min_length` after their items.
 //!
 //! `FieldType::ModelList` declares a `list[M]` field and `FieldType::NullableModelList` a `list[M] | None` field. Each
-//! item is validated as the model `M`. FastAPI validates bodies with `from_attributes`, so a non-object item reports
-//! `model_attributes_type` at its index, with no context. An item's own errors sit under its index, in the same order
-//! as a top-level model's (fields, then extra keys). A value that is not a list reports `list_type` at the field; only
+//! item is validated as the model `M`. A non-object item reports `model_attributes_type` at its index, with no
+//! context. An item's own errors sit under its index, in the same order as a top-level model's (fields, then extra
+//! keys). A value that is not a list reports `list_type` at the field; only
 //! the nullable type takes null. The validated list holds each item as a validated object, and a missing optional item
 //! field stays absent.
 //!
 //! `FieldType::NullableTaggedUnionList` declares a `list[A | B | C] | None` field whose items are discriminated on
-//! one key, as pydantic's `Field(discriminator=...)` does.
+//! one key.
 //! Each `TaggedVariant` maps a tag value to its member model, which declares the discriminator as a `Literal` of that
 //! tag, so the validated item keeps its tag. A non-object item reports `model_attributes_type` at its index. An object
 //! without the discriminator key reports `union_tag_not_found` at its index, and one whose tag matches no variant
-//! reports `union_tag_invalid` there, with the tag's Python `str()`. A member's own errors sit under `[index, tag]`: a
+//! reports `union_tag_invalid` there, with the tag's text rendering. A member's own errors sit under `[index, tag]`: a
 //! bad `pid` in a `local_pid` item at index 0 reports `["body", "watch_targets", 0, "local_pid", "pid"]`. The field
 //! follows the `ModelList` rules for a non-list value, for null and for the list's bounds.
 //!
-//! `RequestBody::check` returns the ordered `FieldError`s; `validate` wraps them in FastAPI's 422 response. A missing
-//! optional field stays absent from the returned object so the handler applies the Python default.
+//! `RequestBody::check` returns the ordered `FieldError`s; `validate` wraps them in the 422 response. A missing
+//! optional field stays absent from the returned object so the handler applies the field's default.
 
 use std::cmp::Ordering;
 
@@ -61,10 +60,11 @@ use charliebot_core::text_repr;
 use http::{HeaderMap, StatusCode, header};
 use serde_json::{Map, Number, Value, json};
 
-use crate::json_loads::{self, LoadFailure};
+use charliebot_core::json_loads::{self, LoadFailure};
+
 use crate::{responses, validation};
 
-/// The result of FastAPI's body read: no bytes, parsed JSON, or untouched bytes.
+/// The result of the body read: no bytes, parsed JSON, or untouched bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RequestBody {
   Absent,
@@ -72,7 +72,7 @@ pub enum RequestBody {
   Raw(Bytes),
 }
 
-/// Read the request body with FastAPI's default strict content-type behavior.
+/// Read the request body with the strict content-type rule.
 pub async fn read(headers: &HeaderMap, body: Body) -> Result<RequestBody, Box<Response>> {
   let raw = match to_bytes(body, usize::MAX).await {
     Ok(raw) => raw,
@@ -107,7 +107,7 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<RequestBody, Box<Re
   }
 }
 
-/// True when `email.message.Message` would select JSON for this content type.
+/// True when the media type is `application/json` or `application/*+json`, compared case-insensitively.
 pub fn is_json_content_type(value: &str) -> bool {
   let media_type = value.split(';').next().unwrap_or_default().trim();
   let mut components = media_type.split('/');
@@ -124,7 +124,7 @@ pub fn is_json_content_type(value: &str) -> bool {
     && (sub_type.eq_ignore_ascii_case("json") || sub_type.to_ascii_lowercase().ends_with("+json"))
 }
 
-/// A field type supported by the request models in the Python API. Equality is not derived: a nested model holds a
+/// A field type supported by the request models. Equality is not derived: a nested model holds a
 /// `ModelCheck` function pointer, which has no meaningful comparison.
 #[derive(Debug, Clone, Copy)]
 pub enum FieldType {
@@ -134,11 +134,11 @@ pub enum FieldType {
   NullableInteger,
   NullableFloat,
   Boolean,
-  /// A `dict` field whose keys and values are unconstrained.
+  /// A mapping field whose keys and values are unconstrained.
   Dictionary,
   Literal(&'static [&'static str]),
   NullableLiteral(&'static [&'static str]),
-  /// A `StrEnum` field: pydantic's `enum` error names the choices.
+  /// A `StrEnum` field: the `enum` error names the choices.
   Enum(&'static [&'static str]),
   NullableEnum(&'static [&'static str]),
   StringList,
@@ -148,7 +148,7 @@ pub enum FieldType {
     class_name: &'static str,
     model: &'static BodyModel,
   },
-  /// A `list[M]` field whose items are each validated as the nested model `M`. FastAPI reports a non-object item as
+  /// A `list[M]` field whose items are each validated as the nested model `M`. A non-object item reports
   /// `model_attributes_type`, which names no model.
   ModelList {
     model: &'static BodyModel,
@@ -157,8 +157,8 @@ pub enum FieldType {
   NullableModelList {
     model: &'static BodyModel,
   },
-  /// A `list[A | B | C] | None` field discriminated on `discriminator`, as pydantic's `Field(discriminator=...)`
-  /// does: null is valid, and each item of a list is validated as the variant whose tag it carries.
+  /// A `list[A | B | C] | None` field discriminated on `discriminator`: null is valid, and each item of a list is
+  /// validated as the variant whose tag it carries.
   NullableTaggedUnionList {
     discriminator: &'static str,
     variants: &'static [TaggedVariant],
@@ -225,36 +225,36 @@ impl Field {
     Self { name, field_type, required: true, bounds: Bounds::NONE }
   }
 
-  /// Declare a field whose Python model has a default.
+  /// Declare a field with a default.
   pub const fn optional(name: &'static str, field_type: FieldType) -> Self {
     Self { name, field_type, required: false, bounds: Bounds::NONE }
   }
 
-  /// Declare pydantic's `gt`: the value must be greater than the bound.
+  /// The value must be greater than the bound.
   pub const fn gt(self, bound: validation::Bound) -> Self {
     assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
     Self { bounds: Bounds { gt: Some(bound), ..self.bounds }, ..self }
   }
 
-  /// Declare pydantic's `ge`: the value must be at least the bound.
+  /// The value must be at least the bound.
   pub const fn ge(self, bound: validation::Bound) -> Self {
     assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
     Self { bounds: Bounds { ge: Some(bound), ..self.bounds }, ..self }
   }
 
-  /// Declare pydantic's `le`: the value must be at most the bound.
+  /// The value must be at most the bound.
   pub const fn le(self, bound: validation::Bound) -> Self {
     assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
     Self { bounds: Bounds { le: Some(bound), ..self.bounds }, ..self }
   }
 
-  /// Declare pydantic's `min_length`: a string has at least this many characters, a list at least this many items.
+  /// A string has at least this many characters, a list at least this many items.
   pub const fn min_length(self, min_length: usize) -> Self {
     assert!(self.field_type.takes_length_bound(), "min_length applies to a string or list field");
     Self { bounds: Bounds { min_length: Some(min_length), ..self.bounds }, ..self }
   }
 
-  /// Declare pydantic's `max_length`: a string has at most this many characters, a list at most this many items.
+  /// A string has at most this many characters, a list at most this many items.
   pub const fn max_length(self, max_length: usize) -> Self {
     assert!(self.field_type.takes_length_bound(), "max_length applies to a string or list field");
     Self { bounds: Bounds { max_length: Some(max_length), ..self.bounds }, ..self }
@@ -271,14 +271,14 @@ pub enum BodyRequirement {
 /// Whether a model keeps the keys it does not declare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtraKeys {
-  /// pydantic's default `extra="ignore"`: an undeclared key is dropped.
+  /// An undeclared key is dropped.
   Ignore,
   /// `extra="forbid"`: each undeclared key is an `extra_forbidden` error.
   Forbid,
 }
 
 /// A model validator. It runs on the validated values once every field passes, and returns the message of the
-/// `ValueError` it raises, or `None` when the values are valid.
+/// error it raises, or `None` when the values are valid.
 pub type ModelCheck = fn(&Map<String, Value>) -> Option<String>;
 
 /// A request model's fields, body-parameter requirement, extra-key policy and model validator.
@@ -320,10 +320,10 @@ impl BodyModel {
 }
 
 impl RequestBody {
-  /// Validate this body against a model and return its declared fields, or the errors FastAPI reports for it.
+  /// Validate this body against a model and return its declared fields, or the errors for it.
   pub fn check(&self, model: &BodyModel) -> Result<Option<Value>, Vec<validation::FieldError>> {
     match self {
-      // FastAPI passes a JSON `null` body as None, which a required model reports as missing.
+      // A JSON `null` body reads as None, which a required model reports as missing.
       RequestBody::Absent | RequestBody::Json(Value::Null) => match model.requirement {
         BodyRequirement::Required => Err(vec![body_missing_error()]),
         BodyRequirement::Optional => Ok(None),
@@ -337,7 +337,7 @@ impl RequestBody {
     }
   }
 
-  /// Validate this body against a model: its declared fields, or FastAPI's 422 response.
+  /// Validate this body against a model: its declared fields, or the 422 response.
   pub fn validate(&self, model: &BodyModel) -> Result<Option<Value>, Box<Response>> {
     self.check(model).map_err(|errors| Box::new(validation::response(&errors)))
   }
@@ -450,7 +450,7 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
 }
 
 /// A `list[M]` field: each item is an object validated as `model`. A non-object item reports `model_attributes_type`
-/// at its index, as FastAPI's body validation does.
+/// at its index.
 fn model_list(
   field: &Field,
   value: &Value,
@@ -516,7 +516,7 @@ fn string_item(item: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<valid
   Err(vec![validation::FieldError { loc: loc.to_vec(), input: item.clone(), kind: validation::Kind::StringType }])
 }
 
-/// A list field. pydantic checks `max_length` before the items and `min_length` after them, and a list with an
+/// A list field. `max_length` is checked before the items and `min_length` after them, and a list with an
 /// invalid item reports only the items' errors. `item` validates each item at its index; the list holds the items'
 /// validated values in order.
 fn list_field(
@@ -558,7 +558,7 @@ fn list_field(
 impl Bounds {
   /// The first bound that a scalar value violates, or `None` when it passes. A null passes every bound.
   ///
-  /// A number is compared in its bound's type. Pydantic reports `le`, then `ge` and `gt`.
+  /// A number is compared in its bound's type. The bound order is `le`, then `ge` and `gt`.
   fn violation(&self, value: &Value) -> Option<validation::Kind> {
     match value {
       Value::String(text) => {
@@ -599,7 +599,7 @@ impl Bounds {
 }
 
 /// How a validated number compares with a bound. An integer field compares exactly, as i128. A float field compares
-/// as f64, where `-0.0` equals `0.0`, as in pydantic.
+/// as f64, where `-0.0` equals `0.0`.
 fn order(number: &Number, bound: validation::Bound) -> Ordering {
   match bound {
     validation::Bound::Int(bound) => {
@@ -646,7 +646,7 @@ fn integer_value(value: &Value, nullable: bool) -> Result<Value, validation::Kin
   }
 }
 
-/// A float field's value, read as pydantic's lax mode reads it: a number, a boolean or a numeric string.
+/// A float field's value in lax mode: a number, a boolean or a numeric string.
 fn float_value(value: &Value, nullable: bool) -> Result<Value, validation::Kind> {
   if value.is_null() && nullable {
     return Ok(Value::Null);

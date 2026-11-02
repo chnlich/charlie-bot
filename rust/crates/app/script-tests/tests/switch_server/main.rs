@@ -1,7 +1,7 @@
 //! The switch command's tests (scripts/switch-server.sh), run for real against stub commands and the stand-in servers.
 //!
-//! These are the tests of tests/test_switch_server.py, with every parametrized case as its own test. Each asserts the
-//! output lines and the exit code of its original: the main module holds the preflight, readback, escalation and pane
+//! Every parametrized case is its own test. Each asserts the
+//! output lines and the exit code: the main module holds the preflight, readback, escalation and pane
 //! tests, `probe` the probe-turn tests, and `delegation` the delegation-check tests and the restore they drive.
 
 mod cleanup;
@@ -435,7 +435,7 @@ fn seed_improve_loop(world: &World, controller_pid: u32) {
   fs::write(loop_dir.join("state.json"), state.to_string()).expect("the loop state");
 }
 
-/// The target of `path` when it is a symlink, as `os.readlink` reads it.
+/// The target of `path` when it is a symlink.
 fn readlink_opt(path: &Path) -> Option<PathBuf> {
   path.is_symlink().then(|| fs::read_link(path).expect("read the link"))
 }

@@ -1,19 +1,18 @@
-//! The required-file reads: a `--file` argument or stdin; file reads carry Python's text-mode line endings.
+//! The required-file reads: a `--file` argument or stdin; file reads carry text-mode line endings.
 
 use std::io::Read as _;
 use std::path::Path;
 
 use crate::exit::CliExit;
 
-/// The file's text with Python's text-mode line endings, where `\r\n` and a lone `\r` read as
-/// `\n` — what `Path.read_text(encoding="utf-8")` returns.
+/// The file's UTF-8 text with text-mode line endings, where `\r\n` and a lone `\r` read as `\n`.
 pub fn read_text_mode(path: &Path) -> Result<String, CliExit> {
   let content = std::fs::read_to_string(path).map_err(|error| CliExit::error(error.to_string()))?;
   Ok(content.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// A required text file, a usage error on a missing or empty one. The text carries Python's
-/// text-mode line endings (see [`read_text_mode`]).
+/// A required text file, a usage error on a missing or empty one. The text carries text-mode line
+/// endings (see [`read_text_mode`]).
 pub fn read_required_text_file(flag_name: &str, file_path: &str) -> Result<String, CliExit> {
   let path = Path::new(file_path);
   if !path.is_file() {

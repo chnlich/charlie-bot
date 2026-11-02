@@ -415,7 +415,6 @@ export TEMP="$TMP_ROOT"
 export TMUX_TMPDIR="$TMUX_ROOT"
 export CHARLIEBOT_HOME="$TRIAL_CB_HOME"
 export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
-export UV_CACHE_DIR="$TREE/uv-cache"
 export XDG_CACHE_HOME="$TREE/xdg-cache"
 export XDG_CONFIG_HOME="$TREE/xdg-config"
 export XDG_DATA_HOME="$TREE/xdg-data"
@@ -1292,7 +1291,7 @@ fi
 if [[ -n $manager_id && -n $SERVER_PID ]]; then
   cat >"$TREE/manager-delegate.txt" <<EOF
 Run this command once:
-charliebot delegate --repo $SYNTH_REPO --base-branch origin/main --task-spec-file $TREE/delegate-task.md --keep-worktree 1 --task-type quick-edit
+charliebot delegate --repo $SYNTH_REPO --base-branch origin/main --task-spec-file $TREE/delegate-task.md --keep-worktree 1 --context-work 0 --task-type quick-edit
 Reply with exactly one word: STARTED.
 When the worker completion report arrives, reply with exactly one word: DONE.
 EOF

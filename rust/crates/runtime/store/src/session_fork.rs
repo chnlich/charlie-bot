@@ -1,6 +1,6 @@
-//! Session fork and elone (`src/runtime/session_fork.py`). A fork copies one session's chat history into a new manager
+//! Session fork and elone. A fork copies one session's chat history into a new manager
 //! session. A clone of a manager source is a sibling at the source's task-tree position. An elone replaces a manager
-//! source in place: the child takes over the source's decomposition edge and subtree, the source closes archived, and
+//! source in place. The child takes over the source's decomposition edge and subtree, the source closes archived, and
 //! the scheduled bindings of the source move to the child. An elone of a worker source is an ordinary fork, and its
 //! source only archives.
 
@@ -358,10 +358,9 @@ impl Store {
 
 /// `SessionFork._stream_reference_file`: copy the non-blank lines among the first `take` raw lines of `source` into
 /// `out`. Returns `(raw, appended)`: the raw lines spent against the budget, blank lines included, and the lines
-/// written. The whole file must decode as UTF-8, including the lines past the budget, as
-/// `src/runtime/session_fork.py:117-180` checks while it walks its mapped bytes with `find`; here the file maps once
-/// and memchr supplies the same line boundaries. A non-blank line that is not wrapped in `{}` fails the copy. A CR
-/// before the newline is dropped.
+/// written. The whole file must decode as UTF-8, including the lines past the budget. The file maps once and memchr
+/// supplies the line boundaries. A non-blank line that is not wrapped in `{}` fails the copy. A CR before the
+/// newline is dropped.
 fn copy_reference_file(out: &mut impl Write, source: &Path, take: usize) -> StoreResult<(usize, usize)> {
   let map = match fsutil::map_file(source) {
     Ok(map) => map,
@@ -382,7 +381,7 @@ fn copy_reference_file(out: &mut impl Write, source: &Path, take: usize) -> Stor
     raw += 1;
     appended += usize::from(copy_reference_line(out, line)?);
   }
-  // An unterminated final frame is a frame like any other, as Python's `find` loop reads it.
+  // An unterminated final frame is a frame like any other.
   if raw < take && start < bytes.len() {
     raw += 1;
     appended += usize::from(copy_reference_line(out, &bytes[start..])?);

@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::dispatch::{self, Dispatcher};
 
-/// The input to a master trigger, with the Python entry point's defaults.
+/// The input to a master trigger. `new` sets the defaults for the optional fields.
 pub struct TriggerMasterRequest<'a> {
   pub session_id: &'a str,
   pub summary: &'a str,
@@ -21,7 +21,7 @@ pub struct TriggerMasterRequest<'a> {
 }
 
 impl<'a> TriggerMasterRequest<'a> {
-  /// Set the required source session and summary with the Python defaults.
+  /// Set the required source session and summary; the optional fields take the defaults set here.
   pub fn new(session_id: &'a str, summary: &'a str) -> TriggerMasterRequest<'a> {
     TriggerMasterRequest {
       session_id,

@@ -240,7 +240,7 @@ fn last_capture_time_is_host_scoped_and_default_path_is_under_home_usage() {
   assert_eq!(default_ledger_path(Path::new("/home/fixture")), Path::new("/home/fixture/usage/ledger.sqlite3"));
 }
 
-// The cases of tests/test_usage_ledger.py, in the file's order.
+// The ledger cases, in the recorded order.
 
 fn models(rows: &[LedgerRow]) -> Vec<&str> {
   rows.iter().map(|row| row.model.as_str()).collect()

@@ -1,6 +1,6 @@
-//! `src/features/memory`: the labeled-entry memory store's server half. It reads and scaffolds the store, selects the
-//! memory each run's instructions take, and exposes the store root to the diff view. The `memory` CLI and
-//! `memory_proposal.py` stay in Python.
+//! The labeled-entry memory store's server half. It reads and scaffolds the store, selects the
+//! memory each run's instructions take, and exposes the store root to the diff view. The `memory` CLI lives in
+//! this crate beside it.
 
 pub mod cli;
 pub mod memory;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use charliebot_registry::{Registry, RegistryError};
 use turn_contribution::MemoryTurn;
 
-/// `src/features/memory/__init__.py`, without the CLI command: the store's diff root, then its turn contribution.
+/// `register`: the store's diff root, then its turn contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.diff_root("memory", store_root::memory_dir)?;
   registry.turn_contribution("memory", Arc::new(MemoryTurn))
@@ -50,7 +50,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, strong: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       github: Default::default(),

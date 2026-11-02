@@ -1,8 +1,8 @@
-//! The web reply record and the web-session test (`src/features/web_reply/reply.py`): the refusals, the `answer_ids`
+//! The web reply record and the web-session test: the refusals, the `answer_ids`
 //! binding, the For-you layer and the readback. The round-end audit that nudges and notices over these records is in
 //! `audit.rs`.
 //!
-//! The web session test is chat_threads' `thread_sessions.is_thread_session`, restated over the same fields: this
+//! The web session test is chat_threads' `thread_sessions::is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
 
 use std::collections::HashSet;
@@ -27,15 +27,15 @@ use charliebot_user_text_checks::{self as user_text_checks, UserTextChecks, User
 use regex::{Captures, Regex};
 use serde_json::{Value, json};
 
-/// The web reply rules file under `prompts/` (`reply.RULES_FILE`).
+/// The web reply rules file under `prompts/`.
 pub const RULES_FILE: &str = "web_reply.md";
 
-/// The field of a web reply record that names the user messages it answers (`reply.ANSWER_IDS`).
+/// The field of a web reply record that names the user messages it answers.
 const ANSWER_IDS: &str = "answer_ids";
-/// The field of a web reply record posted before `answer_ids`: one user message id, or null (`reply.ANSWERS`).
+/// The field of a web reply record posted before `answer_ids`: one user message id, or null.
 const ANSWERS: &str = "answers";
 
-/// The audit's nudge for the unanswered user message `user_event_id` (`reply.nudge_text`).
+/// The audit's nudge for the unanswered user message `user_event_id`.
 pub fn nudge_text(user_event_id: &str) -> String {
   let opening = "Web reply nudge: your last turn woke on a user message and ended without a web reply. \
                  The For-you view hides your turn output. ";
@@ -43,7 +43,7 @@ pub fn nudge_text(user_event_id: &str) -> String {
 }
 
 /// The sentences that ask for the web reply to the unanswered user message `user_event_id`: the tag the reply passes to
-/// `--answers`, and how a long answer reaches the For-you view (`reply.answer_request`).
+/// `--answers`, and how a long answer reaches the For-you view.
 pub fn answer_request(user_event_id: &str) -> String {
   let tag = message_tag(user_event_id);
   format!(
@@ -56,19 +56,18 @@ pub fn answer_request(user_event_id: &str) -> String {
   )
 }
 
-/// The tag of a user message: its first eight characters, the prefix that `--answers` takes (`reply.message_tag`).
+/// The tag of a user message: its first eight characters, the prefix that `--answers` takes.
 pub fn message_tag(user_event_id: &str) -> String {
   user_event_id.chars().take(8).collect()
 }
 
-/// The notice the user reads when the nudge turn also ended without a reply (`reply.NOTICE_TEXT`).
+/// The notice the user reads when the nudge turn also ended without a reply.
 pub const NOTICE_TEXT: &str = "No reply was posted for this message. The Everything view shows this turn's output.";
 
-/// The sender name the nudge carries in the chat log (`reply.NUDGE_SENDER_NAME`).
+/// The sender name the nudge carries in the chat log.
 pub const NUDGE_SENDER_NAME: &str = "Web reply";
 
-/// The reply budget the readback's `over_budget` flag measures; an over-budget reply still posts
-/// (`reply.REPLY_BUDGET_CHARS`).
+/// The reply budget the readback's `over_budget` flag measures; an over-budget reply still posts.
 pub const REPLY_BUDGET_CHARS: usize = 500;
 
 /// The language check holds a reply when the answered user message has at least this many Han characters.
@@ -93,7 +92,7 @@ static MARKDOWN_LINK_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_reg
 static HAN_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"[㐀-䶿一-鿿]"));
 static LATIN_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"[A-Za-z]"));
 
-/// The roles the For-you layer shows: the user's messages, the replies and the notices (`reply._FOR_YOU_ROLES`).
+/// The roles the For-you layer shows: the user's messages, the replies and the notices.
 const FOR_YOU_ROLES: [&str; 3] = [USER, WEB_REPLY, WEB_REPLY_NOTICE];
 
 /// A refused web reply or status write, or a failure the route answers as an unhandled exception.
@@ -130,12 +129,12 @@ impl From<anyhow::Error> for WebReplyError {
   }
 }
 
-/// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
+/// True for a manager session that no Slack or Discord thread owns.
 pub fn is_web_session(meta: &SessionMetadata) -> bool {
   charliebot_tasks::midturn_delivery::is_web_session(meta)
 }
 
-/// The web session named by `session_id` (`reply.require_web_session`): 404 for an unknown session, 409 for a thread
+/// The web session named by `session_id`: 404 for an unknown session, 409 for a thread
 /// session or a worker.
 pub async fn require_web_session(
   features: &FeatureContext,
@@ -155,7 +154,7 @@ pub async fn require_web_session(
   Ok(meta)
 }
 
-/// The session's chat events in log order, read off the runtime's worker threads as `asyncio.to_thread` does.
+/// The session's chat events in log order, read off the runtime's worker threads.
 pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow::Result<Arc<Vec<SharedChatEvent>>> {
   let store = Arc::clone(&features.store);
   let session_id = session_id.to_string();
@@ -165,8 +164,7 @@ pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow:
   Ok(loaded?)
 }
 
-/// The nudge's `nudge_of`: the user message an audit nudge was posted for, or `None` for any other event
-/// (`reply.nudge_of`).
+/// The nudge's `nudge_of`: the user message an audit nudge was posted for, or `None` for any other event.
 pub fn nudge_of(event: &impl EventFields) -> Option<String> {
   if event.field("type").and_then(EventFields::as_str_field) != Some(AGENT_MESSAGE) {
     return None;
@@ -179,7 +177,7 @@ pub fn nudge_of(event: &impl EventFields) -> Option<String> {
 }
 
 /// The user message that an input answers: the message itself, or the message its nudge was posted for; `None` for any
-/// other event (`reply.answered_user_id`).
+/// other event.
 pub fn answered_user_id(event: &impl EventFields) -> Option<String> {
   if event.field("type").and_then(EventFields::as_str_field) == Some(USER) {
     return event.field("id").and_then(EventFields::as_str_field).map(str::to_string);
@@ -187,7 +185,7 @@ pub fn answered_user_id(event: &impl EventFields) -> Option<String> {
   nudge_of(event)
 }
 
-/// The user message ids a web reply record answers, in the order it names them (`reply.answer_ids`). A record posted
+/// The user message ids a web reply record answers, in the order it names them. A record posted
 /// before `answer_ids` holds its one id under `answers`, or none when that is null. Every reader of the field goes
 /// through this function.
 pub fn answer_ids(record: &impl EventFields) -> Vec<String> {
@@ -197,7 +195,7 @@ pub fn answer_ids(record: &impl EventFields) -> Vec<String> {
   record.field(ANSWERS).and_then(EventFields::as_str_field).map(|id| vec![id.to_string()]).unwrap_or_default()
 }
 
-/// A user message that the running turn can answer: its id and its text (`reply.Candidate`).
+/// A user message that the running turn can answer: its id and its text.
 #[derive(Clone, Copy)]
 struct Candidate<'a> {
   id: &'a str,
@@ -205,7 +203,7 @@ struct Candidate<'a> {
 }
 
 /// The user messages the running turn can answer, in log order: each user message the turn holds, and each user
-/// message that one of its nudges was posted for (`reply.turn_candidates`).
+/// message that one of its nudges was posted for.
 fn turn_candidates<'a>(events: &'a [SharedChatEvent], running: &[String]) -> Vec<Candidate<'a>> {
   let running: HashSet<&str> = running.iter().map(String::as_str).collect();
   let mut answerable: HashSet<String> = HashSet::new();
@@ -229,7 +227,7 @@ fn turn_candidates<'a>(events: &'a [SharedChatEvent], running: &[String]) -> Vec
 }
 
 /// The user message ids that a reply answers: the candidates that the `--answers` tags name, each tag matching one
-/// candidate by its full id or its eight-character tag (`reply.bind_answers`). With no tag, the one candidate binds,
+/// candidate by its full id or its eight-character tag. With no tag, the one candidate binds,
 /// and none leaves the reply answering nothing. Two or more candidates without a tag, and a tag that matches no
 /// candidate or several, refuse with 422 and the candidates' tags and text.
 fn bind_answers(candidates: &[Candidate], tags: &[String]) -> Result<Vec<String>, WebReplyError> {
@@ -296,8 +294,7 @@ fn candidate_refusal<'a>(
   WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, lines.join("\n"))
 }
 
-/// The text of the answered user messages, joined by line breaks; `None` when the reply answers none
-/// (`reply.answered_text`).
+/// The text of the answered user messages, joined by line breaks; `None` when the reply answers none.
 fn answered_text(candidates: &[Candidate], answer_ids: &[String]) -> Option<String> {
   let texts: Vec<&str> = candidates
     .iter()
@@ -307,7 +304,7 @@ fn answered_text(candidates: &[Candidate], answer_ids: &[String]) -> Option<Stri
   (!texts.is_empty()).then(|| texts.join("\n"))
 }
 
-/// Whether the log holds a web reply that answers `user_event_id` (`reply.replied`).
+/// Whether the log holds a web reply that answers `user_event_id`.
 pub fn replied(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY)
@@ -315,12 +312,12 @@ pub fn replied(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   })
 }
 
-/// Whether the log holds the nudge posted for `user_event_id` (`reply.nudged`).
+/// Whether the log holds the nudge posted for `user_event_id`.
 pub fn nudged(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| nudge_of(event.as_ref()).as_deref() == Some(user_event_id))
 }
 
-/// Whether the log holds the no-reply notice for `user_event_id` (`reply.noticed`).
+/// Whether the log holds the no-reply notice for `user_event_id`.
 pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_NOTICE)
@@ -329,7 +326,7 @@ pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   })
 }
 
-/// The Han and Latin-letter counts of `text`, with fenced code, inline code, URLs and paths left out (`_han_and_latin`).
+/// The Han and Latin-letter counts of `text`, with fenced code, inline code, URLs and paths left out.
 fn han_and_latin(text: &str) -> anyhow::Result<(usize, usize)> {
   let mut body = text.to_owned();
   for pattern in [&*CODE_FENCE_RE, &*INLINE_CODE_RE, &*URL_RE] {
@@ -362,7 +359,7 @@ fn language_check_holds(user_text: Option<&str>, reply: &str) -> anyhow::Result<
 }
 
 /// The paths that resolve the file links of a web message in `session_id`: this server's port, the CharlieBot home, the
-/// session directory and the user's home (`web_reply.api._file_link_scan_context`).
+/// session directory and the user's home.
 pub fn file_link_scan_context(
   features: &FeatureContext,
   session_id: &str,
@@ -400,7 +397,7 @@ fn visible_reply_chars(text: &str) -> anyhow::Result<usize> {
   Ok(visible.chars().count())
 }
 
-/// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
+/// Record `text` as the session's web reply and return the readback the CLI prints.
 ///
 /// Accepted text is recorded exactly as written. It answers the user messages that `answers` tags name among the
 /// running turn's candidates (see [`bind_answers`]). The language check holds the text unless `keep_language`, the
@@ -480,7 +477,7 @@ pub async fn post_web_reply_with_request_id(
       event["id"] = json!(charliebot_store::control_events::stable_request_event_id(session_id, request_id));
       event["request_id"] = json!(request_id);
     }
-    // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
+    // Release the shared snapshot before append; the store appends into the cached list.
     // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
     drop(events);
     features.store.append_chat_event(session_id, event).await?
@@ -504,8 +501,7 @@ fn web_reply_receipt(event: &Value) -> Value {
   })
 }
 
-/// The For-you layer: the user's messages, the replies and the notices, in log order, as `{role, content}` rows
-/// (`reply.for_you_entries`).
+/// The For-you layer: the user's messages, the replies and the notices, in log order, as `{role, content}` rows.
 #[cfg(test)]
 pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, WebReplyError> {
   let compact = events.iter().map(ChatEvent::from_value).collect::<Vec<_>>();
@@ -617,7 +613,7 @@ mod tests {
     assert_eq!(replies(&home, &sid).len(), 2);
   }
 
-  // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback
+  // The replay readback pins the stored visible count, not the label count.
   #[tokio::test]
   async fn markdown_link_reply_replay_returns_the_stored_visible_count() {
     let home = Home::new();
@@ -801,8 +797,7 @@ mod tests {
     }
   }
 
-  // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback
-  // Python: tests/test_web_reply.py::test_a_bare_url_counts_in_full_in_a_web_reply
+  // A markdown link counts as its label, and a bare URL counts in full in the reply.
   #[tokio::test]
   async fn a_markdown_link_counts_as_its_label_and_a_bare_url_counts_in_full() {
     let home = Home::new();

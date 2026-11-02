@@ -131,7 +131,7 @@ https://www.googleapis.com/auth/spreadsheets
 https://www.googleapis.com/auth/documents
 https://www.googleapis.com/auth/drive.file
 https://www.googleapis.com/auth/gmail.readonly
-https://www.googleapis.com/auth/calendar.readonly
+https://www.googleapis.com/auth/calendar
 ```
 
 If the GCP project is in Testing mode, the refresh token expires in about seven days. Publish the OAuth consent screen to Production for non-expiring tokens.

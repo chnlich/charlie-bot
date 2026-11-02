@@ -216,7 +216,7 @@ def bin_radius(r: int) -> int:
     return _BINS[-1]
 
 # call site, inside the glow pass
-S_bucket = bin_radius(max_radius)   # returns a python constant
+S_bucket = bin_radius(max_radius)   # returns a Python constant
 # S_bucket enters the shader cache key</pre>
         <p>For a hand check, <code>max_radius = 300</code> maps to <code>S_bucket = 512</code>; <code>max_radius = 400</code> maps to the same shader bin, while a changed row count can still fail the frame guard before the bin is used.</p>
         <p class="muted">Binning sits after the frame guard and before the shader: it protects the shader cache, not the frame cache.</p>

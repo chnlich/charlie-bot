@@ -41,8 +41,8 @@ pub struct SessionCallbacks {
 }
 
 /// The run-tracking operations one live manager turn performs on the queue's shared state: the other sessions'
-/// running turns and the running turn's web-reply input ids. The `master_cc_state` module dicts hold the same state in
-/// Python. The queue implements it; the run and delivery modules work through it, so they never name the queue type.
+/// running turns and the running turn's web-reply input ids. The queue implements it; the run and delivery modules
+/// work through it, so they never name the queue type.
 pub trait RunTracking: Send + Sync {
   /// The metadata of the turns running in other sessions.
   fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata>;

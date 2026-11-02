@@ -1,6 +1,6 @@
-//! `shutil.which`: the executable a command names.
+//! The executable a command names, found by searching the search path.
 
-/// `os.confstr("CS_PATH")` on glibc, the search path `shutil.which` uses when `PATH` is unset.
+/// The search path used when `PATH` is unset: the glibc default executable path.
 const CS_PATH: &str = "/bin:/usr/bin";
 
 /// The path of the executable `command` names, or `None`. `search_path` is `PATH`'s value.

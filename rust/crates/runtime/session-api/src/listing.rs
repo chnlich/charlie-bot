@@ -469,7 +469,7 @@ pub fn active_page_json_text(
 
 /// One row as the page's JSON text, with its `has_unread` cleared for the active session.
 ///
-/// Unlike [`render_row`], the page's rows keep `task.goal` (see `docs/contract/shapes.md`, "Listing rows").
+/// Unlike [`render_row`], the page's rows keep `task.goal`.
 fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
   let mut value = store.session_metadata_value(&row.meta);
   apply_sidebar_fields(&mut value, row, PAGE_PROJECTION);
@@ -545,7 +545,7 @@ pub fn sessions_list_response(
   json_bytes_response(compressed, true)
 }
 
-/// Render metadata as the Python response model does, excluding `task.goal`.
+/// Render metadata as the response model does, excluding `task.goal`.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
   if let Some(task) = value.get_mut("task").and_then(Value::as_object_mut) {
@@ -569,8 +569,8 @@ pub(crate) fn run_backend(store: &Store, meta: &SessionMetadata) -> StoreResult<
 }
 
 fn display_backend(store: &Store, meta: &SessionMetadata) -> StoreResult<Option<String>> {
-  // Matches displayed_backend_id at src/runtime/api/sessions.py:71-74. The serialized run_backend field remains the
-  // thinking_state-only value that session_listing.py:93 uses.
+  // Matches displayed_backend_id. The serialized run_backend field remains the
+  // thinking_state-only value that the listing reads.
   if meta.profile == TaskProfile::Worker {
     return Ok(Some(store.run_backend(&meta.id).unwrap_or_else(|| meta.backend.clone())));
   }

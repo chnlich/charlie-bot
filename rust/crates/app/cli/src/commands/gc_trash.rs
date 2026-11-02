@@ -1,4 +1,4 @@
-//! The `gc-trash` command (`src/runtime/cli/gc_trash.py`): inspect and (only with `--yes`) purge
+//! The `gc-trash` command: inspect and (only with `--yes`) purge
 //! the worktree quarantine trash.
 //!
 //! The startup sweep moves stale failed worktrees into `<paths.worktree_dir>/.trash/`; nothing
@@ -33,8 +33,8 @@ struct TrashEntry {
   size_bytes: u64,
 }
 
-/// Parse the arguments and run one sweep. Parser errors print and exit on their own
-/// (argparse-compatible: help 0, usage error 2).
+/// Parse the arguments and run one sweep. Parser errors print and exit on their own: help exits 0,
+/// a usage error exits 2.
 pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
   let command = with_infer_long_args(GcTrashCli::command());
   let argv = std::iter::once(OsString::from("charliebot gc-trash")).chain(args.iter().cloned());
@@ -79,8 +79,8 @@ fn run(trash_path: &Path, yes: bool) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// `worktree_trash.list_trash_entries`: every top-level child of the trash directory with its age
-/// (since the entry's own last modification, never negative) and recursive size.
+/// Every top-level child of the trash directory with its age (since the entry's own last
+/// modification, never negative) and recursive size.
 fn list_trash_entries(trash_path: &Path, now: SystemTime) -> Result<Vec<TrashEntry>, CliExit> {
   if !trash_path.is_dir() {
     return Ok(Vec::new());
@@ -106,9 +106,8 @@ fn list_trash_entries(trash_path: &Path, now: SystemTime) -> Result<Vec<TrashEnt
   Ok(entries)
 }
 
-/// `worktree_trash.dir_size_bytes`: every non-directory entry's own size; unreadable entries are
-/// skipped, as the Python walker skips them with a warning. A symlink is counted when its target
-/// is not a directory, matching `os.walk(followlinks=False)`.
+/// Every non-directory entry's own size; unreadable entries are skipped. A symlink is counted when
+/// its target is not a directory.
 fn dir_size_bytes(path: &Path) -> u64 {
   let Ok(children) = std::fs::read_dir(path) else { return 0 };
   let mut total = 0;
@@ -127,7 +126,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
   total
 }
 
-/// `shutil.rmtree` over every entry; `true` when any deletion failed. Only entries under the trash
+/// Remove every entry recursively; `true` when any deletion failed. Only entries under the trash
 /// directory are removed; the trash directory itself stays.
 fn purge(entries: &[TrashEntry]) -> bool {
   let mut failed = false;
@@ -156,7 +155,7 @@ fn purge(entries: &[TrashEntry]) -> bool {
   failed
 }
 
-/// `human_size.format_size`: `"5 B"`, `"2.0 KB"`, and upward with one decimal above bytes.
+/// A size as `"5 B"`, `"2.0 KB"`, and upward with one decimal above bytes.
 fn format_size(size: u64) -> String {
   let mut size = size as f64;
   for unit in ["B", "KB", "MB", "GB", "TB"] {

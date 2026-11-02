@@ -310,7 +310,13 @@ mod tests {
     for arguments in [
       args("GET", "relative/path"),
       args("G ET", "http://127.0.0.1:1/api"),
-      RequestArgs { data_file: Some(PathBuf::from("/nonexistent/body")), ..args("POST", "http://127.0.0.1:1/api") },
+      RequestArgs {
+        method: "POST".to_string(),
+        url: "http://127.0.0.1:1/api".to_string(),
+        data_file: Some(PathBuf::from("/nonexistent/body")),
+        json: None,
+        header: Vec::new(),
+      },
     ] {
       let error = arguments.prepare().unwrap_err();
       assert_eq!(error.code, 2);

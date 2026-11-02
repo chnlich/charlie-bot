@@ -24,9 +24,15 @@ pub trait Clock {
 }
 
 /// The process clock: a monotonic instant and a real thread sleep.
-#[derive(Default)]
 pub struct WallClock {
   start: std::sync::OnceLock<std::time::Instant>,
+}
+
+impl WallClock {
+  /// The process clock with no start yet; the first read anchors the scale.
+  fn new() -> Self {
+    Self { start: std::sync::OnceLock::new() }
+  }
 }
 
 impl Clock for WallClock {
@@ -233,7 +239,7 @@ fn run_call(call: ApiCall<'_>) -> Result<Value, CliExit> {
     request_timeout: crate::timeouts::HTTP_INTERNAL_API_TIMEOUT.as_secs_f64(),
     connect_total_timeout: crate::timeouts::CLI_CONNECT_TOTAL_TIMEOUT.as_secs_f64(),
   };
-  call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::default())
+  call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::new())
 }
 
 #[cfg(test)]
@@ -463,7 +469,7 @@ mod tests {
       rejection_exit_codes: &[],
     };
 
-    let value = call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::default()).unwrap();
+    let value = call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::new()).unwrap();
 
     assert_eq!(value, json!({ "ok": true }));
     let request = server.join().unwrap();

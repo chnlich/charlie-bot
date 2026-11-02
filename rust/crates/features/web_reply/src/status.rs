@@ -70,7 +70,7 @@ const NOT_A_DATETIME: &str = "Input should be a valid datetime";
 /// The message a since_exact field that is not a boolean raises.
 const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 
-/// The session status: Goal, Now, Waiting on you and Remaining, and the time the last set stored them
+/// The session status: Goal, Now, Waiting on you and Remaining, and the time the last set stored them.
 /// A status without Remaining serializes without either Remaining key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebStatus {
@@ -300,7 +300,7 @@ fn assign_since(
   Ok(result)
 }
 
-/// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches
+/// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches.
 /// An item whose check predates the tier keeps neither field.
 fn assign_tiers(
   items: Vec<WaitingItem>,
@@ -2218,7 +2218,7 @@ mod tests {
     })
   }
 
-  /// Records a cold read of `item`, then stores the one-item status file that names it
+  /// Records a cold read of `item`, then stores the one-item status file that names it.
   /// Answers the stored status.
   async fn set_after_reads(home: &Home, session_id: &str, item: Value) -> Value {
     record_ask_check(

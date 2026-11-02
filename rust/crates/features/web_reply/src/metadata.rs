@@ -11,7 +11,7 @@ pub struct RemainingItem {
   pub(crate) done: bool,
 }
 
-/// One Waiting on you item: a decision or an action, its context, and the link to the place where the user answers it
+/// One Waiting on you item: a decision or an action, its context, and the link to the place where the user answers it.
 /// An absent context stays absent in stored legacy items. `since` and `since_exact` are
 /// written by the server: `since` is the time the item first appeared or a lower bound on it, and `since_exact` is
 /// false when `since` is that lower bound. `tier` and `rule` are written by the server from the item's ask cold read:

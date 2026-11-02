@@ -159,7 +159,7 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   }))
 }
 
-/// Read the newest `limit` messages of the channel a discord.com link names; nothing is marked read
+/// Read the newest `limit` messages of the channel a discord.com link names; nothing is marked read.
 /// A link that is not one refuses with 422, a channel the bot cannot see with 404.
 async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value, ThreadReplyError> {
   let link = parse_message_link(url)

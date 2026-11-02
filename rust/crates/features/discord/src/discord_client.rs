@@ -127,7 +127,7 @@ impl Display for DiscordAPIError {
 
 impl std::error::Error for DiscordAPIError {}
 
-/// The wait a 429 asks for: the body's `retry_after` seconds, else the `Retry-After` header, else zero
+/// The wait a 429 asks for: the body's `retry_after` seconds, else the `Retry-After` header, else zero.
 /// A header that is not a number fails the call.
 pub fn retry_after_seconds(body: &[u8], retry_after_header: Option<&str>) -> anyhow::Result<f64> {
   if let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(body)

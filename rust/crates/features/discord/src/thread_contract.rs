@@ -1,4 +1,4 @@
-//! The Discord part of the thread reply contract : the platform line and the read
+//! The Discord part of the thread reply contract: the platform line and the read
 //! sentences. The shared contract joins it with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};

@@ -38,7 +38,7 @@ impl TurnContribution for MemoryTurn {
   }
 }
 
-/// The audience mapping : a manager takes the master selection, and every
+/// The audience mapping: a manager takes the master selection, and every
 /// other kind the worker selection for its repo.
 fn memory_selection_for(meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig) -> Result<Option<MemorySelection>> {
   let memory_dir = store_root::memory_dir(cfg);

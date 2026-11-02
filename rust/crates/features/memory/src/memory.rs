@@ -106,7 +106,7 @@ pub struct MemoryEntrySource {
   pub text: String,
 }
 
-/// One ordered segment of a selection : its delivery, text and sources.
+/// One ordered segment of a selection: its delivery, text and sources.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemorySegment {
   pub delivery: &'static str,

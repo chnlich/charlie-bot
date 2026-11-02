@@ -40,6 +40,7 @@ members = [
     "crates/features/host_auth",
     "crates/features/memory",
     "crates/features/slack",
+    "crates/features/taste",
     "crates/features/terminal",
     "crates/features/trace",
     "crates/features/usage",
@@ -179,6 +180,7 @@ charliebot-shell-harness = { path = "crates/infra/shell-harness" }
 charliebot-switch-helper = { path = "crates/app/switch-helper" }
 charliebot-triggers = { path = "crates/runtime/triggers" }
 charliebot-tasks = { path = "crates/runtime/tasks" }
+charliebot-taste = { path = "crates/features/taste" }
 charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }
 charliebot-usage = { path = "crates/runtime/usage" }

@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 29 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 30 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
 //! the not-ported JSON error and exits 1.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 29] = [
+const COMMANDS: [&str; 30] = [
   "artifact",
   "compaction-context",
   "config",
@@ -44,6 +44,7 @@ const COMMANDS: [&str; 29] = [
   "setup",
   "slack",
   "switch-helper",
+  "taste",
   "voice",
   "wait-guard",
   "web",
@@ -132,6 +133,13 @@ fn run_subcommand(
     "setup" => commands::setup::main(args),
     "slack" => charliebot_slack::cli::main(args),
     "switch-helper" => charliebot_switch_helper::main(args),
+    "taste" => {
+      // The plan registry is composed only when `candidates` reads a session's notes.
+      let read_plans = |session_dir: &Path| -> anyhow::Result<Option<Vec<serde_json::Value>>> {
+        host.get()?.registry.plan_registry_reader()?(session_dir)
+      };
+      charliebot_taste::cli::main(args, read_plans)
+    }
     "voice" => commands::voice::main(args, host),
     "wait-guard" => commands::wait_guard::main(args),
     "web" => charliebot_web_reply::cli::main(args, host),

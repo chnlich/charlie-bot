@@ -21,6 +21,7 @@ charliebot-cron.workspace = true
 charliebot-discord.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true
+charliebot-taste.workspace = true
 charliebot-opencode.workspace = true
 charliebot-packages.workspace = true
 charliebot-registry.workspace = true

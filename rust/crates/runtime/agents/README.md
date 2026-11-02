@@ -50,7 +50,7 @@ This crate owns the process transport below the agent backends and the launch ma
 - `RunRequest`, its fields, `RunRequest::new`, and `RunRequest::gate_child_until_on_spawn`
 - `RunOutcome` and its fields, including post-result hang diagnostics
 - `AgentRunner`, `AgentRunner::new`, `run`, `terminate`, and `detach`
-- `json_loads::{loads, loads_text, LoadError, MAX_DEPTH}` (`charliebot_compat::json_loads`, re-exported here). Outcomes and error messages match the recorded decoder outputs.
+- `json_loads::{loads, loads_text, LoadError, MAX_DEPTH}` (`charliebot_core::json_loads`, read by the golden test). Outcomes and error messages match the recorded decoder outputs.
 - `cli_base::{LOCAL_NO_PROXY_ENTRIES, SKIP_PERMISSIONS_FLAG, IMAGE_MIME_BY_EXT, CliHost, resolve_binary, prepend_path_dir, merge_local_no_proxy, apply_proxy_env, strip_google_api_keys, framed_prompt, truthy, str_field, required_str, int_field}`
 - `one_shot_text` (the dispatcher; the tool-capable fallback is `agent_one_shot_text`)
 - `RunRequest.uploaded_files` and `RunOutcome` for a run with no process; the manager turn passes the item's uploads

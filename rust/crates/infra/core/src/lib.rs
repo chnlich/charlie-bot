@@ -13,6 +13,7 @@ pub mod git;
 pub mod home;
 pub mod home_init;
 pub mod hot_reload;
+pub mod json_loads;
 pub mod logging;
 pub mod logline;
 pub mod memo;

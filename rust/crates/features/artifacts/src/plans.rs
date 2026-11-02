@@ -12,7 +12,7 @@ use std::path::Path;
 use std::str::Utf8Error;
 
 use anyhow::anyhow;
-use charliebot_compat::json_loads;
+use charliebot_core::json_loads;
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::{Map, Value, json};
 

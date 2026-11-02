@@ -352,7 +352,6 @@ dependencies = [
  "charliebot-charlie-code",
  "charliebot-claude-code",
  "charliebot-codex",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-gemini",
  "charliebot-registry",
@@ -1251,7 +1250,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-shell-harness",

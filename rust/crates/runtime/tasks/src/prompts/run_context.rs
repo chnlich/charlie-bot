@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::Path;
 
-use charliebot_compat::json_loads;
+use charliebot_core::json_loads;
 use charliebot_store::Store;
 use charliebot_store::run_records::run_not_found_in_task_text;
 use serde_json::{Value, json};

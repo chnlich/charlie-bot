@@ -9,7 +9,6 @@ pub mod headers;
 pub mod http_client;
 pub mod jinja;
 pub mod json;
-pub mod json_loads;
 pub mod mimetypes;
 mod mimetypes_table;
 pub mod request_body;

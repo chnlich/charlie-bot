@@ -70,9 +70,9 @@ impl Credentials {
       .ok_or_else(|| ConfigError(format!("credentials.{section}.{key} is not set in {}", paths::display(&self.path))))
   }
 
-  /// The non-empty `api_key` of `section`: the one section-to-key path for the backend factories and
-  /// `charliebot improve-review`. A missing section, a missing key and an empty value are three errors, each
-  /// naming the item and the file. The key itself never enters the error text.
+  /// The non-empty `api_key` of `section`: the one section-to-key path for the backend factories. A missing
+  /// section, a missing key and an empty value are three errors, each naming the item and the file. The key
+  /// itself never enters the error text.
   pub fn require_api_key(&self, section: &str) -> Result<String, ConfigError> {
     let path = paths::display(&self.path);
     if !self.sections.contains_key(section) {

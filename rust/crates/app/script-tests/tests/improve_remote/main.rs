@@ -833,11 +833,11 @@ fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
 }
 
 #[test]
-fn an_other_directions_clone_whose_fetch_keeps_failing_stops_the_round_with_exit_1() {
+fn an_other_directions_clone_whose_fetch_fails_stops_the_round_with_exit_1() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
-  // The clone's origin is gone, so every attempt to fetch its origin/main fails. The round must stop
-  // rather than build its in-flight list without the ux clone's files.
+  // The clone's origin is gone, so the fetch of its origin/main fails. The round must stop rather
+  // than build its in-flight list without the ux clone's files.
   let gone = world.sandbox.root().join("gone.git").display().to_string();
   world.git(&clone, &["remote", "set-url", "origin", &gone]);
 

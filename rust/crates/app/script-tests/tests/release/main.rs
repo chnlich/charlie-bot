@@ -721,7 +721,7 @@ impl ServeWorld {
     let live_home = sandbox.dir("live-home");
     fs::write(
       live_home.join("config.yaml"),
-      "backends:\n  options:\n    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+      "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
     )
     .expect("the live config");
     fs::write(live_home.join("credentials.yaml"), "serve-test:\n  api_key: not-a-real-key\n").expect("the credentials");

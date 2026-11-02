@@ -818,7 +818,6 @@ mod tests {
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
   }
 
-  // Python: tests/test_claude_code_backend.py:234.
   #[test]
   fn manager_turn_settings_install_six_compaction_context_slots() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -878,7 +877,6 @@ mod tests {
     assert!(settings.get("hooks").is_none());
   }
 
-  // Python: tests/test_claude_code_backend.py:249.
   #[test]
   fn manager_turn_settings_require_the_charliebot_session_id() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -898,7 +896,6 @@ mod tests {
     assert!(format!("{error:#}").contains("require a CharlieBot session id"), "{error:#}");
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py:37.
   #[test]
   fn anthropic_endpoint_sets_the_endpoint_and_pins_every_model_variable_without_a_flag() {
     let backend = AnthropicEndpointBackend::new(
@@ -944,7 +941,6 @@ mod tests {
     assert_eq!(env["PATH"], "/synthetic/bin");
   }
 
-  // Python: tests/test_claude_code_backend.py::test_prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env
   #[test]
   fn prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -973,7 +969,6 @@ mod tests {
     assert_eq!(env["UNRELATED"], "kept");
   }
 
-  // Python: tests/test_claude_code_backend.py::test_one_shot_text_spawns_claude_without_the_gateway_variables
   #[tokio::test]
   async fn one_shot_text_spawns_claude_without_the_gateway_variables() {
     let root = tempfile::tempdir().unwrap();
@@ -1066,7 +1061,6 @@ mod tests {
       .collect()
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_endpoint_env_overrides_every_inherited_gateway_variable
   #[test]
   fn endpoint_env_overrides_every_inherited_gateway_variable() {
     let backend = AnthropicEndpointBackend::new(
@@ -1098,7 +1092,6 @@ mod tests {
     assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
   }
 
-  // Python: tests/test_anthropic_compatible_backend.py::test_claude_model_env_sets_exactly_five_model_variables
   #[test]
   fn claude_model_env_sets_exactly_five_model_variables() {
     assert_eq!(

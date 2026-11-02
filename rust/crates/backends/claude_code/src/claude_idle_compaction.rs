@@ -720,17 +720,6 @@ mod tests {
     (Arc::new(registry), cfg)
   }
 
-  // Python: tests/test_claude_idle_compaction.py:148.
-  // Python: tests/test_claude_idle_compaction.py:149.
-  // Python: tests/test_claude_idle_compaction.py:150.
-  // Python: tests/test_claude_idle_compaction.py:151.
-  // Python: tests/test_claude_idle_compaction.py:152.
-  // Python: tests/test_claude_idle_compaction.py:156.
-  // Python: tests/test_claude_idle_compaction.py:163.
-  // Python: tests/test_claude_idle_compaction.py:164.
-  // Python: tests/test_claude_idle_compaction.py:165.
-  // Python: tests/test_claude_idle_compaction.py:166.
-  // Python: tests/test_claude_idle_compaction.py:167.
   #[test]
   fn every_idle_compaction_gate_rejects_its_case() {
     let now = at("2026-09-06T20:00:00Z");
@@ -765,13 +754,11 @@ mod tests {
     }
   }
 
-  // Python: tests/test_claude_idle_compaction.py:176.
   #[test]
   fn every_idle_compaction_gate_true_starts_a_qualifying_candidate() {
     assert!(should_compact(&base_facts(), IDLE_TOKENS, at("2026-09-06T20:00:00Z"),));
   }
 
-  // Python: tests/test_claude_idle_compaction.py:222.
   #[tokio::test]
   async fn a_second_arm_keeps_one_timer_and_replaces_the_first() {
     let idle = IdleCompaction::new();
@@ -861,7 +848,6 @@ mod tests {
     idle.settle_for_turn(SESSION_ID).await.unwrap();
   }
 
-  // Python: tests/test_claude_idle_compaction.py:280.
   #[tokio::test]
   async fn a_queued_turn_makes_the_idle_trigger_skip() {
     let idle = IdleCompaction::new();
@@ -873,7 +859,6 @@ mod tests {
     assert_eq!(idle.running_count(), 0);
   }
 
-  // Python: tests/test_claude_idle_compaction.py:309.
   #[test]
   fn idle_run_options_keep_the_session_model_and_idle_event_triggers() {
     let root = tempfile::tempdir().unwrap();
@@ -897,7 +882,6 @@ mod tests {
     assert_eq!((run.model.as_str(), run.family.as_str()), ("claude-fable-5-1", "fable"));
   }
 
-  // Python: tests/test_claude_idle_compaction.py:341.
   #[test]
   fn an_unpooled_session_uses_the_default_login_directory() {
     let root = tempfile::tempdir().unwrap();

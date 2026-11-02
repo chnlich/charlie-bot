@@ -27,7 +27,6 @@ mod tests {
 
   #[test]
   fn the_check_passes_and_names_every_required_tool_in_the_ok_line() {
-    // Python: tests/test_setup_runner.py::test_the_packages_register_the_cron_and_claude_code_steps_in_that_order
     // pins the step's presence; the output lines are the setup command's contract.
     setup_step().expect("the committed command disallows the required tools");
   }

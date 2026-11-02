@@ -166,7 +166,6 @@ mod tests {
     assert!(OpenCodeOption::from_fields(&fields("proxy_url: 4\n")).unwrap_err().contains("proxy_url"));
   }
 
-  // Python: tests/test_opencode_backend.py::test_opencode_option_rejects_invalid_fields
   #[test]
   fn option_model_accepts_a_positive_context_limit_and_rejects_zero_and_negative() {
     assert!(OpenCodeOption::from_fields(&fields("context_limit: 420000\n")).is_ok());
@@ -174,7 +173,6 @@ mod tests {
     assert!(OpenCodeOption::from_fields(&fields("context_limit: -1\n")).is_err());
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_overrides_only_context
   #[test]
   fn model_overrides_config_overrides_only_context() {
     let other = BackendOption {
@@ -195,7 +193,6 @@ mod tests {
     assert_eq!(model_overrides_config(&[]).unwrap(), Map::new());
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_rejects_conflicts_naming_both_options
   #[test]
   fn model_overrides_config_rejects_conflicts_naming_both_options() {
     for (first_fields, second_fields, field) in [
@@ -211,7 +208,6 @@ mod tests {
     }
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_carries_extra_body_at_the_model_body_key
   #[test]
   fn model_overrides_config_carries_extra_body_at_the_model_body_key() {
     let option = option("oc", MODEL, "extra_body:\n  cache:\n    no-store: true\n    no-cache: true\n");
@@ -222,7 +218,6 @@ mod tests {
     );
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_keeps_context_and_extra_body_of_two_options_on_one_model
   #[test]
   fn model_overrides_config_keeps_context_and_extra_body_of_two_options_on_one_model() {
     let limited = option("limited", MODEL, "context_limit: 420000\n");
@@ -234,7 +229,6 @@ mod tests {
     );
   }
 
-  // Python: tests/test_opencode_backend.py::test_model_overrides_config_merges_equal_limits_and_distinct_models
   #[test]
   fn model_overrides_config_merges_equal_limits_and_distinct_models() {
     let entries = [

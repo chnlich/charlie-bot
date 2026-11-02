@@ -74,7 +74,6 @@ mod tests {
     }
   }
 
-  // Python: tests/test_claude_code_backend.py::test_replay_becomes_non_rendered_input_delivered_event
   #[test]
   fn replay_becomes_non_rendered_input_delivered_event() {
     let run_id = "11111111-2222-3333-4444-555555555560";
@@ -98,7 +97,6 @@ mod tests {
     );
   }
 
-  // Python: tests/test_claude_code_backend.py::test_replay_after_result_resets_post_result_timeout
   // A late replay keeps a same-process second turn alive across long silent tool work.
   #[tokio::test]
   async fn replay_after_result_resets_post_result_timeout() {

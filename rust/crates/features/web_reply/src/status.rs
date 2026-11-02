@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
@@ -913,6 +913,42 @@ pub struct OpenWaitingItem {
   pub since: UtcDateTime,
 }
 
+/// The sessions whose stored web status carries waiting items, filtered from one metadata corpus.
+///
+/// The approval day view asks every session of the home for its status on each load, and the corpus holds one row per
+/// session of the home. The filter runs when the corpus moves and the rows are reused while the same corpus holds; the
+/// memo keeps the corpus it filtered, so a corpus that replaces it holds a different allocation.
+struct WaitingSessions {
+  corpus: Arc<Vec<Arc<SessionMetadata>>>,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+}
+
+static WAITING_SESSIONS: LazyLock<Mutex<Option<WaitingSessions>>> = LazyLock::new(|| Mutex::new(None));
+
+/// The corpus rows whose stored status names at least one waiting item, in corpus order.
+fn sessions_with_waiting(
+  metas: &Arc<Vec<Arc<SessionMetadata>>>,
+) -> Result<Arc<Vec<Arc<SessionMetadata>>>, WebReplyError> {
+  {
+    let memo = WAITING_SESSIONS.lock().expect("the waiting sessions mutex is not poisoned");
+    if let Some(entry) = memo.as_ref()
+      && Arc::ptr_eq(&entry.corpus, metas)
+    {
+      return Ok(Arc::clone(&entry.rows));
+    }
+  }
+  let mut rows = Vec::new();
+  for meta in metas.iter() {
+    if stored_status(meta)?.is_some_and(|status| !status.waiting.is_empty()) {
+      rows.push(Arc::clone(meta));
+    }
+  }
+  let rows = Arc::new(rows);
+  *WAITING_SESSIONS.lock().expect("the waiting sessions mutex is not poisoned") =
+    Some(WaitingSessions { corpus: Arc::clone(metas), rows: Arc::clone(&rows) });
+  Ok(rows)
+}
+
 /// Every open session's Waiting on you items, the stored ones in metadata-listing order and then the derived ones. The
 /// approval day view reads the whole home through this, where the status read reads one task tree.
 pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
@@ -920,12 +956,10 @@ pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWai
   // The read takes the corpus the listing memo holds instead of a copy of it: the approval day view reads this on
   // every page load, and copying one row per session of the home cost more than the rest of the view together.
   let (metas, _) = tree_read(&features.store, |store| store.load_session_metas_snapshot_versioned(None)).await?;
+  let waiting = sessions_with_waiting(&metas)?;
   let mut rows = Vec::new();
-  for meta in metas.iter() {
-    let Some(status) = stored_status(meta)? else { continue };
-    if status.waiting.is_empty() {
-      continue;
-    }
+  for meta in waiting.iter() {
+    let status = stored_status(meta)?.expect("the filter kept only sessions whose status carries waiting items");
     if meta.status == SessionStatus::Archived || archived.contains(&meta.id) {
       continue;
     }
@@ -2481,5 +2515,21 @@ mod tests {
     let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
     assert_eq!(listed, [root.as_str(), child.as_str(), unrelated.as_str()]);
     assert!(rows.iter().all(|row| row.tier.as_deref() == Some("user-act") && row.rule.is_none()));
+  }
+
+  #[tokio::test]
+  async fn a_waiting_item_set_after_an_approval_read_appears_on_the_next_one() {
+    let home = Home::new();
+    let first = home.manager("first", None).await;
+    let second = home.manager("second", None).await;
+    assert!(open_waiting_items(&home.features).await.expect("the empty read lists nothing").is_empty());
+
+    // The set writes metadata, so the corpus the filter ran on moves and the next read filters the new one.
+    set_after_reads(&home, &second, planned_item("Decide", Value::Null)).await;
+
+    let rows = open_waiting_items(&home.features).await.expect("the read after the set lists the item");
+    let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
+    assert_eq!(listed, [second.as_str()], "the item the set stored, not the corpus the earlier read filtered");
+    assert_ne!(first, second);
   }
 }

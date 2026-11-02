@@ -94,7 +94,8 @@ pub fn call_api(
       Err(TransportError::ConnectPhase(message)) => {
         let remaining = deadline - clock.now();
         if remaining <= 0.0 {
-          return Err(contract_exit(json!({ "error": message, "code": "server_unavailable", "effect": "none" })));
+          let error = contract_error(json!(message), "server_unavailable", EFFECT_NONE, None);
+          return Err(contract_exit(error));
         }
         let delay = (0.25 * 2.0f64.powi(attempt as i32)).min(5.0).min(remaining);
         attempt += 1;
@@ -122,20 +123,35 @@ pub fn call_api(
   }
 }
 
+/// The effect word of a call whose request never reached the server or never changed anything.
+const EFFECT_NONE: &str = "none";
+
 /// The sent-but-lost effect word: `"unknown"` for a call that may mutate, `"none"` for a read-only GET.
 fn unknown_effect(method: Method) -> &'static str {
   match method {
-    Method::Get => "none",
+    Method::Get => EFFECT_NONE,
     Method::Post | Method::Patch => "unknown",
   }
 }
 
 fn outcome_unknown_exit(message: String, effect: &str) -> CliExit {
-  contract_exit(json!({ "error": message, "code": "outcome_unknown", "effect": effect }))
+  contract_exit(contract_error(json!(message), "outcome_unknown", effect, None))
 }
 
 fn contract_exit(error: Value) -> CliExit {
   CliExit::contract(error, 1)
+}
+
+/// The contract's failure object: its message, code and effect, and the version-skew hint when one applies.
+fn contract_error(message: Value, code: &str, effect: &str, hint: Option<String>) -> Value {
+  let mut error = Map::new();
+  error.insert("error".to_string(), message);
+  error.insert("code".to_string(), json!(code));
+  error.insert("effect".to_string(), json!(effect));
+  if let Some(hint) = hint {
+    error.insert("hint".to_string(), json!(hint));
+  }
+  Value::Object(error)
 }
 
 fn build_url(base_url: &str, endpoint: &str, params: Option<&[(String, String)]>) -> String {
@@ -158,16 +174,10 @@ fn rejection_exit(
     .ok()
     .and_then(|body| body.get("detail").cloned())
     .unwrap_or_else(fallback);
-  let mut error = Map::new();
-  error.insert("error".to_string(), message);
-  error.insert("code".to_string(), json!("server_error"));
-  error.insert("effect".to_string(), json!("none"));
-  if let Some(hint) = skew::version_skew_hint(&ctx.base_url, ctx.headers.as_slice(), transport) {
-    error.insert("hint".to_string(), json!(hint));
-  }
+  let hint = skew::version_skew_hint(&ctx.base_url, ctx.headers.as_slice(), transport);
   let exit_code =
     rejection_exit_codes.iter().find(|(status, _)| *status == response.status).map(|(_, code)| *code).unwrap_or(1);
-  CliExit::contract(Value::Object(error), exit_code)
+  CliExit::contract(contract_error(message, "server_error", EFFECT_NONE, hint), exit_code)
 }
 
 /// One POST on the process transport: base URL and auth headers read per call.

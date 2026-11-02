@@ -77,11 +77,15 @@ const TASK_SHARE: f64 = 0.831;
 const RUNS_SHARE: f64 = 0.729;
 /// The share of workers among the sessions with task metadata. The production split was not measured.
 const WORKER_SHARE: f64 = 0.55;
-/// The run count of a session with runs at each quantile, log-linear between knots. Production showed 1 to 243 runs per
-/// session; the store-wide distribution was not measured.
-const RUN_COUNT_KNOTS: [(f64, f64); 5] = [(0.0, 1.0), (0.5, 3.0), (0.9, 12.0), (0.99, 60.0), (1.0, 250.0)];
-/// One run's span of the event log takes at most this many bytes, so a log of n such spans holds at least n runs.
-const RUN_SPAN_BYTES: u64 = 2_000_000;
+/// The run count of a session with runs at each quantile, log-linear between knots, for managers and for workers.
+/// Production showed 1 to 243 runs per session. The reference start replayed 6,907 run follow-ups on its 593 full
+/// passes, 327 of them for workers' work runs (`worker_delivery_awaits_review`). These knots give a full-pass plan
+/// those totals, scaled to the session count.
+const MANAGER_RUN_COUNT_KNOTS: [(f64, f64); 5] = [(0.0, 1.0), (0.5, 7.0), (0.9, 44.0), (0.99, 140.0), (1.0, 243.0)];
+const WORKER_RUN_COUNT_KNOTS: [(f64, f64); 5] = [(0.0, 1.0), (0.4, 1.0), (0.8, 2.0), (0.97, 5.0), (1.0, 10.0)];
+/// One manager turn's span of the event log takes at most this many bytes, so a log of n such spans holds at least n
+/// turns.
+const TURN_SPAN_BYTES: u64 = 1_000_000;
 /// Trigger files and pending triggers per session: about 4,800 and 25 at about 8,100 sessions.
 const TRIGGER_FILES_PER_SESSION: f64 = 4800.0 / 8100.0;
 const PENDING_TRIGGERS_PER_SESSION: f64 = 25.0 / 8100.0;
@@ -107,6 +111,22 @@ enum KeepReason {
   RunUnended,
   SequenceRef,
   WorktreeExists,
+}
+
+impl KeepReason {
+  /// Whether a session kept for `reason` needs task metadata: a worker's task names its repository.
+  fn needs_task(reason: Option<KeepReason>) -> bool {
+    matches!(reason, Some(KeepReason::SequenceRef | KeepReason::WorktreeExists))
+  }
+
+  /// Whether a session kept for `reason` needs runs. Three reasons name a run, and an open task's finished turns confirm
+  /// its inputs; a recent file needs none.
+  fn needs_runs(reason: Option<KeepReason>) -> bool {
+    matches!(
+      reason,
+      Some(KeepReason::StateOpen | KeepReason::RunUnended | KeepReason::SequenceRef | KeepReason::WorktreeExists)
+    )
+  }
 }
 
 /// How a run ended, as its record and the session's facts show.
@@ -178,9 +198,9 @@ fn full_pass_odds(size: u64) -> f64 {
   FULL_PASS_ODDS.iter().find(|(floor, _)| size >= *floor).map(|(_, odds)| *odds).expect("the last band starts at 0")
 }
 
-/// The run count at quantile `u`, for 0 <= u <= 1.
-fn run_count(u: f64) -> usize {
-  for pair in RUN_COUNT_KNOTS.windows(2) {
+/// The run count at quantile `u` of `knots`, for 0 <= u <= 1.
+fn run_count(knots: &[(f64, f64)], u: f64) -> usize {
+  for pair in knots.windows(2) {
     let ((u_low, count_low), (u_high, count_high)) = (pair[0], pair[1]);
     if u <= u_high {
       let position = (u - u_low) / (u_high - u_low);
@@ -201,14 +221,10 @@ impl HomePlan {
     let count = sizes.len();
     let mut rng = Rng::new(seed ^ PLAN_STREAM);
     let reasons = Self::keep_reasons(sizes, &mut rng);
-    let forced_runs =
-      reasons.iter().filter(|reason| reason.is_some_and(|reason| reason != KeepReason::FileAfterMarker));
-    let forced_runs = forced_runs.count() as f64;
-    let rest_runs_share = ((RUNS_SHARE * count as f64 - forced_runs) / (count as f64 - forced_runs)).clamp(0.0, 1.0);
-    let mut sessions: Vec<SessionPlan> = reasons
-      .iter()
-      .zip(sizes)
-      .map(|(reason, size)| Self::session(*reason, *size, rest_runs_share, &mut rng))
+    let tasks = Self::exact_flags(&reasons, TASK_SHARE, KeepReason::needs_task, &mut rng);
+    let with_runs = Self::exact_flags(&reasons, RUNS_SHARE, KeepReason::needs_runs, &mut rng);
+    let mut sessions: Vec<SessionPlan> = (0..count)
+      .map(|index| Self::session(reasons[index], sizes[index], tasks[index], with_runs[index], &mut rng))
       .collect();
 
     let open: Vec<usize> = (0..count).filter(|index| reasons[*index] == Some(KeepReason::StateOpen)).collect();
@@ -248,21 +264,32 @@ impl HomePlan {
     reasons
   }
 
-  fn session(reason: Option<KeepReason>, size: u64, rest_runs_share: f64, rng: &mut Rng) -> SessionPlan {
-    let (profile, has_task) = match reason {
-      Some(KeepReason::StateOpen) => (TaskProfile::Manager, rng.unit() < TASK_SHARE),
-      Some(KeepReason::SequenceRef | KeepReason::WorktreeExists) => (TaskProfile::Worker, true),
-      Some(KeepReason::FileAfterMarker | KeepReason::RunUnended) | None => {
-        let has_task = rng.unit() < TASK_SHARE;
-        let worker = has_task && rng.unit() < WORKER_SHARE;
-        (if worker { TaskProfile::Worker } else { TaskProfile::Manager }, has_task)
+  /// One flag per session: set for each session whose reason `forced` holds, and for a seeded draw of the rest that
+  /// brings the set count to `share` of the sessions.
+  fn exact_flags(
+    reasons: &[Option<KeepReason>],
+    share: f64,
+    forced: fn(Option<KeepReason>) -> bool,
+    rng: &mut Rng,
+  ) -> Vec<bool> {
+    let mut flags: Vec<bool> = reasons.iter().map(|reason| forced(*reason)).collect();
+    let mut rest: Vec<usize> = (0..flags.len()).filter(|index| !flags[*index]).collect();
+    let wanted = ((share * flags.len() as f64).round() as usize).saturating_sub(flags.len() - rest.len());
+    rng.shuffle(&mut rest);
+    for index in rest.into_iter().take(wanted) {
+      flags[index] = true;
+    }
+    flags
+  }
+
+  fn session(reason: Option<KeepReason>, size: u64, has_task: bool, has_runs: bool, rng: &mut Rng) -> SessionPlan {
+    let profile = match reason {
+      Some(KeepReason::StateOpen) => TaskProfile::Manager,
+      Some(KeepReason::SequenceRef | KeepReason::WorktreeExists) => TaskProfile::Worker,
+      Some(KeepReason::FileAfterMarker | KeepReason::RunUnended) | None if has_task && rng.unit() < WORKER_SHARE => {
+        TaskProfile::Worker
       }
-    };
-    let has_runs = match reason {
-      Some(KeepReason::StateOpen | KeepReason::RunUnended | KeepReason::SequenceRef | KeepReason::WorktreeExists) => {
-        true
-      }
-      Some(KeepReason::FileAfterMarker) | None => rng.unit() < rest_runs_share,
+      Some(KeepReason::FileAfterMarker | KeepReason::RunUnended) | None => TaskProfile::Manager,
     };
     let marker = marker_time();
     let started_at = generate::first_session_time() + seconds(rng.range(0, generate::SESSION_START_SPREAD_SECONDS));
@@ -291,7 +318,12 @@ impl HomePlan {
     modified_at: NaiveDateTime,
     rng: &mut Rng,
   ) -> Vec<RunPlan> {
-    let count = run_count(rng.unit()).max(size.div_ceil(RUN_SPAN_BYTES) as usize);
+    let count = match profile {
+      TaskProfile::Manager => {
+        run_count(&MANAGER_RUN_COUNT_KNOTS, rng.unit()).max(size.div_ceil(TURN_SPAN_BYTES) as usize)
+      }
+      TaskProfile::Worker => run_count(&WORKER_RUN_COUNT_KNOTS, rng.unit()),
+    };
     let span = (modified_at - started_at).num_seconds().max(2 * count as i64);
     let step = span / count as i64;
     (0..count)
@@ -668,8 +700,14 @@ pub fn reset(home: &Path) -> Result<()> {
 mod tests {
   use super::*;
 
+  /// The reference start's follow-up totals, scaled to `sessions`.
+  fn scaled(reference: f64, sessions: usize) -> f64 {
+    reference * sessions as f64 / REFERENCE_NODES
+  }
+
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands
-  /// within the A1 range of the reference start.
+  /// within the A1 range of the reference start. Its full passes replay about the reference start's run follow-ups:
+  /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
   fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
     let sessions = 8_100;
@@ -677,9 +715,25 @@ mod tests {
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {
       let dealt = plan.sessions.iter().filter(|session| session.reason == Some(reason)).count();
-      assert_eq!(dealt, (reference * sessions as f64 / REFERENCE_NODES).round() as usize, "{reason:?}");
+      assert_eq!(dealt, scaled(reference, sessions).round() as usize, "{reason:?}");
     }
-    let with_runs = plan.sessions.iter().filter(|session| !session.runs.is_empty()).count() as f64;
-    assert!((with_runs / sessions as f64 - RUNS_SHARE).abs() < 0.02, "{with_runs} sessions hold runs");
+    let with_runs = plan.sessions.iter().filter(|session| !session.runs.is_empty()).count();
+    assert_eq!(with_runs, (RUNS_SHARE * sessions as f64).round() as usize);
+    let with_task = plan.sessions.iter().filter(|session| session.has_task).count();
+    assert_eq!(with_task, (TASK_SHARE * sessions as f64).round() as usize);
+
+    let replayed = |worker_only: bool| {
+      plan
+        .sessions
+        .iter()
+        .filter(|session| session.reason.is_some_and(|reason| reason != KeepReason::SequenceRef))
+        .filter(|session| !worker_only || session.profile == TaskProfile::Worker)
+        .flat_map(|session| &session.runs)
+        .filter(|run| run.end == RunEnd::Finished)
+        .count() as f64
+    };
+    let (followups, worker_followups) = (replayed(false), replayed(true));
+    assert!((followups / scaled(6907.0, sessions) - 1.0).abs() < 0.15, "{followups} follow-ups");
+    assert!((worker_followups / scaled(327.0, sessions) - 1.0).abs() < 0.15, "{worker_followups} worker follow-ups");
   }
 }

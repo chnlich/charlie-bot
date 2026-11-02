@@ -35,7 +35,7 @@ pub enum LoopStatus {
   Interrupted,
 }
 
-/// The state of one loop . The field order is the serialization order.
+/// The state of one loop. The field order is the serialization order.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ImproveState {
   pub loop_id: i64,

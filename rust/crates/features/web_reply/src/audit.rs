@@ -26,19 +26,19 @@ use serde_json::{Value, json};
 
 use crate::reply;
 
-/// The status instruction that ends a status reminder 
+/// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
   "Run `charliebot web status set` when Goal, Now or Waiting on you differs from the state that turn read back. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 
-/// The reminder a turn gets when it recorded no status set or confirm 
+/// The reminder a turn gets when it recorded no status set or confirm.
 fn status_reminder_text() -> String {
   format!("Session status reminder: your last turn ended without a status set or confirm. {STATUS_SENTENCES}")
 }
 
 /// The one reminder that a turn gets when it missed both its web reply and its status, for the unanswered user message
-/// `user_event_id` 
+/// `user_event_id`.
 fn combined_reminder_text(user_event_id: &str) -> String {
   format!(
     "Web reply and session status reminder: your last turn woke on a user message and ended without a web reply and \
@@ -46,10 +46,10 @@ fn combined_reminder_text(user_event_id: &str) -> String {
     reply::answer_request(user_event_id)
   )
 }
-/// The sender name a status reminder carries in the chat log 
+/// The sender name a status reminder carries in the chat log.
 pub const STATUS_REMINDER_SENDER_NAME: &str = "Session status";
 
-/// Whether `event` is a reminder that a turn ended without a status set or confirm 
+/// Whether `event` is a reminder that a turn ended without a status set or confirm.
 pub fn is_status_reminder(event: &impl EventFields) -> bool {
   event.field(WEB_STATUS_REMINDER).is_some()
 }
@@ -195,13 +195,13 @@ fn status_recorded(turn_events: &[charliebot_store::SharedChatEvent]) -> bool {
   })
 }
 
-/// Whether a status reminder for the turn `turn_id` is already in the log 
+/// Whether a status reminder for the turn `turn_id` is already in the log.
 fn reminder_already_posted(loaded: &[charliebot_store::SharedChatEvent], turn_id: Option<&str>) -> bool {
   let Some(turn_id) = turn_id else { return false };
   loaded.iter().any(|event| event.get(WEB_STATUS_REMINDER).and_then(CompactValue::as_str) == Some(turn_id))
 }
 
-/// Whether one of the turn's inputs is a status reminder 
+/// Whether one of the turn's inputs is a status reminder.
 fn woken_by_status_reminder(loaded: &[charliebot_store::SharedChatEvent], input_ids: &[String]) -> bool {
   let wanted: HashSet<&str> = input_ids.iter().map(String::as_str).collect();
   loaded.iter().any(|event| {
@@ -230,7 +230,7 @@ async fn close_request_pending(features: &Arc<FeatureContext>, session_id: &str)
   .context("the task-tree read stopped")?
 }
 
-/// Whether one turn needs one status reminder 
+/// Whether one turn needs one status reminder.
 async fn status_reminder_needed(
   features: &Arc<FeatureContext>,
   session_id: &str,

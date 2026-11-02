@@ -27,9 +27,9 @@ The parent node or the root line approves the plan after both. Contract: the pla
 /// The next step `amend` prints: a later version takes only the checks.
 const AMEND_REMINDER: &str = "A verify round and the cold read check this version before approval. \
 Contract: the plan-approval skill.";
-/// The revision triggers `--trigger` accepts 
+/// The revision triggers `--trigger` accepts.
 const AMEND_TRIGGERS: [&str; 2] = ["auto_amend", "feedback"];
-/// The close modes `--as` accepts 
+/// The close modes `--as` accepts.
 const CLOSE_MODES: [&str; 3] = ["superseded", "abandoned", "completed"];
 
 #[derive(Parser)]

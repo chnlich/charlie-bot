@@ -134,7 +134,7 @@ pub fn is_web_session(meta: &SessionMetadata) -> bool {
   charliebot_tasks::midturn_delivery::is_web_session(meta)
 }
 
-/// The web session named by `session_id` : 404 for an unknown session, 409 for a thread
+/// The web session named by `session_id`: 404 for an unknown session, 409 for a thread
 /// session or a worker.
 pub async fn require_web_session(
   features: &FeatureContext,
@@ -312,12 +312,12 @@ pub fn replied(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   })
 }
 
-/// Whether the log holds the nudge posted for `user_event_id` 
+/// Whether the log holds the nudge posted for `user_event_id`.
 pub fn nudged(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| nudge_of(event.as_ref()).as_deref() == Some(user_event_id))
 }
 
-/// Whether the log holds the no-reply notice for `user_event_id` 
+/// Whether the log holds the no-reply notice for `user_event_id`.
 pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_NOTICE)

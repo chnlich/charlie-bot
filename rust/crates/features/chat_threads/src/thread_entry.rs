@@ -60,7 +60,7 @@ use tokio::task::JoinHandle;
 
 /// The scope of a rule segment's sources.
 const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment 
+/// The delivery of a full text segment.
 const DELIVERY_FULL: &str = "full";
 /// The page-delivery sentence every platform's contract line carries: the reply path posts the text as written and
 /// refuses a file-server link (`LINKED_PAGES_LINE`).
@@ -163,7 +163,7 @@ impl ThreadPlatform {
 pub enum IdOrdering {
   /// Slack's dotted ts strings, ordered as text (`str`).
   Text,
-  /// Discord's snowflakes, ordered as unsigned integers 
+  /// Discord's snowflakes, ordered as unsigned integers.
   Snowflake,
 }
 
@@ -1743,7 +1743,7 @@ where
   Ok(joined.map_err(ThreadReplyError::failure)??)
 }
 
-/// Run `future` as its own task; a failure logs `background_task_failed` 
+/// Run `future` as its own task; a failure logs `background_task_failed`.
 pub(crate) fn spawn_logged<E, F>(name: String, future: F) -> JoinHandle<()>
 where
   E: Display,

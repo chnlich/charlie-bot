@@ -12,7 +12,7 @@ pub const READ_COMMAND: &str = "charliebot discord read";
 /// The trigger-label prefix of a session's armed thread-follow record (`_FOLLOW_TRIGGER_PREFIX`).
 pub const FOLLOW_TRIGGER_PREFIX: &str = "discord-thread-follow";
 
-/// The Discord platform as the shared contract reads it 
+/// The Discord platform as the shared contract reads it.
 pub const DISCORD: ThreadPlatform = ThreadPlatform {
   name: "discord",
   display_name: "Discord",

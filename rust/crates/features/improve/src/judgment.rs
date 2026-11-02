@@ -118,7 +118,7 @@ fn take_500(text: &str) -> String {
   text.chars().take(500).collect()
 }
 
-/// The text blocks of an assistant message, joined in order 
+/// The text blocks of an assistant message, joined in order.
 fn message_text(message: Option<&Value>) -> String {
   let Some(blocks) = message.and_then(|message| message.get("content")).and_then(Value::as_array) else {
     return String::new();

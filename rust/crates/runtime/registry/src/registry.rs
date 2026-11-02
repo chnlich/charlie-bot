@@ -470,7 +470,7 @@ pub struct BackendTypeRegistration {
   pub traits: BackendTraits,
   pub option_model: OptionModel,
   pub factory: Arc<dyn BackendFactory>,
-  /// `None` gives the default lifecycle: one process per run.
+  /// The type's lifecycle override; `None` gives the default of one process per run.
   pub lifecycle: Option<Arc<dyn BackendLifecycle>>,
   pub translate_fallback: bool,
 }
@@ -563,7 +563,7 @@ pub struct LaunchArgs {
 
 /// Builds the per-process backend of one launch (`factory(option, cfg, **launch_kwargs)`).
 pub trait BackendFactory: Send + Sync {
-  /// `option` is `None` only for the translate-fallback type.
+  /// Builds one process's backend for a launch. `option` is `None` only for the translate-fallback type.
   fn build(
     &self,
     option: Option<&BackendOption>,
@@ -799,7 +799,7 @@ pub struct Launch {
 pub trait LaunchWatch: Send {
   /// Records one event. `true` stops the process now, at a safe relay point.
   fn observe(&mut self, event: &Value) -> bool;
-  /// `true`: the run continues in a next process, which `next_launch` plans.
+  /// Whether the run continues in a next process, which `next_launch` plans; `true` continues.
   fn wants_next(&self, exit_code: i32, stderr: &str) -> bool;
 }
 
@@ -971,7 +971,7 @@ pub struct ServeTurnArgs {
   pub process_id: u32,
   /// The directory of the session cgroup that the process runs in, when it runs in one.
   pub cgroup_path: Option<PathBuf>,
-  /// `None` while the turn process runs; then its exit code, or the error that ended it.
+  /// The turn process's exit: `None` while it runs, then its exit code or the error that ended it.
   pub exit: watch::Receiver<Option<Result<i32, String>>>,
   pub on_event: EmitFn,
 }
@@ -1810,9 +1810,9 @@ impl Registry {
 
 /// The handles a feature uses at request time and in its services.
 pub struct FeatureContext {
-  /// `config.yaml`, reloaded when the file moves. A reload that fails keeps the previous config.
+  /// The configuration read from `config.yaml`, reloaded when the file moves; a failed reload keeps the previous value.
   pub config: Arc<HotReload<CharlieBotConfig>>,
-  /// `credentials.yaml`, reloaded when the file moves.
+  /// The credentials read from `credentials.yaml`, reloaded when the file moves.
   pub credentials: Arc<HotReload<Credentials>>,
   /// The sole owner of session metadata and chat-event writes.
   pub store: Arc<Store>,

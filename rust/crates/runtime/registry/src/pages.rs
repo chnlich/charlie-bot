@@ -19,7 +19,7 @@ pub const PAGE_SLOTS: &[&str] = &[
   "home_notes",
 ];
 
-/// `src/<kind>/<name>` for the package `src.<kind>.<name>`, under the checkout at `repo_root`.
+/// The directory of a dotted page package: `src.<kind>.<name>` maps to `src/<kind>/<name>` under `repo_root`.
 pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
   package.split('.').fold(repo_root.to_path_buf(), |path, part| path.join(part))
 }

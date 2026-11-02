@@ -227,7 +227,7 @@ struct Account {
 
 #[derive(Debug)]
 struct AccountTable {
-  /// The file the table was read from; `add` writes its edit back to it.
+  /// The file the table was read from; `exchange-code` writes its edit back to it.
   path: PathBuf,
   raw_bytes: Vec<u8>,
   raw_text: String,
@@ -353,7 +353,7 @@ fn duplicate_google_section(raw_text: &str) -> Option<String> {
   None
 }
 
-/// A repeated key keeps its last value, and `add` relies on that when it refuses a
+/// A repeated key keeps its last value, and `exchange-code` relies on that when it refuses a
 /// repeated `refresh_token` line with its own message; serde_yaml refuses every repeated key, so
 /// repeated key lines inside Google sections are dropped (last wins) before the parse. Keys in the
 /// other sections keep serde_yaml's refusal.
@@ -580,7 +580,7 @@ fn account_section(account: &Account) -> String {
   if account.is_default { GOOGLE_SECTION.to_string() } else { format!("{ACCOUNT_PREFIX}{}", account.name) }
 }
 
-/// `add`: exchange the browser redirect's code for a refresh token, confirm the consenting
+/// `exchange-code`: exchange the browser redirect's code for a refresh token, confirm the consenting
 /// account's email address and write the account section.
 fn add_account(
   table: &AccountTable,
@@ -713,7 +713,7 @@ fn unquote_plus(text: &str) -> String {
   String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// The bytes `add` writes for one account: the edited or appended section, plus the document the
+/// The bytes `exchange-code` writes for one account: the edited or appended section, plus the document the
 /// written file must parse back to.
 fn updated_content(
   table: &AccountTable,
@@ -806,7 +806,7 @@ fn section_mapping_mut<'a>(sections: &'a mut Mapping, section: &str) -> &'a mut 
   }
 }
 
-/// Exchange `add`'s validated edit for a credentials file: every byte outside the edited lines
+/// Build the credentials file from `exchange-code`'s validated edit: every byte outside the edited lines
 /// stays, the file mode stays, and a failure leaves the file unchanged.
 fn write_refresh_token(
   table: &AccountTable,
@@ -984,7 +984,7 @@ fn dump_scalar(value: &str, start_column: usize, allow_unicode: bool, fold_inden
   dump_double_quoted(value, allow_unicode)
 }
 
-/// `Emitter.analyze_scalar` for the single-line values `add` writes: the flags that forbid plain
+/// `Emitter.analyze_scalar` for the single-line values `exchange-code` writes: the flags that forbid plain
 /// style. A line break routes the value to double-quoted escapes; the block-mapping values are one
 /// line.
 fn analyze_scalar(value: &str, allow_unicode: bool) -> AnalyzedScalar {
@@ -1131,7 +1131,7 @@ fn dump_section(section: &str, write_values: &[(&str, &str)]) -> String {
 
 /// `Emitter.write_double_quoted`: the ESCAPE_REPLACEMENTS forms, then `\xXX`, `\uXXXX` and
 /// `\UXXXXXXXX` for everything the writer does not print literally. Folding is the emitter's
-/// escaped-space behavior and stays unimplemented; the values `add` writes are one line.
+/// escaped-space behavior and stays unimplemented; the values `exchange-code` writes are one line.
 fn dump_double_quoted(value: &str, allow_unicode: bool) -> String {
   let mut quoted = String::from("\"");
   for ch in value.chars() {
@@ -1683,7 +1683,7 @@ mod tests {
   // The consent-url and add tests: the token exchange and the profile read run against the stub
   // endpoints, and the file bytes are the recorded expectations.
 
-  /// The exact file `add` writes when it appends a section to the default table.
+  /// The exact file `exchange-code` writes when it appends a section to the default table.
   const APPEND_REFERENCE_BYTES: &str = concat!(
     "google:\n",
     "  client_id: default-client\n",
@@ -1693,7 +1693,7 @@ mod tests {
     "  refresh_token: new-refresh\n",
     "  description: 'personal: mailbox'\n",
   );
-  /// The exact file `add` writes when it inserts into the pending section between two sections.
+  /// The exact file `exchange-code` writes when it inserts into the pending section between two sections.
   const INSERT_REFERENCE_BYTES: &str = concat!(
     "google:\n",
     "  client_id: default-client\n",
@@ -2304,7 +2304,7 @@ appointments and the tax paperwork of the household";
     assert_eq!(std::fs::read(credentials_path(&home)).unwrap(), original);
   }
 
-  /// The block-mapping scalar renderings `add` writes for each value.
+  /// The block-mapping scalar renderings `exchange-code` writes for each value.
   #[test]
   fn the_block_mapping_scalar_dumper_prints_pyyaml_forms() {
     for (value, expected) in [

@@ -22,6 +22,9 @@ use serde_json::{Value, json};
 /// The profile-home directory name under the user's home.
 const CHARLIEBOT_DIR: &str = ".charliebot";
 
+/// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags.
+const RECURSIVE_GREP: &str = r"grep\b(?=[^|;&\n]*\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?=\s|$))";
+
 const PER_FILE_PROCESS_REASON: &str = "This command starts one process per session directory. Use `charliebot session tree --root <id> --include-archived --limit 500` for a session's children, or read all the files in one process.";
 const ROOTED_SEARCH_REASON: &str = "This search runs from `/` or the home directory with no depth limit. Search the directories that can hold the answer, add `-maxdepth`, or prune the session store.";
 const RUN_LOG_SEARCH_REASON: &str = "This recursive search reaches the session store's run logs. Filter with `-g 'chat_events*.jsonl'`, `-g metadata.json` or `-g '*.md'`, or search a more specific directory.";
@@ -96,7 +99,8 @@ fn scan_forms(command: &str) -> Result<Vec<ScanForm>, String> {
   for captures in rooted_search_pattern()?.captures_iter(&shell) {
     let captures = captures.map_err(parse_error)?;
     let around = groups_text(&captures);
-    if !around.contains("-maxdepth") && !around.contains(SESSIONS_DIR_NAME) {
+    let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
+    if !around.contains("-maxdepth") && !prunes_store {
       forms.push(ScanForm::RootedSearch);
       break;
     }
@@ -220,9 +224,10 @@ fn rooted_search_pattern() -> Result<&'static Regex, String> {
     .get_or_init(|| {
       Regex::new(&format!(
         concat!(
-          r"\b(?:find|rg|grep\s+-[a-zA-Z]*r[a-zA-Z]*|fd)\b([^|;&\n]*?)",
+          r"\b(?:find|rg|{recursive_grep}|fd)\b([^|;&\n]*?)",
           r"\s(?:/|~|~/|\$HOME|{home}/?)(?=\s|$|\))([^|;&\n]*)"
         ),
+        recursive_grep = RECURSIVE_GREP,
         home = home_token()?
       ))
       .map_err(|error| format!("scan command parsing failed: {error}"))
@@ -237,10 +242,8 @@ fn run_log_search_pattern() -> Result<&'static Regex, String> {
   PATTERN
     .get_or_init(|| {
       Regex::new(&format!(
-        concat!(
-          r"\b(?:rg|grep\s+-[a-zA-Z]*r[a-zA-Z]*)\b([^|;&\n]*?)",
-          r#"\s\"?(?:{store_or_parent})/?\"?(?=\s|$|\))([^|;&\n]*)"#
-        ),
+        concat!(r"\b(?:rg|{recursive_grep})\b([^|;&\n]*?)", r#"\s\"?(?:{store_or_parent})/?\"?(?=\s|$|\))([^|;&\n]*)"#),
+        recursive_grep = RECURSIVE_GREP,
         store_or_parent = store_or_parent_token()?
       ))
       .map_err(|error| format!("scan command parsing failed: {error}"))
@@ -344,6 +347,21 @@ mod tests {
     for command in commands {
       assert!(scan_forms(command).unwrap().is_empty(), "{command}");
     }
+  }
+
+  #[test]
+  fn recursive_grep_and_unpruned_home_search_are_refused() {
+    let denied = [
+      "grep -n -r X ~/.charliebot/sessions",
+      "grep -R X ~/.charliebot/sessions",
+      "grep --recursive X ~/.charliebot/sessions",
+      r#"find ~ -path "*/sessions/*" -name metadata.json"#,
+      "rg -l X / ~/.charliebot/sessions -g metadata.json",
+    ];
+    for command in denied {
+      assert!(!scan_forms(command).unwrap().is_empty(), "{command}");
+    }
+    assert!(scan_forms("grep -n -r X ~/workspace/charlie-bot/rust").unwrap().is_empty());
   }
 
   #[test]

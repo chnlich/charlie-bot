@@ -78,7 +78,8 @@ readback() {
   echo "readback: $what = $value"
 }
 
-# The whole-disk major:minor that carries the root filesystem, from sysfs rather than a name rule.
+# The whole-disk name and major:minor that carries the root filesystem, from sysfs rather than a
+# name rule, printed on one line so no caller has to close a pipe on the rest.
 resolve_root_disk() {
   local source dev_sys
   source=$(findmnt -no SOURCE --target /)
@@ -86,8 +87,7 @@ resolve_root_disk() {
   while [[ -e "$dev_sys/partition" ]]; do
     dev_sys=$(dirname "$dev_sys")
   done
-  basename "$dev_sys"
-  cat "$dev_sys/dev"
+  echo "$(basename "$dev_sys") $(cat "$dev_sys/dev")"
 }
 
 if [[ $UNDO == 1 ]]; then
@@ -99,7 +99,7 @@ if [[ $UNDO == 1 ]]; then
     readback "charliebot-io-cost.service" "$(systemctl is-enabled charliebot-io-cost.service 2>&1 || true)"
   fi
   echo "undo 2: io.cost"
-  DISK_MAJ_MIN=$(resolve_root_disk | tail -1)
+  read -r _ DISK_MAJ_MIN <<< "$(resolve_root_disk)"
   apply sh -c "echo '$DISK_MAJ_MIN enable=0' > /sys/fs/cgroup/io.cost.qos"
   if [[ $DRY_RUN == 0 ]]; then
     readback "io.cost.qos" "$(cat /sys/fs/cgroup/io.cost.qos)"
@@ -117,8 +117,7 @@ if [[ $UNDO == 1 ]]; then
 fi
 
 echo "== 1. delegate io to the user manager =="
-DISK_NAME=$(resolve_root_disk | head -1)
-DISK_MAJ_MIN=$(resolve_root_disk | tail -1)
+read -r DISK_NAME DISK_MAJ_MIN <<< "$(resolve_root_disk)"
 announce \
   "rm $DROPIN; systemctl daemon-reload" \
   "write $DROPIN with Delegate=pids memory cpu io, then systemctl daemon-reload"
@@ -192,5 +191,9 @@ if [[ $DRY_RUN == 0 ]]; then
   readback "io.cost.qos after the boot unit ran" "$(cat /sys/fs/cgroup/io.cost.qos)"
 fi
 
-echo "done: io is delegated, io.cost is on $DISK_NAME, and the boot unit is enabled"
-echo "the session io shares bind when the server next writes them (enable_session_io_weight is on by default)"
+if [[ $DRY_RUN == 1 ]]; then
+  echo "dry run: nothing was written; rerun without --dry-run as root to apply"
+else
+  echo "done: io is delegated, io.cost is on $DISK_NAME, and the boot unit is enabled"
+  echo "the session io shares bind when the server next writes them (enable_session_io_weight is on by default)"
+fi

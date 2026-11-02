@@ -49,7 +49,7 @@ async fn seeded_home() -> (Home, String) {
   home
     .features
     .startup
-    .insert(Templating::new(repo_root(), &["src.features.approval"]))
+    .insert(Templating::new(repo_root(), &["features.approval"]))
     .expect("the templating inserts once");
   (home, session)
 }
@@ -129,7 +129,7 @@ async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
   home
     .features
     .startup
-    .insert(Templating::new(repo_root(), &["src.features.approval"]))
+    .insert(Templating::new(repo_root(), &["features.approval"]))
     .expect("the templating inserts once");
 
   let now: Timestamp = "2026-11-02T17:00:00Z".parse().expect("the fixed clock parses");
@@ -149,7 +149,7 @@ async fn today_s_view_refreshes_when_the_tab_becomes_visible_and_a_past_day_does
   home
     .features
     .startup
-    .insert(Templating::new(repo_root(), &["src.features.approval"]))
+    .insert(Templating::new(repo_root(), &["features.approval"]))
     .expect("the templating inserts once");
   let now: Timestamp = "2026-11-02T17:00:00Z".parse().expect("the fixed clock parses");
   let today: Date = "2026-11-02".parse().expect("the fixed day parses");

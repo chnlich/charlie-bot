@@ -2332,7 +2332,7 @@ mod tests {
     fs::create_dir(home.path().join("sessions")).unwrap();
     fs::write(home.path().join("config.yaml"), "user_text_checks:\n  internal_id_patterns: ['zz\\d{3}']\n").unwrap();
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.user_text_checks", charliebot_user_text_checks::register).unwrap();
+    registry.register_package("features.user_text_checks", charliebot_user_text_checks::register).unwrap();
     let config = registry.load_config(home.path()).unwrap();
     let id = Uuid::new_v4().to_string();
     fs::create_dir(home.path().join("sessions").join(&id)).unwrap();

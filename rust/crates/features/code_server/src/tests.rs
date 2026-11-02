@@ -20,7 +20,7 @@ use crate::register;
 /// as the worktree directory.
 fn load_config(home: &Path, code_server: Value, workspace: &Path) -> CharlieBotConfig {
   let mut registry = Registry::new();
-  registry.register_package("src.features.code_server", register).expect("the package registers");
+  registry.register_package("features.code_server", register).expect("the package registers");
   fs::create_dir_all(home).expect("the home exists");
   let config = json!({
     "code_server": code_server,

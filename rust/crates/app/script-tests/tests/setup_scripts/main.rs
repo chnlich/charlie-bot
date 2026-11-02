@@ -61,8 +61,8 @@ fn the_rewritten_shell_entry_points_parse() {
     "scripts/setup.sh",
     "scripts/preflight-charlie-code.sh",
     "scripts/sync-skills.sh",
-    "tools/check-skills-host-leak.sh",
-    "rust/scripts/stress-tests.sh",
+    "dev/check-skills-host-leak.sh",
+    "dev/stress-tests.sh",
   ] {
     let sandbox = Sandbox::new();
     let mut command = harness::command("bash", &sandbox.env());

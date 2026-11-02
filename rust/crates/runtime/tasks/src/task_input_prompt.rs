@@ -82,7 +82,7 @@ mod tests {
     test_fixtures::features_with_packages(
       &home.path().join("home"),
       "",
-      &[("src.features.web_reply", charliebot_web_reply::register), ("src.features.voice", charliebot_voice::register)],
+      &[("features.web_reply", charliebot_web_reply::register), ("features.voice", charliebot_voice::register)],
     )
   }
 

@@ -148,9 +148,9 @@ fn sweep(root: &Path) -> Result<String, String> {
     env::set_var("CLAUDE_CONFIG_DIR", &claude_config);
   }
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
-  registry.register_package("src.backends.codex", codex::register).unwrap();
-  registry.register_package("src.backends.opencode", opencode::register_usage_source).unwrap();
+  registry.register_package("backends.claude_code", claude_code::register).unwrap();
+  registry.register_package("backends.codex", codex::register).unwrap();
+  registry.register_package("backends.opencode", opencode::register_usage_source).unwrap();
   let cfg = Arc::new(registry.load_config(&charlie).unwrap());
   // The sandbox guard: every store the sweep reaches resolves inside the tree, checked before the first deletion.
   let claude = ClaudeHost::from_process().unwrap();

@@ -1,4 +1,4 @@
-//! One improve run: `tools/improve/remote-launch.sh` on this host, and `tools/improve/remote-runner.sh` on the
+//! One improve run: `dev/improve/remote-launch.sh` on this host, and `dev/improve/remote-runner.sh` on the
 //! remote host for a round or this host's local claude for a cron session's own turn. A fake `ssh` records its
 //! arguments and runs the remote side locally, and fake `claude`, `systemd-run`, `systemctl` and `cargo` record what
 //! they receive, so each test checks the run's contract without a network, a server or a real remote host.
@@ -204,7 +204,7 @@ fn run_in_scope(world: &World, launch_id: &str) -> harness::Run {
   env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
   let mut command = harness::command("bash", &env);
-  command.arg(harness::repo_root().join("tools/improve/remote-runner.sh")).args([
+  command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
     launch_id,
     FOCUS_DIRECTION,
@@ -461,7 +461,7 @@ fn the_direction_comes_from_the_worker_session_and_its_task_file() {
   // A task file of another session comes first in the directory; its direction must not win.
   fs::write(
     world.sandbox.dir("profile/config.d/cron.d").join("improve-ux.yaml"),
-    "prompt_file: tools/improve/ux.md\nsession_id: 00000000-0000-0000-0000-000000000000\n",
+    "prompt_file: dev/improve/ux.md\nsession_id: 00000000-0000-0000-0000-000000000000\n",
   )
   .expect("another task file");
   let run = world.run(&world.env());

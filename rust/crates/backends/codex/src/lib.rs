@@ -29,7 +29,7 @@ pub use usage_logs::{USAGE_SOURCE, session_id};
 use factory::CodexFactory;
 
 /// The package label the composition list registers this backend's package under.
-pub const PACKAGE: &str = "src.backends.codex";
+pub const PACKAGE: &str = "backends.codex";
 
 /// Registers the codex backend type, its usage resolver, its usage source, and the source's attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -119,7 +119,7 @@ mod tests {
   #[test]
   fn registration_matches_the_backend_and_usage_source() {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.codex", register_synthetic_host).unwrap();
+    registry.register_package("backends.codex", register_synthetic_host).unwrap();
 
     let backend = registry.backend_type_of("codex").unwrap();
     assert_eq!(
@@ -166,7 +166,7 @@ mod tests {
     std::fs::write(rollout, contents).unwrap();
 
     let mut registry = Registry::new();
-    registry.register_package("src.backends.codex", register_synthetic_host).unwrap();
+    registry.register_package("backends.codex", register_synthetic_host).unwrap();
     let registry = Arc::new(registry);
     let host = usage_resolver_host(Arc::clone(&registry), home);
     let constructor = registry.usage_resolver_for("codex").unwrap();

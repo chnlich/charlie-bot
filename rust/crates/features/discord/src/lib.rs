@@ -1,4 +1,4 @@
-//! `src/features/discord`: registers the gateway service, internal routes, config section, session fields and turn
+//! `web/features/discord`: registers the gateway service, internal routes, config section, session fields and turn
 //! contribution for the Discord thread entrypoint.
 
 mod api;

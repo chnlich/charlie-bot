@@ -56,7 +56,7 @@ fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempD
   std::fs::create_dir_all(home.path().join("config.d/cron.d")).expect("cron directory provisions");
   std::fs::create_dir_all(home.path().join("state")).expect("state directory provisions");
   let mut registry = Registry::new();
-  registry.register_package("src.features.cron", crate::register).expect("cron registration");
+  registry.register_package("features.cron", crate::register).expect("cron registration");
   registry.register_package("test.cron_handlers", register_test_handler).expect("handler registration");
   registry.register_package("test.cron_backend", register_test_backend).expect("backend registration");
   registry.register_package("test.host_auth", register_host_auth_stub).expect("host auth registration");

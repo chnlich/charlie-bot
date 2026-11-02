@@ -263,7 +263,7 @@ mod tests {
   #[tokio::test]
   async fn registered_routes_authorize_and_dispatch_and_an_unregistered_path_closes() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.test", register_exchange).expect("register the test route");
+    registry.register_package("features.test", register_exchange).expect("register the test route");
     let (state, _home) = app_state(registry);
     let (address, server) = start_server(state).await;
 

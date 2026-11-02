@@ -1,4 +1,4 @@
-//! `src/features/artifacts`: the `publish:` config section, the session plan registry with its routes and its four verbs
+//! `web/features/artifacts`: the `publish:` config section, the session plan registry with its routes and its four verbs
 //! `present`, `amend`, `approve` and `close`, its sidebar contribution, the artifact file view, and the `plan` and
 //! `artifact check` subcommands.
 

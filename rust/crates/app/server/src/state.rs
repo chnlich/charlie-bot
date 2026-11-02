@@ -28,7 +28,7 @@ impl StaticMount {
     let mut mounts: Vec<StaticMount> = packages
       .iter()
       .map(|package| StaticMount {
-        prefix: format!("/static/{}", package.trim_start_matches("src.").replace('.', "/")),
+        prefix: format!("/static/{}", package.replace('.', "/")),
         directory: StaticDirectory::new(package_directory(repo_root, package).join("static")),
       })
       .collect();

@@ -1,4 +1,4 @@
-//! `src/features/chat_threads`: the Slack and Discord thread sessions. Their turn contribution names the thread brief,
+//! `web/features/chat_threads`: the Slack and Discord thread sessions. Their turn contribution names the thread brief,
 //! their sidebar subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The reply contract
 //! that the platform turn contributions share is in `thread_entry`.
 
@@ -33,7 +33,7 @@ mod tests {
   #[test]
   fn register_adds_the_turn_contribution_the_router_and_the_sidebar_view() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.chat_threads", super::register).expect("the package registers");
+    registry.register_package("features.chat_threads", super::register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);
     assert_eq!(registry.sidebar_contributions().count(), 1);
 

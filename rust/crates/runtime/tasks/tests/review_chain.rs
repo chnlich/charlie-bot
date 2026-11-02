@@ -1354,7 +1354,7 @@ async fn worker_and_review_runs_put_the_guard_first_on_path() -> anyhow::Result<
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).context("checkout root exists")?;
-  let guard_dir = checkout.join("src/runtime/git_stash_guard");
+  let guard_dir = checkout.join("rust/crates/runtime/tasks/git_stash_guard");
   assert!(fs::read_to_string(worker_path)?.starts_with(&format!("{}:", guard_dir.display())));
   assert!(fs::read_to_string(review_path)?.starts_with(&format!("{}:", guard_dir.display())));
   Ok(())

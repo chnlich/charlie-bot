@@ -19,7 +19,7 @@ mod tests {
   #[test]
   fn register_mounts_the_switch_events_router() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.diag", register).expect("the package registers");
+    registry.register_package("features.diag", register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);
   }
 }

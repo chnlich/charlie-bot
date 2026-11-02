@@ -216,7 +216,7 @@ mod tests {
   #[test]
   fn register_mounts_the_router_and_lists_the_home_card() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.files", register).expect("the package registers");
+    registry.register_package("features.files", register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);
     let cards = registry.home_cards();
     assert_eq!(cards.len(), 1);
@@ -262,8 +262,8 @@ mod tests {
   #[tokio::test]
   async fn the_first_file_view_that_answers_ends_the_request() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.passes", passing_package).expect("registers");
-    registry.register_package("src.features.answers", answering_package).expect("registers");
+    registry.register_package("features.passes", passing_package).expect("registers");
+    registry.register_package("features.answers", answering_package).expect("registers");
     let (_home, features) = test_features(registry);
     let (status, body) = answer_text(&features, &parts(Method::GET, &[]), "/no/such/file").await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "answered"));

@@ -17,7 +17,7 @@ use charliebot_agents::cli_base::CliHost;
 pub const USAGE_SOURCE: &str = "Antigravity";
 
 /// The package label the composition list registers this backend's package under.
-pub const PACKAGE: &str = "src.backends.antigravity";
+pub const PACKAGE: &str = "backends.antigravity";
 
 /// Registers the `antigravity` type and the Antigravity usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

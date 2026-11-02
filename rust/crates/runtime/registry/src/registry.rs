@@ -2105,20 +2105,20 @@ mod tests {
     use anyhow::Context;
 
     let step: anyhow::Result<()> = Err(anyhow::anyhow!("HOME must be set")).context("reading the host");
-    let error = registration_step("src.backends.example", step).unwrap_err();
-    assert_eq!(error.package, "src.backends.example");
+    let error = registration_step("backends.example", step).unwrap_err();
+    assert_eq!(error.package, "backends.example");
     assert_eq!(error.message, "reading the host: HOME must be set");
   }
 
   #[test]
   fn registration_order_drives_routes_and_metadata_keys() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.zeta", zeta).unwrap();
-    registry.register_package("src.features.alpha", alpha).unwrap();
+    registry.register_package("features.zeta", zeta).unwrap();
+    registry.register_package("features.alpha", alpha).unwrap();
 
     let routers: Vec<&str> = registry.routers().iter().map(|route| route.package).collect();
-    assert_eq!(routers, ["src.features.zeta", "src.features.alpha"]);
-    assert_eq!(registry.page_packages(), ["src.features.zeta", "src.features.alpha"]);
+    assert_eq!(routers, ["features.zeta", "features.alpha"]);
+    assert_eq!(registry.page_packages(), ["features.zeta", "features.alpha"]);
     let owners: Vec<&str> = registry.metadata_slots().iter().map(|slot| slot.owner).collect();
     assert_eq!(owners, ["zeta", "alpha"]);
     let globals: Vec<&str> = registry.template_globals().map(|(name, _)| name).collect();
@@ -2128,28 +2128,28 @@ mod tests {
   #[test]
   fn duplicate_registration_fails_and_names_both_packages() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.alpha", shared_global).unwrap();
-    let error = registry.register_package("src.features.zeta", shared_global).unwrap_err();
-    assert_eq!(error.package, "src.features.zeta");
-    assert!(error.message.contains("src.features.alpha"), "{error}");
+    registry.register_package("features.alpha", shared_global).unwrap();
+    let error = registry.register_package("features.zeta", shared_global).unwrap_err();
+    assert_eq!(error.package, "features.zeta");
+    assert!(error.message.contains("features.alpha"), "{error}");
   }
 
   #[test]
   fn duplicate_websocket_pattern_fails_and_names_both_packages() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.alpha", websocket_alpha).unwrap();
-    let error = registry.register_package("src.features.zeta", websocket_zeta).unwrap_err();
-    assert_eq!(error.package, "src.features.zeta");
-    assert!(error.to_string().contains("src.features.alpha"), "{error}");
-    assert!(error.to_string().contains("src.features.zeta"), "{error}");
+    registry.register_package("features.alpha", websocket_alpha).unwrap();
+    let error = registry.register_package("features.zeta", websocket_zeta).unwrap_err();
+    assert_eq!(error.package, "features.zeta");
+    assert!(error.to_string().contains("features.alpha"), "{error}");
+    assert!(error.to_string().contains("features.zeta"), "{error}");
   }
 
   #[test]
   fn a_package_listed_twice_fails() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.alpha", alpha).unwrap();
-    let error = registry.register_package("src.features.alpha", alpha).unwrap_err();
-    assert_eq!(error.package, "src.features.alpha");
+    registry.register_package("features.alpha", alpha).unwrap();
+    let error = registry.register_package("features.alpha", alpha).unwrap_err();
+    assert_eq!(error.package, "features.alpha");
   }
 
   #[test]

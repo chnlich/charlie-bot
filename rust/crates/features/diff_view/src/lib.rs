@@ -1,4 +1,4 @@
-//! `src/features/diff_view`: the `/diff` page and the `/api/git` routes it calls. The routes read a repository's refs
+//! `web/features/diff_view`: the `/diff` page and the `/api/git` routes it calls. The routes read a repository's refs
 //! and diffs through `git`. Two memos keep the diff manifest of each resolved range and the branch list of each repo,
 //! so a repeat view runs no diff.
 

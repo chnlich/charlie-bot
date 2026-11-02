@@ -168,7 +168,7 @@ impl Templating {
     for package in &self.packages {
       let directory = package_directory(&self.repo_root, package).join("static");
       if directory.is_dir() {
-        let url_path = package.trim_start_matches("src.").replace('.', "/");
+        let url_path = package.replace('.', "/");
         walk_static_tree(&directory, &format!("{url_path}/"), &mut pairs, &mut paths)?;
       }
     }
@@ -579,7 +579,7 @@ mod tests {
   #[tokio::test]
   async fn render_page_renders_a_package_template_with_request_and_a_global() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    let templates = package_directory(root.path(), "features.notes").join("templates");
     fs::create_dir_all(&templates).unwrap();
     fs::write(
       templates.join("notes.html"),
@@ -587,7 +587,7 @@ mod tests {
     )
     .unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.notes", register_notes).unwrap();
+    registry.register_package("features.notes", register_notes).unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
@@ -608,11 +608,11 @@ mod tests {
   #[tokio::test]
   async fn render_page_substitutes_a_placeholder_and_refuses_a_page_without_it() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    let templates = package_directory(root.path(), "features.notes").join("templates");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("splice.html"), "const DATA = {{ payload|safe }};").unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.notes", register_notes).unwrap();
+    registry.register_package("features.notes", register_notes).unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
@@ -643,11 +643,11 @@ mod tests {
   #[tokio::test]
   async fn a_repeat_render_reuses_the_environment_and_an_edit_takes_effect() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    let templates = package_directory(root.path(), "features.notes").join("templates");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} one").unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.notes", register_notes).unwrap();
+    registry.register_package("features.notes", register_notes).unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
@@ -671,12 +671,12 @@ mod tests {
   #[tokio::test]
   async fn a_page_part_added_on_disk_reaches_the_next_render() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    let templates = package_directory(root.path(), "features.notes").join("templates");
     fs::create_dir_all(templates.join("notes")).unwrap();
     fs::write(templates.join("parts.html"), "{% for part in page_parts('head') %}{% include part %}{% endfor %}")
       .unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.features.notes", register_notes).unwrap();
+    registry.register_package("features.notes", register_notes).unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
@@ -706,10 +706,10 @@ mod tests {
     fs::write(static_root.join("sub").join("b.css"), "beta").unwrap();
     std::os::unix::fs::symlink(static_root.join("sub"), static_root.join("linked")).unwrap();
     std::os::unix::fs::symlink(static_root.join("missing"), static_root.join("dangling")).unwrap();
-    let package_static = package_directory(root.path(), "src.features.notes").join("static");
+    let package_static = package_directory(root.path(), "features.notes").join("static");
     fs::create_dir_all(&package_static).unwrap();
     fs::write(package_static.join("x.txt"), "gamma").unwrap();
-    let templating = Templating::new(root.path(), &["src.features.notes"]);
+    let templating = Templating::new(root.path(), &["features.notes"]);
     // Each file contributes its URL path and its content's sha1, in path order; a dangling link contributes nothing
     // and a symlinked directory's files count under the link's name. Hidden and git-ignored files still count.
     let mut combined = Sha1::new();

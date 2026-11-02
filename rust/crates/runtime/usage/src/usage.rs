@@ -638,7 +638,7 @@ mod tests {
   #[test]
   fn anthropic_compatible_usage_uses_the_option_context_window() {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+    registry.register_package("backends.anthropic_compatible", register_anthropic_compatible).unwrap();
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
       home.path().join("config.yaml"),
@@ -714,7 +714,7 @@ mod tests {
     ];
     let mut registry = Registry::new();
     registry
-      .register_package("src.backends.claude_code", |registry| {
+      .register_package("backends.claude_code", |registry| {
         registry.reading_limits(CLAUDE_READING_KIND, |run_kind| {
           claude_code::claude_reading_limits_from(run_kind, &Env::new())
         })
@@ -765,7 +765,7 @@ mod tests {
   fn claude_reading_takes_the_smaller_of_model_and_declared_windows() {
     let mut registry = Registry::new();
     registry
-      .register_package("src.backends.claude_code", |registry| {
+      .register_package("backends.claude_code", |registry| {
         registry.reading_limits(CLAUDE_READING_KIND, |_run_kind| ContextLimits {
           declared_window: Some(500_000),
           compact_reserve: Some(20_000),
@@ -846,7 +846,7 @@ mod tests {
 
   fn registry_with_snapshot_limits(register: RegisterFn) -> Registry {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.opencode", register).unwrap();
+    registry.register_package("backends.opencode", register).unwrap();
     registry
   }
 
@@ -927,7 +927,7 @@ mod tests {
   #[test]
   fn registered_codex_resolver_precedes_the_fold_and_is_cached_once() {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.codex", register_codex).unwrap();
+    registry.register_package("backends.codex", register_codex).unwrap();
     let registry = Arc::new(registry);
     let home = tempfile::tempdir().unwrap();
     let (usage_owner, _store) = owner_over(home.path(), Arc::clone(&registry));
@@ -1033,7 +1033,7 @@ mod tests {
 
     let home = tempfile::tempdir().unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
+    registry.register_package("backends.claude_code", claude_code::register).unwrap();
     let cfg = registry.load_config(home.path()).unwrap();
     assert!(!claude_code::claude_compaction::expired_cache_compaction_wanted(
       &cfg,

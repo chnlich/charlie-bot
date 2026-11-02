@@ -137,7 +137,7 @@ mod tests {
 
   fn config(accounts_yaml: &str, account_pool: Option<&str>) -> CharlieBotConfig {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.claude_code", crate::register).unwrap();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
     let pool_field = account_pool.map_or_else(String::new, |pool| format!("      account_pool: {pool}\n"));
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -162,7 +162,7 @@ mod tests {
   #[test]
   fn config_rejects_invalid_pool_members_and_missing_option_binding() {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.claude_code", crate::register).unwrap();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
       home.path().join("config.yaml"),
@@ -175,7 +175,7 @@ mod tests {
   #[test]
   fn registration_keeps_the_legacy_keys_and_shared_pool_membership() {
     let mut registry = Registry::new();
-    registry.register_package("src.backends.claude_code", crate::register).unwrap();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
     let section = registry.config_schema().sections.into_iter().find(|section| section.key == "accounts").unwrap();
     assert_eq!(
       section.legacy_keys,
@@ -225,7 +225,7 @@ mod tests {
     ];
     for (accounts, account_pool, expected) in cases {
       let mut registry = Registry::new();
-      registry.register_package("src.backends.claude_code", crate::register).unwrap();
+      registry.register_package("backends.claude_code", crate::register).unwrap();
       let home = tempfile::tempdir().unwrap();
       let binding = account_pool.map_or_else(String::new, |pool| format!("      account_pool: {pool}\n"));
       std::fs::write(

@@ -36,7 +36,7 @@ The command prints `config ok` and exits 0 when the configuration passes. It exi
 failure. Any other argument prints the usage line and exits 2.
 
 - `CHARLIEBOT_REPO_ROOT` (required) names the charlie-bot checkout whose `web/`, page packages
-  (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The binary exits 1 when the variable
+  (`web/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The binary exits 1 when the variable
   is unset or the directory holds no `web/templates`.
 - `CHARLIEBOT_HOME` selects the profile home: unset or blank is `~/.charliebot`, otherwise an absolute or `~` path.
 - `config.yaml` in the home sets `server.host` and `server.port`. `credentials.yaml` sets
@@ -130,7 +130,8 @@ roots copy.
 - **The PACKAGES list alone decides registration order.** The `PACKAGES` list in `rust/crates/app/packages/src/lib.rs`
   sets the order in which packages register; `RUNTIME` in the same file registers before it.
   *Purpose:* routes, page parts, metadata keys, template paths and lifespan steps follow registration order
-  (`docs/registry.md`), so a second list that set that order would change the server's output with no diff to `PACKAGES`.
+  (`docs/registry.md` in the repository root), so a second list that set that order would change the server's output
+  with no diff to `PACKAGES`.
 - **Each file kind has one owner.** The owner module holds the file's paths, its record type, its line rules and the
   functions that decode and encode its lines, and other modules read and write the file through those functions, also
   when they only pass the path to a helper: the owner's decoder and encoder are the only ones code outside the owner
@@ -146,7 +147,6 @@ roots copy.
 ```
 rust/
   Cargo.toml                      workspace: every crate under `crates/`
-  docs/registry.md                the plug-in seam: each hook kind, its Rust signature and an example
   fixtures/golden/                the expected outputs the compat and ssh tests compare with
   crates/infra/core/src/
     config.rs                     config.yaml: typed sections, legacy and unknown key refusals

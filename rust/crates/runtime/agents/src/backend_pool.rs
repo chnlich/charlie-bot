@@ -425,7 +425,7 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
   })
 }
 
-/// Register the session metadata slot owned by `src.features.backend_pool`.
+/// Register the session metadata slot owned by `features.backend_pool`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.metadata_slot_with_validator(
     MetadataSlot {

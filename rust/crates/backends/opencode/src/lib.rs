@@ -33,7 +33,7 @@ pub use server::{
 pub use usage_logs::USAGE_SOURCE;
 
 /// The package label the composition list registers this backend's package under.
-pub const PACKAGE: &str = "src.backends.opencode";
+pub const PACKAGE: &str = "backends.opencode";
 
 /// Register the backend type, shared server factory, usage source and snapshot reading limits.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -163,8 +163,8 @@ pub(crate) mod tests {
     )
     .unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.backends.opencode", register_synthetic).unwrap();
-    registry.register_package("src.backends.anthropic_compatible", anthropic_compatible::register).unwrap();
+    registry.register_package("backends.opencode", register_synthetic).unwrap();
+    registry.register_package("backends.anthropic_compatible", anthropic_compatible::register).unwrap();
     let cfg = registry.load_config(&home).unwrap();
     let extra_body = json!({"cache": {"no-store": true, "no-cache": true}});
 
@@ -185,7 +185,7 @@ pub(crate) mod tests {
     // The name, id prefixes and run_logs_only of the opencode source, and the attribution of the
     // opencode backend type.
     let mut registry = Registry::new();
-    registry.register_package("src.backends.opencode", register_synthetic).unwrap();
+    registry.register_package("backends.opencode", register_synthetic).unwrap();
 
     let source = registry.usage_source_for("opencode").unwrap().unwrap();
     assert_eq!(source.name, USAGE_SOURCE);

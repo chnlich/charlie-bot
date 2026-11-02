@@ -55,7 +55,7 @@ Repo-level skills must also stay free of session-specific debug artifacts: dated
 
 A local pre-commit hook enforces this boundary. One-time setup per clone:
 
-    git config --local core.hooksPath tools/git-hooks
+    git config --local core.hooksPath dev/git-hooks
 
 Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `$CHARLIEBOT_HOME/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. The host patterns scan every tracked file, including decompressed gzip files. The hooks scan staged files, commit messages, and commit identities.
 
@@ -68,7 +68,7 @@ Examples in skills and docs are synthetic end to end, covering people,
 items, and quantities alike, even when a real session supplies the
 template. The authoring-time test: a reader who knows this repository's
 owner learns nothing about any real person from the content.
-tools/check-skills-host-leak.sh scans for host identifiers only, so
+dev/check-skills-host-leak.sh scans for host identifiers only, so
 this boundary rides on the author's judgment; a skill drafted from a live
 session applies the test to every example before it lands.
 

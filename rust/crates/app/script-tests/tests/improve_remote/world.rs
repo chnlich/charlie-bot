@@ -2,7 +2,7 @@
 //! the stub commands of both sides, with a local `claude` stub for a cron session's own turn.
 //!
 //! The repository is a real git repository with `origin/main`, so the launcher reads its commit and
-//! `tools/improve/inflight-files.sh` lists this repository's own worktrees only. The stub `ssh` records its arguments
+//! `dev/improve/inflight-files.sh` lists this repository's own worktrees only. The stub `ssh` records its arguments
 //! and then runs the remote command locally under `SSH_REMOTE_HOME`, with a clean environment that carries the
 //! `FAKE_` variables the stubs read: a real ssh sends no other variable, so a variable that the launcher fails to
 //! forward is absent on the remote side here too. Like a real ssh, the stub sends its standard input to the remote
@@ -223,9 +223,9 @@ impl World {
   pub fn new() -> Self {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
-    let scripts = sandbox.dir("repo/tools/improve");
+    let scripts = sandbox.dir("repo/dev/improve");
     for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh"] {
-      harness::copy_file(&harness::repo_root().join("tools/improve").join(name), &scripts.join(name));
+      harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
@@ -262,7 +262,7 @@ impl World {
     fs::write(
       cron_dir.join(format!("improve-{DIRECTION}.yaml")),
       format!(
-        "cron: 31 * * * *\nbackend: synthetic\nprompt_file: tools/improve/{DIRECTION}.md\nsession_id: {PARENT_ID}\n"
+        "cron: 31 * * * *\nbackend: synthetic\nprompt_file: dev/improve/{DIRECTION}.md\nsession_id: {PARENT_ID}\n"
       ),
     )
     .expect("the cron task file");
@@ -279,7 +279,7 @@ impl World {
     let clone = round_root.join("charlie-bot");
     fs::create_dir_all(&clone).expect("the direction clone");
     git(&sandbox, &git_env, &clone, &["init", "-q", "-b", "main"]);
-    git(&sandbox, &git_env, &clone, &["config", "core.hooksPath", "tools/git-hooks"]);
+    git(&sandbox, &git_env, &clone, &["config", "core.hooksPath", "dev/git-hooks"]);
     git(&sandbox, &git_env, &clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
     let evidence = round_root.join("evidence");
     fs::create_dir_all(&evidence).expect("the evidence directory");
@@ -324,7 +324,7 @@ impl World {
   }
 
   pub fn launcher(&self) -> PathBuf {
-    self.repo.join("tools/improve/remote-launch.sh")
+    self.repo.join("dev/improve/remote-launch.sh")
   }
 
   /// The variables the launcher sees: a clean environment, like the server's child environment.

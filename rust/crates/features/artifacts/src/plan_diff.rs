@@ -1172,8 +1172,8 @@ mod tests {
   use super::*;
   use std::io::Read;
 
-  const BASE: &str = include_str!("../../../../../tests/data/plan_sample_v10.html");
-  const NEW: &str = include_str!("../../../../../tests/data/plan_sample_v11.html");
+  const BASE: &str = include_str!("../../../../../web/tests/data/plan_sample_v10.html");
+  const NEW: &str = include_str!("../../../../../web/tests/data/plan_sample_v11.html");
 
   #[test]
   fn seeded_plan_annotations_match_the_recorded_outputs() {

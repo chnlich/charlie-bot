@@ -74,7 +74,7 @@ impl Home {
     .expect("the synthetic credentials write");
 
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.slack", crate::register).expect("the Slack package registers");
+    registry.register_package("features.slack", crate::register).expect("the Slack package registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("the synthetic Slack config loads");
     loaded.backends.options.push(BackendOption {

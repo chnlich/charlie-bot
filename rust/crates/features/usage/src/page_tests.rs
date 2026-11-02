@@ -38,7 +38,7 @@ fn repo_root() -> &'static Path {
 /// The features of a page test: `registry`'s sources, the repo's templates, and a home at `home`.
 fn page_features(home: &Path, registry: Registry) -> Arc<FeatureContext> {
   let features = feature_context(home, registry);
-  features.startup.insert(Templating::new(repo_root(), &["src.features.usage"])).expect("the templating inserts once");
+  features.startup.insert(Templating::new(repo_root(), &["features.usage"])).expect("the templating inserts once");
   features
 }
 

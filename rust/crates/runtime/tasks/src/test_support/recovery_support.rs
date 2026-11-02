@@ -340,7 +340,7 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
   registry.register_package("test.recovery_backend", register_scripted_backend)?;
   registry.register_package("test.synthetic_loop", register_loop_controller)?;
   registry.register_package("test.synthetic_probe", register_probe_controller)?;
-  registry.register_package("src.features.backend_pool", charliebot_agents::backend_pool::register)?;
+  registry.register_package("features.backend_pool", charliebot_agents::backend_pool::register)?;
   if let Some((package, register)) = extra {
     registry.register_package(package, register)?;
   }

@@ -309,7 +309,7 @@ fn load_config(root: &Path) -> CharlieBotConfig {
   fs::write(home.join("config.yaml"), format!("paths:\n  worktree_dir: '{}'\n", root.join("worktrees").display()))
     .unwrap();
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", charliebot_claude_code::register).unwrap();
+  registry.register_package("backends.claude_code", charliebot_claude_code::register).unwrap();
   registry.load_config(&home).unwrap()
 }
 

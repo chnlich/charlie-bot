@@ -19,9 +19,13 @@ pub const PAGE_SLOTS: &[&str] = &[
   "home_notes",
 ];
 
-/// The directory of a dotted page package: `src.<kind>.<name>` maps to `src/<kind>/<name>` under `repo_root`.
+/// The directory of a dotted page package: `features.<name>` maps to `web/features/<name>` and `backends.<name>` to
+/// `web/backends/<name>` under `repo_root`. Any other first part (the `runtime.*` registrations, whose directories no
+/// checkout carries) maps under `repo_root` unchanged.
 pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
-  package.split('.').fold(repo_root.to_path_buf(), |path, part| path.join(part))
+  let under_web = package.starts_with("features.") || package.starts_with("backends.");
+  let root = if under_web { repo_root.join("web") } else { repo_root.to_path_buf() };
+  package.split('.').fold(root, |path, part| path.join(part))
 }
 
 /// The slot's part templates that exist on disk now, as `<name>/page_<slot>.html`, in package order.
@@ -51,7 +55,7 @@ mod tests {
   #[test]
   fn page_parts_follow_the_package_registration_order() {
     let root = tempfile::tempdir().unwrap();
-    let packages = ["src.features.zeta", "src.features.alpha"];
+    let packages = ["features.zeta", "features.alpha"];
     for package in packages {
       let templates = package_directory(root.path(), package).join("templates");
       let part = package.rsplit('.').next().unwrap();

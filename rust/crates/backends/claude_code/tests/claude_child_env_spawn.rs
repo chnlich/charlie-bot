@@ -14,7 +14,7 @@ use serde_json::Value;
 async fn registered_claude_child_edits_apply_at_the_spawn_boundary() {
   let root = tempfile::tempdir().unwrap();
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", charliebot_claude_code::register).unwrap();
+  registry.register_package("backends.claude_code", charliebot_claude_code::register).unwrap();
   let registry = Arc::new(registry);
   let inherited = Env::from([
     ("PATH".to_string(), "/bin".to_string()),

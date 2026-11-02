@@ -373,7 +373,7 @@ mod tests {
   fn synthetic_config(home: &tempfile::TempDir) -> (Arc<CharlieBotConfig>, Arc<Credentials>) {
     std::fs::write(home.path().join("config.yaml"), "").expect("write the synthetic config");
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.features.voice", crate::register).expect("register the voice config section");
+    registry.register_package("features.voice", crate::register).expect("register the voice config section");
     let cfg = Arc::new(registry.load_config(home.path()).expect("load the synthetic config"));
     let credentials = Arc::new(charliebot_core::credentials::load_credentials(home.path()).expect("load credentials"));
     (cfg, credentials)

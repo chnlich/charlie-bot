@@ -627,7 +627,7 @@ function statusBlockParagraphLines(text) {
   // Rendering itself stays with renderChatMath's auto-render walk on the DOM
   // text node; this extension only decides what survives the parse. The
   // delimiter scan is math-scanner.js's mathSpan (loaded just before this
-  // file), shared with the wrap pre-render driver; tests/chat_math_extension.test.js
+  // file), shared with the wrap pre-render driver; web/tests/chat_math_extension.test.js
   // and the driver's tests run the same case list against both consumers.
   const mathExtension = {
     name: 'math',

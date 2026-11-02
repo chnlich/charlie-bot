@@ -876,7 +876,7 @@ mod tests {
     );
     fs::write(home.join("config.yaml"), config).unwrap();
     let mut registry = Registry::new();
-    registry.register_package("src.backends.claude_code", crate::register).unwrap();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
     registry.load_config(home).unwrap()
   }
 

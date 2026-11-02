@@ -266,7 +266,7 @@ mod tests {
 
   fn test_host(home: &Path) -> CliHost {
     let mut registry = Registry::new();
-    registry.register_package("src.features.artifacts", crate::register).unwrap();
+    registry.register_package("features.artifacts", crate::register).unwrap();
     let registry = Arc::new(registry);
     let cfg = registry.load_config(home).unwrap();
     CliHost {

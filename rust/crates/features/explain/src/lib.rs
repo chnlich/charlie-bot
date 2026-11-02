@@ -1,4 +1,4 @@
-//! `src/features/explain`: the explain button's three routes under `/api/sessions`, the background generation they
+//! `web/features/explain`: the explain button's three routes under `/api/sessions`, the background generation they
 //! start, and the results file they keep in each session.
 //!
 //! A divider's explanation is one tool-capable one-shot agent run over a read-only copy of the session's chat events.
@@ -55,7 +55,7 @@ mod tests {
   #[test]
   fn registers_one_router_that_claims_the_explain_paths_only() {
     let mut registry = Registry::new();
-    registry.register_package("src.features.explain", register).expect("the explain router registers");
+    registry.register_package("features.explain", register).expect("the explain router registers");
 
     let routers = registry.routers();
     assert_eq!(routers.len(), 1);

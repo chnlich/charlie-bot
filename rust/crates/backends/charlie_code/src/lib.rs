@@ -19,7 +19,7 @@ use charliebot_agents::cli_base::CliHost;
 pub const USAGE_SOURCE: &str = "CLC";
 
 /// The package label the composition list registers this backend's package under.
-pub const PACKAGE: &str = "src.backends.charlie_code";
+pub const PACKAGE: &str = "backends.charlie_code";
 
 /// Registers the `charlie-code` type and the CLC usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

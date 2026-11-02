@@ -1,11 +1,11 @@
-//! The cold-session storage sweep (`src/features/usage/storage_cool.py`) and its scheduled handler `cool_storage`: a real
+//! The cold-session storage sweep and its scheduled handler `cool_storage`: a real
 //! run with no dry run, no session scope and no vacuum.
 //!
 //! A session is cold when its metadata reads `archived` and its `updated_at` is at least `MIN_IDLE_DAYS` old. The sweep
 //! deletes the raw transport files of cold sessions (an allowlist of names inside two directory shapes), then lets each
 //! registered usage source delete its own store through `UsageSourceImpl::sweep`. A real run first captures this host's
 //! token usage into the usage ledger, and a capture error aborts before any deletion. A path that cannot be read logs
-//! or reads as absent, and the run goes on. Metadata that Python's loader or cold rule would raise on fails the run.
+//! or reads as absent, and the run goes on. Metadata the loader or the cold rule cannot read fails the run.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -33,11 +33,11 @@ use serde_json::{Map, Value};
 use crate::capture::capture_into_default_ledger;
 use crate::utc_datetime;
 
-/// `constants.MIN_IDLE_DAYS`: how long an archived session must sit idle to count as cold.
+/// How long an archived session must sit idle to count as cold.
 const MIN_IDLE_DAYS: i64 = 14;
-/// `storage_cool.ORPHAN_IDLE_DAYS`: how long an unreferenced backend record must sit idle before the sweep takes it.
+/// How long an unreferenced backend record must sit idle before the sweep takes it.
 const ORPHAN_IDLE_DAYS: i64 = 2;
-/// `RAW_TRANSPORT_NAMES`: the three agent-pipe names from `runs.py`, and the two tee names the backend writers use.
+/// The three agent-pipe names and the two tee names the backend writers use.
 const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, "stderr.log"];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
 const RUN_EVIDENCE_KEYS: [&str; 3] = ["raw_log_ref", "events_ref", "result_ref"];
@@ -90,7 +90,7 @@ pub fn run_cool_sweep(
   for swept in registry.sweep_all(&scope)? {
     categories.extend(swept.categories);
   }
-  // Python passes each category as a keyword named for it. A tracing field name is fixed at compile time, so each category
+  // A tracing field name is fixed at compile time, so each category
   // that the registered sources report has a field here, and a category without one is missing from the log line.
   tracing::info!(
     dry_run = false,
@@ -173,7 +173,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
   now.into_inner() - updated_at >= time::Duration::days(MIN_IDLE_DAYS)
 }
 
-/// `storage_cool._optional_str`: the Python `str()` text of a truthy value, and none for a falsy one.
+/// The text of a truthy value, and none for a falsy one.
 fn optional_text(value: Option<&Value>) -> Option<String> {
   value.filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str)
 }

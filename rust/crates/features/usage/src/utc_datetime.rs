@@ -1,7 +1,7 @@
-//! `models.parse_utc_datetime` for the `updated_at` text the cold rule reads: `datetime.fromisoformat`, with a value that
-//! names no offset read as UTC (`ensure_utc`).
+//! The `updated_at` text the cold rule reads, parsed as an ISO timestamp, with a value that
+//! names no offset read as UTC.
 //!
-//! The grammar follows the C parser of CPython 3.14, which `datetime` runs. A calendar date is `YYYY-MM-DD` or `YYYYMMDD`,
+//! A calendar date is `YYYY-MM-DD` or `YYYYMMDD`,
 //! and one separator character may follow it before a time. The time is `HH`, `HH:MM` or `HH:MM:SS`, or the basic `HHMM`
 //! and `HHMMSS`, with an optional `.` or `,` fraction of any length, read to microseconds. An offset is `Z`, `±HH`,
 //! `±HHMM` or `±HH:MM`, with optional seconds. Hour 24 at zero minutes is the next day's midnight.
@@ -70,8 +70,8 @@ fn time_and_offset(text: &[u8]) -> Option<(ClockFields, Option<UtcOffset>)> {
   }
 }
 
-/// `±HH[[:]MM[[:]SS]]`: a whole offset under a day. The fields add up, so minutes of 60 and seconds of 60 read as Python
-/// reads them.
+/// `±HH[[:]MM[[:]SS]]`: a whole offset under a day. The fields add up, so a minute or second value of 60 still parses
+/// and carries into the offset.
 fn offset(sign: u8, text: &[u8]) -> Option<UtcOffset> {
   let (hour, minute, second, microsecond) = clock(text)?;
   if microsecond != 0 {

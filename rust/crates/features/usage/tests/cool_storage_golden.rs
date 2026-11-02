@@ -346,12 +346,12 @@ fn ordered_state(state: &Value) -> Value {
   state
 }
 
-fn assert_state_matches_recorded_origin(expected_rust: &Value, expected_python: &Value, actual: &Value, label: &str) {
-  let python_origin = expected_python["ledger"]["usage"][3][12].as_str().unwrap();
+fn assert_state_matches_recorded_origin(expected_rust: &Value, recorded: &Value, actual: &Value, label: &str) {
+  let recorded_origin = recorded["ledger"]["usage"][3][12].as_str().unwrap();
   let rust_origin = expected_rust["ledger"]["usage"][3][12].as_str().unwrap();
   let actual_origin = actual["ledger"]["usage"][3][12].as_str().unwrap();
   assert!(
-    actual_origin == python_origin || actual_origin == rust_origin,
+    actual_origin == recorded_origin || actual_origin == rust_origin,
     "unexpected duplicate transcript path {actual_origin}"
   );
   let mut expected = expected_rust.clone();

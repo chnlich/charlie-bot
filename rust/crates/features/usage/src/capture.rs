@@ -108,7 +108,7 @@ pub(crate) fn capture_into_default_ledger(
   Ok(written)
 }
 
-/// This host's name, as the ledger keys its capture times (`socket.gethostname()` in the Python ledger).
+/// This host's name, as the ledger keys its capture times.
 pub(crate) fn host_name() -> anyhow::Result<String> {
   nix::unistd::gethostname()?
     .into_string()
@@ -430,7 +430,7 @@ fn run_metadata(path: &Path) -> anyhow::Result<Map<String, Value>> {
   }
 }
 
-/// The read failure under the verb Python's read reported: an unreadable file reads `reading` and a file that is not
+/// The read failure under the verb the step reports: an unreadable file reads `reading` and a file that is not
 /// JSON reads `parsing`.
 fn metadata_read_error(error: MetadataReadError, metadata_path: &Path) -> anyhow::Error {
   match error {
@@ -552,7 +552,7 @@ fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::
   Ok(ids)
 }
 
-/// The usage source one backend id attributes to, or `None` when it has none (`backend_source` in token_tally.py): a
+/// The usage source one backend id attributes to, or `None` when it has none: a
 /// registered id reads its config type, and an id that left the config reads the id prefix its source registers.
 pub(crate) fn backend_source<'a>(
   backend: &str,
@@ -624,9 +624,9 @@ fn thread_row_model(
   Ok(backend.strip_prefix(prefix).unwrap_or(backend).to_string())
 }
 
-/// A thread result's (in_fresh, cache_write, cache_read, output, in_unsplit), split by the backend's verdict. Python
-/// reads all four keys but adds or binds only the ones the verdict keeps, so a value under a dropped key cannot fail
-/// the capture, and only the kept keys are read here.
+/// A thread result's (in_fresh, cache_write, cache_read, output, in_unsplit), split by the backend's verdict. The
+/// capture reads all four keys but adds or binds only the ones the verdict keeps, so a value under a dropped key cannot
+/// fail the capture, and only the kept keys are read here.
 fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Result<(Count, Count, Count, Count, Count)> {
   match verdict {
     Verdict::CodexRule => {
@@ -670,8 +670,8 @@ fn empty_object() -> &'static Map<String, Value> {
   &EMPTY
 }
 
-/// One usage count as Python reads it, `usage.get(key, 0) or 0`: an absent or falsy value is 0, `true` is 1, and a
-/// number keeps its integer or real type. Any other value fails here; Python fails where the value is added or bound.
+/// One usage count as the capture reads it: an absent or falsy value is 0, `true` is 1, and a
+/// number keeps its integer or real type. Any other value fails here; the ledger fails where the value is added or bound.
 fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
   match object.get(key) {
     None => Ok(Count::Int(0)),
@@ -682,8 +682,8 @@ fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
   }
 }
 
-/// A JSON number as the value Python binds for it: an integer within the signed 64-bit range, else a real.
-/// serde_json reads an integer literal past u64 as an f64, matching orjson's float for the same literal.
+/// A JSON number as the ledger binds it: an integer within the signed 64-bit range, else a real.
+/// serde_json reads an integer literal past u64 as an f64, the value the ledger format stores for that literal.
 fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
   if let Some(integer) = number.as_i64() {
     return Ok(Count::Int(integer));
@@ -694,7 +694,7 @@ fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
   }
 }
 
-/// Python's truth test over a JSON value: null, false, zero, and an empty string, list or map are falsy.
+/// The truth test over a JSON value: null, false, zero, and an empty string, list or map are falsy.
 fn is_falsy(value: &Value) -> bool {
   match value {
     Value::Null => true,
@@ -706,7 +706,7 @@ fn is_falsy(value: &Value) -> bool {
   }
 }
 
-/// The TEXT column's value under `key`, bound as Python binds `value or ""`: a falsy value is "", a string is itself,
+/// The TEXT column's value under `key`: a falsy value is "", a string is itself,
 /// and `true` or a number binds as the INTEGER or REAL that the column stores as text. A list or map fails the bind.
 fn text_value(object: &Map<String, Value>, key: &str) -> anyhow::Result<SqlValue> {
   match object.get(key) {
@@ -719,8 +719,8 @@ fn text_value(object: &Map<String, Value>, key: &str) -> anyhow::Result<SqlValue
   }
 }
 
-/// The string under `key` read through Python's truth test: an absent or falsy value is None, and a truthy value
-/// that is not a string fails the capture, as the Python read raises on it.
+/// The string under `key` read through the truth test: an absent or falsy value is None, and a truthy value
+/// that is not a string fails the capture.
 fn truthy_string(object: &Map<String, Value>, key: &str) -> anyhow::Result<Option<String>> {
   match object.get(key) {
     None => Ok(None),
@@ -730,14 +730,12 @@ fn truthy_string(object: &Map<String, Value>, key: &str) -> anyhow::Result<Optio
   }
 }
 
-/// The non-empty string under `key`. Any other value names no session and is ignored, as token_tally's
-/// `isinstance(..., str)` test does.
+/// The non-empty string under `key`. Any other value names no session and is ignored.
 fn session_text(object: &Map<String, Value>, key: &str) -> Option<String> {
   object.get(key).and_then(Value::as_str).filter(|session| !session.is_empty()).map(str::to_string)
 }
 
-/// Whether the line's `type` is the string `kind`. A `type` that is not a string matches no kind, as
-/// `line.get("type") == ...` does in Python.
+/// Whether the line's `type` is the string `kind`. A `type` that is not a string matches no kind.
 fn is_type(object: &Map<String, Value>, kind: &str) -> bool {
   object.get("type").and_then(Value::as_str) == Some(kind)
 }

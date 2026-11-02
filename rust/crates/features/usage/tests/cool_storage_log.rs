@@ -90,7 +90,7 @@ fn sweep_done_event_carries_each_field() {
     .expect("the sweep logs its summary");
   let mut names: Vec<&str> = done.keys().map(String::as_str).filter(|name| *name != "message").collect();
   names.sort_unstable();
-  // storage_cool.py:305-311 passes dry_run, session_id and total_bytes, then one keyword per category.
+  // The sweep summary logs dry_run, session_id and total_bytes, then one field per category.
   assert_eq!(names, ["claude_transcripts", "codex_rollouts", "dry_run", "raw_transport", "session_id", "total_bytes"]);
   assert_eq!(done["session_id"], "None");
   assert_eq!(done["dry_run"], "false");

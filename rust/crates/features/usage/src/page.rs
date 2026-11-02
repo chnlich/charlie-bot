@@ -1,4 +1,4 @@
-//! `GET /token-usage` (`src/features/usage/api.py`): per-model token usage read from the usage ledger as of the last
+//! `GET /token-usage`: per-model token usage read from the usage ledger as of the last
 //! capture. Loading the page never captures. Its cards are the registered usage sources in registration order, then the
 //! sources whose usage lives only in CharlieBot's own run logs.
 
@@ -282,7 +282,7 @@ impl Totals {
 }
 
 /// The page's window: the earliest first stamp and the latest last stamp, or two empty strings when no row has a first
-/// stamp. Python's `max()` of no last stamps fails the page, and so does this.
+/// stamp. An empty stamp set fails the page, and so does this.
 fn window(rows: &[LedgerRow]) -> anyhow::Result<(String, String)> {
   if !rows.iter().any(|row| !row.first.is_empty()) {
     return Ok((String::new(), String::new()));

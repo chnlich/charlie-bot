@@ -698,7 +698,7 @@ fn capture_without_a_registered_source_raises() {
   drop(registry);
 }
 
-// The cases of tests/test_token_tally.py, in the file's order. The Claude, Codex and opencode cases run on the
+// The capture cases, in the recorded order. The Claude, Codex and opencode cases run on the
 // CliStub stand-ins, so their values are the records the stand-ins yield; the readers that parse those logs live in
 // the agents crate.
 
@@ -1630,9 +1630,8 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   assert_eq!(row(&rows, "Claude Code", NAME).calls, 3); // ... but the Claude file it finished is durable
 }
 
-// The malformed record shapes: each builds the charlie-bot logs that carry them and asserts the rows Python's
-// token_tally writes for the same files. Python skips a shape it cannot key, and reads the rest through its truth
-// tests (`x or {}`, `if backend`, `line.get("type") == ...`).
+// The malformed record shapes: each builds the charlie-bot logs that carry them and asserts the rows the ledger
+// writes for the same files. The ledger skips a shape it cannot key, and reads the rest through its truth tests.
 
 const SHAPE_RESULT: &str = r#"{"type": "result", "timestamp": "2026-09-11T20:00:00+00:00", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3, "output_tokens": 4}}"#;
 const SHAPE_RUN_RESULT: &str = r#"{"type": "result", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3, "output_tokens": 4}}"#;
@@ -2084,7 +2083,7 @@ fn malformed_timestamp_shapes_capture_the_recorded_rows() {
   assert_eq!(stored_ts(&ledger, "run:run-float"), SqlValue::Text("1.5".to_string()));
   assert_eq!(stored_ts(&ledger, "run:run-bool"), SqlValue::Text("1".to_string()));
   assert_eq!(stored_ts(&ledger, "run:run-zero"), SqlValue::Text(String::new()));
-  // A list or map timestamp fails Python's bind, so the capture raises.
+  // A list or map timestamp fails the ledger bind, so the capture raises.
   let raising = [
     r#"{"type": "result", "timestamp": [1], "usage": {"input_tokens": 1}}"#,
     r#"{"type": "result", "timestamp": {"a": 1}, "usage": {"input_tokens": 1}}"#,
@@ -2147,7 +2146,7 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
   );
   assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-08-31", "2026-08-31"));
   assert_eq!(native.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["charlie-code-native"]);
-  // A non-string model that is the last truthy one when the row is built fails Python's rsplit, so the capture raises.
+  // A non-string model that is the last truthy one when the row is built fails the model split, so the capture raises.
   let raising: [[&str; 3]; 2] = [
     [r#"{"type": "context", "model": "vendor/native-model"}"#, r#"{"type": "context", "model": 7}"#, MASTER_RESULT],
     [r#"{"type": "context", "model": 7}"#, r#"{"type": "context", "model": ""}"#, MASTER_RESULT],

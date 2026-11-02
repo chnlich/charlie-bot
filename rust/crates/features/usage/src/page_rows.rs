@@ -1,6 +1,5 @@
-//! The usage page's rows (`src/features/usage/api.py` `_merge_ledger_rows`, `_account_source`, `_model_leaf`,
-//! `_compact`): the ledger's per-(source, model) rows folded into one page row per model, and each account attributed
-//! to the card it counts under.
+//! The usage page's rows: the ledger's per-(source, model) rows folded into one page row per model, and each account
+//! attributed to the card it counts under.
 
 use std::collections::BTreeMap;
 
@@ -44,7 +43,7 @@ pub(crate) struct Segment {
 }
 
 impl PageRow {
-  /// The row as the page's payload and the template context carry it: the keys in the order the Python dict holds them.
+  /// The row as the page's payload and the template context carry it: the keys in the row's field order.
   pub fn to_json(&self) -> Value {
     json!({
       "model": self.model,
@@ -222,9 +221,9 @@ pub(crate) fn model_leaf(model: &str) -> &str {
   leaf[..open].trim_end()
 }
 
-/// The name a model's rows group on: `_model_leaf(model).casefold()`. The full case fold of Unicode's `CaseFolding`
-/// table is what `str.casefold` applies, so names whose letters the upper-then-lower round trip spells differently
-/// (`ı` stays itself, `ẞ` folds to `ss`) group the way the Python page groups them.
+/// The name a model's rows group on: the model leaf's full case fold. The fold covers Unicode's `CaseFolding`
+/// table, so names whose letters the upper-then-lower round trip spells differently
+/// (`ı` stays itself, `ẞ` folds to `ss`) group on their folded spelling.
 pub(crate) fn canonical_model(model: &str) -> String {
   caseless::default_case_fold_str(model_leaf(model))
 }
@@ -241,8 +240,8 @@ pub(crate) fn compact(count: Count) -> String {
   group_thousands(count)
 }
 
-/// Python's `f"{int(value):,}"`: `int()` truncates toward zero, then the digits go in groups of three, with a leading
-/// minus for a negative value.
+/// The grouped digits of the count's integer part: the value truncates toward zero, then the digits go in groups of
+/// three, with a leading minus for a negative value.
 pub(crate) fn group_thousands(value: Count) -> String {
   let whole = match value {
     Count::Int(number) => number,
@@ -259,7 +258,7 @@ pub(crate) fn group_thousands(value: Count) -> String {
   if whole < 0 { format!("-{grouped}") } else { grouped }
 }
 
-/// The count as a JSON number keeping its Python type: an integer stays an integer, a real prints with its decimal
+/// The count as a JSON number keeping its variant: an integer stays an integer, a real prints with its decimal
 /// point.
 pub(crate) fn count_json(count: Count) -> Value {
   match count {
@@ -268,7 +267,7 @@ pub(crate) fn count_json(count: Count) -> Value {
   }
 }
 
-/// The sum of the counts, as Python's `sum()` of the rows' values gives it.
+/// The sum of the counts.
 pub(crate) fn sum_counts<'a>(items: impl Iterator<Item = &'a Count>, label: &'static str) -> anyhow::Result<Count> {
   let mut sum = Count::Int(0);
   for item in items {
@@ -277,7 +276,7 @@ pub(crate) fn sum_counts<'a>(items: impl Iterator<Item = &'a Count>, label: &'st
   Ok(sum)
 }
 
-/// Python's `max(items, key=...)`: the first item of the largest key, so a tie keeps the earlier item.
+/// The first item of the largest key, so a tie keeps the earlier item.
 pub(crate) fn first_max_by<T>(items: &[T], key: impl Fn(&T) -> Count) -> Option<&T> {
   items
     .iter()

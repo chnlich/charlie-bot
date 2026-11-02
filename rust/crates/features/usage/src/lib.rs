@@ -31,7 +31,7 @@ pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage
 pub use count::Count;
 pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 
-/// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the page router, the `ext_usage`
+/// `register`: the `/api` router of `ext_usage`, the page router, the `ext_usage`
 /// service in phase Ready, the home card, the `usage_ledger` and `cool_storage` scheduled handlers, then the
 /// `backend_ids` startup check.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

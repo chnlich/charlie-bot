@@ -23,11 +23,11 @@ fn recorded_usage_ledger_schema_and_repair_results_match_rust() {
   assert_eq!(fixture["python_helper_error"], "AttributeError: 'UsageLedger' object has no attribute 'model_rows'");
 
   let temp = tempdir().unwrap();
-  let python_path = temp.path().join("python.sqlite3");
-  write_database(&fixture, &python_path, temp.path());
-  let before = trigger_and_aggregate(&python_path);
-  UsageLedger::open(&python_path).unwrap().close().unwrap();
-  assert_eq!(before, trigger_and_aggregate(&python_path));
+  let recorded_path = temp.path().join("recorded.sqlite3");
+  write_database(&fixture, &recorded_path, temp.path());
+  let before = trigger_and_aggregate(&recorded_path);
+  UsageLedger::open(&recorded_path).unwrap().close().unwrap();
+  assert_eq!(before, trigger_and_aggregate(&recorded_path));
   assert_eq!(before, fixture["python_created_snapshot"]);
 
   let rust_path = temp.path().join("rust.sqlite3");

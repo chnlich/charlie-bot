@@ -1,6 +1,6 @@
-//! The cases of `tests/test_storage_cool.py` that the real run reaches. Each test runs the sweep over a temporary tree whose
+//! The cold-sweep cases. Each test runs the sweep over a temporary tree whose
 //! Claude, Codex and opencode stores are registered through their own `register_with_host`, so the sources' sweeps are
-//! the ported ones.
+//! the ones the real run uses.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;

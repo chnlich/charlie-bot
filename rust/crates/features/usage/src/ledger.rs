@@ -223,7 +223,7 @@ impl UsageLedger {
     let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
     fs::create_dir_all(parent).with_context(|| format!("creating ledger directory {}", parent.display()))?;
     let conn = Connection::open(&path).with_context(|| format!("opening usage ledger {}", path.display()))?;
-    // Python passes `timeouts.USAGE_LEDGER_LOCK_WAIT_SECONDS` to sqlite3.connect at usage_ledger.py:510.
+    // The lock wait the ledger gives its writers, set on the connection.
     conn.busy_timeout(Duration::from_secs(LOCK_WAIT_SECONDS))?;
     conn.execute_batch(sql::SCHEMA).with_context(|| format!("creating ledger schema at {}", path.display()))?;
     let mut ledger = Self { path, conn };

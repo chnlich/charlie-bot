@@ -6,6 +6,11 @@
 - `rustfmt` and `clippy` gate the Rust code: `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` from `rust/`
 - `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (leak checks, git hooks, browser and live harnesses, builds, eval runners) and the improve cron prompts (the landing protocol, the five direction prompts and `inflight-files.sh`) live in `tools/`.
 
+### Web UI
+
+Each row, strip or label that a UI change adds shows information that the user reads.
+The screen space then goes to content and controls.
+
 ### Module Boundaries
 
 - Keep features behind clean module boundaries, including features used only by other installs.

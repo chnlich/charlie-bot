@@ -389,7 +389,7 @@ mod tests {
       registry: Arc::new(registry),
       repo_root: repo_root.to_path_buf(),
       base_env: agent_base(home, repo_root),
-      pool: BackendPool::default(),
+      pool: Arc::new(BackendPool::default()),
     }
   }
 

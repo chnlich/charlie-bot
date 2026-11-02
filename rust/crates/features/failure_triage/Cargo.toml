@@ -1,0 +1,24 @@
+[package]
+name = "charliebot-failure-triage"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+charliebot-agents.workspace = true
+charliebot-core.workspace = true
+charliebot-registry.workspace = true
+charliebot-store.workspace = true
+charliebot-tasks.workspace = true
+futures-util.workspace = true
+jiff.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -23,7 +23,7 @@ pub struct CliHost {
   pub repo_root: PathBuf,
   pub base_env: AgentBaseEnvironment,
   /// The rotation position and cooldowns every backend call of this process shares.
-  pub pool: BackendPool,
+  pub pool: Arc<BackendPool>,
 }
 
 /// Composes a host. The composition root provides this factory.

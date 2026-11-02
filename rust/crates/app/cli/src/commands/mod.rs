@@ -17,5 +17,6 @@ pub mod scan_guard;
 pub mod schedule_trigger;
 pub mod session;
 pub mod setup;
+pub mod triage;
 pub mod voice;
 pub mod wait_guard;

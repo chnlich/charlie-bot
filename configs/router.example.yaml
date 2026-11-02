@@ -1,6 +1,6 @@
 # The router's own configuration — read by `charliebot router` on every backend choice, so an edit
 # takes effect at the next choice with no restart. Copy it to your charliebot home as router.yaml
-# (<charliebot home>/router.yaml) and fill in the address and the strong list for this host.
+# (<charliebot home>/router.yaml) and fill in the address for this host.
 #
 # The Jev key is not here: `jev.credential` names a section of credentials.yaml, and the router reads
 # that section's api_key. Never commit a filled-in router.yaml.
@@ -10,15 +10,29 @@
 #   jev.model       the model name the endpoint takes
 #   jev.credential  the credentials.yaml section holding this router's key
 #   instructions    the one question Jev answers
-#   routine, design the two criteria it chooses between, with the rule for each
-#   strong          the backends design work gets, in order; ids must be backends from config.yaml
+#   classes         each class of work: `when` is the criterion Jev reads for it, and `run_on` is where
+#                   the work runs: `pool` (the backends.pool rotation), `session` (the delegating
+#                   session's backend), or an ordered list of backends.options ids
+#   roles           each role that routes, with the ordered list of class names it chooses among; a
+#                   role this file does not list is not routed. A role with one class needs no Jev call.
+#
+# A list `run_on` answers only the ids that are candidates for the request, in the list's order.
+# Every id must be a backends.options id of config.yaml; the router refuses the file otherwise.
 
 jev:
   # Placeholder: your gateway's choice endpoint.
   url: https://jev.example.com/v1/systemone
   model: jev-latest
   credential: jev
-instructions: Which kind of CharlieBot work is this? Use routine unless the work clearly meets the condition of design.
-routine: Default. Fixes a bug, adds tests, changes config, runs a script, reads or summarizes, follows a written plan, checks a change that follows known patterns, answers a question or an alert, or does a short action.
-design: Only when the work designs a new mechanism across several modules, plans or decides a strategy, checks a large or risky new design, or a fast model already failed it.
-strong: [claude-opus]
+instructions: Which class of CharlieBot work is this? Choose routine unless the work clearly meets the condition of another class.
+classes:
+  routine:
+    when: Default. Fixes a bug, adds tests, changes config, runs a script or a job, queries state, follows a written plan or an approved design, lands reviewed work, or revises a page from review findings.
+    run_on: pool
+  context:
+    when: A first read of unfamiliar material, an understanding, a design draft or a plan, or a diagnosis of an unexplained failure.
+    run_on: session
+roles:
+  implement: [routine, context]
+  quick-edit: [routine, context]
+  script-run: [routine, context]

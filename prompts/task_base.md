@@ -18,6 +18,8 @@ The codebase has a single user. Apply these principles:
   old form. The first release then carries one form.
 - **One owner per responsibility**: give each responsibility one owning module. When a change meets scattered
   ownership, consolidate it.
+- **One general mechanism**: serve every backend, tool and field through one general mechanism. A new case then reuses
+  that path, so the code keeps one path to test and maintain.
 - **Repo environment**: use the environment that the repo defines. When a toolchain is missing, escalate it and name
   the defect in the manifest.
 - **Recipes are executable**: submit, deploy, and recovery flows go through the repo's entry

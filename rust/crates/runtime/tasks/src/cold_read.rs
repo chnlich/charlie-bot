@@ -787,7 +787,7 @@ BBBB
           (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), "/synthetic/gh-wrapper/gh".to_string()),
         ]),
       },
-      pool: charliebot_agents::backend_pool::BackendPool::default(),
+      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::default()),
     };
 
     let probe = run_light_probe(&host, "prompt", "system").await.unwrap();

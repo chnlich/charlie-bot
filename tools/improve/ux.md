@@ -21,6 +21,7 @@ Take a defect that the before screenshot shows at either width, on the mock home
 Use 1440 px as the desktop width and 390 px as the phone width.
 The two widths stand for the desktop window and the phone screen.
 The mock home has the production number of sessions, so the pages show the layout that a user sees.
+Apply the screen-space rule in `AGENTS.md` to each defect you choose.
 
 ## Mock home
 

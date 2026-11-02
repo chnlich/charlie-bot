@@ -38,7 +38,7 @@ fn compose_with(home: &Path, repo_root: &Path, server_bin_dir: &Path) -> anyhow:
     registry: Arc::new(registry),
     repo_root: repo_root.to_path_buf(),
     base_env,
-    pool: BackendPool::default(),
+    pool: Arc::new(BackendPool::default()),
   })
 }
 

@@ -1,0 +1,479 @@
+//! Run cause lines: cleaning, the ordered cause patterns, normalization, the no-cause shapes and the signature keys.
+//!
+//! A run's record names its error material in three places: the `error` events of its `events.jsonl`, the end of its
+//! `agent.stderr.log`, and the `terminal_reason` of its `result` event. Extraction picks the first cause the ordered
+//! pattern list finds, in the ported order of the failure inventory's `extract_signatures.py`. A record that fits one
+//! of the closed no-cause shapes has no cause to judge.
+
+use std::sync::LazyLock;
+
+use regex::Regex;
+
+/// The longest normalized cause line a signature carries, in characters.
+pub const MAX_CAUSE_CHARS: usize = 240;
+
+/// The longest example error text a row carries, in characters.
+pub const MAX_ANCHOR_CHARS: usize = 200;
+
+static ANSI: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").expect("the ANSI escape expression is valid"));
+
+/// Lines that carry no cause: the LiteLLM banner, a log-retention note and an entry-path note.
+static NOISE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+  [
+    r"^Provider List: https://docs\.litellm\.ai",
+    r"^Give Feedback / Get Help:",
+    r"^LiteLLM\.Info: If you need to debug this error",
+    r"(?i)^[\w.:/-]*docs/providers$",
+    r"^Command logs retained at:",
+    r"^loading path=",
+  ]
+  .into_iter()
+  .map(|pattern| Regex::new(pattern).expect("every noise expression is valid"))
+  .collect()
+});
+
+/// A LiteLLM banner line, in its three-line form plus a provider-list URL whose line was cut short. A record made only
+/// of these has no cause to read.
+static BANNER: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+  [
+    r"^Provider List: https://docs\.litellm\.ai",
+    r"^Give Feedback / Get Help:",
+    r"^LiteLLM\.Info: If you need to debug this error",
+    r"(?i)^[\w.:/-]*docs/providers$",
+    r"litellm\._turn_on_debug",
+  ]
+  .into_iter()
+  .map(|pattern| Regex::new(pattern).expect("every banner expression is valid"))
+  .collect()
+});
+
+static UUID: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b").expect("the uuid expression is valid")
+});
+static SESSION_PATH: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(&format!(r"{}/<uuid>", charliebot_core::config::SESSIONS_DIR_NAME))
+    .expect("the session-path expression is valid")
+});
+static HEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[0-9a-f]{7,40}\b").expect("the hex expression is valid"));
+/// A session id field value, and the OpenCode `ses_` id form: per-session identifiers belong to no signature.
+static SESSION_FIELD: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+  [
+    (r"(?i)(^|\s)session_id=[^\s]+", "${1}session_id=<session>"),
+    (r"(?i)(^|\s)session=[^\s]+", "${1}session=<session>"),
+    (r"\bses_[A-Za-z0-9]+\b", "<session>"),
+  ]
+  .into_iter()
+  .map(|(pattern, replacement)| (Regex::new(pattern).expect("every session-id expression is valid"), replacement))
+  .collect()
+});
+static PATH: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r#"/home/[^\s:'"]+|/tmp/[^\s:'"]+|/Users/[^\s:'"]+"#).expect("the path expression is valid")
+});
+static TIMESTAMP: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"\b\d{4}-\d{2}-\d{2}T[\d:.]+Z?\b").expect("the timestamp expression is valid"));
+static NUMBER_WITH_UNIT: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"\b\d+(\.\d+)?\s?(ms|s|MB|GB|KiB|MiB|B)\b").expect("the number-with-unit expression is valid")
+});
+static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d+\b").expect("the number expression is valid"));
+static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect("the whitespace expression is valid"));
+
+static REDACTIONS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+  [
+    (r"(?i)(api_key[=:]\s*)[A-Za-z0-9_\-]{8,}", "$1<redacted>"),
+    (r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}", "$1<redacted>"),
+    (r"\bsk-[A-Za-z0-9_\-]{8,}", "<redacted>"),
+    (r"(?i)(token[=:]\s*)\S{8,}", "$1<redacted>"),
+  ]
+  .into_iter()
+  .map(|(pattern, replacement)| (Regex::new(pattern).expect("every redaction expression is valid"), replacement))
+  .collect()
+});
+static SECRET_HEX: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"\b[0-9a-f]{32,}\b").expect("the secret-hex expression is valid"));
+
+static HTTP_STATUS: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"\b[45]\d\d\b").expect("the http-status expression is valid"));
+
+/// One ordered cause pattern. `whole_text` makes the pattern's hit name the whole cleaned text, as the Python
+/// inventory does for the classes whose matched fragment is too narrow to identify the failure; `whole_line` names the
+/// line the hit sits on, for a class whose match is a single word.
+struct CausePattern {
+  /// The Python inventory's class name. The signature keeps the normalized cause line, not this name.
+  #[allow(dead_code)]
+  name: &'static str,
+  expression: Regex,
+  whole_text: bool,
+  whole_line: bool,
+}
+
+impl CausePattern {
+  fn new(name: &'static str, pattern: &str, whole_text: bool) -> CausePattern {
+    CausePattern {
+      name,
+      expression: Regex::new(pattern).expect("every cause expression is valid"),
+      whole_text,
+      whole_line: false,
+    }
+  }
+
+  fn line(name: &'static str, pattern: &str) -> CausePattern {
+    CausePattern {
+      name,
+      expression: Regex::new(pattern).expect("every cause expression is valid"),
+      whole_text: false,
+      whole_line: true,
+    }
+  }
+}
+
+static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
+  vec![
+    CausePattern::new("scope-exists", r"the previous round still runs: unit \S+sc?ope exists", false),
+    CausePattern::new("no-cron-task-file", r"no cron task file under .* names session_id", false),
+    CausePattern::new("missing-python-module", r"No module named '([^']+)'", false),
+    CausePattern::new("skill-yaml", r"failed to load skill \S+: missing YAML frontmatter", false),
+    CausePattern::new("unrecognized-model", r"\[claude-code:unrecognized_model\].*", false),
+    CausePattern::new("mem-cap", "内存上限触发", false),
+    CausePattern::new("ratelimit", r"RateLimitError:.*", true),
+    CausePattern::new("overloaded", r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)", true),
+    CausePattern::new(
+      "auth",
+      r"(?i)(Failed to authenticate|oauth_org_not_allowed|invalid x-api-key|401|Unauthorized|authentication_error)",
+      false,
+    ),
+    CausePattern::new("timeout", r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)", false),
+    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", false),
+    CausePattern::new("traceback", r"Traceback \(most recent call last\)", true),
+    CausePattern::new("compile-error", r"(?m)^error(\[E\d+\])?:.*", true),
+    CausePattern::new("worktree", r"(?i)(worktree|already exists|not a git repository)", true),
+    CausePattern::new("assertion", r"(?i)(assertion failed|AssertionError|assert_eq)", true),
+    CausePattern::new("permission", r"(?i)(Permission denied|EACCES|landlock|read-only file system)", true),
+    CausePattern::new("git", r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", true),
+    CausePattern::new("api-error", r"(?i)(API Error|api_error|invalid_request_error)", true),
+    CausePattern::line("failed-word", r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)"),
+  ]
+});
+
+/// The four shapes of a record whose cause is not in the record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoCauseShape {
+  /// The error text is blank after cleaning.
+  EmptyText,
+  /// The error text is the LiteLLM banner alone.
+  BannerOnly,
+  /// The record holds a `terminal_reason` with no HTTP status.
+  TerminalReason,
+  /// The record holds an exit code and no error text.
+  ExitCodeOnly,
+}
+
+impl NoCauseShape {
+  /// The reason a row states for this shape.
+  pub fn reason(self) -> &'static str {
+    match self {
+      NoCauseShape::EmptyText => "the record's error text is blank after cleaning",
+      NoCauseShape::BannerOnly => "the record holds only the LiteLLM banner",
+      NoCauseShape::TerminalReason => "the record holds only a terminal_reason with no HTTP status",
+      NoCauseShape::ExitCodeOnly => "the record holds only the exit code",
+    }
+  }
+}
+
+/// What extraction read from one run's error material.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExtractedCause {
+  /// A cause line to judge, with the redacted example text it came from.
+  Cause { line: String, anchor: String },
+  /// No cause to judge, with the shape that says why.
+  NoCause { shape: NoCauseShape, anchor: String },
+}
+
+/// Drop ANSI escapes, blank lines and the noise lines that carry no cause.
+pub fn clean(text: &str) -> String {
+  let plain = ANSI.replace_all(text, "");
+  plain
+    .lines()
+    .filter(|line| !line.trim().is_empty() && !NOISE.iter().any(|noise| noise.is_match(line)))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// Remove credentials and long identifiers from text that reaches a row or a model.
+pub fn redact(text: &str) -> String {
+  let mut text = text.to_string();
+  for (expression, replacement) in REDACTIONS.iter() {
+    text = expression.replace_all(&text, *replacement).into_owned();
+  }
+  SECRET_HEX.replace_all(&text, "<redacted>").into_owned()
+}
+
+/// The stable signature text of a cause line: identifiers, numbers, timestamps and per-session path segments
+/// replaced, whitespace collapsed, and the first [`MAX_CAUSE_CHARS`] characters kept.
+pub fn normalize(text: &str) -> String {
+  let mut text = UUID.replace_all(text, "<uuid>").into_owned();
+  text = SESSION_PATH.replace_all(&text, "<session>").into_owned();
+  text = redact(&text);
+  text = ANSI.replace_all(&text, "").into_owned();
+  for (expression, replacement) in SESSION_FIELD.iter() {
+    text = expression.replace_all(&text, *replacement).into_owned();
+  }
+  text = HEX.replace_all(&text, "<hex>").into_owned();
+  text = PATH.replace_all(&text, "<path>").into_owned();
+  text = TIMESTAMP.replace_all(&text, "<ts>").into_owned();
+  text = NUMBER_WITH_UNIT.replace_all(&text, "<n>$2").into_owned();
+  text = NUMBER.replace_all(&text, "<n>").into_owned();
+  let text = WHITESPACE.replace_all(&text, " ");
+  text.trim().chars().take(MAX_CAUSE_CHARS).collect()
+}
+
+/// The redacted example text a row keeps for a cause or a no-cause shape.
+fn anchor(text: &str) -> String {
+  redact(text).chars().take(MAX_ANCHOR_CHARS).collect()
+}
+
+/// Whether the text holds only banner lines. The banner reaches a log or an event colored, so the escapes come off
+/// before the lines are read.
+fn banner_only(text: &str) -> bool {
+  let plain = ANSI.replace_all(text, "");
+  let mut saw_banner = false;
+  for line in plain.lines() {
+    if line.trim().is_empty() {
+      continue;
+    }
+    if BANNER.iter().any(|banner| banner.is_match(line)) {
+      saw_banner = true;
+      continue;
+    }
+    return false;
+  }
+  saw_banner
+}
+
+/// Whether an HTTP status appears in the text.
+fn has_http_status(text: &str) -> bool {
+  HTTP_STATUS.is_match(text)
+}
+
+/// The first cause the ordered pattern list finds in `text`.
+fn match_cause(text: &str) -> Option<String> {
+  for pattern in PATTERNS.iter() {
+    let Some(found) = pattern.expression.find(text) else { continue };
+    if pattern.whole_text {
+      return Some(text.to_string());
+    }
+    if pattern.whole_line {
+      // The class's own `^|\W` guard is part of the match, so the line is read from the word it found.
+      let matched = &text[found.start()..found.end()];
+      let start = found.start() + matched.len() - matched.trim_start().len();
+      let end = start + matched.trim().len();
+      return Some(containing_line(text, start, end).to_string());
+    }
+    return Some(found.as_str().to_string());
+  }
+  None
+}
+
+fn containing_line(text: &str, start: usize, end: usize) -> &str {
+  let line_start = text[..start].rfind('\n').map_or(0, |index| index + 1);
+  let line_end = text[end..].find('\n').map_or(text.len(), |index| end + index);
+  text[line_start..line_end].trim()
+}
+
+/// The cause of one run, from its error-event contents in file order, its stderr tail and its terminal reason.
+pub fn extract_run_cause(error_texts: &[&str], stderr: &str, terminal_reason: Option<&str>) -> ExtractedCause {
+  let error_cleans: Vec<String> = error_texts.iter().map(|text| clean(text)).filter(|text| !text.is_empty()).collect();
+  for text in error_cleans.iter().rev() {
+    if let Some(line) = match_cause(text) {
+      return ExtractedCause::Cause { line, anchor: anchor(text) };
+    }
+  }
+  let stderr_clean = clean(stderr);
+  if !stderr_clean.is_empty()
+    && let Some(line) = match_cause(&stderr_clean)
+  {
+    return ExtractedCause::Cause { line, anchor: anchor(&stderr_clean) };
+  }
+  let mut combined = error_texts.join("\n");
+  combined.push('\n');
+  combined.push_str(stderr);
+  if banner_only(&combined) {
+    return ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, anchor: anchor(combined.trim()) };
+  }
+  if let Some(text) = error_cleans.last() {
+    return ExtractedCause::Cause { line: text.clone(), anchor: anchor(text) };
+  }
+  if !stderr_clean.is_empty() {
+    return ExtractedCause::Cause { line: stderr_clean.clone(), anchor: anchor(&stderr_clean) };
+  }
+  if let Some(reason) = terminal_reason {
+    let line = format!("terminal_reason={reason}");
+    if has_http_status(reason) {
+      return ExtractedCause::Cause { line: line.clone(), anchor: anchor(&line) };
+    }
+    return ExtractedCause::NoCause { shape: NoCauseShape::TerminalReason, anchor: anchor(&line) };
+  }
+  if !error_texts.is_empty() || !stderr.is_empty() {
+    return ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() };
+  }
+  ExtractedCause::NoCause { shape: NoCauseShape::ExitCodeOnly, anchor: String::new() }
+}
+
+/// The exit-code text of a signature: the number, or `null` when the record finished without one.
+pub fn exit_text(exit_code: Option<i32>) -> String {
+  match exit_code {
+    Some(code) => code.to_string(),
+    None => "null".to_string(),
+  }
+}
+
+/// The signature of a run record.
+pub fn run_signature(kind: &str, exit_code: Option<i32>, backend: &str, cause: &ExtractedCause) -> String {
+  let exit = exit_text(exit_code);
+  match cause {
+    ExtractedCause::Cause { line, .. } => format!("run:{kind}:{exit}:{}", normalize(line)),
+    ExtractedCause::NoCause { .. } => format!("run:{kind}:{exit}:no-cause:{backend}"),
+  }
+}
+
+/// The signature of one server-log error line.
+pub fn log_signature(event: &str, message: &str) -> String {
+  format!("log:{event}:{}", normalize(message))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn cause(line: &str) -> ExtractedCause {
+    ExtractedCause::Cause { line: line.to_string(), anchor: line.to_string() }
+  }
+
+  #[test]
+  fn the_two_improve_ux_exit_five_texts_share_one_signature_and_keep_a_cause() {
+    let first =
+      extract_run_cause(&["improve runner: the previous round still runs: unit improve-ux.scope exists"], "", None);
+    let second =
+      extract_run_cause(&["improve runner: the previous round still runs: unit improve-ux.scope exists"], "", None);
+    assert_eq!(first, second);
+    assert_eq!(
+      run_signature("work", Some(5), "synthetic-backend", &first),
+      "run:work:5:the previous round still runs: unit improve-ux.scope exists"
+    );
+    assert!(matches!(first, ExtractedCause::Cause { .. }));
+  }
+
+  #[test]
+  fn a_missing_yaml_frontmatter_skill_load_error_keeps_its_own_signature() {
+    let cause = extract_run_cause(
+      &[],
+      "Reading additional input from stdin...\n\
+       2026-10-19T06:09:24.154864Z ERROR codex_core::session::session: failed to load skill \
+       /home/synthetic/.charliebot/skills/zhihu-colony-article/SKILL.md: missing YAML frontmatter delimited by ---",
+      None,
+    );
+    assert_eq!(
+      run_signature("work", Some(1), "synthetic-backend", &cause),
+      "run:work:1:failed to load skill <path>: missing YAML frontmatter"
+    );
+  }
+
+  #[test]
+  fn the_four_no_cause_shapes_are_closed_and_distinct() {
+    let empty = extract_run_cause(&["\u{1b}[0m   "], "", None);
+    assert_eq!(empty, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
+    let whitespace = extract_run_cause(&["   \n\t"], "", None);
+    assert_eq!(whitespace, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
+    let whitespace_stderr = extract_run_cause(&[], "  \n ", None);
+    assert_eq!(whitespace_stderr, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
+
+    let banner = extract_run_cause(&["Provider List: https://docs.litellm.ai/docs/providers"], "", None);
+    assert_eq!(
+      banner,
+      ExtractedCause::NoCause {
+        shape: NoCauseShape::BannerOnly,
+        anchor: "Provider List: https://docs.litellm.ai/docs/providers".to_string(),
+      }
+    );
+
+    let terminal = extract_run_cause(&[], "", Some("api_error"));
+    assert_eq!(
+      terminal,
+      ExtractedCause::NoCause { shape: NoCauseShape::TerminalReason, anchor: "terminal_reason=api_error".to_string() }
+    );
+
+    let exit = extract_run_cause(&[], "", None);
+    assert_eq!(exit, ExtractedCause::NoCause { shape: NoCauseShape::ExitCodeOnly, anchor: String::new() });
+
+    for (cause, shape) in [
+      (empty, NoCauseShape::EmptyText),
+      (banner, NoCauseShape::BannerOnly),
+      (terminal, NoCauseShape::TerminalReason),
+      (exit, NoCauseShape::ExitCodeOnly),
+    ] {
+      assert!(matches!(cause, ExtractedCause::NoCause { shape: found, .. } if found == shape));
+      assert_eq!(run_signature("work", Some(1), "synthetic-backend", &cause), "run:work:1:no-cause:synthetic-backend");
+    }
+  }
+
+  #[test]
+  fn the_colored_three_line_litellm_banner_is_no_cause() {
+    let banner = "\u{1b}[1;31mProvider List: https://docs.litellm.ai/docs/providers\u{1b}[0m\n\
+                  \u{1b}[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\u{1b}[0m\n\
+                  \u{1b}[1;31mLiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.\u{1b}[0m";
+    let cause = extract_run_cause(&[banner], "", None);
+    assert_eq!(cause, ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, anchor: anchor(banner.trim()) });
+  }
+
+  #[test]
+  fn a_cut_short_banner_line_is_no_cause() {
+    let text = "lm.ai/docs/providers\n\u{1b}[1;31mProvider List: https://docs.litellm.ai/docs/providers\u{1b}[0m";
+    let cause = extract_run_cause(&[text], "", None);
+    assert!(matches!(cause, ExtractedCause::NoCause { shape: NoCauseShape::BannerOnly, .. }), "{cause:?}");
+  }
+
+  #[test]
+  fn a_single_error_word_takes_its_whole_line() {
+    let cause =
+      extract_run_cause(&["starting\nError: No deferred tool marker found in the transcript\nrest"], "", None);
+    let ExtractedCause::Cause { line, .. } = cause else { panic!("{cause:?}") };
+    assert_eq!(line, "Error: No deferred tool marker found in the transcript");
+  }
+
+  #[test]
+  fn a_word_at_the_end_of_a_single_line_text_takes_that_line() {
+    let extracted = extract_run_cause(&["the run failed"], "", None);
+    let ExtractedCause::Cause { line, .. } = extracted else { panic!("{extracted:?}") };
+    assert_eq!(line, "the run failed");
+  }
+
+  #[test]
+  fn a_word_that_merely_contains_oom_is_not_an_oom_kill() {
+    let extracted = extract_run_cause(&["the room is out of scope"], "", None);
+    assert_eq!(extracted, cause("the room is out of scope"));
+  }
+
+  #[test]
+  fn other_text_is_a_cause_and_a_terminal_reason_with_a_status_is_not_no_cause() {
+    let other = extract_run_cause(&["something unexpected happened"], "", None);
+    assert_eq!(other, cause("something unexpected happened"));
+    let status = extract_run_cause(&[], "", Some("api_error status=503"));
+    assert!(matches!(status, ExtractedCause::Cause { .. }));
+  }
+
+  #[test]
+  fn normalization_removes_ids_numbers_timestamps_and_paths() {
+    let text = "run 023536a4-48d6-5183-b9f9-8b588ffa0e43 failed at 2026-11-01T20:19:51.151464Z after 12 s in \
+                /home/synthetic/.charliebot/sessions/023536a4-48d6-5183-b9f9-8b588ffa0e43/data";
+    assert_eq!(normalize(text), "run <uuid> failed at <ts> after <n>s in <path>");
+    assert_eq!(normalize("sessions/023536a4-48d6-5183-b9f9-8b588ffa0e43/data"), "<session>/data");
+  }
+
+  #[test]
+  fn secrets_do_not_reach_a_signature_or_an_anchor() {
+    let text = "api_key=abcdefgh12345678 Authorization: Bearer abcdefgh12345 sk-abcdefgh12345";
+    let redacted = redact(text);
+    assert!(!redacted.contains("abcdefgh"));
+    assert!(redacted.contains("<redacted>"));
+  }
+}

@@ -19,6 +19,7 @@ charliebot-claude-code.workspace = true
 charliebot-core.workspace = true
 charliebot-cron.workspace = true
 charliebot-discord.workspace = true
+charliebot-failure-triage.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true
 charliebot-taste.workspace = true

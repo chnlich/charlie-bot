@@ -1399,9 +1399,13 @@ pub struct Summon<'a> {
   pub user: Option<&'a str>,
 }
 
+/// Route a new thread session: the router answers from the whole thread, and an answer that is not routed, or a router
+/// failure, leaves the session on the default backend. The route the session keeps says why (`thread not routed`,
+/// `router failed: …`).
 async fn route_thread_session(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &FeatureContext,
+  session_id: &str,
   origin: &Value,
 ) -> Result<(Option<String>, Option<backend_pool::BackendRoute>), ThreadReplyError> {
   let cfg = features.config.get().map_err(ThreadReplyError::failure)?;
@@ -1420,39 +1424,33 @@ async fn route_thread_session(
     .join("\n");
   let candidates = cfg.backends.options.iter().map(|option| option.id.clone()).collect::<Vec<_>>();
   let pool = backend_pool::backend_pool(features).map_err(ThreadReplyError::failure)?;
-  let route = match pool.route(&cfg, "thread", &text, &candidates).await {
-    Ok(route) => route,
+  let decided = match pool.route(&cfg, "thread", &text, &candidates, None).await {
+    Ok(answer) => pool.decide(&cfg, "thread", answer).map_err(ThreadReplyError::failure)?,
     Err(error) => {
-      let message = format!("backend router failed: {error}");
-      let address = adapter.address_of(origin);
-      adapter
-        .post(
-          &address,
-          &message,
-          &format!("{}-routerror:{}#1", adapter.platform().name, charliebot_store::control_events::new_request_id()),
-        )
-        .await?;
-      return Err(ThreadReplyError::failure(message));
+      tracing::warn!(event = "thread_route_failed", session = session_id, error = %error);
+      backend_pool::RoutedRequest::failed(&error)
     }
   };
-  let selected = pool.pick_ordered(&cfg, "thread", &route.backends, &[]).map_err(ThreadReplyError::failure)?;
-  let selected = match selected {
-    Some(option) => Some(option),
-    None => pool.select(&cfg, "thread", &[]).map_err(ThreadReplyError::failure)?,
+  let backend = match decided.target {
+    backend_pool::RouteTarget::NotRouted => None,
+    backend_pool::RouteTarget::Backend(option) => Some(option.id),
+    backend_pool::RouteTarget::Pool => {
+      let Some(option) = pool.select(&cfg, "thread", &[]).map_err(ThreadReplyError::failure)? else {
+        let message = format!("no backend is available for the thread session: {}", pool.recovery_report(&cfg));
+        let address = adapter.address_of(origin);
+        adapter
+          .post(
+            &address,
+            &message,
+            &format!("{}-routerror:{}#1", adapter.platform().name, charliebot_store::control_events::new_request_id()),
+          )
+          .await?;
+        return Err(ThreadReplyError::failure(message));
+      };
+      Some(option.id)
+    }
   };
-  let Some(option) = selected else {
-    let message = format!("no backend is available for the thread session: {}", pool.recovery_report(&cfg));
-    let address = adapter.address_of(origin);
-    adapter
-      .post(
-        &address,
-        &message,
-        &format!("{}-routerror:{}#1", adapter.platform().name, charliebot_store::control_events::new_request_id()),
-      )
-      .await?;
-    return Err(ThreadReplyError::failure(message));
-  };
-  Ok((Some(option.id), Some(route)))
+  Ok((backend, Some(decided.route)))
 }
 
 /// Accept one summon: resolve the session, persist the summon, fire the round, and light the ack (`accept_summon`).
@@ -1501,7 +1499,7 @@ pub async fn accept_summon(
   match existing_session {
     None => {
       let name = format!("{} {}", summon.label, local_time());
-      let (backend, route) = route_thread_session(adapter, features, summon.origin).await?;
+      let (backend, route) = route_thread_session(adapter, features, session_id, summon.origin).await?;
       features
         .store
         .create_task(

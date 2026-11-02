@@ -568,6 +568,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-cron",
  "charliebot-discord",
+ "charliebot-failure-triage",
  "charliebot-improve",
  "charliebot-memory",
  "charliebot-opencode",
@@ -859,6 +860,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-failure-triage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-tasks",
+ "futures-util",
+ "jiff",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "charliebot-files"
 version = "0.1.0"
 dependencies = [
@@ -1079,6 +1100,7 @@ dependencies = [
  "charliebot-discord",
  "charliebot-disk-sweep",
  "charliebot-explain",
+ "charliebot-failure-triage",
  "charliebot-files",
  "charliebot-gemini",
  "charliebot-host-auth",

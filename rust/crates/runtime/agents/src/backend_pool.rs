@@ -81,11 +81,47 @@ pub const BACKEND_FROM_POOL_FIELD: &str = "backend_from_pool";
 /// The cooldown for a quota error that names no reset time.
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
 
-/// One router answer: backend ids in preference order and the router's explanation.
+/// The route a request keeps on its session: the backend ids the router named, and the router's explanation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BackendRoute {
   pub backends: Vec<String>,
   pub reason: String,
+}
+
+/// One router answer: whether the router routed the request, the backend ids in preference order, and the reason.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouterAnswer {
+  pub routed: bool,
+  pub backends: Vec<String>,
+  pub reason: String,
+}
+
+/// Where one routed request runs.
+#[derive(Debug)]
+pub enum RouteTarget {
+  /// The router did not route the request, or the router failed: the caller's default path runs it.
+  NotRouted,
+  /// The router sent the request to the pool, or every backend it named is cooling.
+  Pool,
+  /// The first backend the router named that is not cooling.
+  Backend(BackendOption),
+}
+
+/// One routed request: the route its session keeps, and where it runs.
+#[derive(Debug)]
+pub struct RoutedRequest {
+  pub route: BackendRoute,
+  pub target: RouteTarget,
+}
+
+impl RoutedRequest {
+  /// The request after a router failure: it takes the caller's default path, and its route names the failure.
+  pub fn failed(error: &RouterError) -> Self {
+    Self {
+      route: BackendRoute { backends: Vec::new(), reason: format!("router failed: {error}") },
+      target: RouteTarget::NotRouted,
+    }
+  }
 }
 
 /// A configured router could not start or did not answer its contract.
@@ -192,17 +228,49 @@ impl BackendPool {
     Ok(None)
   }
 
-  /// Ask `backends.routing.command` to order candidate backends for one role.
+  /// Ask `backends.routing.command` for one request's answer. `session_backend` is the delegating session's backend id,
+  /// or None for a thread.
   pub async fn route(
     &self,
     cfg: &CharlieBotConfig,
     role: &str,
     text: &str,
     candidates: &[String],
-  ) -> Result<BackendRoute, RouterError> {
+    session_backend: Option<&str>,
+  ) -> Result<RouterAnswer, RouterError> {
     let routing =
       cfg.backends.routing.as_ref().ok_or_else(|| RouterError("backends.routing is not configured".to_string()))?;
-    self.route_command(&routing.command, role, text, candidates, StdDuration::from_secs(ROUTER_TIMEOUT_SECONDS)).await
+    self
+      .route_command(
+        &routing.command,
+        role,
+        text,
+        candidates,
+        session_backend,
+        StdDuration::from_secs(ROUTER_TIMEOUT_SECONDS),
+      )
+      .await
+  }
+
+  /// Turn one router answer into the route the request keeps and the place it runs. The first named backend that is not
+  /// cooling runs the request; when every named backend is cooling, the route says the request ran on the pool.
+  pub fn decide(&self, cfg: &CharlieBotConfig, caller: &str, answer: RouterAnswer) -> anyhow::Result<RoutedRequest> {
+    let RouterAnswer { routed, backends, reason } = answer;
+    if !routed {
+      return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::NotRouted });
+    }
+    if backends.is_empty() {
+      return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Pool });
+    }
+    match self.pick_ordered(cfg, caller, &backends, &[])? {
+      Some(option) => {
+        Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Backend(option) })
+      }
+      None => {
+        let reason = format!("{reason}; {} cooling; ran on pool", backends.join(", "));
+        Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Pool })
+      }
+    }
   }
 
   async fn route_command(
@@ -211,11 +279,17 @@ impl BackendPool {
     role: &str,
     text: &str,
     candidates: &[String],
+    session_backend: Option<&str>,
     timeout: StdDuration,
-  ) -> Result<BackendRoute, RouterError> {
+  ) -> Result<RouterAnswer, RouterError> {
     let program = command.first().ok_or_else(|| RouterError("backends.routing.command is empty".to_string()))?;
     let candidate_entries = self.route_candidates(candidates);
-    let payload = json!({"role": role, "text": text, "candidates": candidate_entries});
+    let payload = json!({
+      "role": role,
+      "text": text,
+      "candidates": candidate_entries,
+      "session_backend": session_backend,
+    });
     let input =
       serde_json::to_vec(&payload).map_err(|error| RouterError(format!("could not encode router input: {error}")))?;
     let mut process = Command::new(program);
@@ -438,7 +512,7 @@ fn parse_router_output(
   program: &str,
   output: RouterOutput,
   candidates: &[String],
-) -> Result<BackendRoute, RouterError> {
+) -> Result<RouterAnswer, RouterError> {
   let status_code = output.status.code().map_or_else(|| "signal".to_string(), |code| code.to_string());
   let stderr = stderr_tail(&output.stderr);
   if !output.status.success() {
@@ -450,28 +524,34 @@ fn parse_router_output(
     ))
   })?;
   let object = parsed.as_object();
+  let routed = object.and_then(|object| object.get("routed")).and_then(Value::as_bool);
   let backends = object
     .and_then(|object| object.get("backends"))
     .and_then(Value::as_array)
     .filter(|backends| backends.iter().all(Value::is_string));
   let reason = object.and_then(|object| object.get("reason")).and_then(Value::as_str);
-  let (Some(backends), Some(reason)) = (backends, reason) else {
+  let (Some(routed), Some(backends), Some(reason)) = (routed, backends, reason) else {
     return Err(RouterError(format!(
       "backend router command {program} exited {status_code} with stdout outside the router contract \
-       (backends: list[str], reason: str expected); stderr: {stderr}"
+       (routed: bool, backends: list[str], reason: str expected); stderr: {stderr}"
     )));
   };
   let backends = backends
     .iter()
     .map(|backend| backend.as_str().expect("backend element is a string").to_string())
     .collect::<Vec<_>>();
+  if !routed && !backends.is_empty() {
+    return Err(RouterError(format!(
+      "backend router command {program} answered routed false with backends {backends:?}; stderr: {stderr}"
+    )));
+  }
   let unknown = backends.iter().filter(|backend| !candidates.contains(backend)).collect::<Vec<_>>();
   if !unknown.is_empty() {
     return Err(RouterError(format!(
       "backend router command {program} returned ids outside the candidates: {unknown:?}; stderr: {stderr}"
     )));
   }
-  Ok(BackendRoute { backends, reason: reason.to_string() })
+  Ok(RouterAnswer { routed, backends, reason: reason.to_string() })
 }
 
 fn stderr_tail(stderr: &[u8]) -> String {
@@ -708,27 +788,30 @@ mod tests {
     let directory = tempfile::tempdir().unwrap();
     let command = router_command(
       &directory,
-      "cat >/dev/null\nprintf '%s' '{\"backends\":[\"b\",\"a\"],\"reason\":\"ranked\"}'",
+      "cat >/dev/null\nprintf '%s' '{\"routed\":true,\"backends\":[\"b\",\"a\"],\"reason\":\"ranked\"}'",
       &[],
     );
     let mut cfg = config(&["a", "b"]);
     configured_router(&mut cfg, command);
 
-    let route = BackendPool::default()
-      .route(&cfg, "implement", "design task", &["a".to_string(), "b".to_string()])
+    let answer = BackendPool::default()
+      .route(&cfg, "implement", "design task", &["a".to_string(), "b".to_string()], Some("a"))
       .await
       .unwrap();
-    assert_eq!(route, BackendRoute { backends: vec!["b".to_string(), "a".to_string()], reason: "ranked".to_string() });
+    assert_eq!(
+      answer,
+      RouterAnswer { routed: true, backends: vec!["b".to_string(), "a".to_string()], reason: "ranked".to_string() }
+    );
   }
 
   #[tokio::test]
-  async fn router_receives_role_text_and_each_cooling_deadline() {
+  async fn router_receives_role_text_session_backend_and_each_cooling_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let capture = directory.path().join("stdin.json");
     let capture_text = capture.to_string_lossy().into_owned();
     let command = router_command(
       &directory,
-      "cat > \"$1\"\nprintf '%s' '{\"backends\":[],\"reason\":\"captured\"}'",
+      "cat > \"$1\"\nprintf '%s' '{\"routed\":true,\"backends\":[],\"reason\":\"captured\"}'",
       &[&capture_text],
     );
     let mut cfg = config(&["a", "b"]);
@@ -737,11 +820,13 @@ mod tests {
     pool.cool("a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     pool.cool("b", Some(UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap()));
 
-    let route = pool.route(&cfg, "thread", "untrimmed thread", &["a".to_string(), "b".to_string()]).await.unwrap();
-    assert_eq!(route.reason, "captured");
+    let answer =
+      pool.route(&cfg, "thread", "untrimmed thread", &["a".to_string(), "b".to_string()], Some("b")).await.unwrap();
+    assert_eq!(answer.reason, "captured");
     let request: Value = serde_json::from_slice(&fs::read(capture).unwrap()).unwrap();
     assert_eq!(request["role"], "thread");
     assert_eq!(request["text"], "untrimmed thread");
+    assert_eq!(request["session_backend"], "b");
     assert_eq!(
       request["candidates"],
       serde_json::json!([
@@ -762,6 +847,7 @@ mod tests {
         "implement",
         "task",
         &candidates,
+        None,
         StdDuration::from_secs(1),
       )
       .await
@@ -770,27 +856,55 @@ mod tests {
 
     let directory = tempfile::tempdir().unwrap();
     let command = router_command(&directory, "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[]);
-    let exited =
-      pool.route_command(&command, "implement", "task", &candidates, StdDuration::from_secs(1)).await.unwrap_err();
+    let exited = pool
+      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
+      .await
+      .unwrap_err();
     assert!(exited.to_string().contains("exited 3") && exited.to_string().contains("router boom"));
 
     let command = router_command(&directory, "cat >/dev/null\nprintf '%s' 'not json'", &[]);
-    let malformed =
-      pool.route_command(&command, "implement", "task", &candidates, StdDuration::from_secs(1)).await.unwrap_err();
+    let malformed = pool
+      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
+      .await
+      .unwrap_err();
     assert!(malformed.to_string().contains("stdout outside the router contract"));
+
+    // An answer without the routed flag is the old form, and the contract names the flag.
+    let command =
+      router_command(&directory, "cat >/dev/null\nprintf '%s' '{\"backends\":[\"a\"],\"reason\":\"old form\"}'", &[]);
+    let without_routed = pool
+      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
+      .await
+      .unwrap_err();
+    assert!(without_routed.to_string().contains("routed: bool"));
 
     let command = router_command(
       &directory,
-      "cat >/dev/null\nprintf '%s' '{\"backends\":[\"ghost\"],\"reason\":\"unknown\"}'",
+      "cat >/dev/null\nprintf '%s' '{\"routed\":false,\"backends\":[\"a\"],\"reason\":\"contradiction\"}'",
       &[],
     );
-    let unknown =
-      pool.route_command(&command, "implement", "task", &candidates, StdDuration::from_secs(1)).await.unwrap_err();
+    let unrouted_with_backends = pool
+      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
+      .await
+      .unwrap_err();
+    assert!(unrouted_with_backends.to_string().contains("routed false"));
+
+    let command = router_command(
+      &directory,
+      "cat >/dev/null\nprintf '%s' '{\"routed\":true,\"backends\":[\"ghost\"],\"reason\":\"unknown\"}'",
+      &[],
+    );
+    let unknown = pool
+      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
+      .await
+      .unwrap_err();
     assert!(unknown.to_string().contains("ghost"));
 
     let command = router_command(&directory, "cat >/dev/null\nsleep 5", &[]);
-    let timeout =
-      pool.route_command(&command, "implement", "task", &candidates, StdDuration::from_millis(100)).await.unwrap_err();
+    let timeout = pool
+      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_millis(100))
+      .await
+      .unwrap_err();
     assert!(timeout.to_string().contains("timed out"));
   }
 

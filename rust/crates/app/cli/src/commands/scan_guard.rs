@@ -2,8 +2,9 @@
 //!
 //! A refused scan is one of three shell-level forms: one process per session directory, a search from `/` or the home
 //! directory that neither limits depth nor prunes the session store, or a recursive search of the session store or a
-//! parent of it whose file-name filter reaches run logs. Script code inside single quotes or heredoc bodies is not
-//! shell, so one process that reads all the files in a glob passes.
+//! parent of it whose file-name filter reaches run logs. An argument's quoting does not change its meaning, so a
+//! quoted store path counts as its bare form, while script code inside quotes or heredoc bodies is not shell and one
+//! process that reads all the files in a glob passes.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -105,7 +106,7 @@ fn scan_forms(command: &str) -> Result<Vec<ScanForm>, String> {
       break;
     }
   }
-  for captures in run_log_search_pattern()?.captures_iter(command) {
+  for captures in run_log_search_pattern()?.captures_iter(&shell) {
     let captures = captures.map_err(parse_error)?;
     let globs = glob_names(&groups_text(&captures))?;
     if globs.is_empty() || globs.iter().any(|glob| run_log_globs().contains(&glob.as_str())) {
@@ -116,10 +117,17 @@ fn scan_forms(command: &str) -> Result<Vec<ScanForm>, String> {
   Ok(forms)
 }
 
-/// The command with heredoc bodies and single-quoted strings removed: script code there is not shell.
+/// The command with heredoc bodies removed and single-quoted strings reduced to their text. A quoted argument means
+/// the same thing bare, so a quoted store path keeps its text. Quoted text that is not one shell argument, script or
+/// prose holding a space or a shell separator, is dropped, because it is not shell.
 fn shell_text(command: &str) -> String {
   let without_heredocs = heredoc_pattern().replace_all(command, "<<HEREDOC");
-  single_quote_pattern().replace_all(&without_heredocs, "''").into_owned()
+  single_quote_pattern()
+    .replace_all(&without_heredocs, |captures: &Captures<'_>| match captures.get(1) {
+      Some(argument) => argument.as_str().to_string(),
+      None => String::new(),
+    })
+    .into_owned()
 }
 
 fn groups_text(captures: &Captures<'_>) -> String {
@@ -259,7 +267,8 @@ fn heredoc_pattern() -> &'static Regex {
 
 fn single_quote_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
-  PATTERN.get_or_init(|| Regex::new(r"'[^']*'").expect("single-quote pattern is valid"))
+  PATTERN
+    .get_or_init(|| Regex::new(r"'([^'\s;|&`]*)'|'[^']*'").expect("single-quote pattern is valid"))
 }
 
 /// A file-name filter with its value: an exclusion (`-g '!...'`) matches none, so it names no glob.
@@ -362,6 +371,29 @@ mod tests {
       assert!(!scan_forms(command).unwrap().is_empty(), "{command}");
     }
     assert!(scan_forms("grep -n -r X ~/workspace/charlie-bot/rust").unwrap().is_empty());
+  }
+
+  #[test]
+  fn quoted_store_paths_mean_the_same_thing_bare() {
+    // A single-quoted store path is the same search root as its bare form, and its run-log glob still refuses.
+    assert_eq!(
+      scan_forms(&format!(r"rg -l X '{}/.charliebot/sessions' -g '*.jsonl'", home())).unwrap(),
+      vec![ScanForm::RunLogSearch]
+    );
+    // A single-quoted prune path keeps the prune it names.
+    assert!(scan_forms(r"find ~ -path '*/.charliebot/sessions' -prune -o -name X -print").unwrap().is_empty());
+    assert!(scan_forms(&format!(
+      r"find / \( -path '/proc' -o -path '{}/.charliebot/sessions' \) -prune -o -name X -print",
+      home()
+    ))
+    .unwrap()
+    .is_empty());
+    // Quoted prose holding a space is not shell, so a root written inside it is not a search root.
+    assert!(
+      scan_forms(&format!(r"rg -l 'find / and replace' {}/.charliebot/sessions -g metadata.json", home()))
+        .unwrap()
+        .is_empty()
+    );
   }
 
   #[test]

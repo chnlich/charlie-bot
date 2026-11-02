@@ -40,9 +40,9 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::Shape;
-use crate::generate::{self, EventLog};
 use crate::manifest::{MANIFEST_NAME, Manifest, ManifestSession, SessionMetadata};
 use crate::rng::Rng;
+use crate::session::{self, EventLog};
 use crate::text::{self, SyntheticText};
 
 /// The file beside the sessions that holds the boot marker. `scripts/release/trial.sh --seed-home` copies it to the
@@ -181,7 +181,7 @@ struct HomePlan {
 
 /// The boot marker: the start of the last clean walk before the planned server start.
 fn marker_time() -> NaiveDateTime {
-  generate::first_session_time() + TimeDelta::seconds(generate::SESSION_START_SPREAD_SECONDS as i64 + 86_400)
+  session::first_session_time() + TimeDelta::seconds(session::SESSION_START_SPREAD_SECONDS as i64 + 86_400)
 }
 
 /// The fire time of every pending trigger, after any lab start.
@@ -212,7 +212,7 @@ fn run_count(knots: &[(f64, f64)], u: f64) -> usize {
 
 /// A random version-4 id from the plan's stream.
 fn plan_id(rng: &mut Rng) -> String {
-  generate::session_id(rng)
+  session::session_id(rng)
 }
 
 impl HomePlan {
@@ -292,7 +292,7 @@ impl HomePlan {
       Some(KeepReason::FileAfterMarker | KeepReason::RunUnended) | None => TaskProfile::Manager,
     };
     let marker = marker_time();
-    let started_at = generate::first_session_time() + seconds(rng.range(0, generate::SESSION_START_SPREAD_SECONDS));
+    let started_at = session::first_session_time() + seconds(rng.range(0, session::SESSION_START_SPREAD_SECONDS));
     let activity = seconds(rng.range(3_600, ACTIVITY_SECONDS));
     let modified_at = match reason {
       Some(KeepReason::FileAfterMarker) => marker + seconds(rng.range(1, AFTER_MARKER_SECONDS)),
@@ -359,7 +359,7 @@ impl HomePlan {
 
 /// A chrono instant as the store's UTC time.
 fn utc(moment: NaiveDateTime) -> UtcDateTime {
-  UtcDateTime::parse(&generate::stamp(moment)).expect("a generated stamp parses")
+  UtcDateTime::parse(&session::stamp(moment)).expect("a generated stamp parses")
 }
 
 fn system_time(moment: NaiveDateTime) -> SystemTime {
@@ -423,7 +423,7 @@ fn write_task_log(
     let mut inputs = Vec::new();
     log.write_turns(limit, rng, text, &mut |rng: &mut Rng, event: &mut Value| inputs.push(label_input(rng, event)))?;
     if span + 1 == spans {
-      let mut last = generate::final_event(final_text, &log.next_stamp());
+      let mut last = session::final_event(final_text, &log.next_stamp());
       inputs.push(label_input(rng, &mut last));
       log.push(&last)?;
     }
@@ -585,14 +585,14 @@ fn write_marker_seed(home: &Path) -> Result<()> {
 /// Writes a task-tree home of `sessions` sessions for `seed` into `staging`, whose final path is `home`. Returns the
 /// total event-log bytes.
 pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64) -> Result<u64> {
-  let (mut rng, text, sizes) = generate::planned_home(sessions, seed);
+  let (mut rng, text, sizes) = session::planned_home(sessions, seed);
   let plan = HomePlan::new(&sizes, seed);
   let worktrees = home.join(WORKTREES_DIR);
   fs::create_dir(staging.join(WORKTREES_DIR)).context("cannot create the worktree directory")?;
   let mut manifest_sessions = Vec::with_capacity(sessions);
   let mut total = 0;
   for (session, size) in plan.sessions.iter().zip(&sizes) {
-    let id = generate::session_id(&mut rng);
+    let id = session::session_id(&mut rng);
     let session_dir = staging.join(&id);
     fs::create_dir_all(layout::data_dir(&session_dir))
       .with_context(|| format!("cannot create {}", session_dir.display()))?;
@@ -609,8 +609,8 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
           TaskProfile::Worker => "worker",
         },
         backend: "mock-backend",
-        created_at: generate::stamp(session.started_at),
-        updated_at: generate::stamp(session.modified_at),
+        created_at: session::stamp(session.started_at),
+        updated_at: session::stamp(session.modified_at),
         schema_version: 2,
         has_unread: false,
         starred: false,
@@ -618,7 +618,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
       task_parent_id: None,
       task: session.has_task.then(|| task_spec(session.profile, &mut rng)),
     };
-    generate::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
+    session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     for (run, inputs) in session.runs.iter().zip(log.run_inputs) {
       let run_dir = layout::runs_dir(&session_dir).join(&run.id);
       fs::create_dir_all(&run_dir).with_context(|| format!("cannot create {}", run_dir.display()))?;
@@ -647,7 +647,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     sessions: manifest_sessions,
     shape: Shape::TaskTree,
   };
-  generate::write_json(&staging.join(MANIFEST_NAME), &manifest, b" ")?;
+  session::write_json(&staging.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
 }
 
@@ -662,7 +662,7 @@ pub fn reset(home: &Path) -> Result<()> {
   if manifest.shape != Shape::TaskTree {
     bail!("{} holds a {:?} home; only a task-tree home has a generated state to reset", home.display(), manifest.shape);
   }
-  let (_, _, sizes) = generate::planned_home(manifest.session_count, manifest.seed);
+  let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed);
   let plan = HomePlan::new(&sizes, manifest.seed);
   let worktrees = fs::canonicalize(home)?.join(WORKTREES_DIR);
   let mut restored_worktrees = 0;
@@ -711,7 +711,7 @@ mod tests {
   #[test]
   fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
     let sessions = 8_100;
-    let (_, _, sizes) = generate::planned_home(sessions, 1);
+    let (_, _, sizes) = session::planned_home(sessions, 1);
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {
       let dealt = plan.sessions.iter().filter(|session| session.reason == Some(reason)).count();

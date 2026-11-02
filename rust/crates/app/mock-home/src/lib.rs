@@ -2,7 +2,7 @@
 //! the manifest that `generate` wrote beside it.
 //!
 //! The home holds one directory per session, with `metadata.json` and `data/chat_events.jsonl`, and one `manifest.json`
-//! beside the sessions. The event-log sizes follow the production shape in `generate::SIZE_KNOTS`. Every sentence is
+//! beside the sessions. The event-log sizes follow the production shape in `session::SIZE_KNOTS`. Every sentence is
 //! written for this crate, so no text comes from a real session. One seed gives the same bytes on every run, so the
 //! servers under test load the same data.
 //!
@@ -15,6 +15,7 @@ pub mod check;
 pub mod generate;
 mod manifest;
 mod rng;
+mod session;
 pub mod task_tree;
 mod text;
 

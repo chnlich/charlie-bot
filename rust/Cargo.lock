@@ -900,13 +900,18 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-shell-harness",
+ "charliebot-store",
  "futures-util",
  "http 1.5.0",
  "libc",
+ "regex",
+ "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "time",
  "tokio",
+ "tower",
  "tracing",
 ]
 

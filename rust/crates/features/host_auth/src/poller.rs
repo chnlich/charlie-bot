@@ -9,6 +9,7 @@ use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use futures_util::future::BoxFuture;
 use tokio::task::JoinHandle;
 
+use crate::browser_login;
 use crate::host_auth::{self, PROBE_INTERVAL_SEC, RoundSlot};
 
 /// The service's one loop task. Starting creates it, and stopping cancels and drains it.
@@ -48,6 +49,8 @@ impl Service for HostAuthPoller {
         Err(error) => return Err(error.into()),
       }
       tracing::info!("host_auth_poller_stopped");
+      // Python's `stop_service` also ends every live browser login after the poller stops.
+      browser_login::stop_all().await;
       Ok(())
     })
   }

@@ -11,6 +11,19 @@ use crate::{paths, text_repr};
 
 pub const CHARLIEBOT_HOME_ENV: &str = "CHARLIEBOT_HOME";
 
+/// The profile home as a message writes it: the variable's name in place of the machine-specific path.
+pub const DISPLAY_HOME: &str = "$CHARLIEBOT_HOME";
+
+/// A path under the profile home in the form [`DISPLAY_HOME`] writes. An empty `relative` is the home itself.
+pub fn display_path(relative: &str) -> String {
+  if relative.is_empty() { DISPLAY_HOME.to_string() } else { format!("{DISPLAY_HOME}/{relative}") }
+}
+
+/// A directory under the profile home in the form [`DISPLAY_HOME`] writes, with its trailing slash.
+pub fn display_dir(relative: &str) -> String {
+  format!("{}/", display_path(relative))
+}
+
 /// The profile's opencode store directory name, under the profile home.
 pub const OPENCODE_DIR_NAME: &str = "opencode";
 /// The `data` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_DATA_HOME`.

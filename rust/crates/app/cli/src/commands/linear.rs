@@ -46,7 +46,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     LinearCommand::Graphql(args) => {
       let request_body = read_request(args.file.as_deref())?;
       let home = home::charliebot_home_dir()
-        .map_err(|_| credential_failure(Path::new(&format!("$CHARLIEBOT_HOME/{}", config::CREDENTIALS_FILENAME))))?;
+        .map_err(|_| credential_failure(Path::new(&home::display_path(config::CREDENTIALS_FILENAME))))?;
       let response = execute_graphql(&request_body, GRAPHQL_ENDPOINT, &home)?;
       std::io::stdout().write_all(&response).map_err(|_| CliExit::error("could not write the Linear response"))?;
       Ok(())

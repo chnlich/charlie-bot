@@ -118,7 +118,7 @@ fn credentials_path(home: &Path) -> PathBuf {
 fn credential_failure(key: &str, path: Option<&Path>) -> CliExit {
   let where_text = match path {
     Some(path) => paths::display(path),
-    None => format!("$CHARLIEBOT_HOME/{}", config::CREDENTIALS_FILENAME),
+    None => home::display_path(config::CREDENTIALS_FILENAME),
   };
   CliExit::contract(json!({"error": format!("credentials.feishu.{key} is unavailable in {where_text}")}), 3)
 }

@@ -63,19 +63,18 @@ fn preflight(backend_id: &str) -> Result<(), String> {
   let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
   let home_dir = home::charliebot_home_dir().map_err(|error| error.to_string())?;
   let cfg = registry.load_config(&home_dir).map_err(|error| error.to_string())?;
-  let home_env = home::CHARLIEBOT_HOME_ENV;
-  let config_file = charliebot_core::config::CONFIG_FILENAME;
+  let config_file = home::display_path(charliebot_core::config::CONFIG_FILENAME);
 
   // Mechanism 1: the config entry exists and is a charlie-code backend.
   let Some(option) = cfg.get_backend_option(backend_id) else {
     return Err(format!(
-      "option-missing: add a backends.options entry with id {backend_id} and type charlie-code to ${home_env}/{config_file}"
+      "option-missing: add a backends.options entry with id {backend_id} and type charlie-code to {config_file}"
     ));
   };
   if option.backend_type != "charlie-code" {
     return Err(format!(
       "option-missing: backend option {backend_id} has type {}, not charlie-code; \
-       add a backends.options entry with id {backend_id} and type charlie-code to ${home_env}/{config_file}",
+       add a backends.options entry with id {backend_id} and type charlie-code to {config_file}",
       option.backend_type
     ));
   }

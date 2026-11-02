@@ -133,7 +133,7 @@ pub enum FieldType {
   NullableInteger,
   NullableFloat,
   Boolean,
-  /// A `dict` field whose keys and values are unconstrained.
+  /// A mapping field whose keys and values are unconstrained.
   Dictionary,
   Literal(&'static [&'static str]),
   NullableLiteral(&'static [&'static str]),

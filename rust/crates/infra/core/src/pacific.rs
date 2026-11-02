@@ -6,11 +6,11 @@ use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
-/// The house time zone (`config.HOUSE_TIMEZONE`): the zone every approval day reads in, and the default of a scheduled
+/// The house time zone: the zone every approval day reads in, and the default of a scheduled
 /// task that names none.
 pub const ZONE: &str = "America/Los_Angeles";
 
-/// A Pacific-day read that refused (`pacific.PacificError`).
+/// A Pacific-day read that refused (`PacificError`).
 #[derive(Debug)]
 pub struct PacificError(String);
 
@@ -22,17 +22,17 @@ impl std::fmt::Display for PacificError {
 
 impl std::error::Error for PacificError {}
 
-/// The America/Los_Angeles zone (`pacific.zone`).
+/// The America/Los_Angeles zone (`zone`).
 pub fn zone() -> Result<TimeZone, PacificError> {
   TimeZone::get(ZONE).map_err(|error| PacificError(format!("loading the time zone {ZONE}: {error}")))
 }
 
-/// The Pacific calendar day an instant falls in (`pacific.day_of`).
+/// The Pacific calendar day an instant falls in (`day_of`).
 pub fn day_of(moment: Timestamp) -> Result<Date, PacificError> {
   Ok(moment.to_zoned(zone()?).date())
 }
 
-/// The Pacific calendar day a stored stamp holds (`pacific.day_of_stamp`). The stamps the server and the CLI write are
+/// The Pacific calendar day a stored stamp holds (`day_of_stamp`). The stamps the server and the CLI write are
 /// UTC ISO forms with an offset or a `Z` suffix and an optional fraction; a stamp outside those forms names no day.
 pub fn day_of_stamp(text: &str) -> Result<Date, PacificError> {
   let moment: Timestamp =

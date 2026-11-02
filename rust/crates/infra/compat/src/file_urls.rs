@@ -230,11 +230,11 @@ pub fn decimal_port(text: &str) -> Option<u64> {
 /// The form of a file link the scanner recognized (`FileLinkForm`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileLinkForm {
-  /// A file-server URL: the mount, then an absolute path (`FileLinkForm.CANONICAL`).
+  /// A file-server URL: the mount, then an absolute path.
   Canonical,
-  /// A URL under the retired `/files/` or `/file/` prefix (`FileLinkForm.RETIRED_PREFIX`).
+  /// A URL under the retired `/files/` or `/file/` prefix.
   RetiredPrefix,
-  /// A Markdown target that names a path on this host (`FileLinkForm.LOCAL_PATH`).
+  /// A Markdown target that names a path on this host.
   LocalPath,
 }
 
@@ -259,7 +259,7 @@ pub struct FileLink {
 }
 
 impl FileLink {
-  /// Whether this finding names a link the reader cannot open (`FileLink.dead`).
+  /// Whether this finding names a link the reader cannot open.
   pub fn dead(&self) -> bool {
     self.live == Some(false)
   }
@@ -497,8 +497,8 @@ fn scan_candidate(candidate: &Candidate, context: Option<&ScanContext>) -> io::R
   Ok(None)
 }
 
-/// `stat` as `pathlib` uses it for `exists`, `is_file` and `is_dir`. A path with an embedded NUL byte names no file,
-/// and neither do the errors `pathlib` ignores (ENOENT, ENOTDIR, EBADF and ELOOP).
+/// The `stat` behind the path checks. A path with an embedded NUL byte names no file,
+/// and neither do the errors that mean the path cannot name a file (ENOENT, ENOTDIR, EBADF and ELOOP).
 fn stat_path(path: &Path) -> io::Result<Option<fs::Metadata>> {
   if path.as_os_str().as_bytes().contains(&0) {
     return Ok(None);

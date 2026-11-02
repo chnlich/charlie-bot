@@ -1,4 +1,4 @@
-//! The file-backed cache that reloads when its file's fingerprint moves (`credentials._HotReloadCache`).
+//! The file-backed cache that reloads when its file's fingerprint moves.
 //!
 //! `get` re-runs the loader only when the file's `(mtime, size)` differs from both the cached value's
 //! and the last failure's. A failed reload keeps the previous value and logs one warning per error

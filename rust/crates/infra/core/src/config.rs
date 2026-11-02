@@ -26,7 +26,7 @@ pub const SESSIONS_DIR_NAME: &str = "sessions";
 /// The profile home's directory of configuration fragments, one YAML file per job or section.
 pub const CONFIG_D_DIR_NAME: &str = "config.d";
 
-/// A legacy-key value under this prefix names a `credentials.yaml` key path (`config_registry.CREDENTIALS_PREFIX`).
+/// A legacy-key value under this prefix names a `credentials.yaml` key path (`CREDENTIALS_PREFIX`).
 pub const CREDENTIALS_PREFIX: &str = "credentials: ";
 
 /// The `api_base` key of a `backends.options[]` entry: the upstream endpoint several backend types read. They import
@@ -56,7 +56,7 @@ const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 const FIELD_NAMES: &[&str] =
   &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram"];
 
-/// `config.LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
+/// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
 const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
   ("server_host", "server.host"),
   ("server_port", "server.port"),
@@ -93,7 +93,7 @@ const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
 /// A parsed package section: the value its parser returned. [`CharlieBotConfig::section`] downcasts it.
 pub type SectionValue = Arc<dyn Any + Send + Sync>;
 
-/// A top-level config key a package owns (`config_registry.register_config_section`). The loader keeps the
+/// A top-level config key a package owns. The loader keeps the
 /// key's raw YAML and calls `parse` on it; an omitted key arrives as an empty mapping, which yields the
 /// model's defaults. A parse error fails the load.
 #[derive(Clone, Copy)]
@@ -165,9 +165,9 @@ impl OptionField {
 #[derive(Clone, Default)]
 pub struct ConfigSchema {
   pub sections: Vec<ConfigSection>,
-  /// Retired top-level keys that no section owns (`config_registry.register_legacy_keys`).
+  /// Retired top-level keys that no section owns.
   pub legacy_keys: Vec<(&'static str, &'static str)>,
-  /// The registered backend type names (`backend_type_registration.register_backend_type`).
+  /// The registered backend type names.
   pub backend_types: Vec<&'static str>,
 }
 
@@ -516,7 +516,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
 }
 
 /// Refuse a config whose backend catalog is broken: no options, an id listed twice, or a pool entry
-/// naming no option. One error lists every violation (`config.require_backends`).
+/// naming no option. One error lists every violation (`require_backends`).
 pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
   if cfg.backends.options.is_empty() {
     return Err(ConfigError(
@@ -659,7 +659,7 @@ fn parse_backends(
   Ok(BackendsConfig { pool, routing, strong, options })
 }
 
-/// One backend entry, validated as the option model its `type` names would (`backend_models.parse_option`).
+/// One backend entry, validated as the option model its `type` names would (`parse_option`).
 fn parse_option(
   config_path: &str,
   index: usize,

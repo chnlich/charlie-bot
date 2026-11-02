@@ -1,4 +1,4 @@
-//! The response helpers every route uses: JSON, plain text, HTML, redirect, the `HTTPException`
+//! The response helpers every route uses: JSON, plain text, HTML, redirect, the error-status
 //! rendering, and the 500 body.
 
 use axum::body::Body;
@@ -34,7 +34,7 @@ pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
   bytes_response(status, "application/json", Bytes::from(body))
 }
 
-/// The `HTTPException` rendering: `{"detail": <reason phrase>}`.
+/// The error-status rendering: `{"detail": <reason phrase>}`.
 pub fn http_exception(status: StatusCode) -> Response {
   json(status, &json!({ "detail": status.canonical_reason().expect("every raised status has a reason phrase") }))
 }

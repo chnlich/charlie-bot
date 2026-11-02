@@ -17,10 +17,10 @@ use crate::paths;
 use crate::text_repr::{JsonStyle, json_dumps};
 
 /// The digest's record store, next to the other host-level state records
-/// (`approval_digest.DIGEST_RELATIVE_PATH`).
+/// (`DIGEST_RELATIVE_PATH`).
 pub const DIGEST_RELATIVE_PATH: &str = "state/digest_entries.jsonl";
 
-/// The pseudo-policy a T2 decision records under (`approval_digest.T2_POLICY`).
+/// The pseudo-policy a T2 decision records under (`T2_POLICY`).
 pub const T2_POLICY: &str = "t2";
 
 /// One NDJSON record line, with non-ASCII passed through and the default separators.
@@ -28,7 +28,7 @@ const RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// One digest record: a T1 policy use or a T2 decision, what was done, and how to undo it
-/// (`approval_digest.DigestEntry`).
+/// (`DigestEntry`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DigestEntry {
   /// The UTC instant the entry was written, as an ISO 8601 timestamp renders it.
@@ -49,7 +49,7 @@ pub struct DigestEntry {
   pub link: Option<String>,
 }
 
-/// A digest read or write that refused (`approval_digest.DigestError`).
+/// A digest read or write that refused (`DigestError`).
 #[derive(Debug)]
 pub struct DigestError(String);
 
@@ -61,12 +61,12 @@ impl std::fmt::Display for DigestError {
 
 impl std::error::Error for DigestError {}
 
-/// The digest store's path under `home` (`approval_digest.digest_path`).
+/// The digest store's path under `home` (`digest_path`).
 pub fn digest_path(home: &Path) -> PathBuf {
   home.join(DIGEST_RELATIVE_PATH)
 }
 
-/// The digest entries in the store, in append order (`approval_digest.read_entries`). A blank line is skipped; any
+/// The digest entries in the store, in append order (`read_entries`). A blank line is skipped; any
 /// other line that does not hold a digest record refuses the read with the store's path and the line number.
 pub fn read_entries(home: &Path) -> Result<Vec<DigestEntry>, DigestError> {
   let path = digest_path(home);
@@ -100,7 +100,7 @@ pub struct DigestCall<'a> {
   pub now: &'a str,
 }
 
-/// Record one digest entry (`approval_digest.add`). The step names its policy: a standing policy id checks the table's
+/// Record one digest entry (`add`). The step names its policy: a standing policy id checks the table's
 /// scope gates — the policy must exist, must not have expired, and must have cap room in the Pacific day `now` falls
 /// in — and requires the caller's `scope_check`; `t2` records a decision without either. Every refusal names the
 /// reason and tells the caller to ask for the step as a T0 Waiting on you item instead.

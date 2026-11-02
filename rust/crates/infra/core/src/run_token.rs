@@ -17,11 +17,11 @@ use crate::text_repr;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// `constants.RUN_TOKEN_ENV`: the environment variable that carries a run's token into its agent process, and the
+/// `RUN_TOKEN_ENV`: the environment variable that carries a run's token into its agent process, and the
 /// bearer the CLIs present.
 pub const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 
-/// `constants.SESSION_ID_ENV_VAR`: the server writes the master's session id into every spawned process environment,
+/// `SESSION_ID_ENV`: the server writes the master's session id into every spawned process environment,
 /// and the CLIs read it back.
 pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 

@@ -106,7 +106,7 @@ pub fn serve_file(path: &Path, content_type: &str, method: &Method, headers: &He
   file_response(path, &metadata, &MimeTypes::builtin(), Some(content_type), method, headers)
 }
 
-/// `StaticFiles.check_config`: the 500 a mount answers while its directory is missing or not a directory.
+/// The 500 a mount answers while its directory is missing or not a directory.
 fn directory_failure(directory: &Path) -> Option<Response> {
   match std::fs::metadata(directory) {
     Ok(metadata) if metadata.is_dir() => None,
@@ -247,7 +247,6 @@ fn file_response(
   multipart_response(path, &file_headers, &ranges, head_only)
 }
 
-/// `StaticFiles.is_not_modified`.
 fn is_not_modified(file_headers: &FileHeaders, request: &HeaderMap) -> bool {
   let if_none_match = header_text(request, &header::IF_NONE_MATCH);
   if !if_none_match.is_empty() {

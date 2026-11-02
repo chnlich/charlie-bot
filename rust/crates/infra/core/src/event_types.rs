@@ -227,7 +227,7 @@ pub fn is_real_user_message(event: &impl EventFields) -> bool {
 }
 
 /// The thread platforms that can summon a session. Each platform listener writes its summon block under its
-/// `ThreadPlatform.name`; the Slack and Discord tests pin both names to this list.
+/// platform key; the Slack and Discord tests pin both keys to this list.
 pub const THREAD_PLATFORM_KEYS: &[&str] = &["slack", "discord"];
 
 /// Return whether an event is a thread platform summon: an `agent_message` whose `slack` or `discord` block has no

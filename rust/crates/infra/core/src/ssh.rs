@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::paths;
 
-/// `timeouts.SSH_CONNECT_TIMEOUT`: the ssh `ConnectTimeout`, in seconds.
+/// The ssh `ConnectTimeout`, in seconds.
 pub const CONNECT_TIMEOUT_SECONDS: u32 = 10;
 
 /// How long a ControlMaster stays up after its last use, in seconds.

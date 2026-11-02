@@ -142,3 +142,10 @@ publish:
 # Telegram: the notification target.
 telegram:
   chat_id:
+
+# GitHub: the agent gh wrapper's App token command. The executable (one path, `~`
+# expanded) the wrapper runs with `--write <owner>/<repo>` to mint the agent GitHub
+# App's installation token for a text-carrying write. Absent, the wrapper refuses
+# every text-carrying write and names this key in the error.
+github:
+  app_token_command:

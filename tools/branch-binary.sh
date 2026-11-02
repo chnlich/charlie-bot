@@ -36,6 +36,11 @@ RUN_LOOKUP_SECONDS=120
 # Push. git's own error text (unknown ref, rejected update) is the failure message.
 git push origin "$branch:$branch"
 
+# The run list lags the dispatch, so the lookup demands a run id that did not exist before it: without
+# that guard a rerun for the same branch resolves to the previous call's run and downloads a stale binary.
+latest_before=$(gh run list --workflow "$WORKFLOW" --branch "$branch" --event workflow_dispatch \
+  --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+
 # Dispatch. gh prints its own error and exits non-zero; no retry.
 gh workflow run "$WORKFLOW" --ref "$branch"
 
@@ -44,7 +49,7 @@ run_id=''
 while (( SECONDS < RUN_LOOKUP_SECONDS )); do
   run_id=$(gh run list --workflow "$WORKFLOW" --branch "$branch" --event workflow_dispatch \
     --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-  [[ -n "$run_id" ]] && break
+  [[ -n "$run_id" && "$run_id" != "$latest_before" ]] && break
   sleep 10
 done
 if [[ -z "$run_id" ]]; then
@@ -87,5 +92,6 @@ gh run download "$run_id" --name "charliebot-server-$sha" --dir "$dest"
 
 (cd "$dest" && sha256sum -c sha256sums.txt)
 
+echo "run: $run_url"
 echo "charliebot CLI: $dest/charliebot"
 echo "server binary:  $dest/charliebot-server"

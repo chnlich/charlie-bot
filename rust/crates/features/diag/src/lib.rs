@@ -1,11 +1,11 @@
-//! `src/features/diag`: the write-only session-switch telemetry route. The web UI posts each session-switch phase to
+//! The write-only session-switch telemetry route. The web UI posts each session-switch phase to
 //! `POST /api/diag/switch-events`, and the route logs the point as one `diag_switch` line. No state is kept.
 
 mod api;
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register` (`src/features/diag/__init__.py`): the `/api/diag` router, nothing else.
+/// `register`: the `/api/diag` router, nothing else.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)
 }

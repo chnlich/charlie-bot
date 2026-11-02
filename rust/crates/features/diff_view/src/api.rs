@@ -1,4 +1,4 @@
-//! The `/api/git` routes (`src/features/diff_view/api.py`): the branch list, the repository list, and the manifest and
+//! The `/api/git` routes: the branch list, the repository list, and the manifest and
 //! the diff of one range.
 
 use std::collections::HashSet;

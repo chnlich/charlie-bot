@@ -1,4 +1,4 @@
-//! The diff viewer page (`src/features/diff_view/page.py`): `GET /diff`.
+//! The diff viewer page: `GET /diff`.
 
 use std::sync::Arc;
 

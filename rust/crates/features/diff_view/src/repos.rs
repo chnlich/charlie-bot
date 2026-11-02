@@ -1,4 +1,4 @@
-//! The repository list of the diff page's datalist (`CharlieBotConfig.discover_repos`, `src/infra/config.py`).
+//! The repository list of the diff page's datalist, read from `CharlieBotConfig::discover_repos`.
 
 use std::collections::HashSet;
 use std::io;

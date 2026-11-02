@@ -1,5 +1,5 @@
-//! The `git` subprocesses of the diff view, run as `subprocess.run(["git", *args], cwd=repo, capture_output=True,
-//! text=True, check=False, timeout=...)` runs them (`src/features/diff_view/api.py`).
+//! The `git` subprocesses of the diff view: output captured, a nonzero exit is not an error of the run, and each
+//! call carries a timeout.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -10,12 +10,12 @@ use charliebot_compat::responses;
 use http::StatusCode;
 use serde_json::json;
 
-/// `timeouts.SUBPROCESS_GIT_READ_TIMEOUT`: `rev-parse` and `branch`.
+/// The read timeout of `rev-parse` and `branch`.
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// `timeouts.SUBPROCESS_GIT_DIFF_TIMEOUT`: the two `diff` reads.
+/// The timeout of the two `diff` reads.
 pub(crate) const DIFF_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// `_run_git_sync`: the stdout of `git <args>` in `repo`. A nonzero exit answers 500 with the stripped stderr, or
+/// The stdout of `git <args>` in `repo`. A nonzero exit answers 500 with the stripped stderr, or
 /// `failure_detail` when stderr is empty. A timeout, a spawn failure or undecodable output answers the plain 500 of an
 /// unhandled exception.
 pub(crate) async fn run(
@@ -40,7 +40,7 @@ pub(crate) async fn run(
       return Err(responses::internal_error("TimeoutExpired", detail));
     }
   };
-  // The subprocess module decodes both streams before it reads the exit status.
+  // Both streams decode before the exit status is read.
   let stdout = decode(&output.stdout)?;
   let stderr = decode(&output.stderr)?;
   if !output.status.success() {
@@ -51,15 +51,14 @@ pub(crate) async fn run(
   Ok(stdout)
 }
 
-/// `text=True` output: strict UTF-8, with `\r\n` and lone `\r` read as `\n` (the subprocess module's
-/// `_translate_newlines`).
+/// Text output: strict UTF-8, with `\r\n` and lone `\r` read as `\n`.
 fn decode(bytes: &[u8]) -> Result<String, Response> {
   let text = std::str::from_utf8(bytes)
     .map_err(|error| responses::internal_error("UnicodeDecodeError", format!("git output is not UTF-8: {error}")))?;
   Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// The argument list as Python's `repr` prints it inside a `TimeoutExpired` message.
+/// The argument list as the timeout-failure message carries it.
 fn quoted(args: &[&str]) -> String {
   args.iter().map(|arg| format!("{arg:?}")).collect::<Vec<_>>().join(", ")
 }

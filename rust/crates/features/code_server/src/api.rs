@@ -1,4 +1,4 @@
-//! The `/api/code-server` route (`src/features/code_server/api.py`): open a folder in code-server, starting it when
+//! The `/api/code-server` route: open a folder in code-server, starting it when
 //! nothing listens on its port, and the template global that shows the diff page's open button.
 
 use std::collections::HashMap;
@@ -108,8 +108,8 @@ struct OpenSetup {
   port: u16,
 }
 
-/// `_resolve_code_server_executable`, `_resolve_folder_under_allowed_root` and config-file reads all run in the
-/// FastAPI sync endpoint's thread pool (`src/features/code_server/api.py:76-90`).
+/// `executable`, `resolve_folder` and config-file reads all run on the
+/// blocking pool (`tokio::task::spawn_blocking` at the caller).
 fn prepare_open(
   section: &CodeServerConfig,
   paths: &PathsConfig,
@@ -129,7 +129,7 @@ fn prepare_open(
       return Err(http_error(StatusCode::INTERNAL_SERVER_ERROR, &detail));
     }
   };
-  // `_is_listening` takes a socket port: a value beyond 0-65535 fails inside the socket call, unhandled.
+  // The listener check takes a socket port: a value beyond 0-65535 fails inside the socket call, unhandled.
   let Ok(port) = u16::try_from(port) else {
     return Err(responses::internal_error("OverflowError", "port must be 0-65535.".to_string()));
   };

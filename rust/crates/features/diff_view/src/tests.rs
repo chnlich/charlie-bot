@@ -1,4 +1,4 @@
-//! The cases of `tests/test_git_diff_api.py` against real git repositories, and the route answers that the memo, the
+//! The cases against real git repositories, and the route answers that the memo, the
 //! repository list and the 400, 422, 405 and 500 paths give.
 
 use std::collections::HashMap;

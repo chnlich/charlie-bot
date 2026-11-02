@@ -1,4 +1,4 @@
-//! The diag route (`src/features/diag/api.py`): `POST /api/diag/switch-events`, one validated telemetry point per
+//! The diag route: `POST /api/diag/switch-events`, one validated telemetry point per
 //! call, logged as a single `diag_switch` line. No session or state is consulted; the route answers `{"ok": true}`.
 
 use std::borrow::Cow;
@@ -17,12 +17,12 @@ use charliebot_registry::FeatureContext;
 use http::StatusCode;
 use serde_json::{Value, json};
 
-/// The point logs at most this many code points of `error`, as Python's `error[:MAX_ERROR_CHARS]` keeps.
+/// The point logs at most this many code points of `error`, truncated to the first `MAX_ERROR_CHARS`.
 pub const MAX_ERROR_CHARS: usize = 300;
 
 const PHASES: &[&str] = &["started", "completed", "superseded", "failed", "render_error"];
 
-/// `SwitchEventRequest` in its declaration order, with `extra='forbid'`.
+/// The switch-event body's fields, in their declaration order; an unknown field is refused.
 const SWITCH_EVENT_FIELDS: &[Field] = &[
   Field::required("phase", FieldType::Literal(PHASES)),
   Field::required("from_session", FieldType::NullableString),
@@ -116,7 +116,7 @@ fn optional_str<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> O
 }
 
 /// An integer field of the validated body, `None` when the field is absent or null. `i128` holds the signed 64-bit
-/// range and the positive values through the unsigned 64-bit maximum accepted by the FastAPI body reader.
+/// range and the positive values through the unsigned 64-bit maximum accepted by the body reader.
 fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> {
   match values.get(name) {
     None | Some(Value::Null) => None,
@@ -131,9 +131,8 @@ fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> 
   }
 }
 
-/// `error` cut to its first `MAX_ERROR_CHARS` code points, as Python's `error[:MAX_ERROR_CHARS]` keeps.
-/// Like `src/features/diag/api.py:32-39`, borrow the validated string and inspect only the first character past the
-/// limit before allocating the retained prefix.
+/// `error` cut to its first `MAX_ERROR_CHARS` code points. The check borrows the validated string and inspects
+/// only the first character past the limit before allocating the retained prefix.
 pub fn cut_error<'a>(error: Option<&'a str>) -> Option<Cow<'a, str>> {
   error.map(|error| match error.char_indices().nth(MAX_ERROR_CHARS) {
     Some((end, _)) => Cow::Owned(error[..end].to_owned()),

@@ -1,4 +1,4 @@
-//! The per-file manifest of a diff range (`src/features/diff_view/api.py` `diff_files`): the name-status and numstat
+//! The per-file manifest of a diff range: the name-status and numstat
 //! reads of `git diff -z`, and the rows they build.
 
 use std::collections::HashMap;

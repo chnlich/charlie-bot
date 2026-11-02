@@ -1,4 +1,4 @@
-//! The `code_server:` config section (`src/features/code_server/config.py`) and the values read from the code-server
+//! The `code_server:` config section and the values read from the code-server
 //! config file that it names.
 
 use std::io;

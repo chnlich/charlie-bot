@@ -1,4 +1,4 @@
-//! The stat-only signatures of a repository's state (`src/features/diff_view/api.py`): the ref-state signature that
+//! The stat-only signatures of a repository's state: the ref-state signature that
 //! keys the branch memo, and the `.gitattributes` signature that keys the manifest memo.
 
 use std::fs::Metadata;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use charliebot_core::paths;
 use walkdir::WalkDir;
 
-/// `(mtime_ns, size)` of one file. Python compares the nanosecond clock; a pair of seconds and nanoseconds compares
+/// `(mtime_ns, size)` of one file. The nanosecond clock and a pair of seconds and nanoseconds compare
 /// the same way.
 pub(crate) type FileStamp = (i64, i64, u64);
 

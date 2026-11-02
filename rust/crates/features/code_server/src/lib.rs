@@ -11,7 +11,7 @@ mod which;
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register` (`src/features/code_server/__init__.py`): the router, the template global, then the config section.
+/// `register`: the router, the template global, then the config section.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.template_global("code_server_enabled", api::code_server_enabled)?;

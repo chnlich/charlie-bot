@@ -18,7 +18,7 @@ md-5.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
 percent-encoding.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 regex.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true

@@ -200,7 +200,7 @@ pub struct ClaudeCodeBackend {
   effort: Option<String>,
   cli_binary: Option<String>,
   fast_mode: bool,
-  use_wait_guard: bool,
+  use_pre_tool_use_guards: bool,
   run_kind: RunKind,
   claude_session_id: Option<String>,
   claude_config_dir: Option<String>,
@@ -246,17 +246,17 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("midturn_run_id must be a string"),
     }
     .filter(|value| !value.is_empty());
-    let use_wait_guard = match launch.backend_kwargs.get("use_wait_guard") {
+    let use_pre_tool_use_guards = match launch.backend_kwargs.get("use_pre_tool_use_guards") {
       None => true,
       Some(Value::Bool(value)) => *value,
-      Some(_) => bail!("backend_kwargs.use_wait_guard must be a boolean"),
+      Some(_) => bail!("backend_kwargs.use_pre_tool_use_guards must be a boolean"),
     };
     Ok(Self {
       model,
       effort: effort.filter(|value| !value.is_empty()),
       cli_binary: cli_binary.filter(|value| !value.is_empty()),
       fast_mode,
-      use_wait_guard,
+      use_pre_tool_use_guards,
       run_kind,
       claude_session_id,
       claude_config_dir: claude_config_dir.filter(|value| !value.is_empty()),
@@ -282,10 +282,10 @@ impl ClaudeCodeBackend {
     if let Some(effort) = &self.effort {
       command.extend(["--effort".to_string(), effort.clone()]);
     }
-    let mut settings = match self.use_wait_guard {
+    let mut settings = match self.use_pre_tool_use_guards {
       true => claude_launch::headless_claude_settings(self.run_kind, self.cgroup_session_id.as_deref())?,
       false => {
-        claude_launch::headless_claude_settings_without_wait_guard(self.run_kind, self.cgroup_session_id.as_deref())?
+        claude_launch::headless_claude_settings_without_guards(self.run_kind, self.cgroup_session_id.as_deref())?
       }
     };
     if self.fast_mode {
@@ -868,8 +868,8 @@ mod tests {
   }
 
   #[test]
-  fn headless_settings_install_wait_guard_except_for_scheduled_steps() {
-    let expected = serde_json::json!([{
+  fn headless_settings_install_guards_by_run_kind() {
+    let both = serde_json::json!([{
       "matcher": "Bash",
       "hooks": [
         {"type": "command", "command": "charliebot wait-guard"},
@@ -878,9 +878,15 @@ mod tests {
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
       let settings = claude_launch::headless_claude_settings(run_kind, Some("manager-session")).unwrap();
-      assert_eq!(settings["hooks"]["PreToolUse"], expected, "{run_kind:?}");
+      assert_eq!(settings["hooks"]["PreToolUse"], both, "{run_kind:?}");
     }
+    let scan_only = serde_json::json!([{
+      "matcher": "Bash",
+      "hooks": [{"type": "command", "command": "charliebot scan-guard"}]
+    }]);
     let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None).unwrap();
+    assert_eq!(settings["hooks"]["PreToolUse"], scan_only);
+    let settings = claude_launch::headless_claude_settings_without_guards(RunKind::ScheduledStep, None).unwrap();
     assert!(settings.get("hooks").is_none());
   }
 

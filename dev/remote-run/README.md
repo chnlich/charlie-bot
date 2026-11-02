@@ -46,12 +46,13 @@ install or build that a later run needs is rebuilt.
 ## Configuration
 
 Every host-specific value comes from the host, so no tracked file carries an address or a path
-that belongs to one machine.
+that belongs to one machine. The runner reads the CharlieBot `config.yaml` on each run, through
+`charliebot config get`, so an edit to the file applies to the next run with no server restart.
 
 | Value | Where it comes from | Meaning |
 |---|---|---|
-| `REMOTE_RUN_HOST` | the environment; required | The ssh alias of the build host, as `~/.ssh/config` names it. Export it in the shell profile. |
-| `REMOTE_RUN_REMOTE_BASE` | the environment; default `scripts/remote-run` | The runner's state directory on the build host, relative to its `$HOME`. A host with runner state installed elsewhere points this at it. |
+| `remote_run.host` | the CharlieBot `config.yaml`; no default | The ssh alias of the build host, as `~/.ssh/config` names it. Until it is set, the runner stops with exit 2 and names the key. |
+| `remote_run.remote_base` | the CharlieBot `config.yaml`; default `scripts/remote-run` | The runner's state directory on the build host, relative to its `$HOME`. A host with runner state installed elsewhere sets this. |
 | `REMOTE_RUN_CONNECT_TIMEOUT` | the environment; default `60` | The connectivity check's time limit in seconds, for tests. |
 | `server.public_url` | the CharlieBot `config.yaml`, read with `charliebot config get server.public_url` | The address a person reaches the CharlieBot server at. The stop text links `<public_url>/host-auth`. It has no default; the host sets it. |
 
@@ -98,7 +99,7 @@ a later run reclaims the ones no process holds.
 | Code | Meaning |
 |---|---|
 | command's own code | The connectivity check passed; the exit code comes back unchanged, 255 included. |
-| 2 | The runner's own argument or configuration check refused the run: no command, an unset `REMOTE_RUN_HOST`, an unsafe directory name, or a tree ownership conflict. |
+| 2 | The runner's own argument or configuration check refused the run: no command, an unset `remote_run.host`, an unsafe `remote_run.remote_base`, an unsafe directory name, or a tree ownership conflict. |
 | 86 | The connectivity check saw a Tailscale login link. The runner prints a stop text that tells the agent to end the run and report the blocker, with the full `/host-auth` page URL. |
 | 87 | The connectivity check failed any other way, or ran past its 60-second limit. The same stop text is printed. |
 

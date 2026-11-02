@@ -115,7 +115,7 @@ const FIELD_KEYS: [&str; 8] =
 const DEFAULT_HOME_KEY: &str = "default_charliebot_home";
 
 /// The nested keys the command reads: the address a person reaches the server at, the local work guard's switch, and
-/// the build-host keys the guard names and the runner reads. The unset optionals are null.
+/// the build-host keys the runner reads. The unset optionals are null.
 const PUBLIC_URL_KEY: &str = "server.public_url";
 const GUARD_SWITCH_KEY: &str = "server.enable_local_work_guard";
 const RUNNER_HOST_KEY: &str = "remote_run.host";
@@ -163,7 +163,7 @@ fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Optio
     GUARD_SWITCH_KEY => Rendered::Scalar(cfg.server.enable_local_work_guard.to_string()),
     "remote_run" => Rendered::Json(remote_run_json(cfg)),
     RUNNER_HOST_KEY => optional_text(&cfg.remote_run.host),
-    RUNNER_BASE_KEY => optional_text(&cfg.remote_run.remote_base),
+    RUNNER_BASE_KEY => Rendered::Scalar(cfg.remote_run.remote_base.clone()),
     "paths" => Rendered::Json(paths_json(cfg)),
     "backends" => Rendered::Json(backends_json(cfg, registry).map_err(Failure::value)?),
     "ui" => Rendered::Json(ui_json(cfg)),
@@ -376,12 +376,14 @@ mod tests {
     let yaml = "server:\n  enable_local_work_guard: false\nremote_run:\n  host: build-host\n";
     assert_eq!(run_yaml(yaml, "server.enable_local_work_guard").expect("the switch prints"), "false\n");
     assert_eq!(run_yaml(yaml, "remote_run.host").expect("the host prints"), "build-host\n");
-    let failure = run_yaml(yaml, "remote_run.remote_base").expect_err("an unset base is null");
-    assert_eq!(failure.code, 1);
-    assert_eq!(failure.message, "error: config key remote_run.remote_base is unset");
+    assert_eq!(run_yaml(yaml, "remote_run.remote_base").expect("the default base prints"), "scripts/remote-run\n");
     let printed: Value =
       serde_json::from_str(run_yaml(yaml, "remote_run").expect("the section prints").trim_end()).unwrap();
-    assert_eq!(printed, json!({ "host": "build-host", "remote_base": null }));
+    assert_eq!(printed, json!({ "host": "build-host", "remote_base": "scripts/remote-run" }));
+    let unset = "server:\n  enable_local_work_guard: false\n";
+    let failure = run_yaml(unset, "remote_run.host").expect_err("an unset host is null");
+    assert_eq!(failure.code, 1);
+    assert_eq!(failure.message, "error: config key remote_run.host is unset");
   }
 
   #[test]

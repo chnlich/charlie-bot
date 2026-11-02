@@ -6,7 +6,8 @@
 # Called from the directory to run in. Inside a git worktree the sync covers the whole worktree;
 # in any other directory it covers the current directory. The command's exit code comes back
 # unchanged once the connectivity check has passed, 255 included. Exit 2 is this script's own
-# argument check, 86 the check's Tailscale login link, and 87 the check's other failures.
+# argument or configuration check, 86 the check's Tailscale login link, and 87 the check's other
+# failures.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
@@ -21,7 +22,7 @@ if (( $# == 0 )); then
   exit 2
 fi
 
-remote_run_configure_host
+remote_run_read_config
 remote_run_validate_base
 remote_run_local_preflight
 remote_run_resolve_root

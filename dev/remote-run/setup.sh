@@ -17,7 +17,7 @@ if (( $# != 0 )); then
   exit 2
 fi
 
-remote_run_configure_host
+remote_run_read_config
 remote_run_validate_base
 remote_run_local_preflight
 remote_run_resolve_root

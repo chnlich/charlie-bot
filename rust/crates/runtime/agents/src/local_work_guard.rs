@@ -1,15 +1,16 @@
 //! The local work guard: the environment that makes an agent's shell refuse a compile or a test run on this host.
 //!
-//! `configure` reads the switch and the runner keys when the server loads its configuration. `child_env` is the
-//! registry edit that adds the variables to each agent child process. The server's own environment never receives
-//! them, so the web terminal and the one-shot calls run without them. The variables point into `dev/local-work-guard/`
-//! of the runtime checkout, the copy the server reads prompts and skills from. Each refusal script names the toolchains
-//! it refuses by the list in `dev/remote-run/README.md`.
+//! `configure` reads the switch when the server loads its configuration. `child_env` is the registry edit that adds
+//! the variables to each agent child process. The server's own environment never receives them, so the web terminal
+//! and the one-shot calls run without them. The variables point into `dev/local-work-guard/` of the runtime checkout,
+//! the copy the server reads prompts and skills from. Each refusal script names the toolchains it refuses by the list
+//! in `dev/remote-run/README.md`. The build host is not part of this environment: the refusal and the runner read
+//! `remote_run.host` from `config.yaml` on each run.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use charliebot_core::config::{RemoteRunConfig, ServerConfig};
+use charliebot_core::config::ServerConfig;
 use charliebot_registry::backend::Env;
 
 /// The refusal scripts' directory, relative to the runtime checkout.
@@ -18,18 +19,16 @@ const GUARD_DIR: &str = "dev/local-work-guard";
 /// The guard the server configured: `None` when `server.enable_local_work_guard` is false.
 static GUARD: OnceLock<Option<LocalWorkGuard>> = OnceLock::new();
 
-/// The guard's settings: the refusal directory and the runner keys that the refusal text and the runner read.
+/// The guard's settings: the refusal directory that its variables point into.
 #[derive(Debug, PartialEq, Eq)]
 struct LocalWorkGuard {
   dir: PathBuf,
-  remote_run_host: String,
-  remote_run_remote_base: Option<String>,
 }
 
-/// Reads the guard switch of `server` and the runner keys of `remote_run`, for the checkout at `repo_root`. The server
-/// calls this once, before any agent run; an error names the key that the start must fix.
-pub fn configure(repo_root: &Path, server: &ServerConfig, remote_run: &RemoteRunConfig) -> Result<(), String> {
-  let guard = LocalWorkGuard::from_server(repo_root, server, remote_run)?;
+/// Reads the guard switch of `server`, for the checkout at `repo_root`. The server calls this once, before any agent
+/// run; an error stops the start.
+pub fn configure(repo_root: &Path, server: &ServerConfig) -> Result<(), String> {
+  let guard = LocalWorkGuard::from_server(repo_root, server)?;
   GUARD.set(guard).map_err(|_| "the local work guard is configured twice in one process".to_string())
 }
 
@@ -44,19 +43,10 @@ pub fn child_env(env: &mut Env) {
 
 impl LocalWorkGuard {
   /// The guard for `server`, or `None` when its switch is off.
-  fn from_server(
-    repo_root: &Path,
-    server: &ServerConfig,
-    remote_run: &RemoteRunConfig,
-  ) -> Result<Option<Self>, String> {
+  fn from_server(repo_root: &Path, server: &ServerConfig) -> Result<Option<Self>, String> {
     if !server.enable_local_work_guard {
       return Ok(None);
     }
-    let remote_run_host = remote_run.host.clone().filter(|host| !host.is_empty()).ok_or_else(|| {
-      "remote_run.host is required while server.enable_local_work_guard is true: set it to the ssh alias of the build \
-       host"
-        .to_string()
-    })?;
     let dir = repo_root.join(GUARD_DIR);
     // NODE_OPTIONS and MAKEFILES split their values on spaces, so a space in the path would drop the refusal silently.
     if dir.to_string_lossy().contains(' ') {
@@ -65,7 +55,7 @@ impl LocalWorkGuard {
         dir.display()
       ));
     }
-    Ok(Some(Self { dir, remote_run_host, remote_run_remote_base: remote_run.remote_base.clone() }))
+    Ok(Some(Self { dir }))
   }
 
   /// Adds the refusal variables to `env`. An entry already set keeps its value after the guard's entry.
@@ -81,10 +71,6 @@ impl LocalWorkGuard {
     env.insert("CC".to_string(), format!("{dir}/bin/cc"));
     env.insert("CXX".to_string(), format!("{dir}/bin/c++"));
     prepend(env, "PATH", ":", &format!("{dir}/bin"));
-    env.insert("REMOTE_RUN_HOST".to_string(), self.remote_run_host.clone());
-    if let Some(remote_base) = &self.remote_run_remote_base {
-      env.insert("REMOTE_RUN_REMOTE_BASE".to_string(), remote_base.clone());
-    }
   }
 }
 
@@ -105,17 +91,9 @@ mod tests {
     serde_yaml::from_str(yaml).unwrap()
   }
 
-  fn remote_run(yaml: &str) -> RemoteRunConfig {
-    serde_yaml::from_str(yaml).unwrap()
-  }
-
   #[test]
   fn the_guard_sets_each_refusal_variable_and_keeps_the_values_already_set() {
-    let guard = LocalWorkGuard {
-      dir: PathBuf::from("/checkout/dev/local-work-guard"),
-      remote_run_host: "build-host".to_string(),
-      remote_run_remote_base: Some("scripts/remote-run".to_string()),
-    };
+    let guard = LocalWorkGuard { dir: PathBuf::from("/checkout/dev/local-work-guard") };
     let mut env = Env::from([
       ("PATH".to_string(), "/usr/bin".to_string()),
       ("PYTHONPATH".to_string(), "/opt/lib".to_string()),
@@ -137,8 +115,6 @@ mod tests {
       ("PATH".to_string(), format!("{guard_dir}/bin:/usr/bin")),
       ("PYTEST_PLUGINS".to_string(), "refuse_local_tests".to_string()),
       ("PYTHONPATH".to_string(), format!("{guard_dir}/python:/opt/lib")),
-      ("REMOTE_RUN_HOST".to_string(), "build-host".to_string()),
-      ("REMOTE_RUN_REMOTE_BASE".to_string(), "scripts/remote-run".to_string()),
       ("RUSTC_WRAPPER".to_string(), format!("{guard_dir}/rustup/rustc-wrapper")),
       ("RUSTUP_TOOLCHAIN".to_string(), format!("{guard_dir}/rustup")),
     ]);
@@ -146,25 +122,12 @@ mod tests {
   }
 
   #[test]
-  fn the_switch_off_configures_no_guard_and_a_missing_runner_host_names_its_key() {
+  fn the_switch_off_configures_no_guard_and_the_switch_on_needs_no_runner_key() {
     let root = Path::new("/checkout");
+    assert_eq!(LocalWorkGuard::from_server(root, &server("enable_local_work_guard: false")).unwrap(), None);
     assert_eq!(
-      LocalWorkGuard::from_server(root, &server("enable_local_work_guard: false"), &remote_run("{}")).unwrap(),
-      None
+      LocalWorkGuard::from_server(root, &server("enable_local_work_guard: true")).unwrap(),
+      Some(LocalWorkGuard { dir: PathBuf::from("/checkout/dev/local-work-guard") })
     );
-
-    let error =
-      LocalWorkGuard::from_server(root, &server("enable_local_work_guard: true"), &remote_run("{}")).unwrap_err();
-    assert!(error.contains("remote_run.host"), "{error}");
-
-    let guard = LocalWorkGuard::from_server(
-      root,
-      &server("enable_local_work_guard: true"),
-      &remote_run("host: build-host\nremote_base: scripts/remote-run\n"),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(guard.remote_run_host, "build-host");
-    assert_eq!(guard.remote_run_remote_base.as_deref(), Some("scripts/remote-run"));
   }
 }

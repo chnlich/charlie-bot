@@ -217,8 +217,8 @@ pub struct ServerConfig {
   /// delegated io there: a host sets this true when io appears in the slice's `cgroup.controllers`.
   #[serde(default = "default_switch_off")]
   pub enable_session_io_weight: bool,
-  /// Agent runs carry the local work guard: a compile or test run on this host is refused and names the build host.
-  /// false sets none of the guard's variables.
+  /// Agent runs carry the local work guard: a compile or test run on this host is refused, and the refusal names the
+  /// build host that `remote_run.host` sets. false sets none of the guard's variables.
   #[serde(default = "default_switch_on")]
   pub enable_local_work_guard: bool,
   #[serde(default = "default_min_free_disk_gib")]
@@ -229,19 +229,30 @@ pub struct ServerConfig {
   pub public_url: Option<String>,
 }
 
-/// `remote_run:` section: the build host that the local work guard names and `dev/remote-run` sends runs to. A
+/// `remote_run:` section: the build host that `dev/remote-run` sends runs to, and the state directory it uses there. A
 /// top-level section, not `server:` keys, because a live release refuses unknown `server:` keys: a host sets this
-/// section while the previous release still runs.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+/// section while the previous release still runs. The runner and the local work guard's refusal read these keys on
+/// each run, so an edit reaches the next run without a server restart.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteRunConfig {
-  /// The ssh alias of the build host that `dev/remote-run` sends runs to. Required while the local work guard is
-  /// on: a refused agent is told to run on this host, so the value must exist.
+  /// The ssh alias of the build host, as `~/.ssh/config` names it. It has no default: until the host sets it, the
+  /// runner stops with exit 2 and names this key.
   #[serde(default)]
   pub host: Option<String>,
-  /// The runner's state directory on the build host, relative to its home. Unset keeps the runner's own default.
-  #[serde(default)]
-  pub remote_base: Option<String>,
+  /// The runner's state directory on the build host, relative to its home.
+  #[serde(default = "default_remote_base")]
+  pub remote_base: String,
+}
+
+impl Default for RemoteRunConfig {
+  fn default() -> Self {
+    Self { host: None, remote_base: default_remote_base() }
+  }
+}
+
+fn default_remote_base() -> String {
+  "scripts/remote-run".to_string()
 }
 
 // The schema defaults of `ServerConfig`.
@@ -851,7 +862,7 @@ mod tests {
     assert!(cfg.server.enable_session_cpu_weight);
     assert!(!cfg.server.enable_session_io_weight);
     assert!(cfg.server.enable_local_work_guard);
-    assert_eq!(cfg.remote_run, RemoteRunConfig { host: None, remote_base: None });
+    assert_eq!(cfg.remote_run, RemoteRunConfig { host: None, remote_base: "scripts/remote-run".to_string() });
     assert_eq!(cfg.backends.pool, vec!["claude-fable".to_string()]);
     let option = cfg.get_backend_option("claude-fable").unwrap();
     assert_eq!(
@@ -885,7 +896,7 @@ mod tests {
     let cfg = load(&home).unwrap();
     assert!(!cfg.server.enable_local_work_guard);
     assert_eq!(cfg.remote_run.host.as_deref(), Some("build-host"));
-    assert_eq!(cfg.remote_run.remote_base.as_deref(), Some("scripts/remote-run"));
+    assert_eq!(cfg.remote_run.remote_base, "scripts/remote-run");
   }
 
   #[test]

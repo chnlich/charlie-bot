@@ -1,10 +1,12 @@
-//! The remote runner: `dev/remote-run/run.sh` starts every run with a connectivity check whose
-//! Tailscale login link exits 86, whose other failures and its time limit exit 87, and whose stop
-//! text names the `/host-auth` page; after the check, the command's exit code comes back
-//! unchanged, 255 included. `dev/remote-run/remote-exec.pl` runs a payload with a short TMPDIR
-//! under /tmp, passes the command's exit code through, and stops the descendants the command
-//! leaves behind.
+//! The remote runner: `dev/remote-run/run.sh` reads the build host and its state base from `config.yaml` on each
+//! run, and stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
+//! login link exits 86, whose other failures and its time limit exit 87, and whose stop text names the `/host-auth`
+//! page; after the check, the command's exit code comes back unchanged, 255 included. `dev/remote-run/remote-exec.pl`
+//! runs a payload with a short TMPDIR under /tmp, passes the command's exit code through, and stops the descendants the
+//! command leaves behind. The local work guard's refusal names the same host and prints in full while the host is
+//! unset.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -22,6 +24,13 @@ fn run_sh() -> PathBuf {
 fn remote_exec_pl() -> PathBuf {
   harness::repo_root().join(format!("{SCRIPTS}/remote-exec.pl"))
 }
+
+fn refuse_sh() -> PathBuf {
+  harness::repo_root().join("dev/local-work-guard/refuse.sh")
+}
+
+/// The CharlieBot home's config that the runner reads on each run: the build host, and the address the stop text links.
+const CONFIG: &str = "server:\n  public_url: https://charlie.example.test:18498\nremote_run:\n  host: build-host\n";
 
 /// The fake ssh answers the runner's remote queries and plays the cases the connectivity check
 /// must tell apart. Its behavior comes from the environment, one case per variable.
@@ -49,14 +58,6 @@ printf '%s\n' "rsync $*" >>"${FAKE_SSH_LOG:?}"
 exit "${FAKE_RSYNC_STATUS:-0}"
 "##;
 
-const FAKE_CHARLIEBOT: &str = r##"
-if [[ "${FAKE_URL_UNSET:-0}" == 1 ]]; then
-  echo "error: config key server.public_url is unset" >&2
-  exit 1
-fi
-printf 'https://charlie.example.test:18498\n'
-"##;
-
 /// A project directory for the runner to sync: no git, so the run takes the directory mode.
 fn project(sandbox: &Sandbox) -> PathBuf {
   let project = sandbox.dir("project");
@@ -64,9 +65,18 @@ fn project(sandbox: &Sandbox) -> PathBuf {
   project
 }
 
-fn run_env(sandbox: &Sandbox) -> Env {
+/// The `charliebot` on PATH is the built CLI, which reads `config.yaml` from `CHARLIEBOT_HOME` on each call.
+fn install_cli(sandbox: &Sandbox) {
+  let cli = harness::built_binary("charliebot");
+  sandbox.stub("charliebot", &format!("exec \"{}\" \"$@\"\n", cli.display()));
+}
+
+/// The environment of one run: a CharlieBot home whose `config.yaml` is `config`, and the fake ssh's log.
+fn run_env(sandbox: &Sandbox, config: &str) -> Env {
+  let home = sandbox.dir("home");
+  fs::write(home.join("config.yaml"), config).expect("write the config");
   let mut env = sandbox.env();
-  env.insert("REMOTE_RUN_HOST".to_string(), HOST.to_string());
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
   env.insert("FAKE_SSH_LOG".to_string(), sandbox.root().join("ssh.log").display().to_string());
   env
 }
@@ -85,13 +95,17 @@ fn stop_text_is_printed(run: &harness::Run) {
   assert!(run.stderr.contains(PAGE_URL), "{}", run.describe());
 }
 
+fn ssh_log(sandbox: &Sandbox) -> String {
+  fs::read_to_string(sandbox.root().join("ssh.log")).unwrap_or_default()
+}
+
 #[test]
 fn a_login_link_in_the_check_gives_86_and_the_stop_text() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
-  sandbox.stub("charliebot", FAKE_CHARLIEBOT);
+  install_cli(&sandbox);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox);
+  let mut env = run_env(&sandbox, CONFIG);
   env.insert("FAKE_LINK".to_string(), "1".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 86, "{}", run.describe());
@@ -103,9 +117,9 @@ fn a_login_link_in_the_check_gives_86_and_the_stop_text() {
 fn a_check_failure_gives_87_and_the_stop_text() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
-  sandbox.stub("charliebot", FAKE_CHARLIEBOT);
+  install_cli(&sandbox);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox);
+  let mut env = run_env(&sandbox, CONFIG);
   env.insert("FAKE_CHECK_FAIL".to_string(), "1".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 87, "{}", run.describe());
@@ -116,9 +130,9 @@ fn a_check_failure_gives_87_and_the_stop_text() {
 fn a_check_past_its_limit_gives_87() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
-  sandbox.stub("charliebot", FAKE_CHARLIEBOT);
+  install_cli(&sandbox);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox);
+  let mut env = run_env(&sandbox, CONFIG);
   env.insert("FAKE_CHECK_HANG".to_string(), "1".to_string());
   env.insert("REMOTE_RUN_CONNECT_TIMEOUT".to_string(), "2".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
@@ -130,14 +144,46 @@ fn a_check_past_its_limit_gives_87() {
 fn a_missing_public_url_names_the_key() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
-  sandbox.stub("charliebot", FAKE_CHARLIEBOT);
+  install_cli(&sandbox);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox);
+  let mut env = run_env(&sandbox, "remote_run:\n  host: build-host\n");
   env.insert("FAKE_LINK".to_string(), "1".to_string());
-  env.insert("FAKE_URL_UNSET".to_string(), "1".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 86, "{}", run.describe());
   assert!(run.stderr.contains("server.public_url"), "{}", run.describe());
+}
+
+#[test]
+fn an_unset_host_stops_before_any_ssh_call_and_names_the_key() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let mut env = run_env(&sandbox, "server:\n  public_url: https://charlie.example.test:18498\n");
+  // The environment no longer names the host, so an exported value does not stand in for the config.
+  env.insert("REMOTE_RUN_HOST".to_string(), "env-host".to_string());
+  let run = run_runner(&env, &project, &["echo", "remote"]);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("remote_run.host"), "{}", run.describe());
+  assert!(!ssh_log(&sandbox).contains("env-host"), "the run reached ssh: {}", run.describe());
+}
+
+#[test]
+fn a_host_written_after_the_start_reaches_the_next_run() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let env = run_env(&sandbox, "server:\n  public_url: https://charlie.example.test:18498\n");
+  let unset = run_runner(&env, &project, &["echo", "remote"]);
+  assert_eq!(unset.code, 2, "{}", unset.describe());
+
+  // The host is written to config.yaml after the first run. The next run reads the file, with no server restart.
+  fs::write(sandbox.root().join("home/config.yaml"), CONFIG).expect("write the config");
+  let run = run_runner(&env, &project, &["echo", "remote"]);
+  assert_ne!(run.code, 2, "{}", run.describe());
+  assert!(ssh_log(&sandbox).contains(HOST), "the next run did not reach the written host: {}", run.describe());
 }
 
 #[test]
@@ -145,13 +191,49 @@ fn a_passing_check_leaves_a_remote_255_unchanged() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox);
+  let mut env = run_env(&sandbox, CONFIG);
   env.insert("FAKE_REMOTE_STATUS".to_string(), "255".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 255, "{}", run.describe());
-  let log = std::fs::read_to_string(sandbox.root().join("ssh.log")).expect("the ssh log");
+  let log = ssh_log(&sandbox);
   assert!(log.contains("remote-exec.pl"), "the remote command never ran: {log}");
+  assert!(log.lines().any(|line| line.contains(HOST) && line.ends_with(" true")), "the check named no host: {log}");
+}
+
+/// Runs the local work guard's refusal for `tool` with the environment `env`.
+fn refuse(env: &Env, tool: &str) -> harness::Run {
+  let mut command = Command::new("bash");
+  command.arg(refuse_sh()).arg(tool);
+  command.env_clear();
+  command.envs(env);
+  harness::run(&mut command)
+}
+
+#[test]
+fn the_refusal_names_the_build_host_from_config() {
+  let sandbox = Sandbox::new();
+  install_cli(&sandbox);
+  let env = run_env(&sandbox, CONFIG);
+  let run = refuse(&env, "cargo");
+  assert_eq!(run.code, 97, "{}", run.describe());
+  assert!(run.stderr.contains("refused: cargo"), "{}", run.describe());
+  assert!(run.stderr.contains(HOST), "{}", run.describe());
+  assert!(run.stderr.contains("dev/remote-run/run.sh"), "{}", run.describe());
+}
+
+#[test]
+fn the_refusal_prints_in_full_and_names_the_key_while_the_host_is_unset() {
+  let sandbox = Sandbox::new();
+  install_cli(&sandbox);
+  let env = run_env(&sandbox, "server:\n  public_url: https://charlie.example.test:18498\n");
+  let run = refuse(&env, "cargo");
+  assert_eq!(run.code, 97, "{}", run.describe());
+  assert!(run.stderr.contains("refused: cargo"), "{}", run.describe());
+  assert!(run.stderr.contains("remote_run.host"), "{}", run.describe());
+  assert!(run.stderr.contains("dev/remote-run/run.sh"), "{}", run.describe());
+  assert_eq!(run.stderr.lines().count(), 4, "the refusal is not the four-line text: {}", run.describe());
 }
 
 /// The payload run.sh sends: NUL-separated tree, directory, Python version, and command words,

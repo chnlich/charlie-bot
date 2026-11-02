@@ -3,8 +3,8 @@
 The server sets the variables in this table on every agent child process. Each variable points at a script in this
 directory, and a refused run reaches the agent as the refusal text. The server's own environment, the web terminal and
 the one-shot calls carry none of them. The variables are set in `rust/crates/runtime/agents/src/local_work_guard.rs`,
-and the switch and the runner keys are `server.enable_local_work_guard`, `remote_run.host` and
-`remote_run.remote_base` in `config.yaml`.
+and the switch is `server.enable_local_work_guard` in `config.yaml`. `refuse.sh` reads the build host from
+`remote_run.host` in `config.yaml` at each refusal, so the refusal names the host that the runner uses.
 
 | Toolchain | Variables | Scripts |
 |---|---|---|

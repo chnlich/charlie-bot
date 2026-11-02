@@ -153,21 +153,17 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
 }
 
 #[test]
-fn the_local_work_guard_refuses_a_start_whose_build_host_key_is_unset() {
+fn the_local_work_guard_starts_on_a_home_without_a_runner_section() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
   fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
   fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
+  // The live config's keys: no `remote_run:` section and no guard switch, so the guard runs on its default.
   let backends = "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n";
   fs::write(home.join("config.yaml"), backends).unwrap();
 
-  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
-  assert_eq!(output.status.code(), Some(1));
-  assert!(String::from_utf8_lossy(&output.stderr).contains("remote_run.host"));
-
-  fs::write(home.join("config.yaml"), format!("remote_run:\n  host: build-host\n{backends}")).unwrap();
   let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
   assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
 }

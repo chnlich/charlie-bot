@@ -2,7 +2,7 @@
 # The remote runner's shared functions: configuration, preflight, ssh, and sync.
 #
 # Sourced by run.sh and setup.sh, which run from the directory to work in. Host-specific values
-# come from the environment; see README.md for each one.
+# come from config.yaml, except the connectivity check's time limit; see README.md for each one.
 
 REMOTE_RUN_SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REMOTE_RUN_TAILSCALE_STATUS=86
@@ -10,10 +10,12 @@ REMOTE_RUN_OUTPUT=''
 REMOTE_RUN_LOCAL_PYTHON_VERSION=''
 REMOTE_RUN_WORKTREE_ROOT=''
 REMOTE_RUN_IGNORED_FILTERS=()
+REMOTE_RUN_CONFIG_VALUE=''
 
-# The remote state base, $HOME-relative on the build host. The default is a plain name; the host
-# points it at its installed runner state by exporting the variable.
-REMOTE_RUN_REMOTE_BASE=${REMOTE_RUN_REMOTE_BASE:-scripts/remote-run}
+# The build host and its remote state base are set by remote_run_read_config on each run; the
+# environment does not set them.
+REMOTE_RUN_HOST=''
+REMOTE_RUN_REMOTE_BASE=''
 # The connectivity check's time limit in seconds. Tailscale's check mode otherwise waits 30
 # minutes in silence; the limit turns that wait into a reported blocker.
 REMOTE_RUN_CONNECT_TIMEOUT=${REMOTE_RUN_CONNECT_TIMEOUT:-60}
@@ -24,20 +26,40 @@ remote_run_fail() {
   exit 2
 }
 
-# Every ssh call names the host through this variable, so no tracked file carries the host's
-# address or alias.
-remote_run_configure_host() {
-  if [[ -z "${REMOTE_RUN_HOST:-}" ]]; then
-    remote_run_fail 'REMOTE_RUN_HOST is unset; export it in your shell profile with the ssh alias of the build host'
+# Reads one key of config.yaml through the CharlieBot CLI into REMOTE_RUN_CONFIG_VALUE. A failed
+# read prints the CLI's message and returns its status.
+remote_run_config_get() {
+  local output status
+  status=0
+  output=$(charliebot config get "$1" 2>&1) || status=$?
+  if (( status == 0 )); then
+    REMOTE_RUN_CONFIG_VALUE=$output
+    return 0
   fi
+  printf '%s\n' "$output" >&2
+  return "$status"
+}
+
+# Reads the build host and the remote base for this run. The host has no default: an unset host
+# stops the run and names the key. Every ssh call names the host through REMOTE_RUN_HOST, so no
+# tracked file carries the host's address or alias.
+remote_run_read_config() {
+  if ! remote_run_config_get remote_run.host || [[ -z "$REMOTE_RUN_CONFIG_VALUE" ]]; then
+    remote_run_fail 'set remote_run.host in config.yaml to the ssh alias of the build host'
+  fi
+  REMOTE_RUN_HOST=$REMOTE_RUN_CONFIG_VALUE
+  if ! remote_run_config_get remote_run.remote_base; then
+    remote_run_fail 'cannot read remote_run.remote_base from config.yaml'
+  fi
+  REMOTE_RUN_REMOTE_BASE=$REMOTE_RUN_CONFIG_VALUE
 }
 
 remote_run_validate_base() {
   if [[ ! "$REMOTE_RUN_REMOTE_BASE" =~ ^[A-Za-z0-9._/-]+$ || "$REMOTE_RUN_REMOTE_BASE" == */ ]]; then
-    remote_run_fail "REMOTE_RUN_REMOTE_BASE must be a \$HOME-relative path of safe characters: $REMOTE_RUN_REMOTE_BASE"
+    remote_run_fail "remote_run.remote_base must be a \$HOME-relative path of safe characters: $REMOTE_RUN_REMOTE_BASE"
   fi
   if [[ "$REMOTE_RUN_REMOTE_BASE" == *..* ]]; then
-    remote_run_fail "REMOTE_RUN_REMOTE_BASE must not climb out of \$HOME: $REMOTE_RUN_REMOTE_BASE"
+    remote_run_fail "remote_run.remote_base must not climb out of \$HOME: $REMOTE_RUN_REMOTE_BASE"
   fi
 }
 
@@ -135,20 +157,10 @@ remote_run_read_local_python_version() {
   REMOTE_RUN_LOCAL_PYTHON_VERSION=$version
 }
 
-# Read the build host's address for people, which the stop text links. The status goes through the
-# || capture: after `if output=$(...)` with an assignment in the then-branch, bash's $? is reset in
-# the else-branch.
+# Read the build host's address for people, which the stop text links.
 remote_run_public_url() {
-  local output status
-  status=0
-  output=$(charliebot config get server.public_url 2>&1) || status=$?
-  if (( status == 0 )); then
-    REMOTE_RUN_PUBLIC_URL=${output%$'\n'}
-    REMOTE_RUN_PUBLIC_URL=${REMOTE_RUN_PUBLIC_URL%/}
-    return 0
-  fi
-  printf '%s\n' "$output" >&2
-  return "$status"
+  remote_run_config_get server.public_url || return $?
+  REMOTE_RUN_PUBLIC_URL=${REMOTE_RUN_CONFIG_VALUE%/}
 }
 
 # The stop text tells the agent to end the run and report the blocker, with the /host-auth page.

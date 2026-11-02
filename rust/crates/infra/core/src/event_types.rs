@@ -8,6 +8,8 @@ pub const RESULT: &str = "result";
 pub const SYSTEM: &str = "system";
 pub const TOOL_USE: &str = "tool_use";
 pub const TOOL_RESULT: &str = "tool_result";
+/// The id that pairs a `tool_result` block with the `tool_use` block it answers.
+pub const TOOL_USE_ID: &str = "tool_use_id";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";

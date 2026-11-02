@@ -900,11 +900,11 @@ impl OpenCodeTranslator {
             content.push(part.get("name").map(value_str).unwrap_or(mime.to_string()));
           }
         }
-        Ok(vec![json!({"type": event_types::TOOL_RESULT, "tool_use_id": id, "content": content.join("\n")})])
+        Ok(vec![json!({"type": event_types::TOOL_RESULT, event_types::TOOL_USE_ID: id, "content": content.join("\n")})])
       }
       "session.tool.failed" => Ok(vec![json!({
         "type": event_types::TOOL_RESULT,
-        "tool_use_id": required_string(data, "id")?,
+        event_types::TOOL_USE_ID: required_string(data, "id")?,
         "content": error_text(data.get("error"))
       })]),
       "session.step.ended" => {

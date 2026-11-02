@@ -221,8 +221,9 @@ struct ChatScan {
 }
 
 /// Scan a session's chat log in file order. A line that is not JSON is skipped, as `chat_events::find_in_log` skips
-/// it: an append can tear a line. A JSON value that is not an object, or a user or web reply event without the fields a
-/// candidate carries, fails the scan with the line's location.
+/// it: an append can tear a line. A JSON value that is not an object fails the scan. A real user message, as
+/// `event_types::is_real_user_message` selects it, and a web reply need the fields a candidate carries, or the scan
+/// fails with the line's location. A tool-result echo is not a real user message and is skipped.
 fn scan_chat_log(session_dir: &Path, ratings: &[Rating]) -> anyhow::Result<ChatScan> {
   let path = layout::chat_events_path(session_dir);
   let lines = match chat_events::read_lines(&path, LineRule::Lines) {
@@ -257,7 +258,7 @@ fn scan_chat_log(session_dir: &Path, ratings: &[Rating]) -> anyhow::Result<ChatS
     {
       scan.ratings[position].index = index;
     }
-    if event_type != Some(event_types::USER) {
+    if !event_types::is_real_user_message(&event) {
       continue;
     }
     scan.users.push(UserMessage {
@@ -656,5 +657,27 @@ mod fixture_tests {
     let message = format!("{error:#}");
     assert!(message.contains("chat_events.jsonl:8"), "{message}");
     assert!(message.contains("`id`"), "{message}");
+  }
+
+  #[test]
+  fn a_tool_result_echo_between_user_messages_changes_nothing() {
+    let (_temp, sessions) = fixture();
+    let before = collect(&sessions, since(), &CandidateSource::all(), &read_plans).unwrap();
+    let log = sessions.join(SESSION).join("data/chat_events.jsonl");
+    let mut lines: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(str::to_string).collect();
+    // The backend's echo of a tool result: `type` is `user`, but the text sits under `message`, not `content`.
+    let echo = json!({
+      "type": "user",
+      "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+      "session_id": SESSION,
+      "uuid": "echo-1",
+      "timestamp": "2026-10-16T10:30:00+00:00",
+      "tool_use_result": {"stdout": "ok"},
+      "id": "echo-1"
+    });
+    lines.insert(2, echo.to_string());
+    fs::write(&log, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    let after = collect(&sessions, since(), &CandidateSource::all(), &read_plans).unwrap();
+    assert_eq!(after, before);
   }
 }

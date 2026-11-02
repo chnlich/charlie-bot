@@ -21,8 +21,8 @@ registration order:
 
 ```rust
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
-  ("src.features.artifacts", features::artifacts), // stub: src.features.artifacts
-  ("src.features.backup", stub),                   // stub: src.features.backup
+  ("src.features.artifacts", charliebot_artifacts::register),
+  ("src.features.backup", charliebot_backup::register),
   // ...
 ];
 ```
@@ -35,13 +35,8 @@ logging and stale sweeping happen before recovery and early services.
 before the session API routes serve requests. The runtime owns these steps, so they do not appear in
 `PACKAGES`.
 
-A package whose crate does not exist yet calls a stub, and the entry carries a `// stub: <package>` marker. A stub
-that carries registration data makes those registrations (its config section, its metadata slots, its backend
-types). A stub with no data is `stub`, which registers nothing. `packages::registry()` calls `register_package` for
-each entry; the first failure stops the server with exit code 1.
-
-A package's crate replaces its stub entry with its own `register` function. The registration calls in
-`register` do not change.
+Each entry names its package's `register` function. `packages::registry()` calls `register_package` for each entry;
+the first failure stops the server with exit code 1.
 
 ## Hook kinds
 
@@ -295,8 +290,7 @@ lock. `restore_chain` takes the lock itself and returns the restored ids.
 `caller::resolve_caller(headers: &HeaderMap, features: &FeatureContext) -> Result<CallerIdentity, Response>` resolves
 the operator or active agent identity from request headers, the live `FeatureContext.credentials` and the store's run
 identity. `CallerIdentity` exposes `is_operator()`, `session_id()` and `claims()`, and implements
-`FromRequestParts<Arc<FeatureContext>>` for route extractors. Every handler that answers for a session or accepts a run
-token resolves its caller through this extractor.
+`FromRequestParts<Arc<FeatureContext>>` for route extractors. A handler that checks the caller takes this extractor.
 
 `task_errors::task_http_error(error: StoreError) -> Response` is the shared HTTP mapping for task-domain errors. It
 maps refusal variants to their HTTP status and detail, conflicts include their message and blockers, and failures use
@@ -415,29 +409,3 @@ implements them over the registered lifecycles and sequence controllers, and the
 
 - CLI commands and setup steps. The `charliebot` CLI owns its subcommands outside the registry, so the server
   registers neither.
-
-## What the stubs register
-
-Stubs register their packages' data, so the server's behavior does not change:
-
-- The backend packages have crates: `claude_code` (`cc-claude`), `codex` (no lifecycle, so each run uses one process),
-  `openai_compatible` (`cc-openai-compatible`, `ClaudeCliLifecycle`), `anthropic_compatible`
-  (`cc-anthropic-compatible`, `ClaudeCliLifecycle`), `gemini`, `antigravity` and `charlie_code` (`charlie-code`). Each
-  registers its type. The packages that log usage also register their usage sources. `claude_code` registers typed
-  account configuration, its config check, metadata slots, pooled lifecycle and the login-notice renderer.
-- Data-carrying stubs: `artifacts` (`publish` section), `cron` (session slot), `slack` (`slack` section, session slot
-  and turn contribution), `discord` (`discord` section, session slot and turn contribution), `web_reply` (session slot
-  and turn contribution), `code_server` (`code_server` section), `voice` (`voice` section, its two template globals
-  and the default-backend check), and the backend type `opencode`, whose factory refuses every launch with
-  "not ported". The `opencode` stub also registers the usage source `opencode`, which reads and vacuums the store's
-  database.
-- Empty stubs: the other listed packages.
-- `backend_pool` has a crate, not a stub: its session slot comes from `charliebot_agents::backend_pool::register`.
-
-Not registered yet:
-
-- `code_server`'s template global for the diff page, which the diff page does not render yet.
-- The `src.features.usage` page package has no crate; the runtime session-usage owner and Codex's registered source
-  are separate from that page.
-- WebSocket routes, services and startup checks. No stub makes them yet. The `files` package registers the
-  routers, file views and cards, and the `memory` package registers the diff root `memory`.

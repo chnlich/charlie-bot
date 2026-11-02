@@ -44,6 +44,7 @@ struct Task {
   goal: &'static str,
   repo_path: Option<&'static str>,
   task_type: Option<&'static str>,
+  context_work: bool,
 }
 
 /// One golden case. Chain entries name rule bodies by `bodies` name; `None` is a null ref.
@@ -66,7 +67,18 @@ fn manager(id: &'static str, name: &'static str) -> Meta {
 }
 
 fn worker(id: &'static str, name: &'static str, repo: Option<&'static str>, task_type: Option<&'static str>) -> Meta {
-  Meta { id, name, profile: "worker", task: Some(Task { goal: GOAL, repo_path: repo, task_type }) }
+  Meta { id, name, profile: "worker", task: Some(Task { goal: GOAL, repo_path: repo, task_type, context_work: false }) }
+}
+
+/// A worker whose delegation declared context work.
+fn context_work_worker(
+  id: &'static str,
+  name: &'static str,
+  repo: Option<&'static str>,
+  task_type: Option<&'static str>,
+) -> Meta {
+  let meta = worker(id, name, repo, task_type);
+  Meta { task: meta.task.map(|task| Task { context_work: true, ..task }), ..meta }
 }
 
 fn matrix() -> Vec<Case> {
@@ -158,6 +170,16 @@ fn matrix() -> Vec<Case> {
       name: "work_implement_with_repo",
       kind: "work",
       meta: worker("worker-session", "Worker", Some(REPO), Some("implement")),
+      overlay: None,
+      chain: NO_CHAIN,
+      node_body: None,
+      host: None,
+      bodies: &[],
+    },
+    Case {
+      name: "work_implement_context_work",
+      kind: "work",
+      meta: context_work_worker("worker-session", "Worker", Some(REPO), Some("implement")),
       overlay: None,
       chain: NO_CHAIN,
       node_body: None,
@@ -384,6 +406,7 @@ fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot)
     goal: task.goal.to_string(),
     repo_path: task.repo_path.map(String::from),
     task_type: task.task_type.map(|name| serde_json::from_value::<TaskType>(json!(name)).expect("known task type")),
+    context_work: task.context_work,
     cold_read: cold_read_spec(task.task_type),
     ..TaskSpec::default()
   });

@@ -1,4 +1,4 @@
-//! The chat-channel entrypoint service (`src/features/chat_threads/channel_service.py`): one gateway listener task plus
+//! The chat-channel entrypoint service: one gateway listener task plus
 //! the boot backfill task. A channel's crate keeps its own service wiring and its configuration gate; the task
 //! bookkeeping lives here.
 

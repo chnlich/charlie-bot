@@ -1,4 +1,4 @@
-//! The chat_threads package's sidebar contribution (`src/features/chat_threads/sidebar.py`): a Slack or Discord thread
+//! The chat_threads package's sidebar contribution: a Slack or Discord thread
 //! session roots the Threads view.
 
 use charliebot_registry::sidebar::SidebarContribution;

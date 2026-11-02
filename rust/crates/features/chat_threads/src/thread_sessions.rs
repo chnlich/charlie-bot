@@ -1,4 +1,4 @@
-//! The thread-session predicate (`src/features/chat_threads/thread_sessions.py`).
+//! The thread-session predicate.
 //!
 //! A thread session answers one Slack or Discord thread: its metadata carries that platform's origin field, set at
 //! summon creation and never mutated. The turn contribution and the sidebar classify through [`is_thread_session`],

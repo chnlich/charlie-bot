@@ -1,15 +1,15 @@
-//! The shared thread core (`src/features/chat_threads/thread_entry.py`): the platform description, the adapter surface,
+//! The shared thread core: the platform description, the adapter surface,
 //! the reply contract, and the entries the Slack and Discord listeners call. A listener builds one `ThreadPlatform`
 //! from its constants, implements `ThreadAdapter` over its client, and calls these entries with the adapter.
 //!
-//! Public API, each item with its Python anchor (names in `thread_entry.py` unless a path is given):
-//! - `ThreadPlatform` (`ThreadPlatform`): the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
+//! Public API:
+//! - `ThreadPlatform`: the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
 //!   derive the marker keys from `name`.
 //! - `IdOrdering` (`ThreadPlatform.id_key`): text order for Slack ts strings, integer order for Discord snowflakes.
-//! - `ThreadMessage` (`ThreadMessage`) and `ThreadAdapter` (`ThreadAdapter`): the message the round side reads, and the
+//! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
 //!   platform face of the entries.
-//! - `ThreadReplyError` (`ThreadReplyError`) with `ThreadDetail`: a refusal with its HTTP status and detail; an
-//!   unplanned failure answers 500 "Internal Server Error", as Python's unhandled exception does.
+//! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
+//!   unplanned failure answers 500 "Internal Server Error".
 //! - `load_prompt_doc`, `thread_reply_contract`, `thread_reply_segment`: the reply contract (`LINKED_PAGES_LINE` joins
 //!   it for every platform).
 //! - Pure helpers: `follow_wake_label`, `follow_floor`, `chunk_text`, `event_by_id`, `summon_of`, `newest_thread_input`,
@@ -175,7 +175,7 @@ pub enum IdKey<'a> {
 }
 
 impl IdOrdering {
-  /// The ordering key of `id`. A snowflake that is not an unsigned integer panics, as Python's `int()` raises.
+  /// The ordering key of `id`. A snowflake that is not an unsigned integer panics.
   pub fn key(self, id: &str) -> IdKey<'_> {
     match self {
       IdOrdering::Text => IdKey::Text(id),
@@ -302,7 +302,7 @@ impl ThreadReplyError {
     Self { status, detail: ThreadDetail::Text(detail.into()) }
   }
 
-  /// An unplanned failure of a store or runtime call. It is logged here and answered as Python's unhandled exception
+  /// An unplanned failure of a store or runtime call. It is logged here and answered as an unhandled failure
   /// is: 500 with the text "Internal Server Error".
   pub fn failure(error: impl Display) -> Self {
     tracing::error!(error = %error, "thread_entry_failed");
@@ -330,8 +330,8 @@ impl From<anyhow::Error> for ThreadReplyError {
   }
 }
 
-/// Read one prompts doc fresh from disk, with universal newlines and Python's `str.strip()`
-/// (`load_prompt_doc`). A missing or unreadable doc fails with its name, its path and the likely cause.
+/// Read one prompts doc fresh from disk, with universal newlines and both-sided whitespace trimmed.
+/// A missing or unreadable doc fails with its name, its path and the likely cause.
 pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyhow::Result<String> {
   let path = repo.path().join("prompts").join(name);
   let bytes =
@@ -389,11 +389,11 @@ pub fn follow_floor(label: &str) -> Option<String> {
   FOLLOW_FLOOR_RE.captures(label).map(|captures| captures[1].to_string())
 }
 
-/// Split `text` into chunks of at most `limit` characters for sequential posting (`chunk_text`).
+/// Split `text` into chunks of at most `limit` characters for sequential posting.
 ///
 /// Greedy packing over paragraph units (a paragraph plus its trailing blank-line separator); a unit longer than
-/// `limit` falls to line units, and a line longer than `limit` is hard-cut. Lengths count characters, as Python's
-/// `len` counts code points. A whitespace-only chunk is dropped at return unless every chunk is whitespace.
+/// `limit` falls to line units, and a line longer than `limit` is hard-cut. Lengths count characters, as code
+/// points. A whitespace-only chunk is dropped at return unless every chunk is whitespace.
 pub fn chunk_text(text: &str, limit: usize) -> Vec<String> {
   if text.chars().count() <= limit {
     return vec![text.to_string()];
@@ -812,7 +812,7 @@ pub async fn post_reply_with_caller_context(
 
   let chars = text.chars().count();
   drop(bound);
-  // Python appends to its cached list in place (`chat_events.py:221-224`); release the Arc before the same write.
+  // The store appends to its cached event list in place; release the Arc before the same write.
   drop(chat_events);
   let payload = json!({"answers": answers, "chars": chars, "chunks": bodies.len()});
   let _event = if let (Some(request_id), Some(event_id)) = (request_id, event_id.as_deref()) {

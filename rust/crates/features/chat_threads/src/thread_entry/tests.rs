@@ -1,4 +1,4 @@
-//! The reply-contract cases and the port of `tests/core/test_thread_entry.py`. The cases run under a synthetic second
+//! The reply-contract cases. The cases run under a synthetic second
 //! platform, "fakechat", with snowflake-ordered ids: the real store, trigger manager and dispatcher run over a temporary
 //! home, and a recording executor stands where the agent launch would go. No agent starts.
 

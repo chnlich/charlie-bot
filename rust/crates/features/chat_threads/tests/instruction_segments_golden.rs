@@ -45,24 +45,24 @@ fn contributions_match_the_recorded_cases() {
     let checkout = case["checkout"].as_str().unwrap();
     let repo_path = root.path().join(checkout);
     let actual = rust_answer(case, &repo_path);
-    let expected = materialize_paths(case["expected"].clone(), root.path());
+    let recorded = materialize_paths(case["expected"].clone(), root.path());
     for (index, (key, _, _)) in PACKAGES.iter().enumerate() {
-      let python = &expected[*key];
-      let rust = &actual[*key];
-      if python.get("error").is_some() {
+      let recorded_answer = &recorded[*key];
+      let answer = &actual[*key];
+      if recorded_answer.get("error").is_some() {
         error_answers[index] += 1;
-      } else if python["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
+      } else if recorded_answer["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
         segment_answers[index] += 1;
       }
-      if checkout == "without-web_reply.md" && *key == "web_reply" && python.get("error").is_some() {
+      if checkout == "without-web_reply.md" && *key == "web_reply" && recorded_answer.get("error").is_some() {
         assert!(
-          rust.get("error").is_some(),
-          "expected the missing prompt to fail on both sides: case={case:?} python={python} rust={rust}"
+          answer.get("error").is_some(),
+          "expected the missing prompt to fail on both sides: case={case:?} python={recorded_answer} rust={answer}"
         );
         missing_web_failures += 1;
-      } else if python != rust {
+      } else if recorded_answer != answer {
         panic!(
-          "recorded Python contribution differs: checkout={checkout} case={case:?} key={key} expected={python} actual={rust}"
+          "recorded Python contribution differs: checkout={checkout} case={case:?} key={key} expected={recorded_answer} actual={answer}"
         );
       }
     }

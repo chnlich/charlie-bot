@@ -106,12 +106,16 @@ const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
   TaggedVariant { tag: REMOTE_PID_KIND, model: &REMOTE_PID },
   TaggedVariant { tag: SLURM_JOB_KIND, model: &SLURM_JOB },
 ];
+/// The schedule-trigger body field that lists the targets a trigger watches. The body model reads it and so does
+/// the `schedule-trigger` command, so neither crate spells the name on its own.
+pub const WATCH_TARGETS_FIELD: &str = "watch_targets";
+
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required("delay_seconds", FieldType::Integer),
   Field::required("message", FieldType::String).max_length(MAX_TRIGGER_MESSAGE_CHARS),
   Field::optional(
-    "watch_targets",
+    WATCH_TARGETS_FIELD,
     FieldType::NullableTaggedUnionList { discriminator: "kind", variants: WATCH_TARGET_VARIANTS },
   ),
 ];
@@ -1370,7 +1374,7 @@ fn schedule_request(payload: &Value) -> anyhow::Result<ScheduleTriggerRequest> {
     session_id: payload["session_id"].as_str().expect("validated string field").to_string(),
     delay_seconds: integer_field(payload, "delay_seconds")?,
     message: payload["message"].as_str().expect("validated string field").to_string(),
-    watch_targets: match payload.get("watch_targets") {
+    watch_targets: match payload.get(WATCH_TARGETS_FIELD) {
       None | Some(Value::Null) => None,
       Some(Value::Array(items)) => Some(items.iter().map(watch_target).collect::<anyhow::Result<_>>()?),
       other => unreachable!("validated watch targets are null or a list, not {other:?}"),

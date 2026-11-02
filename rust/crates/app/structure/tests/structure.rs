@@ -951,6 +951,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::trigger_files::SLURM_JOB_KIND`.",
   },
+  OwnerRow {
+    name: "watch_targets",
+    owner: "runtime/triggers",
+    hint: "Use `charliebot_triggers::triggers::WATCH_TARGETS_FIELD`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

@@ -19,7 +19,7 @@ use axum::routing::post;
 use charliebot_compat::routing::{get_only, refuse_other_methods};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 
-/// `register` (`src/features/explain/__init__.py`): the router under `/api/sessions`.
+/// `register`: the router under `/api/sessions`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)
 }

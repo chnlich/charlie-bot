@@ -52,7 +52,7 @@ pub fn results_path(store: &Store, session_id: &str) -> PathBuf {
   store.chat_events_path(session_id).with_file_name(RESULTS_FILE)
 }
 
-/// Runs blocking file work on the blocking pool, where Python runs its `asyncio.to_thread` calls.
+/// Runs blocking file work on the blocking pool.
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> anyhow::Result<T> {
   spawn_blocking(work).await?
 }
@@ -68,7 +68,7 @@ fn load_results(path: &Path) -> anyhow::Result<Results> {
   }
 }
 
-/// `_write_entry`: replace the divider's entry and swap the whole document into place, indented as Python writes it.
+/// Replaces the divider's entry and swaps the whole document into place, in the file's pretty indentation.
 fn write_entry(path: &Path, upto: i64, entry: Map<String, Value>) -> anyhow::Result<()> {
   let mut results = load_results(path)?;
   results.insert(upto.to_string(), Value::Object(entry));
@@ -145,9 +145,9 @@ async fn reap(
   Ok(reaped)
 }
 
-/// `extract_round_text`: the last assistant text in the events `[0, upto + 1)`, or `None` when there is none.
+/// The last assistant text in the events `[0, upto + 1)`, or `None` when there is none.
 fn extract_round_text(store: &Store, session_id: &str, upto: i64) -> anyhow::Result<Option<String>> {
-  // A divider below zero leaves an empty range, as Python's `range(0, upto + 1)` does.
+  // A divider below zero leaves an empty range.
   let end = usize::try_from(upto.saturating_add(1)).unwrap_or(0);
   let range = store.load_chat_events_shared_range_sync(session_id, 0, end)?;
   let events = &range.events[range.range];

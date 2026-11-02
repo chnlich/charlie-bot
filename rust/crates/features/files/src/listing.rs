@@ -1,4 +1,4 @@
-//! `_dir_listing_page` (`src/features/files/api.py`): the HTML page of one directory.
+//! The HTML page of one directory.
 //!
 //! The walk lists the directory and stats each child; a child that cannot be stat-ed is left out. The rows sort
 //! directories first, then by lowercase name, and each row is escaped, quoted and appended in turn.
@@ -118,7 +118,7 @@ fn page(display_path: &str, rows: &str) -> String {
   )
 }
 
-/// `datetime.fromtimestamp(seconds, tz=UTC).strftime("%Y-%m-%d %H:%M")`. CPython rounds the fraction to whole
+/// The modified minute of a timestamp, printed as `"%Y-%m-%d %H:%M"` in UTC. The fraction rounds to whole
 /// microseconds half to even, and a rounding carry of 1e6 microseconds moves the whole seconds on by one.
 fn modified_minute(seconds: f64) -> Result<String, ListingError> {
   let micros = (seconds.fract() * 1e6).round_ties_even();

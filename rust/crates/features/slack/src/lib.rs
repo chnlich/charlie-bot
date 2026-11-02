@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use service::SlackService;
 use turn_contribution::SlackTurnContribution;
 
-/// Register in the Python package order, omitting its Python-only CLI command.
+/// `register`: the service, the routes and the package's other registrations, in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.service(Arc::new(SlackService::default()))?;
   registry.router(api::routes, api::matches)?;

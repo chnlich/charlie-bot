@@ -370,9 +370,8 @@ pub(super) async fn send_json(socket: &mut WebSocket, value: &Value) -> Result<(
 
 /// Relays the PTY and the socket until either one ends.
 ///
-/// An `Err` returns without a close frame. uvicorn 0.42.0's websockets implementation
-/// (`WebSocketProtocol.run_asgi` in `uvicorn/protocols/websockets/websockets_impl.py`) closes the transport
-/// after an exception raised past `accept`, and sends no close frame, so the client sees the connection end.
+/// An `Err` returns without a close frame: the transport closes, no Close message is sent, and the client
+/// sees the connection end.
 pub(super) async fn run_pty_relay(mut socket: WebSocket, mut attachment: PtyAttachment) -> Result<(), String> {
   let (sender, mut receiver) = mpsc::unbounded_channel();
   let pump_fd = attachment.fd;

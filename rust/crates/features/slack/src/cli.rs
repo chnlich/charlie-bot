@@ -1,4 +1,4 @@
-//! The `slack` verbs (`src/features/slack/cli.py`): reply on a session's own Slack thread, acknowledge read thread
+//! The `slack` verbs: reply on a session's own Slack thread, acknowledge read thread
 //! messages, and send one authenticated Slack Web API request.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `ack`

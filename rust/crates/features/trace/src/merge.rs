@@ -86,11 +86,11 @@ pub(super) async fn cached_build(
   slim: bool,
   mode: BuildMode,
 ) -> Result<PathBuf, BuildFailure> {
-  let python_mode = match mode {
+  let mode_name = match mode {
     BuildMode::DirectPass => DIRECT_MODE,
     BuildMode::Merge => MERGE_MODE,
   };
-  let key = merge_cache_key(&paths, slim, python_mode)?;
+  let key = merge_cache_key(&paths, slim, mode_name)?;
   let cfg = features.config.get().map_err(|error| BuildFailure::Failed(error.to_string()))?;
   let cache_dir = cfg.charliebot_home.join("cache").join("perfetto_merge");
   fs::create_dir_all(&cache_dir).map_err(io_failure)?;

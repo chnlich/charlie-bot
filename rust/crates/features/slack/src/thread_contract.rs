@@ -1,11 +1,11 @@
-//! The Slack part of the thread reply contract (`src/features/slack/slack_listener.py`): the platform line, the
+//! The Slack part of the thread reply contract: the platform line, the
 //! thread's address, and the read and ack sentences. The shared contract joins it with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
 use crate::metadata::SlackOrigin;
 
-/// The Slack platform as the shared contract reads it (`slack_listener.SLACK`).
+/// The Slack platform as the shared contract reads it.
 pub const SLACK: ThreadPlatform = ThreadPlatform {
   name: "slack",
   display_name: "Slack",

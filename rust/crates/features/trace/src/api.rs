@@ -132,8 +132,8 @@ async fn perfetto_merged(
     return json_error(StatusCode::BAD_REQUEST, "Provide at least one trace path with 'trace' or 'dir'.");
   }
 
-  // Python offloads discovery and each selected path check to `asyncio.to_thread` (`src/features/trace/api.py:354,
-  // 361-365`); keep the same filesystem work off Tokio's worker here.
+  // The discovery and each selected path check run on the blocking pool; the filesystem work stays off
+  // Tokio's worker here.
   let resolve_traces = tokio::task::spawn_blocking(move || resolve_trace_paths(traces, dir.as_deref(), &pattern)).await;
   let resolved_paths = match resolve_traces {
     Ok(Ok(paths)) => paths,
@@ -298,8 +298,7 @@ enum GlobToken {
   Class(Vec<char>),
 }
 
-/// A reusable `fnmatch.fnmatch` pattern. Python compiles and caches each pattern, then runs the matcher per filename
-/// (`src/features/trace/api.py:130-138`); compile once here before the directory loop and reuse the name buffer.
+/// A reusable glob pattern. It compiles once before the directory loop and reuses the name buffer.
 struct GlobMatcher {
   tokens: Vec<GlobToken>,
   name: Vec<char>,

@@ -25,10 +25,10 @@ const SLACK_NS: Uuid =
   Uuid::from_bytes([0x1b, 0x4e, 0x28, 0xba, 0x2f, 0xa1, 0x4d, 0x7a, 0x9f, 0x0c, 0x8d, 0x5e, 0x7a, 0x3b, 0x6c, 0x11]);
 const ACCEPTANCE_REACTION: &str = "eyes";
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
-// `src/infra/timeouts.py::WS_CLIENT_CLOSE_TIMEOUT` is one second; the sender is aborted on every session exit.
+// The websocket close waits one second; the sender is aborted on every session exit.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Return the deterministic session id for a Slack thread (`summon_session_id`).
+/// Return the deterministic session id for a Slack thread.
 pub fn summon_session_id(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
   Uuid::new_v5(&SLACK_NS, format!("slack:{team_id}:{channel_id}:{thread_ts}").as_bytes()).to_string()
 }
@@ -1016,7 +1016,7 @@ mod tests {
 
   #[test]
   fn the_slack_platform_name_is_a_thread_platform_key() {
-    // Python: tests/test_run_token.py:243.
+    // The platform name is a thread-platform key.
     assert!(charliebot_core::event_types::THREAD_PLATFORM_KEYS.contains(&SLACK.name));
   }
 }

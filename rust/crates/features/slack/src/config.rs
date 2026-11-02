@@ -1,4 +1,4 @@
-//! The `slack:` section (`src/features/slack/config.py`): the allow-list for Slack summons.
+//! The `slack:` section: the allow-list for Slack summons.
 
 use std::sync::Arc;
 

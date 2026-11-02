@@ -24,7 +24,7 @@ fn terminal_websocket(_features: Arc<FeatureContext>, request: WebSocketRequest)
   })
 }
 
-/// Runs one attachment and logs its end in `api.py`'s order: `terminal_ws_disconnected` from the `finally`,
+/// Runs one attachment and logs its end: `terminal_ws_disconnected` from the disconnect guard,
 /// then the exception that escaped the handler.
 async fn serve_attachment(socket: WebSocket) {
   let outcome = {

@@ -610,29 +610,6 @@ impl Store {
     layout::threads_dir(&self.session_dir(session_id)).join(thread_id).join(METADATA_FILE_NAME)
   }
 
-  /// Read one thread metadata file from disk.
-  pub fn read_thread_metadata(&self, path: &Path) -> StoreResult<Option<crate::metadata::ThreadMetadata>> {
-    let raw = match fs::read_to_string(path) {
-      Ok(raw) => raw,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
-    };
-    if raw.trim().is_empty() {
-      return Ok(None);
-    }
-    serde_json::from_str(&raw)
-      .map(Some)
-      .map_err(|error| StoreError::new(format!("{}: invalid thread metadata: {error}", path.display())))
-  }
-
-  /// Atomically write a thread metadata file using the model field and slot order.
-  pub fn write_thread_metadata(&self, path: &Path, metadata: &crate::metadata::ThreadMetadata) -> StoreResult<()> {
-    let parent = path.parent().expect("thread metadata path has a parent");
-    fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;
-    fsutil::atomic_write_text(path, &metadata.to_json_string(&self.slots))
-      .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
-  }
-
   /// Invalidate cached metadata and listing snapshots after an external write or deletion.
   pub fn invalidate_cache(&self, session_id: &str) {
     self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").remove(session_id);

@@ -410,34 +410,6 @@ pub struct ThreadMetadata {
   pub extra: Map<String, Value>,
 }
 
-impl ThreadMetadata {
-  /// Render this thread using registered field order and preserve unregistered keys.
-  pub fn to_json_string(&self, slots: &[MetadataSlot]) -> String {
-    let mut declared = Vec::new();
-    push(&mut declared, "id", &self.id);
-    push(&mut declared, "session_id", &self.session_id);
-    push(&mut declared, "description", &self.description);
-    push(&mut declared, "status", &self.status);
-    push(&mut declared, "created_at", &self.created_at);
-    push(&mut declared, "started_at", &self.started_at);
-    push(&mut declared, "completed_at", &self.completed_at);
-    push(&mut declared, "pid", &self.pid);
-    push(&mut declared, "pid_start", &self.pid_start);
-    push(&mut declared, "exit_code", &self.exit_code);
-    push(&mut declared, "branch_name", &self.branch_name);
-    push(&mut declared, "base_branch", &self.base_branch);
-    push(&mut declared, "repo_path", &self.repo_path);
-    push(&mut declared, "worktree_path", &self.worktree_path);
-    push(&mut declared, "context", &self.context);
-    push(&mut declared, "backend", &self.backend);
-    push(&mut declared, "model", &self.model);
-    push(&mut declared, "keep_worktree", &self.keep_worktree);
-    push(&mut declared, "tried_backends", &self.tried_backends);
-    push(&mut declared, "task_type", &self.task_type);
-    finish_metadata(declared, &self.extra, slots, MetadataFile::Thread)
-  }
-}
-
 /// Session metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SessionMetadata {

@@ -159,7 +159,7 @@ rust/
     text_repr.rs                  repr, str and JSON renderings
     printable_table.rs            the non-printable character ranges
     ssh.rs                        the batch-mode ssh argv and its 0700 control directory
-  crates/infra/compat/src/   the Python-compatibility pieces the server and later crates share
+  crates/infra/compat/src/   the compatibility pieces the server and later crates share
     json.rs                       orjson and Starlette JSON bytes, floats included
     validation.rs                 FastAPI's 422 bodies and pydantic's lax parsing of query and path values
     jinja.rs                      minijinja environment with Jinja2's tojson and urlencode, autoescape on
@@ -180,8 +180,8 @@ rust/
     store_hooks.rs                the store's hook traits, answered by the registered lifecycles and controllers
     templating.rs                 the page engine: Jinja2-compatible rendering with minijinja and `render_page`
   crates/app/packages/src/lib.rs
-                                  the composition root both binaries share: the runtime and package lists, with a
-                                  stub for each unported package
+                                  the composition root both binaries share: the runtime and package lists, one entry
+                                  per package
   crates/app/server/src/
     main.rs                       startup, lifespan, bind, graceful shutdown
     app.rs                        the middleware stack and the feature routers
@@ -211,5 +211,3 @@ rust/
 - Package-registered config sections stay raw YAML until their packages register their sections. The page reads only
   `voice.default_backend`.
 - A run token whose base64 holds characters outside the base64url alphabet is refused.
-- The diff page's `code_server_enabled` template global is not registered, because the diff page is
-  not rendered.

@@ -780,7 +780,7 @@ mod tests {
 
   use super::{CronBinding, last_saturday_1am_utc, register_step_run, row_schedule_fields};
   use crate::boundary::BoundaryState;
-  use crate::config::{ScheduledTaskConfig, StepConfig};
+  use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{feature_context, manager};
 
   #[tokio::test]
@@ -975,7 +975,7 @@ mod tests {
       project: None,
       allow_failure: false,
       session_id: Some(parent.id.clone()),
-      mode: Some("worker".to_string()),
+      mode: Some(TaskMode::Worker),
       prompt: None,
       handler: None,
       steps: Some(vec![

@@ -138,7 +138,7 @@ The review is one direct `charlie-code` run, outside the clone.
 The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `tools/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
-The model, API base and context window come from the `claude-code-kimi-k3.1-pro` entry in `backends.options` of `$CHARLIEBOT_HOME/config.yaml`, on `--model`, `--api-base` and `--context-window`; the gateway route needs the provider prefix on the model and the `/v1` suffix on the API base.
+The model, API base and context window come from the `claude-code-kimi-k3.1-pro` entry in `backends.options` of `$CHARLIEBOT_HOME/config.yaml`, on `--model`, `--api-base` and `--context-window`; the gateway route needs `openai/` followed by the entry's `model` value on `--model` (LiteLLM's OpenAI-compatible route) and the `/v1` suffix on the API base.
 The option names are `charlie-code`'s own CLI contract.
 
 The scratch directory sits outside the clone, so the reviewer's own git checkouts stay away from the clone's HEAD.

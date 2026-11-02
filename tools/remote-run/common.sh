@@ -303,7 +303,7 @@ remote_run_refresh_remote_exec() {
   local status
   if remote_run_rsync_capture --archive --checksum --rsh "$REMOTE_RUN_RSYNC_RSH" \
     "$REMOTE_RUN_SCRIPT_DIR/remote-exec.pl" \
-    "$REMOTE_RUN_HOST:\$HOME/$REMOTE_RUN_REMOTE_BASE/remote-exec.pl"; then
+    "$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/remote-exec.pl"; then
     :
   else
     status=$?
@@ -323,5 +323,7 @@ remote_run_remote_payload() {
 
 remote_run_remote_command() {
   local payload=$1
-  printf 'exec "%s/remote-exec.pl" "%s"' "$(remote_run_base_path)" "$payload"
+  # The base travels in the command: ssh does not forward the local environment.
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/remote-exec.pl" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$payload"
 }

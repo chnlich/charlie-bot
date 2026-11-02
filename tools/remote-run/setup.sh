@@ -165,7 +165,7 @@ fi
 
 if rsync --archive --checksum --rsh "$REMOTE_RUN_RSYNC_RSH" \
   "$REMOTE_RUN_SCRIPT_DIR/remote-exec.pl" \
-  "$REMOTE_RUN_HOST:\$HOME/$REMOTE_RUN_REMOTE_BASE/remote-exec.pl"; then
+  "$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/remote-exec.pl"; then
   :
 else
   status=$?

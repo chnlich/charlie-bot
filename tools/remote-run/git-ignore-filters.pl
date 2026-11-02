@@ -65,7 +65,7 @@ sub main {
   binmode STDIN;
   binmode STDOUT;
   # A tree outside git has no ignore rules and nothing to protect.
-  if (system('git -C ' . quotemeta($root) . ' rev-parse --git-dir 2>/dev/null') != 0) {
+  if (system('git -C ' . quotemeta($root) . ' rev-parse --git-dir >/dev/null 2>&1') != 0) {
     return;
   }
   my $remote_paths = do { local $/; my $input = <STDIN>; $input // '' };

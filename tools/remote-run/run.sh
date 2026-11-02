@@ -132,8 +132,8 @@ exclude_args=(
   --exclude=/rust/target/
   --filter=:-\ .gitignore
 )
-# The remote shell expands the base's leading $HOME, as rsync hands the path to it.
-remote_tree="$REMOTE_RUN_HOST:\$HOME/$REMOTE_RUN_REMOTE_BASE/trees/$tree_name/"
+# rsync expands a leading ~ on the remote path itself; a $HOME would reach it unexpanded.
+remote_tree="$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/trees/$tree_name/"
 
 marker_query="if [[ -f \"$base/tree-owners/$tree_name\" ]]; then cat -- \"$base/tree-owners/$tree_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
 if remote_run_capture "$marker_query"; then
@@ -206,7 +206,7 @@ fi
 remote_root="~/$REMOTE_RUN_REMOTE_BASE/trees/$tree_name"
 relative_dir=$REMOTE_RUN_RELATIVE_DIR
 shift
-payload=$(remote_run_remote_payload "$remote_root" "$relative_dir" "$python_version" "$@")
+payload=$(remote_run_remote_payload "$remote_root" "$relative_dir" "$python_version" "$command_name" "$@")
 remote_command=$(remote_run_remote_command "$payload")
 # ssh-guard runs as this shell's direct child. Backgrounding the stream would make a subshell the
 # parent instead, and that subshell outlives a SIGKILLed run.sh, which keeps the remote command

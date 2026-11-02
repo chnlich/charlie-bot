@@ -25,13 +25,13 @@ fn remote_exec_pl() -> PathBuf {
 
 /// The fake ssh answers the runner's remote queries and plays the cases the connectivity check
 /// must tell apart. Its behavior comes from the environment, one case per variable.
-const FAKE_SSH: &str = r#"
+const FAKE_SSH: &str = r##"
 log="${FAKE_SSH_LOG:?}"
 printf '%s\n' "$*" >>"$log"
 last="${*: -1}"
 case "$last" in
   *tree-owners*) printf '__NO_LOCAL_ROOT_RECORD__' ;;
-  exec\ *) exit "${FAKE_REMOTE_STATUS:-0}" ;;
+  *" exec "*) exit "${FAKE_REMOTE_STATUS:-0}" ;;
   true)
     if [[ -n "${FAKE_LINK:-}" ]]; then
       echo "# To authenticate, visit: https://login.tailscale.com/a/l0000000000000" >&2
@@ -42,20 +42,20 @@ case "$last" in
     ;;
 esac
 exit 0
-"#;
+"##;
 
-const FAKE_RSYNC: &str = r#"
+const FAKE_RSYNC: &str = r##"
 printf '%s\n' "rsync $*" >>"${FAKE_SSH_LOG:?}"
 exit "${FAKE_RSYNC_STATUS:-0}"
-"#;
+"##;
 
-const FAKE_CHARLIEBOT: &str = r#"
+const FAKE_CHARLIEBOT: &str = r##"
 if [[ "${FAKE_URL_UNSET:-0}" == 1 ]]; then
-  echo 'error: config key server.public_url is unset' >&2
+  echo "error: config key server.public_url is unset" >&2
   exit 1
 fi
 printf 'https://charlie.example.test:18498\n'
-"#;
+"##;
 
 /// A project directory for the runner to sync: no git, so the run takes the directory mode.
 fn project(sandbox: &Sandbox) -> PathBuf {
@@ -91,7 +91,7 @@ fn a_login_link_in_the_check_gives_86_and_the_stop_text() {
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("charliebot", FAKE_CHARLIEBOT);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox, &project);
+  let mut env = run_env(&sandbox);
   env.insert("FAKE_LINK".to_string(), "1".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 86, "{}", run.describe());
@@ -105,7 +105,7 @@ fn a_check_failure_gives_87_and_the_stop_text() {
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("charliebot", FAKE_CHARLIEBOT);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox, &project);
+  let mut env = run_env(&sandbox);
   env.insert("FAKE_CHECK_FAIL".to_string(), "1".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 87, "{}", run.describe());
@@ -118,7 +118,7 @@ fn a_check_past_its_limit_gives_87() {
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("charliebot", FAKE_CHARLIEBOT);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox, &project);
+  let mut env = run_env(&sandbox);
   env.insert("FAKE_CHECK_HANG".to_string(), "1".to_string());
   env.insert("REMOTE_RUN_CONNECT_TIMEOUT".to_string(), "2".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
@@ -132,7 +132,7 @@ fn a_missing_public_url_names_the_key() {
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("charliebot", FAKE_CHARLIEBOT);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox, &project);
+  let mut env = run_env(&sandbox);
   env.insert("FAKE_LINK".to_string(), "1".to_string());
   env.insert("FAKE_URL_UNSET".to_string(), "1".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
@@ -146,7 +146,7 @@ fn a_passing_check_leaves_a_remote_255_unchanged() {
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("rsync", FAKE_RSYNC);
   let project = project(&sandbox);
-  let mut env = run_env(&sandbox, &project);
+  let mut env = run_env(&sandbox);
   env.insert("FAKE_REMOTE_STATUS".to_string(), "255".to_string());
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 255, "{}", run.describe());
@@ -156,15 +156,11 @@ fn a_passing_check_leaves_a_remote_255_unchanged() {
 
 /// The payload run.sh sends: NUL-separated tree, directory, Python version, and command words,
 /// base64-encoded through the system base64 tool, as run.sh builds it.
-fn payload(sandbox: &Sandbox, relative: &str, python: &str, argv: &[&str]) -> String {
+fn payload(relative: &str, python: &str, argv: &[&str]) -> String {
   let tree = "~/scripts/remote-run/trees/proj".to_string();
   let mut fields: Vec<String> = vec![tree, relative.to_string(), python.to_string()];
   fields.extend(argv.iter().map(|word| word.to_string()));
-  let script = fields
-    .iter()
-    .map(|field| format!("'{field}'"))
-    .collect::<Vec<_>>()
-    .join(" ");
+  let script = fields.iter().map(|field| format!("'{}'", field.replace('\'', "'\\''"))).collect::<Vec<_>>().join(" ");
   let mut command = Command::new("bash");
   command.arg("-c").arg(format!("printf '%s\\0' {script} | base64 -w0"));
   let output = command.output().expect("base64 runs");
@@ -189,6 +185,7 @@ fn install_remote_state(sandbox: &Sandbox) {
 
 fn remote_exec_env(sandbox: &Sandbox) -> Env {
   let mut env = sandbox.env();
+  env.insert("REMOTE_RUN_REMOTE_BASE".to_string(), "scripts/remote-run".to_string());
   env.insert("HOME".to_string(), sandbox.root().display().to_string());
   env
 }
@@ -206,8 +203,7 @@ fn a_command_gets_a_short_tmpdir_and_its_own_exit_code() {
   let sandbox = Sandbox::new();
   install_remote_state(&sandbox);
   let env = remote_exec_env(&sandbox);
-  let payload =
-    payload(&sandbox, ".", "", &["sh", "-c", "printf '%s' \"$TMPDIR\"; exit 42"]);
+  let payload = payload(".", "", &["sh", "-c", "printf '%s' \"$TMPDIR\"; exit 42"]);
   let run = run_remote_exec(&env, &payload);
   assert_eq!(run.code, 42, "{}", run.describe());
   assert!(run.stdout.starts_with("/tmp/rr-"), "{}", run.describe());
@@ -219,8 +215,7 @@ fn a_command_leaving_a_daemon_does_not_hold_the_runner() {
   let sandbox = Sandbox::new();
   install_remote_state(&sandbox);
   let env = remote_exec_env(&sandbox);
-  let payload = payload(&sandbox, ".", "",
-    &["sh", "-c", "setsid sh -c 'sleep 30' >/dev/null 2>&1 <&- & sleep 0.2"]);
+  let payload = payload(".", "", &["sh", "-c", "setsid sh -c 'sleep 30' >/dev/null 2>&1 <&- & sleep 0.2"]);
   let started = Instant::now();
   let run = run_remote_exec(&env, &payload);
   assert_eq!(run.code, 0, "{}", run.describe());
@@ -232,10 +227,9 @@ fn a_command_leaving_a_daemon_does_not_hold_the_runner() {
 fn a_cargo_command_without_slots_is_refused() {
   let sandbox = Sandbox::new();
   install_remote_state(&sandbox);
-  std::fs::remove_dir_all(sandbox.root().join("scripts/remote-run/slots"))
-    .expect("remove the slots");
+  std::fs::remove_dir_all(sandbox.root().join("scripts/remote-run/slots")).expect("remove the slots");
   let env = remote_exec_env(&sandbox);
-  let payload = payload(&sandbox, ".", "", &["cargo", "test"]);
+  let payload = payload(".", "", &["cargo", "test"]);
   let run = run_remote_exec(&env, &payload);
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("build slot is missing"), "{}", run.describe());

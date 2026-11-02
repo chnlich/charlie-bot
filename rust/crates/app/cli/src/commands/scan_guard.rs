@@ -288,8 +288,7 @@ fn heredoc_pattern() -> &'static Regex {
 
 fn single_quote_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
-  PATTERN
-    .get_or_init(|| Regex::new(r"'([^'\s;|&`]*)'|'[^']*'").expect("single-quote pattern is valid"))
+  PATTERN.get_or_init(|| Regex::new(r"'([^'\s;|&`]*)'|'[^']*'").expect("single-quote pattern is valid"))
 }
 
 /// A file-name filter with its value: an exclusion (`-g '!...'`) matches none, so it names no glob.
@@ -403,12 +402,14 @@ mod tests {
     );
     // A single-quoted prune path keeps the prune it names.
     assert!(scan_forms(r"find ~ -path '*/.charliebot/sessions' -prune -o -name X -print").unwrap().is_empty());
-    assert!(scan_forms(&format!(
-      r"find / \( -path '/proc' -o -path '{}/.charliebot/sessions' \) -prune -o -name X -print",
-      home()
-    ))
-    .unwrap()
-    .is_empty());
+    assert!(
+      scan_forms(&format!(
+        r"find / \( -path '/proc' -o -path '{}/.charliebot/sessions' \) -prune -o -name X -print",
+        home()
+      ))
+      .unwrap()
+      .is_empty()
+    );
     // Quoted prose holding a space is not shell, so a root written inside it is not a search root.
     assert!(
       scan_forms(&format!(r"rg -l 'find / and replace' {}/.charliebot/sessions -g metadata.json", home()))

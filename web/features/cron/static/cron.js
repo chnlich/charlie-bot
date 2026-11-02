@@ -24,7 +24,7 @@ const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', '
 // the normal editable form. Broken: every field read-only, Enabled disabled and
 // rendering the file's raw value (indeterminate when the file was
 // unparseable). The full load error + path sit in the error box, Save hidden,
-// Delete kept. Otherwise every field is editable and Save is shown.
+// Delete kept.
 function applyCronBrokenView(task) {
   const isBroken = !!(task && task.broken);
   CRON_EDITABLE_FIELD_IDS.forEach(id => { document.getElementById(id).readOnly = isBroken; });

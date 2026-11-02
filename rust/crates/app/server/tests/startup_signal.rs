@@ -39,7 +39,7 @@ impl Drop for ServerChild {
 
 fn config_text(port: u16) -> String {
   format!(
-    "server:\n  host: 127.0.0.1\n  port: {port}\n  session_memory_max_mb: 0\n  session_swap_max_mb: 0\n  session_tasks_max: 0\n  min_free_disk_gib: 0\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n"
+    "server:\n  host: 127.0.0.1\n  port: {port}\n  session_memory_max_mb: 0\n  session_swap_max_mb: 0\n  session_tasks_max: 0\n  min_free_disk_gib: 0\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n"
   )
 }
 

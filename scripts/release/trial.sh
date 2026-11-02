@@ -394,6 +394,8 @@ server:
   min_free_disk_gib: 0
   enable_session_cpu_weight: $CPU_WEIGHT_SWITCH
   enable_session_io_weight: $IO_WEIGHT_SWITCH
+  # The synthetic trial home names no build host, so the guard stays off.
+  enable_local_work_guard: false
 paths:
   workspace_dirs:
     - $WORKSPACE

@@ -1,22 +1,27 @@
 //! The backend router and its CLI wrapper.
 //!
-//! `charliebot router` answers one backend-choice question per process: the caller writes one JSON
-//! object on stdin and reads one back on stdout.
+//! `charliebot router` answers one routing question per process: the caller writes one JSON object on stdin and reads
+//! one back on stdout.
 //!
-//!   {"role": "implement", "text": "<the work>", "candidates": [{"id": "claude-opus", "cooling_until": null}]}
-//!   {"backends": ["claude-opus"], "reason": "design p=0.86"}
+//!   {"role": "implement", "text": "<the work>", "candidates": [{"id": "claude-opus", "cooling_until": null}],
+//!    "session_backend": "claude-opus"}
+//!   {"routed": true, "backends": ["claude-opus"], "reason": "context p=0.81"}
 //!
-//! Design work gets the `strong` ids that are also candidates, in `strong` order; routine work gets
-//! an empty list, which tells the caller to keep using its pool. `<charliebot home>/router.yaml` is
-//! read on every call, so an edit takes effect at the next choice; the Jev key comes from the
-//! `credentials.yaml` section that `jev.credential` names. The caller bounds one routing call at
-//! [`timeouts::ROUTER_TIMEOUT_SECONDS`], which is why one attempt is bounded at 5 s and the single
-//! retry after an HTTP 429 waits 10 s: two attempts plus the wait fit inside that budget.
+//! `<charliebot home>/router.yaml` (or the file `--config` names) lists the classes of work and the roles that route.
+//! A role lists its classes; when it lists more than one, Jev chooses one of them, and the chosen class names the
+//! backends the work runs on: `pool`, `session` (the delegating session's backend) or an ordered list of backend ids.
+//! A role the file does not list is not routed, and its caller keeps its own default. The Jev key comes from the
+//! `credentials.yaml` section that `jev.credential` names, even when `--config` names the file. The rules file is read
+//! on every call, so an edit takes effect at the next choice.
 //!
-//! The answer is the only thing printed on stdout. Every failure — a broken `router.yaml`, a missing
-//! Jev key, malformed stdin, a Jev error, a second HTTP 429 — writes `router: <message>` on stderr
-//! and exits 1; the command never prints a fallback answer.
+//! The caller bounds one routing call at [`timeouts::ROUTER_TIMEOUT_SECONDS`], which is why one attempt is bounded at 5 s
+//! and the single retry after an HTTP 429 waits 10 s: two attempts plus the wait fit inside that budget.
+//!
+//! The answer is the only thing printed on stdout. Every failure — a broken rules file, a missing Jev key, malformed
+//! stdin, a Jev error, a second HTTP 429 — writes `router: <message>` on stderr and exits 1; the command never prints a
+//! fallback answer.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,18 +34,31 @@ use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::text_repr;
 use charliebot_core::timeouts;
-use clap::{CommandFactory, Parser};
-use serde_json::{Value, json};
+use clap::{CommandFactory, FromArgMatches, Parser};
+use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as YamlValue};
 
 const ROUTER_FILENAME: &str = "router.yaml";
 
-/// A thread's text keeps only this many trailing characters: a thread grows without bound, Jev's input cap does not.
-const THREAD_TEXT_LIMIT: usize = 20_000;
+/// Jev reads at most this many characters of one request: a delegation's first characters and a thread's last ones. A
+/// thread grows without bound, and Jev's input cap does not.
+const TEXT_LIMIT: usize = 20_000;
 
-const ROUTINE: &str = "routine";
-const DESIGN: &str = "design";
-const DESIGN_THRESHOLD: f64 = 0.5;
+/// The role whose text keeps its last characters. Every other role is a delegation, labelled with its task type.
+const THREAD_ROLE: &str = "thread";
+
+/// Keys of the rules-file form that this router no longer reads. A file that still has one is refused.
+const OLD_FORM_FIELDS: &[&str] = &["routine", "design", "strong"];
+const TOP_LEVEL_FIELDS: &[&str] = &["jev", "instructions", "classes", "roles"];
+const JEV_FIELDS: &[&str] = &["url", "model", "credential"];
+const CLASS_FIELDS: &[&str] = &["when", "run_on"];
+
+/// The `run_on` keywords. Any other `run_on` value is a list of backend ids.
+const RUN_ON_POOL: &str = "pool";
+const RUN_ON_SESSION: &str = "session";
+
+/// The name of the one question each choice asks Jev.
+const CHOICE_QUESTION: &str = "kind";
 
 /// The two Jev bounds the caller's [`timeouts::ROUTER_TIMEOUT_SECONDS`] budget shapes: one attempt
 /// and the pause before the single 429 retry. Tests inject smaller values so no test sleeps the
@@ -52,20 +70,26 @@ pub(crate) struct Limits {
 }
 
 #[derive(Parser)]
-#[command(
-  name = "router",
-  about = "Choose backends for one CharlieBot task: ask Jev whether the work is routine or design work"
-)]
-struct RouterCli {}
+#[command(name = "router", about = "Choose backends for one CharlieBot task: ask Jev which class of work it is")]
+struct RouterCli {
+  #[arg(
+    long,
+    value_name = "PATH",
+    help = "Read the rules from PATH instead of <charliebot home>/router.yaml; the credentials still come from the home"
+  )]
+  config: Option<PathBuf>,
+}
 
 /// Parse the arguments and run one routing call. Parser errors print and exit on their own: help
 /// exits 0, a usage error exits 2.
 pub fn main(args: &[OsString]) {
   let command = with_infer_long_args(RouterCli::command());
   let argv = std::iter::once(OsString::from("charliebot router")).chain(args.iter().cloned());
-  if let Err(error) = command.try_get_matches_from(argv) {
-    error.exit();
-  }
+  let matches = match command.try_get_matches_from(argv) {
+    Ok(matches) => matches,
+    Err(error) => error.exit(),
+  };
+  let cli = RouterCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   let mut raw = String::new();
   if let Err(error) = std::io::stdin().read_to_string(&mut raw) {
     eprintln!("router: {error}");
@@ -75,7 +99,7 @@ pub fn main(args: &[OsString]) {
     request_timeout: Duration::from_secs(timeouts::ROUTER_JEV_REQUEST_TIMEOUT),
     rate_limit_wait: Duration::from_secs(timeouts::ROUTER_JEV_RATE_LIMIT_WAIT),
   };
-  match route(&raw, &limits, &mut |pause| std::thread::sleep(pause)) {
+  match route(&raw, cli.config.as_deref(), &limits, &mut |pause| std::thread::sleep(pause)) {
     Ok(answer) => print!("{}", json_out::render(&answer, None)),
     Err(message) => {
       eprintln!("router: {message}");
@@ -84,40 +108,83 @@ pub fn main(args: &[OsString]) {
   }
 }
 
-/// Config first, then the stdin request, so a broken `router.yaml` wins over a broken request.
-fn route(raw: &str, limits: &Limits, sleep: &mut dyn FnMut(Duration)) -> Result<Value, String> {
+/// Config first, then the stdin request, so a broken rules file wins over a broken request.
+fn route(
+  raw: &str,
+  rules_path: Option<&Path>,
+  limits: &Limits,
+  sleep: &mut dyn FnMut(Duration),
+) -> Result<Value, String> {
   let home_dir = home::charliebot_home_dir().map_err(|error| error.to_string())?;
-  route_in_home(&home_dir, raw, limits, sleep)
+  let rules_path = rules_path.map_or_else(|| config_path(&home_dir), Path::to_path_buf);
+  route_in_home(&home_dir, &rules_path, raw, limits, sleep)
 }
 
-fn route_in_home(home: &Path, raw: &str, limits: &Limits, sleep: &mut dyn FnMut(Duration)) -> Result<Value, String> {
-  let config = load_config(&config_path(home))?;
+fn route_in_home(
+  home: &Path,
+  rules_path: &Path,
+  raw: &str,
+  limits: &Limits,
+  sleep: &mut dyn FnMut(Duration),
+) -> Result<Value, String> {
+  let backend_ids = live_backend_ids(home)?;
+  let rules = load_rules(rules_path, &backend_ids)?;
   let request = read_request(raw)?;
-  let probability = design_probability(home, &config, &request.text, limits, sleep)?;
-  let (backends, reason) = choose(&config, &request, probability);
-  Ok(json!({ "backends": backends, "reason": reason }))
+  let answer = answer(home, &rules, &request, limits, sleep)?;
+  Ok(json!({ "routed": answer.routed, "backends": answer.backends, "reason": answer.reason }))
 }
 
-/// `<charliebot home>/router.yaml`, the router's own configuration file.
+/// `<charliebot home>/router.yaml`, the rules file `--config` replaces.
 fn config_path(home: &Path) -> PathBuf {
   home.join(ROUTER_FILENAME)
 }
 
-/// One validated `router.yaml`: where Jev lives, the rule text, and the strong backends in order.
-struct RouterConfig {
+/// The `backends.options` ids of the home's `config.yaml`, loaded by the same loader the server uses.
+fn live_backend_ids(home: &Path) -> Result<Vec<String>, String> {
+  let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
+  let cfg = registry.load_config(home).map_err(|error| error.to_string())?;
+  Ok(cfg.backends.options.into_iter().map(|option| option.id).collect())
+}
+
+/// One validated rules file: where Jev lives, the question it answers, the classes, and the classes each role lists.
+struct RouterRules {
   url: String,
   model: String,
   credential: String,
   instructions: String,
-  routine: String,
-  design: String,
-  strong: Vec<String>,
+  classes: BTreeMap<String, ClassRule>,
+  roles: BTreeMap<String, Vec<String>>,
 }
 
-/// One decoded stdin object; a thread's text arrives already cut to [`THREAD_TEXT_LIMIT`].
+/// One class of work: the criterion Jev reads for it and the backends it runs on.
+struct ClassRule {
+  when: String,
+  run_on: RunOn,
+}
+
+enum RunOn {
+  Pool,
+  Session,
+  Backends(Vec<String>),
+}
+
+/// One decoded stdin object. `state` is the text Jev reads, already labelled and cut.
 struct RouteRequest {
-  text: String,
+  role: String,
+  state: String,
   candidate_ids: Vec<String>,
+  session_backend: Option<String>,
+}
+
+/// The router's answer for one request.
+struct Answer {
+  routed: bool,
+  backends: Vec<String>,
+  reason: String,
+}
+
+fn yaml_key(name: &str) -> YamlValue {
+  YamlValue::String(name.to_string())
 }
 
 fn field_error(path_text: &str, field: &str, expectation: &str) -> String {
@@ -125,60 +192,155 @@ fn field_error(path_text: &str, field: &str, expectation: &str) -> String {
 }
 
 fn required_text(mapping: &Mapping, field: &str, path_text: &str, prefix: &str) -> Result<String, String> {
-  match mapping.get(YamlValue::String(field.to_string())) {
+  match mapping.get(yaml_key(field)) {
     Some(YamlValue::String(text)) if !text.trim().is_empty() => Ok(text.trim().to_string()),
     _ => Err(field_error(path_text, &format!("{prefix}{field}"), "a non-empty string")),
   }
 }
 
-fn strong_backends(mapping: &Mapping, path_text: &str) -> Result<Vec<String>, String> {
-  let expectation = "a non-empty list of backend ids";
-  let Some(YamlValue::Sequence(items)) = mapping.get(YamlValue::String("strong".to_string())) else {
-    return Err(field_error(path_text, "strong", expectation));
-  };
-  if items.is_empty() {
-    return Err(field_error(path_text, "strong", expectation));
-  }
-  let mut strong = Vec::new();
-  for (index, backend) in items.iter().enumerate() {
-    match backend {
-      YamlValue::String(text) if !text.trim().is_empty() => strong.push(text.trim().to_string()),
-      _ => return Err(field_error(path_text, &format!("strong[{index}]"), "a backend id")),
+/// Refuse a key the mapping does not define, so a misspelled or retired field cannot pass silently. `prefix` is the
+/// dotted path of the mapping with its trailing dot, or empty at the top level.
+fn reject_unknown_fields(mapping: &Mapping, known: &[&str], path_text: &str, prefix: &str) -> Result<(), String> {
+  for key in mapping.keys() {
+    match key.as_str() {
+      Some(name) if known.contains(&name) => {}
+      Some(name) => {
+        return Err(format!("{path_text}: {prefix}{name} is not a field here; the fields are {}", known.join(", ")));
+      }
+      None => return Err(format!("{path_text}: {prefix}keys must be text")),
     }
   }
-  Ok(strong)
+  Ok(())
 }
 
-/// Read and validate one `router.yaml`; a missing file or a malformed field names the file and the field.
-fn load_config(path: &Path) -> Result<RouterConfig, String> {
+/// Read and validate one rules file. A missing file, an old-form file, an unknown field, an unknown class in a role and
+/// an unknown backend id each fail with a message that names the file and the field.
+fn load_rules(path: &Path, backend_ids: &[String]) -> Result<RouterRules, String> {
   let path_text = paths::display(path);
   let text = match std::fs::read_to_string(path) {
     Ok(text) => text,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-      return Err(format!("{path_text}: missing; the router reads its Jev address, rule text and strong list from it"));
+      return Err(format!("{path_text}: missing; the router reads its Jev address, classes and roles from it"));
     }
     Err(error) => return Err(format!("{path_text}: {error}")),
   };
   let document: YamlValue = serde_yaml::from_str(&text).map_err(|error| format!("{path_text}: {error}"))?;
-  let expectation = "a mapping with jev, instructions, routine, design and strong";
+  let expectation = "a mapping with jev, instructions, classes and roles";
   let Some(document) = document.as_mapping() else {
     return Err(field_error(&path_text, "the document", expectation));
   };
-  let Some(YamlValue::Mapping(jev)) = document.get(YamlValue::String("jev".to_string())) else {
+  if let Some(field) = OLD_FORM_FIELDS.iter().copied().find(|field| document.contains_key(yaml_key(field))) {
+    return Err(format!(
+      "{path_text}: {field} is the old router form; write classes and roles instead (see configs/router.example.yaml)"
+    ));
+  }
+  reject_unknown_fields(document, TOP_LEVEL_FIELDS, &path_text, "")?;
+  let Some(YamlValue::Mapping(jev)) = document.get(yaml_key("jev")) else {
     return Err(field_error(&path_text, "jev", "a mapping"));
   };
-  Ok(RouterConfig {
-    url: required_text(jev, "url", &path_text, "jev.")?,
-    model: required_text(jev, "model", &path_text, "jev.")?,
-    credential: required_text(jev, "credential", &path_text, "jev.")?,
-    instructions: required_text(document, "instructions", &path_text, "")?,
-    routine: required_text(document, "routine", &path_text, "")?,
-    design: required_text(document, "design", &path_text, "")?,
-    strong: strong_backends(document, &path_text)?,
-  })
+  reject_unknown_fields(jev, JEV_FIELDS, &path_text, "jev.")?;
+  let url = required_text(jev, "url", &path_text, "jev.")?;
+  let model = required_text(jev, "model", &path_text, "jev.")?;
+  let credential = required_text(jev, "credential", &path_text, "jev.")?;
+  let instructions = required_text(document, "instructions", &path_text, "")?;
+  let classes = classes_of(document, backend_ids, &path_text)?;
+  let roles = roles_of(document, &classes, &path_text)?;
+  Ok(RouterRules { url, model, credential, instructions, classes, roles })
 }
 
-/// Decode one stdin object; a thread's text keeps only its last [`THREAD_TEXT_LIMIT`] characters.
+fn classes_of(
+  document: &Mapping,
+  backend_ids: &[String],
+  path_text: &str,
+) -> Result<BTreeMap<String, ClassRule>, String> {
+  let expectation = "a non-empty mapping of class names to rules";
+  let Some(YamlValue::Mapping(classes)) = document.get(yaml_key("classes")) else {
+    return Err(field_error(path_text, "classes", expectation));
+  };
+  if classes.is_empty() {
+    return Err(field_error(path_text, "classes", expectation));
+  }
+  let mut rules = BTreeMap::new();
+  for (name, rule) in classes {
+    let Some(name) = name.as_str() else {
+      return Err(field_error(path_text, "classes", "class names that are text"));
+    };
+    let YamlValue::Mapping(rule) = rule else {
+      return Err(field_error(path_text, &format!("classes.{name}"), "a mapping with when and run_on"));
+    };
+    let prefix = format!("classes.{name}.");
+    reject_unknown_fields(rule, CLASS_FIELDS, path_text, &prefix)?;
+    rules.insert(
+      name.to_string(),
+      ClassRule {
+        when: required_text(rule, "when", path_text, &prefix)?,
+        run_on: run_on_of(rule, name, backend_ids, path_text)?,
+      },
+    );
+  }
+  Ok(rules)
+}
+
+fn run_on_of(rule: &Mapping, class: &str, backend_ids: &[String], path_text: &str) -> Result<RunOn, String> {
+  let field = format!("classes.{class}.run_on");
+  let expectation = "pool, session, or a non-empty list of backend ids";
+  match rule.get(yaml_key("run_on")) {
+    Some(YamlValue::String(target)) if target == RUN_ON_POOL => Ok(RunOn::Pool),
+    Some(YamlValue::String(target)) if target == RUN_ON_SESSION => Ok(RunOn::Session),
+    Some(YamlValue::Sequence(items)) if !items.is_empty() => {
+      let mut ids = Vec::new();
+      for (index, item) in items.iter().enumerate() {
+        let YamlValue::String(id) = item else {
+          return Err(field_error(path_text, &format!("{field}[{index}]"), "a backend id"));
+        };
+        if !backend_ids.contains(id) {
+          return Err(format!("{path_text}: {field}[{index}]: '{id}' is not in backends.options of config.yaml"));
+        }
+        ids.push(id.clone());
+      }
+      Ok(RunOn::Backends(ids))
+    }
+    _ => Err(field_error(path_text, &field, expectation)),
+  }
+}
+
+fn roles_of(
+  document: &Mapping,
+  classes: &BTreeMap<String, ClassRule>,
+  path_text: &str,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+  let Some(YamlValue::Mapping(roles)) = document.get(yaml_key("roles")) else {
+    return Err(field_error(path_text, "roles", "a mapping of role names to lists of class names"));
+  };
+  let mut table = BTreeMap::new();
+  for (role, names) in roles {
+    let Some(role) = role.as_str() else {
+      return Err(field_error(path_text, "roles", "role names that are text"));
+    };
+    let field = format!("roles.{role}");
+    let YamlValue::Sequence(names) = names else {
+      return Err(field_error(path_text, &field, "a non-empty list of class names"));
+    };
+    if names.is_empty() {
+      return Err(field_error(path_text, &field, "a non-empty list of class names"));
+    }
+    let mut listed = Vec::new();
+    for (index, name) in names.iter().enumerate() {
+      let Some(name) = name.as_str() else {
+        return Err(field_error(path_text, &format!("{field}[{index}]"), "a class name"));
+      };
+      if !classes.contains_key(name) {
+        return Err(format!("{path_text}: {field}[{index}]: '{name}' is not a class in classes"));
+      }
+      listed.push(name.to_string());
+    }
+    table.insert(role.to_string(), listed);
+  }
+  Ok(table)
+}
+
+/// Decode one stdin object. The text Jev reads is built and cut here, so the server and a calibration replay that send
+/// the same role and spec get the same Jev input.
 fn read_request(raw: &str) -> Result<RouteRequest, String> {
   let document: Value = serde_json::from_str(raw).map_err(|error| format!("stdin: not one JSON object: {error}"))?;
   let Some(document) = document.as_object() else {
@@ -189,7 +351,7 @@ fn read_request(raw: &str) -> Result<RouteRequest, String> {
     _ => return Err("stdin.role: must be a non-empty string".to_string()),
   };
   let text = match document.get("text") {
-    Some(Value::String(text)) => text.clone(),
+    Some(Value::String(text)) => text,
     _ => return Err("stdin.text: must be a string".to_string()),
   };
   let Some(Value::Array(candidates)) = document.get("candidates") else {
@@ -203,8 +365,26 @@ fn read_request(raw: &str) -> Result<RouteRequest, String> {
       _ => return Err(format!("stdin.candidates[{index}].id: must be a non-empty string")),
     }
   }
-  let text = if role == "thread" { last_chars(&text, THREAD_TEXT_LIMIT) } else { text };
-  Ok(RouteRequest { text, candidate_ids })
+  let session_backend = match document.get("session_backend") {
+    Some(Value::Null) => None,
+    Some(Value::String(backend)) if !backend.trim().is_empty() => Some(backend.clone()),
+    _ => return Err("stdin.session_backend: must be a backend id or null".to_string()),
+  };
+  Ok(RouteRequest { state: jev_state(&role, text), role, candidate_ids, session_backend })
+}
+
+/// The text Jev reads for one request: a delegation's task-type line and spec, cut to its first [`TEXT_LIMIT`]
+/// characters, or a thread's text cut to its last [`TEXT_LIMIT`] characters.
+fn jev_state(role: &str, text: &str) -> String {
+  if role == THREAD_ROLE {
+    return last_chars(text, TEXT_LIMIT);
+  }
+  first_chars(&format!("Task type: {role}\n\n{text}"), TEXT_LIMIT)
+}
+
+/// `text[:limit]` in characters, not bytes.
+fn first_chars(text: &str, limit: usize) -> String {
+  text.chars().take(limit).collect()
 }
 
 /// `text[-limit:]` in characters, not bytes.
@@ -216,16 +396,77 @@ fn last_chars(text: &str, limit: usize) -> String {
   text.chars().skip(count - limit).collect()
 }
 
-/// Jev's choice request: one question named `kind` with the routine and design criteria.
-fn jev_body(config: &RouterConfig, text: &str) -> Value {
+/// The answer for one request. A role the rules do not list answers not routed without a Jev call; a role with one class
+/// answers that class without one; otherwise Jev chooses among the role's classes.
+fn answer(
+  home: &Path,
+  rules: &RouterRules,
+  request: &RouteRequest,
+  limits: &Limits,
+  sleep: &mut dyn FnMut(Duration),
+) -> Result<Answer, String> {
+  let Some(classes) = rules.roles.get(&request.role) else {
+    return Ok(Answer { routed: false, backends: Vec::new(), reason: format!("{} not routed", request.role) });
+  };
+  let (chosen, probability) = if let [only] = classes.as_slice() {
+    (only.as_str(), 1.0)
+  } else {
+    choose_class(home, rules, classes, &request.state, limits, sleep)?
+  };
+  let backends = match &rules.classes[chosen].run_on {
+    RunOn::Pool => Vec::new(),
+    RunOn::Session => match &request.session_backend {
+      Some(session_backend) => vec![session_backend.clone()],
+      None => {
+        return Err(format!(
+          "classes.{chosen}.run_on: session runs on the delegating session's backend, but the request names no session_backend"
+        ));
+      }
+    },
+    RunOn::Backends(ids) => ids.iter().filter(|id| request.candidate_ids.contains(id)).cloned().collect(),
+  };
+  Ok(Answer { routed: true, backends, reason: format!("{chosen} p={}", text_repr::format_f(probability, 2)) })
+}
+
+/// Ask Jev once (one 429 retry) which of one role's classes fits `state`, and the probability Jev gave that class.
+/// Probabilities that tie at the top go to the class the role lists first; otherwise the choice is Jev's `choice`.
+fn choose_class<'a>(
+  home: &Path,
+  rules: &RouterRules,
+  classes: &'a [String],
+  state: &str,
+  limits: &Limits,
+  sleep: &mut dyn FnMut(Duration),
+) -> Result<(&'a str, f64), String> {
+  let loaded = credentials::load_credentials(home).map_err(|error| error.to_string())?;
+  let api_key = loaded.require(&rules.credential, "api_key").map_err(|error| error.to_string())?;
+  let payload = post(&rules.url, &jev_body(rules, classes, state), &api_key, limits, sleep)?;
+  let probabilities =
+    classes.iter().map(|class| class_probability(&rules.url, &payload, class)).collect::<Result<Vec<f64>, String>>()?;
+  let top = probabilities.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+  let tied: Vec<usize> = (0..classes.len()).filter(|&index| probabilities[index] == top).collect();
+  if let [first, _, ..] = tied.as_slice() {
+    return Ok((classes[*first].as_str(), top));
+  }
+  let choice = choice_of(&rules.url, &payload)?;
+  let Some(index) = classes.iter().position(|class| class == choice) else {
+    return Err(format!("{}: the answer's choice '{choice}' is not one of the role's classes", rules.url));
+  };
+  Ok((classes[index].as_str(), probabilities[index]))
+}
+
+/// Jev's choice request: one question with the role's classes as its criteria.
+fn jev_body(rules: &RouterRules, classes: &[String], state: &str) -> Value {
+  let criteria: Map<String, Value> =
+    classes.iter().map(|class| (class.clone(), Value::String(rules.classes[class].when.clone()))).collect();
   json!({
-    "model": config.model,
-    "state": text,
+    "model": rules.model,
+    "state": state,
     "questions": {
-      "kind": {
+      CHOICE_QUESTION: {
         "type": "choice",
-        "instructions": config.instructions,
-        "criteria": { ROUTINE: config.routine, DESIGN: config.design },
+        "instructions": rules.instructions,
+        "criteria": criteria,
       },
     },
   })
@@ -293,45 +534,32 @@ fn dumps_payload(payload: &Value) -> String {
   text_repr::json_dumps(payload, &text_repr::DEFAULT_JSON)
 }
 
-/// The `answers.kind.probabilities.design` number of one Jev response. A JSON boolean is not a number.
-fn answer_design_probability(url: &str, payload: &Value) -> Result<f64, String> {
-  let value = payload
+/// The `answers.kind.probabilities.<class>` number of one Jev response. A JSON boolean is not a number.
+fn class_probability(url: &str, payload: &Value, class: &str) -> Result<f64, String> {
+  payload
     .get("answers")
-    .and_then(|answer| answer.get("kind"))
+    .and_then(|answer| answer.get(CHOICE_QUESTION))
     .and_then(|question| question.get("probabilities"))
-    .and_then(|probabilities| probabilities.get(DESIGN));
-  match value {
-    Some(Value::Number(number)) => match number.as_f64() {
-      Some(probability) => Ok(probability),
-      None => {
-        Err(format!("{url}: the answer has no answers.kind.probabilities.design number: {}", dumps_payload(payload)))
-      }
-    },
-    _ => Err(format!("{url}: the answer has no answers.kind.probabilities.design number: {}", dumps_payload(payload))),
-  }
+    .and_then(|probabilities| probabilities.get(class))
+    .and_then(Value::as_f64)
+    .ok_or_else(|| {
+      format!(
+        "{url}: the answer has no answers.{CHOICE_QUESTION}.probabilities.{class} number: {}",
+        dumps_payload(payload)
+      )
+    })
 }
 
-/// Ask Jev once (one 429 retry) how likely *text* is design work.
-fn design_probability(
-  home: &Path,
-  config: &RouterConfig,
-  text: &str,
-  limits: &Limits,
-  sleep: &mut dyn FnMut(Duration),
-) -> Result<f64, String> {
-  let loaded = credentials::load_credentials(home).map_err(|error| error.to_string())?;
-  let api_key = loaded.require(&config.credential, "api_key").map_err(|error| error.to_string())?;
-  answer_design_probability(&config.url, &post(&config.url, &jev_body(config, text), &api_key, limits, sleep)?)
-}
-
-/// The backends this request gets, in order, and the one-line reason for them.
-fn choose(config: &RouterConfig, request: &RouteRequest, probability: f64) -> (Vec<String>, String) {
-  let reason = |kind: &str| format!("{kind} p={}", text_repr::format_f(probability, 2));
-  if probability <= DESIGN_THRESHOLD {
-    return (Vec::new(), reason(ROUTINE));
-  }
-  let backends = config.strong.iter().filter(|backend| request.candidate_ids.contains(*backend)).cloned().collect();
-  (backends, reason(DESIGN))
+/// The `answers.kind.choice` text of one Jev response.
+fn choice_of<'a>(url: &str, payload: &'a Value) -> Result<&'a str, String> {
+  payload
+    .get("answers")
+    .and_then(|answer| answer.get(CHOICE_QUESTION))
+    .and_then(|question| question.get("choice"))
+    .and_then(Value::as_str)
+    .ok_or_else(|| {
+      format!("{url}: the answer has no answers.{CHOICE_QUESTION}.choice text: {}", dumps_payload(payload))
+    })
 }
 
 #[cfg(test)]
@@ -344,12 +572,16 @@ mod tests {
 
   use super::*;
 
-  const INSTRUCTIONS: &str = "Which kind of work is this?";
+  const INSTRUCTIONS: &str = "Which class of work is this?";
   const ROUTINE_RULE: &str = "Routine work: fixes, tests and short actions.";
+  const CONTEXT_RULE: &str = "Context work: a first read, an understanding or a design.";
   const DESIGN_RULE: &str = "Design work: a new mechanism across modules.";
   const STRONG: [&str; 2] = ["strong-alpha", "strong-beta"];
   const POOL: &str = "pool-gamma";
+  const SESSION: &str = "strong-alpha";
   const API_KEY: &str = "test-key";
+  const DEFAULT_ROLES: &str =
+    "roles:\n  implement: [routine, context]\n  quick-edit: [routine, context]\n  script-run: [routine, context]\n";
 
   /// The bounds the tests inject: a real attempt bound that still outruns the stub, and a wait no
   /// test sleeps out for real.
@@ -505,10 +737,11 @@ mod tests {
     let _ = stream.flush();
   }
 
-  fn answer(design: f64) -> (u16, Value) {
+  /// A Jev answer naming `choice`, with the probability of each of the two default classes.
+  fn jev_reply(choice: &str, routine: f64, context: f64) -> (u16, Value) {
     (
       200,
-      json!({ "answers": { "kind": { "choice": "design", "probabilities": { "routine": 1.0 - design, "design": design } } } }),
+      json!({ "answers": { "kind": { "choice": choice, "probabilities": { "routine": routine, "context": context } } } }),
     )
   }
 
@@ -520,7 +753,14 @@ mod tests {
   impl TestHome {
     fn new() -> TestHome {
       let temp = tempfile::tempdir().unwrap();
-      TestHome { home: temp.path().to_path_buf(), _temp: temp }
+      let home = TestHome { home: temp.path().to_path_buf(), _temp: temp };
+      write_credentials(&home, "jev");
+      write_config(&home);
+      home
+    }
+
+    fn rules_path(&self) -> PathBuf {
+      self.home.join(ROUTER_FILENAME)
     }
   }
 
@@ -528,28 +768,51 @@ mod tests {
     std::fs::write(home.home.join("credentials.yaml"), format!("{section}:\n  api_key: {API_KEY}\n")).unwrap();
   }
 
-  fn write_router(home: &TestHome, url: &str, strong: &[&str]) {
-    let strong_lines: Vec<String> = strong.iter().map(|backend| format!("  - {backend}\n")).collect();
-    std::fs::write(
-      home.home.join(ROUTER_FILENAME),
-      format!(
-        "jev:\n  url: {url}\n  model: jev-test\n  credential: jev\ninstructions: \"{INSTRUCTIONS}\"\nroutine: \"{ROUTINE_RULE}\"\ndesign: \"{DESIGN_RULE}\"\nstrong:\n{}",
-        strong_lines.join("")
-      ),
-    )
-    .unwrap();
+  /// The live `config.yaml`: the backend ids the rules may name, all codex options.
+  fn write_config(home: &TestHome) {
+    let options: String = STRONG
+      .iter()
+      .copied()
+      .chain([POOL])
+      .map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n"))
+      .collect();
+    std::fs::write(home.home.join("config.yaml"), format!("backends:\n  options:\n{options}")).unwrap();
   }
 
-  fn request(role: &str, text: &str, candidates: &[&str]) -> String {
+  fn rules_text(url: &str, classes: &str, roles: &str) -> String {
+    format!(
+      "jev:\n  url: {url}\n  model: jev-test\n  credential: jev\ninstructions: \"{INSTRUCTIONS}\"\n{classes}{roles}"
+    )
+  }
+
+  /// The two-class rules of the example: routine runs on the pool, context on the session.
+  fn default_classes() -> String {
+    format!(
+      "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: session}}\n"
+    )
+  }
+
+  fn write_rules(home: &TestHome, url: &str, classes: &str, roles: &str) {
+    std::fs::write(home.rules_path(), rules_text(url, classes, roles)).unwrap();
+  }
+
+  fn request(role: &str, text: &str, candidates: &[&str], session_backend: Option<&str>) -> String {
     let entries: Vec<Value> =
       candidates.iter().map(|identifier| json!({ "id": identifier, "cooling_until": null })).collect();
-    serde_json::to_string(&json!({ "role": role, "text": text, "candidates": entries })).unwrap()
+    serde_json::to_string(&json!({
+      "role": role,
+      "text": text,
+      "candidates": entries,
+      "session_backend": session_backend,
+    }))
+    .unwrap()
   }
 
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
     jev.replies.lock().unwrap().extend(replies);
     let mut pauses = Vec::new();
-    let result = route_in_home(&home.home, payload, &test_limits(), &mut |pause| pauses.push(pause));
+    let result =
+      route_in_home(&home.home, &home.rules_path(), payload, &test_limits(), &mut |pause| pauses.push(pause));
     if result.is_ok() {
       assert_eq!(pauses, Vec::<Duration>::new(), "a success path sleeps no rate-limit wait");
     }
@@ -557,41 +820,274 @@ mod tests {
   }
 
   #[test]
-  fn design_work_returns_the_strong_backends_that_are_candidates_in_strong_order() {
+  fn context_work_answers_the_session_backend_at_the_probability_jev_gave_it() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Design a new caching layer.", &[STRONG[1], POOL, STRONG[0]]);
-      let answer = run(&home, &payload, &jev, vec![answer(0.86)]).unwrap();
+      let payload = request("implement", "Understand the caching layer.", &[STRONG[0], POOL], Some(SESSION));
+      let answer = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
 
-      assert_eq!(answer, json!({ "backends": ["strong-alpha", "strong-beta"], "reason": "design p=0.86" }));
+      assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.81" }));
       let requests = jev.requests();
       assert_eq!(requests.len(), 1);
       let body = &requests[0];
       assert_eq!(body["model"], "jev-test");
-      assert_eq!(body["state"], "Design a new caching layer.");
+      assert_eq!(body["state"], "Task type: implement\n\nUnderstand the caching layer.");
       assert_eq!(body["questions"]["kind"]["type"], "choice");
       assert_eq!(body["questions"]["kind"]["instructions"], INSTRUCTIONS);
-      assert_eq!(body["questions"]["kind"]["criteria"], json!({ "routine": ROUTINE_RULE, "design": DESIGN_RULE }));
+      assert_eq!(
+        body["questions"]["kind"]["criteria"],
+        json!({ "context": CONTEXT_RULE, "routine": ROUTINE_RULE }),
+        "the role's classes are the criteria"
+      );
       assert_eq!(jev.authorizations(), vec![format!("Bearer {API_KEY}")]);
     });
   }
 
   #[test]
-  fn routine_work_returns_no_backends() {
+  fn routine_work_answers_the_pool_as_an_empty_list() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &[STRONG[0], POOL]);
-      let answer = run(&home, &payload, &jev, vec![answer(0.12)]).unwrap();
+      let payload = request("implement", "Add a test for the parser.", &[STRONG[0], POOL], Some(SESSION));
+      let answer = run(&home, &payload, &jev, vec![jev_reply("routine", 0.88, 0.12)]).unwrap();
 
-      assert_eq!(answer, json!({ "backends": [], "reason": "routine p=0.12" }));
+      assert_eq!(answer, json!({ "routed": true, "backends": [], "reason": "routine p=0.88" }));
+    });
+  }
+
+  #[test]
+  fn a_list_target_answers_its_candidate_ids_in_the_order_the_class_lists_them() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      let classes = format!(
+        "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  design: {{when: \"{DESIGN_RULE}\", run_on: [{}, {}]}}\n",
+        STRONG[1], STRONG[0]
+      );
+      write_rules(&home, &jev.url, &classes, "roles:\n  implement: [routine, design]\n");
+
+      let payload = request("implement", "Design a new caching layer.", &[STRONG[0], POOL, STRONG[1]], None);
+      let answer = run(&home, &payload, &jev, vec![(
+        200,
+        json!({ "answers": { "kind": { "choice": "design", "probabilities": { "routine": 0.14, "design": 0.86 } } } }),
+      )])
+      .unwrap();
+
+      assert_eq!(answer, json!({ "routed": true, "backends": [STRONG[1], STRONG[0]], "reason": "design p=0.86" }));
+    });
+  }
+
+  #[test]
+  fn a_tie_for_the_top_probability_takes_the_class_the_role_lists_first() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), "roles:\n  implement: [context, routine]\n");
+
+      let payload = request("implement", "Read the caching layer.", &[STRONG[0]], Some(SESSION));
+      // Jev names routine, but context is listed first and ties at the top.
+      let answer = run(&home, &payload, &jev, vec![jev_reply("routine", 0.5, 0.5)]).unwrap();
+
+      assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.50" }));
+    });
+  }
+
+  #[test]
+  fn a_session_target_without_a_session_backend_exits_non_zero_naming_the_field() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = request("implement", "Understand the caching layer.", &[STRONG[0]], None);
+      let error = run(&home, &payload, &jev, vec![jev_reply("context", 0.2, 0.8)]).unwrap_err();
+
+      assert!(error.contains("classes.context.run_on"), "{error}");
+      assert!(error.contains("session_backend"), "{error}");
+    });
+  }
+
+  #[test]
+  fn a_one_class_role_answers_its_class_without_a_jev_call() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), "roles:\n  quick-edit: [context]\n  script-run: [routine]\n");
+
+      let session = request("quick-edit", "Read the page.", &[STRONG[0], POOL], Some(SESSION));
+      let session_answer = run(&home, &session, &jev, Vec::new()).unwrap();
+      let pool = request("script-run", "Run the script.", &[STRONG[0], POOL], Some(SESSION));
+      let pool_answer = run(&home, &pool, &jev, Vec::new()).unwrap();
+
+      assert_eq!(session_answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=1.00" }));
+      assert_eq!(pool_answer, json!({ "routed": true, "backends": [], "reason": "routine p=1.00" }));
+      assert!(jev.requests().is_empty(), "a one-class role makes no call");
+    });
+  }
+
+  #[test]
+  fn a_role_absent_from_the_rules_answers_not_routed_without_a_jev_call() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = request("verify", "Confirm the change.", &[STRONG[0]], Some(SESSION));
+      let answer = run(&home, &payload, &jev, Vec::new()).unwrap();
+
+      assert_eq!(answer, json!({ "routed": false, "backends": [], "reason": "verify not routed" }));
+      assert!(jev.requests().is_empty(), "an absent role makes no call");
+    });
+  }
+
+  #[test]
+  fn an_old_form_rules_file_exits_non_zero_naming_the_field() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      std::fs::write(
+        home.rules_path(),
+        format!(
+          "jev:\n  url: {}\n  model: jev-test\n  credential: jev\ninstructions: \"{INSTRUCTIONS}\"\n\
+           routine: \"{ROUTINE_RULE}\"\ndesign: \"{DESIGN_RULE}\"\nstrong:\n  - {}\n",
+          jev.url, STRONG[0]
+        ),
+      )
+      .unwrap();
+
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
+
+      assert!(error.contains(&paths::display(&home.rules_path())), "{error}");
+      assert!(error.contains("routine"), "{error}");
+    });
+  }
+
+  #[test]
+  fn an_unknown_class_in_a_role_exits_non_zero_naming_the_role_and_class() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), "roles:\n  implement: [routine, ghost]\n");
+
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
+
+      assert!(error.contains("roles.implement[1]"), "{error}");
+      assert!(error.contains("'ghost'"), "{error}");
+    });
+  }
+
+  #[test]
+  fn an_unknown_backend_id_in_run_on_exits_non_zero_naming_the_field() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      let classes = format!(
+        "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: [ghost-backend]}}\n"
+      );
+      write_rules(&home, &jev.url, &classes, DEFAULT_ROLES);
+
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
+
+      assert!(error.contains("classes.context.run_on[0]"), "{error}");
+      assert!(error.contains("ghost-backend"), "{error}");
+    });
+  }
+
+  #[test]
+  fn the_config_flag_reads_the_given_rules_file_and_the_home_credentials() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      let elsewhere = tempfile::tempdir().unwrap();
+      let rules = elsewhere.path().join("calibration.yaml");
+      std::fs::write(&rules, rules_text(&jev.url, &default_classes(), DEFAULT_ROLES)).unwrap();
+      assert!(!home.rules_path().exists(), "the home holds no router.yaml");
+
+      let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
+      jev.replies.lock().unwrap().push_back(jev_reply("context", 0.19, 0.81));
+      let answer = route_in_home(&home.home, &rules, &payload, &test_limits(), &mut |_| {});
+
+      assert_eq!(answer.unwrap(), json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.81" }));
+      assert_eq!(jev.authorizations(), vec![format!("Bearer {API_KEY}")]);
+    });
+  }
+
+  #[test]
+  fn delegation_text_is_cut_to_its_first_characters_and_thread_text_to_its_last() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(
+        &home,
+        &jev.url,
+        &default_classes(),
+        "roles:\n  implement: [routine, context]\n  thread: [routine, context]\n",
+      );
+      let long_text = format!("{}THREAD-END", "x".repeat(25_000));
+      let label = "Task type: implement\n\n";
+
+      let delegation = request("implement", &long_text, &STRONG, None);
+      run(&home, &delegation, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
+      let thread = request("thread", &long_text, &STRONG, None);
+      run(&home, &thread, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
+
+      let requests = jev.requests();
+      let delegation_state = requests[0]["state"].as_str().unwrap();
+      assert_eq!(delegation_state.chars().count(), TEXT_LIMIT);
+      assert_eq!(delegation_state, format!("{label}{}", "x".repeat(TEXT_LIMIT - label.len())));
+      let thread_state = requests[1]["state"].as_str().unwrap();
+      let expected_tail: String = long_text.chars().skip(25_010 - TEXT_LIMIT).collect();
+      assert_eq!(thread_state, expected_tail);
+      assert_eq!(thread_state.chars().count(), TEXT_LIMIT);
+    });
+  }
+
+  #[test]
+  fn the_server_and_the_replay_send_the_same_jev_input_for_one_spec() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+      let spec = "Goal: explain the routing contract.\n\n## Requester Words\n- \"keep it simple\"";
+
+      // The server sends the delegation's description with its role and the manager's backend.
+      let server_request = request("implement", spec, &STRONG, Some(SESSION));
+      run(&home, &server_request, &jev, vec![jev_reply("context", 0.3, 0.7)]).unwrap();
+
+      // A calibration replay reads the same spec and role from another rules file under --config.
+      let replay_dir = tempfile::tempdir().unwrap();
+      let replay_rules = replay_dir.path().join("router.yaml");
+      std::fs::write(&replay_rules, rules_text(&jev.url, &default_classes(), DEFAULT_ROLES)).unwrap();
+      jev.replies.lock().unwrap().push_back(jev_reply("context", 0.3, 0.7));
+      let replay = route_in_home(&home.home, &replay_rules, &server_request, &test_limits(), &mut |_| {}).unwrap();
+
+      let requests = jev.requests();
+      assert_eq!(requests.len(), 2);
+      assert_eq!(requests[0], requests[1], "one spec gives one Jev input");
+      assert_eq!(requests[0]["state"], format!("Task type: implement\n\n{spec}"));
+      assert_eq!(replay, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
+    });
+  }
+
+  #[test]
+  fn a_request_without_session_backend_exits_non_zero_naming_the_field() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = json!({ "role": "implement", "text": "Add a test.", "candidates": [] }).to_string();
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
+
+      assert!(error.contains("stdin.session_backend"), "{error}");
     });
   }
 
@@ -599,18 +1095,23 @@ mod tests {
   fn one_rate_limit_waits_then_returns_the_answer() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
       let limits = test_limits();
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
-      jev.replies.lock().unwrap().extend(vec![(429, json!({ "error": "rate limited" })), answer(0.86)]);
+      let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
+      jev
+        .replies
+        .lock()
+        .unwrap()
+        .extend(vec![(429, json!({ "error": "rate limited" })), jev_reply("context", 0.19, 0.81)]);
       let pauses = Arc::new(Mutex::new(Vec::new()));
       let recorded = pauses.clone();
-      let result = route_in_home(&home.home, &payload, &limits, &mut |pause| recorded.lock().unwrap().push(pause));
+      let result = route_in_home(&home.home, &home.rules_path(), &payload, &limits, &mut |pause| {
+        recorded.lock().unwrap().push(pause)
+      });
 
-      assert_eq!(result.unwrap(), json!({ "backends": ["strong-alpha", "strong-beta"], "reason": "design p=0.86" }));
+      assert_eq!(result.unwrap(), json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.81" }));
       assert_eq!(jev.requests().len(), 2);
       assert_eq!(*pauses.lock().unwrap(), vec![limits.rate_limit_wait]);
     });
@@ -620,11 +1121,10 @@ mod tests {
   fn two_rate_limits_exit_non_zero_with_the_status_and_body() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
       let error = run(
         &home,
         &payload,
@@ -643,11 +1143,10 @@ mod tests {
   fn another_http_error_exits_non_zero_without_printing_an_answer() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
       let error = run(&home, &payload, &jev, vec![(500, json!({ "error": "gateway down" }))]).unwrap_err();
 
       assert!(error.contains("500"), "{error}");
@@ -656,70 +1155,50 @@ mod tests {
   }
 
   #[test]
-  fn an_answer_without_a_design_probability_exits_non_zero() {
+  fn an_answer_without_a_class_probability_exits_non_zero() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
+      let payload = request("implement", "Add a test for the parser.", &STRONG, Some(SESSION));
       let error = run(&home, &payload, &jev, vec![(200, json!({ "answers": { "other": {} } }))]).unwrap_err();
 
-      assert!(error.contains("the answer has no answers.kind.probabilities.design number"), "{error}");
+      assert!(error.contains("the answer has no answers.kind.probabilities.routine number"), "{error}");
     });
   }
 
   #[test]
-  fn a_thread_text_is_cut_to_its_last_twenty_thousand_characters() {
+  fn an_edit_to_the_rules_file_takes_effect_on_the_next_call() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
-      let long_text = format!("{}THREAD-END", "x".repeat(25_000));
+      let classes = |target: &str| {
+        format!(
+          "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: [{target}]}}\n"
+        )
+      };
+      write_rules(&home, &jev.url, &classes(STRONG[0]), DEFAULT_ROLES);
 
-      let thread_payload = request("thread", &long_text, &STRONG);
-      run(&home, &thread_payload, &jev, vec![answer(0.12)]).unwrap();
-      let implement_payload = request("implement", &long_text, &STRONG);
-      run(&home, &implement_payload, &jev, vec![answer(0.12)]).unwrap();
+      let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
+      let first = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
+      assert_eq!(first["backends"], json!([STRONG[0]]));
 
-      let requests = jev.requests();
-      let expected_tail: String = long_text.chars().skip(25_010 - THREAD_TEXT_LIMIT).collect();
-      assert_eq!(requests[0]["state"], expected_tail);
-      assert_eq!(requests[0]["state"].as_str().unwrap().chars().count(), THREAD_TEXT_LIMIT);
-      assert_eq!(requests[1]["state"], long_text);
+      write_rules(&home, &jev.url, &classes(STRONG[1]), DEFAULT_ROLES);
+      let second = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
+      assert_eq!(second["backends"], json!([STRONG[1]]));
     });
   }
 
   #[test]
-  fn an_edit_to_router_yaml_takes_effect_on_the_next_call() {
+  fn a_malformed_rules_file_exits_non_zero_naming_the_file_and_field() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
-      let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &[STRONG[0]]);
+      let path = home.rules_path();
+      std::fs::write(&path, "jev:\n  model: jev-test\n  credential: jev\nclasses: {}\nroles: {}\n").unwrap();
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
-      let first = run(&home, &payload, &jev, vec![answer(0.86)]).unwrap();
-      assert_eq!(first["backends"], json!(["strong-alpha"]));
-
-      write_router(&home, &jev.url, &[STRONG[1]]);
-      let second = run(&home, &payload, &jev, vec![answer(0.86)]).unwrap();
-      assert_eq!(second["backends"], json!(["strong-beta"]));
-    });
-  }
-
-  #[test]
-  fn a_malformed_router_yaml_exits_non_zero_naming_the_file_and_field() {
-    with_timeout(|| {
-      let home = TestHome::new();
-      write_credentials(&home, "jev");
-      let path = home.home.join(ROUTER_FILENAME);
-      std::fs::write(&path, "jev:\n  model: jev-test\n  credential: jev\nstrong:\n  - strong-alpha\n").unwrap();
-
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
-      let error = route_in_home(&home.home, &payload, &test_limits(), &mut |_| {}).unwrap_err();
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      let error = route_in_home(&home.home, &path, &payload, &test_limits(), &mut |_| {}).unwrap_err();
 
       assert!(error.contains(&paths::display(&path)), "{error}");
       assert!(error.contains("jev.url"), "{error}");
@@ -727,28 +1206,27 @@ mod tests {
   }
 
   #[test]
-  fn router_yaml_that_is_not_yaml_exits_non_zero_naming_the_file() {
+  fn rules_that_are_not_yaml_exit_non_zero_naming_the_file() {
     with_timeout(|| {
       let home = TestHome::new();
-      write_credentials(&home, "jev");
-      let path = home.home.join(ROUTER_FILENAME);
+      let path = home.rules_path();
       std::fs::write(&path, "jev: [unclosed\n").unwrap();
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
-      let error = route_in_home(&home.home, &payload, &test_limits(), &mut |_| {}).unwrap_err();
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      let error = route_in_home(&home.home, &path, &payload, &test_limits(), &mut |_| {}).unwrap_err();
 
       assert!(error.contains(&paths::display(&path)), "{error}");
     });
   }
 
   #[test]
-  fn a_missing_router_yaml_exits_non_zero_naming_the_file() {
+  fn a_missing_rules_file_exits_non_zero_naming_the_file() {
     with_timeout(|| {
       let home = TestHome::new();
-      let path = home.home.join(ROUTER_FILENAME);
+      let path = home.rules_path();
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
-      let error = route_in_home(&home.home, &payload, &test_limits(), &mut |_| {}).unwrap_err();
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      let error = route_in_home(&home.home, &path, &payload, &test_limits(), &mut |_| {}).unwrap_err();
 
       assert!(error.contains(&paths::display(&path)), "{error}");
       assert!(error.contains("missing"), "{error}");
@@ -761,15 +1239,25 @@ mod tests {
       let home = TestHome::new();
       write_credentials(&home, "another-section");
       let jev = FakeJev::start(Vec::new());
-      write_router(&home, &jev.url, &STRONG);
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG);
-      let error = route_in_home(&home.home, &payload, &test_limits(), &mut |_| {}).unwrap_err();
+      let payload = request("implement", "Add a test for the parser.", &STRONG, Some(SESSION));
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
       assert!(error.contains("credentials.yaml"), "{error}");
       assert!(error.contains("jev.api_key"), "{error}");
       assert!(jev.requests().is_empty(), "no request reaches Jev without the key");
     });
+  }
+
+  #[test]
+  fn the_example_rules_file_loads_with_the_loader() {
+    let example = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/router.example.yaml"));
+    let rules = load_rules(example, &[]).unwrap();
+
+    assert_eq!(rules.roles["implement"], ["routine", "context"]);
+    assert_eq!(rules.roles.len(), 3);
+    assert!(matches!(rules.classes["context"].run_on, RunOn::Session));
   }
 
   #[test]

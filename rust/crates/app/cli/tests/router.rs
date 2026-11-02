@@ -2,8 +2,8 @@
 //! and a fake Jev on a free loopback port, and its stdout, stderr and exit code are the contract.
 //!
 //! The per-failure details are unit-tested in `src/commands/router.rs`; this target proves the
-//! dispatcher wiring — one success prints only the one-line JSON answer, and one failure prints
-//! `router: <message>` on stderr, nothing on stdout, and exits 1.
+//! dispatcher wiring — one success prints only the one-line JSON answer, `--config` reads the file it
+//! names, and one failure prints `router: <message>` on stderr, nothing on stdout, and exits 1.
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 const API_KEY: &str = "test-key";
 const STRONG: [&str; 2] = ["strong-alpha", "strong-beta"];
+const POOL: &str = "pool-gamma";
 
 /// The whole test runs behind this ceiling so a hang fails the test instead of the suite.
 fn with_timeout<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
@@ -139,26 +140,35 @@ fn serve(
   let _ = stream.flush();
 }
 
-fn write_router(home: &Path, url: &str) {
-  let strong0 = STRONG[0];
-  let strong1 = STRONG[1];
-  std::fs::write(
-    home.join("router.yaml"),
-    format!(
-      "jev:\n  url: {url}\n  model: jev-test\n  credential: jev\n\
-       instructions: \"Which kind of work is this?\"\n\
-       routine: \"Routine work: fixes, tests and short actions.\"\n\
-       design: \"Design work: a new mechanism across modules.\"\n\
-       strong:\n  - {strong0}\n  - {strong1}\n"
-    ),
+/// The rules file of the example's shape: routine runs on the pool, context on the session.
+fn rules_text(url: &str) -> String {
+  format!(
+    "jev:\n  url: {url}\n  model: jev-test\n  credential: jev\n\
+     instructions: \"Which class of work is this?\"\n\
+     classes:\n\
+     \x20 routine: {{when: \"Routine work: fixes, tests and short actions.\", run_on: pool}}\n\
+     \x20 context: {{when: \"Context work: a first read or a design.\", run_on: session}}\n\
+     roles:\n\
+     \x20 implement: [routine, context]\n"
   )
-  .unwrap();
 }
 
-/// Run the built binary once with `router` as argv; returns `(exit code, stdout, stderr)`.
-fn run_binary(home: &Path, stdin_text: &str) -> (i32, String, String) {
+/// The live `config.yaml`: the backend ids the rules may name.
+fn write_config(home: &Path) {
+  let options: String = STRONG
+    .iter()
+    .copied()
+    .chain([POOL])
+    .map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n"))
+    .collect();
+  std::fs::write(home.join("config.yaml"), format!("backends:\n  options:\n{options}")).unwrap();
+}
+
+/// Run the built binary once with `router` and `arguments` as argv; returns `(exit code, stdout, stderr)`.
+fn run_binary(home: &Path, arguments: &[&str], stdin_text: &str) -> (i32, String, String) {
   let mut child = Command::new(env!("CARGO_BIN_EXE_charliebot"))
     .arg("router")
+    .args(arguments)
     .env("CHARLIEBOT_HOME", home)
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
@@ -180,35 +190,46 @@ fn router_end_to_end_prints_one_answer_and_reports_failures_through_the_built_bi
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     std::fs::write(home.join("credentials.yaml"), format!("jev:\n  api_key: {API_KEY}\n")).unwrap();
-    let jev = FakeJev::start(vec![
-      (
-        200,
-        json!({ "answers": { "kind": { "choice": "design", "probabilities": { "routine": 0.14, "design": 0.86 } } } }),
-      ),
-      (500, json!({ "error": "gateway down" })),
-    ]);
-    write_router(home, &jev.url);
+    write_config(home);
+    let answer = (
+      200,
+      json!({ "answers": { "kind": { "choice": "context", "probabilities": { "routine": 0.14, "context": 0.86 } } } }),
+    );
+    let jev = FakeJev::start(vec![answer.clone(), answer]);
+    std::fs::write(home.join("router.yaml"), rules_text(&jev.url)).unwrap();
     let stdin = json!({
       "role": "implement",
-      "text": "Design a new caching layer.",
-      "candidates": [{ "id": STRONG[0], "cooling_until": null }, { "id": "pool-gamma", "cooling_until": null }],
+      "text": "Understand the caching layer.",
+      "candidates": [{ "id": STRONG[0], "cooling_until": null }, { "id": POOL, "cooling_until": null }],
+      "session_backend": STRONG[0],
     })
     .to_string();
 
-    let (code, stdout, stderr) = run_binary(home, &stdin);
+    let (code, stdout, stderr) = run_binary(home, &[], &stdin);
 
     assert_eq!(code, 0, "stderr: {stderr}");
-    assert_eq!(stdout, format!("{{\"backends\": [\"{}\"], \"reason\": \"design p=0.86\"}}\n", STRONG[0]));
+    assert_eq!(
+      stdout,
+      format!("{{\"routed\": true, \"backends\": [\"{}\"], \"reason\": \"context p=0.86\"}}\n", STRONG[0])
+    );
     assert_eq!(stderr, "");
     let requests = jev.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["model"], "jev-test");
-    assert_eq!(requests[0]["state"], "Design a new caching layer.");
+    assert_eq!(requests[0]["state"], "Task type: implement\n\nUnderstand the caching layer.");
     assert_eq!(jev.authorizations.lock().unwrap().as_slice(), &[format!("Bearer {API_KEY}")]);
 
-    // One failure through the same binary: stdout stays empty and stderr carries the message.
+    // `--config` reads the file it names, even while the home's router.yaml is broken.
     std::fs::write(home.join("router.yaml"), "jev: [unclosed\n").unwrap();
-    let (code, stdout, stderr) = run_binary(home, &stdin);
+    let calibration = temp.path().join("calibration.yaml");
+    std::fs::write(&calibration, rules_text(&jev.url)).unwrap();
+    let calibration_text = calibration.display().to_string();
+    let (code, stdout, stderr) = run_binary(home, &["--config", &calibration_text], &stdin);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("\"routed\": true"), "{stdout}");
+
+    // One failure through the same binary: stdout stays empty and stderr carries the message.
+    let (code, stdout, stderr) = run_binary(home, &[], &stdin);
 
     assert_eq!(code, 1);
     assert_eq!(stdout, "");

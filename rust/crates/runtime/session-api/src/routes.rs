@@ -38,6 +38,10 @@ fn gzip_body_memo(limit: usize) -> GzipBodyCache {
 static STATUS_BODY_MEMO: OnceLock<StatusBodyCache> = OnceLock::new();
 static STATUS_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(16));
 static SEARCH_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(2));
+static TREE_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(4));
+
+/// The body length below which the transport middleware leaves a response uncompressed (`GZipMiddleware`).
+const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct StatusKey {
@@ -369,9 +373,48 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
   })
   .await;
   match page {
-    Ok(body) => responses::fast_json_rendered(StatusCode::OK, body),
+    Ok(body) => tree_page_response(&request, body),
     Err(error) => task_http_error(error),
   }
+}
+
+/// Send a task-tree page, reusing the compressed body a repeat request already deflated.
+///
+/// A page holds its bytes across requests while the tree and its rows hold, and the transport middleware deflates
+/// every body afresh: on the 7,160-session mock home that deflate costs about two thirds of this route's latency.
+/// The memo answers a repeat with the bytes it already compressed.
+///
+/// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
+/// headers the middleware would write: `Vary: Accept-Encoding` with the compressed body, and the plain response for
+/// a body below the middleware's minimum size.
+fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
+  let wants_gzip = request
+    .headers()
+    .get(header::ACCEPT_ENCODING)
+    .and_then(|value| value.to_str().ok())
+    .is_some_and(|value| value.contains("gzip"));
+  if !wants_gzip || body.len() < TRANSPORT_GZIP_MINIMUM_SIZE {
+    return responses::fast_json_rendered(StatusCode::OK, body);
+  }
+  let compressed = {
+    let mut cache = TREE_GZIP_MEMO.lock().expect("tree gzip memo mutex is not poisoned");
+    match cache.get(&body).cloned() {
+      Some(compressed) => compressed,
+      None => {
+        let compressed = charliebot_compat::compression::gzip_level_one(&body);
+        cache.put(body, compressed.clone());
+        compressed
+      }
+    }
+  };
+  Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_LENGTH, compressed.len())
+    .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
+    .header(header::VARY, HeaderValue::from_static("Accept-Encoding"))
+    .body(Body::from(compressed))
+    .expect("a compressed JSON response builds")
 }
 
 async fn session_search(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -632,6 +675,60 @@ mod tests {
       to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
     let busy: Value = serde_json::from_slice(&busy).unwrap();
     assert_ne!(busy[0]["thinking_since"], Value::Null, "a moved derived-state generation renders the row again");
+  }
+
+  #[tokio::test]
+  async fn a_tree_page_answers_gzip_with_the_bytes_the_transport_would_send() {
+    let (_home, features) = crate::test_support::feature_context();
+    for index in 0..20 {
+      crate::test_support::create_node(&features.store, &format!("tree-gzip-{index}"), None, TaskProfile::Manager)
+        .await;
+    }
+    let page = |accept_encoding: &str| {
+      Request::builder()
+        .uri(api::SESSION_TREE_PATH)
+        .header(header::ACCEPT_ENCODING, accept_encoding)
+        .body(Body::empty())
+        .unwrap()
+    };
+    let answer = |accept_encoding: &'static str| {
+      let features = Arc::clone(&features);
+      async move { session_tree(State(features), page(accept_encoding)).await }
+    };
+
+    let identity = answer("identity").await;
+    assert_eq!(identity.headers().get(header::CONTENT_ENCODING), None);
+    let identity = to_bytes(identity.into_body(), usize::MAX).await.unwrap();
+    assert!(identity.len() >= TRANSPORT_GZIP_MINIMUM_SIZE, "the page is large enough for the transport to deflate");
+
+    let gzip = answer("gzip").await;
+    assert_eq!(gzip.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+    assert_eq!(gzip.headers().get(header::VARY).unwrap(), "Accept-Encoding");
+    let content_length: usize = gzip.headers().get(header::CONTENT_LENGTH).unwrap().to_str().unwrap().parse().unwrap();
+    let compressed = to_bytes(gzip.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(compressed.len(), content_length);
+    assert_eq!(compressed.as_ref(), charliebot_compat::compression::gzip_level_one(&identity));
+
+    let repeat = answer("gzip").await;
+    let repeat = to_bytes(repeat.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(repeat, compressed, "a repeat page answers with the compressed body the memo already holds");
+  }
+
+  #[tokio::test]
+  async fn a_tree_page_below_the_transport_minimum_answers_uncompressed() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "tree-small", None, TaskProfile::Manager).await;
+    let request = Request::builder()
+      .uri(api::SESSION_TREE_PATH)
+      .header(header::ACCEPT_ENCODING, "gzip")
+      .body(Body::empty())
+      .unwrap();
+
+    let response = session_tree(State(features), request).await;
+
+    assert_eq!(response.headers().get(header::CONTENT_ENCODING), None, "the transport leaves a short body alone");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.len() < TRANSPORT_GZIP_MINIMUM_SIZE);
   }
 
   #[tokio::test]

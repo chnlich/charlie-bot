@@ -1,24 +1,18 @@
 //! A watch on the served template and static trees, for a render that must see an edit on disk.
 //!
-//! A render must notice an edit at its own request: the page a user opens carries the template and asset bytes that
-//! exist when it is built. Reading every served file's `(mtime, size)` per render proves that and costs two statx
-//! calls per served file. An inotify watch answers the same question with one read. The kernel queues an event for
-//! every write, create, remove, rename or permission change below a watched directory, and a read returns the events
-//! queued before it. A render that reads no event serves the tree state it read before; a render that reads an event
-//! reads the trees again.
+//! A render must notice an edit at its own request, because the page it builds carries the template and asset bytes
+//! that exist then. Reading every served file's `(mtime, size)` proves that at two statx calls per file. An inotify
+//! watch answers the same question with one read. The kernel queues an event for every write, create, remove, rename
+//! or permission change below a watched directory, and a read returns the events queued before it.
 //!
 //! [`TreeWatch::revision`] returns a counter that moves when a read drains at least one event. A caller caches its
 //! tree state beside the counter it read and reads the trees again when the counter moves.
 //!
 //! A read that drained events registers the watches again from the directories on disk. An event does not say which
-//! directory it created, and an overflowed queue drops events entirely. A watch added only for the events a read saw
-//! would then miss a directory created in a dropped one. Re-registering also follows a symlinked directory to the
-//! target it names now, and finds the nearest existing ancestor of a tree that was removed and recreated.
-//!
-//! A served file read through a symlink is watched at the file's own target, because an edit there raises no event
-//! below the watched directories. A tree the process cannot watch, because the filesystem has no inotify, the watch
-//! limit is spent, or a symlink in it does not resolve, leaves the watch blind. Every read then answers a moved
-//! counter, so the caller reads the trees again on every render, as a render without a watch does.
+//! directory it created, and an overflowed queue drops events. A watch added only for the events a read saw would
+//! miss a directory created in a dropped one. A served file read through a symlink is watched at the file's own
+//! target, because an edit there raises no event below the watched directories. A tree the process cannot watch
+//! leaves the watch blind, and every read then reports a moved counter.
 
 use std::ffi::CString;
 use std::fs;

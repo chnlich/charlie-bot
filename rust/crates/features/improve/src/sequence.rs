@@ -630,7 +630,7 @@ async fn judge_iteration(
   loop_dir: &Path,
   tip_before: &str,
 ) -> anyhow::Result<IterationJudgment> {
-  let report_path = loop_dir.join(format!("iter_{iteration:04}.md"));
+  let report_path = command::iteration_report_path(loop_dir, iteration);
   let (tip_after, commits_added) = landing::commit_delta(wt_path, tip_before).await;
   if !report_path.exists() {
     let mut fallback = format!("Iteration {iteration} finished without a report file.");
@@ -922,7 +922,7 @@ async fn loop_close_verdict(
     if blocked_iter.as_ref().is_some_and(|(iteration, _)| *iteration == seq.position) {
       continue;
     }
-    let report_path = loop_dir.join(format!("iter_{:04}.md", seq.position));
+    let report_path = command::iteration_report_path(&loop_dir, seq.position);
     if !report_path.is_file() {
       // An iteration the loop never judged has no summary.
       continue;

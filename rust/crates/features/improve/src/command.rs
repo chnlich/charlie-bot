@@ -124,6 +124,12 @@ pub fn loop_plan_path(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) ->
   loop_dir(cfg, session_id, loop_id).join(PLAN_FILE)
 }
 
+/// The iteration report file under a loop directory. The worker prompt's `iteration_reports` section names the same
+/// file, and every reader of a report goes through this path.
+pub fn iteration_report_path(loop_dir: &Path, iteration: i64) -> PathBuf {
+  loop_dir.join(format!("iter_{iteration:04}.md"))
+}
+
 /// Read the live goal of a loop directory. A missing `goal.md` fails loudly: there is no fallback to the state file's
 /// startup snapshot.
 pub fn read_loop_goal(loop_dir: &Path) -> anyhow::Result<String> {

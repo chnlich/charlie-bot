@@ -517,8 +517,8 @@ pub struct OpenWaitingRow {
 /// Read every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).
 pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
 
-/// Read the host that a backend type's entry logs into from the entry's type-specific keys: `Some(alias)` for an entry
-/// that names a host (`host_auth_alias`), `None` for one that names none.
+/// Read the host that a backend type's entry logs into, from the entry's type-specific keys. The host is `Some(alias)`
+/// for an entry that names one (`host_auth_alias`), and `None` for one that names none.
 pub type BackendHostAliasFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
 
 /// One probed host's login record as `features/host_auth` keeps it in `host_auth.json`.

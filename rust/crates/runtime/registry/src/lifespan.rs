@@ -1,20 +1,15 @@
 //! The lifespan steps of the server and the runner that orders them.
 //!
-//! Startup runs in this order, after the home writer fence and the home seeding:
-//!
-//! 1. the pre-recovery steps, in registration order;
-//! 2. the recovery steps, in registration order: each starts as a task before the early services start and is awaited
-//!    after them. No route, trigger or cron fire starts an agent process before they complete;
-//! 3. the early services, in registration order;
-//! 4. the trigger step, at most one, after recovery;
-//! 5. the ready services, in registration order.
+//! Startup runs after the home writer fence and the home seeding. In registration order it runs the pre-recovery
+//! steps, then the recovery steps, then the early services, then at most one trigger step, then the ready services.
+//! Each recovery step starts as a task before the early services and is awaited after them, so no agent process
+//! starts before recovery completes. Each step and service logs one `startup_segment` line through the server's
+//! [`StartupClock`].
 //!
 //! Shutdown stops the ready services in reverse registration order, then the early ones in reverse, then closes the
-//! shared HTTP client and WebSockets. The server releases the home fence and logs `charliebot_shutdown` next.
-//! On SIGINT and failed bind, it runs let-go steps after that line; on SIGTERM, it skips them and restores
-//! SIGTERM's default disposition and re-raises it.
-//!
-//! Startup logs one `startup_segment` line per step and service, through the server's [`StartupClock`].
+//! shared HTTP client and WebSockets. The server releases the home fence and logs `charliebot_shutdown` next. On
+//! SIGINT and failed bind it then runs let-go steps; on SIGTERM it skips them, restores SIGTERM's default
+//! disposition and re-raises it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

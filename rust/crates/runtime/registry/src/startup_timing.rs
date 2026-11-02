@@ -9,8 +9,8 @@
 //! The server logs that last `at_ms` as `ready_in_ms` on `server_ready`.
 //!
 //! The recovery steps run as tasks while the early services start. A `recovery:<step>` segment is therefore the time
-//! the startup path waits for that step after the services before it have started, and the step's own log line (such
-//! as `task_tree_recovery_done elapsed_ms`) gives its full run time.
+//! the startup path waits for that step after the services before it have started. The step's own log line, such as
+//! `task_tree_recovery_done elapsed_ms`, gives its full run time.
 
 use std::time::{Duration, Instant};
 

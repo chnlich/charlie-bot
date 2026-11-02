@@ -41,7 +41,7 @@ Stopping or cancelling the loop still requires explicit user approval. Without a
 
 For large "elephant" improvements, split planning from execution:
 
-- **Planner**: Optional pre-loop delegation orchestrated by the master. Use a separate `script-run` task to profile the repo, identify prioritized levers by impact/headroom, and write acceptance criteria for each lever. The deliverable is `plan.md`, passed to the loop with `--plan-file`. The planner may use a different backend/model through `delegate --backend <id>`.
+- **Planner**: Optional pre-loop delegation orchestrated by the master. Use a separate `script-run` task to profile the repo, identify prioritized levers by impact/headroom, and write acceptance criteria for each lever. The deliverable is `plan.md`, passed to the loop with `--plan-file`. The planner may use a different backend/model through `delegate --backend <id>`, declaring `--context-work` by the definition in `charliebot delegate --help`.
 - **Executor**: Improve loop iterations read `goal.md`, optional `plan.md`, and previous iteration summaries. Each worker decides how to implement the current highest-priority incomplete lever, not what to tackle. Ordering comes from `plan.md`.
 - **Elephants first**: Order levers by impact/headroom, not ease. Multi-iteration levers are expected and normal.
 - **Plan is optional**: Small tasks can skip the planner and omit `--plan-file`, preserving the original thin-goal behavior.

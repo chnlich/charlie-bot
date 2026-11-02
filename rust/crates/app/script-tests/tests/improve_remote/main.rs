@@ -161,17 +161,93 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
 }
 
 #[test]
-fn the_round_claude_gets_the_gateway_token_in_its_environment() {
+fn the_round_gets_the_gateway_token_under_both_tools_variables() {
   let world = World::new();
   let run = world.run(&world.env());
   assert_eq!(run.code, 0, "{}", run.describe());
   let env = world.claude_environment();
   let digest = format!("{:x}", Sha256::digest(GATEWAY_TOKEN));
-  assert_eq!(
-    env.get("ANTHROPIC_AUTH_TOKEN_SHA256").map(String::as_str),
-    Some(digest.as_str()),
-    "claude did not get the gateway token: {}",
-    run.describe()
+  for name in ["ANTHROPIC_AUTH_TOKEN_SHA256", "CHARLIE_CODE_API_KEY_SHA256"] {
+    assert_eq!(
+      env.get(name).map(String::as_str),
+      Some(digest.as_str()),
+      "{name} does not carry the gateway token: {}",
+      run.describe()
+    );
+  }
+}
+
+/// The stub improve-sandbox of the focused export checks: it records the digests of the two gateway variables it
+/// receives, so the assertion holds no token value.
+const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digests of the two gateway variables, then exit.
+printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\n' \
+  "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
+  "$(printf '%s' "${CHARLIE_CODE_API_KEY-}" | sha256sum | cut -d' ' -f1)" >"$FAKE_SCOPE_ENV"
+exit 0
+"#;
+
+/// The direction of the focused export checks; its TMPDIR name no real direction's round shares.
+const FOCUS_DIRECTION: &str = "focused";
+
+/// Runs the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway variables.
+fn run_in_scope(world: &World, launch_id: &str) -> harness::Run {
+  let launch = world.remote_home.join("improve/launch").join(launch_id);
+  fs::create_dir_all(&launch).expect("the launch directory");
+  fs::write(launch.join("args"), "").expect("the launch arguments file");
+  fs::create_dir_all(format!("/tmp/improve-{FOCUS_DIRECTION}-tmp")).expect("the round's TMPDIR");
+  fs::create_dir_all(world.remote_home.join("improve").join(FOCUS_DIRECTION)).expect("the round root");
+  let bin = world.remote_home.join("improve/runner/bin");
+  fs::create_dir_all(&bin).expect("the runner bin directory");
+  harness::write_executable(&bin.join("improve-sandbox"), format!("#!/usr/bin/env bash\n{SCOPE_ENV_STUB}"));
+  let mut env = harness::Env::new();
+  env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
+  env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("tools/improve/remote-runner.sh")).args([
+    "--in-scope",
+    launch_id,
+    FOCUS_DIRECTION,
+  ]);
+  harness::run(&mut command)
+}
+
+#[test]
+fn the_in_scope_runner_exports_the_credentials_token_under_both_tools_names() {
+  let world = World::new();
+  // The fixture token differs from the launcher's, so the check reads the credentials file and not the environment.
+  let token = "focused-gateway-token";
+  fs::write(
+    world.remote_home.join("improve/home/credentials.yaml"),
+    format!("synthetic-gateway:\n  api_key: {token}\n"),
+  )
+  .expect("the fixture credentials file");
+
+  let run = run_in_scope(&world, "20261101T090000Z-1-300");
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let record = world.sandbox.root().join("scope-env.txt");
+  let text = fs::read_to_string(&record).expect("the stub improve-sandbox recorded its environment");
+  let digest = format!("{:x}", Sha256::digest(token));
+  for name in ["ANTHROPIC_AUTH_TOKEN_SHA256", "CHARLIE_CODE_API_KEY_SHA256"] {
+    assert!(text.contains(&format!("{name}={digest}\n")), "{name} misses the fixture token:\n{text}");
+  }
+}
+
+#[test]
+fn the_in_scope_runner_without_a_credentials_token_exits_1_and_names_the_file() {
+  let world = World::new();
+  fs::write(world.remote_home.join("improve/home/credentials.yaml"), "").expect("the empty credentials file");
+  let credentials = world.remote_home.join("improve/home/credentials.yaml");
+
+  let run = run_in_scope(&world, "20261101T090100Z-1-301");
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let message = stderr(&run);
+  assert!(
+    message.contains("the round's credentials file holds no gateway token")
+      && message.contains(credentials.display().to_string().as_str()),
+    "the failure does not name the tokenless credentials file: {message}"
   );
 }
 

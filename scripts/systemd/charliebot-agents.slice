@@ -6,12 +6,16 @@ Description=CharlieBot agent processes
 # its largest process while the server, outside it, keeps answering. Swap stays off so a full share
 # never pushes the host into swap. A session's own 12 GiB cgroup stays inside this share.
 #
-# CPUWeight is the default value set on purpose: the explicit property is what makes systemd turn the
-# cpu controller on down to this slice's subtree, where the server then writes each session cgroup's
-# cpu.weight. Without it cpu stays out of the agents' cgroup.controllers and the sessions get no cpu
-# share. The parent charliebot.slice needs no extra line: this property makes systemd enable cpu there.
+# CPUWeight and IOWeight are the default values set on purpose: the explicit property is what makes
+# systemd turn the controller on down to this slice's subtree, where the server then writes each
+# session cgroup's cpu.weight (and, once io reaches the user manager, io.weight). Without the property
+# the controller stays out of the agents' cgroup.controllers and the sessions get no share — io stays
+# out even after setup-io-share.sh delegates io, because systemd enables a controller toward a slice
+# only for a unit property that needs it. The parent charliebot.slice needs no extra line: these
+# properties make systemd enable the controllers there.
 [Slice]
 CPUWeight=100
+IOWeight=100
 MemoryMax=80%
 MemorySwapMax=0
 

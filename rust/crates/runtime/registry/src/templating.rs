@@ -49,7 +49,7 @@ pub struct Templating {
   packages: Vec<&'static str>,
   /// The template search path: `web/templates`, then each page package's `templates/`, in registration order.
   directories: Vec<PathBuf>,
-  /// Whether the unique-name check has passed once (Python checks when it first builds the engine).
+  /// Whether the unique-name check has passed once (it runs when the engine is first built).
   names_checked: AtomicBool,
   /// The cached `git_version()` value, computed at the first render that asks for it.
   git_version: OnceLock<String>,
@@ -398,7 +398,7 @@ pub enum RenderError {
 }
 
 impl RenderError {
-  /// The Python exception class the same failure raises, for the request log.
+  /// The exception class the same failure raises, for the request log.
   pub fn kind(&self) -> &'static str {
     match self {
       RenderError::DuplicateName(_) | RenderError::Global(_) => "ValueError",

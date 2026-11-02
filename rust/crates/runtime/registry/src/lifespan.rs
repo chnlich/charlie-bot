@@ -129,7 +129,7 @@ impl Lifespan {
     self.start_services(Phase::Ready, &recovery_done).await
   }
 
-  /// Spawns every registered recovery step as its own task, as Python's `create_task` spawns the one recovery, and
+  /// Spawns every registered recovery step as its own task, and
   /// returns their joined outcome: the early services start while the steps run. The first failing step's error ends
   /// the join, with the step's name in it.
   fn spawn_recovery_steps(&self) -> Option<Shared<BoxFuture<'static, Result<(), String>>>> {

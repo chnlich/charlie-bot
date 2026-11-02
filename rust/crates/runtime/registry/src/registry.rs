@@ -35,7 +35,7 @@ use crate::usage::{QuotaAccount, SourceSweep, SweepScope, UsageSource};
 /// A package's `register` function: the package's contributions, made through the registry's typed methods.
 pub type RegisterFn = fn(&mut Registry) -> Result<(), RegistryError>;
 
-/// A registration that fails startup. Python raises `ValueError` at the same point; the message names the
+/// A registration that fails startup. The message names the
 /// package whose `register` made the registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryError {
@@ -401,8 +401,8 @@ impl Registry {
     Ok(())
   }
 
-  /// Register a backend type's `backends.options[]` field schema: its type-specific fields in the Python
-  /// option model's declaration order, with the value each holds when the entry omits it.
+  /// Register a backend type's `backends.options[]` field schema: its type-specific fields in declaration order,
+  /// with the value each holds when the entry omits it.
   ///
   /// `charliebot config get backends` renders an option from this schema, so the output carries the same
   /// fields and defaults as the type's pydantic model. A backend package registers its own schema next to
@@ -460,7 +460,7 @@ pub struct BackendTraits {
   pub compact_hint: Option<&'static str>,
 }
 
-/// Validates one `backends.options[]` entry's type-specific keys (the pydantic option model of Python).
+/// Validates one `backends.options[]` entry's type-specific keys.
 pub type OptionModel = fn(&serde_yaml::Mapping) -> Result<(), String>;
 
 /// One backend type (`backend_type_registration.register_backend_type`). `translate_fallback` marks the one type that
@@ -1225,7 +1225,7 @@ pub trait Service: Send + Sync {
 
 /// A file view (`wiring.register_file_view`). The file server asks each view, in registration order, before it
 /// serves a path; `path` is the absolute path without its leading "/". `Ok(Some)` answers the request, `Ok(None)`
-/// passes it on, and `Err` is the error response (Python raises `HTTPException`).
+/// passes it on, and `Err` is the error response.
 pub trait FileView: Send + Sync {
   fn view<'a>(
     &'a self,
@@ -1472,7 +1472,7 @@ pub type EventRenderer = fn(&Value) -> Value;
 
 /// One package's part in a master turn. Every step defaults to adding nothing.
 pub trait TurnContribution: Send + Sync {
-  /// The Python class this contribution ports, named as `type(contribution).__name__` names it. The store names the
+  /// The class name of this contribution. The store names the
   /// contribution's after-turn task by it: `after-turn-<class name>-<session id>`.
   fn class_name(&self) -> &'static str;
 
@@ -1531,8 +1531,8 @@ pub trait TurnContribution: Send + Sync {
 }
 
 impl Registry {
-  /// Register a turn contribution (`turn_contributions.register_turn_contribution`). A chat renderer type that an
-  /// earlier contribution, or this one, already renders fails here: Python fails at the aggregator's build.
+  /// Register a turn contribution. A chat renderer type that an
+  /// earlier contribution, or this one, already renders fails here, at the aggregator's build.
   pub fn turn_contribution(
     &mut self,
     name: &'static str,

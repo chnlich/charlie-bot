@@ -2,7 +2,7 @@
 //! sequence kind it declares, and it answers for its sessions in the listings and in the bindings the runtime asks
 //! for.
 //!
-//! The run lifecycle methods of the Python controller (`redrive`, `launch_context`, `after_run`, `recover_run`,
+//! The run lifecycle methods of a sequence controller (`redrive`, `launch_context`, `after_run`, `recover_run`,
 //! `reconcile_interrupted`) run over the store's run records and task tree through `SequenceTree`.
 
 use std::borrow::Cow;
@@ -213,7 +213,7 @@ pub trait SequenceCompletion: Send + Sync {
     reason: &'a str,
   ) -> BoxFuture<'a, StoreResult<Vec<String>>>;
 
-  /// The restore's core for a caller that holds the control lock; returns Python's `(restored, announcements)` pair.
+  /// The restore's core for a caller that holds the control lock; returns the `(restored, announcements)` pair.
   fn restore_chain_locked<'a>(
     &'a self,
     guard: &'a ControlGuard,

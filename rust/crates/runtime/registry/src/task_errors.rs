@@ -5,7 +5,7 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_store::StoreError;
 
-/// Translate one task-domain error into the FastAPI response used by structural routes.
+/// Translate one task-domain error into the response used by structural routes.
 pub fn task_http_error(error: StoreError) -> Response {
   let message = error.to_string();
   match error {

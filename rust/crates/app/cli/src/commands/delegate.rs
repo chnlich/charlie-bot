@@ -1,5 +1,6 @@
 //! The task delegation command from src/runtime/cli/delegate.py.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -9,7 +10,9 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_core::config;
 use charliebot_core::event_types;
+use charliebot_store::chat_events::{self, LineRule};
 use charliebot_tasks::routes as task_routes;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
@@ -24,14 +27,8 @@ const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
   ## Reviewer Checklist - concrete checks beyond "tests passed".
   ## Out of Scope - things the worker must not change.
 
-  Specs must not forbid test edits: tests asserting removed behavior get updated or deleted with it.
-
-  Spec precision follows the task kind: an exploratory or judgment-heavy task (a cleanup whose
-  extent is a judgment call, a review, a comment or doc rewrite) states the goal, the reason in
-  the requester's words, the judging standard, the invariants, and the scope, and stops there -
-  an enumerated change list caps the result at what the master already found. A fixed mechanical
-  contract keeps its executable contract and acceptance assertions: there the precision is the
-  deliverable.
+  A context-work spec carries a ## Requester Words section: the words that asked the question, and each earlier user decision the task rests on, each quoted verbatim with its session id and event kind (user, agent, scheduled or thread). charliebot delegate checks each quote against the events of that kind in that session.
+  - 「<verbatim>」 (session <36-char session id>, <user|agent|scheduled|thread>)
 
   --repo and --base-branch: give both, or omit both for a repo-less implement, quick-edit, or
   script-run task. verify forbids both.
@@ -49,18 +46,32 @@ Task types (--task-type):
   script-run: the worktree (repo-less: the Run directory) is a sandbox to run scripts, submit jobs, or query state; the worker must not modify tracked files or commit; no reviewer, no merge.
   verify: a repo-less read-only plan verifier; no worktree, reviewer, or merge.
 
+Context work (--context-work):
+
+  Context work is a first read of unfamiliar material, an understanding, or a design draft. Pass --context-work 1 for context work; the server runs it on backends.strong. Pass 0 for every other task, verify included.
+
 Backend selection (--backend):
 
-  Pass --backend only when the user or the line's goal names a backend. Omitted: implement,
-  quick-edit, and script-run take the next backends.pool member that is not cooling, or inherit the
-  session backend when the pool is empty; a worker out of quota continues on the next member in the
-  same worktree. Verify routes to the next member that differs from the session backend.
-  An explicit --backend replaces that routing for every task type, verify included, and is never
-  failed over. The resolved backend runs every work Run of the worker session.
+  Pass --backend only when the user or the line's goal names a backend. Omitted: context work takes
+  backends.strong; implement, quick-edit, and script-run take the next backends.pool member that is
+  not cooling, or inherit the session backend when the pool is empty; a worker out of quota continues
+  on the next member in the same worktree. Verify routes to the next member that differs from the
+  session backend. An explicit --backend replaces that routing for every task type, verify included,
+  and is never failed over; backends.strong is never failed over either. The resolved backend runs
+  every work Run of the worker session.
 "#;
 
-const LONG_OPTIONS: [&str; 8] =
-  ["session", "repo", "task-spec-file", "base-branch", "backend", "keep-worktree", "request-id", "task-type"];
+const LONG_OPTIONS: [&str; 9] = [
+  "session",
+  "repo",
+  "task-spec-file",
+  "base-branch",
+  "backend",
+  "keep-worktree",
+  "context-work",
+  "request-id",
+  "task-type",
+];
 
 const TASK_SPEC_REQUIRED_HEADINGS: [&str; 6] =
   ["Goal", "Source Files", "Required Behavior", "Acceptance Tests", "Reviewer Checklist", "Out of Scope"];
@@ -83,6 +94,8 @@ struct DelegateCli {
   backend: Option<String>,
   #[arg(long, required = true, value_parser = clap::value_parser!(i32).range(0..=1), help = "0 or 1 (rule in the epilog)")]
   keep_worktree: i32,
+  #[arg(long, required = true, value_parser = clap::value_parser!(i32).range(0..=1), help = "0 or 1 (rule in the epilog)")]
+  context_work: i32,
   #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)")]
   request_id: Option<String>,
   #[arg(long, value_enum, default_value = "implement", help = "Task profile (rules in the epilog)")]
@@ -139,6 +152,9 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if let Err(message) = validate_repo_and_branch(cli.task_type, cli.repo.as_deref(), cli.base_branch.as_deref()) {
     parser_error(&mut command, ErrorKind::ValueValidation, message);
   }
+  if let Err(message) = validate_context_work(cli.task_type, cli.context_work) {
+    parser_error(&mut command, ErrorKind::ValueValidation, message);
+  }
   if cli.task_type != TaskType::Verify
     && let Some(repo) = &cli.repo
   {
@@ -148,6 +164,11 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(cli.session.as_deref())?;
   let task_spec = files::read_required_text_file("--task-spec-file", &cli.task_spec_file)?;
   validate_task_spec_markdown(&task_spec)?;
+  let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let context_work = cli.context_work == 1;
+  if context_work {
+    validate_requester_words(&task_spec, &home)?;
+  }
 
   let keep_worktree = cli.keep_worktree == 1;
   let mut invocation = Map::new();
@@ -157,12 +178,14 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(cli.task_spec_file));
   invocation.insert(task_routes::DELEGATE_REVIEWER_CONTEXT_FILE_FIELD.to_string(), Value::Null);
   invocation.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
+  invocation.insert(task_routes::DELEGATE_CONTEXT_WORK_FIELD.to_string(), json!(context_work));
   invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), optional_string(&cli.backend));
 
   let mut payload = Map::new();
   payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
   payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(task_spec));
   payload.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
+  payload.insert(task_routes::DELEGATE_CONTEXT_WORK_FIELD.to_string(), json!(context_work));
   payload.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
   payload.insert(event_types::DELEGATE_INVOCATION.to_string(), Value::Object(invocation));
   if let Some(base_branch) = &cli.base_branch {
@@ -178,7 +201,6 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     payload.insert(task_routes::DELEGATE_REQUEST_ID_FIELD.to_string(), json!(request_id));
   }
 
-  let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let readback_session = session_id.clone();
   let readback_description = task_spec.clone();
   let readback_task_type = task_type.to_string();
@@ -316,6 +338,161 @@ fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
   Ok(())
 }
 
+fn validate_context_work(task_type: TaskType, context_work: i32) -> Result<(), String> {
+  if context_work == 1 && task_type == TaskType::Verify {
+    return Err("--context-work 1 is forbidden when --task-type verify".to_string());
+  }
+  Ok(())
+}
+
+/// The heading of the section that a context-work spec carries.
+const REQUESTER_WORDS_HEADING: &str = "Requester Words";
+
+/// The event kinds a requester quote names. Each kind matches the chat-log events it stands for: a user message is a
+/// `user` event with string content; an agent message is an `agent_message` event; a scheduled-task prompt is a
+/// `scheduled_trigger` event; a Slack or Discord thread message is the `agent_message` event that carries the
+/// platform's summon block (`event_types::is_platform_summon`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequesterKind {
+  User,
+  Agent,
+  Scheduled,
+  Thread,
+}
+
+impl RequesterKind {
+  fn parse(name: &str) -> Option<Self> {
+    match name {
+      "user" => Some(Self::User),
+      "agent" => Some(Self::Agent),
+      "scheduled" => Some(Self::Scheduled),
+      "thread" => Some(Self::Thread),
+      _ => None,
+    }
+  }
+
+  fn name(self) -> &'static str {
+    match self {
+      Self::User => "user",
+      Self::Agent => "agent",
+      Self::Scheduled => "scheduled",
+      Self::Thread => "thread",
+    }
+  }
+
+  fn matches(self, event: &Value) -> bool {
+    match self {
+      Self::User => event_types::is_real_user_message(event),
+      Self::Agent => event.get("type").and_then(Value::as_str) == Some(event_types::AGENT_MESSAGE),
+      Self::Scheduled => event.get("type").and_then(Value::as_str) == Some(event_types::SCHEDULED_TRIGGER),
+      Self::Thread => event_types::is_platform_summon(event),
+    }
+  }
+}
+
+/// One `- 「quote」 (session <id>, <kind>)` line of the Requester Words section.
+struct RequesterQuote<'a> {
+  quote: &'a str,
+  session_id: &'a str,
+  kind: RequesterKind,
+}
+
+/// Split a quote line at its last ` (session ` tag, so a quote may itself hold a 」.
+fn parse_requester_line(line: &str) -> Option<(&str, &str, &str)> {
+  let body = line.strip_prefix("- 「")?;
+  let (quote, tail) = body.rsplit_once("」 (session ")?;
+  let (session_id, kind) = tail.strip_suffix(')')?.split_once(", ")?;
+  Some((quote, session_id, kind))
+}
+
+/// Check every quote of the `## Requester Words` section against the events of its named kind in its named session.
+/// One refusal lists every quote that fails.
+fn validate_requester_words(task_spec: &str, home: &Path) -> Result<(), CliExit> {
+  let lines: Vec<&str> = task_spec.lines().collect();
+  let start = lines.iter().position(|line| is_heading(line, REQUESTER_WORDS_HEADING)).ok_or_else(|| {
+    CliExit::usage(format!("task spec missing the ## {REQUESTER_WORDS_HEADING} section that --context-work 1 requires"))
+  })?;
+  let mut quotes = Vec::new();
+  for line in lines.iter().skip(start + 1).take_while(|line| !is_next_heading(line)).map(|line| line.trim()) {
+    if line.is_empty() {
+      continue;
+    }
+    let Some((quote, session_id, kind)) = parse_requester_line(line) else {
+      return Err(CliExit::usage(format!(
+        "## {REQUESTER_WORDS_HEADING} line must read `- 「quote」 (session <id>, <kind>)`: {line}"
+      )));
+    };
+    let Some(kind) = RequesterKind::parse(kind) else {
+      return Err(CliExit::usage(format!(
+        "## {REQUESTER_WORDS_HEADING} kind must be user, agent, scheduled or thread: {line}"
+      )));
+    };
+    if quote.is_empty() {
+      return Err(CliExit::usage(format!("## {REQUESTER_WORDS_HEADING} quote is empty: {line}")));
+    }
+    quotes.push(RequesterQuote { quote, session_id, kind });
+  }
+  if quotes.is_empty() {
+    return Err(CliExit::usage(format!("## {REQUESTER_WORDS_HEADING} section lists no quote")));
+  }
+
+  let mut logs: BTreeMap<&str, Option<Vec<Value>>> = BTreeMap::new();
+  for quote in &quotes {
+    if !logs.contains_key(quote.session_id) {
+      logs.insert(quote.session_id, session_events(home, quote.session_id)?);
+    }
+  }
+  let mut failures = Vec::new();
+  for quote in &quotes {
+    let reason = match &logs[quote.session_id] {
+      None => "the session has no chat log".to_string(),
+      Some(events) if events.iter().any(|event| quote.kind.matches(event) && event_contains(event, quote.quote)) => {
+        continue;
+      }
+      Some(_) => format!("no {} event of the session contains it", quote.kind.name()),
+    };
+    failures.push(format!("- 「{}」 (session {}, {}): {reason}", quote.quote, quote.session_id, quote.kind.name()));
+  }
+  if failures.is_empty() {
+    return Ok(());
+  }
+  Err(CliExit::usage(format!(
+    "## {REQUESTER_WORDS_HEADING} quotes not found in their named sessions:\n{}",
+    failures.join("\n")
+  )))
+}
+
+fn event_contains(event: &Value, quote: &str) -> bool {
+  event.get("content").and_then(Value::as_str).is_some_and(|content| content.contains(quote))
+}
+
+/// The events of a session's chat log, its archives and its live log in reading order, or `None` when the session has
+/// no chat log under the home.
+fn session_events(home: &Path, session_id: &str) -> Result<Option<Vec<Value>>, CliExit> {
+  let session_dir = config::sessions_dir_in(home).join(session_id);
+  let paths = chat_events::session_log_paths(&session_dir)
+    .map_err(|error| CliExit::error(format!("reading the chat log of session {session_id}: {error}")))?;
+  if paths.is_empty() {
+    return Ok(None);
+  }
+  let mut events = Vec::new();
+  for path in paths {
+    let lines = chat_events::read_lines(&path, LineRule::PerLine)
+      .map_err(|error| CliExit::error(format!("reading {}: {error}", path.display())))?;
+    for line in lines {
+      let line = line.map_err(|error| CliExit::error(format!("reading {}: {error}", path.display())))?;
+      if line.text.trim().is_empty() {
+        continue;
+      }
+      let event = line.decode().map_err(|error| {
+        CliExit::error(format!("{} line {} is not a JSON event: {error}", path.display(), line.number))
+      })?;
+      events.push(event);
+    }
+  }
+  Ok(Some(events))
+}
+
 fn is_heading(line: &str, heading: &str) -> bool {
   line.strip_prefix("## ").is_some_and(|name| name.trim_end_matches([' ', '\t']) == heading)
 }
@@ -355,6 +532,7 @@ mod tests {
       "--base-branch",
       "--backend",
       "--keep-worktree",
+      "--context-work",
       "--request-id",
       "--task-type",
     ] {
@@ -373,6 +551,13 @@ mod tests {
     ] {
       assert!(help.contains(section), "{section} is missing from help");
     }
+  }
+
+  #[test]
+  fn requester_line_splits_at_the_last_session_tag() {
+    let session = "11111111-2222-4333-8444-555555555555";
+    assert_eq!(parse_requester_line(&format!("- 「a」b」 (session {session}, user)")), Some(("a」b", session, "user")));
+    assert_eq!(parse_requester_line("- 「a」 (session 11111111)"), None);
   }
 
   #[test]

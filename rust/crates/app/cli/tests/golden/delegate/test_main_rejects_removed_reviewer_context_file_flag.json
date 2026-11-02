@@ -13,6 +13,8 @@
     "--reviewer-context-file",
     "{root}/reviewer_context.md",
     "--keep-worktree",
+    "0",
+    "--context-work",
     "0"
   ],
   "cwd": "{root}",

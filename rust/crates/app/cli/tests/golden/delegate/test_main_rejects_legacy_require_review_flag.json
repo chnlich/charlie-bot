@@ -13,6 +13,8 @@
     "--require-review",
     "0",
     "--keep-worktree",
+    "0",
+    "--context-work",
     "0"
   ],
   "cwd": "{root}",

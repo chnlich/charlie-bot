@@ -1292,7 +1292,7 @@ fi
 if [[ -n $manager_id && -n $SERVER_PID ]]; then
   cat >"$TREE/manager-delegate.txt" <<EOF
 Run this command once:
-charliebot delegate --repo $SYNTH_REPO --base-branch origin/main --task-spec-file $TREE/delegate-task.md --keep-worktree 1 --task-type quick-edit
+charliebot delegate --repo $SYNTH_REPO --base-branch origin/main --task-spec-file $TREE/delegate-task.md --keep-worktree 1 --context-work 0 --task-type quick-edit
 Reply with exactly one word: STARTED.
 When the worker completion report arrives, reply with exactly one word: DONE.
 EOF

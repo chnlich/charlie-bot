@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "delegate",
+    "--session",
+    "s1",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0",
+    "--context-work",
+    "1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n\n## Requester Words\n- 「synthetic user request about the widget」 (session 11111111-2222-4333-8444-555555555555, user)\n- 「synthetic absent quote」 (session 11111111-2222-4333-8444-555555555555, user)\n- 「synthetic agent summary of the widget」 (session 11111111-2222-4333-8444-555555555555, user)\n",
+    "home/sessions/11111111-2222-4333-8444-555555555555/data/chat_events.jsonl": "{\"type\": \"user\", \"content\": \"synthetic user request about the widget\"}\n{\"type\": \"agent_message\", \"content\": \"synthetic agent summary of the widget\", \"from_session\": \"11111111-2222-4333-8444-555555555555\"}\n{\"type\": \"agent_message\", \"content\": \"synthetic thread message about the widget\", \"slack\": {\"thread_ts\": \"1.2\"}}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"## Requester Words quotes not found in their named sessions:\\n- 「synthetic absent quote」 (session 11111111-2222-4333-8444-555555555555, user): no user event of the session contains it\\n- 「synthetic agent summary of the widget」 (session 11111111-2222-4333-8444-555555555555, user): no user event of the session contains it\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

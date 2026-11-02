@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use charliebot_registry::Registry;
 use charliebot_store::layout;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, WORK_STATE};
+use charliebot_store::metadata::{
+  HAS_PENDING_TRIGGER, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, SessionStatus, WORK_STATE,
+};
 use charliebot_store::run_records::RUN_METADATA_NAME;
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Map, Value, json};
@@ -72,9 +74,9 @@ pub(crate) fn resolve_sidebar_state(
         entry.insert("has_running_tasks".to_string(), Value::Bool(false));
       }
       if include_trigger {
-        entry.insert("has_pending_trigger".to_string(), Value::Bool(false));
-        entry.insert("pending_trigger_count".to_string(), Value::from(0));
-        entry.insert("next_trigger_at".to_string(), Value::Null);
+        entry.insert(HAS_PENDING_TRIGGER.to_string(), Value::Bool(false));
+        entry.insert(PENDING_TRIGGER_COUNT.to_string(), Value::from(0));
+        entry.insert(NEXT_TRIGGER_AT.to_string(), Value::Null);
       }
       if include_plan {
         entry.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(false));
@@ -141,10 +143,10 @@ pub(crate) fn resolve_sidebar_state(
       );
     }
     if include_trigger {
-      let count = snapshot.get("pending_trigger_count").cloned().unwrap_or(Value::from(0));
-      entry.insert("has_pending_trigger".to_string(), Value::Bool(count.as_i64().unwrap_or_default() > 0));
-      entry.insert("pending_trigger_count".to_string(), count);
-      entry.insert("next_trigger_at".to_string(), snapshot.get("next_trigger_at").cloned().unwrap_or(Value::Null));
+      let count = snapshot.get(PENDING_TRIGGER_COUNT).cloned().unwrap_or(Value::from(0));
+      entry.insert(HAS_PENDING_TRIGGER.to_string(), Value::Bool(count.as_i64().unwrap_or_default() > 0));
+      entry.insert(PENDING_TRIGGER_COUNT.to_string(), count);
+      entry.insert(NEXT_TRIGGER_AT.to_string(), snapshot.get(NEXT_TRIGGER_AT).cloned().unwrap_or(Value::Null));
     }
     if include_plan {
       entry.insert(
@@ -270,8 +272,8 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
   }
   let activity = store.task_tree_activity(session_id)?;
   let mut snapshot = Map::new();
-  snapshot.insert("pending_trigger_count".to_string(), Value::from(pending_count));
-  snapshot.insert("next_trigger_at".to_string(), next_trigger.map_or(Value::Null, |value| json!(value.to_str())));
+  snapshot.insert(PENDING_TRIGGER_COUNT.to_string(), Value::from(pending_count));
+  snapshot.insert(NEXT_TRIGGER_AT.to_string(), next_trigger.map_or(Value::Null, |value| json!(value.to_str())));
   snapshot.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(pending_plan_approval));
   snapshot.insert(TASK_TREE_ACTIVITY.to_string(), json!([activity.has_running_tasks, activity.work_state]));
   Ok(snapshot)

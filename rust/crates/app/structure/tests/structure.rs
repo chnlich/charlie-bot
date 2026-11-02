@@ -927,6 +927,21 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
   OwnerRow {
+    name: "has_pending_trigger",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::HAS_PENDING_TRIGGER`.",
+  },
+  OwnerRow {
+    name: "pending_trigger_count",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::PENDING_TRIGGER_COUNT`.",
+  },
+  OwnerRow {
+    name: "next_trigger_at",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::NEXT_TRIGGER_AT`.",
+  },
+  OwnerRow {
     name: "has_pending_plan_approval",
     owner: "runtime/store",
     hint: "Use `charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL`.",

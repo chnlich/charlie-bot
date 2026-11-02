@@ -7,7 +7,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, WORK_STATE};
+use charliebot_store::metadata::{
+  HAS_PENDING_TRIGGER, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_FIELDS, SessionMetadata, SessionStatus,
+  TaskProfile, WORK_STATE,
+};
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
@@ -637,16 +640,16 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   }
   if projection.include_trigger {
     object.insert(
-      "has_pending_trigger".to_string(),
-      derived.and_then(|entry| entry.get("has_pending_trigger")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_PENDING_TRIGGER.to_string(),
+      derived.and_then(|entry| entry.get(HAS_PENDING_TRIGGER)).cloned().unwrap_or(Value::Bool(false)),
     );
     object.insert(
-      "pending_trigger_count".to_string(),
-      derived.and_then(|entry| entry.get("pending_trigger_count")).cloned().unwrap_or(Value::from(0)),
+      PENDING_TRIGGER_COUNT.to_string(),
+      derived.and_then(|entry| entry.get(PENDING_TRIGGER_COUNT)).cloned().unwrap_or(Value::from(0)),
     );
     object.insert(
-      "next_trigger_at".to_string(),
-      derived.and_then(|entry| entry.get("next_trigger_at")).cloned().unwrap_or(Value::Null),
+      NEXT_TRIGGER_AT.to_string(),
+      derived.and_then(|entry| entry.get(NEXT_TRIGGER_AT)).cloned().unwrap_or(Value::Null),
     );
   }
   if projection.include_plan {

@@ -13,7 +13,9 @@ use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime, WORK_STATE};
+use charliebot_store::metadata::{
+  HAS_PENDING_TRIGGER, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, UtcDateTime, WORK_STATE,
+};
 use charliebot_store::sidebar_state;
 use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
@@ -321,16 +323,16 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_isoformat_text())),
     );
     payload.insert(
-      "has_pending_trigger".to_string(),
-      entry.and_then(|row| row.get("has_pending_trigger")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_PENDING_TRIGGER.to_string(),
+      entry.and_then(|row| row.get(HAS_PENDING_TRIGGER)).cloned().unwrap_or(Value::Bool(false)),
     );
     payload.insert(
-      "pending_trigger_count".to_string(),
-      entry.and_then(|row| row.get("pending_trigger_count")).cloned().unwrap_or(Value::from(0)),
+      PENDING_TRIGGER_COUNT.to_string(),
+      entry.and_then(|row| row.get(PENDING_TRIGGER_COUNT)).cloned().unwrap_or(Value::from(0)),
     );
-    let next = entry.and_then(|row| row.get("next_trigger_at")).cloned().unwrap_or(Value::Null);
+    let next = entry.and_then(|row| row.get(NEXT_TRIGGER_AT)).cloned().unwrap_or(Value::Null);
     payload.insert(
-      "next_trigger_at".to_string(),
+      NEXT_TRIGGER_AT.to_string(),
       next.as_str().map_or(next.clone(), |value| {
         UtcDateTime::parse(value).map_or(next.clone(), |at| json!(at.to_isoformat_text()))
       }),
@@ -434,16 +436,16 @@ fn apply_derived_fields(
   }
   if include_trigger {
     object.insert(
-      "has_pending_trigger".to_string(),
-      derived.and_then(|row| row.get("has_pending_trigger")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_PENDING_TRIGGER.to_string(),
+      derived.and_then(|row| row.get(HAS_PENDING_TRIGGER)).cloned().unwrap_or(Value::Bool(false)),
     );
     object.insert(
-      "pending_trigger_count".to_string(),
-      derived.and_then(|row| row.get("pending_trigger_count")).cloned().unwrap_or(Value::from(0)),
+      PENDING_TRIGGER_COUNT.to_string(),
+      derived.and_then(|row| row.get(PENDING_TRIGGER_COUNT)).cloned().unwrap_or(Value::from(0)),
     );
     object.insert(
-      "next_trigger_at".to_string(),
-      derived.and_then(|row| row.get("next_trigger_at")).cloned().unwrap_or(Value::Null),
+      NEXT_TRIGGER_AT.to_string(),
+      derived.and_then(|row| row.get(NEXT_TRIGGER_AT)).cloned().unwrap_or(Value::Null),
     );
   }
   if include_plan {

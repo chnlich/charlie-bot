@@ -2,12 +2,9 @@
 
 use charliebot_core::credentials;
 use charliebot_core::home;
-use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
+use charliebot_core::run_token::{CALLER_SESSION_HEADER, RUN_TOKEN_ENV, SESSION_ID_ENV};
 
 use crate::exit::CliExit;
-
-/// The calling session on internal-API calls. One spelling everywhere.
-pub const CALLER_SESSION_HEADER: &str = "X-CharlieBot-Caller-Session";
 
 /// The `Authorization` and caller-session headers for one internal-API call.
 ///
@@ -17,7 +14,7 @@ pub const CALLER_SESSION_HEADER: &str = "X-CharlieBot-Caller-Session";
 /// operator identity. Without a run token the operator access key is used: `credentials.yaml`
 /// under `charliebot.access_key`. With neither, no header is sent, because the middleware is a
 /// no-op for an empty key. When `CHARLIEBOT_SESSION_ID` is non-empty the returned headers also
-/// carry `X-CharlieBot-Caller-Session` with that value. The server records that header on operator
+/// carry `CALLER_SESSION_HEADER` with that value. The server records that header on operator
 /// caller identities only: an agent's session comes from its verified token, never the header.
 pub fn internal_api_auth_headers() -> Result<Vec<(String, String)>, CliExit> {
   let token = std::env::var(RUN_TOKEN_ENV).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty());

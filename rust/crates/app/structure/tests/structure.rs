@@ -1244,8 +1244,8 @@ const FORMAT_TABLE: &[FormatRow] = &[
     kind: "thread metadata",
     owner: "runtime/store",
     names: &["thread_metadata_path", "METADATA_FILE_NAME"],
-    hint: "Read it through `Store::read_thread_metadata` or `charliebot_store::metadata::read_metadata_object`, and \
-           write it through `Store::write_thread_metadata`.",
+    hint: "Read it through `charliebot_store::metadata::read_metadata_object`; the store writes no thread metadata \
+           file.",
   },
   FormatRow {
     kind: "run metadata",

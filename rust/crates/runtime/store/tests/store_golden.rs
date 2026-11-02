@@ -13,7 +13,7 @@ use charliebot_core::run_token;
 use charliebot_registry::Registry;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime, read_metadata_object};
 use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::session_fork::{CloseReportRedelivery, ReplacedSourceArchive};
 use charliebot_store::{
@@ -192,26 +192,8 @@ async fn store_operations_write_identical_files_and_read_each_others_output() {
         );
       }
       let thread_path = rust_store.thread_metadata_path(SESSION_ID, THREAD_ID);
-      let thread = rust_store.read_thread_metadata(&thread_path).unwrap().unwrap();
-      assert_eq!(thread.extra.get("left_by_deleted_package").unwrap()["kept"], true);
-    }
-    if *operation == OPS[0] {
-      let mut rust_thread: ThreadMetadata = serde_json::from_value(json!({
-        "id": THREAD_ID,
-        "session_id": SESSION_ID,
-        "description": "synthetic thread",
-        "created_at": FIXED_TIME,
-        "claude_session_id": "native-thread-id",
-        "left_by_deleted_package": {"kept": true},
-      }))
-      .unwrap();
-      rust_thread.extra.insert("rust_written_unknown".to_string(), json!("preserved"));
-      rust_store
-        .write_thread_metadata(
-          &rust_home.join("sessions").join(SESSION_ID).join("threads").join(THREAD_ID).join("rust-written.json"),
-          &rust_thread,
-        )
-        .unwrap();
+      let thread = read_metadata_object(&thread_path).unwrap().unwrap();
+      assert_eq!(thread["left_by_deleted_package"]["kept"], true);
     }
   }
   run_golden_helper("verify", root.path(), &[]);

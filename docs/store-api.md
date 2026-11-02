@@ -13,7 +13,6 @@ that was checked, so a concurrent write's cached result stays current.
 - `Store::get_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
 - `Store::read_metadata_fresh(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
 - `Store::session_dir(&self, session_id: &str) -> PathBuf`; `Store::metadata_path(&self, session_id: &str) -> PathBuf`
-- `Store::read_thread_metadata(&self, path: &Path) -> StoreResult<Option<ThreadMetadata>>`; `Store::write_thread_metadata(&self, path: &Path, metadata: &ThreadMetadata) -> StoreResult<()>` (legacy thread layout)
 - `Store::persist_cc_session_id(&self, session_id: &str, cc_session_id: &str, native_backend: Option<&str>) -> StoreResult<Option<String>>`
 - `Store::persist_native_backend(&self, session_id: &str, native_backend: &str) -> StoreResult<Option<String>>`
 - `Store::persist_native_anchor_provenance(&self, session_id: &str, prompt_hash: &str, native_backend: &str, model: Option<&str>) -> StoreResult<()>`

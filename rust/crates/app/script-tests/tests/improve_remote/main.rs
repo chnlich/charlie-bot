@@ -347,6 +347,11 @@ fn an_evidence_copy_past_its_limit_stops_and_the_round_still_exits_with_claudes_
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(elapsed < Duration::from_secs(20), "the launcher waited {elapsed:?} on the copy");
   assert!(world.claude_ran(), "the copy limit stopped the round itself:\n{}", run.describe());
+  assert!(
+    stderr(&run).contains("the evidence copy stopped (status 124)"),
+    "the stopped copy did not report its timeout:\n{}",
+    run.describe()
+  );
 }
 
 #[test]

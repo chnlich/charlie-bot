@@ -132,6 +132,7 @@ copy_evidence() {
   local local_evidence="$HOME/improve/$direction/evidence"
   mkdir -p -- "$local_evidence"
   local remote_evidence='$HOME/improve/'"$direction"'/evidence'
+  local status=0
   set +e
   timeout --kill-after=5 "$limit" bash -c '
     set -o pipefail
@@ -139,7 +140,6 @@ copy_evidence() {
       "if [ -d \"$2\" ]; then tar -C \"$2\" -cf - .; else tar -cf - --files-from=/dev/null; fi" \
       | tar -C "$3" -xf -
   ' copy "$REMOTE_HOST" "$remote_evidence" "$local_evidence" 3>&-
-  local status
   status=$?
   set -e
   if (( status != 0 )); then

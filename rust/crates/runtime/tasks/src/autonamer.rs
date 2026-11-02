@@ -360,6 +360,7 @@ mod tests {
       backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      github: Default::default(),
       sections: Sections::default(),
     }
   }

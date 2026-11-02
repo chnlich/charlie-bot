@@ -10,7 +10,8 @@ use charliebot_claude_code as claude_code;
 use charliebot_codex::CodexHost;
 use charliebot_codex::factory::CodexFactory;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CharlieBotConfig, GithubConfig, PathsConfig, Sections, ServerConfig, TelegramConfig,
+  UiConfig,
 };
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{BackendFactory, Env, LaunchArgs};
@@ -46,6 +47,7 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   symlink(env!("CARGO_BIN_EXE_fake_program"), system_bin.join("codex")).unwrap();
   fs::write(system_bin.join("probe.json"), json!({"codex": [{"exit": 0}]}).to_string()).unwrap();
   let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
+  let gh_wrapper_dir = charliebot_agents::gh_wrapper::dir_under(&repository);
   let cases = cases(&venv_bin, &system_bin, &server_bin_dir);
   let python = run_golden_reference(&repository, &cases, root.path());
   let python_cases = python.as_array().expect("Python reference returns a case array");
@@ -59,7 +61,8 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   let mut rust_cases = Vec::new();
 
   for case in &cases {
-    let rewritten = agent_environment::agent_environment(&case.process_env, &case.server_bin_dir).unwrap();
+    let rewritten =
+      agent_environment::agent_environment(&case.process_env, &case.server_bin_dir, &gh_wrapper_dir).unwrap();
     let startup = StartupState::default();
     startup.insert(rewritten).unwrap();
     let base = startup.require::<agent_environment::AgentBaseEnvironment>().unwrap();
@@ -214,6 +217,7 @@ fn main_config() -> CharlieBotConfig {
     backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    github: GithubConfig { app_token_command: None },
     sections: Sections::default(),
   }
 }

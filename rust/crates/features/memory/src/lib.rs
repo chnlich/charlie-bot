@@ -53,6 +53,7 @@ mod tests {
       backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      github: Default::default(),
       sections: Sections::default(),
     };
     let roots: Vec<_> = registry.diff_roots().map(|(name, root)| (name, root(&cfg))).collect();

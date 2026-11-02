@@ -8,10 +8,11 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -22,10 +23,11 @@
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -34,10 +36,11 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -48,10 +51,11 @@
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -60,19 +64,21 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$HOME/.local/bin:$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -81,19 +87,21 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$HOME/.local/bin:$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -102,19 +110,21 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -123,19 +133,21 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -144,19 +156,21 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$HOME/.local/bin:$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -165,19 +179,21 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$HOME/.local/bin:$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -186,10 +202,11 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -201,11 +218,12 @@
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "GIT_CEILING_DIRECTORIES": "$HOME",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "RUN_ADDITION": "manager-turn",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -214,10 +232,11 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -229,11 +248,12 @@
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "GIT_CEILING_DIRECTORIES": "$HOME",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "RUN_ADDITION": "manager-turn",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -242,21 +262,23 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "current-session",
         "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         "GIT_CEILING_DIRECTORIES": "$HOME",
         "HOME": "$HOME",
-        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$HOME/.local/bin:$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "RUN_ADDITION": "manager-turn",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -265,21 +287,23 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "CHARLIEBOT_SESSION_ID": "current-session",
         "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         "GIT_CEILING_DIRECTORIES": "$HOME",
         "HOME": "$HOME",
-        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$HOME/.local/bin:$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "RUN_ADDITION": "manager-turn",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -288,10 +312,11 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -302,10 +327,11 @@
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "CLAUDE_CONFIG_DIR": "$HOME/accounts/claude-one",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "__all__",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     },
     {
@@ -314,10 +340,11 @@
         "CHARLIEBOT_SESSION_ID": "parent-session",
         "CLAUDECODE": "1",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       },
       "child_env": {
         "BASH_DEFAULT_TIMEOUT_MS": "900000",
@@ -328,10 +355,11 @@
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "CLAUDE_CONFIG_DIR": "$HOME/accounts/claude-one",
         "HOME": "$HOME",
-        "PATH": "$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
+        "PATH": "$REPO/src/runtime/gh_wrapper:$TMPROOT/release:$TMPROOT/venv/bin:$TMPROOT/system-bin",
         "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
         "SYNTHETIC_SERVER_VALUE": "retained",
-        "DBUS_SESSION_BUS_ADDRESS": "disabled:"
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:",
+        "CHARLIEBOT_GH_WRAPPER": "$REPO/src/runtime/gh_wrapper/gh"
       }
     }
   ]

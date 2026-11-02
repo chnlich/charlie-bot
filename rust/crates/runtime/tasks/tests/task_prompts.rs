@@ -109,6 +109,7 @@ fn config(home: &Path) -> CharlieBotConfig {
     backends: BackendsConfig { pool: vec![BACKEND_ID.to_string()], routing: None, options: vec![backend_option(None)] },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    github: Default::default(),
     sections: Sections::default(),
   }
 }

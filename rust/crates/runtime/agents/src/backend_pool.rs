@@ -546,6 +546,7 @@ mod tests {
       },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      github: Default::default(),
       sections: Sections::default(),
     }
   }

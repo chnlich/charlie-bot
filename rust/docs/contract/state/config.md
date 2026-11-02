@@ -101,6 +101,7 @@ Every core section model sets `extra='forbid'`.
 | `backends.options` | list[option] | `[]` | backend catalog (section 4); an empty list fails server startup |
 | `ui.home_services` | list[`{name: str, description: str, url: str}`] | `[]` | cards on `/home`, probed by connecting to the URL's host and port; each item forbids extra keys |
 | `telegram.chat_id` | str or null | null | Telegram notification target; sending without it raises `RuntimeError` (`src/infra/notifications.py`) |
+| `github.app_token_command` | str or null | null | executable the agent `gh` wrapper runs with `--write <owner>/<repo>` to mint the agent GitHub App's installation token; `~` is expanded at load. The server passes it to agent processes as `CHARLIEBOT_GH_APP_TOKEN_CMD`; absent, the wrapper refuses every text-carrying write with an error naming this key (`state/env.md` section 3) |
 
 No pydantic constraint rejects a negative integer in `server.*`. **UNVERIFIED:** how negative values behave; no
 validator was found, so they pass load.

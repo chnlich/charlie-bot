@@ -6,6 +6,7 @@ pub mod backend_types;
 pub mod cli_base;
 pub mod cli_host;
 pub mod event_builders;
+pub mod gh_wrapper;
 pub mod launch_loop;
 pub mod one_shot;
 pub mod runner;

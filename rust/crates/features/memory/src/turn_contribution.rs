@@ -117,6 +117,7 @@ mod tests {
       backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      github: Default::default(),
       sections: Sections::default(),
     }
   }

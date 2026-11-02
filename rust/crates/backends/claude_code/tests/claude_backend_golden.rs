@@ -34,6 +34,7 @@ fn main_module() -> CharlieBotConfig {
     backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    github: Default::default(),
     sections: charliebot_core::config::Sections::default(),
   }
 }

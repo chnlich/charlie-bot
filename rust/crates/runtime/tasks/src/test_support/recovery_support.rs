@@ -403,6 +403,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
     backends: BackendsConfig { pool, routing: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    github: Default::default(),
     sections: Sections::default(),
   }
 }

@@ -542,6 +542,7 @@ pub fn config(home: &Path) -> CharlieBotConfig {
     },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    github: Default::default(),
     sections: Sections::default(),
   }
 }

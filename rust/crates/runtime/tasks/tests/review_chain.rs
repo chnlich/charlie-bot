@@ -1360,7 +1360,7 @@ async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() 
 
 // Python: tests/test_git_stash_guard.py::test_worker_and_review_runs_put_the_guard_first_on_path
 #[tokio::test]
-async fn worker_and_review_runs_put_the_guard_first_on_path() -> anyhow::Result<()> {
+async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let temp = tempfile::tempdir()?;
   let worker_path = temp.path().join("worker-path");
@@ -1386,9 +1386,11 @@ async fn worker_and_review_runs_put_the_guard_first_on_path() -> anyhow::Result<
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).context("checkout root exists")?;
+  let wrapper_dir = checkout.join("src/runtime/gh_wrapper");
   let guard_dir = checkout.join("src/runtime/git_stash_guard");
-  assert!(fs::read_to_string(worker_path)?.starts_with(&format!("{}:", guard_dir.display())));
-  assert!(fs::read_to_string(review_path)?.starts_with(&format!("{}:", guard_dir.display())));
+  let expected_head = format!("{}:{}:", wrapper_dir.display(), guard_dir.display());
+  assert!(fs::read_to_string(worker_path)?.starts_with(&expected_head));
+  assert!(fs::read_to_string(review_path)?.starts_with(&expected_head));
   Ok(())
 }
 

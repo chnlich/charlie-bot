@@ -40,7 +40,17 @@ and `PYTHONUNBUFFERED=1`, which the script sets for the server process.
 Every agent child copies the server's environment, so `charliebot-server` rewrites it once before anything spawns:
 
 - `VIRTUAL_ENV` and `UV_RUN_RECURSION_DEPTH` are removed.
-- The server binary's directory is placed first on `PATH`; an entry that names it elsewhere is dropped.
+- `GH_TOKEN`, `GITHUB_TOKEN` and `CHARLIEBOT_GH_APP_TOKEN_CMD` are removed: a pass-through or App-not-installed
+  `gh` call runs as gh's stored login, and the server sets the token command from the host config.
+- The agent `gh` wrapper's directory (`<repo>/src/runtime/gh_wrapper`, checked executable like the CLI) is placed
+  first on `PATH`, the server binary's directory second; an entry that names either elsewhere is dropped.
+- `CHARLIEBOT_GH_WRAPPER` is set to the wrapper script's path. `AgentRunner.run` runs
+  `gh_wrapper.require_gh_wrapper` after the backend's own `prepare_env`: it moves the wrapper directory back to the
+  front of `PATH` (the backends that prepend the user's `~/.local/bin` would otherwise put the personal `gh` first)
+  and refuses a spawn whose `PATH` does not resolve `gh` to the wrapper, naming the path it does resolve.
+- The host config's `github.app_token_command`, `~` expanded, becomes `CHARLIEBOT_GH_APP_TOKEN_CMD`, the executable
+  the wrapper runs with `--write <owner>/<repo>`. With no key the variable is absent, and the wrapper refuses every
+  text-carrying write with an error that names the key.
 - `PYDANTIC_DISABLE_PLUGINS` keeps a host value and defaults to `__all__`.
 
 No virtualenv directory is removed from `PATH`, and the server sets no venv bin variable: the server, the CLI and the
@@ -99,7 +109,7 @@ The working directory is `<home>/sessions/<sid>`.
 
 | Variable | Value | Setter |
 | --- | --- | --- |
-| `PATH` | `<repo>/src/runtime/git_stash_guard:` prepended | `Worker.run` (the directory holds a `git` wrapper that refuses `git stash` write forms and passes everything else to the real git) |
+| `PATH` | `<repo>/src/runtime/gh_wrapper:` first (added when missing), then `<repo>/src/runtime/git_stash_guard:` | `Worker.run` (the wrapper directory holds the agent `gh` of section 3; the guard directory holds a `git` wrapper that refuses `git stash` write forms and passes everything else to the real git) |
 
 The working directory is the run's worktree.
 
@@ -115,6 +125,10 @@ The working directory is the run's worktree.
 | `antigravity` | `GEMINI_API_KEY` and `GOOGLE_API_KEY` removed; `/home/<user>/.local/bin` prepended to `PATH` | `src/backends/antigravity/antigravity_cli.py` |
 | `charlie-code` | `/home/<user>/.local/bin` prepended to `PATH`; `CHARLIE_CODE_API_KEY=<credentials.<credential>.api_key>` when the option names a credential; `HTTP_PROXY`, `HTTPS_PROXY` (`=proxy_url`) and merged `NO_PROXY` when it sets `proxy_url` | `src/backends/charlie_code/charlie_code.py` |
 | `opencode` | The turn's own process (`/usr/bin/sleep infinity`) gets the env unchanged. The same env, plus proxy variables when `proxy_url` is set, plus `BASH_ENV=<repo>/src/backends/opencode/cgroup_join.sh` and `CHARLIEBOT_SESSION_CGROUP=<cgroup dir>` when the session has a cgroup, is sent to the shared server as the session's shell environment (`PUT /api/session/<id>/environment`), so the agent's tool shells see it. | `src/backends/opencode/opencode.py::_put_environment` |
+
+After the backend edit, `AgentRunner.run` calls `gh_wrapper.require_gh_wrapper`: it moves the agent `gh` wrapper
+directory to the front of `PATH` (the `~/.local/bin` prepend above must not win) and refuses a spawn whose `PATH`
+does not resolve `gh` to the wrapper, naming the path it resolves.
 
 ## 5. Other processes the server starts
 

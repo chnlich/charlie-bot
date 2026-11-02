@@ -1,0 +1,586 @@
+#!/bin/sh
+# gh - CharlieBot agent wrapper: a text-carrying GitHub write to a repository
+# where the agent GitHub App is installed goes out under the App, and every
+# other call passes through as the personal login (plan 1 v3, W3).
+#
+# agent_environment (rust/crates/runtime/agents/src/agent_environment.rs) puts
+# this directory first on the PATH of every agent process, and AgentRunner
+# refuses a spawn whose PATH does not resolve gh here. The wrapper classifies
+# the call before it runs anything:
+#
+#   - Text-carrying writes: pr create, pr edit, pr comment, pr review, issue
+#     create, issue edit, issue comment, pr close with -c/--comment, pr merge
+#     with -b/--body or -t/--subject, and gh api whose method is not GET (gh
+#     defaults to POST when fields are given; -X/--method overrides).
+#   - Every other call passes through unchanged, with no token lookup.
+#
+# gh api graphql is classified by its document instead of its method: a
+# document whose operations are all queries passes through unchanged, while a
+# document with a mutation or subscription operation, or one whose operation
+# type cannot be read (an unreadable @file, --input, stdin), is refused.
+#
+# For a text-carrying write the target repository is -R/--repo when given,
+# otherwise the repository gh resolves from the current directory; gh api
+# takes the repos/<owner>/<repo>/ prefix of its path, with {owner} and {repo}
+# expanded as gh expands them. The wrapper then calls the token command named
+# by $CHARLIEBOT_GH_APP_TOKEN_CMD (the host config's github.app_token_command)
+# with --write <owner>/<repo>:
+#   - exit 0: run the real gh with GH_TOKEN set to the printed token;
+#   - exit 3: the App is not installed there; run the real gh unchanged;
+#   - any other exit: report the token command's error and run nothing.
+#
+# A text-carrying write whose target the wrapper cannot resolve is refused
+# before anything runs, with an error that names the -R flag and the REST
+# form. The wrapper never sets GH_TOKEN for a call outside the text-carrying
+# set and never falls back to the personal login after a token error.
+
+set -u
+
+TOKEN_VAR=CHARLIEBOT_GH_APP_TOKEN_CMD
+TOKEN_CMD=${CHARLIEBOT_GH_APP_TOKEN_CMD:-}
+
+# cd must not reroute or print: the self_dir lookup below needs plain chdir
+# semantics.
+unset CDPATH
+
+# Unset PATH is treated as empty: the wrapper then fails loudly below instead
+# of emulating execvp's confstr fallback.
+PATH=${PATH:-}
+
+self_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+
+# Drop this directory from PATH everywhere it appears, preserving the entry
+# structure otherwise: empty entries name the current directory and stay
+# empty. The wrapper execs the real gh by absolute path, so it never calls
+# itself through PATH.
+path_rest=$PATH
+new_path=''
+path_sep=''
+while :; do
+  case $path_rest in
+    *:*)
+      path_entry=${path_rest%%:*}
+      path_rest=${path_rest#*:}
+      path_more=1
+      ;;
+    *)
+      path_entry=$path_rest
+      path_more=0
+      ;;
+  esac
+  if [ "$path_entry" != "$self_dir" ]; then
+    new_path=$new_path$path_sep$path_entry
+    path_sep=:
+  fi
+  [ "$path_more" = 1 ] || break
+done
+PATH=$new_path
+export PATH
+
+# Search PATH for an executable and print the path found. Relative entries
+# resolve against the current directory, like execvp. An entry that resolves
+# physically to this wrapper's own directory is skipped: the entry may spell
+# that directory through a symlink or a relative path, which the string
+# removal above does not catch, and exec'ing this script again would loop.
+find_on_path() {
+  find_name=$1
+  find_rest=$PATH
+  while :; do
+    case $find_rest in
+      *:*)
+        find_dir=${find_rest%%:*}
+        find_rest=${find_rest#*:}
+        find_more=1
+        ;;
+      *)
+        find_dir=$find_rest
+        find_more=0
+        ;;
+    esac
+    if [ -z "$find_dir" ]; then
+      find_dir=.
+    fi
+    case $find_dir in
+      /*) ;;
+      *) find_dir=$PWD/$find_dir ;;
+    esac
+    if [ -x "$find_dir/$find_name" ]; then
+      find_real_dir=$(cd -- "$find_dir" 2>/dev/null && pwd -P)
+      if [ "$find_real_dir" != "$self_dir" ]; then
+        printf '%s\n' "$find_dir/$find_name"
+        return 0
+      fi
+    fi
+    [ "$find_more" = 1 ] || return 1
+  done
+}
+
+real_gh=$(find_on_path gh)
+if [ -z "$real_gh" ]; then
+  printf 'gh-wrapper: no real gh found on PATH\n' >&2
+  exit 127
+fi
+# Belt against a PATH entry whose gh is a symlink onto this script: never exec
+# this script itself.
+if [ "$(cd -- "$(dirname -- "$real_gh")" && pwd -P)" = "$self_dir" ]; then
+  printf "gh-wrapper: '%s' is this wrapper, not the real gh; fix PATH\n" "$0" >&2
+  exit 127
+fi
+
+# The repository gh itself resolves from the current directory, read through
+# the real gh as the personal login: a read-only call.
+cwd_repo() {
+  "$real_gh" repo view --json nameWithOwner -q .nameWithOwner
+}
+
+# Refuse a text-carrying write whose target the wrapper cannot resolve.
+refuse() {
+  printf '%s\n' \
+    'gh-wrapper: cannot resolve the target repository of this write; pass -R <owner>/<repo> to the gh command, or give gh api a REST path of the form repos/<owner>/<repo>/' >&2
+  exit 1
+}
+
+# Print query, mutation or unknown for the GraphQL document on stdin.
+#
+# Comments and string literals (single and block) are skipped, so a keyword
+# inside either does not count. A top-level mutation or subscription keyword
+# makes the document non-query; a top-level query keyword or an anonymous
+# selection set (`{`) makes it a query; a fragment definition is not an
+# operation. Any other shape is unknown, which the caller refuses.
+graphql_document_kind() {
+  awk '
+    { text = text $0 "\n" }
+    END {
+      n = length(text)
+      depth = 0
+      paren = 0
+      fragment = 0
+      operation = 0
+      kind = "unknown"
+      i = 1
+      while (i <= n) {
+        c = substr(text, i, 1)
+        if (c == "#") {
+          while (i <= n && substr(text, i, 1) != "\n") i++
+          continue
+        }
+        if (c == "\"") {
+          if (substr(text, i, 3) == "\"\"\"") {
+            i += 3
+            while (i <= n && substr(text, i, 3) != "\"\"\"") i++
+            i += 3
+            continue
+          }
+          i++
+          while (i <= n) {
+            c = substr(text, i, 1)
+            if (c == "\\") { i += 2; continue }
+            i++
+            if (c == "\"") break
+          }
+          continue
+        }
+        if (c == "{") {
+          if (depth == 0 && paren == 0) {
+            if (fragment) fragment = 0
+            else operation = 1
+          }
+          depth++
+          i++
+          continue
+        }
+        if (c == "}") {
+          if (depth > 0) depth--
+          if (depth == 0) fragment = 0
+          i++
+          continue
+        }
+        if (c == "(") { paren++; i++; continue }
+        if (c == ")") { if (paren > 0) paren--; i++; continue }
+        if (c ~ /[A-Za-z_]/) {
+          start = i
+          while (i <= n && substr(text, i, 1) ~ /[A-Za-z0-9_]/) i++
+          if (depth == 0 && paren == 0) {
+            word = substr(text, start, i - start)
+            if (word == "mutation" || word == "subscription") kind = "mutation"
+            else if (word == "query") { operation = 1; fragment = 0 }
+            else if (word == "fragment") fragment = 1
+          }
+          continue
+        }
+        i++
+      }
+      if (kind != "mutation" && operation) kind = "query"
+      printf "%s\n", kind
+    }
+  '
+}
+
+# Print the operation kind of this gh api graphql call, or unknown when no
+# document can be read: no query field, --input, reading stdin, an unreadable
+# @file, or an empty document.
+graphql_call_kind() {
+  if [ "$api_input" -eq 1 ]; then
+    printf 'unknown\n'
+    return
+  fi
+  if [ "$api_query_found" -eq 1 ]; then
+    if [ "$api_query_file" -eq 0 ]; then
+      printf '%s' "$api_query" | graphql_document_kind
+      return
+    fi
+    if [ "$api_query" != "-" ] && [ -r "$api_query" ] && [ -f "$api_query" ]; then
+      cat -- "$api_query" | graphql_document_kind
+      return
+    fi
+  fi
+  printf 'unknown\n'
+}
+
+# Classify the argv without touching the caller's positionals. Sets:
+#   cmd, action    the first two positional words
+#   repo_flag      the -R/--repo value, empty when absent
+#   api_path       the gh api path argument, empty when absent
+#   api_method     the -X/--method value, empty when absent
+#   api_fields     1 when the call passes field flags or --input
+#   api_input      1 when the call passes --input
+#   api_query      the GraphQL document, or the @file that holds it
+#   api_query_file 1 when api_query names a file
+#   close_comment  1 when the call passes -c/--comment
+#   merge_text     1 when the call passes -b/--body or -t/--subject
+classify() {
+  cmd=
+  action=
+  repo_flag=
+  api_path=
+  api_method=
+  api_fields=0
+  api_input=0
+  api_query=
+  api_query_found=0
+  api_query_file=0
+  close_comment=0
+  merge_text=0
+  words=0
+  end_of_flags=0
+  while [ $# -gt 0 ]; do
+    arg=$1
+    shift
+    if [ "$end_of_flags" -eq 0 ] && [ "$arg" = -- ]; then
+      end_of_flags=1
+      continue
+    fi
+    if [ "$end_of_flags" -eq 0 ]; then
+      case $arg in
+        # Value flags the classification reads. Each accepts the pflag forms:
+        # "-X value", "-X=value", "-Xvalue" and "--long value" / "--long=value".
+        -R)
+          [ $# -gt 0 ] || break
+          repo_flag=$1
+          shift
+          continue
+          ;;
+        -R=*)
+          repo_flag=${arg#-R=}
+          continue
+          ;;
+        -R?*)
+          repo_flag=${arg#-R}
+          continue
+          ;;
+        --repo)
+          [ $# -gt 0 ] || break
+          repo_flag=$1
+          shift
+          continue
+          ;;
+        --repo=*)
+          repo_flag=${arg#--repo=}
+          continue
+          ;;
+        -X)
+          [ $# -gt 0 ] || break
+          api_method=$1
+          shift
+          continue
+          ;;
+        -X=*)
+          api_method=${arg#-X=}
+          continue
+          ;;
+        -X?*)
+          api_method=${arg#-X}
+          continue
+          ;;
+        --method=*)
+          api_method=${arg#--method=}
+          continue
+          ;;
+        --method)
+          [ $# -gt 0 ] || break
+          api_method=$1
+          shift
+          continue
+          ;;
+        -f|-F|--raw-field|--field)
+          [ $# -gt 0 ] || break
+          api_fields=1
+          case $1 in
+            query=*) record_query_value "${1#query=}" ;;
+          esac
+          shift
+          continue
+          ;;
+        --input)
+          [ $# -gt 0 ] || break
+          api_fields=1
+          api_input=1
+          shift
+          continue
+          ;;
+        -f?*|-F?*)
+          api_fields=1
+          case $arg in
+            -fquery=*) record_query_value "${arg#-fquery=}" ;;
+            -f=query=*) record_query_value "${arg#-f=query=}" ;;
+            -Fquery=*) record_query_value "${arg#-Fquery=}" ;;
+            -F=query=*) record_query_value "${arg#-F=query=}" ;;
+          esac
+          continue
+          ;;
+        --raw-field=*|--field=*|--input=*)
+          api_fields=1
+          case $arg in
+            --raw-field=query=*) record_query_value "${arg#--raw-field=query=}" ;;
+            --field=query=*) record_query_value "${arg#--field=query=}" ;;
+            --input=*) api_input=1 ;;
+          esac
+          continue
+          ;;
+        -c?*)
+          close_comment=1
+          continue
+          ;;
+        -b?*|-t?*)
+          merge_text=1
+          continue
+          ;;
+        -c|--comment)
+          [ $# -gt 0 ] || break
+          close_comment=1
+          shift
+          continue
+          ;;
+        -b|--body|-t|--subject)
+          [ $# -gt 0 ] || break
+          merge_text=1
+          shift
+          continue
+          ;;
+        --comment=*)
+          close_comment=1
+          continue
+          ;;
+        --body=*|--subject=*)
+          merge_text=1
+          continue
+          ;;
+        # Value flags the classification does not read; their values are
+        # skipped so they are not mistaken for positional words.
+        -H|-p|-q)
+          [ $# -gt 0 ] || break
+          shift
+          continue
+          ;;
+        -H?*|-H=*|-p?*|-q?*)
+          continue
+          ;;
+        --header|--hostname|--cache|--preview|--body-file|--title|--notes|\
+--milestone|--assignee|--label|--project|--reviewer|--base|--head|--template|--jq)
+          [ $# -gt 0 ] || break
+          shift
+          continue
+          ;;
+        # Every other long flag is boolean (gh api's --paginate, --silent, --verbose), so it cannot push the
+        # API path or the subcommand word out of place.
+        --*)
+          continue
+          ;;
+        # Unknown short flags pass; a value flag among them would put its
+        # value where a positional word could sit, which gh rejects anyway.
+        -?)
+          continue
+          ;;
+      esac
+    fi
+    words=$((words + 1))
+    if [ "$words" -eq 1 ]; then
+      cmd=$arg
+    elif [ "$words" -eq 2 ]; then
+      action=$arg
+      # gh api's path is the first word after the subcommand; only the api
+      # branch reads it.
+      api_path=$arg
+    fi
+  done
+}
+
+# Record the GraphQL document a field flag carries; a leading @ names a file
+# whose operation type is read later.
+record_query_value() {
+  api_query=$1
+  api_query_found=1
+  case $api_query in
+    @*) api_query=${api_query#@} ; api_query_file=1 ;;
+  esac
+}
+
+classify "$@"
+
+# The gh api endpoint with its host and leading slash removed, so a REST path
+# and an absolute URL name the same resource.
+path=
+if [ "$cmd" = api ]; then
+  path=$api_path
+  case $path in
+    *://*)
+      path=${path#*://}
+      path=${path#*/}
+      ;;
+  esac
+  path=${path#/}
+fi
+
+is_text=0
+case $cmd in
+  pr)
+    case $action in
+      create|edit|comment|review)
+        is_text=1
+        ;;
+      close)
+        if [ "$close_comment" -eq 1 ]; then
+          is_text=1
+        fi
+        ;;
+      merge)
+        if [ "$merge_text" -eq 1 ]; then
+          is_text=1
+        fi
+        ;;
+    esac
+    ;;
+  issue)
+    case $action in
+      create|edit|comment)
+        is_text=1
+        ;;
+    esac
+    ;;
+  api)
+    method=$api_method
+    if [ -z "$method" ] && [ "$api_fields" -eq 1 ]; then
+      method=POST
+    fi
+    if [ -z "$method" ]; then
+      method=GET
+    fi
+    case $method in
+      [Gg][Ee][Tt]) ;;
+      *)
+        if [ "$path" = graphql ]; then
+          kind=$(graphql_call_kind)
+          [ -n "$kind" ] || kind=unknown
+          if [ "$kind" != query ]; then
+            refuse
+          fi
+        else
+          is_text=1
+        fi
+        ;;
+    esac
+    ;;
+esac
+
+if [ "$is_text" -ne 1 ]; then
+  exec "$real_gh" "$@"
+fi
+
+if [ -z "$TOKEN_CMD" ]; then
+  printf 'gh-wrapper: the agent GitHub App token command is not configured; set the host config key github.app_token_command, which the server passes to agent processes as %s. Nothing was run.\n' \
+    "$TOKEN_VAR" >&2
+  exit 1
+fi
+
+owner_repo=
+if [ "$cmd" = api ]; then
+  if [ -z "$path" ]; then
+    refuse
+  fi
+  case $path in
+    *'{owner}'*|*'{repo}'*)
+      cwd=$(cwd_repo) || refuse
+      case $cwd in
+        */*/*|*'/') refuse ;;
+        */*) ;;
+        *) refuse ;;
+      esac
+      owner_part=${cwd%%/*}
+      repo_part=${cwd#*/}
+      path=$(printf '%s' "$path" | sed -e "s/{owner}/$owner_part/" -e "s/{repo}/$repo_part/")
+      ;;
+  esac
+  case $path in
+    repos/*/*)
+      rest=${path#repos/}
+      owner=${rest%%/*}
+      rest=${rest#*/}
+      repo=${rest%%/*}
+      if [ -n "$owner" ] && [ -n "$repo" ]; then
+        owner_repo=$owner/$repo
+      fi
+      ;;
+  esac
+  if [ -z "$owner_repo" ]; then
+    refuse
+  fi
+else
+  if [ -n "$repo_flag" ]; then
+    owner_repo=$repo_flag
+  else
+    owner_repo=$(cwd_repo) || refuse
+  fi
+fi
+
+tmp_err=$(mktemp "${TMPDIR:-/tmp}/gh-wrapper.XXXXXX") || exit 1
+
+# The token is captured from stdout into a variable: a file would hold it on disk, readable under the umask.
+status=0
+token=$("$TOKEN_CMD" --write "$owner_repo" 2>"$tmp_err") || status=$?
+
+case $status in
+  0)
+    # The stderr capture never holds the token; remove it before gh replaces this process.
+    rm -f "$tmp_err"
+    if [ -z "$token" ]; then
+      printf 'gh-wrapper: %s --write %s exited 0 but printed no token; nothing was run\n' \
+        "$TOKEN_CMD" "$owner_repo" >&2
+      exit 1
+    fi
+    GH_TOKEN=$token
+    export GH_TOKEN
+    exec "$real_gh" "$@"
+    ;;
+  3)
+    rm -f "$tmp_err"
+    exec "$real_gh" "$@"
+    ;;
+  *)
+    printf 'gh-wrapper: %s --write %s exited %s; nothing was run\n' "$TOKEN_CMD" "$owner_repo" "$status" >&2
+    if [ -s "$tmp_err" ]; then
+      cat "$tmp_err" >&2
+    fi
+    rm -f "$tmp_err"
+    exit "$status"
+    ;;
+esac

@@ -327,6 +327,8 @@ esac
   fn text_writes_mint_an_app_token_for_their_target() {
     let cases: Vec<(Vec<&str>, &str)> = vec![
       (vec!["pr", "create", "-R", "o/r", "--title", "t"], "o/r"),
+      (vec!["pr", "new", "-R", "o/r", "--title", "t"], "o/r"),
+      (vec!["issue", "new", "-R", "o/r", "--title", "t"], "o/r"),
       (vec!["pr", "edit", "-R", "o/r", "12", "--body", "b"], "o/r"),
       (vec!["pr", "comment", "-R", "o/r", "12", "--body-file", "f"], "o/r"),
       (vec!["pr", "review", "-R", "o/r", "12", "--approve"], "o/r"),
@@ -464,6 +466,9 @@ esac
       vec!["api", "graphql", "-f", "query=query { a }", "--input", "body.json"],
       vec!["api", "graphql", "-F", "query=@/synthetic/unreadable-query.graphql"],
       vec!["api", "-X", "GET", "graphql", "-f", "query=mutation { x }"],
+      // Two query fields: gh's order for them is not read, so the document is unknown whichever one is a mutation.
+      vec!["api", "graphql", "-f", "query={viewer{login}}", "-F", "query=@/synthetic/mutation.graphql"],
+      vec!["api", "graphql", "-f", "query={viewer{login}}", "-f", "query={viewer{name}}"],
     ];
 
     for args in &cases {

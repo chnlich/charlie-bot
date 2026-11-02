@@ -17,7 +17,8 @@
 # gh api graphql is classified by its document instead of its method: a
 # document whose operations are all queries passes through unchanged, while a
 # document with a mutation or subscription operation, or one whose operation
-# type cannot be read (an unreadable @file, --input, stdin), is refused.
+# type cannot be read (an unreadable @file, --input, stdin, two query fields),
+# is refused.
 #
 # For a text-carrying write the target repository is -R/--repo when given,
 # otherwise the repository gh resolves from the current directory; gh api
@@ -217,10 +218,10 @@ graphql_document_kind() {
 }
 
 # Print the operation kind of this gh api graphql call, or unknown when no
-# document can be read: no query field, --input, reading stdin, an unreadable
-# @file, or an empty document.
+# document can be read: no query field, two query fields, --input, reading
+# stdin, an unreadable @file, or an empty document.
 graphql_call_kind() {
-  if [ "$api_input" -eq 1 ]; then
+  if [ "$api_input" -eq 1 ] || [ "$api_query_ambiguous" -eq 1 ]; then
     printf 'unknown\n'
     return
   fi
@@ -263,6 +264,7 @@ value_letters() {
 #   api_input      1 when the call passes --input
 #   api_query      the GraphQL document, or the @file that holds it
 #   api_query_file 1 when api_query names a file
+#   api_query_ambiguous 1 when the call names two query fields
 #   close_comment  1 when the call passes -c/--comment
 #   merge_text     1 when the call passes -b/--body or -t/--subject
 classify() {
@@ -276,6 +278,7 @@ classify() {
   api_query=
   api_query_found=0
   api_query_file=0
+  api_query_ambiguous=0
   close_comment=0
   merge_text=0
   words=0
@@ -475,10 +478,15 @@ classify() {
 }
 
 # Record the GraphQL document a field flag carries; a leading @ names a file
-# whose operation type is read later.
+# whose operation type is read later. A second query field makes the document
+# unknown: the order in which gh applies two query fields is not read here.
 record_query_value() {
+  if [ "$api_query_found" -eq 1 ]; then
+    api_query_ambiguous=1
+  fi
   api_query=$1
   api_query_found=1
+  api_query_file=0
   case $api_query in
     @*) api_query=${api_query#@} ; api_query_file=1 ;;
   esac
@@ -504,7 +512,7 @@ is_text=0
 case $cmd in
   pr)
     case $action in
-      create|edit|comment|review)
+      create|new|edit|comment|review)
         is_text=1
         ;;
       close)
@@ -521,7 +529,7 @@ case $cmd in
     ;;
   issue)
     case $action in
-      create|edit|comment)
+      create|new|edit|comment)
         is_text=1
         ;;
     esac

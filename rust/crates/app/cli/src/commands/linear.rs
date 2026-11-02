@@ -24,11 +24,11 @@ struct LinearCli {
 
 #[derive(Subcommand)]
 enum LinearCommand {
-  Graphql(GraphqlArgs),
+  Request(RequestArgs),
 }
 
 #[derive(Args)]
-struct GraphqlArgs {
+struct RequestArgs {
   #[arg(long, value_name = "PATH")]
   file: Option<PathBuf>,
 }
@@ -43,7 +43,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   };
   let cli = LinearCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   match cli.command {
-    LinearCommand::Graphql(args) => {
+    LinearCommand::Request(args) => {
       let request_body = read_request(args.file.as_deref())?;
       let home = home::charliebot_home_dir()
         .map_err(|_| credential_failure(Path::new(&home::display_path(config::CREDENTIALS_FILENAME))))?;

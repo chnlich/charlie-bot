@@ -1,11 +1,10 @@
-//! `charliebot schedule-trigger`: register a wake that fires when the watched
+//! The `session trigger` verb: register a wake that fires when the watched
 //! targets finish or `--max-wait` elapses, or start `--cmd` detached and register the wake on its wrapper.
 //!
 //! Exit codes: 0 registered; 2 usage error, a 422 refusal or a failed readback check; 3 the ssh start failed or the
 //! remote PID did not parse (nothing registered); 1 the client contract. Under `--cmd` every failed registration exits
 //! 2 after the started wrapper is killed.
 
-use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -167,10 +166,11 @@ impl Args {
   }
 }
 
-/// The argument parser: unique long-option prefixes, and the last value of a repeated flag.
-fn command() -> Command {
+/// The trigger verb's parser for the `session` command: unique long-option prefixes, and the last
+/// value of a repeated flag.
+pub fn command() -> Command {
   with_infer_long_args(
-    Command::new("schedule-trigger")
+    Command::new("trigger")
       .about("Schedule a delayed trigger for a CharlieBot session")
       .arg(
         Arg::new("session")
@@ -231,15 +231,9 @@ fn command() -> Command {
   )
 }
 
-/// Parse the schedule-trigger arguments and run the registration. Parser errors print and exit on their own
-/// (a usage error exits 2).
-pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let argv = std::iter::once(OsString::from("charliebot schedule-trigger")).chain(args.iter().cloned());
-  let matches = match command().try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let args = Args::from_matches(&matches);
+/// Run one parsed `session trigger` invocation: the registration.
+pub fn run(matches: &ArgMatches) -> Result<(), CliExit> {
+  let args = Args::from_matches(matches);
   if args.cmd.is_some() && args.watch.is_some() {
     return Err(CliExit::usage(
       "--cmd and --watch are mutually exclusive: the trigger watches the one process --cmd starts",

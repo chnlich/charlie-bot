@@ -1,12 +1,15 @@
 {
   "argv": [
-    "schedule-trigger",
+    "session",
+    "trigger",
     "--session",
     "s1",
-    "--max",
+    "--max-wait",
     "60",
     "--message",
-    "m"
+    "first",
+    "--message",
+    "second"
   ],
   "cwd": "{root}",
   "files": {
@@ -38,7 +41,7 @@
         "body": {
           "session_id": "s1",
           "delay_seconds": 60,
-          "message": "m"
+          "message": "second"
         }
       }
     ]

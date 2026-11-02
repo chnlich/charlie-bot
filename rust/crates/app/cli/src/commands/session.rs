@@ -1,5 +1,5 @@
 //! The `session` verbs: create, tree, retry, archive, acknowledge,
-//! cancel, reparent, send, dialog.
+//! cancel, reparent, send, dialog, trigger.
 //!
 //! `create` builds session metadata only (no first message); with `--parent` it becomes the v2
 //! task create whose (parent, request_id) binds one stable node. `archive` and `cancel` keep the
@@ -13,6 +13,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use crate::commands::session_trigger;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -34,7 +35,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
 /// Exit code when the server refuses the send (over-limit message): the usage-error exit code,
-/// matching schedule-trigger's 422 mapping.
+/// matching the session trigger's 422 mapping.
 const EXIT_SEND_REFUSED: i32 = 2;
 
 /// The events endpoint's clamp; the fewest requests a full dialog history admits.
@@ -222,14 +223,20 @@ struct DialogArgs {
 }
 
 /// Parse the session arguments and run one verb. Parser errors print and exit on their own: help
-/// exits 0, a usage error exits 2.
+/// exits 0, a usage error exits 2. The `trigger` verb keeps its own parser
+/// ([`session_trigger::command`]) and rides the same `session` parse, so its registration logic
+/// stays in one place.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = send_source_group(with_infer_long_args(SessionCli::command()));
+  let command = send_source_group(with_infer_long_args(SessionCli::command().subcommand(session_trigger::command())));
   let argv = std::iter::once(OsString::from("charliebot session")).chain(args.iter().cloned());
   let matches = match command.try_get_matches_from(argv) {
     Ok(matches) => matches,
     Err(error) => error.exit(),
   };
+  if matches.subcommand_name() == Some("trigger") {
+    let trigger = matches.subcommand_matches("trigger").expect("the trigger verb matched");
+    return session_trigger::run(trigger);
+  }
   let cli = SessionCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   match cli.command {
     SessionCommand::Create(args) => create(&args),

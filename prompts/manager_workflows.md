@@ -65,10 +65,10 @@ See `charliebot delegate --help` for flags, task-type profiles, `--keep-worktree
 Iterative change→run→verify loop; workers are fully autonomous (human on the loop, not in
 the loop). Use improve when the task needs iteration/convergence ("make it better until X",
 tuning, repeated test-fix); use one-shot delegation when there's a discrete deliverable.
-`charliebot improve` is non-blocking; the completion summary arrives as an async event —
+`charliebot improve start` is non-blocking; the completion summary arrives as an async event —
 receive it, do not poll. Steer a running loop by editing goal.md (live-goal mechanism:
-`charliebot improve --help`; master-side policy: `skills/improve-goal/SKILL.md`).
-Approval follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for flags,
+`charliebot improve start --help`; master-side policy: `skills/improve-goal/SKILL.md`).
+Approval follows `skills/plan-approval/SKILL.md`. See `charliebot improve start --help` for flags,
 `--goal-file`, `--work-branch`, and `--merge-back`.
 
 When a session manages several improve loops, run each loop in its own child session.

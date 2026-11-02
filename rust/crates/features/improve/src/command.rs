@@ -79,10 +79,10 @@ impl fmt::Display for ImproveLoopAlreadyRunningError {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self.loop_id {
       None => {
-        formatter.write_str("An improve loop is already running for this session. Use charliebot improve-stop first.")
+        formatter.write_str("An improve loop is already running for this session. Use charliebot improve stop first.")
       }
       Some(loop_id) => {
-        write!(formatter, "Loop {loop_id} is already running for this session. Use charliebot improve-stop first.")
+        write!(formatter, "Loop {loop_id} is already running for this session. Use charliebot improve stop first.")
       }
     }
   }

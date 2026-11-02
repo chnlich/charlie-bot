@@ -1,4 +1,4 @@
-//! The `schedule-trigger` process tests. Each runs the built `charliebot` against a stub internal API on 127.0.0.1
+//! The `session trigger` process tests. Each runs the built `charliebot` against a stub internal API on 127.0.0.1
 //! and, for `--host`, a stub `ssh` that comes first on the CLI's PATH. Every CLI process gets a cleared environment
 //! and only the variables named here, with CHARLIEBOT_HOME and HOME inside the test's temp root. Each test that starts
 //! a wrapper kills its process group before it returns. Only the ssh localhost test runs the real ssh.
@@ -192,16 +192,17 @@ impl Sandbox {
     self.home.join("sessions")
   }
 
-  /// Run `charliebot schedule-trigger ARGS` with HOME in the temp root.
+  /// Run `charliebot session trigger ARGS` with HOME in the temp root.
   fn run(&self, args: &[&str]) -> Run {
     self.run_as(args, self.root.path())
   }
 
-  /// Run `charliebot schedule-trigger ARGS` with the given HOME: the environment holds only these four variables.
+  /// Run `charliebot session trigger ARGS` with the given HOME: the environment holds only these four variables.
   fn run_as(&self, args: &[&str], home: &Path) -> Run {
     let path = format!("{}:/usr/bin:/bin", self.bin.display());
     let mut child = Command::new(env!("CARGO_BIN_EXE_charliebot"))
-      .arg("schedule-trigger")
+      .arg("session")
+      .arg("trigger")
       .args(args)
       .current_dir(self.root.path())
       .env_clear()

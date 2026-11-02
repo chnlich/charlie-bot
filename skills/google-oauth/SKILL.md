@@ -94,7 +94,7 @@ The account owner gives consent in a browser. Only the owner can do this step.
 2. Send the URL to the account owner. When the email address is still unknown, ask the owner for it in the same message.
 3. The owner signs in to that account and approves.
 4. The owner copies the full URL from the browser address bar after the redirect to `http://localhost`.
-5. Run `charliebot google add <name> --email <email address> --redirect-url '<redirect URL>' --description '<one line>' [--owner <person>]`.
+5. Run `charliebot google exchange-code <name> --email <email address> --redirect-url '<redirect URL>' --description '<one line>' [--owner <person>]`.
 6. Report the email address that `add` prints.
 
 When the `google` section sets `owner`, pass `--owner` with the person name of the account owner.

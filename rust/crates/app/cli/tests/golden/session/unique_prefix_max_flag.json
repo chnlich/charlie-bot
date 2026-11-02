@@ -1,23 +1,25 @@
 {
   "argv": [
-    "schedule-trigger",
+    "session",
+    "trigger",
     "--session",
     "s1",
-    "--max-wait",
+    "--max",
     "60",
     "--message",
-    "m",
-    "--watch",
-    "12345"
+    "m"
   ],
   "cwd": "{root}",
   "files": {
-    "home/config.yaml": "server:\n  port: {port}\n",
-    "home/sessions/s1/triggers/trig-1.json": "{\"id\": \"trig-1\", \"status\": \"pending\", \"message\": \"m\", \"watch_targets\": [{\"kind\": \"local_pid\", \"pid\": 12345}], \"created_at\": \"2026-10-08T00:00:00+00:00\", \"fire_at\": \"2026-10-08T00:11:00+00:00\"}"
+    "home/config.yaml": "server:\n  port: {port}\n"
   },
   "responses": [
     {
-      "drop_after_request": true
+      "status": 200,
+      "body": {
+        "trigger_id": "trig-1",
+        "fire_at": "2026-10-08T00:11:00+00:00"
+      }
     }
   ],
   "expect": {
@@ -37,13 +39,7 @@
         "body": {
           "session_id": "s1",
           "delay_seconds": 60,
-          "message": "m",
-          "watch_targets": [
-            {
-              "kind": "local_pid",
-              "pid": 12345
-            }
-          ]
+          "message": "m"
         }
       }
     ]

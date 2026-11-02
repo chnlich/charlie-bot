@@ -1,6 +1,7 @@
 {
   "argv": [
     "improve",
+    "start",
     "--session",
     "s1",
     "--repo",

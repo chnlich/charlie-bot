@@ -1,4 +1,4 @@
-//! The improve loop: `charliebot improve` runs an iterative worker loop on the task tree as one sequence.
+//! The improve loop: `charliebot improve start` runs an iterative worker loop on the task tree as one sequence.
 
 pub mod api;
 pub mod cli;

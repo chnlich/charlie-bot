@@ -1,4 +1,4 @@
-//! The internal improve routes behind `charliebot improve` and `charliebot improve-stop`.
+//! The internal improve routes behind `charliebot improve start` and `charliebot improve stop`.
 
 use std::fmt::Display;
 use std::sync::Arc;

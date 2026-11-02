@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 31 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 28 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
 //! the not-ported JSON error and exits 1.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 31] = [
+const COMMANDS: [&str; 28] = [
   "artifact",
   "compaction-context",
   "config",
@@ -29,16 +29,13 @@ const COMMANDS: [&str; 31] = [
   "gc-trash",
   "google",
   "improve",
-  "improve-stop",
   "linear",
   "memory",
   "plan",
-  "policy",
   "preflight-charlie-code",
   "publish",
   "release-helper",
   "router",
-  "schedule-trigger",
   "scan-guard",
   "session",
   "setup",
@@ -116,11 +113,9 @@ fn run_subcommand(
     "gc-trash" => commands::gc_trash::main(args, host),
     "google" => commands::google::main(args),
     "improve" => charliebot_improve::cli::improve_main(args),
-    "improve-stop" => charliebot_improve::cli::stop_main(args),
     "linear" => commands::linear::main(args),
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
-    "policy" => commands::policy::main(args),
     "preflight-charlie-code" => commands::preflight_charlie_code::main(args),
     "publish" => charliebot_artifacts::cli::publish::main(args, host),
     "release-helper" => commands::release_helper::main(args),
@@ -129,7 +124,6 @@ fn run_subcommand(
       Ok(())
     }
     "scan-guard" => commands::scan_guard::main(args),
-    "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
     "setup" => commands::setup::main(args),
     "slack" => charliebot_slack::cli::main(args),

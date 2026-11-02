@@ -1,6 +1,6 @@
-//! The `charliebot improve` and `charliebot improve-stop` verbs.
+//! The `improve` verbs: `start` launches the loop, `stop` stops it.
 //!
-//! `improve` reads the goal file (and the optional plan file), posts them to
+//! `improve start` reads the goal file (and the optional plan file), posts them to
 //! `/api/internal/improve`, and returns immediately; the iteration loop runs on the server. The
 //! verb's readback proves a launch whose response was lost: the newest loop directory whose
 //! `goal.md` equals the sent goal, plus that loop's one worker child.
@@ -16,7 +16,7 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
 use charliebot_store::layout;
-use clap::{CommandFactory, FromArgMatches, Parser};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
 use crate::sequence;
@@ -37,12 +37,23 @@ iteration slot.
 "#;
 
 #[derive(Parser)]
-#[command(
-  name = "improve",
-  about = "Run an iterative improvement loop via CharlieBot workers",
-  after_help = IMPROVE_EPILOG
-)]
+#[command(name = "improve", about = "Iterative improvement loops run by CharlieBot workers")]
 struct ImproveCli {
+  #[command(subcommand)]
+  verb: ImproveVerb,
+}
+
+#[derive(Subcommand)]
+enum ImproveVerb {
+  /// Run an iterative improvement loop via CharlieBot workers
+  Start(StartArgs),
+  /// Stop this session's active improve loop after the current iteration
+  Stop(StopArgs),
+}
+
+#[derive(Args)]
+#[command(after_help = IMPROVE_EPILOG)]
+struct StartArgs {
   #[arg(long, help = SESSION_HELP)]
   session: Option<String>,
   #[arg(long, required = true, help = "Path to the git repo workers should operate on")]
@@ -71,40 +82,53 @@ struct ImproveCli {
   merge_back: bool,
 }
 
-#[derive(Parser)]
-#[command(name = "improve-stop", about = "Stop this session's active improve loop after the current iteration")]
-struct StopCli {
+#[derive(Args)]
+struct StopArgs {
   #[arg(long, help = SESSION_HELP)]
   session: Option<String>,
 }
 
-/// `charliebot improve`: read the goal and optional plan, launch the loop, print the launch answer.
+/// The improve namespace: the dispatcher's vocabulary entry and the parser's usage-prefix second
+/// word, joined to the program name at parse time.
+const NAMESPACE: &str = "improve";
+
+/// Parse the improve verb and run it. Parser errors print and exit on their own: help
+/// exits 0, a usage error exits 2.
 pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   let mut command = with_infer_long_args(ImproveCli::command());
-  let argv = std::iter::once(OsString::from("charliebot improve")).chain(args.iter().cloned());
+  let argv = std::iter::once(OsString::from(format!("charliebot {NAMESPACE}"))).chain(args.iter().cloned());
   let matches = match command.clone().try_get_matches_from(argv) {
     Ok(matches) => matches,
     Err(error) => error.exit(),
   };
   let cli = ImproveCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  match cli.verb {
+    ImproveVerb::Start(start) => {
+      args::validate_repo_path(&mut command, &start.repo);
+      start_loop(&start)
+    }
+    ImproveVerb::Stop(stop) => stop_loop(&stop),
+  }
+}
 
-  args::validate_repo_path(&mut command, &cli.repo);
-  let session_id = resolve::resolve_from_env(cli.session.as_deref())?;
-  let goal = files::read_required_text_file("--goal-file", &cli.goal_file)?;
-  let plan = match &cli.plan_file {
+/// `improve start`: read the goal and optional plan, launch the loop, print the launch answer.
+fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
+  let session_id = resolve::resolve_from_env(args.session.as_deref())?;
+  let goal = files::read_required_text_file("--goal-file", &args.goal_file)?;
+  let plan = match &args.plan_file {
     Some(path) => Some(files::read_required_text_file("--plan-file", path)?),
     None => None,
   };
 
   let mut payload = Map::new();
   payload.insert("session_id".to_string(), json!(session_id));
-  payload.insert("repo_path".to_string(), json!(cli.repo));
-  payload.insert("base_branch".to_string(), json!(cli.base_branch));
-  payload.insert("backend".to_string(), optional_string(&cli.backend));
-  payload.insert("iterations".to_string(), json!(cli.iterations));
+  payload.insert("repo_path".to_string(), json!(args.repo));
+  payload.insert("base_branch".to_string(), json!(args.base_branch));
+  payload.insert("backend".to_string(), optional_string(&args.backend));
+  payload.insert("iterations".to_string(), json!(args.iterations));
   payload.insert("goal".to_string(), json!(goal));
-  payload.insert("work_branch".to_string(), optional_string(&cli.work_branch));
-  payload.insert("merge_back".to_string(), json!(cli.merge_back));
+  payload.insert("work_branch".to_string(), optional_string(&args.work_branch));
+  payload.insert("merge_back".to_string(), json!(args.merge_back));
   if let Some(plan_text) = &plan {
     payload.insert("plan".to_string(), json!(plan_text));
   }
@@ -113,7 +137,7 @@ pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   let readback_session = session_id.clone();
   let readback_goal = goal.clone();
   let readback_plan = plan.clone();
-  let iterations = cli.iterations;
+  let iterations = args.iterations;
   let readback =
     move || Ok(readback_launch(&home, &readback_session, &readback_goal, readback_plan.as_deref(), iterations));
   let result = client::post("/api/internal/improve", Value::Object(payload), Some(Box::new(readback)), &[])?;
@@ -122,17 +146,9 @@ pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// `charliebot improve-stop`: stop the session's running loop and report the server's ack.
-pub fn stop_main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(StopCli::command());
-  let argv = std::iter::once(OsString::from("charliebot improve-stop")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = StopCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
-
-  let session_id = resolve::resolve_from_env(cli.session.as_deref())?;
+/// `improve stop`: stop the session's running loop and report the server's ack.
+fn stop_loop(args: &StopArgs) -> Result<(), CliExit> {
+  let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   client::post("/api/internal/improve/stop", json!({ "session_id": session_id }), None, &[])?;
   println!("stopped");
   Ok(())

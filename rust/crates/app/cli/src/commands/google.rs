@@ -2,7 +2,7 @@
 //!
 //! `request` mints the selected account's access token inside this process, sends one HTTP request
 //! and prints the response body. `list` prints the account table. `consent-url` builds the account
-//! owner's consent link and `add` exchanges the browser redirect for a refresh token and stores it
+//! owner's consent link and `exchange-code` exchanges the browser redirect for a refresh token and stores it
 //! atomically in `credentials.yaml`. The token never reaches a command line, an output stream or a
 //! run record.
 
@@ -57,7 +57,7 @@ enum GoogleCommand {
   Request(RequestCommand),
   List(ListArgs),
   ConsentUrl(ConsentUrlArgs),
-  Add(AddArgs),
+  ExchangeCode(ExchangeCodeArgs),
 }
 
 #[derive(Args)]
@@ -84,7 +84,7 @@ struct ConsentUrlArgs {
 }
 
 #[derive(Args)]
-struct AddArgs {
+struct ExchangeCodeArgs {
   /// The account name whose section receives the refresh token.
   name: String,
   /// The email address the consenting account must answer with.
@@ -125,7 +125,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
       let url = consent_url(&table, &args.name, args.email.as_deref())?;
       request::write_stdout(format!("{url}\n").as_bytes())
     }
-    GoogleCommand::Add(args) => {
+    GoogleCommand::ExchangeCode(args) => {
       let email = add_account(
         &table,
         &args.name,
@@ -135,13 +135,13 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
         args.owner.as_deref(),
         &endpoints,
       )?;
-      request::write_stdout(add_output(&args.name, &email).as_bytes())
+      request::write_stdout(exchange_code_output(&args.name, &email).as_bytes())
     }
   }
 }
 
-/// The `add` verb's stdout line.
-fn add_output(name: &str, email: &str) -> String {
+/// The `exchange-code` verb's stdout line.
+fn exchange_code_output(name: &str, email: &str) -> String {
   format!("{name}: {email}\n")
 }
 
@@ -1856,7 +1856,7 @@ appointments and the tax paperwork of the household";
     let updated = std::fs::read(&path).unwrap();
     let parsed: Yaml = serde_yaml::from_slice(&updated).unwrap();
     assert_eq!(email, "person@example.invalid");
-    assert_eq!(add_output("personal", &email), "personal: person@example.invalid\n");
+    assert_eq!(exchange_code_output("personal", &email), "personal: person@example.invalid\n");
     assert_eq!(updated, APPEND_REFERENCE_BYTES.as_bytes());
     assert!(updated.starts_with(&original));
     assert_eq!(parsed["google_account_personal"]["refresh_token"], "new-refresh");
@@ -1923,7 +1923,7 @@ appointments and the tax paperwork of the household";
 
     let updated = std::fs::read(credentials_path(&home)).unwrap();
     assert_eq!(email, "person@example.invalid");
-    assert_eq!(add_output("personal", &email), "personal: person@example.invalid\n");
+    assert_eq!(exchange_code_output("personal", &email), "personal: person@example.invalid\n");
     assert_eq!(updated, INSERT_REFERENCE_BYTES.as_bytes());
     let updated_text = String::from_utf8(updated).unwrap();
     let (head, rest) = updated_text.split_once("google_account_personal:\n").expect("the pending section stays");
@@ -2047,7 +2047,7 @@ appointments and the tax paperwork of the household";
     let updated_lines: Vec<String> =
       std::fs::read_to_string(credentials_path(&home)).unwrap().lines().map(str::to_string).collect();
     assert_eq!(email, "person@example.invalid");
-    assert_eq!(add_output("personal", &email), "personal: person@example.invalid\n");
+    assert_eq!(exchange_code_output("personal", &email), "personal: person@example.invalid\n");
     assert_eq!(updated_lines.len(), original_lines.len());
     let changes: Vec<(&String, &String)> =
       original_lines.iter().zip(&updated_lines).filter(|(before, after)| before != after).collect();

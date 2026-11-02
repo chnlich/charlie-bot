@@ -36,15 +36,18 @@ A candidate becomes a row when the user:
 - rejects a working result and states a preference.
 
 An approval is a short user message, such as 同意, 可以, LGTM or 按推荐来, that accepts what the agent
-proposed. It becomes one `choice` row for the item the reply laid out when all of these hold:
-- the `previous_web_reply` laid out two or more options for the item;
-- the reply recommended one of them;
-- the user's approval accepted the recommendation.
+proposed. A take-off and a go-ahead are approvals of a step. Each of the three yields one `choice` row
+for each fork that the reply, or the page the reply links, laid out when all of these hold:
+- the fork names two or more options;
+- the reply or the page recommends one of them;
+- the user's words accept that recommendation.
 
-The row's `options` are the options the reply laid out, and `recommended` and `chosen` are the
-recommendation. An approval of a step that offered no alternative — a take-off, a go-ahead on a single
-proposal — becomes no row. Without the approval rule the table would hold the user's overrides alone and
-teach that the user rejects recommendations.
+The row's `options` are the fork's named options, and `recommended` and `chosen` are the recommendation.
+The step itself yields no row: a take-off, a go-ahead, and a step whose only alternatives are to skip it
+or to revise it first offer no choice between named options, so the step holds no preference to record.
+One message can accept a step and a fork together, and one page can hold several forks; each accepted
+fork is its own decision and gets its own row. Without the approval rule the table would hold the user's
+overrides alone and teach that the user rejects recommendations.
 
 A candidate that reports a defect or asks for new work becomes no row.
 
@@ -56,18 +59,18 @@ It becomes no row, because a preference holds across situations and a row holds 
 
 ## Rows
 
-Write one row for each candidate that qualifies. A row carries:
+Write one row for each decision that qualifies. A candidate can hold several decisions: a comment batch
+answers several numbered items, and one message can accept several forks of a page. A row carries:
 - `decided_at`: the candidate's `timestamp`;
 - `domain`: `<area>/<topic>`. Use a domain that `charliebot taste index` already lists when one fits the
   situation;
 - `kind`: `choice` when the user picked among options, and `rejection` when the user rejected a working
   result;
 - `situation`: one or two sentences;
-- `options`: every option the candidate names — for an approval, every option its `previous_web_reply`
-  laid out — and `[]` when it names none. A rejection lists the delivered result and the result the user
-  asked for;
-- `recommended`: the recommendation that the candidate or, for an approval, the `previous_web_reply`
-  names, or `null`;
+- `options`: every option the candidate names (for an approval, every named option of the fork) and
+  `[]` when it names none. A rejection lists the delivered result and the result the user asked for;
+- `recommended`: the recommendation that the candidate or, for an approval, the reply or the page names,
+  or `null`;
 - `chosen`: the option the user picked, or the result the user asked for;
 - `reason`: the user's words for the choice, or `未说明` when the candidate states no reason;
 - `source`: `session_id` and `url` from the candidate, exactly one of `event_id` or `plan_version` from
@@ -80,6 +83,13 @@ row, and the row records the number of the comment it comes from in `source.comm
 check tells decisions of one event apart by that number, so two items of one batch land as two rows even
 when they choose the same text, while a second extraction of the same item stays refused. A candidate that
 is not a comment batch carries no `comment_item`.
+
+One decision keeps one row. A plan note can restate a decision that the user's own words already record,
+and an active row can record a decision with other wording or without `comment_item`. The decision's row
+comes from the user's own words, because a row records the user's choice and a note is the agent's
+restatement. A second row for a recorded decision would count one choice twice, so compare each new
+decision with the domain's active rows that the Reversals section has you read: `charliebot taste add`
+refuses only an exact repeat, and a repeat with other wording slips past it.
 
 Write each row with `charliebot taste add --file <row.json>`. The command validates every field, assigns
 the id and refuses a duplicate. A refusal that names an existing row means that candidate already has a

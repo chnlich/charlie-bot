@@ -1894,7 +1894,11 @@ fn claude_error_result(api_error_status: Value, result: &str) -> Value {
 /// Launch an implement worker's first run, which prints `first_events` and exits 1, and wait for it to end. A
 /// pool-chosen worker takes the pool's first member; a named worker takes `fake`. The retry on the next member prints
 /// one assistant line and exits 1, and the manager's turn after the failure report prints one result.
-async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) -> anyhow::Result<ErrorEventRun> {
+async fn launch_error_event_worker(
+  first_events: &[Value],
+  pool_chosen: bool,
+  context_work: bool,
+) -> anyhow::Result<ErrorEventRun> {
   let retry_events =
     [json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": "retry stopped"}]}})];
   let scripts =
@@ -1922,6 +1926,7 @@ async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) ->
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
+    context_work,
     ..TaskSpec::default()
   };
   let worker = stack
@@ -2031,7 +2036,7 @@ async fn assert_no_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
   settle_node(stack, &error.manager_id).await
 }
 
-/// The named-backend worker: its delegation named the backend, so it is not pool-chosen and has no route.
+/// The worker whose backend the delegation named, or `backends.strong` resolved: not pool-chosen, and no route.
 async fn assert_named_worker(error: &ErrorEventRun) -> anyhow::Result<()> {
   let meta = error.stack.store().load_task_meta(&error.worker_id).await?;
   assert_ne!(meta.extra("backend_from_pool"), Some(&Value::Bool(true)), "a named worker is not pool-chosen");
@@ -2052,14 +2057,14 @@ fn assert_result_logged(error: &ErrorEventRun, result: &str) -> anyhow::Result<(
 // Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (capacity).
 #[tokio::test]
 async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
 // Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (no output).
 #[tokio::test]
 async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true).await?;
+  let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
@@ -2067,7 +2072,7 @@ async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result
 #[tokio::test]
 async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
@@ -2075,14 +2080,14 @@ async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()>
 #[tokio::test]
 async fn internal_server_error_with_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
 // Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (500).
 #[tokio::test]
 async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true).await?;
+  let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
@@ -2091,7 +2096,7 @@ async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result
 async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "OpenCode backend failed: OpenCode SSE stream carried no session progress for 3600.0 s \
     (heartbeats during silence: 359)";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
@@ -2100,7 +2105,7 @@ async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow:
 async fn opencode_closed_peer_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "OpenCode backend failed: peer closed connection without sending complete message body \
     (incomplete chunked read)";
-  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  let error = launch_error_event_worker(&[error_event(message, "")], true, false).await?;
   assert_temporary_failover(&error).await
 }
 
@@ -2110,6 +2115,7 @@ async fn step_limit_error_with_bad_gateway_content_does_not_fail_over() -> anyho
   let error = launch_error_event_worker(
     &[error_event("Step limit (1000) exceeded without task completion.", "Bad Gateway")],
     true,
+    false,
   )
   .await?;
   assert_no_failover(&error).await
@@ -2118,9 +2124,12 @@ async fn step_limit_error_with_bad_gateway_content_does_not_fail_over() -> anyho
 // Python: tests/test_backend_router.py::test_stderr_tail_and_request_id_do_not_trigger_backend_failover, the 400 case.
 #[tokio::test]
 async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()> {
-  let error =
-    launch_error_event_worker(&[error_event("Error code: 400 - invalid request (request id req_502ab1)", "")], true)
-      .await?;
+  let error = launch_error_event_worker(
+    &[error_event("Error code: 400 - invalid request (request id req_502ab1)", "")],
+    true,
+    false,
+  )
+  .await?;
   assert_no_failover(&error).await
 }
 
@@ -2128,15 +2137,26 @@ async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()
 #[tokio::test]
 async fn system_event_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
   let event = json!({"type": event_types::SYSTEM, "message": CAPACITY_MESSAGE, "content": ""});
-  let error = launch_error_event_worker(&[event], true).await?;
+  let error = launch_error_event_worker(&[event], true, false).await?;
   assert_no_failover(&error).await
 }
 
 // Python: tests/test_backend_router.py::test_a_named_backend_capacity_error_reports_failure_without_failover
 #[tokio::test]
 async fn a_named_backend_capacity_error_reports_failure_without_failover() -> anyhow::Result<()> {
-  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false).await?;
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false, false).await?;
   assert_named_worker(&error).await?;
+  assert_no_failover(&error).await
+}
+
+/// A backend that `backends.strong` resolved behaves like a named one: a quota failure fails the run to the parent, and
+/// the record keeps the context-work declaration.
+#[tokio::test]
+async fn a_strong_backend_capacity_error_reports_failure_without_failover() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false, true).await?;
+  assert_named_worker(&error).await?;
+  let meta = error.stack.store().load_task_meta(&error.worker_id).await?;
+  assert_eq!(meta.task.as_ref().map(|task| task.context_work), Some(true), "the record keeps the declaration");
   assert_no_failover(&error).await
 }
 
@@ -2144,7 +2164,7 @@ async fn a_named_backend_capacity_error_reports_failure_without_failover() -> an
 #[tokio::test]
 async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
-  let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
@@ -2153,7 +2173,7 @@ async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()>
 #[tokio::test]
 async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
-  let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
@@ -2162,7 +2182,7 @@ async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()>
 #[tokio::test]
 async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded";
-  let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
@@ -2171,7 +2191,7 @@ async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()>
 #[tokio::test]
 async fn claude_result_without_status_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: Connection error.";
-  let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true, false).await?;
   assert_result_logged(&error, result)?;
   assert_temporary_failover(&error).await
 }
@@ -2181,7 +2201,7 @@ async fn claude_result_without_status_connection_error_fails_over_on_the_worker_
 async fn claude_result_400_reasoning_error_does_not_fail_over() -> anyhow::Result<()> {
   let result = "API Error: 400 litellm.BadRequestError: OpenAIException - The `reasoning_content` in the thinking mode \
     must be passed back to the API. (request_id: f69ad0ec-cd32-4570-917d-7689ec630120)";
-  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true, false).await?;
   assert_no_failover(&error).await
 }
 
@@ -2189,7 +2209,7 @@ async fn claude_result_400_reasoning_error_does_not_fail_over() -> anyhow::Resul
 #[tokio::test]
 async fn claude_result_400_mentioning_bad_gateway_does_not_fail_over() -> anyhow::Result<()> {
   let result = "API Error: 400 litellm.BadRequestError: upstream reported Bad Gateway";
-  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true, false).await?;
   assert_no_failover(&error).await
 }
 
@@ -2203,7 +2223,7 @@ async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> 
     "api_error_status": null,
     "result": "Fixed the Bad Gateway handler.",
   });
-  let error = launch_error_event_worker(&[event], true).await?;
+  let error = launch_error_event_worker(&[event], true, false).await?;
   assert_no_failover(&error).await
 }
 
@@ -2212,7 +2232,7 @@ async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> 
 async fn a_named_backend_claude_result_error_reports_failure_without_failover() -> anyhow::Result<()> {
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let event = claude_error_result(json!(502), result);
-  let error = launch_error_event_worker(&[event], false).await?;
+  let error = launch_error_event_worker(&[event], false, false).await?;
   assert_named_worker(&error).await?;
   assert_no_failover(&error).await
 }

@@ -68,6 +68,7 @@ pub const DELEGATE_BASE_BRANCH_FIELD: &str = "base_branch";
 pub const DELEGATE_TASK_SPEC_FILE_FIELD: &str = "task_spec_file";
 pub const DELEGATE_REVIEWER_CONTEXT_FILE_FIELD: &str = "reviewer_context_file";
 pub const DELEGATE_KEEP_WORKTREE_FIELD: &str = "keep_worktree";
+pub const DELEGATE_CONTEXT_WORK_FIELD: &str = "context_work";
 pub const DELEGATE_BACKEND_FIELD: &str = "backend";
 pub const DELEGATE_REQUEST_ID_FIELD: &str = "request_id";
 
@@ -155,6 +156,7 @@ const DELEGATE_INVOCATION_FIELDS: &[Field] = &[
   Field::optional(DELEGATE_TASK_SPEC_FILE_FIELD, FieldType::NullableString),
   Field::optional(DELEGATE_REVIEWER_CONTEXT_FILE_FIELD, FieldType::NullableString),
   Field::required(DELEGATE_KEEP_WORKTREE_FIELD, FieldType::Boolean),
+  Field::optional(DELEGATE_CONTEXT_WORK_FIELD, FieldType::Boolean),
   Field::optional(DELEGATE_BACKEND_FIELD, FieldType::NullableString),
 ];
 const DELEGATE_INVOCATION_BODY: BodyModel = BodyModel::required(DELEGATE_INVOCATION_FIELDS).forbid_extra();
@@ -166,6 +168,7 @@ const DELEGATE_BODY_FIELDS: &[Field] = &[
   Field::optional(DELEGATE_REPO_PATH_FIELD, FieldType::NullableString),
   Field::optional(DELEGATE_TASK_TYPE_FIELD, FieldType::Enum(DELEGATE_TASK_TYPE)),
   Field::optional(DELEGATE_KEEP_WORKTREE_FIELD, FieldType::Boolean),
+  Field::optional(DELEGATE_CONTEXT_WORK_FIELD, FieldType::Boolean),
   Field::optional(
     event_types::DELEGATE_INVOCATION,
     FieldType::NullableModel { class_name: "DelegateInvocationMetadata", model: &DELEGATE_INVOCATION_BODY },
@@ -183,6 +186,7 @@ struct DelegateRequest {
   repo_path: Option<String>,
   task_type: TaskType,
   keep_worktree: bool,
+  context_work: bool,
   delegate_invocation: Option<Value>,
   request_id: Option<String>,
   cold_read: Option<ColdReadSpec>,
@@ -211,6 +215,7 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     repo_path: optional_string(&values, DELEGATE_REPO_PATH_FIELD),
     task_type,
     keep_worktree: values.get(DELEGATE_KEEP_WORKTREE_FIELD).and_then(Value::as_bool).unwrap_or(false),
+    context_work: values.get(DELEGATE_CONTEXT_WORK_FIELD).and_then(Value::as_bool).unwrap_or(false),
     delegate_invocation: values.get(event_types::DELEGATE_INVOCATION).filter(|value| !value.is_null()).cloned(),
     request_id: optional_string(&values, DELEGATE_REQUEST_ID_FIELD),
     cold_read,
@@ -239,6 +244,9 @@ fn delegate_field_contract(request: &DelegateRequest) -> Result<(), String> {
   if request.task_type != TaskType::ColdRead && request.cold_read.is_some() {
     return Err(format!("{task_type} delegations reject cold_read"));
   }
+  if request.context_work && matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) {
+    return Err(format!("{task_type} delegations reject context_work"));
+  }
   if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) {
     if request.repo_path.is_some() {
       return Err(format!("{task_type} delegations are repo-less; omit repo_path"));
@@ -261,6 +269,7 @@ fn delegate_task_spec(request: &DelegateRequest) -> TaskSpec {
     base_branch: request.base_branch.clone(),
     task_type: Some(request.task_type),
     keep_worktree: request.keep_worktree,
+    context_work: request.context_work,
     cold_read: request.cold_read.clone(),
     ..TaskSpec::default()
   }
@@ -286,6 +295,7 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
       (DELEGATE_TASK_SPEC_FILE_FIELD): null,
       (DELEGATE_REVIEWER_CONTEXT_FILE_FIELD): null,
       (DELEGATE_KEEP_WORKTREE_FIELD): request.keep_worktree,
+      (DELEGATE_CONTEXT_WORK_FIELD): request.context_work,
       (DELEGATE_BACKEND_FIELD): request.backend,
     });
   }
@@ -298,6 +308,7 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
       .get(DELEGATE_REVIEWER_CONTEXT_FILE_FIELD)
       .filter(|value| !value.is_null()),
     (DELEGATE_KEEP_WORKTREE_FIELD): invocation.get(DELEGATE_KEEP_WORKTREE_FIELD),
+    (DELEGATE_CONTEXT_WORK_FIELD): invocation.get(DELEGATE_CONTEXT_WORK_FIELD).filter(|value| !value.is_null()),
     (DELEGATE_BACKEND_FIELD): invocation.get(DELEGATE_BACKEND_FIELD).filter(|value| !value.is_null()),
   })
 }
@@ -339,8 +350,21 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(pool) => pool,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let strong_backend = match (request.context_work, cfg.backends.strong.as_deref()) {
+    (true, None) => {
+      return responses::json(
+        StatusCode::BAD_REQUEST,
+        &json!({ "detail": "context work runs on backends.strong, which config.yaml does not set" }),
+      );
+    }
+    (true, Some(strong)) => Some(strong),
+    (false, _) => None,
+  };
+  // An explicit --backend names the backend; context work without one takes backends.strong. A named backend skips
+  // the router and the pool.
+  let named_backend = request.backend.as_deref().or(strong_backend);
   let mut route = None;
-  let routed = if request.backend.is_none()
+  let routed = if named_backend.is_none()
     && matches!(request.task_type, TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun | TaskType::Verify)
     && cfg.backends.routing.is_some()
   {
@@ -386,7 +410,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   };
   let resolved = if let Some(routed) = routed {
     Ok(Some(routed))
-  } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && request.backend.is_none() {
+  } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && named_backend.is_none() {
     crate::spawner_backends::select_verify_backend(
       &cfg,
       &features.store,
@@ -407,7 +431,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       &cfg,
       &features.store,
       &request.session_id,
-      request.backend.as_deref(),
+      named_backend,
       request.task_type.into(),
       &pool,
     )

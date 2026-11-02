@@ -22,6 +22,7 @@ use super::options::CodexOptions;
 use super::text::truthy;
 use super::translate::CodexTranslator;
 use charliebot_agents::cli_base::prepend_path_dir;
+use charliebot_agents::gh_wrapper;
 use charliebot_agents::one_shot::{assistant_text, frame_system_prompt};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
@@ -163,7 +164,10 @@ impl CodexBackend {
     let mut command = self.exec_command_head();
     command.push("--".to_string());
     command.push(frame_system_prompt(system, prompt));
-    let env = self.prepare_env(base_env.clone());
+    // The one-shot runs codex with its shell tools, so it takes the runner's spawn check: `prepare_env` puts the
+    // user's `~/.local/bin` first, where the personal gh lives.
+    let mut env = self.prepare_env(base_env.clone());
+    gh_wrapper::require_gh_wrapper(&mut env)?;
     let spec = SpawnSpec::new(
       command[0].clone(),
       command[1..].iter().map(OsString::from).collect(),
@@ -373,5 +377,54 @@ mod tests {
     )
     .unwrap();
     assert!(backend.build_command("prompt").unwrap().contains(&"developer_instructions=null".to_string()));
+  }
+
+  /// The one-shot's child keeps the agent gh wrapper first on PATH, ahead of the user's `~/.local/bin` that
+  /// `prepare_env` prepends.
+  #[tokio::test]
+  async fn one_shot_keeps_the_gh_wrapper_first_on_path() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let wrapper_dir = root.path().join("wrapper");
+    let local_bin = root.path().join("local-bin");
+    fs::create_dir_all(&wrapper_dir).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    for dir in [&wrapper_dir, &local_bin] {
+      let gh = dir.join("gh");
+      fs::write(&gh, "#!/bin/sh\n").unwrap();
+      fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let recorded_path = root.path().join("child-path");
+    let codex = root.path().join("codex");
+    let script = format!(
+      r#"#!/bin/sh
+printf '%s\n' "$PATH" > '{}'
+printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_message","text":"ok"}}}}'
+"#,
+      recorded_path.display()
+    );
+    fs::write(&codex, script).unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let base_env = Env::from([
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", wrapper_dir.display())),
+      (gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper_dir.join("gh").display().to_string()),
+    ]);
+    let mut backend = CodexBackend::from_launch(
+      codex,
+      &local_bin,
+      "gpt-5.5",
+      &CodexOptions::default(),
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+
+    assert_eq!(backend.one_shot_text(&base_env, "prompt", "system", None).unwrap().await.unwrap(), "ok");
+
+    let child_path = fs::read_to_string(&recorded_path).unwrap();
+    let entries: Vec<&str> = child_path.trim_end().split(':').collect();
+    assert_eq!(entries, [wrapper_dir.to_str().unwrap(), local_bin.to_str().unwrap(), "/usr/bin", "/bin"]);
   }
 }

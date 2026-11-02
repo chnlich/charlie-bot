@@ -717,7 +717,7 @@ fn launch_of(case: &Value) -> LaunchArgs {
   // The recorded fixture predates this Rust-only operational hook, so compare the shared CLI behavior without it.
   let mut backend_kwargs = serde_json::Map::new();
   if case["backend_type"] == "cc-anthropic-compatible" {
-    backend_kwargs.insert("use_wait_guard".to_string(), Value::Bool(false));
+    backend_kwargs.insert("use_pre_tool_use_guards".to_string(), Value::Bool(false));
   }
   LaunchArgs {
     extra_flags: strings(&case["extra_flags"]),

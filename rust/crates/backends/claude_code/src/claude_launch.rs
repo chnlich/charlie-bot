@@ -66,37 +66,56 @@ pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> 
   settings
 }
 
-fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>) {
-  let hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
-  hooks.as_object_mut().expect("Claude hook settings are an object").insert(
+/// The PreToolUse guards a headless Claude process runs under: wait-guard holds a run to its own tasks, and scan-guard
+/// refuses whole-store searches.
+#[derive(Clone, Copy)]
+struct PreToolUseGuards {
+  wait_guard: bool,
+  scan_guard: bool,
+}
+
+/// The guards a run kind runs under. Scheduled steps run the scan guard only.
+fn pre_tool_use_guards(run_kind: RunKind) -> PreToolUseGuards {
+  match run_kind {
+    RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => {
+      PreToolUseGuards { wait_guard: true, scan_guard: true }
+    }
+    RunKind::ScheduledStep => PreToolUseGuards { wait_guard: false, scan_guard: true },
+  }
+}
+
+fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>, guards: PreToolUseGuards) {
+  let mut hooks = Vec::new();
+  if guards.wait_guard {
+    hooks.push(json!({"type": "command", "command": "charliebot wait-guard"}));
+  }
+  if guards.scan_guard {
+    hooks.push(json!({"type": "command", "command": "charliebot scan-guard"}));
+  }
+  let event_hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
+  event_hooks.as_object_mut().expect("Claude hook settings are an object").insert(
     PRE_TOOL_USE_HOOK_EVENT.to_string(),
-    json!([{
-      "matcher": "Bash",
-      "hooks": [
-        {"type": "command", "command": "charliebot wait-guard"},
-        {"type": "command", "command": "charliebot scan-guard"}
-      ]
-    }]),
+    json!([{"matcher": "Bash", "hooks": hooks}]),
   );
 }
 
 /// The one settings object every headless Claude process receives for its run kind.
 pub fn headless_claude_settings(run_kind: RunKind, session_id: Option<&str>) -> anyhow::Result<Map<String, Value>> {
-  headless_claude_settings_for(run_kind, session_id, true)
+  headless_claude_settings_for(run_kind, session_id, Some(pre_tool_use_guards(run_kind)))
 }
 
-/// Headless settings for compaction, which keeps its existing hook set.
-pub fn headless_claude_settings_without_wait_guard(
+/// Headless settings for compaction, which runs with no PreToolUse guard.
+pub fn headless_claude_settings_without_guards(
   run_kind: RunKind,
   session_id: Option<&str>,
 ) -> anyhow::Result<Map<String, Value>> {
-  headless_claude_settings_for(run_kind, session_id, false)
+  headless_claude_settings_for(run_kind, session_id, None)
 }
 
 fn headless_claude_settings_for(
   run_kind: RunKind,
   session_id: Option<&str>,
-  use_wait_guard: bool,
+  guards: Option<PreToolUseGuards>,
 ) -> anyhow::Result<Map<String, Value>> {
   let mut settings = Map::new();
   settings.insert(DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
@@ -112,13 +131,8 @@ fn headless_claude_settings_for(
       settings.insert(DISABLE_BUNDLED_SKILLS_SETTINGS_KEY.to_string(), Value::Bool(true));
     }
   }
-  if use_wait_guard {
-    match run_kind {
-      RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => {
-        add_pre_tool_use_hooks(&mut settings)
-      }
-      RunKind::ScheduledStep => {}
-    }
+  if let Some(guards) = guards {
+    add_pre_tool_use_hooks(&mut settings, guards);
   }
   Ok(settings)
 }

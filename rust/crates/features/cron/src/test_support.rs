@@ -42,6 +42,9 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   cfg.paths.worktree_dir = home.path().join("worktrees").display().to_string();
   // The synthetic sessions have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent chain.
   cfg.server.session_memory_max_mb = 0;
+  // A worker launch is withheld below `server.min_free_disk_gib`. The production default of 10 GiB can exceed a CI
+  // runner's free disk, so this fixture pins the check off; the tasks crate tests the withhold itself.
+  cfg.server.min_free_disk_gib = 0;
   for id in std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()) {
     cfg.backends.options.push(BackendOption {
       id: id.to_string(),

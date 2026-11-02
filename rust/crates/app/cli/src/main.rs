@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the caller-less names the Python CLI lists are unknown names here.
-const COMMANDS: [&str; 28] = [
+const COMMANDS: [&str; 29] = [
   "artifact",
   "compaction-context",
   "config",
@@ -39,6 +39,7 @@ const COMMANDS: [&str; 28] = [
   "release-helper",
   "router",
   "schedule-trigger",
+  "scan-guard",
   "session",
   "setup",
   "slack",
@@ -125,6 +126,7 @@ fn run_subcommand(
       commands::router::main(args);
       Ok(())
     }
+    "scan-guard" => commands::scan_guard::main(args),
     "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
     "setup" => commands::setup::main(args),

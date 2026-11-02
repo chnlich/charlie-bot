@@ -13,6 +13,7 @@ pub mod policy;
 pub mod preflight_charlie_code;
 pub mod release_helper;
 pub mod router;
+pub mod scan_guard;
 pub mod schedule_trigger;
 pub mod session;
 pub mod setup;

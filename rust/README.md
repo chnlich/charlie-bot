@@ -1,12 +1,8 @@
 # CharlieBot server in Rust
 
-`charliebot-server` is the base for porting the Python server (`server.py`) to Rust. It serves the
-foundation routes the way the Python server does, byte for byte where the frontend or the CLI can
-observe it. Those routes are the chat page `GET /`, `GET /api/auth/status`, `GET /api/internal/version`
-and the `/static` mounts. It runs the same middleware stack: auth gate, transport gzip and request
-log. It holds the home writer fence, so it and the Python server exclude each other on one home.
-`docs/PORT_STATUS.md` lists every Python route and whether it is ported. `PORT_BASELINE` names the
-Python commit the port reproduces.
+`charliebot-server` serves the chat page `GET /`, `GET /api/auth/status`, `GET /api/internal/version`
+and the `/static` mounts. It runs the middleware stack: auth gate, transport gzip and request
+log. It holds the home writer fence, so no second server process serves the same home.
 
 ## Build
 
@@ -40,31 +36,26 @@ The command prints `config ok` and exits 0 when the configuration passes. It exi
 failure. Any other argument prints the usage line and exits 2.
 
 - `CHARLIEBOT_REPO_ROOT` (required) names the charlie-bot checkout whose `web/`, page packages
-  (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The Python server
-  derives the same root from its own location. The binary exits 1 when the variable is unset or the
-  directory holds no `web/templates`.
-- `CHARLIEBOT_HOME` selects the profile home exactly as `src/infra/home.py` does: unset or blank is
-  `~/.charliebot`, otherwise an absolute or `~` path.
+  (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The binary exits 1 when the variable
+  is unset or the directory holds no `web/templates`.
+- `CHARLIEBOT_HOME` selects the profile home: unset or blank is `~/.charliebot`, otherwise an absolute or `~` path.
 - `config.yaml` in the home sets `server.host` and `server.port`. `credentials.yaml` sets
-  `charliebot.access_key`; an empty or absent key turns access-key auth off, as in Python.
+  `charliebot.access_key`; an empty or absent key turns access-key auth off.
 
 Startup loads `config.yaml` and checks it, then requires a backend option and loads `credentials.yaml`.
 Any error exits 1 with a message naming the key. Startup then takes the home writer fence. When
 another process holds the fence, the binary logs `server_startup_refused_home_writer_fence` and exits 3.
 Next it initializes the home, logs `server_ready`, and binds. SIGTERM and SIGINT stop accepting and give
 in-flight requests up to 5 s. Rust stops services, closes the HTTP client and WebSockets, releases the fence,
-and logs `charliebot_shutdown` (`server.py:293-310`). SIGTERM then restores and raises its default signal action;
-it skips let-go steps, as Uvicorn does (`uvicorn/server.py:322-339`).
+and logs `charliebot_shutdown`. SIGTERM then restores and raises its default signal action;
+it skips let-go steps.
 
 SIGINT runs the `task_execution` and `headless_renderer` let-go steps after the shutdown line, then exits 0.
-A failed bind runs those steps after its shutdown line and exits 1 (`uvicorn/server.py:179-182`). Python's normal exit
-cancels pending tasks and joins the default executor (`asyncio/runners.py:63-75`; `concurrent/futures/thread.py:23-31`),
-then its `atexit` hook closes the browser
-(`src/features/artifacts/headless_render.py:184`). Turn cancellation follows `src/runtime/master_cc_run.py:648-664`.
+A failed bind runs those steps after its shutdown line and exits 1.
 
 Logs are text lines on stdout that open with the UTC time, the level, the file and line of the tracing call, and the
-event name, then `key=value` fields in call order (`rust/docs/contract/middleware.md` gives the grammar;
-`charliebot_core::logline` writes and reads it). Event names and fields follow the Python server's. Every HTTP
+event name, then `key=value` fields in call order (the `logline` grammar;
+`charliebot_core::logline` writes and reads it). Every HTTP
 response logs one `http_request` line with `method`, `path`, `status`, `duration_ms` and `client`. A failed request
 adds `error`.
 
@@ -78,13 +69,10 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --check
 ```
 
-`cargo test` compares the YAML writer, JSON reader, boot marker, FastAPI body and form handling, and html tokenizer
-with recorded Python outputs. Each fixture names its deleted reference and base commit, so these comparisons do not
-start Python or `uv`. Other Python-derived expectations are recorded beside the tests that read them. The CPython
-tables keep their generator and commit in the table headers; the WAV fixtures keep theirs in the fixture README.
-The compatibility and SSH outputs under `rust/fixtures/golden/` are recorded data.
-The parity harness (`rust/parity/`) that compared the Rust server against the Python reference on synthetic homes was
-removed on 2026-10-27; `main` has no Python server to compare against.
+`cargo test` compares the YAML writer, JSON reader, boot marker, body and form handling, and html tokenizer
+with recorded outputs. The compatibility and SSH outputs under `rust/fixtures/golden/` are recorded data; other
+recorded expectations live beside the tests that read them. The recorded tables name their generator in the table
+headers, and the WAV fixtures name theirs in the fixture README.
 
 ### Shell-script tests
 
@@ -158,9 +146,7 @@ roots copy.
 ```
 rust/
   Cargo.toml                      workspace: every crate under `crates/`
-  PORT_BASELINE                   the Python commit the port reproduces
-  docs/PORT_STATUS.md             every Python route: method, path, stage, and status (`ported`, `todo` or `not ported`)
-  docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
+  docs/registry.md                the plug-in seam: each hook kind, its Rust signature and an example
   fixtures/golden/                the expected outputs the compat and ssh tests compare with
   crates/infra/core/src/
     config.rs                     config.yaml: typed sections, legacy and unknown key refusals
@@ -169,15 +155,15 @@ rust/
     home.rs, paths.rs             CHARLIEBOT_HOME, expanduser, realpath
     fence.rs, fsutil.rs           the home writer fence and its identity record
     run_token.rs                  signed run tokens
-    logging.rs, timefmt.rs        JSON log lines, Python time formats
-    text_repr.rs                  CPython repr, str and json.dumps renderings
-    printable_table.rs            CPython's non-printable ranges; generator provenance is in its header
+    logging.rs, timefmt.rs        JSON log lines, the stored time formats
+    text_repr.rs                  repr, str and JSON renderings
+    printable_table.rs            the non-printable character ranges
     ssh.rs                        the batch-mode ssh argv and its 0700 control directory
   crates/infra/compat/src/   the Python-compatibility pieces the server and later crates share
     json.rs                       orjson and Starlette JSON bytes, floats included
     validation.rs                 FastAPI's 422 bodies and pydantic's lax parsing of query and path values
     jinja.rs                      minijinja environment with Jinja2's tojson and urlencode, autoescape on
-    mimetypes.rs, mimetypes_table.rs  content types; table snapshot provenance is in the table header
+    mimetypes.rs, mimetypes_table.rs  content types
     static_files.rs               StaticFiles answers: ranges, conditional requests, content types
     responses.rs, headers.rs      response builders and the latin-1 header text
     routing.rs                    method refusals: GET-only, GET and HEAD, POST-only, and Starlette's `allow` list
@@ -213,32 +199,17 @@ rust/
                                   the switch script's home, run-record and API-answer reads (`charliebot switch-helper`)
 ```
 
-## Differences from the Python server
+## Behavior notes
 
-The routes marked `ported` in `docs/PORT_STATUS.md` answer as the Python server does, except where
-listed here:
-
-- `GET /` renders the context of a home without sessions. The session sidebar, the redirect to the
-  first session and the `?session=` bootstrap port with the sessions stage. Until then, a home whose
-  `sessions/` directory holds anything answers 500 rather than render a sidebar that omits them.
-- `GET /api/sessions/{session_id}/effective-prompt` leaves out the reply segments that the web, Slack and Discord
-  turn contributions add to a manager run, because those contributions do not yet render their segments. The
-  preview of a manager session with one of those origins differs from the Python server until they do.
-- Transport gzip uses zlib at level 1, and the Python server uses ISA-L at level 1. The headers and the
-  decoded bytes match; the compressed bytes and their `content-length` differ.
-- Logs use the `logline` grammar, with UTC time and a source-location column. The Python server renders structlog's
-  console format, with local time and no location column. Event names and fields match. The Rust server adds
+- Transport gzip uses zlib at level 1; the compressed bytes and their `content-length` are the zlib output.
+- Logs use the `logline` grammar, with UTC time and a source-location column. The server adds
   `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
   `crates/app/server/src/main.rs`.
-- YAML loads as YAML 1.2 (serde_yaml), and the Python server loads YAML 1.1 (PyYAML). Unquoted `yes`,
-  `no`, `on` and `off` are strings here and booleans there.
+- YAML loads as YAML 1.2 (serde_yaml): unquoted `yes`, `no`, `on` and `off` are strings.
 - Startup also loads `credentials.yaml` and the `voice:` keys the page reads, and it fails on an
-  invalid file. The Python server reads credentials at the first request. Startup skips the Python
-  server's v1-sessions and package startup checks, session cgroups, task recovery and background
-  services; those port with their stages.
-- Package-registered config sections stay raw YAML until their packages port. The page reads only
+  invalid file.
+- Package-registered config sections stay raw YAML until their packages register their sections. The page reads only
   `voice.default_backend`.
-- A run token whose base64 holds characters outside the base64url alphabet fails here. CPython's
-  decoder skips such characters.
+- A run token whose base64 holds characters outside the base64url alphabet is refused.
 - The diff page's `code_server_enabled` template global is not registered, because the diff page is
-  not ported.
+  not rendered.

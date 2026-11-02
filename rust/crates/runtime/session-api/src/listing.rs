@@ -469,7 +469,7 @@ pub fn active_page_json_text(
 
 /// One row as the page's JSON text, with its `has_unread` cleared for the active session.
 ///
-/// Unlike [`render_row`], the page's rows keep `task.goal` (see `docs/contract/shapes.md`, "Listing rows").
+/// Unlike [`render_row`], the page's rows keep `task.goal`.
 fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
   let mut value = store.session_metadata_value(&row.meta);
   apply_sidebar_fields(&mut value, row, PAGE_PROJECTION);

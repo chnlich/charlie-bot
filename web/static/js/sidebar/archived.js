@@ -16,8 +16,8 @@
 // ---------------------------------------------------------------------------
 
 const ARCHIVED_PAGE_LIMIT = 100;
-// The server clamps limit to 500 (SESSION_PAGE_LIMIT_MAX in src/infra/constants.py;
-// clamp(1, 500) in rust/crates/runtime/session-api/src/routes.rs), so a refresh
+// The server clamps limit to 500 (clamp(1, 500) in
+// rust/crates/runtime/session-api/src/routes.rs), so a refresh
 // asks for that many rows per request.
 const ARCHIVED_REFRESH_PAGE_LIMIT = 500;
 // Auto-append stops at the cap; the Load more button turns deeper scrolling

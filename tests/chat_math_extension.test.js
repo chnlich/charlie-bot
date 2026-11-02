@@ -6,10 +6,10 @@ const { loadRenderer } = require('./marked_renderer_harness');
 // The chat math extension (web/static/js/markdown-renderer.js) passes the four
 // KaTeX delimiter classes through marked as whole tokens so the formula bytes
 // survive to the DOM text node, where renderChatMath's auto-render walk does
-// the actual rendering. Cases 01-11 are ported from a session probe; the rest
-// pin the bracket classes and the dollar/bracket skip guards. The same case
-// list runs against the wrap pre-render driver in tests/core/test_artifact_wrap.py,
-// so the chat and wrap scanners stay behavior-identical.
+// the actual rendering. The cases pin the bracket classes and the
+// dollar/bracket skip guards. The chat parser and the wrap pre-render driver
+// (src/features/artifacts/prerender_math.js) share web/static/js/math-scanner.js,
+// so one case list covers both scanners.
 
 // The harness loads the page's real marked build from the CDN (the same URL the
 // index page loads) with markdown-renderer.js registered on it, so these parses

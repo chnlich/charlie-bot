@@ -44,7 +44,7 @@ function getUploadedFilesForPayload() {
 }
 
 // The chat-message send path posts entries validated against UploadedFileRef
-// in src/infra/models.py; this projection is the wire payload's one definition.
+// in rust/crates/runtime/tasks/src/routes.rs; this projection is the wire payload's one definition.
 function toPayloadFiles(files) {
   return files.map((file) => ({
     filename: file.filename,

@@ -15,7 +15,7 @@
 # (one cron job per file); any other yaml under config.d/ fails startup.
 # `charliebot config get <key>` prints a key's value wherever it lives.
 
-# Server: the bind address uvicorn listens on.
+# Server: the bind address the server listens on.
 server:
   host: 127.0.0.1
   port: 18498

@@ -44,7 +44,7 @@ const VOICE_MAX_SAMPLES = 5 * 60 * VOICE_SAMPLE_RATE; // the server's recording 
 const VOICE_UPLOAD_TIMEOUT_MS = 60 * 1000;
 // The send gate's message while a transcription window (upload + decode) is open.
 const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
-// The input_mode a dictated message carries (src/features/voice/turn_contribution.py VOICE_INPUT_MODE).
+// The input_mode a dictated message carries (rust/crates/features/voice/src/lib.rs VOICE_INPUT_MODE).
 const VOICE_INPUT_MODE = 'voice';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so

@@ -5,8 +5,8 @@ load_host_patterns() {
   if [[ -z "$extra_patterns_file" ]]; then
     local profile_home
     # The profile home, by the rule the server's home module owns: CHARLIEBOT_HOME when set (blank counts as
-    # unset), ~/.charliebot otherwise, and a leading ~ in the value is HOME. The hook must resolve it with no release
-    # and no Python on PATH.
+    # unset), ~/.charliebot otherwise, and a leading ~ in the value is HOME. The hook runs from git's own
+    # environment and must resolve it with plain shell.
     profile_home=${CHARLIEBOT_HOME:-$HOME/.charliebot}
     profile_home=${profile_home/#\~/$HOME}
     if [[ -f "$profile_home/skills_leak_patterns.local.txt" ]]; then

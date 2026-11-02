@@ -1271,7 +1271,8 @@ run_detached() {
   switch_forward
 }
 
-# tests/test_switch_server.py sources this file for the probe functions. A sourced copy stops here and runs no switch.
+# The switch tests (rust/crates/app/script-tests/tests/switch_server/) source this file for the probe functions. A
+# sourced copy stops here and runs no switch.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi

@@ -392,7 +392,7 @@ pub fn parse_bool(source: Source, name: &str, text: &str) -> Result<bool, Box<Fi
 
 /// A `float` value's text in lax mode: surrounding whitespace is ignored and an
 /// underscore may join two digits. A non-finite text (`nan`, `inf`) fails as `float_parsing`, because the parser
-/// refuses non-finite floats (`rust/docs/PORT_STATUS.md`).
+/// refuses non-finite floats.
 pub fn parse_float(source: Source, name: &str, text: &str) -> Result<f64, Box<FieldError>> {
   let parsed = if underscores_join_digits(text) { text.trim().replace('_', "").parse::<f64>().ok() } else { None };
   parsed.filter(|value| value.is_finite()).ok_or_else(|| failure(source, name, text, Kind::FloatParsing))

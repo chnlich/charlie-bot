@@ -1,5 +1,5 @@
-//! The timestamp forms of `host_auth.py`: `datetime.isoformat()` and `fromisoformat()` for the aware values the state
-//! file holds, and `astimezone().strftime(...)` for the page's renderings in the server's own zone.
+//! The timestamp forms of the host-auth state: ISO format and parse for the aware values the state
+//! file holds, and the page's renderings in the server's own zone.
 
 use std::ffi::CStr;
 
@@ -7,17 +7,17 @@ use anyhow::Context;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 
-/// `models.utc_now()`: `datetime.now(UTC)`, which carries microseconds and no finer.
+/// The now in UTC, truncated to microseconds and no finer.
 pub fn utc_now() -> OffsetDateTime {
   let now = OffsetDateTime::now_utc();
   now.replace_nanosecond(now.microsecond() * 1_000).expect("a microsecond count is a valid nanosecond count")
 }
 
-/// `datetime.isoformat()`: the fraction appears only when the microsecond is not zero.
+/// The ISO form: the fraction appears only when the microsecond is not zero.
 pub use charliebot_core::timefmt::isoformat;
 
-/// `datetime.fromisoformat()` for a value with an offset. Naive text is refused, since Python cannot subtract a
-/// naive value from the aware clock either.
+/// The ISO parse for a value with an offset. Naive text is refused: a naive value cannot be subtracted from the
+/// aware clock.
 pub fn parse(text: &str) -> anyhow::Result<OffsetDateTime> {
   OffsetDateTime::parse(text, &Rfc3339).with_context(|| format!("{text:?} is not an ISO timestamp with an offset"))
 }
@@ -52,8 +52,8 @@ fn local_text(moment: OffsetDateTime, format: LocalFormat) -> String {
   }
 }
 
-/// The server zone's offset in seconds and abbreviation at `unix_seconds`. `localtime_r` gives the same two fields
-/// CPython's `astimezone()` reads, and `%Z` prints the abbreviation.
+/// The server zone's offset in seconds and abbreviation at `unix_seconds`, as `localtime_r` reports them;
+/// the abbreviation is the `%Z` field.
 fn local_zone(unix_seconds: i64) -> (i32, String) {
   let time = unix_seconds as libc::time_t;
   // SAFETY: `tm` holds integers and pointers only, so the zeroed value is valid, and `localtime_r` fills the whole of

@@ -1,5 +1,4 @@
-//! The `host_auth` service (`src/features/host_auth/api.py` `_poll_loop`, `_poller_round`, and the `SingleTaskPoller`
-//! that owns the loop): one round at start, then one per standing period.
+//! The `host_auth` service: one round at start, then one per standing period.
 
 use std::future::Future;
 use std::sync::Mutex;
@@ -92,10 +91,9 @@ where
 
 /// The wait between the ready signal and the first round.
 ///
-/// Python's `_poll_loop` (`src/features/host_auth/api.py:191-198`) is started by its ready-phase service, but its body
-/// first runs when the startup coroutine yields, and the loop then still finishes the server's startup tail before it
-/// reaches the poller. A cold-boot census starts at the `server_ready` line, and Python's state file is never resident
-/// in it. This wait puts the first state read past that census's visit of the home root, where `host_auth.json` sits.
+/// The server's startup tail still runs after the ready signal, and the cold-boot census that starts at the
+/// `server_ready` line visits the home root where `host_auth.json` sits. This wait puts the first state read
+/// past that census's visit.
 const FIRST_ROUND_DELAY: Duration = Duration::from_millis(300);
 
 /// Wait for readiness, then the startup tail; false when stopping instead.

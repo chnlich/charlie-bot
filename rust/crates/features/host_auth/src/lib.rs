@@ -14,7 +14,7 @@ use std::sync::Arc;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register` (`src/features/host_auth/__init__.py`): the router, the `host_auth` service in phase Ready, then the
+/// `register`: the router, the `host_auth` service in phase Ready, then the
 /// home card.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;

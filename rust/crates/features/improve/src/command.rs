@@ -275,7 +275,7 @@ pub fn stop_improve_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Re
   Ok(true)
 }
 
-/// Resolve a path the way Python's non-strict `Path.resolve()` does: symlinks in the existing prefix are followed and
+/// Resolve a path non-strictly: symlinks in the existing prefix are followed and
 /// the missing tail is kept as written.
 pub fn resolve_path(path: &Path) -> anyhow::Result<PathBuf> {
   let absolute = std::path::absolute(path).with_context(|| format!("absolute path of {}", path.display()))?;

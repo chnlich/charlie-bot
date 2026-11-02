@@ -38,7 +38,7 @@ pub fn commits_section_first_none(text: &str) -> bool {
   false
 }
 
-/// Python's `re.match(r"^none\b", text)`: `none` followed by a non-word character or the end.
+/// A leading `none` followed by a non-word character or the end.
 fn starts_with_word_none(text: &str) -> bool {
   text.strip_prefix("none").is_some_and(|rest| rest.chars().next().is_none_or(|next| !is_word_char(next)))
 }
@@ -209,12 +209,12 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
   )
 }
 
-/// Python's `str(value).lower()` of an optional field; an absent field reads as `None`.
+/// The lowercased text of an optional field; an absent field reads as `None`.
 fn lowered_str(value: Option<&Value>) -> String {
   value_str(value.unwrap_or(&Value::Null)).to_lowercase()
 }
 
-/// Python's truthiness for the JSON values the rate-limit info carries.
+/// The falsiness of the JSON values the rate-limit info carries.
 fn is_falsy(value: &Value) -> bool {
   match value {
     Value::Null => true,

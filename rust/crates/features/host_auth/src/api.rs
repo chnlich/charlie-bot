@@ -1,4 +1,4 @@
-//! The host-auth routes (`src/features/host_auth/api.py`): the page, the status JSON and the manual probe.
+//! The host-auth routes: the page, the status JSON and the manual probe.
 
 use std::path::Path;
 use std::sync::Arc;

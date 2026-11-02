@@ -1,5 +1,4 @@
-//! The standing page (`src/features/host_auth/api.py` `host_auth_page`, `_page_rows`, `_summary`, `_format_remaining`):
-//! the template context built from the state and rendered through the shared template handle.
+//! The standing page: the template context built from the state and rendered through the shared template handle.
 
 use anyhow::Context;
 use axum::response::Response;

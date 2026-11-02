@@ -1,4 +1,4 @@
-//! `src/features/host_auth/host_auth.py`: the state file, the probe round, the one-transition baseline and the estimate.
+//! The state file, the probe round, the one-transition baseline and the estimate.
 //!
 //! A round probes every host whose backoff has run out, publishes the result to `<home>/host_auth.json`, and holds
 //! the `probe_running` claim while it probes. The remote side sees one read-only command per probe.
@@ -235,7 +235,7 @@ fn read_config_hosts(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
 }
 
 /// `probe_running` held for the whole round. It is set before the probes and released on every path: `release`
-/// saves the finished state, and a drop saves the released claim when the round ends early, as Python's `finally`.
+/// saves the finished state, and a drop saves the released claim when the round ends early.
 struct ProbeClaim<'a> {
   path: &'a Path,
   state: State,

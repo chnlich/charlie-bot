@@ -1,4 +1,4 @@
-//! One probe of a host (`host_auth.py` `classify`, `build_detail` and `probe_host`): `ssh <alias> true` run through
+//! One probe of a host: `ssh <alias> true` run through
 //! charliebot-core's batch-mode argv, its output read in full, and the verdict read from that output.
 
 use std::io;
@@ -64,8 +64,7 @@ pub async fn probe_host(alias: String) -> io::Result<(i32, String)> {
 }
 
 /// Run `argv`, read its stdout and stderr in full, and kill it when it outlives `timeout`. The output read before
-/// the kill is kept. The return code is the exit code, or the negated signal number of a killed process, as
-/// Python's `returncode` reports it.
+/// the kill is kept. The return code is the exit code, or the negated signal number of a killed process.
 pub async fn run_probe(argv: &[String], timeout: Duration) -> io::Result<(i32, String)> {
   let (program, arguments) = argv.split_first().expect("an ssh argv names a program");
   let mut child = Command::new(program).args(arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;

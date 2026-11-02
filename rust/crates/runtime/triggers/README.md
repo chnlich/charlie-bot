@@ -15,6 +15,6 @@ trigger records, waiters and startup recovery. The trigger step is registered af
 `TriggerManager::list_triggers` has the public signature
 `pub async fn list_triggers(&self, session_id: &str) -> anyhow::Result<Vec<charliebot_store::trigger_files::PendingTrigger>>`.
 
-The models keep the discriminator and field order of the trigger records Python wrote, so a recorded trigger file
+The models keep the discriminator and field order of the stored trigger records, so a recorded trigger file
 loads unchanged. A scheduled trigger reaches the existing dispatch admission path with its trigger id as the stable
 input id.

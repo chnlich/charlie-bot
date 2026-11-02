@@ -137,7 +137,7 @@ copy_evidence() {
   mkdir -p -- "$local_evidence"
   local remote_evidence='$HOME/improve/'"$direction"'/evidence'
   local work
-  work=$(mktemp -d "${TMPDIR:-/tmp}/improve-evidence.XXXXXXXX") || fail 1 'cannot make a directory for the evidence copy'
+  work=$(mktemp -d "${TMPDIR:-/tmp}/improve-evidence.XXXXXXXX") || fail 1 'cannot make the evidence copy directory'
   local status=0
   set +e
   timeout --kill-after=5 "$limit" bash -c '

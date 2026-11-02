@@ -140,7 +140,7 @@ pub fn cut_error<'a>(error: Option<&'a str>) -> Option<Cow<'a, str>> {
   })
 }
 
-/// The `diag_switch` record: the validated fields in `model_dump()` order, with the cut error and an absent optional
+/// The `diag_switch` record: the validated fields in declaration order, with the cut error and an absent optional
 /// logged as null. `error` is the cut error, which must outlive the record.
 pub fn switch_record<'a>(event: &'a SwitchEvent<'_>, error: &'a str) -> Vec<(&'static str, LogValue<'a>)> {
   vec![
@@ -196,7 +196,7 @@ impl std::fmt::Display for LogValue<'_> {
   }
 }
 
-/// The one `diag_switch` line, its fields in `model_dump()` order.
+/// The one `diag_switch` line, its fields in declaration order.
 fn log_switch_event(event: &SwitchEvent<'_>) {
   let error = cut_error(event.error);
   let error = error.as_deref().unwrap_or("");

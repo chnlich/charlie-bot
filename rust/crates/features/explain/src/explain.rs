@@ -57,7 +57,7 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> anyhow::Result<T> + 
   spawn_blocking(work).await?
 }
 
-/// `json_utils.load_json_dict`: the document at `path`, or an empty one when the file does not exist yet.
+/// The document at `path`, or an empty one when the file does not exist yet.
 fn load_results(path: &Path) -> anyhow::Result<Results> {
   if !path.exists() {
     return Ok(Results::new());
@@ -88,7 +88,7 @@ fn is_pending(entry: &Map<String, Value>) -> bool {
   entry.get("state").and_then(Value::as_str) == Some("pending")
 }
 
-/// `_is_stale`: a pending entry whose own request has outlived the one-shot budget.
+/// A pending entry whose own request has outlived the one-shot budget.
 fn is_stale(entry: &Map<String, Value>) -> anyhow::Result<bool> {
   let requested_at = field(entry, "requested_at")?.as_str().context("an explain entry's requested_at is not text")?;
   let requested = OffsetDateTime::parse(requested_at, &Rfc3339)?;
@@ -127,7 +127,7 @@ fn terminal_entry(
   new_entry(state, backend, answer, error, requested_at, Some(&timefmt::utc_now_iso()))
 }
 
-/// `_reap_stale_pending`: land a stale pending entry as an error, persist it, and log the reap.
+/// Land a stale pending entry as an error, persist it, and log the reap.
 async fn reap(
   features: &FeatureContext,
   session_id: &str,
@@ -173,7 +173,7 @@ struct HistoryCopy {
 }
 
 impl HistoryCopy {
-  /// `_make_ro_copy`: copy the session's events into a fresh temporary directory, then chmod the copy 0444.
+  /// Copy the session's events into a fresh temporary directory, then chmod the copy 0444.
   fn make(store: &Store, session_id: &str) -> anyhow::Result<Self> {
     let source = store.chat_events_path(session_id);
     let dir = tempdir::mkdtemp("charliebot-explain-")?;
@@ -201,7 +201,7 @@ enum Outcome {
 }
 
 impl Generation {
-  /// `_generate`: run the explain and land its entry. A failure lands as the entry's error text and is logged.
+  /// Run the explain and land its entry. A failure lands as the entry's error text and is logged.
   async fn generate(&self, timeout: Duration) {
     if let Err(error) = self.run(timeout).await {
       let text = exception_text(&error);
@@ -238,7 +238,7 @@ impl Generation {
     agent_one_shot_text(built, &base_env.values, &prompt, prompt::SYSTEM, Some(timeout)).await
   }
 
-  /// `_finish`: land the terminal entry, then broadcast the state the file now holds.
+  /// Land the terminal entry, then broadcast the state the file now holds.
   async fn finish(&self, outcome: Outcome) -> anyhow::Result<()> {
     let (state, answer, error) = match outcome {
       Outcome::Ready(answer) => ("ready", answer, None),

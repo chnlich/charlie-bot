@@ -125,7 +125,7 @@ fn gib(bytes: u64) -> f64 {
   bytes as f64 / (1024.0 * 1024.0 * 1024.0)
 }
 
-/// Every session's cold verdict and backend reference (`_scan_sessions`). A session whose metadata cannot be read is
+/// Every session's cold verdict and backend reference. A session whose metadata cannot be read is
 /// skipped; a document that is not a JSON object fails the run.
 fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMap<String, SessionFacts>> {
   let mut facts = HashMap::new();
@@ -178,7 +178,7 @@ fn optional_text(value: Option<&Value>) -> Option<String> {
   value.filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str)
 }
 
-/// Backend session ids that metadata references, each with the sessions that reference it (`_scan_references`).
+/// Backend session ids that metadata references, each with the sessions that reference it.
 fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec<SessionFacts>> {
   let mut references: HashMap<String, Vec<SessionFacts>> = HashMap::new();
   for owner in facts.values() {
@@ -189,7 +189,7 @@ fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec
   references
 }
 
-/// Deletes the reserved transport names inside one cold session's managed run directories (`_sweep_raw_transport`).
+/// Deletes the reserved transport names inside one cold session's managed run directories.
 /// A file that a v2 run record references is kept.
 fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> anyhow::Result<()> {
   let referenced = run_referenced_transport(session_dir)?;
@@ -207,7 +207,7 @@ fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> an
   Ok(())
 }
 
-/// The two directory shapes whose direct children the transport rule governs (`_managed_transport_dirs`): each master
+/// The two directory shapes whose direct children the transport rule governs: each master
 /// run directory, and each thread's data directory. Symlinks are not followed.
 fn managed_transport_dirs(session_dir: &Path) -> Vec<PathBuf> {
   let mut managed = Vec::new();
@@ -232,7 +232,7 @@ fn managed_transport_dirs(session_dir: &Path) -> Vec<PathBuf> {
   managed
 }
 
-/// The transport files that a v2 run record of this session references (`_run_referenced_transport`). Migrated runs
+/// The transport files that a v2 run record of this session references. Migrated runs
 /// point at their original evidence, which must stay readable, so the sweep keeps it.
 fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
   let runs_dir = session_dir.join(DATA_DIR_NAME).join(RUNS_DIR_NAME);
@@ -259,7 +259,7 @@ fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBu
   Ok(referenced)
 }
 
-/// One of the five reserved transport names, or its `<name>.<N>` rotation variant (`_is_transport_name`).
+/// One of the five reserved transport names, or its `<name>.<N>` rotation variant.
 fn is_transport_name(path: &Path) -> bool {
   let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
     return false;
@@ -289,7 +289,7 @@ fn sorted_scan(root: &Path) -> Option<Vec<PathBuf>> {
   }
 }
 
-/// `Path.is_dir()` and `Path.is_file()`: each follows links, and a failed stat reads as false, as `os.path.isdir` does.
+/// Each check follows links, and a failed stat reads as false.
 fn is_dir(path: &Path) -> bool {
   fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }

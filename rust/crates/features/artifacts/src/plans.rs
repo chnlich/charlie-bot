@@ -133,7 +133,7 @@ pub fn require_plan(plans: &[Value], plan_id: i64) -> Result<&Value, String> {
     .ok_or_else(|| format!("plan {plan_id} not found in session"))
 }
 
-/// `_project_version(ver)`: the version's registry fields, `null` where it has none.
+/// The version's registry fields, `null` where it has none.
 fn project_version(version: &Value) -> Result<Value, String> {
   let Value::Object(version) = version else {
     return Err(format!("version must be a dict, got {}", type_name(version)));
@@ -141,7 +141,7 @@ fn project_version(version: &Value) -> Result<Value, String> {
   Ok(Value::Object(picked(version, &VERSION_FIELDS)))
 }
 
-/// `_project_plan(plan)`: the plan's registry fields, with each version projected.
+/// The plan's registry fields, with each version projected.
 fn project_plan(plan: &Value) -> Result<Map<String, Value>, String> {
   let Value::Object(plan) = plan else {
     return Err(format!("plan must be a dict, got {}", type_name(plan)));
@@ -157,7 +157,7 @@ fn project_plan(plan: &Value) -> Result<Map<String, Value>, String> {
   Ok(projected)
 }
 
-/// `_project_plan` and `derive_state_str` together: the enriched plan the read returns, or the error it reports.
+/// `project_plan` and `derive_state_str` together: the enriched plan the read returns, or the error it reports.
 fn project_and_derive(plan: &Value) -> Result<Map<String, Value>, String> {
   let mut projected = project_plan(plan)?;
   let state = derive_state_str(&projected)?;
@@ -247,7 +247,7 @@ pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
   })
 }
 
-/// `_project_registry(data)`: the registry a save writes. Each plan is projected to the persisted fields, and the top
+/// The registry a save writes. Each plan is projected to the persisted fields, and the top
 /// level keeps only `plans`, so keys the schema does not know are dropped on save.
 pub(crate) fn project_registry(plans: &[Value]) -> Result<Value, String> {
   let projected = plans.iter().map(|plan| project_plan(plan).map(Value::Object)).collect::<Result<Vec<_>, _>>()?;

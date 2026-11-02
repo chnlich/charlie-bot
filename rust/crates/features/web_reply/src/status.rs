@@ -627,11 +627,10 @@ fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
   texts
 }
 
-/// `status.set_status`: store the items the JSON `text` names, record one `web_status` event and notify the
-/// ancestors. Waiting items need a non-blank context and a matching cold-read digest, whose tier and rule the stored
-/// item carries; with the approval policy table's refusal switch on, an item tiered t1 or t2 refuses the set. A
-/// stale plan link refuses the set before the cold read. The return adds the Now length; a refusal stores and
-/// records nothing.
+/// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
+/// a non-blank context and a matching cold-read digest, whose tier and rule the stored item carries; with the
+/// approval policy table's refusal switch on, an item tiered t1 or t2 refuses the set. A stale plan link refuses the
+/// set before the cold read. The return adds the Now length; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_web_session(features, session_id).await?;
@@ -734,7 +733,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   Ok(Value::Object(result))
 }
 
-/// `status.confirm_status`: confirm that the stored status needs no change and return it.
+/// Confirm that the stored status needs no change and return it.
 ///
 /// A stale plan link in a stored item refuses the confirmation with 409 and names the newest file. A confirmation
 /// records one web_status_confirmed event and cold reads nothing.
@@ -783,7 +782,7 @@ async fn open_statuses(
   Ok(statuses)
 }
 
-/// `status.read_status`: the session's status, waiting items of open descendants and Now items of open children, newest
+/// The session's status, waiting items of open descendants and Now items of open children, newest
 /// first. A descendant needs waiting items; a child needs a Now value.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
@@ -833,7 +832,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   }))
 }
 
-/// The status as `model_dump(mode="json")` renders it.
+/// The status as its JSON serialization renders it.
 fn payload_of(status: &WebStatus) -> Value {
   serde_json::to_value(status).expect("a web status serializes to JSON")
 }
@@ -1035,7 +1034,7 @@ mod tests {
     format!("https://synthetic.invalid{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
   }
 
-  /// The bare file-server path an agent writes as an item link (`_host_file_link`).
+  /// The bare file-server path an agent writes as an item link.
   fn host_link(path: &std::path::Path) -> String {
     format!("{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
   }
@@ -1959,7 +1958,7 @@ mod tests {
   // Stale plan links: an old version or a closed lineage is refused in set and confirm
   // -------------------------------------------------------------------------
 
-  /// The waiting items without the start-time fields that the server writes (`_without_item_times`).
+  /// The waiting items without the start-time fields that the server writes.
   fn without_item_times(items: &Value) -> Value {
     Value::Array(
       items
@@ -1981,7 +1980,7 @@ mod tests {
     home.root().join("sessions")
   }
 
-  /// A session artifact page whose bytes are the file name (`_session_artifact`).
+  /// A session artifact page whose bytes are the file name.
   fn session_artifact(home: &Home, session_id: &str, name: &str) -> PathBuf {
     let path = sessions_dir(home).join(session_id).join("artifacts").join(name);
     fs::create_dir_all(path.parent().expect("the artifact directory")).expect("the artifact directory writes");
@@ -1989,7 +1988,7 @@ mod tests {
     path
   }
 
-  /// One plan-registry version row (`_plan_version`).
+  /// One plan-registry version row.
   fn plan_version(v: i64, relative: &str) -> Value {
     json!({
       "v": v,
@@ -2001,12 +2000,12 @@ mod tests {
     })
   }
 
-  /// One plan-registry plan row (`_plan`).
+  /// One plan-registry plan row.
   fn plan(plan_id: i64, versions: Value, closed: Value) -> Value {
     json!({"id": plan_id, "title": format!("Plan {plan_id}"), "versions": versions, "takeoff": null, "closed": closed})
   }
 
-  /// Writes `plans` as the session's plan registry (`_write_plans`).
+  /// Writes `plans` as the session's plan registry.
   fn write_plans(home: &Home, session_id: &str, plans: Value) {
     let path = sessions_dir(home).join(session_id).join("plans.json");
     fs::create_dir_all(path.parent().expect("the session directory")).expect("the session directory writes");
@@ -2026,7 +2025,7 @@ mod tests {
       .expect("the stored status writes");
   }
 
-  /// A status file whose one waiting item names `text`, `context` and `link` (`_waiting_with_link`).
+  /// A status file whose one waiting item names `text`, `context` and `link`.
   fn waiting_with_link(text: &str, link: Value) -> String {
     json!({"waiting": [{
       "text": text,
@@ -2220,7 +2219,7 @@ mod tests {
   }
 
   /// Records a cold read of `item`, then stores the one-item status file that names it
-  /// (`_set_after_reads`). Answers the stored status.
+  /// Answers the stored status.
   async fn set_after_reads(home: &Home, session_id: &str, item: Value) -> Value {
     record_ask_check(
       &home.features,

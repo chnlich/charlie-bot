@@ -72,7 +72,7 @@ pub(crate) fn listen_port(config_path: &Path) -> Result<i64, String> {
   parse_int(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
 }
 
-/// The document at `path`, as `yaml_utils.load_yaml` reads it: `Null` when the file is missing or holds no document.
+/// The document at `path`: `Null` when the file is missing or holds no document.
 fn read_document(path: &Path) -> Result<Value, String> {
   if !path.exists() {
     return Ok(Value::Null);

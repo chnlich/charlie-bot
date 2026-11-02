@@ -203,7 +203,7 @@ fn registry_path(features: &FeatureContext, session_id: &str) -> PathBuf {
   features.store.session_dir(session_id).join(PLANS_FILE)
 }
 
-/// `_load` on the blocking pool.
+/// `load` on the blocking pool.
 async fn read_registry(path: PathBuf) -> Result<Value, VerbError> {
   blocking(move || load(&path)).await
 }
@@ -226,7 +226,7 @@ fn load(path: &Path) -> Result<Value, VerbError> {
   })
 }
 
-/// `_save`: writes the projected registry, then marks the session's sidebar row dirty. The write creates no directory,
+/// Writes the projected registry, then marks the session's sidebar row dirty. The write creates no directory,
 /// so a session directory that is gone fails the save.
 fn save(path: &Path, session_id: &str, registry: &Value) -> Result<(), VerbError> {
   let projected = plans::project_registry(plans_of(registry)?).map_err(VerbError::Refused)?;
@@ -236,7 +236,7 @@ fn save(path: &Path, session_id: &str, registry: &Value) -> Result<(), VerbError
   Ok(())
 }
 
-/// `_broadcast`: the `plan_updated` frame on the session's channel.
+/// The `plan_updated` frame on the session's channel.
 async fn broadcast(features: &FeatureContext, session_id: &str, plan_id: &Value) -> Result<(), VerbError> {
   let frame = json!({"type": "plan_updated", "session_id": session_id, "plan_id": plan_id});
   features
@@ -246,7 +246,7 @@ async fn broadcast(features: &FeatureContext, session_id: &str, plan_id: &Value)
     .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: error.to_string() })
 }
 
-/// `_validate_new_version_file(session_id, file, data)`: the session-relative path of a file that may back a new version.
+/// The session-relative path of a file that may back a new version.
 /// The file must lie in the session directory, pass the plan assertion set, and back no version yet. The caller holds the
 /// session lock and passes the registry it loaded.
 async fn validate_new_version_file(
@@ -290,10 +290,10 @@ async fn validate_new_version_file(
   Ok(file_relative)
 }
 
-/// `_validate_file_in_session_dir(session_id, file)`: the session-relative path of a file that lies in the session
-/// directory and exists. The caller passes the normalized spelling, which the messages name.
+/// The session-relative path of a file that lies in the session directory and exists. The caller passes the
+/// normalized spelling, which the messages name.
 fn validate_file_in_session_dir(features: &FeatureContext, session_id: &str, file: &str) -> Result<String, VerbError> {
-  // `Path.resolve()` raises this ValueError for a NUL byte, before any containment check.
+  // A NUL byte refuses before any containment check.
   if file.contains('\0') {
     return Err(VerbError::Refused("lstat: embedded null character in path".to_string()));
   }
@@ -314,7 +314,7 @@ fn validate_file_in_session_dir(features: &FeatureContext, session_id: &str, fil
   Ok(relative.to_string_lossy().into_owned())
 }
 
-/// `_find_binding_by_file(data, file)`: the plan id and version number of the first version whose file, normalized, is
+/// The plan id and version number of the first version whose file, normalized, is
 /// `file`. Both sides are normalized, so a registry row spelled `./artifacts/c.html` matches `artifacts/c.html`.
 fn find_binding_by_file(plans: &[Value], file: &str) -> Result<Option<(Value, Value)>, VerbError> {
   for plan in plans {
@@ -333,7 +333,7 @@ fn find_binding_by_file(plans: &[Value], file: &str) -> Result<Option<(Value, Va
   Ok(None)
 }
 
-/// `_resolve_target_plan_for_amend(data, plan_id)`: the index of the plan an amend extends. A named plan must be open; with
+/// The index of the plan an amend extends. A named plan must be open; with
 /// no id, the one open lineage is the target.
 fn resolve_target_plan_for_amend(plans: &[Value], plan_id: Option<&Value>) -> Result<usize, VerbError> {
   let Some(plan_id) = plan_id else {
@@ -391,7 +391,7 @@ fn close_plan(plans: &mut [Value], plan_id: &Value, close_as: &str) -> Result<Ma
   Ok(plan.clone())
 }
 
-/// `_require_open_plan(data, plan_id)`: the index of the plan with this id, which must not be closed.
+/// The index of the plan with this id, which must not be closed.
 fn require_open_plan(plans: &[Value], plan_id: &Value) -> Result<usize, VerbError> {
   let index = require_plan(plans, plan_id)?;
   let plan = plan_map(&plans[index])?;

@@ -50,7 +50,7 @@ fn pending_plan_approval(plans_path: &Path, session_id: &str) -> bool {
   read.plans.iter().any(|plan| plan.get("state").and_then(Value::as_str) == Some(AWAITING_APPROVAL_STATE))
 }
 
-/// `_copy_plans_to_child`: copies the parent's `plans.json` and every artifact it references into the child session.
+/// Copies the parent's `plans.json` and every artifact it references into the child session.
 ///
 /// The child registry names each artifact by its path relative to the child session. A missing or outside-parent
 /// artifact logs a warning and does not abort the copy. A parent with no `plans.json` has nothing to copy.

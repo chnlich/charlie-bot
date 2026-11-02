@@ -69,7 +69,7 @@ pub(crate) fn archive_name(moment: NaiveDateTime) -> String {
 }
 
 /// Parses the naive local datetime of a backup filename like `charliebot-20260101-120000.tar.gz`
-/// (`_parse_backup_date`), validating each field as `strptime` does.
+/// Validating each field as `strptime` does.
 pub(crate) fn parse_backup_date(name: &str) -> Option<NaiveDateTime> {
   let ts = name.strip_prefix(BACKUP_PREFIX).and_then(|ts| ts.strip_suffix(BACKUP_SUFFIX))?;
   let bytes = ts.as_bytes();

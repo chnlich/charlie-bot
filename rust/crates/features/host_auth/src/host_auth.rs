@@ -181,7 +181,7 @@ fn new_entry(alias: &str, hostname: &str) -> Map<String, Value> {
   entry
 }
 
-/// `_merge_hosts`: rebuild the host list in config order. The config alone decides the set; an existing entry keeps
+/// Rebuild the host list in config order. The config alone decides the set; an existing entry keeps
 /// its history and takes the config's `HostName`.
 fn merge_hosts(state: &mut State, host_list: &[(String, String)]) -> anyhow::Result<()> {
   let mut previous: HashMap<String, Map<String, Value>> = HashMap::new();
@@ -310,7 +310,7 @@ where
 
 static ROUND_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// The process-wide round flag (`_round_running`): a manual round and the poller's tick never run together. The
+/// The process-wide round flag: a manual round and the poller's tick never run together. The
 /// claim is released when the guard drops, on every path.
 pub struct RoundSlot(());
 

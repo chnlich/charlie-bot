@@ -30,7 +30,7 @@ fn origin() -> Value {
   json!({"guild_id": GUILD, "parent_channel_id": PARENT, "thread_id": THREAD})
 }
 
-/// A Discord-backed session like a summon leaves it, with an optional read watermark (`_make_session`).
+/// A Discord-backed session like a summon leaves it, with an optional read watermark.
 async fn make_session(home: &Home, watermark: Option<String>) -> String {
   home.thread_session(&summon_session_id(GUILD, THREAD), origin(), watermark.as_deref()).await
 }

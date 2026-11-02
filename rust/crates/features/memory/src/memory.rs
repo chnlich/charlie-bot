@@ -125,7 +125,7 @@ pub struct MemorySelection {
   pub text: Option<String>,
 }
 
-/// Serializes `ensure_store` in the process (`_ENSURE_STORE_LOCK`): a `git init` that starts while another runs in the
+/// Serializes `ensure_store` in the process: a `git init` that starts while another runs in the
 /// same directory exits 128.
 static ENSURE_STORE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -267,7 +267,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
   })
 }
 
-/// `^([a-z_]+): (.+)$` (`_HEADER_RE`): the field name and the value of one header line.
+/// `^([a-z_]+): (.+)$`: the field name and the value of one header line.
 fn split_header_line(line: &str) -> Option<(&str, &str)> {
   let key_len = line.bytes().take_while(|b| b.is_ascii_lowercase() || *b == b'_').count();
   if key_len == 0 {
@@ -277,12 +277,12 @@ fn split_header_line(line: &str) -> Option<(&str, &str)> {
   (!value.is_empty()).then(|| (&line[..key_len], value))
 }
 
-/// `^[A-Za-z0-9._-]+$` (`_SLUG_RE`).
+/// `^[A-Za-z0-9._-]+$`.
 fn is_slug(value: &str) -> bool {
   !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// `^[A-Za-z0-9._-]+( *, *[A-Za-z0-9._-]+)*$` (`_AUDIENCE_VALUE_RE`): slug elements separated by commas, with spaces
+/// `^[A-Za-z0-9._-]+( *, *[A-Za-z0-9._-]+)*$`: slug elements separated by commas, with spaces
 /// allowed around a comma but not at either end of the value.
 fn is_audience_value(value: &str) -> bool {
   let elements: Vec<&str> = value.split(',').collect();
@@ -301,7 +301,7 @@ fn is_topic_name(name: &str) -> bool {
     && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// One vocabulary line, `name` or `name resident` (`_TOPIC_LINE_RE`).
+/// One vocabulary line, `name` or `name resident`.
 fn parse_topic_line(raw: &str) -> Option<(&str, bool)> {
   let (name, resident) = match raw.strip_suffix(" resident") {
     Some(name) => (name, true),

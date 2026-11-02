@@ -16,7 +16,7 @@ use charliebot_cli_common::resolve;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 
-/// `constants.DISCORD_READ_LIMIT_MIN`, `_MAX` and `_DEFAULT`: the page-size bounds the parser and the endpoint share.
+/// The page-size bounds the parser and the endpoint share.
 const READ_LIMIT_MIN: i64 = 1;
 const READ_LIMIT_MAX: i64 = 100;
 const READ_LIMIT_DEFAULT: i64 = 50;

@@ -63,7 +63,7 @@ fn quoted(args: &[&str]) -> String {
   args.iter().map(|arg| format!("{arg:?}")).collect::<Vec<_>>().join(", ")
 }
 
-/// `_resolve_commits_sync`: each ref's full commit SHA, in order, from one `rev-parse` call.
+/// Each ref's full commit SHA, in order, from one `rev-parse` call.
 pub(crate) async fn resolve_commits(repo: &Path, refs: &[&str]) -> Result<Vec<String>, Response> {
   let specs: Vec<String> = refs.iter().map(|reference| format!("{reference}^{{commit}}")).collect();
   let mut args = vec!["rev-parse"];
@@ -72,7 +72,7 @@ pub(crate) async fn resolve_commits(repo: &Path, refs: &[&str]) -> Result<Vec<St
   Ok(stdout.split_whitespace().map(str::to_string).collect())
 }
 
-/// `_list_branches_sync`: the output lines of `git branch -a`, most recent commit first.
+/// The output lines of `git branch -a`, most recent commit first.
 pub(crate) async fn branch_lines(repo: &Path) -> Result<Vec<String>, Response> {
   let stdout = run(
     repo,

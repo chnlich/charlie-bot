@@ -23,11 +23,11 @@ pub const SLACK: ThreadPlatform = ThreadPlatform {
   summon_line: "Slack 线程召唤",
 };
 
-/// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
+/// The command the reply-format contract names for posting a reply.
 const REPLY_COMMAND: &str = "charliebot slack reply";
-/// Slack's per-message text limit, as the contract states it (`_MAX_POST_CHARS`).
+/// Slack's per-message text limit, as the contract states it.
 const MAX_POST_CHARS: usize = 40000;
-/// The trigger-label prefix of a session's armed thread-follow record (`_FOLLOW_TRIGGER_PREFIX`).
+/// The trigger-label prefix of a session's armed thread-follow record.
 const FOLLOW_TRIGGER_PREFIX: &str = "slack-thread-follow";
 
 /// The Slack part of the contract for the thread `origin` names (`thread_contract_part`).
@@ -46,7 +46,7 @@ pub fn thread_contract_part(origin: &SlackOrigin) -> String {
   )
 }
 
-/// The platform line every Slack contract part opens with (`_PLATFORM_LINE`).
+/// The platform line every Slack contract part opens with.
 fn platform_line() -> String {
   format!(
     "Platform: Slack. Reply command: `{REPLY_COMMAND} --file <path>`. \

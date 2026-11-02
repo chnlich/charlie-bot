@@ -97,7 +97,7 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
     Err(ListingError::PermissionDenied) => return permission_denied(),
     Err(ListingError::Failed { kind, detail }) => return responses::internal_error(kind, detail),
   }
-  // Not a directory. `os.path.exists` decides between 404 and the file answer.
+  // Not a directory. The metadata read decides between 404 and the file answer.
   match fs::metadata(&fs_path) {
     Err(_) => not_found(),
     Ok(metadata) if !metadata.is_file() => {

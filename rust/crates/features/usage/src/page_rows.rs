@@ -108,7 +108,7 @@ impl Tally {
   }
 }
 
-/// `_merge_ledger_rows`: the page rows, ranked by output then model. Rows group on the casefolded model leaf, so a
+/// The page rows, ranked by output then model. Rows group on the casefolded model leaf, so a
 /// spelling one source gives a model merges with the others; versions stay apart. The output ranking is the one the
 /// page's hero, charts and both tables share.
 pub(crate) fn merge(
@@ -178,7 +178,7 @@ fn merge_group(
   })
 }
 
-/// `_account_source`: the card name an account counts under, and whether it is a fallback. A row of another source
+/// The card name an account counts under, and whether it is a fallback. A row of another source
 /// keeps its own source. A charlie-bot row's account is a backend id, which attributes to the CLI that ran the call,
 /// and that CLI's card marks the account a fallback unless the card reads only CharlieBot's own logs.
 pub(crate) fn account_source(
@@ -206,7 +206,7 @@ pub(crate) fn backend_page_source<'a>(
   })
 }
 
-/// `_model_leaf`: the last `/` segment minus a trailing ` (provider)` suffix, with its case kept.
+/// The last `/` segment minus a trailing ` (provider)` suffix, with its case kept.
 pub(crate) fn model_leaf(model: &str) -> &str {
   let leaf = model.rsplit('/').next().expect("rsplit yields at least one piece");
   let Some(inner) = leaf.strip_suffix(')') else {
@@ -228,7 +228,7 @@ pub(crate) fn canonical_model(model: &str) -> String {
   caseless::default_case_fold_str(model_leaf(model))
 }
 
-/// `_compact`: a count in K, M or B with at most two decimals (`1.23M`, `456K`), else the count with comma groups.
+/// A count in K, M or B with at most two decimals (`1.23M`, `456K`), else the count with comma groups.
 pub(crate) fn compact(count: Count) -> String {
   let value = count.as_f64();
   for (cut, suffix) in [(1e9, "B"), (1e6, "M"), (1e3, "K")] {

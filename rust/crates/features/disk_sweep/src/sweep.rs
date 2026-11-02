@@ -537,7 +537,7 @@ fn tree_latest_mtime(path: &Path) -> Result<f64> {
 
 fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
   let mut repositories = Vec::new();
-  // `_nested_repositories` reports the candidate itself when it holds `.git`, and never walks into one.
+  // The scan reports the candidate itself when it holds `.git`, and never walks into one.
   let walk = WalkDir::new(path)
     .sort_by_file_name()
     .into_iter()

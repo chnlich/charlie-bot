@@ -221,7 +221,7 @@ fn load_json_metadata(path: &Path) -> Result<Option<Value>, CliExit> {
   match metadata::read_metadata_value(path) {
     Ok(value) => Ok(Some(value)),
     Err(MetadataReadError::Io(error)) => Err(CliExit::error(format!("read {}: {error}", path.display()))),
-    // A file that is not JSON names no profile, the way `json_utils.load_json_meta` answers None for one.
+    // A file that is not JSON names no profile: the read answers None for one.
     Err(MetadataReadError::Json(_)) => Ok(None),
   }
 }

@@ -250,7 +250,7 @@ fn version_number(version: &Value) -> Result<i64, WebReplyError> {
     .ok_or_else(|| WebReplyError::Failed(anyhow!("a plan version has no integer v: {version}")))
 }
 
-/// `posixpath.normpath` for the session-relative and registry-file paths the lookup compares.
+/// The normalization the session-relative and registry-file paths the lookup compares go through.
 fn posix_normpath(text: &str) -> String {
   let absolute = text.starts_with('/');
   let mut parts: Vec<&str> = Vec::new();

@@ -72,24 +72,24 @@ pub const LINKED_PAGES_LINE: &str = concat!(
 const REDLINE_DOC: &str = "thread_reply_redline.md";
 /// The reply-format doc every platform's contract carries.
 const REPLY_FORMAT_DOC: &str = "thread_reply_format.md";
-/// Waits between the retries of one platform call (`_RETRY_DELAYS`); exhausting them logs an error, not a raise.
+/// Waits between the retries of one platform call; exhausting them logs an error, not a raise.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
-/// How much of an unread message's text the 412 refusal carries (`_TEXT_PREVIEW_CHARS`).
+/// How much of an unread message's text the 412 refusal carries.
 const TEXT_PREVIEW_CHARS: usize = 200;
-/// The reply budget the format contract states (`_REPLY_BUDGET_CHARS`): the depth goes to a page.
+/// The reply budget the format contract states: the depth goes to a page.
 const REPLY_BUDGET_CHARS: usize = 500;
-/// A thread-follow batch sleeps out this quiet delay from its newest message (`_FOLLOW_QUIET_SECONDS`).
+/// A thread-follow batch sleeps out this quiet delay from its newest message.
 const FOLLOW_QUIET_SECONDS: i64 = 10;
-/// A follow chain never runs past this cap from its first message (`_FOLLOW_CHAIN_CAP_SECONDS`).
+/// A follow chain never runs past this cap from its first message.
 const FOLLOW_CHAIN_CAP_SECONDS: i64 = 300;
 /// The house timezone of session display names.
 const HOUSE_TIMEZONE: Tz = chrono_tz::America::Los_Angeles;
-/// The notice a lost summon's thread receives (`_LOST_SUMMON_NOTICE`).
+/// The notice a lost summon's thread receives.
 const LOST_SUMMON_NOTICE: &str = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。";
-/// The notice a thread receives when neither its round nor its nudge round replied (`_NO_REPLY_NOTICE`).
+/// The notice a thread receives when neither its round nor its nudge round replied.
 const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details are in the session log. \
   Mention me again for a thread answer.";
-/// The follow-trigger floor the label carries (`_FOLLOW_FLOOR_RE`).
+/// The follow-trigger floor the label carries.
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
 static PARAGRAPH_SEPARATOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{2,}").expect("valid pattern"));
 static SESSION_LOCKS: LazyLock<StdMutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
@@ -117,7 +117,7 @@ pub struct ThreadPlatform {
   pub display_name: &'static str,
   /// The platform's reply event type.
   pub reply_event_type: &'static str,
-  /// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
+  /// The command the reply-format contract names for posting a reply.
   pub reply_command: &'static str,
   /// The platform's per-message character limit (`max_post_chars`).
   pub max_post_chars: usize,
@@ -1013,7 +1013,7 @@ pub async fn ack_messages(
   Ok(json!({"acked": ids.len(), format!("watermark_{}", platform.id_label): watermark}))
 }
 
-/// The nudge text the summon round's silence triggers (`_NUDGE_TEMPLATE`).
+/// The nudge text the summon round's silence triggers.
 fn nudge_text(platform: &ThreadPlatform) -> String {
   format!(
     "{} thread: the round answering this mention ended without posting a reply. Decide now:\n\
@@ -1798,7 +1798,7 @@ fn event_id(event: &Value) -> &str {
   event.get("id").and_then(Value::as_str).expect("a chat event carries a string id")
 }
 
-/// The house-timezone wall clock of a session name: `YYYY-MM-DD HH:MM` (`_local_time`).
+/// The house-timezone wall clock of a session name: `YYYY-MM-DD HH:MM`.
 fn local_time() -> String {
   chrono::Utc::now().with_timezone(&HOUSE_TIMEZONE).format("%Y-%m-%d %H:%M").to_string()
 }

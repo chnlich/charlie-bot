@@ -22,7 +22,7 @@ use crate::discord_client::{
 use crate::discord_listener::{Bot, DISCORD, DiscordThreadAdapter, eligible_message};
 use crate::metadata::DiscordOrigin;
 
-/// The readback's `message` view of one thread message (`_message_view`): ids, the author's name and configured person,
+/// The readback's `message` view of one thread message: ids, the author's name and configured person,
 /// the text, the attachment URLs, and the unread and summon flags.
 fn message_view(message: &Message, unread: bool, summon: bool, allowed_users: &BTreeMap<String, String>) -> Value {
   json!({
@@ -38,7 +38,7 @@ fn message_view(message: &Message, unread: bool, summon: bool, allowed_users: &B
   })
 }
 
-/// The mention message ids of the session's pending summons (`_pending_summon_mention_ids`). A summon is pending while
+/// The mention message ids of the session's pending summons. A summon is pending while
 /// its event carries the discord block without `nudge_of`, no master_done names its id, no lost-summon backfill marker
 /// names it, and it has a mention id.
 fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
@@ -95,7 +95,7 @@ async fn load_chat_events(bot: &Bot, session_id: &str) -> Result<Vec<ChatEvent>,
   Ok(events?)
 }
 
-/// Read the session's own Discord thread, and ack the unread messages the window returns (`_read_own_thread`). The
+/// Read the session's own Discord thread, and ack the unread messages the window returns. The
 /// window starts at the earlier of the oldest unread message and the oldest pending summon's mention, or holds the
 /// newest `limit` messages when neither exists. The starter rides first, outside the count, when it lives in the parent
 /// channel: a 404 there means the thread has none.
@@ -160,7 +160,7 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
 }
 
 /// Read the newest `limit` messages of the channel a discord.com link names; nothing is marked read
-/// (`_read_linked_channel`). A link that is not one refuses with 422, a channel the bot cannot see with 404.
+/// A link that is not one refuses with 422, a channel the bot cannot see with 404.
 async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value, ThreadReplyError> {
   let link = parse_message_link(url)
     .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;

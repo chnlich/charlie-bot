@@ -93,7 +93,7 @@ fn row(child: &Child, base: &str) -> Result<String, ListingError> {
   ))
 }
 
-/// The page around the rows. Its markup is `_DIR_LISTING_TEMPLATE`, with its doubled braces read as single ones.
+/// The page around the rows. The format reads the markup's doubled braces as single ones.
 fn page(display_path: &str, rows: &str) -> String {
   format!(
     r#"<!DOCTYPE html>
@@ -146,7 +146,7 @@ fn escape(text: &str) -> String {
   html_escape::encode_quoted_attribute(text).into_owned()
 }
 
-/// `urllib.parse.quote(name, safe='')`: every byte but ASCII letters, digits and `_.-~` becomes `%XX`.
+/// Every byte but ASCII letters, digits and `_.-~` becomes `%XX`.
 fn quote(name: &str) -> String {
   utf8_percent_encode(name, FILENAME_SET).to_string()
 }

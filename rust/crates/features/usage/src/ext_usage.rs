@@ -125,7 +125,7 @@ fn cache_key(account: &dyn QuotaAccount) -> String {
   format!("{}:{}", account.provider(), account.label())
 }
 
-/// `_poll_loop`: rounds forever. A round that fails logs once, then sleeps one round gap before the next round.
+/// Rounds forever. A round that fails logs once, then sleeps one round gap before the next round.
 pub async fn poll_loop(panel: Arc<Panel>, host: Arc<dyn PollHost>) {
   loop {
     if let Err(error) = poll_round(&panel, host.as_ref()).await {

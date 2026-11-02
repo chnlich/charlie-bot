@@ -26,18 +26,18 @@ use crate::params::{self, Params, take};
 use crate::refs::{self, FileStamp, Signature};
 use crate::repos;
 
-/// `_DIFF_MAX_BYTES`: a per-file diff above this many bytes answers a stub unless `force` is set.
+/// A per-file diff above this many bytes answers a stub unless `force` is set.
 pub(crate) const DIFF_MAX_BYTES: usize = 5 * 1024 * 1024;
-/// `_DIFF_FILES_MEMO_LIMIT`: the ranges a /diff page watches across its tabs.
+/// The ranges a /diff page watches across its tabs.
 pub(crate) const MANIFEST_MEMO_LIMIT: usize = 64;
-/// `_BRANCH_LIST_MEMO_LIMIT`: one listing per repo the branch picker has served.
+/// One listing per repo the branch picker has served.
 pub(crate) const BRANCH_MEMO_LIMIT: usize = 8;
 /// The most names `branches` answers, `HEAD` included.
 const BRANCH_LIMIT: usize = 50;
 const MODES: &[&str] = &["three-dot", "two-dot"];
 const DEFAULT_MODE: &str = "three-dot";
 
-/// `_ManifestKey`: the repo, both resolved SHAs, the range mode and the `.gitattributes` signature.
+/// The repo, both resolved SHAs, the range mode and the `.gitattributes` signature.
 #[derive(Eq, Hash, PartialEq)]
 pub(crate) struct ManifestKey {
   pub(crate) repo: String,
@@ -47,7 +47,7 @@ pub(crate) struct ManifestKey {
   pub(crate) attributes: Option<FileStamp>,
 }
 
-/// `_BranchListKey`: the repo and its ref-state signature.
+/// The repo and its ref-state signature.
 #[derive(Eq, Hash, PartialEq)]
 pub(crate) struct BranchKey {
   pub(crate) repo: String,
@@ -254,7 +254,7 @@ async fn file_answer(
   Ok(json!({"diff": diff, "path": path, "size_bytes": size_bytes}))
 }
 
-/// `_resolve_repo_under_workspace`: the repository `repo` names, resolved, when it holds `.git` and lies under a
+/// The repository `repo` names, resolved, when it holds `.git` and lies under a
 /// workspace directory or a registered diff root.
 fn resolve_repo(repo: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<PathBuf, Response> {
   let repo_path = paths::realpath(&PathBuf::from(paths::expanduser(repo)));
@@ -273,7 +273,7 @@ fn resolve_repo(repo: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Resu
   Ok(repo_path)
 }
 
-/// `_list_branches_memoized_sync`: the repo's listing, re-run only when its ref state moved.
+/// The repo's listing, re-run only when its ref state moved.
 async fn branch_lines(state: &GitState, repo: &Path) -> Result<Arc<Vec<String>>, Response> {
   let owned = repo.to_path_buf();
   let signature = blocking(move || refs::signature(&owned).map_err(io_error)).await?;

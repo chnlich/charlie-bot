@@ -129,7 +129,7 @@ impl CheckInputs {
   }
 }
 
-/// `_run_check`: the assertion lines, then the cold read the session's shape selects.
+/// The assertion lines, then the cold read the session's shape selects.
 fn check(args: &CheckArgs, lazy_host: &LazyHost) -> Result<CheckOutcome, CliExit> {
   if args.genre == "waiting" && !args.assertions_only {
     return Err(CliExit::usage(
@@ -244,7 +244,7 @@ fn resolve_path(path: &Path) -> Result<PathBuf, CliExit> {
   }
 }
 
-/// `_session_identity`: the server-written variable, else the cwd's name when the cwd is a session directory.
+/// The server-written variable, else the cwd's name when the cwd is a session directory.
 fn session_identity(config: &CharlieBotConfig, inputs: &CheckInputs) -> Option<String> {
   if let Some(session) = &inputs.session_env {
     return Some(session.clone());
@@ -257,7 +257,7 @@ fn session_identity(config: &CharlieBotConfig, inputs: &CheckInputs) -> Option<S
   cwd.file_name().map(|name| name.to_string_lossy().into_owned())
 }
 
-/// `_session_profile`: the requesting session's `profile` from its metadata.
+/// The requesting session's `profile` from its metadata.
 fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String, CliExit> {
   let path = config.sessions_dir().join(session_id).join(SESSION_METADATA_NAME);
   let unreadable = |detail: String| {
@@ -271,7 +271,7 @@ fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String
   }
 }
 
-/// `_delegate_cold_read`: POST the cold-read child and return the started line.
+/// POST the cold-read child and return the started line.
 fn delegate_cold_read(
   args: &CheckArgs,
   artifact: &Path,
@@ -329,7 +329,7 @@ struct ProbeResult {
   page_sha256: String,
 }
 
-/// `artifact_check.run_probe`: the page text and the eight questions to the light backends in rotation order.
+/// The page text and the eight questions to the light backends in rotation order.
 fn run_probe(
   runtime: &tokio::runtime::Runtime,
   host: &CliHost,

@@ -32,7 +32,7 @@ fn chunk_header(body: &[u8], position: usize) -> Option<ChunkHeader> {
   Some(ChunkHeader { name, size, body: position + 8 })
 }
 
-/// Parse a WAV body the way `wave.open` reads it, returning the format and the data chunk's frames.
+/// Parse a WAV body, returning the format and the data chunk's frames.
 pub(crate) fn read(body: &[u8]) -> Result<WaveData<'_>, String> {
   let riff = chunk_header(body, 0).ok_or("truncated WAV header")?;
   if &riff.name != b"RIFF" {
@@ -57,7 +57,7 @@ pub(crate) fn read(body: &[u8]) -> Result<WaveData<'_>, String> {
       }
       _ => {}
     }
-    // A chunk whose declared size is odd is followed by one pad byte, and so is every chunk `wave` skips.
+    // A chunk whose declared size is odd is followed by one pad byte, and so is every chunk the walker skips.
     position = chunk.body.saturating_add(chunk.size).saturating_add(chunk.size & 1);
   }
   Err("fmt chunk and/or data chunk missing".to_string())

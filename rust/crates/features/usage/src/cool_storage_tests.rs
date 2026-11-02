@@ -501,7 +501,7 @@ fn cold_rule_reads_updated_at_and_status() {
 
 #[test]
 fn rotation_suffix_counts_unicode_digits_as_isdigit_does() {
-  // `str.isdigit` accepts the Arabic-Indic three and the superscript two, and refuses a vulgar fraction.
+  // The suffix digit check accepts the Arabic-Indic three and the superscript two, and refuses a vulgar fraction.
   assert!(is_transport_name(Path::new("agent.raw.ndjson.\u{663}")));
   assert!(is_transport_name(Path::new("stdout.log.\u{b2}")));
   assert!(is_transport_name(Path::new("stderr.log.2")));

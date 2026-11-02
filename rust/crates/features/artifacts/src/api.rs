@@ -219,7 +219,7 @@ impl AmendRequest {
   }
 }
 
-/// `_build_base(req)`: the base a version records, `null` when the request names none of the three base fields.
+/// The base a version records, `null` when the request names none of the three base fields.
 fn build_base(fields: &mut Map<String, Value>) -> Value {
   let repo = fields.remove("base_repo").unwrap_or(Value::Null);
   let branch = fields.remove("base_branch").unwrap_or(Value::Null);

@@ -224,7 +224,7 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// `_render_status`: the GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then one
+/// The GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then one
 /// block per child with waiting items, then the Now of each open child.
 fn render_status(result: &Value) -> Result<String, CliExit> {
   let mut lines: Vec<String> = Vec::new();
@@ -289,7 +289,7 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
   Ok(lines.join("\n"))
 }
 
-/// `_item_lines`: the item line, its `since` and `since_exact` lines, and its context when one is stored, indented below.
+/// The item line, its `since` and `since_exact` lines, and its context when one is stored, indented below.
 fn item_lines(item: &Value) -> Result<Vec<String>, CliExit> {
   let mut lines = vec![
     item_line(item)?,
@@ -315,7 +315,7 @@ fn remaining_done(item: &Value) -> Result<bool, CliExit> {
     .ok_or_else(|| CliExit::error("the response carries a remaining item without a boolean done"))
 }
 
-/// `_item_line`: `- <text>`, with ` (<link>)` appended when the item names a link.
+/// `- <text>`, with ` (<link>)` appended when the item names a link.
 fn item_line(item: &Value) -> Result<String, CliExit> {
   let text = text_repr::value_str(field(item, "text")?);
   let link = field(item, "link")?;

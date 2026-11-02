@@ -31,7 +31,7 @@ pub enum LocalFormat {
   Clock,
 }
 
-/// `_local_timestamp`: the stored timestamp in the server's zone, or `None` when it is absent.
+/// The stored timestamp in the server's zone, or `None` when it is absent.
 pub fn local_timestamp(moment: Option<&str>, format: LocalFormat) -> anyhow::Result<Option<String>> {
   moment.map(|text| parse(text).map(|moment| local_text(moment, format))).transpose()
 }

@@ -2,7 +2,7 @@
 //! binding, the For-you layer and the readback. The round-end audit that nudges and notices over these records is in
 //! `audit.rs`.
 //!
-//! The web session test is chat_threads' `thread_sessions.is_thread_session`, restated over the same fields: this
+//! The web session test is chat_threads' `thread_sessions::is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
 
 use std::collections::HashSet;
@@ -326,7 +326,7 @@ pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   })
 }
 
-/// The Han and Latin-letter counts of `text`, with fenced code, inline code, URLs and paths left out (`_han_and_latin`).
+/// The Han and Latin-letter counts of `text`, with fenced code, inline code, URLs and paths left out.
 fn han_and_latin(text: &str) -> anyhow::Result<(usize, usize)> {
   let mut body = text.to_owned();
   for pattern in [&*CODE_FENCE_RE, &*INLINE_CODE_RE, &*URL_RE] {

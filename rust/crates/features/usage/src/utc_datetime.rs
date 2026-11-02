@@ -85,7 +85,7 @@ fn offset(sign: u8, text: &[u8]) -> Option<UtcOffset> {
 }
 
 /// `HH[:MM[:SS]]` or `HHMM[SS]` with one separator kind throughout, then an optional `.` or `,` fraction after the
-/// seconds (`_parse_hh_mm_ss_ff`).
+/// seconds.
 fn clock(text: &[u8]) -> Option<ClockFields> {
   let mut fields = [0u8; 3];
   let mut pos = 0;

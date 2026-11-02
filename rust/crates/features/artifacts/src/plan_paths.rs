@@ -25,7 +25,7 @@ pub fn resolve_plan_file(session_dir: &Path, file: &str) -> (PathBuf, Option<Pat
   (candidate, relative)
 }
 
-/// `posixpath.normpath`: drops the `.` and empty parts of a POSIX path and folds each `..` into the part before it. Two
+/// Drops the `.` and empty parts of a POSIX path and folds each `..` into the part before it. Two
 /// leading slashes stay two, and three or more fold to one. The empty path is `.`.
 pub fn posix_normpath(path: &str) -> String {
   if path.is_empty() {

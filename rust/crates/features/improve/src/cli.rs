@@ -88,15 +88,11 @@ struct StopArgs {
   session: Option<String>,
 }
 
-/// The improve namespace: the dispatcher's vocabulary entry and the parser's usage-prefix second
-/// word, joined to the program name at parse time.
-const NAMESPACE: &str = "improve";
-
 /// Parse the improve verb and run it. Parser errors print and exit on their own: help
 /// exits 0, a usage error exits 2.
 pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   let mut command = with_infer_long_args(ImproveCli::command());
-  let argv = std::iter::once(OsString::from(format!("charliebot {NAMESPACE}"))).chain(args.iter().cloned());
+  let argv = std::iter::once(OsString::from("charliebot improve")).chain(args.iter().cloned());
   let matches = match command.try_get_matches_from_mut(argv) {
     Ok(matches) => matches,
     Err(error) => error.exit(),

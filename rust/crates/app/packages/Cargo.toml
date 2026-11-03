@@ -27,6 +27,7 @@ charliebot-explain.workspace = true
 charliebot-failure-triage.workspace = true
 charliebot-files.workspace = true
 charliebot-gemini.workspace = true
+charliebot-github.workspace = true
 charliebot-host-auth.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true

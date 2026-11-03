@@ -569,6 +569,7 @@ dependencies = [
  "charliebot-cron",
  "charliebot-discord",
  "charliebot-failure-triage",
+ "charliebot-github",
  "charliebot-improve",
  "charliebot-memory",
  "charliebot-opencode",
@@ -935,6 +936,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-github"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-cli-common",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "clap",
+ "futures-util",
+ "http 1.5.0",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "charliebot-host-auth"
 version = "0.1.0"
 dependencies = [
@@ -1126,6 +1149,7 @@ dependencies = [
  "charliebot-failure-triage",
  "charliebot-files",
  "charliebot-gemini",
+ "charliebot-github",
  "charliebot-host-auth",
  "charliebot-improve",
  "charliebot-memory",

@@ -39,6 +39,7 @@ members = [
     "crates/features/explain",
     "crates/features/failure_triage",
     "crates/features/files",
+    "crates/features/github",
     "crates/features/host_auth",
     "crates/features/memory",
     "crates/features/slack",
@@ -169,6 +170,7 @@ charliebot-explain = { path = "crates/features/explain" }
 charliebot-failure-triage = { path = "crates/features/failure_triage" }
 charliebot-files = { path = "crates/features/files" }
 charliebot-gemini = { path = "crates/backends/gemini" }
+charliebot-github = { path = "crates/features/github" }
 charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }

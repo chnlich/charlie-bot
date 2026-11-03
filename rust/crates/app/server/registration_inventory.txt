@@ -13,6 +13,7 @@ page_packages	features.cron	features.cron
 page_packages	features.diag	features.diag
 page_packages	features.drafts	features.drafts
 page_packages	features.slack	features.slack
+page_packages	features.github	features.github
 page_packages	features.discord	features.discord
 page_packages	features.disk_sweep	features.disk_sweep
 page_packages	features.web_reply	features.web_reply
@@ -85,6 +86,7 @@ config section	features.user_text_checks	user_text_checks
 config section	features.artifacts	publish
 config section	features.code_server	code_server
 config section	features.slack	slack
+config section	features.github	github
 config section	features.discord	discord
 config section	features.host_auth	host_auth
 config section	features.voice	voice
@@ -175,6 +177,7 @@ usage resolver	backends.codex	codex
 sequence controller	features.cron	cron
 sequence controller	features.improve	improve
 draft platform	features.slack	slack
+draft platform	features.github	github
 plan registry	features.artifacts	plan_registry
 open waiting items reader	features.web_reply	open_waiting_items
 derived waiting items reader	features.cron	derived_waiting_items

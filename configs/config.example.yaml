@@ -153,7 +153,9 @@ slack:
 # token command: the executable (one path, `~` expanded) the wrapper runs with
 # `--write <owner>/<repo>` to mint the agent GitHub App's installation token for
 # a text-carrying write; absent, the wrapper refuses every text-carrying write
-# and names this key in the error.
+# and names this key in the error. The server reads the key from the live
+# config when it spawns each agent process, so a key added, changed or removed
+# here reaches the next agent spawn without a server restart.
 github:
   user_token_command:
   app_token_command:

@@ -20,8 +20,9 @@ pub const WRAPPER_REPO_DIR: &str = "rust/crates/runtime/agents/gh_wrapper";
 /// The environment variable that names the wrapper script for the spawn check. `agent_environment` sets it; an
 /// environment without it was not built by the server and carries no wrapper contract.
 pub const WRAPPER_PATH_VAR: &str = "CHARLIEBOT_GH_WRAPPER";
-/// The environment variable that names the App token command the wrapper runs. The server sets it from the host
-/// config's [`CONFIG_KEY`]; the wrapper refuses a text-carrying write without it.
+/// The environment variable that names the App token command the wrapper runs. The spawn path sets it from the live
+/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`); the wrapper refuses a text-carrying
+/// write without it.
 pub const TOKEN_COMMAND_VAR: &str = "CHARLIEBOT_GH_APP_TOKEN_CMD";
 /// The host config key that names the App token command.
 pub const CONFIG_KEY: &str = "github.app_token_command";

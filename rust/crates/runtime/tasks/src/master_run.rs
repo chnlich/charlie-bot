@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::agent_environment;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
 use charliebot_agents::runner::{AgentRunner, RunRequest};
@@ -363,7 +363,7 @@ fn turn_launch_context(
   held_native_id: Option<String>,
 ) -> anyhow::Result<LaunchContext> {
   let callbacks = item.callbacks.clone();
-  let base_env = callbacks.features.startup.require::<AgentBaseEnvironment>()?;
+  let base_env = agent_environment::spawn_base_environment(&callbacks.features)?;
   let session_id = item.session_metadata().id;
   let running_session_id = session_id.clone();
   let shared_metadata = Arc::clone(&item.session_meta);
@@ -532,7 +532,7 @@ impl RunProcess for TurnProcess<'_> {
       let mut request = RunRequest::new(
         process_prompt.to_string(),
         self.cwd.clone(),
-        self.features.startup.require::<AgentBaseEnvironment>()?.as_ref().clone(),
+        agent_environment::spawn_base_environment(&self.features)?,
         charliebot_agents::transport::cgroup::SessionCgroupConfig::from_config(&self.item.cfg),
         Arc::clone(&self.features.registry),
       );

@@ -180,7 +180,7 @@ fn run_server() -> ExitCode {
   runtime.block_on(run(repo_root, agent_base))
 }
 
-async fn run(repo_root: RepoRoot, mut agent_base: AgentBaseEnvironment) -> ExitCode {
+async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode {
   let mut stop = match StopSignal::install() {
     Ok(stop) => stop,
     Err(error) => {
@@ -220,8 +220,6 @@ async fn run(repo_root: RepoRoot, mut agent_base: AgentBaseEnvironment) -> ExitC
     return finish_boot_stop(None, None, signal_receiver).await;
   }
   let cfg = state_parts.config.get().expect("load_inputs loaded the config");
-  // The config load runs after `replace_environment`, so the host's token command reaches the agent environment here.
-  gh_wrapper::apply_token_command(&mut agent_base.values, cfg.github.app_token_command.as_deref());
 
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, None, signal_receiver).await;

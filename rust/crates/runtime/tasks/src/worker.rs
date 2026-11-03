@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
-use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::agent_environment;
 use charliebot_agents::backend_pool::{self, QUOTA_ERROR_PATTERNS};
 use charliebot_agents::backend_types::{self, BuiltBackend};
 use charliebot_agents::event_builders;
@@ -411,7 +411,7 @@ impl Worker {
   /// The child environment overlay of every process: the launch's own variables, with the agent `gh` wrapper first
   /// on PATH and the stash-guard directory directly after it (`Worker.run`).
   fn process_env(&self) -> anyhow::Result<Env> {
-    let base_env = self.features.startup.require::<AgentBaseEnvironment>()?;
+    let base_env = self.features.startup.require::<agent_environment::AgentBaseEnvironment>()?;
     let checkout = self.features.startup.require::<RepoRoot>()?;
     let guard_dir = checkout.path().join(GIT_STASH_GUARD_DIR);
     let gh_wrapper_dir = gh_wrapper::dir_under(checkout.path());
@@ -445,7 +445,7 @@ impl Worker {
   ) -> anyhow::Result<LaunchContext> {
     let session_meta =
       self.session_meta.clone().context("a task run with a backend option needs its session metadata")?;
-    let base_env = self.features.startup.require::<AgentBaseEnvironment>()?;
+    let base_env = agent_environment::spawn_base_environment(&self.features)?;
     let emit_sink = Arc::clone(sink);
     let context_sink = Arc::clone(sink);
     Ok(LaunchContext {
@@ -564,11 +564,11 @@ impl Worker {
     );
     let prompt = launch.prompt.clone().unwrap_or_else(|| self.task_description.clone());
     let (on_event, mut receiver) = stream_event_channel("event consumer stopped", "event acknowledgement stopped");
-    let base_env = self.features.startup.require::<AgentBaseEnvironment>()?;
+    let base_env = agent_environment::spawn_base_environment(&self.features)?;
     let mut request = RunRequest::new(
       prompt,
       self.working_dir.clone(),
-      base_env.as_ref().clone(),
+      base_env,
       SessionCgroupConfig::from_config(&self.cfg),
       Arc::clone(&self.features.registry),
     );

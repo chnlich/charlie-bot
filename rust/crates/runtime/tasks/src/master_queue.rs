@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, anyhow};
-use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::agent_environment;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -610,8 +610,8 @@ async fn arm_idle_compaction(
   let context_session_id = session_id.clone();
   let context_state: SessionContextStateFn =
     Arc::new(move |metadata| Ok(usage.context_state(&context_session_id, metadata)?));
-  let base_environment = features.startup.require::<AgentBaseEnvironment>()?;
-  let mut base_env = base_environment.values.clone();
+  let base_environment = agent_environment::spawn_base_environment(&features)?;
+  let mut base_env = base_environment.values;
   base_env.insert("GIT_CEILING_DIRECTORIES".to_string(), cfg.charliebot_home.to_string_lossy().into_owned());
   let cwd = cfg.sessions_dir().join(&session_id);
   let emit_session_id = session_id.clone();

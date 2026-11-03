@@ -30,8 +30,8 @@
 # otherwise the repository gh resolves from the current directory; gh api
 # takes the repos/<owner>/<repo>/ prefix of its path, with {owner} and {repo}
 # expanded as gh expands them. The wrapper then calls the token command named
-# by $CHARLIEBOT_GH_APP_TOKEN_CMD (the host config's github.app_token_command)
-# with --write <owner>/<repo>:
+# by $CHARLIEBOT_GH_APP_TOKEN_CMD (the host config's github.app_token_command,
+# which the server passes to each agent process when it spawns it)
 #   - exit 0: run the real gh with GH_TOKEN set to the printed token;
 #   - exit 3: the App is not installed there; run the real gh unchanged;
 #   - any other exit: report the token command's error and run nothing.

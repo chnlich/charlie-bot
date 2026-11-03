@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::agent_environment;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -180,7 +180,7 @@ async fn generate_name(
 ) -> anyhow::Result<String> {
   let launch = LaunchArgs { cgroup_session_id: Some(session_id.to_string()), ..LaunchArgs::default() };
   let built = backend_types::build_backend(Arc::clone(&features.registry), option, cfg, launch)?;
-  let base_env = features.startup.require::<AgentBaseEnvironment>()?;
+  let base_env = agent_environment::spawn_base_environment(features)?;
   charliebot_agents::one_shot_text(built, &base_env.values, prompt, system_prompt, Some(LIGHT_ONESHOT_TIMEOUT)).await
 }
 

@@ -57,8 +57,8 @@ judges it. Each packet still needs exactly one answer per message, or the run fa
   `task_parent_id`, and its timestamp is in the window (event 8789, `scan_window.py`).
 - A child's reports to its parent are the parent's `agent_message` events from that child, up to `--reports-until`.
   They go in the packet as context (event 8839, `build_packets.py`).
-- A file a message names is a path under `~`, the home directory, or `/tmp`, or an `artifacts/` path resolved first in
-  the parent's session and then in the child's (event 8810, `paths.py`; event 8834 fixes the trailing punctuation). A
+- A file a message names is a path under `~`, the home directory, or `/tmp`, or an `artifacts/` path resolved in the
+  parent's session (event 8810, `paths.py`; event 8834 fixes the trailing punctuation). A
   path is read as text, as the file's text with HTML tags reduced to text, or it is marked missing, directory or binary.
   Text longer than 30000 characters is cut. A file in the child's own session shows only its name (event 9257).
 - Packets hold up to 120000 characters, and a repeated file in one packet shows a pointer to the first message that
@@ -78,6 +78,8 @@ Changed, with the reason:
   it (event 9257). The tool uses the final file for both profiles. The sentence only matters for a packet that points to
   the child's own file, and no worker packet did in the recovered run (the rerun listing at event 9263 lists manager children
   only).
+- The recovered packet build read the child's reports with no upper bound (event 8839). The tool bounds them at
+  `--reports-until`, so a rerun after the store has grown holds the reports the review saw.
 
 Not recovered, and the replacement:
 

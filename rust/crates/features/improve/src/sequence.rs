@@ -19,6 +19,7 @@ use anyhow::{Context, bail};
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
+use charliebot_core::parallel_walk;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
@@ -985,11 +986,18 @@ pub async fn reconcile_interrupted_sequences(
     session_dirs.push(entry?.path());
   }
   session_dirs.sort();
-  for session_dir in session_dirs {
+  // Only a session directory with a loops directory holds a loop. The stats that find those directories read nothing
+  // the repairs below write, so they run in parallel before the repairs.
+  let Some(holds_loops) = parallel_walk::map_until(&session_dirs, &|| stop.is_cancelled(), |session_dir| {
+    session_dir.is_dir() && session_dir.join("loops").is_dir()
+  }) else {
+    return Ok(repaired);
+  };
+  for (session_dir, holds_loops) in session_dirs.into_iter().zip(holds_loops) {
     if stop.is_cancelled() {
       return Ok(repaired);
     }
-    if !session_dir.is_dir() || !session_dir.join("loops").is_dir() {
+    if !holds_loops {
       continue;
     }
     let session_id = session_dir.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();

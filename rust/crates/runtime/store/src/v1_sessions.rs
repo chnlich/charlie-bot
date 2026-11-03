@@ -7,41 +7,48 @@ use std::path::Path;
 use serde_json::Value;
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::parallel_walk;
 use charliebot_core::v1_sessions::{CONVERSION_SCRIPT, V1_SESSION_CONVERSION_GUIDANCE};
 
 use crate::metadata::MetadataReadError;
 
-/// Count session directories whose metadata has no non-null `profile` field.
+/// Count session directories whose metadata has no non-null `profile` field. The directories are read in parallel; the
+/// first unreadable one in directory order fails the count.
 pub fn count_v1_sessions(sessions_dir: &Path) -> Result<usize, String> {
   if !sessions_dir.is_dir() {
     return Ok(0);
   }
-  let entries = fs::read_dir(sessions_dir).map_err(|error| format!("{}: {error}", sessions_dir.display()))?;
+  let entries = fs::read_dir(sessions_dir)
+    .and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<io::Result<Vec<_>>>())
+    .map_err(|error| format!("{}: {error}", sessions_dir.display()))?;
   let mut count = 0;
-  for entry in entries {
-    let entry = entry.map_err(|error| format!("{}: {error}", sessions_dir.display()))?;
-    let name = entry.file_name();
-    let name = name.to_string_lossy();
-    if !entry.path().is_dir() || (name.starts_with(".task-") && name.ends_with(".tmp")) {
-      continue;
-    }
-    let path = crate::layout::metadata_path(&entry.path());
-    let metadata = match crate::metadata::read_metadata_value(&path) {
-      Ok(metadata) => metadata,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-      Err(error) => {
-        return Err(match error {
-          MetadataReadError::Io(error) => format!("{}: {error}", path.display()),
-          MetadataReadError::Json(message) => format!("{} is not valid JSON: {message}", path.display()),
-        });
-      }
-    };
-    let object = metadata.as_object().ok_or_else(|| format!("{} is not a JSON object", path.display()))?;
-    if object.get("profile").is_none_or(Value::is_null) {
+  for is_v1 in parallel_walk::map(&entries, |session_dir| is_v1_session(session_dir)) {
+    if is_v1? {
       count += 1;
     }
   }
   Ok(count)
+}
+
+/// Whether `session_dir` is a session directory whose metadata has no non-null `profile` field.
+fn is_v1_session(session_dir: &Path) -> Result<bool, String> {
+  let name = session_dir.file_name().expect("a directory entry names a file").to_string_lossy();
+  if !session_dir.is_dir() || (name.starts_with(".task-") && name.ends_with(".tmp")) {
+    return Ok(false);
+  }
+  let path = crate::layout::metadata_path(session_dir);
+  let metadata = match crate::metadata::read_metadata_value(&path) {
+    Ok(metadata) => metadata,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+    Err(error) => {
+      return Err(match error {
+        MetadataReadError::Io(error) => format!("{}: {error}", path.display()),
+        MetadataReadError::Json(message) => format!("{} is not valid JSON: {message}", path.display()),
+      });
+    }
+  };
+  let object = metadata.as_object().ok_or_else(|| format!("{} is not a JSON object", path.display()))?;
+  Ok(object.get("profile").is_none_or(Value::is_null))
 }
 
 /// Refuse startup when the home contains sessions that would disappear from v2 listings.

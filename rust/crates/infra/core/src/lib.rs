@@ -19,6 +19,7 @@ pub mod logline;
 pub mod memo;
 pub mod metadata_slot;
 pub mod pacific;
+pub mod parallel_walk;
 pub mod paths;
 mod printable_table;
 pub mod proc_identity;

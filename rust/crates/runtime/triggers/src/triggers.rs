@@ -21,7 +21,7 @@ use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::{event_types, ssh, text_repr};
+use charliebot_core::{event_types, parallel_walk, ssh, text_repr};
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
@@ -411,8 +411,8 @@ impl TriggerManager {
 
   /// Restart every pending trigger found under the configured sessions directory.
   ///
-  /// One blocking walk reads every session's trigger files, in directory order, and the pending triggers then start in
-  /// that order. A trigger task writes only its own file, so reading every file before the first start reads what the
+  /// One blocking walk reads every session's trigger files in parallel, and the pending triggers then start in directory
+  /// order. A trigger task writes only its own file, so reading every file before the first start reads what the
   /// walk would read with the starts in between.
   pub async fn recover_pending(self: &Arc<Self>) -> anyhow::Result<()> {
     let stop = self.features.startup.stop();
@@ -1318,42 +1318,64 @@ struct TriggerWalk {
   end: anyhow::Result<()>,
 }
 
-/// Read every session's trigger files under `sessions_dir`, in directory order, until a stop request or an error.
+/// Read every session's trigger files under `sessions_dir`, in directory order, until a stop request or an error. The
+/// sessions are read in parallel, and the walk keeps those before the first error in directory order.
 fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop) -> TriggerWalk {
   let mut sessions = Vec::new();
-  let end = (|| {
-    let entries = match std::fs::read_dir(sessions_dir) {
-      Ok(entries) => entries,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-      Err(error) => return Err(error).with_context(|| format!("read {}", sessions_dir.display())),
-    };
-    for entry in entries {
-      if stop.is_cancelled() {
-        return Ok(());
-      }
-      let entry = entry?;
-      if !entry.file_type()?.is_dir() {
-        continue;
-      }
-      let started = std::time::Instant::now();
-      let directory = layout::triggers_dir(&entry.path());
-      let files = match trigger_files::iter_trigger_file_stats(&directory) {
-        Ok(files) => files,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-        Err(error) => return Err(error).with_context(|| format!("scan {}", directory.display())),
-      };
-      let triggers = files
-        .into_iter()
-        .map(|(path, _stat)| {
-          let loaded = trigger_files::read_trigger(&path);
-          (path, loaded)
-        })
-        .collect();
-      sessions.push(SessionTriggers { dir: entry.path(), triggers, read_time: started.elapsed() });
+  let entries = match std::fs::read_dir(sessions_dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return TriggerWalk { sessions, end: Ok(()) },
+    Err(error) => {
+      let end = Err(error).with_context(|| format!("read {}", sessions_dir.display()));
+      return TriggerWalk { sessions, end };
     }
-    Ok(())
-  })();
+  };
+  // The listing ends at its first error, and the sessions listed before it are read.
+  let mut listed = Vec::new();
+  let mut end = Ok(());
+  for entry in entries {
+    match entry {
+      Ok(entry) => listed.push(entry),
+      Err(error) => {
+        end = Err(error.into());
+        break;
+      }
+    }
+  }
+  let Some(reads) = parallel_walk::map_until(&listed, &|| stop.is_cancelled(), read_one_session_triggers) else {
+    return TriggerWalk { sessions, end: Ok(()) };
+  };
+  for read in reads {
+    match read {
+      Ok(Some(session)) => sessions.push(session),
+      Ok(None) => {}
+      Err(error) => return TriggerWalk { sessions, end: Err(error) },
+    }
+  }
   TriggerWalk { sessions, end }
+}
+
+/// One session directory's trigger files, each with its load result; `None` for an entry that is not a directory or
+/// holds no triggers directory.
+fn read_one_session_triggers(entry: &std::fs::DirEntry) -> anyhow::Result<Option<SessionTriggers>> {
+  if !entry.file_type()?.is_dir() {
+    return Ok(None);
+  }
+  let started = std::time::Instant::now();
+  let directory = layout::triggers_dir(&entry.path());
+  let files = match trigger_files::iter_trigger_file_stats(&directory) {
+    Ok(files) => files,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("scan {}", directory.display())),
+  };
+  let triggers = files
+    .into_iter()
+    .map(|(path, _stat)| {
+      let loaded = trigger_files::read_trigger(&path);
+      (path, loaded)
+    })
+    .collect();
+  Ok(Some(SessionTriggers { dir: entry.path(), triggers, read_time: started.elapsed() }))
 }
 
 fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]) -> String {

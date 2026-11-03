@@ -20,6 +20,7 @@ use anyhow::{Context, anyhow, bail};
 use charliebot_agents::runs::run_alive_probe;
 use charliebot_agents::transport::{identity, recovery as transport_recovery};
 use charliebot_core::config::BackendOption;
+use charliebot_core::parallel_walk;
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_registry::sequence::{
   SequenceCompletion, SequenceController, SequenceDispatch, SequenceExecutor, SequenceSessionEvents,
@@ -344,18 +345,6 @@ enum WalkEntry {
   Kept { reason: Option<&'static str>, session: Box<FullPassSession> },
 }
 
-/// The threads one batch of the walk's per-session reads may split across.
-///
-/// The skip checks, the absence proofs and the fact scans each read only their own session's files, before any
-/// node pass writes, so each batch splits across the available cores. On the 7,160-session mock home sixteen threads
-/// left the absence-proof scan at about the walk's fixed per-session cost, so more threads gained nothing.
-const WALK_WORKERS: usize = 16;
-/// The batch size below which a batch runs on the calling thread.
-///
-/// Starting a thread costs more than a handful of small reads, so only a batch a production home produces takes the
-/// parallel path.
-const WALK_PARALLEL_MIN_ITEMS: usize = 64;
-
 /// Reconcile every node this home owns, in sorted directory order (`task_recovery.reconcile_task_tree`). The sequence
 /// controllers mark their interrupted state first.
 ///
@@ -567,11 +556,11 @@ fn examine_session_dir(
   Ok(WalkEntry::Kept { reason, session: Box::new(FullPassSession { session_id, meta }) })
 }
 
-/// [`parallel_map_until`] on the blocking pool; the items come back with the results.
+/// [`parallel_walk::map_until`] on the blocking pool, ended by the startup stop; the items come back with the results.
 ///
 /// A batch reads for seconds on a large home. Run in place, it would hold one of the async runtime's threads for that
 /// long, and the stop request arrives through a runtime task: on a host with one runtime thread, the stop would wait for
-/// the batch to end. A batch below [`WALK_PARALLEL_MIN_ITEMS`] runs on the calling thread, as the walk's reads did
+/// the batch to end. A batch below [`parallel_walk::MIN_ITEMS`] runs on the calling thread, as the walk's reads did
 /// before they were batched.
 async fn blocking_batch<T, R>(
   items: Vec<T>,
@@ -582,58 +571,17 @@ where
   T: Send + Sync + 'static,
   R: Send + 'static,
 {
-  if items.len() < WALK_PARALLEL_MIN_ITEMS {
-    let results = parallel_map_until(&items, stop, job);
+  if items.len() < parallel_walk::MIN_ITEMS {
+    let results = parallel_walk::map_until(&items, &|| stop.is_cancelled(), job);
     return Ok((items, results));
   }
   let stop = stop.clone();
   tokio::task::spawn_blocking(move || {
-    let results = parallel_map_until(&items, &stop, job);
+    let results = parallel_walk::map_until(&items, &|| stop.is_cancelled(), job);
     (items, results)
   })
   .await
   .context("a startup walk batch task failed")
-}
-
-/// `job` applied to each item, in the items' order.
-///
-/// The items split across the available cores when the batch is large enough to pay for the threads. Each worker takes
-/// the next unclaimed item, so one large session's read never holds back a run of others behind it. A worker checks
-/// the stop request before each item and stops when it meets one; the result is then `None`, and the walk ends with
-/// the counters it has, as a sequential stop does.
-fn parallel_map_until<T: Sync, R: Send>(
-  items: &[T],
-  stop: &StartupStop,
-  job: impl Fn(&T) -> R + Sync,
-) -> Option<Vec<R>> {
-  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(WALK_WORKERS);
-  if items.len() < WALK_PARALLEL_MIN_ITEMS || workers < 2 {
-    let mut results = Vec::with_capacity(items.len());
-    for item in items {
-      if stop.is_cancelled() {
-        return None;
-      }
-      results.push(job(item));
-    }
-    return Some(results);
-  }
-  let next = std::sync::atomic::AtomicUsize::new(0);
-  let slots: Vec<std::sync::Mutex<Option<R>>> = items.iter().map(|_| std::sync::Mutex::new(None)).collect();
-  std::thread::scope(|scope| {
-    for _ in 0..workers {
-      scope.spawn(|| {
-        loop {
-          let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-          if index >= items.len() || stop.is_cancelled() {
-            return;
-          }
-          let result = job(&items[index]);
-          *slots[index].lock().expect("walk slot mutex is not poisoned") = Some(result);
-        }
-      });
-    }
-  });
-  slots.into_iter().map(|slot| slot.into_inner().expect("walk slot mutex is not poisoned")).collect()
 }
 
 async fn reconcile_node_until_stopped<T>(stop: &StartupStop, node_pass: impl Future<Output = T>) -> Option<T> {
@@ -1685,7 +1633,7 @@ mod tests {
   async fn a_walk_batch_keeps_each_result_in_order_and_ends_at_a_stop() {
     let (_home, features) = startup_features().await;
     let store = &features.store;
-    let count = WALK_PARALLEL_MIN_ITEMS + 2;
+    let count = parallel_walk::MIN_ITEMS + 2;
     let mut candidates = Vec::with_capacity(count);
     for index in 0..count {
       let session_id = format!("batch-{index:03}");
@@ -1704,8 +1652,10 @@ mod tests {
       candidates.push(FullPassSession { session_id, meta });
     }
     let stop = StartupStop::default();
-    let proved = parallel_map_until(&candidates, &stop, |candidate| store.has_no_task_node(&candidate.meta))
-      .expect("no stop request arrived");
+    let proved = parallel_walk::map_until(&candidates, &|| stop.is_cancelled(), |candidate| {
+      store.has_no_task_node(&candidate.meta)
+    })
+    .expect("no stop request arrived");
     assert_eq!(proved.len(), candidates.len(), "every candidate keeps its proof");
     for (index, (proved, candidate)) in proved.into_iter().zip(&candidates).enumerate() {
       let sequential = store.has_no_task_node(&candidate.meta).expect("the sequential proof reads the session");
@@ -1715,7 +1665,7 @@ mod tests {
 
     // A worker checks the stop before each item it takes, so a stop ends the batch with the later items unread.
     let taken = std::sync::atomic::AtomicUsize::new(0);
-    let stopped = parallel_map_until(&candidates, &stop, |_| {
+    let stopped = parallel_walk::map_until(&candidates, &|| stop.is_cancelled(), |_| {
       taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
       stop.cancel();
     });

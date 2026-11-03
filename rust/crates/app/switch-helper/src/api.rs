@@ -12,6 +12,7 @@ use charliebot_core::event_types;
 use charliebot_core::logline;
 use charliebot_core::text_repr;
 use charliebot_store::layout;
+use charliebot_store::metadata::KEEP_WORKTREE_FIELD;
 use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
 use serde_json::{Value, json};
 
@@ -175,7 +176,7 @@ fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
     "repo_path": repo,
     "base_branch": "main",
     "task_type": "script-run",
-    "keep_worktree": true,
+    (KEEP_WORKTREE_FIELD): true,
     "request_id": format!("switch-delegation:{session}"),
   });
   text_repr::json_dumps(&body, &text_repr::DEFAULT_JSON)

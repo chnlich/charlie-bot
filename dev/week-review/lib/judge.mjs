@@ -118,7 +118,8 @@ export function callClaude({ model, input, where }) {
 }
 
 // Runs `tasks` (functions returning promises) with at most `limit` in flight. The first failure stops the pool from
-// starting further tasks and rejects the run.
+// starting further tasks and rejects the run with that failure; the failures of tasks already in flight settle into
+// the same result instead of escaping as unhandled rejections.
 export async function runPool(tasks, limit) {
   let next = 0;
   let failed = false;
@@ -134,5 +135,7 @@ export async function runPool(tasks, limit) {
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  const failure = settled.find((outcome) => outcome.status === 'rejected');
+  if (failure) throw failure.reason;
 }

@@ -18,6 +18,12 @@ pub const AGENTS_SLICE: &str = "charliebot-agents.slice";
 pub const PROCS_FILE_NAME: &str = "cgroup.procs";
 /// The pre-split parent of the session slices. Nothing is created here; a leftover directory is still swept.
 pub const RETIRED_APP_SLICE: &str = "app.slice";
+/// The log event stating that the session cgroup limits are on.
+pub const SESSION_CGROUP_ENABLED_EVENT: &str = "session_cgroup_enabled";
+/// The log event naming each session cgroup the server created.
+pub const SESSION_CGROUP_CREATED_EVENT: &str = "session_cgroup_created";
+/// The log event naming the stale session cgroups the startup sweep removed.
+pub const SESSION_CGROUP_SWEEP_REMOVED_EVENT: &str = "session_cgroup_sweep_removed";
 /// The `oom_score_adj` of every agent process: a host-wide OOM picks an agent process before the server, which keeps
 /// the default 0. The value is positive, which an unprivileged writer may set.
 pub const SESSION_CGROUP_OOM_SCORE_ADJ: i64 = 500;

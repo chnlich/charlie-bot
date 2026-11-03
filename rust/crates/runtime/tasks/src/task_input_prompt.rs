@@ -54,6 +54,7 @@ pub fn compose_input_prompt(
         child_report_text(&report, provenance)
       }
       event_types::SCHEDULED_TRIGGER => format!("[Scheduled trigger] {content}"),
+      event_types::DRAFT_SENT => format!("[Draft sent] {content}"),
       _ => content.to_string(),
     };
     let event_uploads = event

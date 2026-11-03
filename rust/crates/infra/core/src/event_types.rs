@@ -56,6 +56,12 @@ pub const CONTEXT_TOKENS: &str = "context_tokens";
 pub const CONTEXT_FULL: &str = "context_full";
 pub const CONTEXT_COMPACT_AT: &str = "context_compact_at";
 pub const CLONE_START: &str = "clone_start";
+/// The agent registered a message or publication for the operator to approve. Its card carries the full body.
+pub const DRAFT_REGISTERED: &str = "draft_registered";
+/// The operator's send went out; the event wakes the session that registered the draft.
+pub const DRAFT_SENT: &str = "draft_sent";
+/// A send failed. `outcome` reads `rejected` or `unknown`, and the server never retries it.
+pub const DRAFT_FAILED: &str = "draft_failed";
 pub const RUNNING_CHANGED: &str = "running_changed";
 pub const UNREAD_CHANGED: &str = "unread_changed";
 pub const SESSION_RENAMED: &str = "session_renamed";

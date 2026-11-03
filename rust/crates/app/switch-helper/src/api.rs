@@ -1,10 +1,11 @@
 //! The response-body reads of the switch: one field of an API answer, the newest run's fields, a run-state page, the
-//! assistant-message count of a bootstrap, the delegate request body, a launch log match and a run's error text.
+//! assistant-message count of a bootstrap, the delegate request body, a launch log match, a run's error text and a
+//! run's first command.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
@@ -13,10 +14,12 @@ use charliebot_core::logline;
 use charliebot_core::text_repr;
 use charliebot_store::layout;
 use charliebot_store::metadata::KEEP_WORKTREE_FIELD;
-use charliebot_store::run_records::{EventReadError, RUN_EVENTS_NAME, read_event_values};
+use charliebot_store::run_records::{
+  EventReadError, RUN_EVENTS_NAME, parse_event_line, read_event_values, read_run_metadata,
+};
 use serde_json::{Value, json};
 
-use crate::common::{USAGE, exact, exit_with, failed, read_json};
+use crate::common::{USAGE, exact, exit_with, failed, metadata_read_failure, read_json};
 
 /// `json-field BODY NAME`: the top-level field's value as plain text.
 pub fn json_field(args: &[OsString]) -> Result<(), CliExit> {
@@ -182,12 +185,17 @@ fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
   text_repr::json_dumps(&body, &text_repr::DEFAULT_JSON)
 }
 
+/// The directory of one run of a session under the home.
+fn run_dir(home: &str, session_id: &str, run_id: &str) -> PathBuf {
+  let session = config::sessions_dir_in(Path::new(home)).join(session_id);
+  layout::runs_dir(&session).join(run_id)
+}
+
 /// `run-error HOME SESSION RUN`: the message of the last error event in the run's event log, with its whitespace
 /// collapsed; empty when the run logged no error.
 pub fn run_error(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
-  let session = config::sessions_dir_in(Path::new(&home)).join(&session_id);
-  let path = layout::runs_dir(&session).join(&run_id).join(RUN_EVENTS_NAME);
+  let path = run_dir(&home, &session_id, &run_id).join(RUN_EVENTS_NAME);
   let events = match read_event_values(&path) {
     Ok(events) => events,
     Err(EventReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -201,6 +209,96 @@ pub fn run_error(args: &[OsString]) -> Result<(), CliExit> {
 fn last_error_message(events: &[Value]) -> Option<String> {
   let last = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ERROR))?;
   Some(last.get("message").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// `run-first-command HOME SESSION RUN`: the run's first command as three fields joined by the unit separator (0x1f):
+/// the cwd of the log's first init event, the kind of its first tool result (see `first_command`), and the run's
+/// backend from its metadata. The log is read under the skip contract, so a line the backend is still writing does
+/// not fail the read; a log not written yet gives empty first two fields.
+pub fn run_first_command(args: &[OsString]) -> Result<(), CliExit> {
+  let [home, session_id, run_id] = exact::<3>(args)?;
+  let dir = run_dir(&home, &session_id, &run_id);
+  let events_path = dir.join(RUN_EVENTS_NAME);
+  let events: Vec<Value> = match fs::read(&events_path) {
+    Ok(bytes) => bytes.split(|byte| *byte == b'\n').filter_map(parse_event_line).collect(),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    Err(error) => return Err(failed(format!("read {}: {error}", events_path.display()))),
+  };
+  let metadata_path = layout::metadata_path(&dir);
+  let metadata =
+    read_run_metadata(&metadata_path).map_err(|error| failed(metadata_read_failure(&metadata_path, error)))?;
+  let backend = metadata
+    .get("backend")
+    .and_then(Value::as_str)
+    .ok_or_else(|| CliExit::error(format!("{} has no backend", metadata_path.display())))?;
+  let (cwd, kind) = first_command(&events);
+  println!("{cwd}\u{1f}{kind}\u{1f}{backend}");
+  Ok(())
+}
+
+/// The cwd of the log's first init event, and the kind of its first tool result: `command-ok` for a Bash command that
+/// did not error, `command-failed` for a Bash command that errored, and `not-command` for any other tool. A tool result
+/// is either a user message's `tool_result` block, which names its tool by the `tool_use_id` of an earlier assistant
+/// `tool_use` block, or a top-level `tool_result` event that names its tool in `tool_name`. Each part is empty while
+/// the log holds no such event.
+fn first_command(events: &[Value]) -> (String, String) {
+  let mut cwd: Option<String> = None;
+  let mut kind: Option<&'static str> = None;
+  let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
+  for event in events {
+    match event.get("type").and_then(Value::as_str) {
+      Some(event_types::SYSTEM) if cwd.is_none() && event.get("subtype").and_then(Value::as_str) == Some("init") => {
+        cwd = Some(event.get("cwd").and_then(Value::as_str).unwrap_or_default().to_string());
+      }
+      Some(event_types::ASSISTANT) => {
+        for block in content_blocks(event) {
+          let id = block.get("id").and_then(Value::as_str);
+          let name = block.get("name").and_then(Value::as_str);
+          if block.get("type").and_then(Value::as_str) == Some(event_types::TOOL_USE)
+            && let (Some(id), Some(name)) = (id, name)
+          {
+            tool_names.insert(id.to_string(), name.to_string());
+          }
+        }
+      }
+      Some(event_types::USER) => {
+        for block in content_blocks(event) {
+          if block.get("type").and_then(Value::as_str) == Some(event_types::TOOL_RESULT) {
+            let id = block.get(event_types::TOOL_USE_ID).and_then(Value::as_str);
+            let name = id.and_then(|id| tool_names.get(id)).map_or("", String::as_str);
+            record_first_result(&mut kind, name, is_error(block));
+          }
+        }
+      }
+      Some(event_types::TOOL_RESULT) => {
+        let name = event.get("tool_name").and_then(Value::as_str).unwrap_or_default();
+        record_first_result(&mut kind, name, is_error(event));
+      }
+      _ => {}
+    }
+  }
+  (cwd.unwrap_or_default(), kind.unwrap_or_default().to_string())
+}
+
+/// Keeps the kind of the first tool result it is given; later results change nothing.
+fn record_first_result(kind: &mut Option<&'static str>, tool: &str, is_error: bool) {
+  if kind.is_none() {
+    *kind = Some(match (tool, is_error) {
+      ("Bash", false) => "command-ok",
+      ("Bash", true) => "command-failed",
+      _ => "not-command",
+    });
+  }
+}
+
+/// Whether a tool result reports an error. An absent `is_error` is no error, as the aggregator reads it.
+fn is_error(result: &Value) -> bool {
+  result.get("is_error").is_some_and(text_repr::is_truthy)
+}
+
+/// The content blocks of an event's message; empty when the message holds no list.
+fn content_blocks(event: &Value) -> &[Value] {
+  event.pointer("/message/content").and_then(Value::as_array).map_or(&[], Vec::as_slice)
 }
 
 #[cfg(test)]
@@ -288,5 +386,39 @@ mod tests {
     let events: Vec<Value> = text.lines().map(|line| decode_event_line(line).expect("the events")).collect();
     assert_eq!(last_error_message(&events).as_deref(), Some("boxed text"));
     assert_eq!(last_error_message(&[]), None);
+  }
+
+  fn events_of(lines: &[&str]) -> Vec<Value> {
+    lines.iter().filter_map(|line| parse_event_line(line.as_bytes())).collect()
+  }
+
+  #[test]
+  fn the_first_command_reads_a_claude_run_log_and_skips_a_partial_line() {
+    // Lines of a claude-code run as its event log holds them. The last line is still being written.
+    let events = events_of(&[
+      r#"{"type":"system","subtype":"init","cwd":"/wt/task-1"}"#,
+      r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git rev-parse --short HEAD"}}]}}"#,
+      r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"abc1234","is_error":false}]}}"#,
+      r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Rep"#,
+    ]);
+    assert_eq!(first_command(&events), ("/wt/task-1".to_string(), "command-ok".to_string()));
+  }
+
+  #[test]
+  fn the_first_tool_result_decides_the_kind_and_a_later_one_changes_nothing() {
+    let init = r#"{"type":"system","subtype":"init","cwd":"/wt"}"#;
+    let read = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{}}]}}"#;
+    let read_result =
+      r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"x"}]}}"#;
+    let failed_bash = r#"{"type":"tool_result","tool_name":"Bash","content":"fatal","is_error":true}"#;
+    let bash_ok = r#"{"type":"tool_result","tool_name":"Bash","content":"abc"}"#;
+
+    let kind = |lines: &[&str]| first_command(&events_of(lines)).1;
+    assert_eq!(kind(&[init, read, read_result]), "not-command");
+    assert_eq!(kind(&[init, failed_bash, bash_ok]), "command-failed");
+    // A top-level result carries no is_error when the backend does not report one, which reads as no error.
+    assert_eq!(kind(&[init, bash_ok, read_result]), "command-ok");
+    assert_eq!(first_command(&events_of(&[])), (String::new(), String::new()));
+    assert_eq!(first_command(&events_of(&[init])), ("/wt".to_string(), String::new()));
   }
 }

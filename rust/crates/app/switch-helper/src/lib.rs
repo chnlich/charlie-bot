@@ -3,7 +3,7 @@
 //!
 //! The switch script runs the `charliebot` binary of the release it reads with (see the script's header), so every
 //! helper prints exactly what the switch compares and exits with the code it branches on: a helper that matched prints
-//! nothing and exits 0, and one that did not match exits 1. The eight names each take the arguments the switch
+//! nothing and exits 0, and one that did not match exits 1. The nine names each take the arguments the switch
 //! passes.
 
 use std::ffi::OsString;
@@ -38,6 +38,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     "run-states" => api::run_states(rest),
     "delegation-body" => api::delegation_body(rest),
     "run-error" => api::run_error(rest),
+    "run-first-command" => api::run_first_command(rest),
     other => Err(CliExit::usage(format!("unknown switch helper {other:?}. {}", common::USAGE))),
   }
 }

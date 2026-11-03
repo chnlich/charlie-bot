@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::compact::CompactValue;
 use crate::event_types::{ChatEvent, FileIdentity, SharedChatEvent};
-use crate::metadata::SessionMetadata;
+use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::run_facts::RunFacts;
 use crate::{StoreError, StoreResult};
 
@@ -211,6 +211,39 @@ pub(crate) struct CachedRunFactsAt {
 pub struct TaskTreeActivity {
   pub has_running_tasks: bool,
   pub work_state: String,
+}
+
+/// One child row of a task-tree page: the node's derived facts, read in one pass over the history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskTreeRow {
+  pub session_id: String,
+  pub task_state: String,
+  pub work_state: String,
+  pub archived: bool,
+  pub child_count: usize,
+  pub open_descendant_count: usize,
+  pub running_descendant_count: usize,
+}
+
+/// One computed task-tree page kept for the repeat requests whose inputs still hold.
+///
+/// The rows change when the index build, a run record or any history the row pass read changes. The stored identities
+/// name exactly the histories that pass read, so a repeat request re-reads those and serves the rows when every
+/// identity still matches.
+pub(crate) struct CachedTreePage {
+  /// The index build whose metadata and structure the rows were rendered from. A later build may carry the same
+  /// revision while a rename or an unread flip changed a row's fields, so the identity is the build, not the revision.
+  pub(crate) build_id: u64,
+  pub(crate) records_generation: u64,
+  pub(crate) parent_id: Option<String>,
+  pub(crate) include_archived: bool,
+  pub(crate) after: Option<(UtcDateTime, String)>,
+  pub(crate) limit: usize,
+  /// The histories the row pass read, in read order, shared so a hit re-checks them without copying the list.
+  pub(crate) ids: Arc<Vec<String>>,
+  pub(crate) identity_values: Vec<Option<FileIdentity>>,
+  pub(crate) rows: Vec<TaskTreeRow>,
+  pub(crate) has_more: bool,
 }
 
 pub(crate) struct TreeIndex {

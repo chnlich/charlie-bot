@@ -30,11 +30,11 @@ use crate::metadata::{
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
 use crate::streaming::StreamingManager;
-use crate::task_tree::CachedTreePage;
 #[cfg(test)]
 use crate::task_tree_state::IdentityHook;
 use crate::task_tree_state::{
   CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
+  CachedTreePage,
 };
 use crate::{ControlGuard, StoreError, StoreResult};
 

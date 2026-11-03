@@ -30,9 +30,9 @@ use crate::task_reparent;
 pub(crate) use crate::task_tree_state::IdentityStage;
 pub(crate) use crate::task_tree_state::{
   CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
-  EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
+  CachedTreePage, EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
 };
-pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity};
+pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity, TaskTreeRow};
 use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, task_below_caller};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -241,18 +241,6 @@ impl PromptScope {
   }
 }
 
-/// One child row of a task-tree page: the node's derived facts, read in one pass over the history.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaskTreeRow {
-  pub session_id: String,
-  pub task_state: String,
-  pub work_state: String,
-  pub archived: bool,
-  pub child_count: usize,
-  pub open_descendant_count: usize,
-  pub running_descendant_count: usize,
-}
-
 /// One page of a parent's child rows, and whether a further matching row follows them.
 pub struct TaskTreePage {
   pub rows: Vec<TaskTreeRow>,
@@ -268,27 +256,6 @@ struct TreePageKey<'a> {
   include_archived: bool,
   after: Option<&'a (UtcDateTime, String)>,
   limit: usize,
-}
-
-/// One computed task-tree page kept for the repeat requests whose inputs still hold.
-///
-/// The rows change when the index build, a run record or any history the row pass read changes. The stored identities
-/// name exactly the histories that pass read, so a repeat request re-reads those and serves the rows when every
-/// identity still matches.
-pub(crate) struct CachedTreePage {
-  /// The index build whose metadata and structure the rows were rendered from. A later build may carry the same
-  /// revision while a rename or an unread flip changed a row's fields, so the identity is the build, not the revision.
-  build_id: u64,
-  records_generation: u64,
-  parent_id: Option<String>,
-  include_archived: bool,
-  after: Option<(UtcDateTime, String)>,
-  limit: usize,
-  /// The histories the row pass read, in read order, shared so a hit re-checks them without copying the list.
-  ids: Arc<Vec<String>>,
-  identity_values: Vec<Option<FileIdentity>>,
-  rows: Vec<TaskTreeRow>,
-  has_more: bool,
 }
 
 /// The identity of one session's live history file, resolved from the open sessions directory.

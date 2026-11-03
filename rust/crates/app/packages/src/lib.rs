@@ -29,6 +29,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("features.code_server", charliebot_code_server::register),
   ("features.cron", charliebot_cron::register),
   ("features.diag", charliebot_diag::register),
+  ("features.drafts", charliebot_drafts::register),
   ("features.slack", charliebot_slack::register),
   ("features.discord", charliebot_discord::register),
   ("features.disk_sweep", charliebot_disk_sweep::register),

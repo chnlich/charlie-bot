@@ -11,6 +11,7 @@ page_packages	features.chat_threads	features.chat_threads
 page_packages	features.code_server	features.code_server
 page_packages	features.cron	features.cron
 page_packages	features.diag	features.diag
+page_packages	features.drafts	features.drafts
 page_packages	features.slack	features.slack
 page_packages	features.discord	features.discord
 page_packages	features.disk_sweep	features.disk_sweep
@@ -47,6 +48,7 @@ routers	features.chat_threads	features.chat_threads
 routers	features.code_server	features.code_server
 routers	features.cron	features.cron
 routers	features.diag	features.diag
+routers	features.drafts	features.drafts
 routers	features.slack	features.slack
 routers	features.discord	features.discord
 routers	features.web_reply	features.web_reply
@@ -126,6 +128,7 @@ metadata_slot_validators	-	web_reply:Session
 metadata_slot_validators	-	claude_code:Session
 turn contribution	features.chat_threads	chat_threads
 turn contribution	features.cron	cron
+turn contribution	features.drafts	drafts
 turn contribution	features.slack	slack
 turn contribution	features.discord	discord
 turn contribution	features.web_reply	web_reply
@@ -171,6 +174,7 @@ backend_reading_limits	backends.anthropic_compatible	cc-anthropic-compatible:cla
 usage resolver	backends.codex	codex
 sequence controller	features.cron	cron
 sequence controller	features.improve	improve
+draft platform	features.slack	slack
 plan registry	features.artifacts	plan_registry
 open waiting items reader	features.web_reply	open_waiting_items
 derived waiting items reader	features.cron	derived_waiting_items

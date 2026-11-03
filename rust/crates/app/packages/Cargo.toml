@@ -22,6 +22,7 @@ charliebot-diag.workspace = true
 charliebot-diff-view.workspace = true
 charliebot-discord.workspace = true
 charliebot-disk-sweep.workspace = true
+charliebot-drafts.workspace = true
 charliebot-explain.workspace = true
 charliebot-failure-triage.workspace = true
 charliebot-files.workspace = true

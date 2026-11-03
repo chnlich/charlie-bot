@@ -35,6 +35,7 @@ members = [
     "crates/features/disk_sweep",
     "crates/features/diff_view",
     "crates/features/discord",
+    "crates/features/drafts",
     "crates/features/explain",
     "crates/features/failure_triage",
     "crates/features/files",
@@ -163,6 +164,7 @@ charliebot-diag = { path = "crates/features/diag" }
 charliebot-disk-sweep = { path = "crates/features/disk_sweep" }
 charliebot-diff-view = { path = "crates/features/diff_view" }
 charliebot-discord = { path = "crates/features/discord" }
+charliebot-drafts = { path = "crates/features/drafts" }
 charliebot-explain = { path = "crates/features/explain" }
 charliebot-failure-triage = { path = "crates/features/failure_triage" }
 charliebot-files = { path = "crates/features/files" }

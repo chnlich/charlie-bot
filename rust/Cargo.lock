@@ -839,6 +839,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-drafts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-cli-common",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-tasks",
+ "futures-util",
+ "http 1.5.0",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "charliebot-explain"
 version = "0.1.0"
 dependencies = [
@@ -1099,6 +1121,7 @@ dependencies = [
  "charliebot-diff-view",
  "charliebot-discord",
  "charliebot-disk-sweep",
+ "charliebot-drafts",
  "charliebot-explain",
  "charliebot-failure-triage",
  "charliebot-files",

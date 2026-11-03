@@ -2500,7 +2500,9 @@ fn observe_run_facts(
 fn admits_input(event: &ChatEvent) -> bool {
   match event.get("type").and_then(CompactValue::as_str) {
     Some("user") => event.get("content").is_some_and(CompactValue::is_string),
-    Some("agent_message" | event_types::SCHEDULED_TRIGGER | event_types::CHILD_REPORT) => true,
+    Some("agent_message" | event_types::SCHEDULED_TRIGGER | event_types::CHILD_REPORT | event_types::DRAFT_SENT) => {
+      true
+    }
     _ => false,
   }
 }

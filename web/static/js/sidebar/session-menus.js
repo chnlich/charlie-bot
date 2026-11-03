@@ -10,9 +10,9 @@
 
 // The normal row's Settings menu: openRowMenu (row-menu.js) draws, places and
 // closes the popover; this builds its items from the Settings button's data
-// attributes. Each item keeps its old direct button's condition: a task-tree
-// child moves with its parent (no group move), and a legacy row has no task
-// record behind Task & context. The registered items follow
+// attributes. Each item keeps the condition of its old direct button. A
+// task-tree child moves with its parent (no group move), and a legacy row has
+// no task record behind Task & context. The registered items follow
 // (registerSessionMenuItems).
 function desktopSessionMenuItems(attrs, sessionId) {
   const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];

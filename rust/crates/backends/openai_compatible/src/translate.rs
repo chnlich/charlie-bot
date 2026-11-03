@@ -195,8 +195,8 @@ fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>>
   Ok(converted)
 }
 
-/// The OpenAI chat message for an assistant message: the text joins into `content` (null when empty), and each tool
-/// use becomes a call.
+/// The OpenAI chat message for an assistant message: the text blocks join into `content`, which is null when a
+/// block list has no text. A string content passes through unchanged, and an absent one becomes an empty string.
 fn convert_assistant_message(message: &Map<String, Value>) -> ValueResult<Value> {
   let blocks = match message.get("content") {
     None => return Ok(json!({"role": "assistant", "content": ""})),
@@ -533,8 +533,8 @@ impl OpenAiChatStream {
     events.push(("content_block_stop", json!({"index": call.block_index})));
   }
 
-  /// Applies one streaming tool-call delta: a call's first delta opens its block, and later deltas carry its
-  /// arguments.
+  /// Applies one streaming tool-call delta: the first delta registers the call. The call's block opens at once
+  /// unless Gemini stream rules defer the opening until `extra_content` arrives; earlier arguments stay buffered.
   fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> ValueResult<()> {
     let call_index = match get(tool_call, "index")? {
       None | Some(Value::Null) if self.gemini_stream_rules => json!(0),

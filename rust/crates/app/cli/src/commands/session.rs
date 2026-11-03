@@ -20,6 +20,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_cli_common::response::field;
 use charliebot_cli_common::route;
 use charliebot_cli_common::timeouts;
 use charliebot_core::config;
@@ -277,11 +278,6 @@ fn home_dir() -> Result<std::path::PathBuf, CliExit> {
 
 fn parse_json(flag_name: &str, text: &str) -> Result<Value, CliExit> {
   serde_json::from_str(text).map_err(|error| CliExit::error(format!("{flag_name}: {error}")))
-}
-
-/// A response field the verb reads directly; a missing one is a broken server contract.
-fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, CliExit> {
-  value.get(key).ok_or_else(|| CliExit::error(format!("the response lacks {key}")))
 }
 
 fn create(args: &CreateArgs) -> Result<(), CliExit> {

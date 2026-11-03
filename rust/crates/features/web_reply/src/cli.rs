@@ -17,6 +17,7 @@ use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::resolve;
+use charliebot_cli_common::response::field;
 use charliebot_compat::file_urls;
 use charliebot_core::event_types;
 use charliebot_core::str_methods::splitlines;
@@ -356,11 +357,6 @@ fn short_session_id(row: &Value) -> Result<String, CliExit> {
 
 fn or_not_set(value: &Value) -> String {
   if text_repr::is_truthy(value) { text_repr::value_str(value) } else { "(not set)".to_string() }
-}
-
-/// A response field the verb reads; a missing one is a broken server contract.
-fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, CliExit> {
-  value.get(key).ok_or_else(|| CliExit::error(format!("the response lacks {key}")))
 }
 
 fn list(value: &Value) -> Result<&Vec<Value>, CliExit> {

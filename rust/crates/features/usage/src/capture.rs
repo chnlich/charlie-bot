@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::timefmt;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
 use charliebot_store::layout;
@@ -126,7 +127,7 @@ pub fn capture_charliebot(
   let mut live = LiveSessions::default();
   let mut written = 0;
   for (kind, path, metadata) in charliebot_logs(sessions_dir)? {
-    let signature = format!("p2:{}:{}", mtime_ns(&metadata), metadata.len());
+    let signature = format!("p2:{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
     let path_text = path_text(&path)?;
     if captured.get(path_text) == Some(&signature) {
       continue;
@@ -151,7 +152,7 @@ pub fn capture_runs(
   let mut live = LiveSessions::default();
   let mut written = 0;
   for (path, metadata) in run_logs(sessions_dir)? {
-    let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+    let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
     let path_text = path_text(&path)?;
     if captured.get(path_text) == Some(&signature) {
       continue;
@@ -183,7 +184,8 @@ fn capture_source(
     let path_text = path_text(&path)?;
     let metadata = fs::metadata(&path).with_context(|| format!("statting {}", path.display()))?;
     let previous = captured.get(path_text);
-    let stat_signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+    let stat_signature =
+      format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
     if previous == Some(&stat_signature) {
       continue;
     }
@@ -274,10 +276,6 @@ fn subdirs(path: &Path) -> anyhow::Result<Option<Vec<PathBuf>>> {
     }
   }
   Ok(Some(dirs))
-}
-
-fn mtime_ns(metadata: &fs::Metadata) -> i128 {
-  i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec())
 }
 
 fn path_text(path: &Path) -> anyhow::Result<&str> {

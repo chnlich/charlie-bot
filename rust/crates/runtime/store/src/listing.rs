@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::timefmt;
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
@@ -505,7 +506,7 @@ impl Store {
 fn stat_signature(path: &std::path::Path) -> Option<(i64, i64)> {
   use std::os::unix::fs::MetadataExt;
   let metadata = fs::metadata(path).ok()?;
-  Some((metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000, metadata.size() as i64))
+  Some((timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size() as i64))
 }
 
 fn has_timezone(value: &str) -> bool {

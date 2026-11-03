@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex};
 
+use charliebot_core::timefmt;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus};
 use charliebot_store::{Store, StoreResult};
 use lru::LruCache;
@@ -420,7 +421,7 @@ fn watched_file(sessions_dir: &Path, path: PathBuf) -> WatchedFile {
 fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
   let metadata = fs::metadata(path)?;
   Ok(FileSignature {
-    mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+    mtime_ns: timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()),
     size: metadata.size(),
     inode: metadata.ino(),
   })
@@ -438,7 +439,7 @@ fn file_signature_at(dir: &File, relative: &CString) -> io::Result<FileSignature
   }
   let stat = unsafe { stat.assume_init() };
   Ok(FileSignature {
-    mtime_ns: i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec),
+    mtime_ns: timefmt::file_time_ns(stat.st_mtime, stat.st_mtime_nsec),
     size: stat.st_size as u64,
     inode: stat.st_ino,
   })

@@ -5,6 +5,7 @@ use std::os::fd::AsFd;
 use std::path::Path;
 use std::sync::Arc;
 
+use charliebot_core::timefmt;
 use nix::errno::Errno;
 use nix::fcntl::AtFlags;
 use nix::sys::stat::fstatat;
@@ -40,7 +41,7 @@ impl FileIdentity {
       Ok(metadata) => Ok(Some(Self {
         inode: metadata.ino(),
         size: metadata.size(),
-        mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+        mtime_ns: timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()),
       })),
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
       Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
@@ -56,7 +57,7 @@ impl FileIdentity {
       Ok(stat) => Ok(Some(Self {
         inode: stat.st_ino,
         size: stat.st_size as u64,
-        mtime_ns: i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec),
+        mtime_ns: timefmt::file_time_ns(stat.st_mtime, stat.st_mtime_nsec),
       })),
       Err(Errno::ENOENT) => Ok(None),
       Err(error) => Err(StoreError::new(format!("{relative}: {error}"))),

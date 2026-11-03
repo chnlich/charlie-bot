@@ -24,6 +24,7 @@ use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
 use charliebot_core::text_repr::{is_truthy, value_str};
+use charliebot_core::timefmt;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
@@ -138,7 +139,7 @@ fn walk_jsonl(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// later read. A marker line that does not parse is skipped; one that parses to a non-object fails the read.
 pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Vec<UsageRecord>)> {
   let metadata = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
-  let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+  let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
   let session = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
   let mut reader = BufReader::new(File::open(path).with_context(|| format!("opening {}", path.display()))?);
   let mut seen = HashSet::new();
@@ -238,11 +239,6 @@ fn usage_count(usage: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   }
 }
 
-/// `st_mtime_ns`.
-fn mtime_ns(metadata: &fs::Metadata) -> i128 {
-  i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec())
-}
-
 #[cfg(test)]
 mod tests {
   use std::io::Write;
@@ -284,7 +280,10 @@ mod tests {
     let (signature, records) = read_transcript(&path, "work (default)").unwrap();
 
     let metadata = fs::metadata(&path).unwrap();
-    assert_eq!(signature, format!("{}:{}", mtime_ns(&metadata), metadata.len()));
+    assert_eq!(
+      signature,
+      format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len())
+    );
     let ids: Vec<&str> = records.iter().map(|record| record.record_id.as_str()).collect();
     assert_eq!(ids, ["claude:m1", "claude:m2"]);
     assert_eq!(records[0].in_fresh, 100);

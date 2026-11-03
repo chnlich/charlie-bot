@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::event_types;
 use charliebot_core::text_repr;
+use charliebot_core::timefmt;
 use charliebot_store::ChatEvent;
 use charliebot_store::CompactValue;
 use charliebot_store::aggregator;
@@ -200,7 +201,7 @@ fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
 
 fn stat_signature(path: &Path) -> StoreResult<Value> {
   match fs::metadata(path) {
-    Ok(metadata) => Ok(json!([metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000, metadata.size()])),
+    Ok(metadata) => Ok(json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
     Err(error) => Err(path_error(path, error)),
   }

@@ -80,6 +80,11 @@ pub fn float_seconds(seconds: i64, nanoseconds: i64) -> f64 {
   seconds as f64 + nanoseconds as f64 * 1e-9
 }
 
+/// Nanoseconds since the epoch of a file time: its `st_mtime` seconds and `st_mtime_nsec` nanoseconds.
+pub fn file_time_ns(seconds: i64, nanoseconds: i64) -> i128 {
+  i128::from(seconds) * 1_000_000_000 + i128::from(nanoseconds)
+}
+
 /// Whole seconds of `instant` since the epoch, floored.
 pub fn unix_seconds(instant: SystemTime) -> i64 {
   match instant.duration_since(UNIX_EPOCH) {

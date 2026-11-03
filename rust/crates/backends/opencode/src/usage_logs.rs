@@ -14,6 +14,7 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_core::text_repr::value_str;
+use charliebot_core::timefmt;
 use charliebot_registry::usage::{RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -101,17 +102,12 @@ fn file_state(path: &Path) -> anyhow::Result<String> {
   wal_path.push("-wal");
   let wal_path = PathBuf::from(wal_path);
   let (wal_size, wal_mtime) = match fs::metadata(&wal_path) {
-    Ok(wal) => (wal.len(), mtime_ns(&wal)),
+    Ok(wal) => (wal.len(), timefmt::file_time_ns(wal.mtime(), wal.mtime_nsec())),
     Err(error) if error.kind() == io::ErrorKind::NotFound => (0, 0),
     Err(error) => return Err(error).with_context(|| format!("statting {}", wal_path.display())),
   };
-  let (main_size, main_mtime) = (main.len(), mtime_ns(&main));
+  let (main_size, main_mtime) = (main.len(), timefmt::file_time_ns(main.mtime(), main.mtime_nsec()));
   Ok(format!("{main_size}:{main_mtime}:{wal_size}:{wal_mtime}"))
-}
-
-/// `st_mtime_ns`: the modification time in nanoseconds.
-fn mtime_ns(metadata: &fs::Metadata) -> i128 {
-  i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec())
 }
 
 /// The file state and max `time_updated` of a stored signature in the current format, or `None` for any other format

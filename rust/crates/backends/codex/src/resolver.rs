@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +15,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::event_types::EventFields;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_core::timefmt;
 use charliebot_registry::backend::{UsageResolver, UsageResolverHost};
 use charliebot_store::SharedChatEvent;
 use charliebot_store::Store;
@@ -22,7 +24,7 @@ use serde_json::{Map, Value, json};
 
 use super::options;
 use super::pricing;
-use super::rollout::{self, RolloutUsage, mtime_ns, walk_files};
+use super::rollout::{self, RolloutUsage, walk_files};
 
 /// The two server values the resolver reads beyond the registry's arguments.
 pub trait CodexSessionHost: Send + Sync {
@@ -141,7 +143,8 @@ impl CodexUsageResolver {
       return Ok(None);
     };
     let metadata = fs::metadata(&path).with_context(|| format!("statting rollout {}", path.display()))?;
-    let (mtime_ns, size) = (mtime_ns(&metadata), metadata.len());
+    let mtime_ns = timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec());
+    let size = metadata.len();
     if let Some(cached) = self.usages.lock().expect("the codex usage cache is not poisoned").get(thread_id)
       && cached.mtime_ns == mtime_ns
       && cached.size == size
@@ -176,7 +179,7 @@ impl CodexUsageResolver {
       .into_iter()
       .map(|path| {
         let metadata = fs::metadata(&path).with_context(|| format!("statting rollout {}", path.display()))?;
-        Ok((mtime_ns(&metadata), path))
+        Ok((timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), path))
       })
       .collect::<anyhow::Result<_>>()?;
     newest.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));

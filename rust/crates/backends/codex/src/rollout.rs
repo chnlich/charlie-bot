@@ -171,11 +171,6 @@ fn walk_error(error: walkdir::Error) -> io::Error {
   error.into_io_error().unwrap_or_else(|| io::Error::other(message))
 }
 
-/// The file's modification time in nanoseconds (`st_mtime_ns`).
-pub fn mtime_ns(metadata: &Metadata) -> i128 {
-  i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec())
-}
-
 /// The file's modification time in seconds with its fraction (`st_mtime`).
 pub fn mtime_secs(metadata: &Metadata) -> f64 {
   metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1e9

@@ -7,12 +7,13 @@ use std::collections::HashSet;
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{Context, bail};
 use charliebot_core::str_methods;
-use charliebot_core::timefmt::utc_now_iso;
+use charliebot_core::timefmt::{self, utc_now_iso};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
   PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
@@ -26,7 +27,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
-use super::rollout::{self, mtime_ns, mtime_secs, token_count_payload, walk_files};
+use super::rollout::{self, mtime_secs, token_count_payload, walk_files};
 use super::text::{empty_object, object_or_empty, splitlines, truthy};
 use charliebot_agents::usage_time::utc_isoformat;
 
@@ -240,7 +241,7 @@ impl Inner {
         continue;
       }
       live.insert(path.clone());
-      let signature = (mtime_ns(&metadata), metadata.len());
+      let signature = (timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
       if let Some(events) = memo.fresh(path, signature) {
         by_file.push(events);
         continue;

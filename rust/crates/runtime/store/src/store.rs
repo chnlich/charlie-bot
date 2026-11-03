@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::{METADATA_FILE_NAME, MetadataFile, MetadataSlot};
+use charliebot_core::timefmt;
 use lru::LruCache;
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -1250,7 +1251,7 @@ impl Store {
 
 fn stat_signature(path: &Path) -> Option<(i64, i64)> {
   let metadata = fs::metadata(path).ok()?;
-  Some((metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000, metadata.size() as i64))
+  Some((timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size() as i64))
 }
 
 fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {

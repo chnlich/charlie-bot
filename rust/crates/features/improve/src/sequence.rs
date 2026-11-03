@@ -128,7 +128,7 @@ pub async fn create_improve_child(
 pub fn render_iteration_reports(repo_root: &RepoRoot, loop_dir: &str, iteration: i64) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
     &repo_root.path().join(spawner_prompt::WORKER_PROMPT_PATH),
-    &["iteration_reports"],
+    &[spawner_prompt::ITERATION_REPORTS_SECTION],
     "worker-prompt",
   )?;
   let tokens = vec![
@@ -136,7 +136,7 @@ pub fn render_iteration_reports(repo_root: &RepoRoot, loop_dir: &str, iteration:
     ("{{iteration_number_padded}}", format!("{iteration:04}")),
     ("{{iteration_number}}", iteration.to_string()),
   ];
-  Ok(spawner_prompt::substitute_tokens(&sections["iteration_reports"], &tokens))
+  Ok(spawner_prompt::substitute_tokens(&sections[spawner_prompt::ITERATION_REPORTS_SECTION], &tokens))
 }
 
 /// One iteration's full launch context: the session facts, the shared-worktree bindings, the loop's description and the

@@ -118,10 +118,11 @@ impl Store {
       },
     );
     let version = self.next_node_state_version.fetch_add(1, Ordering::Relaxed);
-    self.node_state_cache.lock().expect("node state cache mutex is not poisoned").insert(
-      session_id.to_string(),
-      CachedNodeState { key: NodeStateKey::File(identity), archived: 0, version },
-    );
+    self
+      .node_state_cache
+      .lock()
+      .expect("node state cache mutex is not poisoned")
+      .insert(session_id.to_string(), CachedNodeState { key: NodeStateKey::File(identity), archived: 0, version });
     self
       .run_facts_by_session
       .lock()
@@ -481,7 +482,8 @@ mod tests {
     assert_eq!(sealed.covered, folded.covered);
     assert_eq!(scanned.run_facts("synthetic").unwrap(), cold.run_facts("synthetic").unwrap());
     assert_eq!(scanned.task_state("synthetic").unwrap(), cold.task_state("synthetic").unwrap());
-    let newest = |store: &Store, scope| store.newest_live_prompt_change("synthetic", scope).unwrap().map(|e| e.to_value());
+    let newest =
+      |store: &Store, scope| store.newest_live_prompt_change("synthetic", scope).unwrap().map(|e| e.to_value());
     for scope in [PromptScope::Subtree, PromptScope::Node] {
       assert_eq!(newest(&scanned, scope), newest(&cold, scope));
     }

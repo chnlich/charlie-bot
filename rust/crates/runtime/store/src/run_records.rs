@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -30,11 +29,13 @@ use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_SYSTEM};
 use crate::event_types::{ChatEvent, SharedChatEvent};
+use crate::held_run_lists::RunListHold;
 pub use crate::metadata::MetadataReadError;
 use crate::metadata::UtcDateTime;
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
+pub use crate::run_record::{RunKind, RunRecord, SequenceRef};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 pub use crate::layout::{DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RUNS_DIR_NAME, THREADS_DIR_NAME};
@@ -275,81 +276,6 @@ fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
     bytes = &bytes[1..];
   }
   bytes
-}
-
-/// The execution category in a persisted run record.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunKind {
-  ManagerTurn,
-  #[default]
-  Work,
-  Review,
-  Iteration,
-  ScheduledStep,
-}
-
-/// The sequence that owns a scheduled run.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SequenceRef {
-  pub kind: String,
-  pub owner_ref: String,
-  pub position: i64,
-}
-
-/// One run's persisted identity and evidence, in model field order.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunRecord {
-  pub id: String,
-  pub session_id: String,
-  #[serde(default)]
-  pub kind: RunKind,
-  #[serde(default)]
-  pub input_event_ids: Vec<String>,
-  #[serde(default)]
-  pub task_spec_hash: Option<String>,
-  #[serde(default)]
-  pub task_spec_ref: Option<String>,
-  #[serde(default)]
-  pub prompt_snapshot_ref: Option<String>,
-  #[serde(default)]
-  pub retry_of_run_id: Option<String>,
-  #[serde(default)]
-  pub review_of_run_id: Option<String>,
-  #[serde(default)]
-  pub backend: Option<String>,
-  #[serde(default)]
-  pub model: Option<String>,
-  #[serde(default)]
-  pub native_session_id: Option<String>,
-  #[serde(default)]
-  pub pid: Option<u32>,
-  #[serde(default)]
-  pub pid_start: Option<String>,
-  #[serde(default)]
-  pub started_at: Option<UtcDateTime>,
-  #[serde(default)]
-  pub ended_at: Option<UtcDateTime>,
-  #[serde(default)]
-  pub exit_code: Option<i32>,
-  #[serde(default)]
-  pub repo_path: Option<String>,
-  #[serde(default)]
-  pub base_branch: Option<String>,
-  #[serde(default)]
-  pub branch_name: Option<String>,
-  #[serde(default)]
-  pub worktree_path: Option<String>,
-  #[serde(default)]
-  pub sequence_ref: Option<SequenceRef>,
-  #[serde(default)]
-  pub raw_log_ref: Option<String>,
-  #[serde(default)]
-  pub events_ref: Option<String>,
-  #[serde(default)]
-  pub result_ref: Option<String>,
 }
 
 /// The record fields a retry caller passes, in keyword order. `input_event_ids` is empty for a worker
@@ -655,6 +581,9 @@ impl Store {
 
   /// Read one run record from disk, or return `None` when its metadata file is absent.
   pub fn read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>> {
+    if let Some(held) = self.held_run_lists.list(session_id) {
+      return Ok(held.iter().find(|run| run.id == run_id).cloned());
+    }
     self.run_record_reads.fetch_add(1, Ordering::Relaxed);
     read_run_path(&self.run_metadata_path(session_id, run_id))
   }
@@ -664,8 +593,28 @@ impl Store {
     self.run_record_reads.load(Ordering::Relaxed)
   }
 
+  /// Start holding the run listings that [`Store::hold_run_list`] reads, until the returned hold drops
+  /// ([`crate::held_run_lists`]).
+  pub fn hold_run_lists(&self) -> RunListHold<'_> {
+    self.held_run_lists.hold()
+  }
+
+  /// Read the session's run records from disk and hold the listing for the current hold. A run-record write that lands
+  /// during the read leaves the listing unheld.
+  pub fn hold_run_list(&self, session_id: &str) -> StoreResult<()> {
+    let generation = self.records_generation();
+    let records = Arc::new(self.list_run_records_sync(session_id)?);
+    if self.records_generation() == generation {
+      self.held_run_lists.keep(session_id, records);
+    }
+    Ok(())
+  }
+
   /// Read all run records for one session in chronological `(started_at, id)` order.
   pub fn list_run_records_sync(&self, session_id: &str) -> StoreResult<Vec<RunRecord>> {
+    if let Some(held) = self.held_run_lists.list(session_id) {
+      return Ok(held.as_ref().clone());
+    }
     let root = self.runs_root(session_id);
     let mut records = Vec::new();
     for entry in read_directory(&root, true)? {
@@ -686,6 +635,9 @@ impl Store {
     session_id: &str,
     should_stop: &mut impl FnMut() -> bool,
   ) -> StoreResult<Option<Vec<RunRecord>>> {
+    if let Some(held) = self.held_run_lists.list(session_id) {
+      return Ok((!should_stop()).then(|| held.as_ref().clone()));
+    }
     let root = self.runs_root(session_id);
     let entries = match fs::read_dir(&root) {
       Ok(entries) => entries,
@@ -1266,6 +1218,7 @@ impl Store {
 
   fn write_run_record(&self, session_id: &str, run: &RunRecord) -> StoreResult<()> {
     require_session_match(session_id, run)?;
+    self.held_run_lists.evict(session_id);
     let path = self.run_metadata_path(session_id, &run.id);
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_run_record_write(run, &path)?;
@@ -1419,6 +1372,38 @@ async fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
 mod tests {
   use super::*;
   use std::fs;
+
+  use crate::store::test_support::make_test_store;
+
+  /// A held listing answers the session's run-record reads without a file read until a run-record write drops it, and
+  /// the end of the hold sends every read back to disk.
+  #[tokio::test]
+  async fn a_held_listing_answers_reads_until_a_write_drops_it() {
+    let (_home, store) = make_test_store();
+    let run = |id: &str| serde_json::from_value::<RunRecord>(json!({"id": id, "session_id": "synthetic"})).unwrap();
+    let ids = |store: &Store| {
+      store.list_run_records_sync("synthetic").unwrap().into_iter().map(|run| run.id).collect::<Vec<_>>()
+    };
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, "synthetic", run("run-a"), None).await.unwrap();
+
+    let hold = store.hold_run_lists();
+    store.hold_run_list("synthetic").unwrap();
+    let reads = store.run_record_read_count();
+    assert_eq!(ids(&store), ["run-a"]);
+    assert_eq!(store.read_run_sync("synthetic", "run-a").unwrap().map(|run| run.id).as_deref(), Some("run-a"));
+    assert_eq!(store.run_record_read_count(), reads, "a held listing reads no file");
+
+    store.register_run_locked(&guard, "synthetic", run("run-b"), None).await.unwrap();
+    assert_eq!(ids(&store), ["run-a", "run-b"], "a write drops the held listing");
+    assert!(store.run_record_read_count() > reads);
+
+    store.hold_run_list("synthetic").unwrap();
+    drop(hold);
+    let reads = store.run_record_read_count();
+    assert_eq!(ids(&store), ["run-a", "run-b"]);
+    assert!(store.run_record_read_count() > reads, "the end of the hold sends reads back to disk");
+  }
 
   #[test]
   fn test_event_line_round_trips_the_event() {

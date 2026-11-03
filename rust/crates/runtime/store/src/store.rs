@@ -385,6 +385,7 @@ pub struct Store {
   /// Chat-history walks that read a node's facts from its files without caching them.
   pub(crate) history_fact_walks: AtomicU64,
   pub(crate) run_record_reads: AtomicU64,
+  pub(crate) held_run_lists: crate::held_run_lists::HeldRunLists,
   pub(crate) task_tree_activity_calls: AtomicU64,
   /// `tree_rows_lock`: one tree page's row computation runs at a time, so concurrent pages never walk the
   /// same histories in parallel.
@@ -484,6 +485,7 @@ impl Store {
       sealed_prompt_changes: StdMutex::new(HashMap::new()),
       history_fact_walks: AtomicU64::new(0),
       run_record_reads: AtomicU64::new(0),
+      held_run_lists: Default::default(),
       task_tree_activity_calls: AtomicU64::new(0),
       tree_rows_lock: StdMutex::new(()),
       history_work: HistoryWorkCounters::default(),
@@ -1103,6 +1105,7 @@ impl Store {
     if !session_dir.exists() {
       return Ok(false);
     }
+    self.held_run_lists.evict(session_id);
     let remove_dir = session_dir.clone();
     tokio::task::spawn_blocking(move || fs::remove_dir_all(&remove_dir))
       .await

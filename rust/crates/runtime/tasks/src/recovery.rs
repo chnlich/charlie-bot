@@ -452,10 +452,12 @@ pub async fn reconcile_task_tree(
     return Ok(counters);
   };
   let absence_proofs_ms = phase_ms();
-  // Each node pass reads its node's facts, which a full read folds from the whole log. The fact scans read only their
-  // own session's files, so they run in parallel here, and each pass starts from its scanned facts sealed to the log's
-  // identity; the pass loads the log only where a step needs its chat content. A seal checks the log's identity, so a
-  // log that an earlier pass appended to after its scan is read by its own pass.
+  // Each node pass reads its node's facts, which a full read folds from the whole log, and lists its run records several
+  // times. The fact scans and the run listings read only their own session's files, so they run in parallel here: each
+  // pass starts from its scanned facts sealed to the log's identity and reads its runs from the held listing, and it
+  // loads the log only where a step needs its chat content. A seal checks the log's identity, so a log that an earlier
+  // pass appended to after its scan is read by its own pass; a run-record write drops its session's held listing.
+  let _run_lists = features.store.hold_run_lists();
   let pass_nodes: Vec<(String, bool)> = candidates
     .iter()
     .zip(&no_nodes)
@@ -463,7 +465,10 @@ pub async fn reconcile_task_tree(
     .collect();
   let scan_features = Arc::clone(features);
   let (_, scans) = blocking_batch(pass_nodes, &stop, move |(session_id, takes_pass)| {
-    takes_pass.then(|| scan_features.store.scan_live_facts(session_id))
+    takes_pass.then(|| {
+      scan_features.store.hold_run_list(session_id)?;
+      scan_features.store.scan_live_facts(session_id)
+    })
   })
   .await?;
   let Some(scans) = scans else {
@@ -478,14 +483,14 @@ pub async fn reconcile_task_tree(
     }
     let session_id = candidate.session_id;
     let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
-    // A scan that failed or changed under its read seals nothing. The pass then reads the log under its session lock
-    // and fails the node on an error that persists.
+    // A read that failed, or a scan that changed under its read, seals nothing. The pass then reads the session's files
+    // itself and fails the node on an error that persists.
     let sealed = scan.map(|scan| match scan? {
       Some(scan) => features.store.seal_scanned_facts(&session_id, scan),
       None => Ok(false),
     });
     if let Some(Err(error)) = sealed {
-      tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_fact_scan_failed");
+      tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_read_ahead_failed");
     }
     let result = match no_node {
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),

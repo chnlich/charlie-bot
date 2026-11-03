@@ -1546,7 +1546,11 @@ impl Store {
 
   /// The live log's newest `prompt_changed` fact of `scope`. A cold cache whose log keeps the identity of a sealed boot
   /// scan answers from that scan; any other read takes it from the live events.
-  pub(crate) fn newest_live_prompt_change(&self, session_id: &str, scope: PromptScope) -> StoreResult<Option<SharedChatEvent>> {
+  pub(crate) fn newest_live_prompt_change(
+    &self,
+    session_id: &str,
+    scope: PromptScope,
+  ) -> StoreResult<Option<SharedChatEvent>> {
     if let LiveHistory::Cold(Some(identity)) = self.live_history(session_id)?
       && let Some(sealed) = self
         .sealed_prompt_changes

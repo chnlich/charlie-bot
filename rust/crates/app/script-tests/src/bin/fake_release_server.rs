@@ -111,8 +111,8 @@ fn serve() -> io::Result<()> {
       process::exit(1);
     }
     if !behavior.check_config_requires.is_empty() {
-      let root = env::var_os("CHARLIEBOT_REPO_ROOT")
-        .ok_or_else(|| io::Error::other("CHARLIEBOT_REPO_ROOT is not set"))?;
+      let root =
+        env::var_os("CHARLIEBOT_REPO_ROOT").ok_or_else(|| io::Error::other("CHARLIEBOT_REPO_ROOT is not set"))?;
       let required = PathBuf::from(root).join(&behavior.check_config_requires);
       if !required.exists() {
         eprintln!("config error: {} is missing", required.display());

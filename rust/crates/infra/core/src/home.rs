@@ -11,6 +11,9 @@ use crate::{paths, text_repr};
 
 pub const CHARLIEBOT_HOME_ENV: &str = "CHARLIEBOT_HOME";
 
+/// The default home's directory name under the user's home, used when `CHARLIEBOT_HOME` is unset.
+pub const DEFAULT_HOME_DIR_NAME: &str = ".charliebot";
+
 /// The profile home as a message writes it: the variable's name in place of the machine-specific path.
 pub const DISPLAY_HOME: &str = "$CHARLIEBOT_HOME";
 
@@ -62,9 +65,10 @@ pub fn charliebot_home_dir() -> Result<PathBuf, HomeError> {
   resolve_home(&raw_env_value())
 }
 
-/// The state directory used when `CHARLIEBOT_HOME` is unset: the user's home joined with `.charliebot`, not resolved.
+/// The state directory used when `CHARLIEBOT_HOME` is unset: the user's home joined with
+/// [`DEFAULT_HOME_DIR_NAME`], not resolved.
 pub fn default_charliebot_home() -> PathBuf {
-  PathBuf::from(paths::expanduser("~")).join(".charliebot")
+  PathBuf::from(paths::expanduser("~")).join(DEFAULT_HOME_DIR_NAME)
 }
 
 /// The profile home when `CHARLIEBOT_HOME` is set and not blank, or `None` when it is not.
@@ -149,7 +153,7 @@ mod tests {
 
   #[test]
   fn a_blank_home_selects_the_default_home() {
-    let default = PathBuf::from(paths::expanduser("~")).join(".charliebot");
+    let default = PathBuf::from(paths::expanduser("~")).join(DEFAULT_HOME_DIR_NAME);
     assert_eq!(default_charliebot_home(), default);
     assert_eq!(resolve_home("").unwrap(), default);
     assert_eq!(resolve_home("   ").unwrap(), default);

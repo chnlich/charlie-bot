@@ -17,16 +17,13 @@ use std::sync::OnceLock;
 use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::SESSIONS_DIR_NAME;
-use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::layout::DATA_DIR_NAME;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME};
 use fancy_regex::{Captures, Regex};
 use serde_json::{Value, json};
 use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
-
-/// The profile-home directory name under the user's home.
-const CHARLIEBOT_DIR: &str = ".charliebot";
 
 /// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags.
 const RECURSIVE_GREP: &str = r"grep\b(?=[^|;&\n]*\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?=\s|$))";
@@ -430,7 +427,7 @@ fn store_token() -> Result<String, String> {
       r")"
     ),
     home = home_token()?,
-    charliebot_dir = CHARLIEBOT_DIR,
+    charliebot_dir = DEFAULT_HOME_DIR_NAME,
     charliebot_home = regex::escape(CHARLIEBOT_HOME_ENV),
     sessions = regex::escape(SESSIONS_DIR_NAME),
   ))
@@ -453,7 +450,7 @@ fn store_or_parent_token() -> Result<String, String> {
       r")"
     ),
     home = home_token()?,
-    charliebot_dir = CHARLIEBOT_DIR,
+    charliebot_dir = DEFAULT_HOME_DIR_NAME,
     charliebot_home = regex::escape(CHARLIEBOT_HOME_ENV),
     sessions = regex::escape(SESSIONS_DIR_NAME),
   ))

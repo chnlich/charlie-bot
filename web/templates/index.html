@@ -297,8 +297,11 @@
   <!-- ==================== RENAME INPUT (floating) ==================== -->
   <input id="rename-input" class="hidden fixed z-50 bg-slate-800 border border-blue-500 rounded-lg px-3 py-1.5 text-sm focus:outline-none" onkeydown="handleRenameKey(event)" onblur="commitRename()">
 
-  <div id="session-action-modal-overlay" class="hidden fixed inset-0 z-[9999] bg-black/60 items-center justify-center" onclick="closeSessionActionModal()">
-    <div class="w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-800 shadow-xl" onclick="event.stopPropagation()">
+  <!-- Both sidebar dialogs (this one and Task & context below) inset their panel with the overlay's
+       16px padding. A margin on the panel would instead sit outside a 100%-wide flex item: on a phone
+       the margins fall past the screen edge and the panel runs edge to edge. -->
+  <div id="session-action-modal-overlay" class="hidden fixed inset-0 z-[9999] bg-black/60 p-4 items-center justify-center" onclick="closeSessionActionModal()">
+    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-800 shadow-xl" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
         <h3 id="session-action-modal-title" class="text-sm font-semibold text-slate-100">Clone Session</h3>
         {{ close_button('closeSessionActionModal()', 'Close', close_btn_class) }}
@@ -320,8 +323,8 @@
     </div>
   </div>
 
-  <div id="task-context-modal-overlay" class="hidden fixed inset-0 z-[9999] bg-black/60 items-center justify-center" onclick="closeTaskContextModal()">
-    <div class="w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-800 shadow-xl" onclick="event.stopPropagation()">
+  <div id="task-context-modal-overlay" class="hidden fixed inset-0 z-[9999] bg-black/60 p-4 items-center justify-center" onclick="closeTaskContextModal()">
+    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-800 shadow-xl" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-700">
         <h3 id="task-context-modal-title" class="text-sm font-semibold text-slate-100 truncate">Task &amp; context</h3>
         {{ close_button('closeTaskContextModal()', 'Close', close_btn_class) }}

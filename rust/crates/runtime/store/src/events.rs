@@ -900,7 +900,7 @@ impl Store {
     events
   }
 
-  fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
+  pub(crate) fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
     self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
     if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {

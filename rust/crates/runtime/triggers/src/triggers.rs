@@ -22,7 +22,7 @@ use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedV
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, ssh, text_repr};
-use charliebot_registry::context::FeatureContext;
+use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
   self, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget, fresh_uuid,
@@ -410,38 +410,24 @@ impl TriggerManager {
   }
 
   /// Restart every pending trigger found under the configured sessions directory.
+  ///
+  /// One blocking walk reads every session's trigger files, in directory order, and the pending triggers then start in
+  /// that order. A trigger task writes only its own file, so reading every file before the first start reads what the
+  /// walk would read with the starts in between.
   pub async fn recover_pending(self: &Arc<Self>) -> anyhow::Result<()> {
     let stop = self.features.startup.stop();
     let sessions_dir = self.features.store.config().sessions_dir();
-    let mut sessions = match tokio::fs::read_dir(&sessions_dir).await {
-      Ok(entries) => entries,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-      Err(error) => return Err(error).with_context(|| format!("read {}", sessions_dir.display())),
-    };
-    while let Some(entry) = sessions.next_entry().await? {
-      if stop.is_cancelled() {
-        return Ok(());
-      }
-      if !entry.file_type().await?.is_dir() {
-        continue;
-      }
-      let recovery_started = Instant::now();
+    let walk_stop = stop.clone();
+    let walk = tokio::task::spawn_blocking(move || read_session_triggers(&sessions_dir, &walk_stop))
+      .await
+      .context("trigger recovery walk task failed")?;
+    for session in walk.sessions {
       let mut recovered = 0u64;
-      let directory = layout::triggers_dir(&entry.path());
-      let directory_for_walk = directory.clone();
-      let files = match tokio::task::spawn_blocking(move || trigger_files::iter_trigger_file_stats(directory_for_walk))
-        .await
-        .context("trigger recovery stat task failed")?
-      {
-        Ok(files) => files,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-        Err(error) => return Err(error).with_context(|| format!("scan {}", directory.display())),
-      };
-      for (path, _stat) in files {
+      for (path, loaded) in session.triggers {
         if stop.is_cancelled() {
           return Ok(());
         }
-        let trigger = match self.load_trigger_path(&path).await {
+        let trigger = match loaded {
           Ok(trigger) => trigger,
           Err(error) => {
             tracing::warn!(
@@ -453,9 +439,6 @@ impl TriggerManager {
             continue;
           }
         };
-        if stop.is_cancelled() {
-          return Ok(());
-        }
         if trigger.status == TriggerStatus::Pending {
           self.start_task(trigger.clone());
           recovered += 1;
@@ -467,9 +450,9 @@ impl TriggerManager {
           );
         }
       }
-      log_slow_trigger_recovery(&entry.path(), recovered, recovery_started);
+      log_slow_trigger_recovery(&session.dir, recovered, session.read_time);
     }
-    Ok(())
+    walk.end
   }
 
   fn start_task(self: &Arc<Self>, trigger: PendingTrigger) {
@@ -1311,16 +1294,66 @@ fn slurm_label(host: Option<&str>, job_id: i64) -> String {
 /// files it waited on without growing the log on a healthy one.
 const SLOW_TRIGGER_RECOVERY_MS: u64 = 1000;
 
-/// Logs one session's trigger-recovery step that took [`SLOW_TRIGGER_RECOVERY_MS`] or more. One line per slow step:
-/// the step covers the session's trigger-file stat walk, the trigger loads and the [`TriggerManager::start_task`]
-/// calls, the work a slow boot's trigger phase waits in.
-fn log_slow_trigger_recovery(session_dir: &Path, recovered: u64, started: tokio::time::Instant) {
-  let elapsed_ms = started.elapsed().as_millis() as u64;
+/// Logs one session's trigger read that took [`SLOW_TRIGGER_RECOVERY_MS`] or more. One line per slow session: the time
+/// covers the session's trigger-file stat walk and trigger loads, the work a slow boot's trigger phase waits in.
+fn log_slow_trigger_recovery(session_dir: &Path, recovered: u64, read_time: std::time::Duration) {
+  let elapsed_ms = read_time.as_millis() as u64;
   if elapsed_ms < SLOW_TRIGGER_RECOVERY_MS {
     return;
   }
   let session = session_dir.file_name().and_then(|name| name.to_str()).unwrap_or("");
   tracing::info!(target: "charliebot_triggers", session, triggers = recovered, elapsed_ms, "trigger_recovery_session_slow");
+}
+
+/// One session's trigger files, each with its load result, in the stat walk's order.
+struct SessionTriggers {
+  dir: PathBuf,
+  triggers: Vec<(PathBuf, anyhow::Result<PendingTrigger>)>,
+  read_time: std::time::Duration,
+}
+
+/// The sessions [`read_session_triggers`] read, and how the walk ended: an error ends it at the session it names.
+struct TriggerWalk {
+  sessions: Vec<SessionTriggers>,
+  end: anyhow::Result<()>,
+}
+
+/// Read every session's trigger files under `sessions_dir`, in directory order, until a stop request or an error.
+fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop) -> TriggerWalk {
+  let mut sessions = Vec::new();
+  let end = (|| {
+    let entries = match std::fs::read_dir(sessions_dir) {
+      Ok(entries) => entries,
+      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+      Err(error) => return Err(error).with_context(|| format!("read {}", sessions_dir.display())),
+    };
+    for entry in entries {
+      if stop.is_cancelled() {
+        return Ok(());
+      }
+      let entry = entry?;
+      if !entry.file_type()?.is_dir() {
+        continue;
+      }
+      let started = std::time::Instant::now();
+      let directory = layout::triggers_dir(&entry.path());
+      let files = match trigger_files::iter_trigger_file_stats(&directory) {
+        Ok(files) => files,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+        Err(error) => return Err(error).with_context(|| format!("scan {}", directory.display())),
+      };
+      let triggers = files
+        .into_iter()
+        .map(|(path, _stat)| {
+          let loaded = trigger_files::read_trigger(&path);
+          (path, loaded)
+        })
+        .collect();
+      sessions.push(SessionTriggers { dir: entry.path(), triggers, read_time: started.elapsed() });
+    }
+    Ok(())
+  })();
+  TriggerWalk { sessions, end }
 }
 
 fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]) -> String {

@@ -350,7 +350,10 @@ enum WalkEntry {
 ///
 /// A pass that runs to its end logs `task_tree_recovery_phases`, the milliseconds of each phase in run order: the
 /// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the fact scans, the node
-/// passes and the marker write; and the whole-log reads and run-record reads the node passes made.
+/// passes and the marker write; and the whole-log reads and run-record reads the node passes made. Three fields split the
+/// node passes by step ([`StepTotals`]): `node_pass_step_ms`, `node_pass_step_file_reads` and
+/// `node_pass_step_file_read_bytes`. A run follow that an earlier pass started in the background can read while a later
+/// pass runs; its reads count toward that later pass's running step.
 pub async fn reconcile_task_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
@@ -472,6 +475,7 @@ pub async fn reconcile_task_tree(
   let fact_scans_ms = phase_ms();
   let file_reads_before_passes = features.store.history_work().file_reads;
   let run_record_reads_before_passes = features.store.run_record_read_count();
+  let mut step_totals = StepTotals::default();
   for ((candidate, no_node), scan) in candidates.into_iter().zip(no_nodes).zip(scans) {
     if stop.is_cancelled() {
       return Ok(counters);
@@ -502,6 +506,7 @@ pub async fn reconcile_task_tree(
     let Some(result) = result else {
       return Ok(counters);
     };
+    step_totals.add(&pass_timer.steps);
     if let Err(error) = result {
       tracing::error!(target: "charliebot_tasks", session_id = %session_id, error = %format!("{error:#}"), "task_recovery_node_failed");
       failed_node = true;
@@ -514,6 +519,7 @@ pub async fn reconcile_task_tree(
   let node_passes_ms = phase_ms();
   let node_pass_file_reads = features.store.history_work().file_reads - file_reads_before_passes;
   let node_pass_run_record_reads = features.store.run_record_read_count() - run_record_reads_before_passes;
+  let (node_pass_step_ms, node_pass_step_file_reads, node_pass_step_file_read_bytes) = step_totals.texts();
   if !failed_node && !stop.is_cancelled() {
     write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
   }
@@ -529,6 +535,9 @@ pub async fn reconcile_task_tree(
     marker_ms,
     node_pass_file_reads,
     node_pass_run_record_reads,
+    node_pass_step_ms = %node_pass_step_ms,
+    node_pass_step_file_reads = %node_pass_step_file_reads,
+    node_pass_step_file_read_bytes = %node_pass_step_file_read_bytes,
     "task_tree_recovery_phases"
   );
   counters.marker = marker.map(UtcDateTime::to_isoformat_text);
@@ -633,33 +642,86 @@ impl Drop for SessionTimer {
   }
 }
 
-/// The steps one node pass ran, in run order: each step's name and its elapsed ms. A step runs from the end of the step
-/// before it, so the steps cover the pass without gaps. A name is the store or adapter call the step makes.
-struct PassSteps {
-  step_started: Instant,
-  steps: Vec<(&'static str, u64)>,
+/// What one step cost: its elapsed time, and the whole-log reads the store made while it ran and their bytes. The time
+/// keeps its full precision, so a sum over many sub-millisecond steps loses nothing to rounding.
+#[derive(Clone, Copy, Default)]
+struct StepCost {
+  elapsed: Duration,
+  file_reads: u64,
+  file_read_bytes: u64,
 }
 
-impl PassSteps {
-  fn start() -> Self {
-    PassSteps { step_started: Instant::now(), steps: Vec::new() }
+impl StepCost {
+  fn add(&mut self, other: StepCost) {
+    self.elapsed += other.elapsed;
+    self.file_reads += other.file_reads;
+    self.file_read_bytes += other.file_read_bytes;
+  }
+}
+
+/// The steps one node pass ran, in run order: each step's name and [`StepCost`]. A step runs from the end of the step
+/// before it, so the steps cover the pass without gaps. A name is the store or adapter call the step makes. The read
+/// counts come from the store's in-memory counters, so the record makes no file call.
+struct PassSteps<'a> {
+  store: &'a Store,
+  step_started: Instant,
+  reads_at_step_start: HistoryWork,
+  steps: Vec<(&'static str, StepCost)>,
+}
+
+impl<'a> PassSteps<'a> {
+  fn start(store: &'a Store) -> Self {
+    PassSteps { store, step_started: Instant::now(), reads_at_step_start: store.history_work(), steps: Vec::new() }
   }
 
   /// Ends the running step as `name`. A step that repeats the one before it adds to that entry, so a pass over many
   /// runs keeps a short line.
   fn end(&mut self, name: &'static str) {
     let now = Instant::now();
-    let elapsed_ms = now.duration_since(self.step_started).as_millis() as u64;
+    let reads = self.store.history_work();
+    let cost = StepCost {
+      elapsed: now.duration_since(self.step_started),
+      file_reads: reads.file_reads - self.reads_at_step_start.file_reads,
+      file_read_bytes: reads.file_read_bytes - self.reads_at_step_start.file_read_bytes,
+    };
     self.step_started = now;
+    self.reads_at_step_start = reads;
     match self.steps.last_mut() {
-      Some((last, total)) if *last == name => *total += elapsed_ms,
-      _ => self.steps.push((name, elapsed_ms)),
+      Some((last, total)) if *last == name => total.add(cost),
+      _ => self.steps.push((name, cost)),
     }
   }
 
   /// The steps as `name=ms` pairs joined by spaces.
   fn text(&self) -> String {
-    self.steps.iter().map(|(name, elapsed_ms)| format!("{name}={elapsed_ms}")).collect::<Vec<_>>().join(" ")
+    self.steps.iter().map(|(name, cost)| format!("{name}={}", cost.elapsed.as_millis())).collect::<Vec<_>>().join(" ")
+  }
+}
+
+/// The [`StepCost`] of each step name summed over every node pass of the walk, so the phase line names where all the
+/// passes spent their time and reads, the passes under [`SLOW_RECOVERY_STEP_MS`] included.
+#[derive(Default)]
+struct StepTotals(Vec<(&'static str, StepCost)>);
+
+impl StepTotals {
+  fn add(&mut self, pass: &PassSteps<'_>) {
+    for (name, cost) in &pass.steps {
+      match self.0.iter_mut().find(|(total_name, _)| total_name == name) {
+        Some((_, total)) => total.add(*cost),
+        None => self.0.push((name, *cost)),
+      }
+    }
+  }
+
+  /// The totals as three texts of `name=value` pairs, one each for the ms, the whole-log reads and their bytes. Every
+  /// text lists every step, in descending order of ms.
+  fn texts(&self) -> (String, String, String) {
+    let mut totals = self.0.clone();
+    totals.sort_by_key(|(_, cost)| std::cmp::Reverse(cost.elapsed));
+    let text = |value: fn(&StepCost) -> u64| {
+      totals.iter().map(|(name, cost)| format!("{name}={}", value(cost))).collect::<Vec<_>>().join(" ")
+    };
+    (text(|cost| cost.elapsed.as_millis() as u64), text(|cost| cost.file_reads), text(|cost| cost.file_read_bytes))
   }
 }
 
@@ -675,13 +737,13 @@ struct NodePassTimer<'a> {
   session_id: String,
   started: Instant,
   reads_before: HistoryWork,
-  steps: PassSteps,
+  steps: PassSteps<'a>,
 }
 
 impl<'a> NodePassTimer<'a> {
   fn start(store: &'a Store, session_id: String) -> Self {
     let reads_before = store.history_work();
-    NodePassTimer { store, session_id, started: Instant::now(), reads_before, steps: PassSteps::start() }
+    NodePassTimer { store, session_id, started: Instant::now(), reads_before, steps: PassSteps::start(store) }
   }
 }
 
@@ -712,7 +774,8 @@ pub async fn reconcile_node(
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
 ) -> anyhow::Result<()> {
-  reconcile_node_inner(features, adapter, session_id, counters, is_driven, None, &mut PassSteps::start()).await
+  reconcile_node_inner(features, adapter, session_id, counters, is_driven, None, &mut PassSteps::start(&features.store))
+    .await
 }
 
 /// The node pass, ending each step in `steps`.
@@ -723,7 +786,7 @@ async fn reconcile_node_inner(
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
   stop: Option<&StartupStop>,
-  steps: &mut PassSteps,
+  steps: &mut PassSteps<'_>,
 ) -> anyhow::Result<()> {
   #[cfg(feature = "test-hooks")]
   adapter.recovery.reconcile_node_calls.fetch_add(1, Ordering::SeqCst);
@@ -1891,7 +1954,27 @@ mod tests {
     timer.steps.end("replay_followups");
     timer.steps.end("replay_followups");
     timer.steps.end("dispatch_pending");
+    let mut totals = StepTotals::default();
+    totals.add(&timer.steps);
+    totals.add(&timer.steps);
     drop(timer);
+
+    // The walk's totals keep each step's reads with the step that made them, summed over the passes.
+    let (step_ms, step_file_reads, step_file_read_bytes) = totals.texts();
+    let names =
+      |text: &str| text.split(' ').map(|pair| pair.split_once('=').unwrap().0.to_string()).collect::<Vec<_>>();
+    assert_eq!(names(&step_ms), names(&step_file_reads), "every text lists the same steps in the same order");
+    assert_eq!(names(&step_ms), names(&step_file_read_bytes), "every text lists the same steps in the same order");
+    let value = |text: &str, step: &str| {
+      text.split(' ').find_map(|pair| pair.strip_prefix(&format!("{step}="))).map(str::to_string)
+    };
+    assert_eq!(value(&step_file_reads, "replay_followups"), Some("2".to_string()), "{step_file_reads}");
+    assert_eq!(value(&step_file_reads, "load_meta"), Some("0".to_string()), "{step_file_reads}");
+    assert_eq!(
+      value(&step_file_read_bytes, "replay_followups"),
+      Some((2 * log_bytes).to_string()),
+      "{step_file_read_bytes}"
+    );
 
     let lines = lines.lock().unwrap();
     let [line] = lines.as_slice() else { panic!("one slow pass logs one line: {lines:?}") };

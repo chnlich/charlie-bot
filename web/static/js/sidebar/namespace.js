@@ -40,8 +40,8 @@
   // The sidebar's rendered controls (the onclick strings of the rows, the
   // group headers and the pending-trigger bell) call sidebarControl(name,
   // ...args). The file that defines a control's handler registers it under
-  // its name when its script loads, so a renderer names a handler of a file
-  // loaded after it only as a string.
+  // its name when its script loads. A renderer therefore names a handler of a
+  // file loaded after it only as a string.
   const sidebarControls = new Map();
 
   function registerSidebarControl(name, handler) {

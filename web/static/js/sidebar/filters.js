@@ -159,11 +159,11 @@ function restoreSidebarFromUrl() {
 // ---------------------------------------------------------------------------
 let searchDebounceTimer = null;
 // The query generation the list is waiting for. Each input text takes the next
-// one, and a response carries the generation it was fetched under, so a slow
+// one. A response carries the generation it was fetched under, so a slow
 // earlier query cannot repaint the rows of a newer one.
 let searchGeneration = 0;
 // The query whose rows the list holds, '' while it holds another view or a
-// note. A same-text call is a refresh: the WebSocket handlers refetch the open
+// note. A same-text call is a refresh. The WebSocket handlers refetch the open
 // query when a session or task tree changes, and that refresh keeps the rows
 // the reader is on.
 let shownSearchQuery = '';

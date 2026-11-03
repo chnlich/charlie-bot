@@ -285,7 +285,7 @@ function renderSessionRowShell(s, {filter, activeClass, options, indicators, lin
 // Empty list note shared by the grouped/search lists here and, through the
 // namespace, the archived list in archived.js. A markup change is made here
 // once, not in each list's empty branch. The note takes the tone of the group
-// label it stands in for: slate-400 reads 6.34:1 on the sidebar, where
+// label it stands in for. Slate-400 reads 6.34:1 on the sidebar, where
 // slate-500 read 3.42:1, under the 4.5:1 floor for this 14px text.
 function renderEmptyNote(text) {
   return `<p class="text-slate-400 text-sm px-3 py-2">${text}</p>`;

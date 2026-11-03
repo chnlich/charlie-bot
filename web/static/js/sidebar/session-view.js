@@ -590,7 +590,7 @@ async function switchSession(sessionId) {
   hideStreaming();
 
   // Click-time feedback: placeholder over the stale DOM, header name and
-  // sidebar highlight move now — every click gets them, even one later
+  // sidebar highlight move now. Every click gets them, even one later
   // superseded; only the latest generation renders session content.
   showSwitchPlaceholder(sessionId);
   updateSidebarHighlight(sessionId);

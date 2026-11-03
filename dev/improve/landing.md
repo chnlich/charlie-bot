@@ -323,7 +323,7 @@ It names:
 It names no file-server URL, because the remote host holds no CharlieBot URL and the round constructs none.
 The message wakes the task session, which replies to the user.
 
-The task session mints the file-server links for the report from the copy that the launcher places at `~/improve/<direction>/evidence/<round>/` on this host after the round.
+The task session mints the file-server links for the report from the copy that the launcher places at `~/improve/<direction>/evidence/<round>/` on the task host after the round.
 Its reply carries those links, and a reader who opens one reads that copy, because the evidence files themselves stay on the remote host.
 No evidence link appears on GitHub.
 

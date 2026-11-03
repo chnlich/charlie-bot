@@ -23,7 +23,11 @@
 # unit directory, CHARLIEBOT_SYSTEMD_USER_DIR, which defaults to the live user's $HOME/.config/systemd/user and is
 # resolved before HOME moves into the rehearsal tree. A rehearsal that stops part way leaves the last installed commit's
 # units in place while the live server keeps running on its own release; the restore step is in that script's header.
-# The rehearsal home's config carries the live weight switches, read the way the trial reads them.
+# The rehearsal home's config carries the live weight switches, read the way the trial reads them. Before the first
+# server start, the rehearsal reads that config with both releases' charliebot-server --check-config, as the switch
+# preflight reads a home: the home serves both releases and the switch back, so a key that either release refuses
+# fails every start, and the check stops the rehearsal in seconds with the refusing release and its error text in the
+# report.
 #
 # Before each switch the rehearsal seeds one live run, because a live switch always has one: the manager turn that
 # requested it. The seed is a manager-turn record whose process is a sleep the new server re-attaches by its recorded
@@ -206,6 +210,8 @@ cleanup() {
     if mkdir -p "$EVIDENCE/logs"; then
       shopt -s nullglob
       for log_file in "$LOGS"/switch_*.log "$LOGS"/switch_*.runs "$LOGS"/server_*.log "$LOGS"/server-latest.log; do
+        # server-latest.log carries no wildcard, so nullglob keeps it when no launcher ran and the link is not there.
+        [ -e "$log_file" ] || continue
         if ! copy_redacted_file "$log_file" "$EVIDENCE/logs/${log_file##*/}"; then
           log "CLEANUP could not copy $log_file to $EVIDENCE/logs"
           evidence_copy_ok=0
@@ -314,8 +320,6 @@ server:
   min_free_disk_gib: 0
   enable_session_cpu_weight: $CPU_WEIGHT_SWITCH
   enable_session_io_weight: $IO_WEIGHT_SWITCH
-  # The synthetic rehearsal home names no build host, so the guard stays off.
-  enable_local_work_guard: false
 paths:
   workspace_dirs:
     - $WORKSPACE
@@ -359,6 +363,28 @@ export CHARLIEBOT_SWITCH_READY_WAIT_S="$READY_WAIT_S"
 export CHARLIEBOT_SWITCH_STOP_WAIT_S="$STOP_WAIT_S"
 export PATH="$ORIGINAL_PATH"
 unset CHARLIE_CODE_API_KEY AIGW_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY
+
+# check_config LABEL COMMIT RELEASE: the release's server reads the rehearsal home's config, as the switch preflight
+# reads a home before it starts a server on it. A key that one release does not accept fails every start on the home,
+# so the refusal stops the rehearsal here, in seconds, with the refusing release and its error text in the report,
+# instead of at a server that never reaches server_ready.
+check_config() {
+  local label=$1 commit=$2 release=$3 output line
+  output="$TREE/check-config-$label.log"
+  if CHARLIEBOT_HOME="$CB_HOME" CHARLIEBOT_REPO_ROOT="$REPO" "$release/charliebot-server" --check-config \
+    > "$output" 2>&1; then
+    log "CONFIG $label: $commit accepts the rehearsal home's config"
+    return 0
+  fi
+  log "CONFIG $label: the release $commit refused the rehearsal home's config:"
+  while IFS= read -r line; do log "$line"; done < "$output"
+  log "FAILED: the $label release $commit refused the rehearsal home's config"
+  exit 1
+}
+
+check_config old "$OLD_COMMIT" "$RELEASES/$OLD_COMMIT"
+check_config new "$NEW_COMMIT" "$RELEASES/$NEW_COMMIT"
+
 SOCK="rehearsal-$$"
 export CHARLIEBOT_TMUX_SOCKET="$SOCK"
 tmux -L "$SOCK" new-session -d -s rehearsal -c "$REPO" -x 200 -y 50 || preflight_fail "start the private tmux server"

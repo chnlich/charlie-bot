@@ -89,6 +89,26 @@ pub(crate) const BACKENDS: &[BackendSpec] = &[
   },
 ];
 
+/// One transcript language the feature offers.
+///
+/// The catalog below is the one home for a language's config code and its name in each backend's protocol; both
+/// setups read it.
+struct LanguageSpec {
+  code: &'static str,
+  gemini_code: &'static str,
+  muse_bias: &'static str,
+}
+
+const LANGUAGES: &[LanguageSpec] = &[
+  LanguageSpec { code: "zh", gemini_code: "cmn-Hans-CN", muse_bias: "Mandarin Chinese" },
+  LanguageSpec { code: "en", gemini_code: "en-US", muse_bias: "English" },
+];
+
+/// The catalog entry for a config language code, or `None` when the feature does not map it.
+fn language_spec(code: &str) -> Option<&'static LanguageSpec> {
+  LANGUAGES.iter().find(|spec| spec.code == code)
+}
+
 #[cfg(test)]
 fn spec_of(kind: BackendKind) -> &'static BackendSpec {
   BACKENDS.iter().find(|spec| spec.kind == kind).expect("the catalog holds every backend kind")
@@ -363,14 +383,8 @@ async fn gemini_send_audio(
 }
 
 fn gemini_setup(vocabulary: &[String], languages: &[String]) -> Value {
-  let language_codes: Vec<&str> = languages
-    .iter()
-    .filter_map(|code| match code.as_str() {
-      "zh" => Some("cmn-Hans-CN"),
-      "en" => Some("en-US"),
-      _ => None,
-    })
-    .collect();
+  let language_codes: Vec<&str> =
+    languages.iter().filter_map(|code| language_spec(code).map(|spec| spec.gemini_code)).collect();
   json!({
     "setup": {
       "model": GEMINI_MODEL,
@@ -595,14 +609,8 @@ fn muse_handshake(token: &str, vocabulary: &[String], languages: &[String]) -> V
   if !vocabulary.is_empty() {
     handshake["keywords"] = json!(vocabulary);
   }
-  let language_bias: Vec<&str> = languages
-    .iter()
-    .filter_map(|language| match language.as_str() {
-      "zh" => Some("Mandarin Chinese"),
-      "en" => Some("English"),
-      _ => None,
-    })
-    .collect();
+  let language_bias: Vec<&str> =
+    languages.iter().filter_map(|language| language_spec(language).map(|spec| spec.muse_bias)).collect();
   if !language_bias.is_empty() {
     handshake["languageBias"] = json!(language_bias);
   }

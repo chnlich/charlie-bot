@@ -49,7 +49,7 @@ function writeJsonl(file, rows) {
 
 // One judge pass over a packet. A message the pass left unanswered is judged once more, alone, with the same
 // instructions; the retry keeps only the answers for those messages, as the recovered review's fill step did.
-async function judgePacket({ packet, prompt, model }) {
+export async function judgePacket({ packet, prompt, model }) {
   const where = packet.name;
   const result = await callClaude({ model, input: judgeInput({ prompt, packetText: packet.text }), where });
   const first = parseAnswers(result, where);

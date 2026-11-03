@@ -91,11 +91,34 @@ Not recovered, and the replacement:
 - The model's answers are not deterministic. The recovered review measured run-to-run agreement of 89.4% on the
   needed-versus-unneeded call for messages judged twice (event 9299).
 
-## Replay seam
+## Offline replay of the pre-send check
 
-The offline replay of the pre-send check will join this tool as another subcommand. It reuses the window selection
-(`lib/window.mjs`), the file merge (`lib/files.mjs`), the packet layout (`lib/packets.mjs`) and the judge
-(`lib/judge.mjs`), and it joins the labels on `event_id`. The `COMMANDS` table in `review.mjs` takes the new entry.
+`replay` runs the server's pre-send check over the labels of a rebuilt window, then judges each message again after
+its flagged passages are deleted:
+
+```sh
+node dev/week-review/review.mjs replay --out <dir> --rebuild <rebuilt label dir> --round <n> \
+  --charliebot <charliebot binary built from this checkout> [--home <dir>] [--repo-root <checkout>] \
+  [--check-parallel 4] [--judge-parallel 6] [--model claude-opus-5-5] [--flip-test 0|1]
+node dev/week-review/review.mjs replay-tally --out <dir> --round <n>
+```
+
+- The check runs in one `charliebot presend-check replay` process per batch, so the light backends rotate as the
+  server's do. The check logic is the Rust function the server calls (`rust/crates/runtime/tasks/src/presend_check.rs`,
+  `judge` and `replay_check`); this module holds no prompt text and no flag parsing. The check reads
+  `prompts/presend_check.md` from `--repo-root`.
+- The context of each message is built as of that message's event in both logs (`context_from_events`).
+- Each child's packet is rebuilt with its edited messages (flagged passages deleted, files merged from the edited text)
+  and judged with the entry point's judge. A message with no content left is not sent and leaves the count; a message
+  whose check or judge call failed is reported with its cause and leaves the projection.
+- The tuning half is the messages sent before 2026-10-18T00:00Z; the test half is the rest. `--flip-test 1` checks each
+  test-half message a second time.
+
+The round's files are `flags.jsonl`, `rejudge.jsonl`, `flip.jsonl` (with `--flip-test 1`), `packets/`, `judgments/`,
+`run.json` and `tally.txt`. `replay-tally` recomputes the tally from those files.
+
+The replay joins the labels on `event_id`; `--rebuild` names the directory of a `label` run (`labels.jsonl`, `run.json`).
+The window in its `run.json` must hold the same messages as the store now does, or the replay stops.
 
 ## Tests
 

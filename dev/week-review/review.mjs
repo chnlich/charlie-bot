@@ -7,6 +7,10 @@
 //   node dev/week-review/review.mjs rejudge --out <dir> --model <gateway model> --gateway <base URL>
 //                                           [--sample 20] [--seed 1] [--credentials <file>]
 //                                           [--credential <entry name>] [--parallel 4]
+//   node dev/week-review/review.mjs replay --out <dir> --rebuild <rebuilt label dir> --round <n> --charliebot <bin>
+//                                          [--home <dir>] [--repo-root <dir>] [--check-parallel 4] [--judge-parallel 6]
+//                                          [--model claude-opus-5-5] [--flip-test 0|1]
+//   node dev/week-review/review.mjs replay-tally --out <dir> --round <n>
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { labelWindow, writeTally } from './lib/label.mjs';
 import { rejudgeSample } from './lib/rejudge.mjs';
 import { formatTally } from './lib/tally.mjs';
+import { formatTally as formatReplayTally, runReplayRound, tallyRound } from './lib/replay.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +54,25 @@ const COMMANDS = {
       '--parallel': '4',
     },
     run: runRejudge,
+  },
+  replay: {
+    flags: {
+      '--out': null,
+      '--rebuild': null,
+      '--round': null,
+      '--charliebot': null,
+      '--home': process.env.CHARLIEBOT_HOME || path.join(os.homedir(), '.charliebot'),
+      '--repo-root': path.resolve(HERE, '..', '..'),
+      '--check-parallel': '4',
+      '--judge-parallel': '6',
+      '--model': 'claude-opus-5-5',
+      '--flip-test': '0',
+    },
+    run: runReplay,
+  },
+  'replay-tally': {
+    flags: { '--out': null, '--round': null },
+    run: runReplayTally,
   },
 };
 
@@ -126,6 +150,37 @@ async function runRejudge(argv) {
     prompts: loadPrompts(),
     parallel: integerFlag('--parallel', flags['--parallel'], 1),
   });
+  process.stdout.write(text);
+}
+
+async function runReplay(argv) {
+  const flags = parseFlags('replay', argv);
+  if (flags['--flip-test'] !== '0' && flags['--flip-test'] !== '1') {
+    throw new Error(`--flip-test takes 0 or 1, got ${JSON.stringify(flags['--flip-test'])}`);
+  }
+  const tally = await runReplayRound({
+    out: flags['--out'],
+    rebuild: flags['--rebuild'],
+    round: integerFlag('--round', flags['--round'], 1),
+    home: flags['--home'],
+    charliebot: flags['--charliebot'],
+    repoRoot: flags['--repo-root'],
+    checkParallel: integerFlag('--check-parallel', flags['--check-parallel'], 1),
+    judgeParallel: integerFlag('--judge-parallel', flags['--judge-parallel'], 1),
+    model: flags['--model'],
+    prompts: loadPrompts(),
+    flipTest: flags['--flip-test'] === '1',
+  });
+  const text = formatReplayTally(tally);
+  fs.writeFileSync(path.join(flags['--out'], `round${flags['--round']}`, 'tally.txt'), text);
+  process.stdout.write(text);
+}
+
+function runReplayTally(argv) {
+  const flags = parseFlags('replay-tally', argv);
+  const roundDir = path.join(flags['--out'], `round${integerFlag('--round', flags['--round'], 1)}`);
+  const text = formatReplayTally(tallyRound(roundDir));
+  fs.writeFileSync(path.join(roundDir, 'tally.txt'), text);
   process.stdout.write(text);
 }
 

@@ -70,6 +70,18 @@ impl LivePromptChanges {
   }
 }
 
+impl ScannedLiveFacts {
+  /// The sessions that the scanned log's close events report to, in log order. A log whose task facts failed to fold
+  /// names none: its node's own read meets that error.
+  pub fn report_recipients(&self) -> impl Iterator<Item = &str> {
+    let close_events = self.facts.task().map_or(&[][..], |task| task.close_events.as_slice());
+    close_events
+      .iter()
+      .filter_map(|close| close.get("report_to").and_then(CompactValue::as_str))
+      .filter(|recipient| !recipient.is_empty())
+  }
+}
+
 impl Store {
   /// Scan and fold a session's live log outside its session lock. `None` when the session holds archived events, has
   /// no live log, or the log changed during the scan; the node's reads then load the log themselves.

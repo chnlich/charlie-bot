@@ -7,13 +7,15 @@
 //! servers under test load the same data.
 //!
 //! The task-tree shape (`task_tree`) adds the production startup's task tree to the same sessions, and `reset` returns
-//! such a home to its generated state after a server start.
+//! such a home to its generated state after a server start. `recovery_check` holds the startup lab recovery check's
+//! sessions and digests.
 
 use serde::{Deserialize, Serialize};
 
 pub mod check;
 pub mod generate;
 mod manifest;
+pub mod recovery_check;
 mod rng;
 mod session;
 pub mod task_tree;

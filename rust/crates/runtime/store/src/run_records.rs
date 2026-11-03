@@ -46,6 +46,20 @@ pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
 pub const CURSOR_NAME: &str = "agent.raw.cursor";
 pub const RUN_EVENTS_NAME: &str = "events.jsonl";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
+
+// The `record_observation` field names. The task side sends them, and this crate validates and applies them, so the
+// writer and the validator match these names instead of spelling them.
+pub const OBSERVATION_NATIVE_SESSION_ID: &str = "native_session_id";
+pub const OBSERVATION_MODEL: &str = "model";
+pub const OBSERVATION_RAW_LOG_REF: &str = "raw_log_ref";
+pub const OBSERVATION_EVENTS_REF: &str = "events_ref";
+pub const OBSERVATION_RESULT_REF: &str = "result_ref";
+pub const OBSERVATION_PROMPT_SNAPSHOT_REF: &str = "prompt_snapshot_ref";
+pub const OBSERVATION_REPO_PATH: &str = "repo_path";
+pub const OBSERVATION_BASE_BRANCH: &str = "base_branch";
+pub const OBSERVATION_BRANCH_NAME: &str = "branch_name";
+pub const OBSERVATION_WORKTREE_PATH: &str = "worktree_path";
+
 pub const STOP_EXIT_POLL: Duration = Duration::from_millis(50);
 pub const STOP_EXIT_WAIT: Duration = Duration::from_secs(10);
 pub const STOP_KILL_EXIT_WAIT: Duration = Duration::from_secs(5);
@@ -925,16 +939,16 @@ impl Store {
     for (field, value) in fields {
       if !matches!(
         field.as_str(),
-        "native_session_id"
-          | "model"
-          | "raw_log_ref"
-          | "events_ref"
-          | "result_ref"
-          | "prompt_snapshot_ref"
-          | "repo_path"
-          | "base_branch"
-          | "branch_name"
-          | "worktree_path"
+        OBSERVATION_NATIVE_SESSION_ID
+          | OBSERVATION_MODEL
+          | OBSERVATION_RAW_LOG_REF
+          | OBSERVATION_EVENTS_REF
+          | OBSERVATION_RESULT_REF
+          | OBSERVATION_PROMPT_SNAPSHOT_REF
+          | OBSERVATION_REPO_PATH
+          | OBSERVATION_BASE_BRANCH
+          | OBSERVATION_BRANCH_NAME
+          | OBSERVATION_WORKTREE_PATH
       ) {
         return Err(StoreError::new(format!("unknown run observation field {field}")));
       }
@@ -946,16 +960,16 @@ impl Store {
         .ok_or_else(|| StoreError::new(format!("run observation field {field} must be a string or null")))?
         .to_string();
       match field.as_str() {
-        "native_session_id" => run.native_session_id = Some(text),
-        "model" => run.model = Some(text),
-        "raw_log_ref" => run.raw_log_ref = Some(text),
-        "events_ref" => run.events_ref = Some(text),
-        "result_ref" => run.result_ref = Some(text),
-        "prompt_snapshot_ref" => run.prompt_snapshot_ref = Some(text),
-        "repo_path" => run.repo_path = Some(text),
-        "base_branch" => run.base_branch = Some(text),
-        "branch_name" => run.branch_name = Some(text),
-        "worktree_path" => run.worktree_path = Some(text),
+        OBSERVATION_NATIVE_SESSION_ID => run.native_session_id = Some(text),
+        OBSERVATION_MODEL => run.model = Some(text),
+        OBSERVATION_RAW_LOG_REF => run.raw_log_ref = Some(text),
+        OBSERVATION_EVENTS_REF => run.events_ref = Some(text),
+        OBSERVATION_RESULT_REF => run.result_ref = Some(text),
+        OBSERVATION_PROMPT_SNAPSHOT_REF => run.prompt_snapshot_ref = Some(text),
+        OBSERVATION_REPO_PATH => run.repo_path = Some(text),
+        OBSERVATION_BASE_BRANCH => run.base_branch = Some(text),
+        OBSERVATION_BRANCH_NAME => run.branch_name = Some(text),
+        OBSERVATION_WORKTREE_PATH => run.worktree_path = Some(text),
         _ => return Err(StoreError::new(format!("unknown run observation field {field}"))),
       }
     }

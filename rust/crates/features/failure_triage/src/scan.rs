@@ -493,6 +493,7 @@ mod tests {
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
+      github: Default::default(),
       sections: Sections::default(),
     }
   }

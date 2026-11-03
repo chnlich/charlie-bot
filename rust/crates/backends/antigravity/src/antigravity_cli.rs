@@ -278,6 +278,22 @@ mod tests {
 
   const SUCCESS: &str = r#"{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"the answer","usage":{"input_tokens":10,"output_tokens":12,"thinking_tokens":11,"cache_read_tokens":3}}"#;
 
+  /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+  fn gh_wrapper_env(root: &Path) -> Env {
+    use std::os::unix::fs::PermissionsExt;
+    let wrapper_dir = root.join("gh-wrapper");
+    fs::create_dir_all(&wrapper_dir).unwrap();
+    let wrapper = wrapper_dir.join("gh");
+    fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).unwrap();
+    Env::from([
+      ("PATH".to_string(), format!("{}:/bin:/usr/bin", wrapper_dir.display())),
+      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+    ])
+  }
+
   fn capture_backend(root: &Path) -> AntigravityBackend {
     AntigravityBackend::from_launch(
       root.join("agy").to_string_lossy().into_owned(),
@@ -297,7 +313,7 @@ mod tests {
     let mut request = RunRequest::new(
       "test".into(),
       root.to_path_buf(),
-      AgentBaseEnvironment { values: Env::from([("PATH".into(), "/bin:/usr/bin".into())]) },
+      AgentBaseEnvironment { values: gh_wrapper_env(root) },
       SessionCgroupConfig::disabled(),
       Arc::new(charliebot_registry::Registry::new()),
     );

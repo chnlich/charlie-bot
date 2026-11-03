@@ -1569,7 +1569,8 @@ const ENVIRONMENT_OWNER: &str = "runtime/agents/src/agent_environment.rs";
 const PRIVATE_STATIC_HINT: &str = "Remove the visibility modifier: the module exposes mutable state through \
                                    functions, and shared data that never changes is a `const` or an access function.";
 
-const OWNED_ENVIRONMENT_HINT: &str = "Change the process environment in `replace_process_environment`.";
+const OWNED_ENVIRONMENT_HINT: &str =
+  "Change the process environment only in `runtime/agents/src/agent_environment.rs`.";
 
 /// A production `static` declaration: its name, its line and whether it carries a visibility modifier.
 struct StaticRecord {

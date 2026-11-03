@@ -35,6 +35,22 @@ pub fn claude_config(account_dir: Option<&Path>) -> String {
   }
 }
 
+/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+fn gh_wrapper_env(base: &Path, path: &str) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = base.join("gh-wrapper");
+  std::fs::create_dir_all(&wrapper_dir).unwrap();
+  let wrapper = wrapper_dir.join("gh");
+  std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+  let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+  permissions.set_mode(0o755);
+  std::fs::set_permissions(&wrapper, permissions).unwrap();
+  Env::from([
+    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+    (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+  ])
+}
+
 /// The feature context over `home`, whose config.yaml is `config_body`, with the cc-claude backend registered.
 pub fn claude_features(home: &Path, config_body: &str) -> Arc<FeatureContext> {
   features_with_packages(home, config_body, &[("backends.claude_code", charliebot_claude_code::register)])
@@ -72,7 +88,7 @@ pub fn features_with_packages(
   ));
   let startup = Arc::new(StartupState::default());
   startup.insert(SessionUsage::new(Arc::clone(&config), Arc::clone(&store), Arc::clone(&registry))).unwrap();
-  startup.insert(AgentBaseEnvironment { values: Env::from([("PATH".to_string(), "/usr/bin".to_string())]) }).unwrap();
+  startup.insert(AgentBaseEnvironment { values: gh_wrapper_env(home, "/usr/bin") }).unwrap();
   Arc::new(FeatureContext { config, credentials, store, registry, startup })
 }
 

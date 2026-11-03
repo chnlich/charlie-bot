@@ -408,6 +408,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
+    github: Default::default(),
     sections: Sections::default(),
   }
 }
@@ -592,6 +593,15 @@ impl Stack {
     Stack::assemble(home, cfg, registry(None)?).await
   }
 
+  /// An agent environment whose PATH starts with the checkout's `gh` wrapper, as the server builds.
+  fn gh_wrapper_env(checkout: &Path, path: &str) -> Env {
+    let wrapper_dir = charliebot_agents::gh_wrapper::dir_under(checkout);
+    Env::from([
+      ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper_dir.join("gh").display().to_string()),
+    ])
+  }
+
   async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
     std::fs::create_dir_all(home.path().join(format!("{CONFIG_D_DIR_NAME}/approval.d")))?;
     std::fs::write(home.path().join(format!("{CONFIG_D_DIR_NAME}/approval.d/policy.yaml")), APPROVAL_POLICY_TABLE)?;
@@ -610,15 +620,13 @@ impl Stack {
         runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
       },
     )?;
-    let startup = Arc::new(StartupState::default());
-    startup.insert(AgentBaseEnvironment {
-      values: charliebot_registry::backend::Env::from([("PATH".to_string(), "/usr/bin".to_string())]),
-    })?;
-    startup.insert(BackendPool::default())?;
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
       .ancestors()
       .nth(4)
       .context("tasks crate manifest has no repository root ancestor")?;
+    let startup = Arc::new(StartupState::default());
+    startup.insert(AgentBaseEnvironment { values: Stack::gh_wrapper_env(checkout, "/usr/bin") })?;
+    startup.insert(BackendPool::default())?;
     startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
     let served = Arc::new(Mutex::new((*cfg).clone()));
     let config_source = Arc::clone(&served);

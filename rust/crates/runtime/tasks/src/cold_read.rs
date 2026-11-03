@@ -578,6 +578,7 @@ mod tests {
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
+      github: Default::default(),
       sections: Sections::default(),
     }
   }
@@ -785,7 +786,12 @@ BBBB
       cfg: probe_cfg(["alpha", "beta"]),
       registry: Arc::new(registry),
       repo_root: PathBuf::from("/synthetic/repo"),
-      base_env: charliebot_agents::agent_environment::AgentBaseEnvironment { values: Env::new() },
+      base_env: charliebot_agents::agent_environment::AgentBaseEnvironment {
+        values: Env::from([
+          ("PATH".to_string(), "/synthetic/gh-wrapper:/bin:/usr/bin".to_string()),
+          (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), "/synthetic/gh-wrapper/gh".to_string()),
+        ]),
+      },
       pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::default()),
     };
 

@@ -334,7 +334,13 @@ Corrections and re-posts follow the tier of the write they repeat.
   the existing data-deletion rule.
 
 - A message or publication in the user's name that reaches other people is T0.
-  Show the full content draft first, and wait for the user to say "take off" before executing.
+  Register a Slack message in the user's name with `charliebot slack draft`, and a GitHub PR or comment in the
+  user's name with `charliebot github draft`: the user's click on its card is the take off, and the server sends the
+  card's text from the user's account.
+  For any other write in the user's name, show the full content draft first, and wait for the user to say "take off"
+  before executing.
+  Send every other Slack write with the Slack bot token, and every other GitHub write through the agent `gh`, which uses
+  the GitHub App where the App is installed.
 - A write under a bot identity inside a standing policy's scope is T1.
   It proceeds, and the agent records it with `charliebot digest add`.
 - A Slack-origin or Discord-origin session's reply to its own thread is T1 under the own-thread standing policy,

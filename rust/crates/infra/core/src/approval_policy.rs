@@ -33,8 +33,23 @@ pub const SECTION_TITLE: &str = "Approval policy table";
 pub const CONSEQUENCE_TEST_IDS: [&str; 6] =
   ["irreversible", "chao-name", "money", "authority", "reading", "rule-named"];
 
+/// The ask tier a consequence test gives a step: the manager asks first (`t0`).
+pub const TIER_T0: &str = "t0";
+
+/// The ask tier a standing policy keeps a step at (`t1`).
+pub const TIER_T1: &str = "t1";
+
+/// The T2 ask tier (`t2`).
+pub const TIER_T2: &str = "t2";
+
+/// The ask tier of an item only the user can approve (`user-act`).
+pub const TIER_USER_ACT: &str = "user-act";
+
+/// The review ask tier (`review`).
+pub const TIER_REVIEW: &str = "review";
+
 /// The tier values a cold-read answer's machine-readable line may give (`ASK_TIERS`).
-pub const ASK_TIERS: [&str; 5] = ["t0", "t1", "t2", "user-act", "review"];
+pub const ASK_TIERS: [&str; 5] = [TIER_T0, TIER_T1, TIER_T2, TIER_USER_ACT, TIER_REVIEW];
 
 /// The exact form of the machine-readable line the ask cold read ends with (`TIER_LINE_FORM`).
 pub const TIER_LINE_FORM: &str = "tier: <tier> rule: <rule>";

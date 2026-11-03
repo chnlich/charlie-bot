@@ -131,8 +131,8 @@ fn age_text(since: UtcDateTime, now: Timestamp) -> String {
 /// The tier's order in the queue: the T0 items first, the review items after them, and everything else last.
 fn tier_group(tier: Option<&str>) -> u8 {
   match tier {
-    Some("t0") => 0,
-    Some("review") => 1,
+    Some(approval_policy::TIER_T0) => 0,
+    Some(approval_policy::TIER_REVIEW) => 1,
     _ => 2,
   }
 }
@@ -174,7 +174,7 @@ fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTa
 fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date, now: Timestamp) -> Result<Vec<Value>, DayError> {
   let mut sheet = Vec::new();
   for row in rows {
-    if row.tier.as_deref() != Some("user-act") {
+    if row.tier.as_deref() != Some(approval_policy::TIER_USER_ACT) {
       continue;
     }
     if date != today {

@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
+use charliebot_core::approval_policy::TIER_USER_ACT;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{HostLogin, OpenWaitingRow};
@@ -20,8 +21,6 @@ use crate::loader;
 
 /// The page where the user approves a host's login, which the derived item links to.
 const HOST_AUTH_LINK: &str = "/host-auth";
-/// The tier of a derived item: only the user can approve a login.
-const USER_ACT_TIER: &str = "user-act";
 
 /// The reason a fire of `task` waits, or `None` when the fire runs. A host that awaits approval holds the fire. A host
 /// that answers ok or is unreachable does not, so an unreachable host fails the round as it does without the gate.
@@ -122,7 +121,7 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
     text: format!("Approve the ssh login to {} on {HOST_AUTH_LINK}", login.alias),
     context: Some(login.detail.lines().next().unwrap_or_default().to_string()),
     link: Some(HOST_AUTH_LINK.to_string()),
-    tier: Some(USER_ACT_TIER.to_string()),
+    tier: Some(TIER_USER_ACT.to_string()),
     rule: None,
     since: UtcDateTime::parse(&login.last_change_at)?,
   })

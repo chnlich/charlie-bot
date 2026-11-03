@@ -236,7 +236,11 @@ Chat.registerSeparatorButton(function(sessionId, eventIndex) {
 // body is fetched on every open, so it shows the current configuration and
 // stores nothing.
 // ---------------------------------------------------------------------------
-const TASK_CONTEXT_NONE = '<span class="text-slate-500">(none)</span>';
+// The dialog's muted tone: its empty values, source labels and prompt table header sit on the
+// modal's slate-800, where slate-500 renders 3.07:1, under the 4.5:1 floor for text this size.
+// slate-400 renders 5.71:1 and stays quieter than the field values.
+const TASK_CONTEXT_MUTED = 'text-slate-400';
+const TASK_CONTEXT_NONE = `<span class="${TASK_CONTEXT_MUTED}">(none)</span>`;
 
 let taskContextModalSession = null;
 
@@ -274,8 +278,8 @@ function taskContextTaskHtml(task) {
 
 function promptSourceLabel(source) {
   const owner = source.source_session_id
-    ? ` <span class="text-slate-500">from ${escapeHtml(source.source_session_id)}</span>` : '';
-  return `<span class="text-slate-500">${escapeHtml(source.scope || '')}</span> ${escapeHtml(source.source_ref || '')}${owner}`;
+    ? ` <span class="${TASK_CONTEXT_MUTED}">from ${escapeHtml(source.source_session_id)}</span>` : '';
+  return `<span class="${TASK_CONTEXT_MUTED}">${escapeHtml(source.scope || '')}</span> ${escapeHtml(source.source_ref || '')}${owner}`;
 }
 
 function formatCharCount(n) {
@@ -305,7 +309,7 @@ function taskContextPromptHtml(preview) {
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Next run context</div>
       <div class="text-xs text-slate-400">${escapeHtml(preview.kind || '')} · ${formatCharCount(total)} chars</div>
     </div>
-    <table class="w-full text-xs"><thead><tr class="text-slate-500 text-left"><th class="pb-1 font-normal">Source</th><th class="pb-1 font-normal">Delivery</th><th class="pb-1 font-normal text-right">Chars</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="w-full text-xs"><thead><tr class="${TASK_CONTEXT_MUTED} text-left"><th class="pb-1 font-normal">Source</th><th class="pb-1 font-normal">Delivery</th><th class="pb-1 font-normal text-right">Chars</th></tr></thead><tbody>${rows}</tbody></table>
     ${overlayNote}
   </div>`;
 }

@@ -335,11 +335,9 @@ impl UserTextChecks {
       {
         continue;
       }
-      let is_tsv = link_path(&target.target).to_ascii_lowercase().ends_with(".tsv");
-      let is_server_markdown = link_path(&target.target).to_ascii_lowercase().ends_with(".md")
-        && files.iter().any(|file| {
-          file.link == target.target && matches!(file.form, FileLinkForm::Canonical | FileLinkForm::RetiredPrefix)
-        });
+      let is_tsv = link_path_ends_with(&target.target, ".tsv");
+      let is_server_markdown = link_path_ends_with(&target.target, ".md")
+        && files.iter().any(|file| file.link == target.target && renders_as_page(file.form));
       if is_tsv || is_server_markdown {
         violations.push(TextViolation::new(
           LINK_RENDERABLE,
@@ -354,10 +352,9 @@ impl UserTextChecks {
   fn page_link_violations(&self, page: &PageScan) -> anyhow::Result<Vec<TextViolation>> {
     let mut violations = Vec::new();
     for link in &page.links {
-      let is_tsv = link_path(&link.href).to_ascii_lowercase().ends_with(".tsv");
-      let is_server_markdown = link_path(&link.href).to_ascii_lowercase().ends_with(".md")
-        && file_urls::scan_file_link_target(&link.href, None)?
-          .is_some_and(|file| matches!(file.form, FileLinkForm::Canonical | FileLinkForm::RetiredPrefix));
+      let is_tsv = link_path_ends_with(&link.href, ".tsv");
+      let is_server_markdown = link_path_ends_with(&link.href, ".md")
+        && file_urls::scan_file_link_target(&link.href, None)?.is_some_and(|file| renders_as_page(file.form));
       if is_tsv || is_server_markdown {
         violations.push(TextViolation::new(
           LINK_RENDERABLE,
@@ -494,14 +491,7 @@ fn session_target_matches(target: &str, full_id: &str) -> bool {
   let Some((before_query, query)) = target.split_once('?') else {
     return false;
   };
-  let path = if let Some((_, after_scheme)) = before_query.split_once("://") {
-    after_scheme.find('/').map_or("", |slash| &after_scheme[slash..])
-  } else if let Some(authority) = before_query.strip_prefix("//") {
-    authority.find('/').map_or("", |slash| &authority[slash..])
-  } else {
-    before_query
-  };
-  path == "/"
+  link_path(before_query) == "/"
     && query
       .split('&')
       .any(|parameter| parameter.split_once('=').is_some_and(|(name, value)| name == "session" && value == full_id))
@@ -625,6 +615,7 @@ fn matching_backtick_run(bytes: &[u8], mut cursor: usize, count: usize, fenced: 
   None
 }
 
+/// The path part of a link: its text before any query or fragment, with the scheme and authority removed.
 fn link_path(link: &str) -> &str {
   let no_fragment = link.split_once('#').map_or(link, |(before, _)| before);
   let no_query = no_fragment.split_once('?').map_or(no_fragment, |(before, _)| before);
@@ -635,6 +626,16 @@ fn link_path(link: &str) -> &str {
   } else {
     no_query
   }
+}
+
+/// Whether a link's path ends with `suffix`, compared in lower case.
+fn link_path_ends_with(link: &str, suffix: &str) -> bool {
+  link_path(link).to_ascii_lowercase().ends_with(suffix)
+}
+
+/// Whether the server serves a file form as a rendered page.
+fn renders_as_page(form: FileLinkForm) -> bool {
+  matches!(form, FileLinkForm::Canonical | FileLinkForm::RetiredPrefix)
 }
 
 fn parse_page(html: &str) -> anyhow::Result<PageScan> {

@@ -272,6 +272,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex; gap: 0.5rem; justify-content: flex-end;
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
+/* The scheduled-task Save button fills green-700, where its slate-200 label renders 4.07:1, under
+   the 4.5:1 floor for 14 px text; its green-600 hover renders 2.67:1. A white label on the
+   green-800 fill renders 7.13:1, and the green-700 hover keeps 5.02:1. */
+#cron-save-btn { background-color: #166534; color: #ffffff; }
+#cron-save-btn:hover { background-color: #15803d; }
 /* Session-row action buttons, the hover reveal: at rest every row's buttons
    sit out of flow at the row's right end. The name and the second-line spans
    then reach the row's right edge, and no width is reserved for actions. On

@@ -154,7 +154,7 @@ pub fn ensure_session_cgroup(config: &SessionCgroupConfig, session_id: &str) -> 
       tasks_max = config.tasks_max,
       cpu_weight = config.enable_cpu_weight,
       io_weight = config.enable_io_weight,
-      event = SESSION_CGROUP_CREATED_EVENT
+      message = %SESSION_CGROUP_CREATED_EVENT
     );
   }
   Ok(path)
@@ -377,7 +377,7 @@ pub fn sweep_stale_session_cgroups_until_stopped(
       target: "charliebot_agents",
       count = removed.len(),
       names = ?removed,
-      event = SESSION_CGROUP_SWEEP_REMOVED_EVENT
+      message = %SESSION_CGROUP_SWEEP_REMOVED_EVENT
     );
   }
   Ok(removed.len())
@@ -431,7 +431,7 @@ pub fn log_session_cgroup_startup(
     tasks_max,
     cpu_weight = enable_cpu_weight,
     io_weight = enable_io_weight,
-    event = SESSION_CGROUP_ENABLED_EVENT
+    message = %SESSION_CGROUP_ENABLED_EVENT
   );
 }
 

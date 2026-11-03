@@ -3,6 +3,8 @@
 mod api;
 pub mod cli;
 mod config;
+mod draft;
+mod draft_target;
 mod event_types;
 pub mod metadata;
 mod service;
@@ -24,6 +26,7 @@ use turn_contribution::SlackTurnContribution;
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.service(Arc::new(SlackService::default()))?;
   registry.router(api::routes, api::matches)?;
+  registry.draft_platform("slack", draft::platform_factory())?;
   registry.config_section(config::section())?;
   registry.metadata_slot_with_validator(
     MetadataSlot {

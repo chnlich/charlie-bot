@@ -33,7 +33,7 @@ pub fn token(home: &Path, kind: TokenKind) -> Result<String, ConfigError> {
 
 /// The Slack Web API methods the user token may call through the CLI: the six read methods agents
 /// use today. The user token is read-only in this CLI; a message in the user's own name goes through
-/// `charliebot outbound draft` and a bot post through `--token bot`.
+/// `charliebot slack draft` and a bot post through `--token bot`.
 pub const USER_READ_METHODS: [&str; 6] = [
   "auth.test",
   "users.list",
@@ -51,7 +51,7 @@ pub fn admit(kind: TokenKind, url: &str) -> Result<(), CliExit> {
   }
   let refused = |subject: String| {
     CliExit::error(format!(
-      "{subject}: the user token is read-only in this CLI. For a message in the user's own name use `charliebot outbound draft`; for a bot post use `--token bot`."
+      "{subject}: the user token is read-only in this CLI. For a message in the user's own name use `charliebot slack draft`; for a bot post use `--token bot`."
     ))
   };
   let method = slack_api_method(url).ok_or_else(|| refused(format!("{url} is not a Slack Web API method URL")))?;

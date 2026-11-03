@@ -1,10 +1,12 @@
 //! The `slack` verbs: reply on a session's own Slack thread, acknowledge read thread
-//! messages, and send one authenticated Slack Web API request.
+//! messages, send one authenticated Slack Web API request, and register a draft of a message in the operator's name.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `ack`
 //! advances the session's read watermark and prints the readback; every read message's id must be passed. `request`
 //! reads the token inside this process, sends one request and prints the response body. The user token is read-only in
 //! this CLI: it admits only the read methods in `token::USER_READ_METHODS`, and the bot token keeps every method.
+//! `draft` registers a channel post, thread reply, DM, or group DM whose card the operator approves; the server sends
+//! the card's body from the operator's own account.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -15,11 +17,12 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::request::{self, RequestArgs};
-use charliebot_cli_common::resolve;
+use charliebot_cli_common::{draft as draft_register, files, resolve};
 use charliebot_core::{config, home, paths};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 
+use crate::draft_target;
 use crate::token::{self, TokenKind};
 
 #[derive(Parser)]
@@ -37,6 +40,8 @@ enum SlackCommand {
   Ack(AckArgs),
   /// Send one authenticated Slack Web API request
   Request(RequestCommand),
+  /// Register a message in the operator's name for approval on a session card
+  Draft(DraftArgs),
 }
 
 #[derive(Args)]
@@ -68,6 +73,25 @@ struct AckArgs {
   session: Option<String>,
 }
 
+#[derive(Args)]
+struct DraftArgs {
+  /// Slack channel id for a channel post or thread reply
+  #[arg(long, value_name = "CHANNEL")]
+  channel: Option<String>,
+  /// Thread timestamp; turns the channel post into a thread reply
+  #[arg(long, value_name = "TS")]
+  thread: Option<String>,
+  /// One or more Slack user ids, comma-separated: one user is a DM, several are a group DM
+  #[arg(long, value_name = "ID", value_delimiter = ',')]
+  users: Option<Vec<String>>,
+  /// File holding the message body; - reads stdin
+  #[arg(long)]
+  file: String,
+  /// Draft id this one replaces, whose card loses its button
+  #[arg(long, value_name = "DRAFT_ID")]
+  replaces: Option<String>,
+}
+
 /// Parse the Slack arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help 0,
 /// usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
@@ -82,7 +106,33 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     SlackCommand::Reply(args) => reply(&args),
     SlackCommand::Ack(args) => ack(&args),
     SlackCommand::Request(args) => run_request(&args),
+    SlackCommand::Draft(args) => draft(&args),
   }
+}
+
+/// Register a Slack draft. The target is validated and the body read before anything is sent, so an unparseable
+/// target registers nothing.
+fn draft(args: &DraftArgs) -> Result<(), CliExit> {
+  let (target, body) = prepare_draft(args)?;
+  draft_register::register("slack", target, body, args.replaces.as_deref())
+}
+
+/// The validated target and the body, with no network call.
+fn prepare_draft(args: &DraftArgs) -> Result<(Value, String), CliExit> {
+  let target = match (&args.channel, &args.users) {
+    (Some(_), Some(_)) => return Err(CliExit::usage("--channel and --users are exclusive")),
+    (None, None) => return Err(CliExit::usage("one of --channel or --users is required")),
+    (Some(channel), None) => json!({"channel": channel, "thread": args.thread}),
+    (None, Some(users)) => {
+      if args.thread.is_some() {
+        return Err(CliExit::usage("--thread applies only to --channel"));
+      }
+      json!({"users": users})
+    }
+  };
+  let target = draft_target::validate_target(&target).map_err(CliExit::usage)?;
+  let body = files::read_exact_text(&args.file)?;
+  Ok((target, body))
 }
 
 fn run_request(args: &RequestCommand) -> Result<(), CliExit> {
@@ -270,7 +320,7 @@ mod tests {
 
       assert_eq!(error.code, 1);
       assert!(text.contains(method), "{text}");
-      assert!(text.contains("charliebot outbound draft") && text.contains("--token bot"), "{text}");
+      assert!(text.contains("charliebot slack draft") && text.contains("--token bot"), "{text}");
       assert_no_token(&text);
       // The stub channel stays empty: no connection, so no bot-token fallback either.
       assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
@@ -375,5 +425,89 @@ mod tests {
     let error = execute_request(&arguments("relative/path", "user").request, TokenKind::User, USER_TOKEN).unwrap_err();
     assert_eq!(error.code, 2);
     assert_no_token(&error_text(&error));
+  }
+
+  fn draft_args(channel: Option<&str>, thread: Option<&str>, users: Option<&[&str]>, file: &str) -> DraftArgs {
+    DraftArgs {
+      channel: channel.map(str::to_string),
+      thread: thread.map(str::to_string),
+      users: users.map(|users| users.iter().map(|user| user.to_string()).collect()),
+      file: file.to_string(),
+      replaces: None,
+    }
+  }
+
+  fn body_file(text: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("body.txt"), text).unwrap();
+    dir
+  }
+
+  #[test]
+  fn a_channel_draft_targets_the_channel_with_an_optional_thread() {
+    let dir = body_file("the body");
+    let file = dir.path().join("body.txt");
+    let file = file.to_str().unwrap();
+
+    let (target, body) = prepare_draft(&draft_args(Some("C0SYNTHETIC"), None, None, file)).unwrap();
+    assert_eq!(target, json!({"channel": "C0SYNTHETIC", "thread": null}));
+    assert_eq!(body, "the body");
+
+    let (target, _) = prepare_draft(&draft_args(Some("C0SYNTHETIC"), Some("1700000000.000100"), None, file)).unwrap();
+    assert_eq!(target, json!({"channel": "C0SYNTHETIC", "thread": "1700000000.000100"}));
+  }
+
+  #[test]
+  fn a_users_draft_names_one_user_or_several() {
+    let dir = body_file("the body");
+    let file = dir.path().join("body.txt");
+    let file = file.to_str().unwrap();
+
+    let (dm, _) = prepare_draft(&draft_args(None, None, Some(&["U0SYNTHETIC"]), file)).unwrap();
+    assert_eq!(dm, json!({"users": ["U0SYNTHETIC"]}));
+    let (group, _) = prepare_draft(&draft_args(None, None, Some(&["U0SYNTHETIC", "U1SYNTHETIC"]), file)).unwrap();
+    assert_eq!(group, json!({"users": ["U0SYNTHETIC", "U1SYNTHETIC"]}));
+  }
+
+  #[test]
+  fn the_target_forms_are_exclusive_and_a_thread_needs_a_channel() {
+    let dir = body_file("the body");
+    let file = dir.path().join("body.txt");
+    let file = file.to_str().unwrap();
+
+    let both = prepare_draft(&draft_args(Some("C0SYNTHETIC"), None, Some(&["U0SYNTHETIC"]), file)).unwrap_err();
+    assert_eq!(both.code, 2);
+    assert!(error_text(&both).contains("--channel and --users are exclusive"), "{}", error_text(&both));
+
+    let neither = prepare_draft(&draft_args(None, None, None, file)).unwrap_err();
+    assert_eq!(neither.code, 2);
+    assert!(error_text(&neither).contains("one of --channel or --users is required"));
+
+    let thread_on_users =
+      prepare_draft(&draft_args(None, Some("1700000000.000100"), Some(&["U0SYNTHETIC"]), file)).unwrap_err();
+    assert_eq!(thread_on_users.code, 2);
+    assert!(error_text(&thread_on_users).contains("--thread applies only to --channel"));
+  }
+
+  #[test]
+  fn an_unparseable_target_exits_two_before_registering() {
+    let dir = body_file("the body");
+    let file = dir.path().join("body.txt");
+    let file = file.to_str().unwrap();
+
+    let error = prepare_draft(&draft_args(Some("not a channel id"), None, None, file)).unwrap_err();
+    assert_eq!(error.code, 2, "an invalid target never reaches the registration call");
+    assert!(error_text(&error).contains("target.channel"));
+
+    let error = prepare_draft(&draft_args(None, None, Some(&[]), file)).unwrap_err();
+    assert_eq!(error.code, 2);
+    assert!(error_text(&error).contains("at least one Slack user"));
+  }
+
+  #[test]
+  fn a_missing_body_exits_two_before_registering() {
+    let error = prepare_draft(&draft_args(Some("C0SYNTHETIC"), None, None, "/no/such/body")).unwrap_err();
+    assert_eq!(error.code, 2);
+    assert!(error_text(&error).contains("--file not found"));
   }
 }

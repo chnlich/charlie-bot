@@ -947,13 +947,10 @@ dependencies = [
  "futures-util",
  "http 1.5.0",
  "reqwest 0.13.5",
- "serde",
  "serde_json",
- "serde_yaml",
  "shlex",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]

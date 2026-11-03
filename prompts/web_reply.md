@@ -2,7 +2,7 @@
 
 The web reply is the message that the user reads in the For-you view of this session.
 The session status is the Goal, Now and Waiting on you of this session, as the Status Block section defines them.
-The status panel at the top of the session page shows the session status in both views.
+The Status tab of the session page shows the session status.
 The Everything view shows the full output of each turn.
 The For-you view shows your web replies and hides the rest of your turn output.
 
@@ -35,7 +35,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When this turn did no action from the list, end the turn without a web reply.
   The For-you view then holds only results that the user reads or acts on.
 - When a child reports progress, a correction or a retraction, handle it with the **Now** rule of the next section.
-  The status panel then carries the progress of each line.
+  The Status tab then carries the progress of each line.
 - When you correct a web reply of a turn that another input woke, record the correction in **Now**.
   The For-you view then shows one reply for each such turn.
 - Leave each child's results to the child's own web replies, the completion of work that you handed to it included.
@@ -65,7 +65,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
-- Write your messages without the status block. The status panel is the one home of the session status.
+- Write your messages without the status block. The Status tab is the one home of the session status.
 - Put the decisions and actions that one user reply settles into one Waiting on you item.
 - The T0 steps that one take off settles form one Waiting on you item.
 - When a plan trade-off is T2, take its recommendation and leave it out of Waiting on you.
@@ -98,8 +98,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
   The item's page then holds the context, and the user reaches the action from it.
 - A user-act item stays in Waiting on you only: the web reply does not request its action again.
 - The user answers your Waiting on you items in your own session.
-- The status panel shows the Waiting on you items of your open descendant sessions below your items.
-- The status panel shows the **Now** of each open child session in a folded block below your items.
+- The Status tab shows the Waiting on you items of your open descendant sessions below your items.
+- The Status tab shows the **Now** of each open child session in a folded block below your items.
 
 ## Remaining
 

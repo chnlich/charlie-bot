@@ -2,9 +2,12 @@
 
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,6 +46,17 @@ struct FileSignature {
   inode: u64,
 }
 
+/// One watched chat file: the path a content scan opens, and its path below the sessions directory,
+/// which a signature read resolves from that directory's open handle.
+///
+/// `below_sessions` is None when a store's sessions directory does not contain the path, so the read
+/// falls back to the path form.
+#[derive(Clone)]
+struct WatchedFile {
+  path: PathBuf,
+  below_sessions: Option<CString>,
+}
+
 /// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
 type RootMemo = LruCache<String, FileSignature>;
 
@@ -66,7 +80,7 @@ pub(crate) struct SearchMatch {
   /// the candidates at or above the last returned row's `updated_at` once the result reaches it.
   ///
   /// The batch shares this list instead of copying it, so a worker thread reads the memo's own paths.
-  watched: Arc<Vec<PathBuf>>,
+  watched: Arc<Vec<WatchedFile>>,
   signatures: Vec<Option<FileSignature>>,
   /// The matched rows, newest first, capped at [`SEARCH_RESULT_LIMIT`].
   rows: Vec<Arc<SessionMetadata>>,
@@ -170,13 +184,16 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   }
 
   let needle = query.to_lowercase();
+  let sessions_dir = store.config().sessions_dir();
+  let sessions_handle = sessions_dir_handle(&sessions_dir);
   let (all, _) = store.load_session_metas_snapshot_versioned(None)?;
   // The query result's listing identity is checked first, then each stored file signature, before name matching or
   // content classification. Keep that hot path ahead of candidate rebuilds.
   if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
     && Arc::ptr_eq(&cached.corpus, &all)
   {
-    let signatures: Vec<Option<FileSignature>> = file_signatures(&cached.watched).into_iter().map(Result::ok).collect();
+    let signatures: Vec<Option<FileSignature>> =
+      file_signatures(&cached.watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
@@ -190,13 +207,13 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
       names.push(meta);
     } else if meta.status == SessionStatus::Active {
       content_metas.push(meta);
-      candidate_paths.push(store.chat_events_path(&meta.id));
+      candidate_paths.push(watched_file(&sessions_dir, store.chat_events_path(&meta.id)));
     }
   }
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
   let candidate_paths = Arc::new(candidate_paths);
-  let signatures: Vec<Option<FileSignature>> = file_signatures(&candidate_paths)
+  let signatures: Vec<Option<FileSignature>> = file_signatures(&candidate_paths, sessions_handle.as_ref())
     .into_iter()
     .zip(&content_metas)
     .map(|(result, meta)| match result {
@@ -211,7 +228,7 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   let mut content_hits = Vec::new();
   let mut scan_failures = 0;
   for (index, (meta, signature)) in content_metas.iter().zip(&signatures).enumerate() {
-    let path = &candidate_paths[index];
+    let path = &candidate_paths[index].path;
     let Some(signature) = signature else { continue };
     let (miss_roots, hit_roots) = memos.lock().expect("session search memo mutex is not poisoned").roots(path);
     if hit_root_covers(&hit_roots, *signature, &needle) {
@@ -278,10 +295,13 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 /// Each read is one `stat` and the answers do not depend on each other, so a batch reads on the signature pool's
 /// threads. The pool lives for the process: a repeat query re-checks one `stat` per watched file, 200 on the mock
 /// home, and starting that many threads costs more than the reads they share.
-fn file_signatures(paths: &Arc<Vec<PathBuf>>) -> Vec<io::Result<FileSignature>> {
+///
+/// When `sessions_dir` is open, a read resolves the file below it instead of walking the home's whole path to the
+/// session's `data` directory, which is most of the route's kernel time on a repeat query.
+fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File>>) -> Vec<io::Result<FileSignature>> {
   let pool = &*SIGNATURE_POOL;
   if paths.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
-    return paths.iter().map(|path| file_signature_unlogged(path)).collect();
+    return paths.iter().map(|file| file_signature(file, sessions_dir.map(Arc::as_ref))).collect();
   }
   let chunk = paths.len().div_ceil(pool.senders.len()).max(SIGNATURE_BATCH_CHUNK_FLOOR);
   let mut chunks: Vec<Option<Vec<io::Result<FileSignature>>>> = paths.chunks(chunk).map(|_| None).collect();
@@ -289,7 +309,13 @@ fn file_signatures(paths: &Arc<Vec<PathBuf>>) -> Vec<io::Result<FileSignature>> 
   for (index, _) in chunks.iter().enumerate() {
     let start = index * chunk;
     let end = (start + chunk).min(paths.len());
-    pool.dispatch(SignatureJob { paths: Arc::clone(paths), start, end, reply: reply.clone() });
+    pool.dispatch(SignatureJob {
+      paths: Arc::clone(paths),
+      sessions_dir: sessions_dir.cloned(),
+      start,
+      end,
+      reply: reply.clone(),
+    });
   }
   drop(reply);
   for _ in 0..chunks.len() {
@@ -303,9 +329,19 @@ fn file_signatures(paths: &Arc<Vec<PathBuf>>) -> Vec<io::Result<FileSignature>> 
   out
 }
 
-/// One chunk of one signature batch: the shared paths, the chunk's half-open range, and its reply channel.
+/// One watched file's identity, resolved from the open sessions directory when the file lies below it.
+fn file_signature(file: &WatchedFile, sessions_dir: Option<&File>) -> io::Result<FileSignature> {
+  match (sessions_dir, &file.below_sessions) {
+    (Some(dir), Some(relative)) => file_signature_at(dir, relative),
+    _ => file_signature_unlogged(&file.path),
+  }
+}
+
+/// One chunk of one signature batch: the shared paths, the sessions directory handle, the chunk's half-open range,
+/// and its reply channel.
 struct SignatureJob {
-  paths: Arc<Vec<PathBuf>>,
+  paths: Arc<Vec<WatchedFile>>,
+  sessions_dir: Option<Arc<File>>,
   start: usize,
   end: usize,
   reply: Sender<(usize, Vec<io::Result<FileSignature>>)>,
@@ -343,7 +379,8 @@ impl SignaturePool {
 
 fn signature_worker(jobs: Receiver<SignatureJob>) {
   for job in jobs {
-    let signatures = job.paths[job.start..job.end].iter().map(|path| file_signature_unlogged(path)).collect();
+    let sessions_dir = job.sessions_dir.as_deref();
+    let signatures = job.paths[job.start..job.end].iter().map(|file| file_signature(file, sessions_dir)).collect();
     // A batch that stopped waiting has no reader for this chunk.
     let _ = job.reply.send((job.start, signatures));
   }
@@ -351,12 +388,56 @@ fn signature_worker(jobs: Receiver<SignatureJob>) {
 
 static SIGNATURE_POOL: LazyLock<SignaturePool> = LazyLock::new(SignaturePool::start);
 
+/// The open sessions directory, one handle for the process lifetime, keyed by its path.
+///
+/// A signature read resolves a session's file below this handle, so it walks only the session's own components.
+/// The store holds the same kind of handle for its identity reads; this one keeps search's reads off the home's
+/// path prefix. A directory that is not there answers None, and the batch reads by path instead.
+static SESSIONS_DIR: LazyLock<Mutex<Option<(PathBuf, Arc<File>)>>> = LazyLock::new(|| Mutex::new(None));
+
+fn sessions_dir_handle(dir: &Path) -> Option<Arc<File>> {
+  let mut memo = SESSIONS_DIR.lock().expect("the sessions directory memo mutex is not poisoned");
+  if let Some((path, handle)) = memo.as_ref()
+    && path == dir
+  {
+    return Some(Arc::clone(handle));
+  }
+  let handle = Arc::new(File::open(dir).ok()?);
+  *memo = Some((dir.to_path_buf(), Arc::clone(&handle)));
+  Some(handle)
+}
+
+/// The watched file at `path`, with its path below `sessions_dir` when it has one.
+fn watched_file(sessions_dir: &Path, path: PathBuf) -> WatchedFile {
+  let below_sessions =
+    path.strip_prefix(sessions_dir).ok().and_then(|relative| CString::new(relative.as_os_str().as_bytes()).ok());
+  WatchedFile { path, below_sessions }
+}
+
 fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
   let metadata = fs::metadata(path)?;
   Ok(FileSignature {
     mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
     size: metadata.size(),
     inode: metadata.ino(),
+  })
+}
+
+/// The identity of the file at `relative`, resolved below the open directory `dir`.
+///
+/// It is the same `fstatat` the path form makes; anchoring it on a directory handle means each read walks only
+/// the session's own path components instead of the home's whole path.
+fn file_signature_at(dir: &File, relative: &CString) -> io::Result<FileSignature> {
+  let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+  let status = unsafe { libc::fstatat(dir.as_raw_fd(), relative.as_ptr(), stat.as_mut_ptr(), 0) };
+  if status != 0 {
+    return Err(io::Error::last_os_error());
+  }
+  let stat = unsafe { stat.assume_init() };
+  Ok(FileSignature {
+    mtime_ns: i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec),
+    size: stat.st_size as u64,
+    inode: stat.st_ino,
   })
 }
 
@@ -518,29 +599,36 @@ mod tests {
 
   /// A batch keeps the argument order across its threads: a signature that moved to another file's
   /// index would compare one candidate's file against another's and keep a stale verdict forever.
+  ///
+  /// The batch reads below the sessions directory, so its answers must match a direct path read: the
+  /// two syscalls differ only in how they resolve the path.
   #[test]
   fn signature_batch_answers_in_argument_order() {
     let home = tempfile::tempdir().unwrap();
+    let sessions_dir = home.path().join("sessions");
+    let data = sessions_dir.join("session-a").join("data");
+    fs::create_dir_all(&data).unwrap();
     let mut paths = Vec::new();
     for index in 0..super::SIGNATURE_BATCH_MIN_PATHS + 37 {
-      let path = home.path().join(format!("chat-{index:05}.jsonl"));
+      let path = data.join(format!("chat-{index:05}.jsonl"));
       // Every 97th path stays absent, so a failed read sits between successful answers.
       if index % 97 != 0 {
         fs::write(&path, format!("event {index}\n")).unwrap();
       }
-      paths.push(path);
+      paths.push(super::watched_file(&sessions_dir, path));
     }
     let paths = Arc::new(paths);
-    let batch = super::file_signatures(&paths);
+    let handle = Arc::new(fs::File::open(&sessions_dir).unwrap());
+    let batch = super::file_signatures(&paths, Some(&handle));
     assert_eq!(batch.len(), paths.len());
-    for (index, (answer, path)) in batch.iter().zip(paths.iter()).enumerate() {
+    for (index, (answer, file)) in batch.iter().zip(paths.iter()).enumerate() {
       if index % 97 == 0 {
         assert!(answer.is_err(), "path {index} is absent and its answer reports the failed read");
         continue;
       }
       let signature = answer.as_ref().expect("a written path reads");
       assert_eq!(signature.size, (format!("event {index}\n").len() as u64), "path {index} answers for itself");
-      assert_eq!(*signature, super::file_signature_unlogged(path).unwrap(), "path {index} matches a direct read");
+      assert_eq!(*signature, super::file_signature_unlogged(&file.path).unwrap(), "path {index} matches a direct read");
     }
   }
 

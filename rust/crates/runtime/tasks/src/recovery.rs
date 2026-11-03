@@ -495,11 +495,10 @@ pub async fn reconcile_task_tree(
     let result = match no_node {
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
       Ok(false) => {
-        reconcile_node_until_stopped(
-          &stop,
-          reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop), &mut pass_timer.steps),
-        )
-        .await
+        // No session channel has a subscriber before the server binds, so the pass builds no aggregator for one.
+        let node_pass =
+          reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop), &mut pass_timer.steps);
+        reconcile_node_until_stopped(&stop, charliebot_store::hold_aggregator_builds(node_pass)).await
       }
       Err(error) => Some(Err(anyhow::Error::new(error))),
     };

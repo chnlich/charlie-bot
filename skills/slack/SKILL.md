@@ -16,8 +16,9 @@ Read messages, search conversations, and look up users in the configured Slack w
 - Requests: send every Slack Web API call through `charliebot slack request`. The command reads the token from `credentials.yaml` inside its own process, so no token appears in a command, an output or a run record.
 
 - CharlieBot runtime calls use app credentials.
-- Use `slack.user_token` for one-off reads and treat it as read-only.
-- Use `slack.bot_token` for posting.
+- `charliebot slack request` admits only read methods with `slack.user_token`.
+- Post with `slack.bot_token`.
+- A message in Chao's name goes through `charliebot slack draft`.
 - Grant missing runtime scopes to the app.
 - Follow the standing approval rules for outbound messages.
 

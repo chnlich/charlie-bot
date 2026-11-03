@@ -1,21 +1,18 @@
 //! Helpers that the manager turn (`master_run`) and the task run (`worker`) share: the stderr tail, the subprocess
 //! buffer limit, the resume routing of a backend type, the extra flags of a launch, and the event channel of a runner.
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
 use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::follow::SilenceCallback;
+use charliebot_agents::transport::spawn;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{RecoverySilence, ResumeStyle};
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value};
 use tokio::sync::{mpsc, oneshot};
-
-const STDERR_TAIL_BYTES: u64 = 64 * 1024;
 
 /// One event handed from a runner to its consumer, with the channel the consumer acknowledges it on.
 pub(crate) struct StreamEvent {
@@ -42,27 +39,21 @@ pub(crate) fn stream_event_channel(
   (on_event, receiver)
 }
 
-/// The last `STDERR_TAIL_BYTES` of a process's stderr log, trimmed; empty when the log does not exist.
+/// The last `spawn::STDERR_TAIL_BYTES` of a process's stderr log, trimmed; empty when the log does not exist.
 pub(crate) async fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
   let path = path.to_path_buf();
-  tokio::task::spawn_blocking(move || read_stderr_tail_file(&path).map(|(text, _)| text))
-    .await
-    .context("joining stderr tail reader")?
+  tokio::task::spawn_blocking(move || match spawn::read_stderr_tail(&path) {
+    Ok(text) => Ok(text),
+    Err(error) if missing_log(&error) => Ok(String::new()),
+    Err(error) => Err(error),
+  })
+  .await
+  .context("joining stderr tail reader")?
 }
 
-fn read_stderr_tail_file(path: &Path) -> anyhow::Result<(String, usize)> {
-  let mut file = match File::open(path) {
-    Ok(file) => file,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((String::new(), 0)),
-    Err(error) => return Err(error).with_context(|| format!("reading stderr log {}", path.display())),
-  };
-  let len = file.metadata().with_context(|| format!("stating stderr log {}", path.display()))?.len();
-  let start = len.saturating_sub(STDERR_TAIL_BYTES);
-  file.seek(SeekFrom::Start(start)).with_context(|| format!("seeking stderr log {}", path.display()))?;
-  let mut contents = Vec::with_capacity(usize::try_from(len - start).context("stderr tail size does not fit usize")?);
-  file.read_to_end(&mut contents).with_context(|| format!("reading stderr tail {}", path.display()))?;
-  let bytes_read = contents.len();
-  Ok((String::from_utf8_lossy(&contents).trim().to_string(), bytes_read))
+/// Whether `error` is the open refusing because a run that wrote no stderr left no log behind.
+fn missing_log(error: &anyhow::Error) -> bool {
+  error.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// The subprocess buffer limit of the configuration, in bytes.
@@ -116,19 +107,27 @@ pub(crate) fn extra_flags_of(backend_kwargs: &Map<String, Value>) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
-  use super::read_stderr_tail_file;
+  use super::read_stderr_tail;
   use std::fs;
 
-  #[test]
-  fn stderr_tail_reads_at_most_sixty_four_kibibytes() {
+  #[tokio::test]
+  async fn stderr_tail_reads_at_most_sixty_four_kibibytes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("stderr.log");
     let mut raw = vec![b'x'; 1024 * 1024];
     raw.extend_from_slice(b" keep this tail \n");
     fs::write(&path, raw).unwrap();
 
-    let (tail, bytes_read) = read_stderr_tail_file(&path).unwrap();
-    assert_eq!(bytes_read, 64 * 1024);
+    let tail = read_stderr_tail(&path).await.unwrap();
+    assert!(tail.len() <= 64 * 1024);
     assert!(tail.ends_with("keep this tail"));
+  }
+
+  #[tokio::test]
+  async fn stderr_tail_of_a_missing_log_is_empty() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let tail = read_stderr_tail(&directory.path().join("stderr.log")).await.unwrap();
+    assert_eq!(tail, "");
   }
 }

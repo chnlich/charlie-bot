@@ -24,6 +24,10 @@ pub const PANEL_RESETS_AT: &str = "resets_at";
 pub const PANEL_SCOPE_LABEL: &str = "scope_label";
 pub const PANEL_EXPIRED: &str = "expired";
 
+/// The label a quota source gives the account that its config does not name. The producer's label and its provider
+/// form the `<provider>:<label>` cache key of one account.
+pub const DEFAULT_ACCOUNT_LABEL: &str = "main";
+
 /// The reading-limits kind a backend registers when a session's context follows Claude Code's event stream. The
 /// usage fold classifies such a session under this kind and looks its limits up.
 pub const CLAUDE_READING_KIND: &str = "claude";

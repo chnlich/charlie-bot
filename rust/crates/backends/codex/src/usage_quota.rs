@@ -14,8 +14,8 @@ use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
-  PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES,
-  PANEL_WINDOWS, QuotaAccount, as_utilization,
+  DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -32,7 +32,7 @@ use charliebot_agents::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
 const PROVIDER_LABEL: &str = "Codex";
-const LABEL: &str = "main";
+
 /// The rate-limit slots, in the order a window list carries them before it is sorted by window length.
 const LIMIT_SLOTS: [&str; 2] = ["primary", "secondary"];
 /// A `token_count` event closes every turn, so the newest one sits in the rollout's trailing bytes.
@@ -76,7 +76,7 @@ impl QuotaAccount for CodexQuotaAccount {
   }
 
   fn label(&self) -> &str {
-    LABEL
+    DEFAULT_ACCOUNT_LABEL
   }
 
   fn last_error(&self) -> String {
@@ -119,7 +119,7 @@ impl Inner {
       Err(error) => {
         tracing::error!(
           target: "charliebot_agents",
-          account = LABEL,
+          account = DEFAULT_ACCOUNT_LABEL,
           error = %error,
           "ext_usage_codex_usage_error"
         );
@@ -131,7 +131,7 @@ impl Inner {
       Ok(Err(error)) => {
         tracing::error!(
           target: "charliebot_agents",
-          account = LABEL,
+          account = DEFAULT_ACCOUNT_LABEL,
           error = %format!("{error:#}"),
           "ext_usage_codex_usage_error"
         );
@@ -144,7 +144,7 @@ impl Inner {
       Ok(Err(error)) => {
         tracing::error!(
           target: "charliebot_agents",
-          account = LABEL,
+          account = DEFAULT_ACCOUNT_LABEL,
           error = %format!("{error:#}"),
           "ext_usage_codex_spend_failed"
         );
@@ -153,7 +153,7 @@ impl Inner {
       Err(error) => {
         tracing::error!(
           target: "charliebot_agents",
-          account = LABEL,
+          account = DEFAULT_ACCOUNT_LABEL,
           error = %error,
           "ext_usage_codex_spend_failed"
         );
@@ -214,7 +214,7 @@ impl Inner {
       }
     }
     let (_, event) = chosen.expect("the event list is not empty");
-    Ok(Some(transform_response(&event, &utc_now_iso(), LABEL)?))
+    Ok(Some(transform_response(&event, &utc_now_iso(), DEFAULT_ACCOUNT_LABEL)?))
   }
 
   /// The 24-hour and 7-day spend across the rollouts modified in the last seven days.

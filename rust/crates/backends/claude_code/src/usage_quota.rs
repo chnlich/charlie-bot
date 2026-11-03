@@ -23,8 +23,8 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
-  PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
+  DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL,
+  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -55,7 +55,6 @@ const BACKOFF_CAP_SECONDS: f64 = 30.0 * 60.0;
 
 const PROVIDER: &str = "claude";
 const PROVIDER_LABEL: &str = "Claude";
-const DEFAULT_LABEL: &str = "main";
 const NO_DATA: &str = "no data";
 
 /// The plan windows the response names by field: `(camel name, snake name, window length in minutes)`.
@@ -413,8 +412,8 @@ impl QuotaAccount for ClaudeQuotaAccount {
 fn derive_login_dirs(host: &ClaudeHost, pool: &[(String, String)]) -> anyhow::Result<Vec<(String, PathBuf)>> {
   let default = abspath(&host.default_dir())?;
   let mut seen = HashSet::from([default.clone()]);
-  let mut labels = HashSet::from([DEFAULT_LABEL.to_string()]);
-  let mut logins = vec![(DEFAULT_LABEL.to_string(), default)];
+  let mut labels = HashSet::from([DEFAULT_ACCOUNT_LABEL.to_string()]);
+  let mut logins = vec![(DEFAULT_ACCOUNT_LABEL.to_string(), default)];
   for (label, raw) in pool {
     let expanded = abspath(&host.expand(raw))?;
     if seen.contains(&expanded) {

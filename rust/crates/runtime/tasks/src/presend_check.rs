@@ -641,7 +641,7 @@ impl LogCache {
 /// logs. Fails when the event is not in the child's log or its sender is not the child's task parent.
 pub async fn replay_check(host: &CheckHost<'_>, logs: &LogCache, item: &ReplayItem) -> anyhow::Result<ReplayCheck> {
   let started = std::time::Instant::now();
-  let sessions = host.cfg.charliebot_home.join("sessions");
+  let sessions = host.cfg.sessions_dir();
   let child_dir = sessions.join(&item.child);
   let child_events = logs.events(&child_dir)?;
   let meta = read_session_metadata(&layout::metadata_path(&child_dir))

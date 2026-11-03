@@ -16,9 +16,12 @@
 # runs detached under setsid, because stopping the old server ends the master turn that started this command. The
 # command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
 # delegation check passed; 2 when the switch failed and the previous implementation serves again; 3 when the restore
-# failed too, and the log ends with the state the server is in; 4 when the switch completed but a recorded run died
-# during it: the new server keeps serving, nothing is restored, and the log names the run and its outcome. When the
-# pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server processes under the pane.
+# failed too, and the log ends with the state the server is in, and with the old release's refusal text when that is
+# the cause; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing is
+# restored, and the log names the run and its outcome; 5 when a check failed and the old release refuses the home while
+# the new release serves: nothing is stopped, the new release keeps serving, and the log names the failed step and the
+# refusal text. When the pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server processes
+# under the pane.
 #
 # Every read of the home, of a run record and of an API answer goes through
 # `charliebot switch-helper` (rust/crates/app/switch-helper). The binary is chosen once, when the switch starts: the
@@ -34,10 +37,12 @@
 # The delegation check runs after the probe turn. The probe proves that the server answers. The check proves that the
 # server creates a worktree on a repository, which the probe does not exercise. The check opens a session of its own
 # with a user message, because the server delegates only from a task chain that holds one. Then it delegates one
-# script-run task on the runtime clone, with base branch main. It waits up to CHARLIEBOT_SWITCH_DELEGATION_WAIT_S for
-# the run to end. It passes when the run records success and the worktree the record names exists. It reads the run
-# record and the worktree path only. Pass or fail, it stops the run, removes the worktree and its branch, and archives
-# its session.
+# script-run task on the runtime clone, with base branch main. It waits up to CHARLIEBOT_SWITCH_DELEGATION_WAIT_S for a
+# pass. The run's event log gives the first tool result: the check passes as soon as that result is a Bash command that
+# did not error and ran in a worktree of the runtime clone, without waiting for the run to end. It also passes when the
+# run ends success and the worktree the record names exists. A run that ends failed fails the check. When the wait ends
+# first, a backend whose event log holds no init cwd or no tool result fails it, and the log names the backend. Pass or
+# fail, it stops the run, removes the worktree and its branch, and archives its session.
 #
 # Environment: CHARLIEBOT_REPO_ROOT is the runtime clone this switch moves; unset means the script's parent
 # directory, which only holds when the script sits inside the clone. A copy outside a checkout refuses an unset
@@ -680,6 +685,38 @@ run_error() {
   helper run-error "$HOME_DIR" "$DELEG_CHILD" "$CHECK_RUN"
 }
 
+# delegation_read_first_command: reads the check's run first command from its event log into FIRST_CWD (the init cwd),
+# FIRST_RESULT (command-ok, command-failed, not-command, or empty while the log holds no tool result) and RUN_BACKEND.
+# A log or record that cannot be read fails the check.
+delegation_read_first_command() {
+  local fields
+  fields="$(helper run-first-command "$HOME_DIR" "$DELEG_CHILD" "$DELEG_RUN")" || {
+    delegation_fail first-command "cannot read the event log of run $DELEG_RUN"
+    return 1
+  }
+  IFS=$'\x1f' read -r FIRST_CWD FIRST_RESULT RUN_BACKEND <<<"$fields"
+}
+
+# delegation_first_command_passed: the first tool result is a Bash command that did not error, and it ran in a worktree
+# of the runtime clone. The clone's own directory is not a worktree the server made, so it does not pass.
+delegation_first_command_passed() {
+  [ "$FIRST_RESULT" = command-ok ] && [ -n "$FIRST_CWD" ] && [ "$FIRST_CWD" != "$REPO_ROOT" ] \
+    && git -C "$REPO_ROOT" worktree list --porcelain | grep -Fxq "worktree $FIRST_CWD"
+}
+
+# delegation_timeout: the wait ended before the first command passed and before the run ended. A log that holds no init
+# cwd or no tool result is named with its backend, since the check can read no first command from it. Otherwise the
+# log names the first tool result and its cwd.
+delegation_timeout() {
+  if [ -z "$FIRST_CWD" ] || [ -z "$FIRST_RESULT" ]; then
+    delegation_fail run "run $CHECK_RUN did not end within ${DELEGATION_WAIT_S}s; backend $RUN_BACKEND's event log "\
+"holds no init cwd or no tool result, so no first command was read"
+  else
+    delegation_fail run "run $CHECK_RUN did not end within ${DELEGATION_WAIT_S}s; its first tool result was "\
+"$FIRST_RESULT in $FIRST_CWD"
+  fi
+}
+
 # delegation_open: creates the session that holds the task, then sends it the user message that opens the task chain.
 # The archive closes the session.
 delegation_open() {
@@ -718,13 +755,19 @@ delegation_run() {
   }
   DELEG_CHILD="$(json_field session_id)" || return 1
   CHECK_RUN="$(json_field run_id)" || return 1
+  DELEG_RUN=$CHECK_RUN
   CHECK_SESSION=$DELEG_CHILD
   check_log "delegated the task to $REPO_ROOT"
   while :; do
     check_read_run || return 1
+    delegation_read_first_command || return 1
+    if delegation_first_command_passed; then
+      check_log "first command succeeded in $FIRST_CWD"
+      return 0
+    fi
     run_ended "$CHECK_STATE" && break
     if [ "$(check_clock)" -ge "$end" ]; then
-      delegation_fail run "run $CHECK_RUN did not end within ${DELEGATION_WAIT_S}s"
+      delegation_timeout
       return 1
     fi
     check_sleep "$end"
@@ -785,11 +828,11 @@ delegation_cleanup() {
   return "$verdict"
 }
 
-# delegation_check: delegates one script-run task on the runtime clone, from a session of its own, and judges the
-# task by its run record. The check passes when the run ended success, its record names the runtime clone, and the
-# worktree it names exists. keep_worktree keeps that directory past the run, so its presence afterwards shows that it
-# existed during the run. Pass or fail, the check then stops the run, removes the worktree and its branch, and archives
-# its session.
+# delegation_check: delegates one script-run task on the runtime clone, from a session of its own, and judges the task
+# by its run's event log and record. The check passes when the first command succeeds in a worktree of the clone, or
+# when the run ended success, its record names the runtime clone, and the worktree it names exists. keep_worktree keeps
+# that directory past the run, so its presence afterwards shows that it existed during the run. Pass or fail, the check
+# then stops the run, removes the worktree and its branch, and archives its session.
 delegation_check() {
   local verdict=0
   CHECK_LABEL=delegation
@@ -799,6 +842,10 @@ delegation_check() {
   CHECK_STATE=""
   DELEG_PARENT=""
   DELEG_CHILD=""
+  DELEG_RUN=""
+  FIRST_CWD=""
+  FIRST_RESULT=""
+  RUN_BACKEND=""
   delegation_open && delegation_run || verdict=1
   delegation_cleanup || verdict=1
   return "$verdict"

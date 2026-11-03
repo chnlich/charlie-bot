@@ -67,6 +67,9 @@ struct Behavior {
   task_state: String,
   worktree: String,
   task_error: String,
+  /// The first tool result written to the delegated run's event log: `none`, `ok` (a Bash command that did not error),
+  /// `failed` (a Bash command that errored) or `not-command` (another tool).
+  first_command: String,
 }
 
 /// One run of the probe session, in the order the server created it.
@@ -441,14 +444,42 @@ impl Server {
       task["branch_name"] = json!("charliebot/task-switch-check");
       task["worktree_path"] = json!(fs::canonicalize(&worktree)?.display().to_string());
     }
+    // The run's record names a backend. Its ended_at is set, so the switch's scan does not take the stand-in's run for
+    // a live one after the check.
+    let cwd = task["worktree_path"].as_str().unwrap_or(repo).to_string();
+    let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(CHILD_SESSION)).join(TASK_RUN);
+    fs::create_dir_all(&run_dir)?;
+    let metadata = json!({"id": TASK_RUN, "backend": "fake-backend", "ended_at": "2026-11-03T00:00:00Z"});
+    fs::write(layout::metadata_path(&run_dir), metadata.to_string())?;
+    let mut events = event_line(&json!({"type": "system", "subtype": "init", "cwd": cwd}));
+    events.extend(first_command_lines(&self.behavior.first_command)?);
     if !self.behavior.task_error.is_empty() {
-      let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(CHILD_SESSION)).join(TASK_RUN);
-      fs::create_dir_all(&run_dir)?;
-      let event = json!({"type": "error", "message": self.behavior.task_error});
-      fs::write(run_dir.join(RUN_EVENTS_NAME), event_line(&event))?;
+      events.extend(event_line(&json!({"type": "error", "message": self.behavior.task_error})));
     }
+    fs::write(run_dir.join(RUN_EVENTS_NAME), events)?;
     Ok(task)
   }
+}
+
+/// The event lines of the stand-in's first tool result, in the shape a claude-code run writes them: the assistant's
+/// tool call, then the user's tool result that names it. `none` writes no result.
+fn first_command_lines(kind: &str) -> io::Result<Vec<u8>> {
+  let (tool, is_error) = match kind {
+    "none" => return Ok(Vec::new()),
+    "ok" => ("Bash", false),
+    "failed" => ("Bash", true),
+    "not-command" => ("Read", false),
+    other => return Err(io::Error::other(format!("no first command kind {other:?}"))),
+  };
+  let call = json!({"type": "assistant", "message": {"content": [
+    {"type": "tool_use", "id": "toolu_1", "name": tool, "input": {}},
+  ]}});
+  let result = json!({"type": "user", "message": {"content": [
+    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "abc1234", "is_error": is_error},
+  ]}});
+  let mut lines = event_line(&call);
+  lines.extend(event_line(&result));
+  Ok(lines)
 }
 
 /// The server answers a message, an archive or a stop only with a request id.

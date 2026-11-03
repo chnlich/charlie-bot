@@ -873,6 +873,7 @@ fn behavior_defaults() -> Map<String, Value> {
     "task_state": "success",
     "worktree": "created",
     "task_error": "",
+    "first_command": "none",
   }) else {
     unreachable!("an object literal");
   };

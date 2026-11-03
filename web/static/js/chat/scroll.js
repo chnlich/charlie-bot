@@ -40,7 +40,9 @@ function restoreBottomPin(container, wasAtBottom, forceScroll) {
   if (engine) {
     if (forceScroll || wasAtBottom) {
       engine.jumpToBottom();
-    } else {
+    } else if (container.clientHeight > 0) {
+      // A hidden list (the Status view) has no viewport to jump from; the
+      // return sets the button from the engine's pin state.
       showScrollToBottom();
     }
     return;

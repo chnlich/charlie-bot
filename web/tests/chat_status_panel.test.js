@@ -669,6 +669,19 @@ test('selecting Status hides the list and shows the panel in its place', async (
       'the engine mounts the view the toggle names');
 });
 
+// The streaming paint restores the bottom pin after every draft render: a reader
+// who is not at the bottom gets the jump button. While Status shows, the list is
+// hidden and the button points at nothing, so it stays down; the return sets it
+// from the engine's pin state.
+test('a streaming paint while Status shows leaves the scroll-to-bottom button hidden', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  selectStatus(rig);
+  rig.context.restoreBottomPin(rig.root, false, false);
+  assert.equal(rig.scrollButton.classList.contains('hidden'), true,
+      'the hidden list raises no jump button over the panel');
+});
+
 test('a web_status message renders as a system line in Everything', () => {
   const rig = panelRig();
   const fields = {id: 'x1', content: 'Status updated: Now', timestamp: '2026-10-16T21:00:00Z'};

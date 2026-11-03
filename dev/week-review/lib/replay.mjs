@@ -299,6 +299,9 @@ export async function runReplayRound({
   flipTest,
 }) {
   const roundDir = path.join(out, `round${round}`);
+  // A rerun of a round number overwrites every output of that round, the flip file included: a rerun without the
+  // flip test must not leave the earlier round's flip.jsonl behind for the tally to read.
+  fs.rmSync(roundDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(roundDir, 'packets'), { recursive: true });
   fs.mkdirSync(path.join(roundDir, 'judgments'), { recursive: true });
   const startedAt = new Date().toISOString();

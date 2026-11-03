@@ -18,6 +18,7 @@ import {
   percentile,
   restoreOrder,
   runCheckBatch,
+  runReplayRound,
   tallyRound,
 } from '../lib/replay.mjs';
 
@@ -34,6 +35,15 @@ after(() => {
 function writeJsonl(file, rows) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+}
+
+function writeFile(file, body) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, body);
+}
+
+function writeLog(file, events) {
+  writeFile(file, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
 }
 
 test('deleting the flagged passages cuts every occurrence out and leaves the rest of the message', () => {
@@ -211,4 +221,171 @@ test('the tally counts the baseline, the edited test half, the flips and the fai
   assert.equal(tally.latency_ms.n, 3);
   assert.equal(tally.latency_ms.median, 20);
   assert.equal(tally.failures.total, 1);
+});
+
+// The stub binaries of the end-to-end round: `charliebot presend-check replay` answers one row per stdin item, and
+// `claude` answers one judge object per PARENT_MESSAGE id in the packet it reads. Both are shell scripts, so the
+// round runs with no real binary and no model.
+function writeStubBinaries(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'charliebot'),
+    [
+      '#!/bin/sh',
+      '# Stands in for `charliebot presend-check replay`: one row per stdin item, each with one flag.',
+      'while IFS= read -r line; do',
+      '  [ -n "$line" ] || continue',
+      '  child=$(printf \'%s\\n\' "$line" | sed \'s/.*"child":"\\([^"]*\\)".*/\\1/\')',
+      '  event=$(printf \'%s\\n\' "$line" | sed \'s/.*"event":"\\([^"]*\\)".*/\\1/\')',
+      '  printf \'{"child":"%s","event":"%s","backend":"stub","check_ms":5,\' "$child" "$event"',
+      '  printf \'"flags":[{"n":1,"kind":"background","quote":"flagged passage","reason":"stub"}]}\\n\'',
+      'done',
+      '',
+    ].join('\n'),
+  );
+  fs.writeFileSync(
+    path.join(dir, 'claude'),
+    [
+      '#!/bin/sh',
+      '# Stands in for the judge: one answer per PARENT_MESSAGE id in the packet, every verdict `needed`.',
+      'ids=$(grep -o \'PARENT_MESSAGE id=[^ ]*\' | sed \'s/^PARENT_MESSAGE id=//\' | sort -u)',
+      'items=',
+      'for id in $ids; do',
+      '  [ -n "$items" ] && items="$items,"',
+      '  items="$items$(printf \'{\\\\"id\\\\":\\\\"%s\\\\",\\\\"verdict\\\\":\\\\"needed\\\\",\\\\"off_goal_percent\\\\":0,' +
+        '\\\\"off_goal_kinds\\\\":[],\\\\"off_goal_quote\\\\":\\\\"\\\\",\\\\"reason\\\\":\\\\"stub\\\\"}\' "$id")"',
+      'done',
+      'printf \'{"is_error":false,"result":"```json\\\\n[%s]\\\\n```"}\\n\' "$items"',
+      '',
+    ].join('\n'),
+  );
+  fs.chmodSync(path.join(dir, 'charliebot'), 0o755);
+  fs.chmodSync(path.join(dir, 'claude'), 0o755);
+  return dir;
+}
+
+// Two parents, two children, four messages: each half of the window holds one message per child, and every message
+// carries the passage the stub check flags.
+function replayFixture(name) {
+  const root = path.join(scratch, name, 'sessions');
+  writeFile(path.join(root, 'P', 'metadata.json'), JSON.stringify({ name: 'parent one' }));
+  writeFile(path.join(root, 'Q', 'metadata.json'), JSON.stringify({ name: 'parent two' }));
+  writeFile(
+    path.join(root, 'C', 'metadata.json'),
+    JSON.stringify({
+      name: 'child one',
+      task_parent_id: 'P',
+      profile: 'worker',
+      task: { goal: 'do the thing', acceptance: [], context_refs: [] },
+    }),
+  );
+  writeFile(
+    path.join(root, 'D', 'metadata.json'),
+    JSON.stringify({
+      name: 'child two',
+      task_parent_id: 'Q',
+      profile: 'manager',
+      task: { goal: 'watch the other thing', acceptance: [], context_refs: [] },
+    }),
+  );
+  writeLog(path.join(root, 'C', 'data', 'chat_events.jsonl'), [
+    { type: 'agent_message', id: 'm1', from_session: 'P', timestamp: '2026-10-15T01:00:00.000Z',
+      content: 'tuning work, flagged passage aside' },
+    { type: 'agent_message', id: 'm2', from_session: 'P', timestamp: '2026-10-19T01:00:00.000Z',
+      content: 'test work, flagged passage aside' },
+  ]);
+  writeLog(path.join(root, 'D', 'data', 'chat_events.jsonl'), [
+    { type: 'agent_message', id: 'm3', from_session: 'Q', timestamp: '2026-10-16T01:00:00.000Z',
+      content: 'other tuning, flagged passage aside' },
+    { type: 'agent_message', id: 'm4', from_session: 'Q', timestamp: '2026-10-20T01:00:00.000Z',
+      content: 'other test, flagged passage aside' },
+  ]);
+  writeLog(path.join(root, 'P', 'data', 'chat_events.jsonl'), [
+    { type: 'agent_message', id: 'r1', from_session: 'C', timestamp: '2026-10-15T02:00:00.000Z', content: 'report one' },
+  ]);
+  writeLog(path.join(root, 'Q', 'data', 'chat_events.jsonl'), [
+    { type: 'agent_message', id: 'r2', from_session: 'D', timestamp: '2026-10-16T02:00:00.000Z', content: 'report two' },
+  ]);
+  return path.join(scratch, name);
+}
+
+function replayRebuild(name) {
+  const dir = path.join(scratch, `${name}-rebuild`);
+  writeJsonl(path.join(dir, 'labels.jsonl'), [
+    { event_id: 'm1', sender: 'P', target: 'C', sent_at: '2026-10-15T01:00:00.000Z', verdict: 'mixed',
+      kinds: ['duplicate'], judge_backend: 'claude-opus-5-5' },
+    { event_id: 'm2', sender: 'P', target: 'C', sent_at: '2026-10-19T01:00:00.000Z', verdict: 'unrelated',
+      kinds: ['other'], judge_backend: 'claude-opus-5-5' },
+    { event_id: 'm3', sender: 'Q', target: 'D', sent_at: '2026-10-16T01:00:00.000Z', verdict: 'needed',
+      kinds: [], judge_backend: 'claude-opus-5-5' },
+    { event_id: 'm4', sender: 'Q', target: 'D', sent_at: '2026-10-20T01:00:00.000Z', verdict: 'mixed',
+      kinds: ['background'], judge_backend: 'claude-opus-5-5' },
+  ]);
+  fs.writeFileSync(
+    path.join(dir, 'run.json'),
+    JSON.stringify({ from: '2026-10-14T00:00:00Z', to: '2026-10-22T00:00:00Z', reports_until: '2026-10-22T00:00:00Z' }),
+  );
+  return dir;
+}
+
+test('a round runs end to end on the stub binaries, and a rerun of the round leaves no earlier file', async () => {
+  const home = replayFixture('e2e');
+  const rebuild = replayRebuild('e2e');
+  const out = path.join(scratch, 'e2e-out');
+  const bin = writeStubBinaries(path.join(scratch, 'e2e-bin'));
+  // The round hashes the check instructions under the repo root it is given.
+  writeFile(path.join(scratch, 'prompts', 'presend_check.md'), 'stub check instructions\n');
+  const prompts = { manager: 'MANAGER PROMPT', worker: 'WORKER PROMPT' };
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath}`;
+  try {
+    const tally = await runReplayRound({
+      out,
+      rebuild,
+      round: 1,
+      home,
+      charliebot: 'charliebot',
+      repoRoot: scratch,
+      checkParallel: 2,
+      judgeParallel: 2,
+      model: 'claude-opus-5-5',
+      prompts,
+      flipTest: true,
+    });
+    const roundDir = path.join(out, 'round1');
+    assert.equal(tally.all.messages, 4);
+    assert.deepEqual(tally.all, { messages: 4, bad: 3, bad_flagged: 3, good: 1, good_flagged: 1 });
+    assert.deepEqual(tally.states, { sent: 4, not_sent: 0, check_failed: 0 });
+    assert.equal(tally.test.after_judged, 2);
+    assert.equal(tally.test.after_share, 0, 'the stub judge calls every edited message needed');
+    assert.equal(tally.test.threshold_reached, true);
+    assert.deepEqual(tally.flip, { pairs: 2, differ: 0, items: 2 });
+    assert.equal(tally.latency_ms.n, 4);
+    assert.deepEqual(tally.failures, { total: 0, by_half: {}, causes: [] });
+    assert.equal(fs.existsSync(path.join(roundDir, 'flags.jsonl')), true);
+    assert.equal(fs.existsSync(path.join(roundDir, 'flip.jsonl')), true);
+    assert.equal(fs.readFileSync(path.join(roundDir, 'rejudge.jsonl'), 'utf8').split('\n').filter((l) => l !== '').length, 4);
+    // A file from the earlier run that the second run does not produce.
+    fs.writeFileSync(path.join(roundDir, 'stale-marker.txt'), 'from the first run');
+
+    const rerun = await runReplayRound({
+      out,
+      rebuild,
+      round: 1,
+      home,
+      charliebot: 'charliebot',
+      repoRoot: scratch,
+      checkParallel: 2,
+      judgeParallel: 2,
+      model: 'claude-opus-5-5',
+      prompts,
+      flipTest: false,
+    });
+    assert.equal(fs.existsSync(path.join(roundDir, 'stale-marker.txt')), false, 'the rerun removed the stale file');
+    assert.equal(fs.existsSync(path.join(roundDir, 'flip.jsonl')), false, 'the rerun left no flip file behind');
+    assert.equal(rerun.flip, null, 'the rerun tally reads no flip file');
+    assert.equal(rerun.all.messages, 4);
+  } finally {
+    process.env.PATH = previousPath;
+  }
 });

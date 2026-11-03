@@ -12,15 +12,18 @@ use std::sync::{Arc, Mutex};
 use crate::config::ConfigError;
 
 /// The `(mtime, size)` reload key; a file that fails to stat keys as zeros.
+///
+/// The approval policy table's memo keys on the same fingerprint, so a file-backed read of either kind moves on the
+/// same edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Fingerprint {
+pub(crate) struct Fingerprint {
   mtime_seconds: i64,
   mtime_nanoseconds: i64,
   size: u64,
 }
 
 impl Fingerprint {
-  fn of(path: &Path) -> Fingerprint {
+  pub(crate) fn of(path: &Path) -> Fingerprint {
     use std::os::unix::fs::MetadataExt;
     match std::fs::metadata(path) {
       Ok(metadata) => {

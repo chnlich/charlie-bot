@@ -2,15 +2,15 @@
 //! tests that make a step T0, the standing policies that keep a step at T1, and the ask-tier refusal switch.
 //!
 //! The table is required host configuration: an absent or invalid table is an error that names the path and the
-//! field, and nothing falls back to a default table. Every read opens the file fresh, so an edit takes effect on the
-//! next read with no server restart. A server-side read whose table content differs from the last recorded content
-//! appends one `policy_table_changed` record to `$CHARLIEBOT_HOME/state/policy_table_changes.jsonl`, next to the
-//! other host-level state records; the baseline content the first read records lives in
-//! `$CHARLIEBOT_HOME/state/policy_table_recorded.yaml`.
+//! field, and nothing falls back to a default table. A read re-parses the file whenever it or the recorded baseline
+//! moved, so an edit takes effect on the next read with no server restart. A server-side read whose table content
+//! differs from the last recorded content appends one `policy_table_changed` record to
+//! `$CHARLIEBOT_HOME/state/policy_table_changes.jsonl`, next to the other host-level state records; the baseline
+//! content the first read records lives in `$CHARLIEBOT_HOME/state/policy_table_recorded.yaml`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use time::Date;
 use time::Month;
 
+use crate::hot_reload::Fingerprint;
 use crate::paths;
 use crate::text_repr::{JsonStyle, json_dumps};
 use crate::timefmt;
@@ -95,7 +96,7 @@ pub struct ApprovalPolicyTable {
 
 /// The table as read: the parsed table, the raw file text, and the SHA-256 of that text
 /// (`LoadedTable`).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LoadedTable {
   pub table: ApprovalPolicyTable,
   pub raw: String,
@@ -255,12 +256,42 @@ pub fn prompt_section(table: &ApprovalPolicyTable) -> String {
   format!("## {SECTION_TITLE}\n\n{yaml}")
 }
 
+/// The table one home last served, with the identities its two files held when it was read.
+///
+/// A repeat read of an unchanged table would pay the file read, the YAML parse and two content hashes again, and the
+/// approval page reads the table on every request. The memo answers that read while both files hold the identity they
+/// had. The recorded baseline is part of the key, so a deleted or rewritten baseline runs the record step that
+/// restores or updates it.
+struct TableMemoEntry {
+  home: PathBuf,
+  policy: Fingerprint,
+  recorded: Fingerprint,
+  loaded: Arc<LoadedTable>,
+}
+
+static TABLE_MEMO: LazyLock<Mutex<Option<TableMemoEntry>>> = LazyLock::new(|| Mutex::new(None));
+
 /// Read the table and append one `policy_table_changed` record when its content differs from the last recorded
 /// content (`load_and_record`). Server-side reads use this; the CLI's reads use [`load`], which
 /// records nothing.
 pub fn load_and_record(home: &Path) -> Result<LoadedTable, PolicyError> {
+  let policy = Fingerprint::of(&table_path(home));
+  let recorded = Fingerprint::of(&recorded_path(home));
+  {
+    let memo = TABLE_MEMO.lock().expect("the policy table memo mutex is not poisoned");
+    if let Some(entry) = memo.as_ref()
+      && entry.home == home
+      && entry.policy == policy
+      && entry.recorded == recorded
+    {
+      return Ok(entry.loaded.as_ref().clone());
+    }
+  }
   let loaded = load(home)?;
   record_if_changed(home, &loaded)?;
+  let recorded = Fingerprint::of(&recorded_path(home));
+  *TABLE_MEMO.lock().expect("the policy table memo mutex is not poisoned") =
+    Some(TableMemoEntry { home: home.to_path_buf(), policy, recorded, loaded: Arc::new(loaded.clone()) });
   Ok(loaded)
 }
 
@@ -700,6 +731,31 @@ enable_ask_tier_refusal: false
 
     load_and_record(home.path()).expect("the second load records the change");
 
+    let store = fs::read_to_string(changes_path(home.path())).expect("the record store reads");
+    assert_eq!(store.lines().count(), 1, "{store}");
+  }
+
+  #[test]
+  fn a_repeat_read_of_an_unchanged_table_serves_the_table_it_read() {
+    let (home, path) = home_with_table(VALID_TABLE);
+    let first = load_and_record(home.path()).expect("the first read records the baseline");
+    assert!(
+      fs::read_to_string(changes_path(home.path())).is_err(),
+      "the first read records the baseline and no change"
+    );
+
+    let repeat = load_and_record(home.path()).expect("the repeat read serves the table");
+    assert_eq!(repeat.table, first.table);
+    assert_eq!(repeat.sha256, first.sha256);
+
+    // The file clock ticks in milliseconds, so an edit lands in a later tick than the read it follows.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let edited = VALID_TABLE.replace("rank: 5", "rank: 7");
+    assert_eq!(edited.len(), VALID_TABLE.len(), "the edit keeps the file's size");
+    fs::write(&path, &edited).expect("the edit writes");
+
+    let changed = load_and_record(home.path()).expect("the edited table loads");
+    assert_eq!(changed.table.consequence_tests[5].rank, 7, "the read serves the edited table");
     let store = fs::read_to_string(changes_path(home.path())).expect("the record store reads");
     assert_eq!(store.lines().count(), 1, "{store}");
   }

@@ -148,6 +148,8 @@ pub(crate) struct CachedChatEvents {
 pub struct HistoryWork {
   /// Live-log reads from disk, each a cache miss.
   pub file_reads: u64,
+  /// Bytes of those reads: each log's length when its read opened it.
+  pub file_read_bytes: u64,
   /// Folds that start from a node's first event.
   pub full_folds: u64,
   /// Events folded, counting each event once for every fold that covers it.
@@ -167,6 +169,7 @@ pub struct HistoryWork {
 #[derive(Default)]
 pub(crate) struct HistoryWorkCounters {
   pub(crate) file_reads: AtomicU64,
+  pub(crate) file_read_bytes: AtomicU64,
   pub(crate) full_folds: AtomicU64,
   pub(crate) folded_events: AtomicU64,
   pub(crate) owned_event_clones: AtomicU64,

@@ -215,6 +215,7 @@ impl Store {
   pub fn history_work(&self) -> HistoryWork {
     HistoryWork {
       file_reads: self.history_work.file_reads.load(Ordering::Relaxed),
+      file_read_bytes: self.history_work.file_read_bytes.load(Ordering::Relaxed),
       full_folds: self.history_work.full_folds.load(Ordering::Relaxed),
       folded_events: self.history_work.folded_events.load(Ordering::Relaxed),
       owned_event_clones: self.history_work.owned_event_clones.load(Ordering::Relaxed),
@@ -894,21 +895,15 @@ impl Store {
       hook();
     }
     let started = Instant::now();
-    let events = ndjson::read_file_compact_until(path, should_stop);
+    let read = ndjson::read_file_compact_sized_until(path, should_stop);
     Self::log_whole_log_load(path, started);
-    events
+    let (events, bytes) = read?;
+    self.history_work.file_read_bytes.fetch_add(bytes, Ordering::Relaxed);
+    Ok(events)
   }
 
   pub(crate) fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
-    self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
-    #[cfg(test)]
-    if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
-      hook();
-    }
-    let started = Instant::now();
-    let events = ndjson::read_file_compact(path);
-    Self::log_whole_log_load(path, started);
-    events
+    Ok(self.read_chat_events_file_until(path, &mut || false)?.expect("a read that no stop request ends returns events"))
   }
 
   /// Logs a whole-log chat-events load of [`WHOLE_LOG_LOGGED_BYTES`] or more with its file, size and wall time, so a
@@ -1085,23 +1080,26 @@ impl Store {
     let generation = self.next_events_cache_generation.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
     let read_hook = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone();
-    let (events, did_read) = tokio::task::spawn_blocking(move || {
+    let (events, read_bytes) = tokio::task::spawn_blocking(move || {
       let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
       if let Some(cached) = cache.as_ref() {
-        return Ok::<_, StoreError>((Arc::clone(&cached.events), false));
+        return Ok::<_, StoreError>((Arc::clone(&cached.events), None));
       }
       #[cfg(test)]
       if let Some(hook) = read_hook {
         hook();
       }
-      let events = Arc::new(ndjson::read_file_compact(&path)?.into_iter().map(Arc::new).collect());
+      let (events, bytes) = ndjson::read_file_compact_sized_until(&path, &mut || false)?;
+      let events: Arc<Vec<SharedChatEvent>> =
+        Arc::new(events.expect("a read that no stop request ends returns events").into_iter().map(Arc::new).collect());
       *cache = Some(CachedChatEvents { generation, identity: Arc::new(()), events: Arc::clone(&events) });
-      Ok((events, true))
+      Ok((events, Some(bytes)))
     })
     .await
     .map_err(|error| StoreError::new(error.to_string()))??;
-    if did_read {
+    if let Some(bytes) = read_bytes {
       self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
+      self.history_work.file_read_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
     Ok(events)
   }

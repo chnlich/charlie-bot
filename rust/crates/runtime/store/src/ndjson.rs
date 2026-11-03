@@ -76,14 +76,23 @@ pub(crate) fn read_file_compact_until(
   path: &Path,
   should_stop: &mut impl FnMut() -> bool,
 ) -> StoreResult<Option<Vec<CompactValue>>> {
+  Ok(read_file_compact_sized_until(path, should_stop)?.0)
+}
+
+/// [`read_file_compact_until`] with the bytes the read opened: the file's length at open, 0 for a missing or empty
+/// file or a read stopped before the open. The length comes from the open itself, so it costs no further file call.
+pub(crate) fn read_file_compact_sized_until(
+  path: &Path,
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<(Option<Vec<CompactValue>>, u64)> {
   if should_stop() {
-    return Ok(None);
+    return Ok((None, 0));
   }
   let map = match open_log_map(path)? {
     Some(map) => map,
-    None => return Ok(Some(Vec::new())),
+    None => return Ok((Some(Vec::new()), 0)),
   };
-  Ok(parse_mapped_lines(&map, should_stop))
+  Ok((parse_mapped_lines(&map, should_stop), map.len() as u64))
 }
 
 /// Read every physical line of `path` through `line`, including a final line without `\n`; a line that `line` answers

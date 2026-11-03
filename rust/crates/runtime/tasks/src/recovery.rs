@@ -31,7 +31,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDate
 use charliebot_store::run_records::{
   self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text,
 };
-use charliebot_store::{PromptScope, Store, StoreError, StoreResult, layout};
+use charliebot_store::{HistoryWork, PromptScope, Store, StoreError, StoreResult, layout};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -477,13 +477,14 @@ pub async fn reconcile_task_tree(
       return Ok(counters);
     }
     let session_id = candidate.session_id;
-    let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
+    let mut pass_timer = NodePassTimer::start(&features.store, session_id.clone());
     // A read that failed, or a scan that changed under its read, seals nothing. The pass then reads the session's files
     // itself and fails the node on an error that persists.
     let sealed = scan.map(|scan| match scan? {
       Some(scan) => features.store.seal_scanned_facts(&session_id, scan),
       None => Ok(false),
     });
+    pass_timer.steps.end("seal_scanned_facts");
     if let Some(Err(error)) = sealed {
       tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_read_ahead_failed");
     }
@@ -492,7 +493,7 @@ pub async fn reconcile_task_tree(
       Ok(false) => {
         reconcile_node_until_stopped(
           &stop,
-          reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop)),
+          reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop), &mut pass_timer.steps),
         )
         .await
       }
@@ -616,8 +617,8 @@ fn log_slow_recovery_step(session_id: &str, step: &str, started: Instant) {
   }
 }
 
-/// Times one session's boot-walk iteration and logs it at [`SLOW_RECOVERY_STEP_MS`] or more, so a slow boot names
-/// each session whose skip check or node pass it waited in.
+/// Times one session's skip check or absence proof and logs it at [`SLOW_RECOVERY_STEP_MS`] or more, so a slow boot
+/// names each session it waited in. A node pass logs the same line through [`NodePassTimer`].
 struct SessionTimer {
   session_id: String,
   started: Instant,
@@ -632,6 +633,76 @@ impl Drop for SessionTimer {
   }
 }
 
+/// The steps one node pass ran, in run order: each step's name and its elapsed ms. A step runs from the end of the step
+/// before it, so the steps cover the pass without gaps. A name is the store or adapter call the step makes.
+struct PassSteps {
+  step_started: Instant,
+  steps: Vec<(&'static str, u64)>,
+}
+
+impl PassSteps {
+  fn start() -> Self {
+    PassSteps { step_started: Instant::now(), steps: Vec::new() }
+  }
+
+  /// Ends the running step as `name`. A step that repeats the one before it adds to that entry, so a pass over many
+  /// runs keeps a short line.
+  fn end(&mut self, name: &'static str) {
+    let now = Instant::now();
+    let elapsed_ms = now.duration_since(self.step_started).as_millis() as u64;
+    self.step_started = now;
+    match self.steps.last_mut() {
+      Some((last, total)) if *last == name => *total += elapsed_ms,
+      _ => self.steps.push((name, elapsed_ms)),
+    }
+  }
+
+  /// The steps as `name=ms` pairs joined by spaces.
+  fn text(&self) -> String {
+    self.steps.iter().map(|(name, elapsed_ms)| format!("{name}={elapsed_ms}")).collect::<Vec<_>>().join(" ")
+  }
+}
+
+/// Times one boot-walk node pass and, at [`SLOW_RECOVERY_STEP_MS`] or more, logs `task_recovery_session_slow` with:
+/// - `session_id` and `elapsed_ms`, as [`SessionTimer`] logs them;
+/// - `step_ms`: the pass's [`PassSteps`];
+/// - `file_reads` and `file_read_bytes`: the whole-log reads that the store made while the pass ran.
+///
+/// The walk runs one node pass at a time, so the store's read counters change only for that pass and for any run
+/// follow an earlier pass started. The timer keeps its record in memory and makes no file call.
+struct NodePassTimer<'a> {
+  store: &'a Store,
+  session_id: String,
+  started: Instant,
+  reads_before: HistoryWork,
+  steps: PassSteps,
+}
+
+impl<'a> NodePassTimer<'a> {
+  fn start(store: &'a Store, session_id: String) -> Self {
+    let reads_before = store.history_work();
+    NodePassTimer { store, session_id, started: Instant::now(), reads_before, steps: PassSteps::start() }
+  }
+}
+
+impl Drop for NodePassTimer<'_> {
+  fn drop(&mut self) {
+    let elapsed_ms = self.started.elapsed().as_millis() as u64;
+    if elapsed_ms >= SLOW_RECOVERY_STEP_MS {
+      let reads = self.store.history_work();
+      tracing::info!(
+        target: "charliebot_tasks",
+        session_id = %self.session_id,
+        elapsed_ms,
+        step_ms = %self.steps.text(),
+        file_reads = reads.file_reads - self.reads_before.file_reads,
+        file_read_bytes = reads.file_read_bytes - self.reads_before.file_read_bytes,
+        "task_recovery_session_slow"
+      );
+    }
+  }
+}
+
 /// One node's pass (`task_execution._reconcile_node`). `is_driven` marks the runs this process already drives: the
 /// end-landing retry passes it so that steps 1 and 2 never start a second driver, and the boot pass passes None.
 pub async fn reconcile_node(
@@ -641,9 +712,10 @@ pub async fn reconcile_node(
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
 ) -> anyhow::Result<()> {
-  reconcile_node_inner(features, adapter, session_id, counters, is_driven, None).await
+  reconcile_node_inner(features, adapter, session_id, counters, is_driven, None, &mut PassSteps::start()).await
 }
 
+/// The node pass, ending each step in `steps`.
 async fn reconcile_node_inner(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
@@ -651,22 +723,27 @@ async fn reconcile_node_inner(
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
   stop: Option<&StartupStop>,
+  steps: &mut PassSteps,
 ) -> anyhow::Result<()> {
   #[cfg(feature = "test-hooks")]
   adapter.recovery.reconcile_node_calls.fetch_add(1, Ordering::SeqCst);
 
   let store = &features.store;
-  if store.load_meta(session_id).await?.is_none() {
+  let has_meta = store.load_meta(session_id).await?.is_some();
+  steps.end("load_meta");
+  if !has_meta {
     return Ok(());
   }
   // Steps 1 and 2 read Run facts from this snapshot. Only the closed-task stop refreshes it, where `_reconcile_node`
   // reloads its event list.
-  let Some(mut runs) = store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))? else {
+  let runs = store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?;
+  steps.end("run_facts");
+  let Some(mut runs) = runs else {
     return Ok(());
   };
-  let Some(run_records) =
-    store.list_run_records_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?
-  else {
+  let run_records = store.list_run_records_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?;
+  steps.end("list_run_records");
+  let Some(run_records) = run_records else {
     return Ok(());
   };
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
@@ -681,11 +758,13 @@ async fn reconcile_node_inner(
   // --- 0. an interrupted prompt edit lands its missing fact ---------------
   {
     let guard = store.control_lock().await;
+    steps.end("control_lock");
     if let Some(locked_meta) = store.load_meta(session_id).await? {
       for scope in [PromptScope::Subtree, PromptScope::Node] {
         store.ensure_prompt_changed_fact_locked(&guard, session_id, &locked_meta, scope).await?;
       }
     }
+    steps.end("ensure_prompt_changed_fact");
   }
 
   // --- 1. stop requests take precedence over any launch or follow ---------
@@ -695,19 +774,23 @@ async fn reconcile_node_inner(
     }
     if runs.stop_requested(&run.id, None) {
       store.reconcile_stop_request(session_id, &run.id).await?;
+      steps.end("reconcile_stop_request");
       run_records_changed = true;
     }
   }
   // A run on a non-open node without a stop fact cannot continue dispatch or hold the node open.
-  if store.node_facts(session_id)?.task()?.task_state != "open" {
+  let task_open = store.node_facts(session_id)?.task()?.task_state == "open";
+  steps.end("node_facts");
+  if !task_open {
     for run in &run_records {
       if runs.terminal_outcome(&run.id)?.is_some() || runs.stop_requested(&run.id, None) {
         continue;
       }
       store.request_stop(session_id, &run.id, &closed_task_stop_request_id(&run.id)).await?;
-      let Some(updated_runs) =
-        store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?
-      else {
+      steps.end("request_stop");
+      let updated_runs = store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?;
+      steps.end("run_facts");
+      let Some(updated_runs) = updated_runs else {
         return Ok(());
       };
       runs = updated_runs;
@@ -731,6 +814,7 @@ async fn reconcile_node_inner(
       tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_resume");
       // A live worker follow tails the process in the background, never holding startup open.
       adapter.follow_run_in_background(session_id, &run.id);
+      steps.end("follow_run_in_background");
     } else {
       counters.drained += 1;
       tracing::warn!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_drain");
@@ -738,15 +822,17 @@ async fn reconcile_node_inner(
       let drain_started = Instant::now();
       adapter.resume_run(session_id, &run.id, Some(ended)).await?;
       log_slow_recovery_step(session_id, "drain_resume_run", drain_started);
+      steps.end("drain_resume_run");
       run_records_changed = true;
     }
   }
 
   // --- 3. terminal runs replay their missing follow-up once ----------------
   if run_records_changed {
-    let Some(refreshed_run_records) =
-      store.list_run_records_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?
-    else {
+    let refreshed_run_records =
+      store.list_run_records_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?;
+    steps.end("list_run_records");
+    let Some(refreshed_run_records) = refreshed_run_records else {
       return Ok(());
     };
     replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records, stop).await?;
@@ -755,12 +841,15 @@ async fn reconcile_node_inner(
     // run-directory scan per node.
     replay_followups_with_records(features, adapter, session_id, counters, &run_records, stop).await?;
   }
+  steps.end("replay_followups");
   if stop.is_some_and(StartupStop::is_cancelled) {
     return Ok(());
   }
   // --- 4. pending reports and pending inputs --------------------------------
   adapter.dispatch.recover_pending_reports(session_id).await?;
+  steps.end("recover_pending_reports");
   adapter.dispatch.dispatch_pending(session_id).await?;
+  steps.end("dispatch_pending");
   Ok(())
 }
 
@@ -1745,6 +1834,85 @@ mod tests {
       after_recovery.file_reads + 1,
       "the boot keeps no event list, so the first content read loads the log"
     );
+    let log_bytes = std::fs::metadata(features.store.chat_events_path(&node.id)).unwrap().len();
+    assert_eq!(
+      features.store.history_work().file_read_bytes,
+      after_recovery.file_read_bytes + log_bytes,
+      "the read counts the log's bytes"
+    );
+  }
+
+  /// Each event the test thread logs, rendered as the server's log renders it.
+  struct RenderedLines(Arc<std::sync::Mutex<Vec<String>>>);
+
+  impl charliebot_core::test_support::EventSink for RenderedLines {
+    fn event(&self, event: &tracing::Event<'_>) {
+      let line = charliebot_core::logging::render_line(event);
+      self.0.lock().expect("the line capture is not poisoned").push(line);
+    }
+  }
+
+  /// A node pass at the slow threshold logs each step it ran in run order, a repeated step once, and the whole-log
+  /// reads the store made while it ran. A faster pass logs nothing.
+  #[tokio::test]
+  async fn a_slow_node_pass_logs_its_steps_and_whole_log_reads() {
+    let (_home, features) = startup_features().await;
+    let node = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-slow-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic slow node".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let log_bytes = std::fs::metadata(features.store.chat_events_path(&node.id)).unwrap().len();
+    let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _capture = charliebot_core::test_support::install_events(Arc::new(RenderedLines(Arc::clone(&lines))));
+
+    drop(NodePassTimer::start(&features.store, node.id.clone()));
+    assert!(lines.lock().unwrap().is_empty(), "a pass under the threshold logs nothing");
+
+    features.store.evict_recovery_history(&node.id);
+
+    let mut timer = NodePassTimer::start(&features.store, node.id.clone());
+    timer.started -= Duration::from_millis(SLOW_RECOVERY_STEP_MS);
+    timer.steps.end("load_meta");
+    features.store.prime_aggregator(&node.id).await.unwrap();
+    timer.steps.end("replay_followups");
+    timer.steps.end("replay_followups");
+    timer.steps.end("dispatch_pending");
+    drop(timer);
+
+    let lines = lines.lock().unwrap();
+    let [line] = lines.as_slice() else { panic!("one slow pass logs one line: {lines:?}") };
+    let row = charliebot_core::logline::parse(line).expect("the line reads back");
+    assert_eq!(row.event, "task_recovery_session_slow");
+    assert_eq!(row.field("session_id"), Some(node.id.as_str()));
+    let elapsed_ms: u64 = row.field("elapsed_ms").expect("the line has elapsed_ms").parse().unwrap();
+    assert!(elapsed_ms >= SLOW_RECOVERY_STEP_MS, "{line}");
+    let steps: Vec<&str> = row
+      .field("step_ms")
+      .expect("the line has step_ms")
+      .split(' ')
+      .map(|pair| {
+        let (name, elapsed_ms) = pair.split_once('=').expect("a step is name=ms");
+        elapsed_ms.parse::<u64>().expect("a step's ms is a number");
+        name
+      })
+      .collect();
+    assert_eq!(steps, ["load_meta", "replay_followups", "dispatch_pending"], "{line}");
+    assert_eq!(row.field("file_reads"), Some("1"), "{line}");
+    assert_eq!(row.field("file_read_bytes"), Some(log_bytes.to_string().as_str()), "{line}");
   }
 
   #[tokio::test]
@@ -1898,6 +2066,7 @@ mod tests {
     let after = features.store.history_work();
     HistoryWork {
       file_reads: after.file_reads - before.file_reads,
+      file_read_bytes: after.file_read_bytes - before.file_read_bytes,
       full_folds: after.full_folds - before.full_folds,
       folded_events: after.folded_events - before.folded_events,
       owned_event_clones: after.owned_event_clones - before.owned_event_clones,

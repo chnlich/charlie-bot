@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
-use charliebot_core::cgroup;
+use charliebot_core::cgroup::{
+  self, SESSION_CGROUP_CREATED_EVENT, SESSION_CGROUP_ENABLED_EVENT, SESSION_CGROUP_SWEEP_REMOVED_EVENT,
+};
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
@@ -38,12 +40,6 @@ use time::macros::format_description;
 const COMPACT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
-/// The startup sweep's removal event, whose `names` list the sweep check reads.
-const SWEEP_REMOVED: &str = "session_cgroup_sweep_removed";
-/// The startup event that states the session cgroup limits are on.
-const CGROUP_ENABLED: &str = "session_cgroup_enabled";
-/// The event that names each session cgroup the server created.
-const CGROUP_CREATED: &str = "session_cgroup_created";
 /// The display state of a run that finished successfully.
 const RUN_STATE_SUCCESS: &str = "success";
 
@@ -745,7 +741,7 @@ fn field_or_empty(row: &Row, key: &str) -> String {
 fn cgroup_enabled(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "cgroup-enabled")?;
   for row in log_rows(path)? {
-    if row.event != CGROUP_ENABLED {
+    if row.event != SESSION_CGROUP_ENABLED_EVENT {
       continue;
     }
     emit_nul(&[
@@ -763,7 +759,7 @@ fn created_cgroups(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "created-cgroups")?;
   for row in log_rows(path)? {
     if let Some(cgroup_path) = row.field("path")
-      && row.event == CGROUP_CREATED
+      && row.event == SESSION_CGROUP_CREATED_EVENT
     {
       println!("{cgroup_path}");
     }
@@ -793,7 +789,7 @@ fn session_cgroup_names(sessions: &str) -> Result<BTreeSet<String>, String> {
 /// The names a `session_cgroup_sweep_removed` line removed, or `None` for any other line.
 fn sweep_removed_names(line: &str) -> Result<Option<Vec<String>>, String> {
   let Some(row) = logline::parse(line) else { return Ok(None) };
-  if row.event != SWEEP_REMOVED {
+  if row.event != SESSION_CGROUP_SWEEP_REMOVED_EVENT {
     return Ok(None);
   }
   // The server logs `names = ?removed`: the Debug text of the list, which a line holds as a quoted JSON array.
@@ -1343,7 +1339,7 @@ mod tests {
       STAMP,
       "info",
       CGROUP_LOCATION,
-      SWEEP_REMOVED,
+      SESSION_CGROUP_SWEEP_REMOVED_EVENT,
       &[("count".to_string(), json!(2)), ("names".to_string(), json!(removed))],
     );
     assert_eq!(
@@ -1368,7 +1364,7 @@ mod tests {
       STAMP,
       "info",
       CGROUP_LOCATION,
-      CGROUP_ENABLED,
+      SESSION_CGROUP_ENABLED_EVENT,
       &[
         ("memory_max_mb".to_string(), json!(1024)),
         ("swap_max_mb".to_string(), json!(0)),
@@ -1379,7 +1375,7 @@ mod tests {
       STAMP,
       "info",
       CGROUP_LOCATION,
-      CGROUP_CREATED,
+      SESSION_CGROUP_CREATED_EVENT,
       &[("path".to_string(), json!("/a/charliebot-sess-aaaaaaaa"))],
     );
     fs::write(&path, format!("{enabled}\n{created}\n")).unwrap();
@@ -1387,10 +1383,10 @@ mod tests {
     let rows = log_rows(&path.to_string_lossy()).unwrap();
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].event, CGROUP_ENABLED);
+    assert_eq!(rows[0].event, SESSION_CGROUP_ENABLED_EVENT);
     assert_eq!(field_or_empty(&rows[0], "memory_max_mb"), "1024");
     assert_eq!(field_or_empty(&rows[0], "tasks_max"), "256");
-    assert_eq!(rows[1].event, CGROUP_CREATED);
+    assert_eq!(rows[1].event, SESSION_CGROUP_CREATED_EVENT);
     assert_eq!(field_or_empty(&rows[1], "path"), "/a/charliebot-sess-aaaaaaaa");
   }
 
@@ -1407,7 +1403,7 @@ mod tests {
 
     let rows = log_rows(&path.to_string_lossy()).unwrap();
 
-    assert_eq!(rows[0].event, CGROUP_CREATED);
+    assert_eq!(rows[0].event, SESSION_CGROUP_CREATED_EVENT);
     assert_eq!(field_or_empty(&rows[0], "path"), "/a/charliebot-sess-bbbbbbbb");
     assert_eq!(rows[0].field("level"), None);
     assert_eq!(rows[0].field("timestamp"), None);

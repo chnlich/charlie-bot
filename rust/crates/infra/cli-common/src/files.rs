@@ -38,6 +38,26 @@ pub fn read_reply_text(file_arg: &str) -> Result<String, CliExit> {
   read_required_text_file("--file", file_arg)
 }
 
+/// A draft body read exactly as stored: the file's bytes with no line-ending rewrite, `-` for stdin. A missing or
+/// empty body is a usage error.
+pub fn read_exact_text(file_arg: &str) -> Result<String, CliExit> {
+  let text = if file_arg == "-" {
+    let mut text = String::new();
+    std::io::stdin().read_to_string(&mut text).map_err(|error| CliExit::error(error.to_string()))?;
+    text
+  } else {
+    let path = Path::new(file_arg);
+    if !path.is_file() {
+      return Err(CliExit::usage(format!("--file not found: {file_arg}")));
+    }
+    std::fs::read_to_string(path).map_err(|error| CliExit::error(error.to_string()))?
+  };
+  if text.trim().is_empty() {
+    return Err(CliExit::usage(format!("--file is empty: {file_arg}")));
+  }
+  Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -51,5 +71,26 @@ mod tests {
     let text = read_required_text_file("--file", path.to_str().unwrap()).unwrap();
 
     assert_eq!(text, "first\nsecond\nthird\n");
+  }
+
+  #[test]
+  fn a_draft_body_keeps_its_line_endings_byte_for_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("body.txt");
+    std::fs::write(&path, "first\r\nsecond\rthird\n").unwrap();
+
+    let text = read_exact_text(path.to_str().unwrap()).unwrap();
+
+    assert_eq!(text, "first\r\nsecond\rthird\n");
+  }
+
+  #[test]
+  fn a_missing_or_empty_draft_body_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join("empty.txt");
+    std::fs::write(&empty, "  \n").unwrap();
+
+    assert_eq!(read_exact_text("/no/such/file").unwrap_err().code, 2);
+    assert_eq!(read_exact_text(empty.to_str().unwrap()).unwrap_err().code, 2);
   }
 }

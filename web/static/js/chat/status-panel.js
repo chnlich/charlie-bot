@@ -1,55 +1,38 @@
 // ---------------------------------------------------------------------------
-// Session status panel (chat column)
+// Session status panel (the Status tab)
 // ---------------------------------------------------------------------------
-// A web session's status shows in the Status view (#chat-status-view). While
-// that view is selected it covers the whole message region: no border, radius
-// or margin, the same box as the message list. The list stays laid out
-// underneath, so the turn engine keeps reading its real height. The waiting
-// count shows on the Status tab's badge. Chat.ForYou owns the toggle that
-// selects the view (for-you.js); this file owns the view, the badge and the
-// new-message count row. A thread session and a worker session show none of
-// them. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
+// A web session's status shows in the Status tab (#tab-status), a top-level tab
+// beside Chat. Selecting the tab hides the Chat column and shows the panel in
+// its place, and the panel scrolls by itself. The waiting count shows on the
+// tab's badge. A thread session and a worker session show neither the tab nor
+// the badge. A web session is one that Chat.ForYou.isWebSession (for-you.js)
+// accepts. This file registers the tab (tabs.js).
 //
 // The status is the session's web_status at open, then the web_status messages
 // of this session, live or in history. The newest updated_at wins, so an older
 // page of history never moves the view back. The descendant and child rows
 // come from GET /api/internal/web/status, fetched at open and on each
 // web_status_subtree notice (websocket-handlers.js).
-//
-// Opening the Status view saves the reader's place in the underlying list
-// (turn-engine.js readingPlace) and closes the list to clicks and focus (the
-// inert attribute). Closing writes the place back for a reader who was in
-// history and shows the new-message count row when messages arrived.
 (function() {
   const Chat = globalThis.Chat;
 
-  const VIEW_ID = 'chat-status-view';
-  const SCROLL_BUTTON_ID = 'scroll-to-bottom';
-  const MESSAGES_ID = 'messages';
+  const VIEW_ID = 'tab-status';
+  const BUTTON_ID = 'btn-status';
   const BADGE_ID = 'status-waiting-count';
-  const NEW_MESSAGES_ID = 'status-new-messages';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
-  // The view name for-yous's toggle carries for the full status.
-  const STATUS_VIEW = 'status';
 
   // The session the page shows the status for, and what it draws from. A null
-  // panelSessionId means the page shows none of the surfaces. statusViewShown
-  // holds the Status view's visibility.
+  // panelSessionId means the page shows none of the surfaces. statusTabShown
+  // holds the Status tab's visibility.
   let panelSessionId = null;
   let panelStatus = null;
   let panelDescendants = [];
   let panelChildren = [];
   let panelDerived = [];
-  let statusViewShown = false;
+  let statusTabShown = false;
   let panelFetchGen = 0;
-  // The reader's place in the underlying list, saved when the Status view
-  // opens with the session it was saved for, written back when it closes.
-  let savedReadingPlace = null;
-  // Messages that arrived while the Status view showed and that the returning
-  // view will show. Zeroed at each open.
-  let statusViewNewCount = 0;
 
   function textSpan(className, text) {
     const span = document.createElement('span');
@@ -253,8 +236,8 @@
     return span;
   }
 
-  // A Waiting on you item. contextOpen: the Status view shows an own item's
-  // context open; the strip and the descendant rows keep it folded.
+  // A Waiting on you item. contextOpen: the Status tab shows an own item's
+  // context open; the descendant rows keep it folded.
   function waitingItem(item, contextOpen) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
@@ -332,7 +315,7 @@
     return row;
   }
 
-  // ---- Status view ---------------------------------------------------------
+  // ---- Status tab ----------------------------------------------------------
 
   // The descendants' items, grouped by session: one header per session, its
   // items under it with their contexts folded. A session whose items all
@@ -383,7 +366,7 @@
     return row;
   }
 
-  function statusViewBody(el) {
+  function statusTabBody(el) {
     if (!panelStatus) {
       const none = statusRow('none');
       none.appendChild(textSpan('text-slate-400', 'No status yet'));
@@ -414,21 +397,20 @@
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
 
-  // The Status view redraws on every status update, and the badge follows the
+  // The Status tab redraws on every status update, and the badge follows the
   // same state.
   function renderPanel() {
     const view = document.getElementById(VIEW_ID);
     if (view) {
       clearChildren(view);
-      view.classList.toggle('hidden', !statusViewShown || !panelSessionId);
-      if (statusViewShown && panelSessionId) statusViewBody(view);
+      if (statusTabShown && panelSessionId) statusTabBody(view);
     }
     renderWaitingBadge();
   }
 
   // The Status tab's waiting count: this session's own Waiting on you items
   // only, less the ones the login-sheet line carries — a child session's
-  // waiting items show in the Status view's child rows. Hidden at 0 and when
+  // waiting items show in the Status tab's child rows. Hidden at 0 and when
   // the page shows no web session.
   function renderWaitingBadge() {
     const badge = document.getElementById(BADGE_ID);
@@ -438,96 +420,31 @@
     badge.classList.toggle('hidden', !count);
   }
 
-  function engineForMessages() {
-    return Chat.activeTurnEngineFor(document.getElementById(MESSAGES_ID));
-  }
-
-  // The covered list takes no clicks and no focus while the Status view shows.
-  function setListInert(inert) {
-    const list = document.getElementById(MESSAGES_ID);
-    if (!list) return;
-    if (inert) list.setAttribute('inert', '');
-    else list.removeAttribute('inert');
-  }
-
-  function showNewMessagesRow(show) {
-    const row = document.getElementById(NEW_MESSAGES_ID);
-    if (!row) return;
-    row.textContent = show
-      ? statusViewNewCount + ' new message' + (statusViewNewCount === 1 ? '' : 's')
-      : '';
-    row.classList.toggle('hidden', !show);
-  }
-
-  // The count row's jump: back to the newest message, the row goes away.
-  function revealStatusNewMessages() {
-    dropNewMessagesCount();
-    if (typeof scrollToBottom === 'function') scrollToBottom();
-  }
-
-  // The count belongs to the session it counted: a Status open or a session
-  // switch zeroes it and takes the row down, whether a close left the row showing.
-  function dropNewMessagesCount() {
-    statusViewNewCount = 0;
-    showNewMessagesRow(false);
-  }
-
-  // The Status view's show and hide, through the toggle's control. Opening it
-  // hides the floating scroll-to-bottom button, which would otherwise hover
-  // over the status text. It also saves the reader's place in the underlying
-  // list and zeroes the new-message count. Closing it puts the button back as
-  // it was, writes the place back and offers the count row's jump.
-  let scrollButtonWasShown = false;
-  function setStatusViewShown(shown) {
-    shown = Boolean(shown);
-    const btn = document.getElementById(SCROLL_BUTTON_ID);
-    if (shown && !statusViewShown) {
-      if (btn) {
-        scrollButtonWasShown = !btn.classList.contains('hidden');
-        btn.classList.add('hidden');
-      }
-      const engine = engineForMessages();
-      savedReadingPlace = {session: panelSessionId, place: engine ? engine.readingPlace() : null};
-      dropNewMessagesCount();
-      setListInert(true);
-    } else if (!shown && statusViewShown) {
-      if (btn) btn.classList.toggle('hidden', !scrollButtonWasShown);
-      setListInert(false);
-      restoreReadingPlaceOnClose();
-    }
-    statusViewShown = shown;
+  // The Status tab's show and hide, through the tab registry (tabs.js). The panel
+  // takes the Chat column's place; the message list stays in the DOM, and the turn
+  // engine projects nothing while the column has no height.
+  function setStatusTabShown(shown) {
+    const view = document.getElementById(VIEW_ID);
+    if (view) view.classList.toggle('hidden', !shown);
+    statusTabShown = shown;
     renderPanel();
   }
 
-  // The close-time write-back. A pinned reader needs nothing: the engine kept
-  // following the new messages, so the return lands on the newest one. A
-  // history reader returns to the place saved at open — not the engine's live
-  // anchor, which a mid-Status clamp may have moved. Only the same session's
-  // place restores: a session switch disposes the reader's place with its
-  // engine.
-  function restoreReadingPlaceOnClose() {
-    const saved = savedReadingPlace;
-    savedReadingPlace = null;
-    let restored = false;
-    if (saved && saved.session === panelSessionId && saved.place && !saved.place.pinned) {
-      const engine = engineForMessages();
-      if (engine) engine.restoreReadingPlace(saved.place);
-      restored = true;
-    }
-    showNewMessagesRow(restored && statusViewNewCount > 0);
+  // The Status button shows for a web session only: a thread session and a worker
+  // session get no Status tab.
+  function setStatusButtonShown(shown) {
+    const btn = document.getElementById(BUTTON_ID);
+    if (btn) btn.classList.toggle('hidden', !shown);
   }
 
-  // A committed message of this session while the Status view shows: it counts
-  // for the return view's jump row when that view will show it. For you applies
-  // its row filter (for-you.js), and Everything counts every message.
-  function noteMessageForStatusView(msg) {
-    if (!statusViewShown || !panelSessionId) return;
-    const engine = engineForMessages();
-    if (engine && engine.view === 'foryou' && !Chat.ForYou.items([{msg}]).length) return;
-    statusViewNewCount++;
-  }
-
-  Chat.registerStatusViewControl({setShown: setStatusViewShown});
+  registerTab({
+    id: 'status',
+    showsChat: false,
+    fullScreenOnMobile: false,
+    keepOnSessionSwitch: false,
+    onShow: () => setStatusTabShown(true),
+    onHide: () => setStatusTabShown(false),
+  });
 
   // A web_status message's status replaces the panel's, unless the panel already
   // holds a newer one.
@@ -564,33 +481,32 @@
   }
 
   // Session open (first load and SPA switch): the session's own status, then the
-  // history's web_status messages, then the descendant rows. The Status view
-  // opens shown when the session's held view choice is Status.
+  // history's web_status messages, then the descendant rows. The page returns to
+  // Chat on a session switch (tabs.js), so the tab is not shown here.
   function openSessionStatusPanel(session, messages) {
     if (!Chat.ForYou.isWebSession(session)) {
       clearSessionStatusPanel();
       return;
     }
-    dropNewMessagesCount();
+    setStatusButtonShown(true);
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
-    setStatusViewShown(Chat.ForYou.viewFor(session) === STATUS_VIEW);
     absorbWebStatusMessages(messages);
     renderPanel();
     fetchDescendants(session.id);
   }
 
   function clearSessionStatusPanel() {
-    dropNewMessagesCount();
+    setStatusButtonShown(false);
     panelSessionId = null;
     panelStatus = null;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
-    setStatusViewShown(false);
+    renderPanel();
   }
 
   // A live or catch-up message of this session: the panel redraws only when a
@@ -610,16 +526,11 @@
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
 
-  // The count row is a page fixture; its click wires once here.
-  const newMessagesRow = document.getElementById(NEW_MESSAGES_ID);
-  if (newMessagesRow) newMessagesRow.onclick = revealStatusNewMessages;
-
   Chat.wire({
     openSessionStatusPanel,
     clearSessionStatusPanel,
     observeWebStatusMessages,
     refreshSessionStatusPanel,
-    noteMessageForStatusView,
   });
 
 })();

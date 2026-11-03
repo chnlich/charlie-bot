@@ -27,9 +27,6 @@ function _commitMessage(msg) {
   // their place.
   hideStreaming();
   appendMessageObject(msg, SESSION_ID, false);
-  // While the Status view covers the list, a message the returning view will
-  // show counts for its jump row (chat/status-panel.js).
-  noteMessageForStatusView(msg);
   observeWebStatusMessages([msg]);
 }
 

@@ -43,15 +43,14 @@
 //     Chat.registerSeparatorButton
 //                                 web/static/js/chat/rendering.js (a button on each separator line)
 //     Chat.registerSeparatorPanel web/static/js/chat/turn-engine.js (a panel under a separator line that the engine reopens)
-//     Chat.registerStatusViewControl
-//                                 web/static/js/chat/for-you.js (the Status view's show and hide, from chat/status-panel.js)
 //     registerGroupMenuItem       web/static/js/sidebar/groups.js (an item of a group header's menu)
 //     registerSessionMenuItems    web/static/js/sidebar/groups.js (items of a session row's Settings menu)
 //     registerSessionRowBadge     web/static/js/sidebar/groups.js (a badge after a session row's indicators)
 //     registerSessionRowLine      web/static/js/sidebar/groups.js (a line in place of a session row's time line)
 //     registerSidebarControl      web/static/js/sidebar/namespace.js (the handler a rendered sidebar control calls by name)
 //     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
-//     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
+//     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks; the Status tab
+//                                 registers from chat/status-panel.js)
 //     registerWorkspaceBadge      web/static/js/sidebar/filters.js (a badge at the top of the Workspace list)
 //     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
 //     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)

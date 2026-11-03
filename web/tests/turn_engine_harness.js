@@ -374,6 +374,8 @@ function loadChatContext(document) {
     relativeTime: (iso) => `relative:${iso}`,
     window: {addEventListener() {}},
     platform: {isMobile: false, onChange() {}},
+    // The Status tab registers at load (chat/status-panel.js); no case here switches tabs.
+    registerTab() {},
     // Real parsing (the fold row formats a message timestamp), fixed "now"
     // (the sidebar bump stamps the current time).
     Date: class FakeDate extends Date {

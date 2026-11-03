@@ -219,6 +219,10 @@
       // scroll; engine write echoes and the browser's clamp over shrunk
       // content keep it.
       this.followNextTurn = false;
+      // Set by a projection that found the list at zero height (a hidden Chat column). The first
+      // projection at a real height reads and clears it: a restore that lands at the bottom on that
+      // return does not arm the follow, so the next message leaves a history reader where they are.
+      this.returnedFromHidden = false;
       // scrollTop at the last genuine (non-echo) scroll event; the direction
       // of each new genuine event is read against it.
       this.lastUserScrollTop = null;
@@ -772,9 +776,14 @@
       // for every reason there is no projection at all — no nodes, no spacer
       // writes, no scrollTop writes. The first non-zero 'resize' projects
       // from scratch instead of repairing a degenerate window.
-      if (this.container.clientHeight === 0) return;
+      if (this.container.clientHeight === 0) {
+        this.returnedFromHidden = true;
+        return;
+      }
+      const returning = this.returnedFromHidden;
+      this.returnedFromHidden = false;
       if (this.view === VIEW_FOR_YOU) {
-        this.reprojectForYou(reason);
+        this.reprojectForYou(reason, returning);
         if (reason !== 'scroll') this.runProjectionCheck();
         return;
       }
@@ -945,6 +954,7 @@
           if (this.restoreReadingAnchor(target)) {
             this.readingAnchor = target;
             this.pendingAnchor = null;
+            if (returning) this.followNextTurn = false;
           } else if (this.anchorAwaitingRematerialization(target)) {
             this.pendingAnchor = target;
           } else {
@@ -1228,36 +1238,14 @@
       this.attach(Object.assign({sentinel}, place));
     }
 
-    // The reader's place as an overlay saves and writes it back: the pin
-    // intent when the reader follows the newest message, otherwise the
-    // reading anchor. The Status view saves it at open and restores it at
-    // close; the view switches save it per view.
+    // The reader's place for a view switch to save: the pin intent when the
+    // reader follows the newest message, otherwise the reading anchor. setView
+    // saves each view's place, and attach writes it back on the return.
     readingPlace() {
       return {
         pinned: this.pinnedIntent,
         readingAnchor: this.pinnedIntent ? null : this.captureReadingAnchor(),
       };
-    }
-
-    // Writes a saved place back without remounting the list. A pinned place
-    // needs nothing — the engine kept following the new messages. A historical
-    // place restores its anchor. When the anchored node is not in the DOM yet,
-    // the anchor waits in pendingAnchor and the next projection completes it,
-    // as attach does.
-    restoreReadingPlace(place) {
-      if (!place || place.pinned) return;
-      const anchor = place.readingAnchor;
-      if (!anchor) return;
-      if (this.restoreReadingAnchor(anchor)) {
-        this.readingAnchor = anchor;
-        this.pendingAnchor = null;
-        // A restore that lands at the bottom arms the deferred follow; the
-        // reader's place was a history place, so the next message must not
-        // pull them down to it.
-        this.followNextTurn = false;
-      } else {
-        this.pendingAnchor = anchor;
-      }
     }
 
     // A worker's For you holds only its summary card, so a worker page's
@@ -1276,7 +1264,7 @@
     // reproject for the For-you view. A scroll only records the reader's
     // place. Every other reason rebuilds the list and holds the place, or
     // keeps the bottom when the reader is pinned; a prepend never pins.
-    reprojectForYou(reason) {
+    reprojectForYou(reason, returning) {
       if (reason === 'scroll') {
         this.readingAnchor = this.captureForYouAnchor();
         return;
@@ -1293,7 +1281,10 @@
       this.pendingAnchor = null;
       this.syncForYouChildren();
       if (pinned) this.writeScrollTop(this.container.scrollHeight);
-      else if (anchor) this.restoreReadingAnchor(anchor);
+      else if (anchor) {
+        this.restoreReadingAnchor(anchor);
+        if (returning) this.followNextTurn = false;
+      }
     }
 
     // The list's children, in order: the pagination sentinel, the shown rows or

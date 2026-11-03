@@ -77,6 +77,14 @@
     return { resp, data };
   }
 
+  // A phone shows one code column: side-by-side halves the width and cuts the changed
+  // line, while line-by-line keeps the whole line on the width the phone has. A wider
+  // window starts side-by-side, the Format select still offers either, and a URL's
+  // outputFormat wins over this default.
+  function defaultOutputFormat() {
+    return window.matchMedia('(max-width: 768px)').matches ? 'line-by-line' : 'side-by-side';
+  }
+
   function readQuery() {
     const p = new URLSearchParams(location.search);
     return {
@@ -84,7 +92,7 @@
       base: p.get('base') || '',
       head: p.get('head') || '',
       mode: p.get('mode') || 'three-dot',
-      outputFormat: p.get('outputFormat') || 'side-by-side',
+      outputFormat: p.get('outputFormat') || defaultOutputFormat(),
       session: p.get('session') || '',
     };
   }

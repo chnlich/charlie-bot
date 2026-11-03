@@ -87,6 +87,7 @@ fn run_check(page_source: &str, remove_probe_on_measurement: bool) -> CheckRun {
     .env("CHARLIEBOT_HOME", &home)
     .env("CHARLIEBOT_REPO_ROOT", harness::repo_root())
     .env("HOME", temporary.path().join("user-home"))
+    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
     .stdin(Stdio::null())
     .stdout(Stdio::from(fs::File::create(&stdout_path).unwrap()))
     .stderr(Stdio::from(fs::File::create(&stderr_path).unwrap()))

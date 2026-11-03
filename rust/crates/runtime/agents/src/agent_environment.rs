@@ -13,9 +13,14 @@ use charliebot_registry::backend::Env;
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use futures_util::future::BoxFuture;
 
+use crate::gh_wrapper;
 use crate::transport::cgroup;
 
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
+/// GitHub credentials and the token command the server process may carry. The wrapper owns the App token, and the
+/// server sets the token command from the host config, so neither an inherited `GH_TOKEN` nor a stale command
+/// reaches an agent. The server's own environment and its non-agent children keep both.
+const GITHUB_ENVIRONMENT_VARIABLES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", gh_wrapper::TOKEN_COMMAND_VAR];
 
 /// The server environment after removing its virtualenv activation for agent children.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,23 +28,30 @@ pub struct AgentBaseEnvironment {
   pub values: Env,
 }
 
-/// Rewrite a supplied server environment with the running server's directory first on agent PATH.
-pub fn agent_environment(inherited: &Env, server_bin_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
+/// Rewrite a supplied server environment with the agent `gh` wrapper and the running server's directory first on
+/// agent PATH.
+pub fn agent_environment(
+  inherited: &Env,
+  server_bin_dir: &Path,
+  gh_wrapper_dir: &Path,
+) -> anyhow::Result<AgentBaseEnvironment> {
   require_agent_cli(server_bin_dir)?;
+  gh_wrapper::require_installed(gh_wrapper_dir)?;
   let Some(path) = inherited.get("PATH") else {
     bail!("PATH is not set in the server environment; the agent environment places the server binary directory on it");
   };
   let mut values = inherited.clone();
-  for name in ACTIVATION_VARIABLES {
+  for name in ACTIVATION_VARIABLES.into_iter().chain(GITHUB_ENVIRONMENT_VARIABLES) {
     values.remove(name);
   }
-  let mut rewritten_entries = vec![server_bin_dir.to_path_buf()];
-  rewritten_entries.extend(env::split_paths(path).filter(|entry| entry != server_bin_dir));
+  let mut rewritten_entries = vec![gh_wrapper_dir.to_path_buf(), server_bin_dir.to_path_buf()];
+  rewritten_entries.extend(env::split_paths(path).filter(|entry| entry != server_bin_dir && entry != gh_wrapper_dir));
   let rewritten_path = env::join_paths(&rewritten_entries)
     .context("the agent PATH entries join with the path separator")?
     .into_string()
     .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
   values.insert("PATH".to_string(), rewritten_path);
+  values.insert(gh_wrapper::WRAPPER_PATH_VAR.to_string(), gh_wrapper_dir.join("gh").to_string_lossy().into_owned());
   // Chrome asks systemd over the session bus to move itself into its own scope. With the bus disabled it cannot, so a
   // browser stays in the cgroup of the process that started it. An agent's browser stays in the session cgroup, and
   // the server's renderer stays in the server's cgroup. `systemctl --user` and `systemd-run --user` reach systemd
@@ -58,22 +70,13 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// Replace the server's process environment with its agent environment, and return that
-/// environment as the typed snapshot. `main` calls this before any thread starts and before the config load. Every
-/// child process copies the process environment, so the web terminal's tmux server and the usage panel's
-/// `claude --version` probe inherit the agent environment too.
-pub fn replace_process_environment(server_bin_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
-  let inherited = process_environment()?;
-  let agent = agent_environment(&inherited, server_bin_dir)?;
-  for name in inherited.keys().filter(|name| !agent.values.contains_key(*name)) {
-    // SAFETY: `main` calls this before the runtime and the logger start, so no other thread reads the environment.
-    unsafe { env::remove_var(name) };
-  }
-  for (name, value) in &agent.values {
-    // SAFETY: as above; this is the only thread.
-    unsafe { env::set_var(name, value) };
-  }
-  Ok(agent)
+/// Build the agent environment from the server's process environment without changing that environment.
+///
+/// Only an agent spawn receives this value. The server's own environment keeps the operator's PATH and GitHub
+/// credentials, and so does every child that is not an agent run: the web terminal's tmux shell resolves `gh` to the
+/// real gh as the operator's stored login, and the usage panel's `claude --version` probe inherits the same.
+pub fn agent_base_environment(server_bin_dir: &Path, gh_wrapper_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
+  agent_environment(&process_environment()?, server_bin_dir, gh_wrapper_dir)
 }
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
@@ -149,12 +152,25 @@ mod tests {
     directory
   }
 
+  /// A wrapper directory with an executable stub script, as `require_installed` expects it.
+  fn gh_wrapper_dir_under(root: &Path) -> PathBuf {
+    let directory = root.join("gh-wrapper");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("gh");
+    fs::write(&script, "test fixture; this file is not run\n").unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    directory
+  }
+
   #[test]
-  fn places_server_binary_dir_first_and_removes_activation() {
+  fn places_the_gh_wrapper_and_server_binary_dir_first_and_removes_activation() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");
     fs::create_dir_all(&venv_bin).unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
     std::os::unix::fs::symlink(root.path().join("venv"), root.path().join("venv-link")).unwrap();
     let tools = root.path().join("tools");
     let system = root.path().join("system");
@@ -173,19 +189,35 @@ mod tests {
         ]
         .join(":"),
       ),
+      ("GH_TOKEN".to_string(), "inherited-personal-token".to_string()),
+      ("GITHUB_TOKEN".to_string(), "inherited-personal-token".to_string()),
+      (gh_wrapper::TOKEN_COMMAND_VAR.to_string(), "/synthetic/stale-token-command".to_string()),
       ("KEPT".to_string(), "value".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &server_bin_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
 
     assert!(!rewritten.values.contains_key("VIRTUAL_ENV"));
     assert!(!rewritten.values.contains_key("UV_RUN_RECURSION_DEPTH"));
+    assert!(!rewritten.values.contains_key("GH_TOKEN"));
+    assert!(!rewritten.values.contains_key("GITHUB_TOKEN"));
+    assert!(!rewritten.values.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));
     let path_entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
-    assert_eq!(path_entries[0], server_bin_dir);
+    assert_eq!(path_entries[0], gh_wrapper_dir);
+    assert_eq!(path_entries[1], server_bin_dir);
     assert_eq!(
       path_entries,
-      [server_bin_dir.clone(), venv_bin, tools, root.path().join("venv-link/bin"), missing, system]
+      [
+        gh_wrapper_dir.clone(),
+        server_bin_dir.clone(),
+        venv_bin,
+        tools,
+        root.path().join("venv-link/bin"),
+        missing,
+        system
+      ]
     );
+    assert_eq!(rewritten.values[gh_wrapper::WRAPPER_PATH_VAR], gh_wrapper_dir.join("gh").display().to_string());
     assert_eq!(rewritten.values["PYDANTIC_DISABLE_PLUGINS"], "__all__");
     assert_eq!(rewritten.values["KEPT"], "value");
     assert!(inherited.contains_key("VIRTUAL_ENV"));
@@ -197,12 +229,13 @@ mod tests {
   fn the_agent_environment_disables_the_session_bus() {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
     let inherited = Env::from([
       ("PATH".to_string(), "/usr/bin".to_string()),
       ("DBUS_SESSION_BUS_ADDRESS".to_string(), "unix:path=/run/user/1001/bus".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &server_bin_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
 
     assert_eq!(rewritten.values["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
   }
@@ -211,15 +244,16 @@ mod tests {
   fn moves_existing_server_dir_to_the_front_and_keeps_pydantic_values() {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
     let inherited = Env::from([
       ("PATH".to_string(), format!("/usr/bin:{}", server_bin_dir.display())),
       ("PYDANTIC_DISABLE_PLUGINS".to_string(), "custom".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &server_bin_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
 
     let entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
-    assert_eq!(entries, [server_bin_dir, PathBuf::from("/usr/bin")]);
+    assert_eq!(entries, [gh_wrapper_dir, server_bin_dir, PathBuf::from("/usr/bin")]);
     assert_eq!(rewritten.values["PYDANTIC_DISABLE_PLUGINS"], "custom");
   }
 
@@ -228,10 +262,11 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = root.path().join("release");
     fs::create_dir_all(&server_bin_dir).unwrap();
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
     let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let expected_path = server_bin_dir.join("charliebot");
 
-    let error = agent_environment(&inherited, &server_bin_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
 
@@ -239,7 +274,30 @@ mod tests {
     let mut permissions = fs::metadata(&expected_path).unwrap().permissions();
     permissions.set_mode(0o644);
     fs::set_permissions(&expected_path, permissions).unwrap();
-    let error = agent_environment(&inherited, &server_bin_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+
+    assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
+    assert!(format!("{error:#}").contains("executable file"), "{error:#}");
+  }
+
+  #[test]
+  fn missing_gh_wrapper_fails_with_the_expected_path() {
+    let root = tempfile::tempdir().unwrap();
+    let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = root.path().join("gh-wrapper");
+    fs::create_dir(&gh_wrapper_dir).unwrap();
+    let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let expected_path = gh_wrapper_dir.join("gh");
+
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+
+    assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
+
+    fs::write(&expected_path, "test fixture; this file is not run\n").unwrap();
+    let mut permissions = fs::metadata(&expected_path).unwrap().permissions();
+    permissions.set_mode(0o644);
+    fs::set_permissions(&expected_path, permissions).unwrap();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
     assert!(format!("{error:#}").contains("executable file"), "{error:#}");
@@ -249,68 +307,114 @@ mod tests {
   fn missing_path_is_an_error_that_names_path() {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
     let inherited = Env::from([("KEPT".to_string(), "value".to_string())]);
 
-    let error = agent_environment(&inherited, &server_bin_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
 
     assert!(error.to_string().contains("PATH"), "{error:#}");
   }
 
-  const STARTUP_TEST: &str = "agent_environment::tests::startup_environment_reaches_grandchildren";
+  #[test]
+  fn the_config_token_command_reaches_the_agent_environment() {
+    let root = tempfile::tempdir().unwrap();
+    let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let mut agent = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    fs::write(
+      home.path().join(charliebot_core::config::CONFIG_FILENAME),
+      "github:\n  app_token_command: ~/synthetic/app-token-command\n",
+    )
+    .unwrap();
+    let cfg = charliebot_core::config::load_config(home.path(), &Default::default()).unwrap();
+    assert!(!agent.values.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));
+
+    gh_wrapper::apply_token_command(&mut agent.values, cfg.github.app_token_command.as_deref());
+
+    assert_eq!(
+      agent.values[gh_wrapper::TOKEN_COMMAND_VAR],
+      charliebot_core::paths::expanduser("~/synthetic/app-token-command")
+    );
+  }
+
+  const STARTUP_TEST: &str = "agent_environment::tests::server_children_keep_the_operator_environment";
   /// Set only in the child process: the file the child writes the grandchild's environment to.
   const CHILD_OUTPUT_ENV: &str = "CHARLIEBOT_STARTUP_ENV_OUTPUT";
   const SERVER_BIN_DIR_ENV: &str = "CHARLIEBOT_SERVER_BIN_DIR";
 
   #[test]
-  fn startup_environment_reaches_grandchildren() {
+  fn server_children_keep_the_operator_environment() {
     match env::var_os(CHILD_OUTPUT_ENV) {
       Some(output) => startup_child(Path::new(&output)),
       None => startup_parent(),
     }
   }
 
-  /// Run this test again in a child process with the activation the server would start with, then read the
-  /// environment that the child's grandchild inherited.
+  /// Run this test again in a child process with the environment the server starts with, then read both the
+  /// environment the child's non-agent grandchild inherited and the agent environment the server builds.
   fn startup_parent() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");
     fs::create_dir_all(&venv_bin).unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
     let output = root.path().join("grandchild.env");
     let path = [venv_bin.display().to_string(), "/usr/bin".to_string(), "/bin".to_string()].join(":");
 
     let status = Command::new(env::current_exe().unwrap())
       .args(["--exact", STARTUP_TEST])
       .env_clear()
-      .env("PATH", path)
+      .env("PATH", &path)
       .env("VIRTUAL_ENV", root.path().join("venv"))
       .env("UV_RUN_RECURSION_DEPTH", "1")
+      .env("GH_TOKEN", "operator-token")
       .env(SERVER_BIN_DIR_ENV, &server_bin_dir)
+      .env("CHARLIEBOT_TEST_GH_WRAPPER_DIR", &gh_wrapper_dir)
       .env(CHILD_OUTPUT_ENV, &output)
       .status()
       .unwrap();
     assert!(status.success(), "the startup child failed: {status}");
 
+    // The server's own environment and its non-agent children keep the operator's values: gh resolves to the
+    // operator's gh, and the wrapper's PATH entry and variables are absent.
     let grandchild = fs::read_to_string(&output).unwrap();
     let vars: BTreeMap<&str, &str> = grandchild.lines().filter_map(|line| line.split_once('=')).collect();
-    assert!(!vars.contains_key("VIRTUAL_ENV"));
-    assert!(!vars.contains_key("UV_RUN_RECURSION_DEPTH"));
-    let entries: Vec<&str> = vars["PATH"].split(':').collect();
-    assert_eq!(entries[0], server_bin_dir.to_str().unwrap());
+    assert_eq!(vars["PATH"], path);
+    assert_eq!(vars["VIRTUAL_ENV"], root.path().join("venv").to_str().unwrap());
+    assert_eq!(vars["UV_RUN_RECURSION_DEPTH"], "1");
+    assert_eq!(vars["GH_TOKEN"], "operator-token");
+    assert!(!vars.contains_key(gh_wrapper::WRAPPER_PATH_VAR));
+    assert!(!vars.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));
+
+    // The agent environment built from the same process environment is the wrapper one.
+    let agent = fs::read_to_string(output.with_extension("agent")).unwrap();
+    let agent_vars: BTreeMap<&str, &str> = agent.lines().filter_map(|line| line.split_once('=')).collect();
+    let entries: Vec<&str> = agent_vars["PATH"].split(':').collect();
+    assert_eq!(entries[0], gh_wrapper_dir.to_str().unwrap());
+    assert_eq!(entries[1], server_bin_dir.to_str().unwrap());
     assert!(entries.contains(&venv_bin.to_str().unwrap()), "the venv bin stays on PATH: {entries:?}");
-    assert_eq!(vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
-    assert_eq!(vars["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
+    assert!(!agent_vars.contains_key("VIRTUAL_ENV"));
+    assert!(!agent_vars.contains_key("UV_RUN_RECURSION_DEPTH"));
+    assert!(!agent_vars.contains_key("GH_TOKEN"));
+    assert_eq!(agent_vars[gh_wrapper::WRAPPER_PATH_VAR], gh_wrapper_dir.join("gh").to_str().unwrap());
+    assert_eq!(agent_vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
+    assert_eq!(agent_vars["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
   }
 
-  /// The startup step as `main` runs it, then the grandchild whose environment the parent checks.
+  /// The startup step as `main` runs it, the grandchild that inherits the unchanged process environment, and the
+  /// agent values the parent checks.
   fn startup_child(output: &Path) {
     let server_bin_dir = PathBuf::from(env::var_os(SERVER_BIN_DIR_ENV).unwrap());
+    let gh_wrapper_dir = PathBuf::from(env::var_os("CHARLIEBOT_TEST_GH_WRAPPER_DIR").unwrap());
 
-    let agent = replace_process_environment(&server_bin_dir).unwrap();
+    let agent = agent_base_environment(&server_bin_dir, &gh_wrapper_dir).unwrap();
 
-    assert_eq!(process_environment().unwrap(), agent.values);
     let grandchild = Command::new("/usr/bin/env").output().unwrap();
     fs::write(output, grandchild.stdout).unwrap();
+    let values: String = agent.values.iter().map(|(name, value)| format!("{name}={value}\n")).collect();
+    fs::write(output.with_extension("agent"), values).unwrap();
   }
 
   #[test]

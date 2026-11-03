@@ -470,6 +470,12 @@ fn run_case(case_path: &Path) -> Result<(), String> {
     .map(|item| substitute(item))
     .collect();
 
+  // The CLI's host builder places the agent gh wrapper first on PATH; give the case's checkout one, and give the
+  // process a PATH when the case does not set one.
+  let wrapper = temp.path().join("repo/rust/crates/runtime/agents/gh_wrapper/gh");
+  std::fs::create_dir_all(wrapper.parent().unwrap()).map_err(|error| format!("{}: {error}", wrapper.display()))?;
+  charliebot_shell_harness::write_executable(&wrapper, "#!/bin/sh\n");
+
   let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
   let stdin = case.get("stdin").and_then(Value::as_str).map(substitute);
   command
@@ -478,6 +484,7 @@ fn run_case(case_path: &Path) -> Result<(), String> {
     .env_clear()
     .env("CHARLIEBOT_HOME", temp.path().join("home"))
     .env("HOME", temp.path().join("user-home"))
+    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
     .env("CHARLIEBOT_REPO_ROOT", temp.path().join("repo"))
     .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
     .stdout(Stdio::piped())

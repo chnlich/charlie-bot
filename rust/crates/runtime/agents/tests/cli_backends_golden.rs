@@ -109,6 +109,7 @@ impl Fixture {
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
+      github: Default::default(),
       sections: Sections::default(),
     }
   }
@@ -567,6 +568,22 @@ fn check_finish(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Ve
   }
 }
 
+/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+fn gh_wrapper_env(dir: &Path) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = dir.join("gh-wrapper");
+  fs::create_dir_all(&wrapper_dir).unwrap();
+  let wrapper = wrapper_dir.join("gh");
+  fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+  let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(&wrapper, permissions).unwrap();
+  env_map(&json!({
+    "PATH": format!("{}:{}:/usr/bin:/bin", wrapper_dir.display(), dir.display()),
+    charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR: wrapper.display().to_string(),
+  }))
+}
+
 /// Runs one fake `agy` through the runner's final-stdout path. Returns the events it emitted, the exit code the runner
 /// recorded, and the guard error that ended the run.
 async fn run_finish(fx: &Fixture, case: &Value) -> Value {
@@ -575,8 +592,7 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
   let launch = LaunchArgs { resume_session_id: opt_text(&case["resume"]), ..LaunchArgs::default() };
   let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch.clone()).unwrap();
   let runner = AgentRunner::new("antigravity", backend, launch);
-  let environment =
-    AgentBaseEnvironment { values: env_map(&json!({"PATH": format!("{}:/usr/bin:/bin", path_text(&dir))})) };
+  let environment = AgentBaseEnvironment { values: gh_wrapper_env(&dir) };
   let mut request = RunRequest::new(
     text(&case["prompt"]).to_string(),
     dir.join("cwd"),

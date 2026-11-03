@@ -438,6 +438,22 @@ struct Setup {
   guard: Arc<ProcessGroupGuard>,
 }
 
+/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+fn gh_wrapper_env(base: &Path, path: &str) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = base.join("gh-wrapper");
+  fs::create_dir_all(&wrapper_dir).unwrap();
+  let wrapper = wrapper_dir.join("gh");
+  fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+  let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(&wrapper, permissions).unwrap();
+  Env::from([
+    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+    (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+  ])
+}
+
 impl Setup {
   fn new(root: &Root, registry: Registry, config: &str) -> anyhow::Result<Self> {
     let home = root.home();
@@ -447,7 +463,7 @@ impl Setup {
     let registry = Arc::new(registry);
     let store = Store::new(cfg.clone(), registry.metadata_slots(), store_hooks(Arc::clone(&registry)))?;
     let startup = Arc::new(StartupState::default());
-    startup.insert(AgentBaseEnvironment { values: Env::from([("PATH".to_string(), "/usr/bin".to_string())]) })?;
+    startup.insert(AgentBaseEnvironment { values: gh_wrapper_env(&home, "/usr/bin") })?;
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
       .ancestors()
       .nth(4)

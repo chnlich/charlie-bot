@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use charliebot_agents::agent_environment::{self, AgentBaseEnvironment};
+use charliebot_agents::gh_wrapper;
 use charliebot_agents::local_work_guard;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
@@ -179,7 +180,7 @@ fn run_server() -> ExitCode {
   runtime.block_on(run(repo_root, agent_base))
 }
 
-async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode {
+async fn run(repo_root: RepoRoot, mut agent_base: AgentBaseEnvironment) -> ExitCode {
   let mut stop = match StopSignal::install() {
     Ok(stop) => stop,
     Err(error) => {
@@ -219,6 +220,8 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     return finish_boot_stop(None, None, signal_receiver).await;
   }
   let cfg = state_parts.config.get().expect("load_inputs loaded the config");
+  // The config load runs after `replace_environment`, so the host's token command reaches the agent environment here.
+  gh_wrapper::apply_token_command(&mut agent_base.values, cfg.github.app_token_command.as_deref());
 
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, None, signal_receiver).await;
@@ -482,7 +485,8 @@ struct StateParts {
   credentials: Arc<charliebot_core::hot_reload::HotReload<charliebot_core::credentials::Credentials>>,
 }
 
-/// The checkout, read once, and the process environment rewritten from it. Any error names the input it concerns.
+/// The checkout, read once, and the agent environment built from the process environment. The process environment
+/// itself keeps the operator's values. Any error names the input it concerns.
 fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
   let server_executable =
@@ -490,8 +494,8 @@ fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let server_bin_dir = server_executable
     .parent()
     .ok_or_else(|| format!("charliebot-server path has no parent: {}", server_executable.display()))?;
-  let agent_base =
-    agent_environment::replace_process_environment(server_bin_dir).map_err(|error| format!("{error:#}"))?;
+  let agent_base = agent_environment::agent_base_environment(server_bin_dir, &gh_wrapper::dir_under(repo_root.path()))
+    .map_err(|error| format!("{error:#}"))?;
   Ok((repo_root, agent_base))
 }
 

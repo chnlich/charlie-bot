@@ -27,6 +27,22 @@ use serde_json::Map;
 use serde_json::Value;
 use serde_yaml::Mapping;
 
+/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+fn gh_wrapper_env(base: &Path, path: &str) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = base.join("gh-wrapper");
+  std::fs::create_dir_all(&wrapper_dir).unwrap();
+  let wrapper = wrapper_dir.join("gh");
+  std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+  let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+  permissions.set_mode(0o755);
+  std::fs::set_permissions(&wrapper, permissions).unwrap();
+  Env::from([
+    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+    (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+  ])
+}
+
 pub fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
   feature_context_with_extra_backends(&[])
 }
@@ -102,7 +118,7 @@ fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempD
   ));
   let startup = Arc::new(StartupState::default());
   startup
-    .insert(AgentBaseEnvironment { values: Env::from([("PATH".to_string(), "/usr/bin".to_string())]) })
+    .insert(AgentBaseEnvironment { values: gh_wrapper_env(home.path(), "/usr/bin") })
     .expect("agent base environment inserts");
   startup.insert(BackendPool::default()).expect("backend pool inserts");
   startup

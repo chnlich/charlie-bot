@@ -302,6 +302,10 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   if startup_stop.is_cancelled() {
     return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
   }
+  // A page read that finds the task-tree index past its TTL rebuilds it on a background thread instead of stalling
+  // for the walk over the home. The store needs its own handle for that, so it is installed once the boot's
+  // recovery has finished.
+  features.store.enable_tree_index_background_refresh();
   let state = Arc::new(AppState {
     features,
     build_info,

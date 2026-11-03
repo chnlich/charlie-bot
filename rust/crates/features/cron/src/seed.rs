@@ -19,25 +19,19 @@ pub struct SeedReport {
 
 /// Seed repo-owned default cron tasks into per-job host files by name.
 ///
-/// Reads `configs/cron.default.yaml` from the repo and the host `config.d/cron.d/` directory. A default entry
-/// with no host file `cron.d/<name>.yaml` is created with the entry body minus `name`. Its `prompt_file` pointer
-/// stays intact: the pointed file owns the prompt body, and the host file carries only the path to it. An entry
-/// whose host file exists is left unchanged. Host-only files are never rewritten or dropped.
+/// Reads the repo's `configs/cron.default.yaml` and the host `config.d/cron.d/` directory. A default entry with no
+/// host file `cron.d/<name>.yaml` is created from its body minus `name`, keeping the `prompt_file` pointer. An
+/// existing host file is left unchanged, and host-only files are never rewritten or dropped.
 ///
-/// With `dry_run` the same validation runs, and nothing is written or created. A would-be seed then reports
-/// `would-create`, so the `./scripts/setup.sh -n` preview fails exactly where the real run fails.
+/// With `dry_run` the same validation runs and nothing is written; a would-be seed reports `would-create`, so the
+/// `./scripts/setup.sh -n` preview fails exactly where the real run fails. `loader::validate_body` checks every
+/// body first, each step's `prompt_file` included, and a failed check writes nothing.
 ///
-/// Creates `config.d/cron.d/` when absent. Writes through [`loader::write_task_file`], the same writer the cron
-/// API uses.
-///
-/// Every default entry is validated before writing. Each must construct a [`crate::config::ScheduledTaskConfig`]
-/// after `prompt_file`/`local` resolution, and every `prompt_file` must resolve to an existing file. An entry
-/// with `steps` resolves each step's `prompt_file` exactly like the task-level pointer. A failed validation
-/// writes nothing.
+/// Creates `config.d/cron.d/` when absent, and each new host file goes through [`loader::write_task_file`], the
+/// writer the cron API uses.
 ///
 /// [`setup_step`], which `charliebot setup` runs, is this function's only caller. The server startup path
-/// ([`charliebot_core::home_init::init_charliebot_home`]) never calls it, so the server never writes cron
-/// config. The tests assert that invariant directly.
+/// `init_charliebot_home` never calls it, so the server never writes cron config.
 pub fn seed_default_cron_tasks(
   cfg: &CharlieBotConfig,
   repo_root: &Path,

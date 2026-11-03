@@ -8,7 +8,7 @@ use std::fs;
 use charliebot_shell_harness::Run;
 use serde_json::{Value, json};
 
-use super::world::{World, write_behavior};
+use super::world::{World, fake_charliebot, replace_charliebot, write_behavior};
 
 const DELEGATE: &str = "POST /api/internal/delegate";
 const DELEGATION_CANCEL: &str = "POST /api/sessions/delegation-child/runs/task-run/cancel";
@@ -187,4 +187,24 @@ fn test_switch_restores_when_the_run_makes_no_tool_call_and_names_its_backend() 
     world.report(&run)
   );
   world.assert_untouched();
+}
+
+#[test]
+fn test_switch_reads_with_the_current_release_when_the_target_lacks_a_read() {
+  // A release built between the switch-helper group and run-first-command still works as a switch's target: its
+  // binary carries the group but not that read, so the switch reads with the binary of the release current names.
+  let mut world = World::new();
+  let band = format!(
+    "if [ \"$1\" = switch-helper ] && [ \"$2\" = run-first-command ]; then\n  \
+     echo 'unknown switch helper' >&2\n  exit 2\nfi\nexec {} \"$@\"\n",
+    fake_charliebot().display()
+  );
+  replace_charliebot(&world.releases.join(&world.new_sha), &band);
+
+  let run = switch_to_new_release(&mut world, &[]);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(world.report(&run).contains("SWITCH COMPLETE"), "{}", world.report(&run));
+  assert!(world.serves_release(&world.new_sha), "{}", world.report(&run));
+  assert_eq!(task_left_behind(&world), Vec::<String>::new(), "{}", world.report(&run));
 }

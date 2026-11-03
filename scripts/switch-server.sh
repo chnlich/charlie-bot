@@ -26,9 +26,10 @@
 #
 # Every read of the home, of a run record and of an API answer goes through
 # `charliebot switch-helper` (rust/crates/app/switch-helper). The binary is chosen once, when the switch starts: the
-# target release's `charliebot` when it has the subcommand, otherwise the `charliebot` of the release `current` names
-# at that moment. The fallback lets a switch back to a release older than this script work: the release that serves
-# the switch supplies the binary. When neither release has it, the preflight exits 2 before it changes anything.
+# target release's `charliebot` when it carries the reads the script calls, otherwise the `charliebot` of the release
+# `current` names at that moment. The fallback lets a switch back to a release older than this script work: the
+# release that serves the switch supplies the binary. When neither release has the reads, the preflight exits 2 before
+# it changes anything.
 #
 # The probe turn runs after the readback, in a session of its own. It passes once the run records its first assistant
 # output (a message or a tool call) or ends success. The archive then stops every run of the session that has not ended,
@@ -150,13 +151,20 @@ fail() { log "preflight failed: $*"; exit 1; }
 RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
 HELPER_BIN=""   # the release's `charliebot`, chosen by helper_binary below
 
-# supports_switch_helper BIN: the binary exists and parses the subcommand group. A release older than the group exits
-# nonzero on it, which is the answer.
+# supports_switch_helper BIN: the binary exists and carries the reads the script calls: the subcommand group, and
+# `run-first-command`, the one read a release built between the group and this script lacks. The read is probed on a
+# home path that does not exist: a binary that has it answers the metadata read failure with exit 1, and one that
+# lacks it answers the unknown name with the usage exit 2.
 supports_switch_helper() {
-  [ -x "$1" ] && "$1" switch-helper --help > /dev/null 2>&1
+  [ -x "$1" ] || return 1
+  "$1" switch-helper --help > /dev/null 2>&1 || return 1
+  local rc
+  "$1" switch-helper run-first-command "$1.probe-home" probe probe > /dev/null 2>&1
+  rc=$?
+  [ "$rc" -ne 2 ]
 }
 
-# helper_binary: choose the binary once, when the switch starts, and exit 2 when neither release has the subcommand.
+# helper_binary: choose the binary once, when the switch starts, and exit 2 when neither release has the reads.
 helper_binary() {
   if [ -n "$HELPER_BIN" ]; then return 0; fi
   if supports_switch_helper "$RELEASE_DIR/charliebot"; then
@@ -169,7 +177,7 @@ helper_binary() {
     HELPER_BIN="$RELEASES_DIR/$current/charliebot"
     return 0
   fi
-  log "preflight failed: neither release $TARGET_SHA nor the release current names has charliebot switch-helper"
+  log "preflight failed: neither release $TARGET_SHA nor the release current names has the switch-helper reads this script calls"
   exit 2
 }
 

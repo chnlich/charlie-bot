@@ -10,7 +10,7 @@ The entry point is `review.mjs`. It runs on Node 20 or later and calls the `clau
 node dev/week-review/review.mjs label --from 2026-10-14T20:24:49Z --to 2026-10-21T20:29:58Z \
   --reports-until 2026-10-21T20:33:00Z --out <dir> [--home <CHARLIEBOT_HOME>] [--model claude-opus-5-5] [--parallel 6]
 node dev/week-review/review.mjs tally --out <dir>
-node dev/week-review/review.mjs rejudge --out <dir> --model gpt-5.5 [--sample 20] [--seed 1]
+node dev/week-review/review.mjs rejudge --out <dir> --model <model> --gateway <base URL> [--sample 20] [--seed 1]
 ```
 
 - `label` selects the window's messages from the session store (`<home>/sessions`, default `CHARLIEBOT_HOME` or
@@ -47,7 +47,9 @@ The judge is `claude -p --model claude-opus-5-5 --output-format json --dangerous
 disabled (event 8849, `classify.sh`). The prompt and packet go in on stdin, separated by a rule line. The answer is the
 last fenced `json` block of the result, or failing that the array from the first `[` to the last `]` (event 9014 and
 event 9027 for the repair steps). A message the answer skips gets one more call that judges only that message (event
-9027, `fill_missing.py`).
+9027, `fill_missing.py`). An answer for an id outside the packet is dropped and its id recorded in the judgment
+(`dropped_ids`), as the same repair step did: a model that mistypes an id leaves its message unanswered, so the retry
+judges it. Each packet still needs exactly one answer per message, or the run fails.
 
 ## Message selection and file merging
 

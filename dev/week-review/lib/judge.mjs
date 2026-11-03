@@ -42,6 +42,15 @@ export function parseAnswers(resultText, where) {
   }
 }
 
+// The answers for the expected ids, and the ids of the answers outside them. A model that mistypes an id leaves its
+// message unanswered, so the caller judges that message again and records the mistyped id.
+export function splitAnswers(answers, expectedIds) {
+  const expected = new Set(expectedIds);
+  const kept = answers.filter((answer) => expected.has(answer?.id));
+  const dropped = answers.filter((answer) => !expected.has(answer?.id)).map((answer) => answer?.id ?? null);
+  return { kept, dropped };
+}
+
 // Fails unless `answers` holds exactly one well-formed object per expected id.
 export function checkAnswers(answers, expectedIds, where) {
   if (!Array.isArray(answers)) throw new Error(`${where}: the answer is not an array`);

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { mergeFiles, FILE_CAP } from '../lib/files.mjs';
 import { PACKET_LIMIT, buildChildPackets } from '../lib/packets.mjs';
-import { VERDICTS, checkAnswers, parseAnswers } from '../lib/judge.mjs';
+import { VERDICTS, checkAnswers, parseAnswers, splitAnswers } from '../lib/judge.mjs';
 import { readCredential } from '../lib/gateway.mjs';
 import { sampleIndices } from '../lib/rejudge.mjs';
 import { summarize } from '../lib/tally.mjs';
@@ -168,6 +168,9 @@ test('an answer is the last fenced block, and a missing or malformed answer fail
   assert.throws(() => checkAnswers([{ ...good, verdict: 'maybe' }], ['a'], 'test'), /verdict/);
   assert.throws(() => checkAnswers([{ ...good, off_goal_kinds: ['gossip'] }], ['a'], 'test'), /off_goal_kinds/);
   assert.throws(() => checkAnswers([], ['a'], 'test'), /no answer/);
+  const split = splitAnswers([good, { ...good, id: 'x' }], ['a', 'b']);
+  assert.deepEqual(split.kept.map((answer) => answer.id), ['a']);
+  assert.deepEqual(split.dropped, ['x']);
   assert.throws(() => checkAnswers([good], ['b'], 'test'), /unknown id/);
   assert.deepEqual(VERDICTS, ['needed', 'mixed', 'unrelated']);
 });

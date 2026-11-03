@@ -107,8 +107,6 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
-    // The periodic self-heal sweep rechecks the rows this route serves; the page's read does not schedule it.
-    sidebar::count_memoized_read(&features.store, &features.registry, page.rows())?;
     Ok(listing::sessions_list_response(
       &request,
       &features.store,

@@ -284,7 +284,8 @@ impl PageCorpusEntry {
   }
 }
 
-/// Read the sidebar corpus without rendering a row.
+/// Read the sidebar corpus without rendering a row. A memo hit still polls the sidebar state, because the periodic
+/// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
@@ -298,6 +299,8 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
       .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.derived)))
   };
   if let Some((rows, derived)) = cached {
+    // A memo hit still polls, because the periodic self-heal sweep is what catches an edit from outside the server.
+    sidebar::count_memoized_read(store, registry, &rows)?;
     let sequence_fields = store.sequence_listing_fields(&rows)?;
     return Ok(PageRows { rows, derived, sequence_fields });
   }

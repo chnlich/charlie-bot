@@ -22,6 +22,32 @@ pub fn map_until<T: Sync, R: Send>(
   should_stop: &(dyn Fn() -> bool + Sync),
   job: impl Fn(&T) -> R + Sync,
 ) -> Option<Vec<R>> {
+  claim_until(items, (0..items.len()).collect(), should_stop, job)
+}
+
+/// [`map_until`] with the items claimed in descending `costs` order, each cost the item's expected work.
+///
+/// The batch ends when its last item ends, so the costliest items start first and the cheap ones fill the threads
+/// around them.
+pub fn map_until_costliest_first<T: Sync, R: Send>(
+  items: &[T],
+  costs: &[u64],
+  should_stop: &(dyn Fn() -> bool + Sync),
+  job: impl Fn(&T) -> R + Sync,
+) -> Option<Vec<R>> {
+  assert_eq!(items.len(), costs.len(), "every walk item has its cost");
+  let mut claim_order: Vec<usize> = (0..items.len()).collect();
+  claim_order.sort_by_key(|&index| std::cmp::Reverse(costs[index]));
+  claim_until(items, claim_order, should_stop, job)
+}
+
+/// `job` applied to each item, claimed in `claim_order` and returned in the items' order.
+fn claim_until<T: Sync, R: Send>(
+  items: &[T],
+  claim_order: Vec<usize>,
+  should_stop: &(dyn Fn() -> bool + Sync),
+  job: impl Fn(&T) -> R + Sync,
+) -> Option<Vec<R>> {
   let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(WORKERS);
   if items.len() < MIN_ITEMS || workers < 2 {
     let mut results = Vec::with_capacity(items.len());
@@ -39,10 +65,11 @@ pub fn map_until<T: Sync, R: Send>(
     for _ in 0..workers {
       scope.spawn(|| {
         loop {
-          let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-          if index >= items.len() || should_stop() {
+          let claim = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+          if claim >= items.len() || should_stop() {
             return;
           }
+          let index = claim_order[claim];
           let result = job(&items[index]);
           *slots[index].lock().expect("walk slot mutex is not poisoned") = Some(result);
         }

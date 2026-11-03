@@ -95,17 +95,80 @@ pub(crate) fn read_file_lines(
   let Some(map) = open_log_map(path)? else {
     return Ok(Vec::new());
   };
+  Ok(lines_of(&map, &line))
+}
+
+/// When a split read splits a log's lines across threads: from `min_bytes`, into runs of at least `chunk_bytes`, on at
+/// most `max_threads` threads.
+struct SplitSizes {
+  min_bytes: usize,
+  chunk_bytes: usize,
+  max_threads: usize,
+}
+
+/// The boot walk's split sizes.
+///
+/// A thread start takes the process's mapping lock for writing, behind every page fault of the logs mapped beside it,
+/// so a split pays only for the few logs that would end the walk's scan phase alone: on the 8,100-session lab home
+/// three logs of 600 reach the minimum.
+const BOOT_SPLIT: SplitSizes = SplitSizes { min_bytes: 32 << 20, chunk_bytes: 16 << 20, max_threads: 4 };
+
+/// [`read_file_lines`] with a large log's lines split across threads at the boot walk's sizes.
+///
+/// Each thread reads a run of whole lines with its own [`ParseKeys`] (a key compares by name, so the tables mix), and
+/// the events keep the file's line order. The boot walk scans every node's log in parallel, so its largest log would
+/// otherwise end the scan phase alone.
+pub(crate) fn read_file_lines_split(
+  path: &Path,
+  line: impl Fn(&[u8], &ParseKeys) -> Option<CompactValue> + Sync,
+) -> StoreResult<Vec<CompactValue>> {
+  let Some(map) = open_log_map(path)? else {
+    return Ok(Vec::new());
+  };
+  Ok(split_lines_of(&map, &line, &BOOT_SPLIT))
+}
+
+/// [`lines_of`] with the lines of `bytes` split across threads at `sizes`.
+fn split_lines_of(
+  bytes: &[u8],
+  line: &(impl Fn(&[u8], &ParseKeys) -> Option<CompactValue> + Sync),
+  sizes: &SplitSizes,
+) -> Vec<CompactValue> {
+  let threads = (bytes.len() / sizes.chunk_bytes).min(sizes.max_threads);
+  if bytes.len() < sizes.min_bytes || threads < 2 {
+    return lines_of(bytes, line);
+  }
+  // Each run of lines ends just after a newline, so every line lies whole in one run.
+  let mut bounds = vec![0];
+  for part in 1..threads {
+    let target = (bytes.len() * part / threads).max(*bounds.last().expect("the bounds start at zero"));
+    match memchr::memchr(b'\n', &bytes[target..]) {
+      Some(offset) if target + offset + 1 < bytes.len() => bounds.push(target + offset + 1),
+      _ => break,
+    }
+  }
+  bounds.push(bytes.len());
+  let runs: Vec<Vec<CompactValue>> = std::thread::scope(|scope| {
+    let handles: Vec<_> =
+      bounds.windows(2).map(|run| scope.spawn(move || lines_of(&bytes[run[0]..run[1]], line))).collect();
+    handles.into_iter().map(|handle| handle.join().expect("a split read thread completes")).collect()
+  });
+  runs.into_iter().flatten().collect()
+}
+
+/// Every physical line of `bytes` through `line`, including a final line without `\n`, with one [`ParseKeys`].
+fn lines_of(bytes: &[u8], line: &impl Fn(&[u8], &ParseKeys) -> Option<CompactValue>) -> Vec<CompactValue> {
   let keys = ParseKeys::default();
   let mut events = Vec::new();
   let mut start = 0;
-  for boundary in memchr_iter(b'\n', &map) {
-    events.extend(line(&map[start..boundary], &keys));
+  for boundary in memchr_iter(b'\n', bytes) {
+    events.extend(line(&bytes[start..boundary], &keys));
     start = boundary + 1;
   }
-  if start < map.len() {
-    events.extend(line(&map[start..], &keys));
+  if start < bytes.len() {
+    events.extend(line(&bytes[start..], &keys));
   }
-  Ok(events)
+  events
 }
 
 /// Map one event log read-only; `None` covers a missing file and a file with no bytes.
@@ -282,6 +345,28 @@ mod tests {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].to_value(), payload);
     assert_eq!(events[1]["i"], CompactValue::PosInt(1));
+  }
+
+  /// A split read gives the events a single-thread read gives, in the file's order: a split never cuts a line,
+  /// including a line longer than a run across a split point, blank and malformed lines, and a final line without `\n`.
+  #[test]
+  fn a_split_read_gives_the_events_of_a_whole_read() {
+    let mut text = String::new();
+    for index in 0..4_000 {
+      text.push_str(&format!("{{\"id\": {index}, \"pad\": \"{}\"}}\n", "p".repeat(index % 600)));
+      if index % 397 == 0 {
+        text.push_str("\n{broken\n");
+      }
+      if index == 2_000 {
+        text.push_str(&format!("{}\n", serde_json::json!({"blob": "x".repeat(600 << 10)})));
+      }
+    }
+    text.push_str("{\"id\": \"last\"}");
+    let sizes = SplitSizes { min_bytes: 1 << 20, chunk_bytes: 128 << 10, max_threads: 8 };
+    assert!(text.len() >= sizes.min_bytes && text.len() >= sizes.chunk_bytes * sizes.max_threads, "the text splits");
+    let split = split_lines_of(text.as_bytes(), &parse_file_line, &sizes);
+    assert_eq!(split.len(), 4_002, "every object line, the blob and the final line");
+    assert_eq!(split, lines_of(text.as_bytes(), &parse_file_line));
   }
 
   #[test]

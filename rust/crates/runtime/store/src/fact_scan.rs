@@ -82,7 +82,8 @@ impl Store {
       return Ok(None);
     };
     let started = Instant::now();
-    let events: Vec<SharedChatEvent> = ndjson::read_file_lines(&path, scan_line)?.into_iter().map(Arc::new).collect();
+    let events: Vec<SharedChatEvent> =
+      ndjson::read_file_lines_split(&path, scan_line)?.into_iter().map(Arc::new).collect();
     log_large_scan(&path, identity.size(), started);
     if FileIdentity::read(&path)? != Some(identity) {
       return Ok(None);

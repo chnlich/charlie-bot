@@ -395,9 +395,10 @@ pub async fn reconcile_task_tree(
   // The skip checks only read, and no node pass has run yet, so the checks run in parallel and their verdicts are
   // applied in the walk's order: the first failing session in that order fails the walk.
   let check_features = Arc::clone(features);
-  let (_, entries) =
-    blocking_batch(session_dirs, &stop, move |session_dir| examine_session_dir(&check_features, session_dir, marker))
-      .await?;
+  let (_, entries) = blocking_batch(session_dirs, None, &stop, move |session_dir| {
+    examine_session_dir(&check_features, session_dir, marker)
+  })
+  .await?;
   let Some(entries) = entries else {
     return Ok(counters);
   };
@@ -430,22 +431,27 @@ pub async fn reconcile_task_tree(
   // report the absence. `has_no_task_node` proves that from the raw event bytes, so the pass here reports the same
   // absence without folding the log. Each proof reads only its own session's files, so the whole batch proves in
   // parallel before the passes run in the walk's order. A probe that cannot read the session's files fails the node,
-  // as a node pass that cannot read them does.
+  // as a node pass that cannot read them does. Each proof also takes its log's size, the scan's cost below; a log that
+  // cannot be stat'ed costs nothing there, and its scan reports the error.
   let proof_features = Arc::clone(features);
-  let (candidates, no_nodes) = blocking_batch(candidates, &stop, move |candidate| {
+  let (candidates, proofs) = blocking_batch(candidates, None, &stop, move |candidate| {
     let _session_timer = SessionTimer { session_id: candidate.session_id.clone(), started: Instant::now() };
-    proof_features.store.has_no_task_node(&candidate.meta)
+    let log_bytes = std::fs::metadata(proof_features.store.chat_events_path(&candidate.session_id))
+      .map_or(0, |metadata| metadata.len());
+    (proof_features.store.has_no_task_node(&candidate.meta), log_bytes)
   })
   .await?;
-  let Some(no_nodes) = no_nodes else {
+  let Some(proofs) = proofs else {
     return Ok(counters);
   };
+  let (no_nodes, log_bytes): (Vec<_>, Vec<_>) = proofs.into_iter().unzip();
   let absence_proofs_ms = phase_ms();
   // Each node pass reads its node's facts, which a full read folds from the whole log, and lists its run records several
   // times. The fact scans and the run listings read only their own session's files, so they run in parallel here: each
   // pass starts from its scanned facts sealed to the log's identity and reads its runs from the held listing, and it
   // loads the log only where a step needs its chat content. A seal checks the log's identity, so a log that an earlier
-  // pass appended to after its scan is read by its own pass; a run-record write drops its session's held listing.
+  // pass appended to after its scan is read by its own pass; a run-record write drops its session's held listing. The
+  // largest logs start first, so the phase ends close to its total work spread across the threads.
   let _run_lists = features.store.hold_run_lists();
   let pass_nodes: Vec<(String, bool)> = candidates
     .iter()
@@ -453,7 +459,7 @@ pub async fn reconcile_task_tree(
     .map(|(candidate, no_node)| (candidate.session_id.clone(), matches!(no_node, Ok(false))))
     .collect();
   let scan_features = Arc::clone(features);
-  let (_, scans) = blocking_batch(pass_nodes, &stop, move |(session_id, takes_pass)| {
+  let (_, scans) = blocking_batch(pass_nodes, Some(log_bytes), &stop, move |(session_id, takes_pass)| {
     takes_pass.then(|| {
       scan_features.store.hold_run_list(session_id)?;
       scan_features.store.scan_live_facts(session_id)
@@ -557,6 +563,7 @@ fn examine_session_dir(
 }
 
 /// [`parallel_walk::map_until`] on the blocking pool, ended by the startup stop; the items come back with the results.
+/// With `costs`, the items are claimed costliest first ([`parallel_walk::map_until_costliest_first`]).
 ///
 /// A batch reads for seconds on a large home. Run in place, it would hold one of the async runtime's threads for that
 /// long, and the stop request arrives through a runtime task: on a host with one runtime thread, the stop would wait for
@@ -564,6 +571,7 @@ fn examine_session_dir(
 /// before they were batched.
 async fn blocking_batch<T, R>(
   items: Vec<T>,
+  costs: Option<Vec<u64>>,
   stop: &StartupStop,
   job: impl Fn(&T) -> R + Send + Sync + 'static,
 ) -> anyhow::Result<(Vec<T>, Option<Vec<R>>)>
@@ -571,13 +579,17 @@ where
   T: Send + Sync + 'static,
   R: Send + 'static,
 {
+  let map = move |items: &[T], stop: &StartupStop| match &costs {
+    Some(costs) => parallel_walk::map_until_costliest_first(items, costs, &|| stop.is_cancelled(), &job),
+    None => parallel_walk::map_until(items, &|| stop.is_cancelled(), &job),
+  };
   if items.len() < parallel_walk::MIN_ITEMS {
-    let results = parallel_walk::map_until(&items, &|| stop.is_cancelled(), job);
+    let results = map(&items, stop);
     return Ok((items, results));
   }
   let stop = stop.clone();
   tokio::task::spawn_blocking(move || {
-    let results = parallel_walk::map_until(&items, &|| stop.is_cancelled(), job);
+    let results = map(&items, &stop);
     (items, results)
   })
   .await

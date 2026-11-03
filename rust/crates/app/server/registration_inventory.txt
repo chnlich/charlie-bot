@@ -86,7 +86,6 @@ config section	features.user_text_checks	user_text_checks
 config section	features.artifacts	publish
 config section	features.code_server	code_server
 config section	features.slack	slack
-config section	features.github	github
 config section	features.discord	discord
 config section	features.host_auth	host_auth
 config section	features.voice	voice

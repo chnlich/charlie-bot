@@ -1,6 +1,6 @@
 //! The GitHub draft platform: the server calls the REST API with the operator's own token.
 //!
-//! The token command comes from host config (`github.user_token_command`), so no repository content names the
+//! The token command comes from the core config's `github.user_token_command`, so no repository content names the
 //! operator's host. A pull request opens with `draft: true`; a comment goes to the issues comments endpoint. The
 //! sender never retries and never falls back to another account.
 
@@ -15,7 +15,6 @@ use futures_util::future::BoxFuture;
 use http::header;
 use serde_json::{Value, json};
 
-use crate::config::GithubConfig;
 use crate::target;
 
 const API_BASE: &str = "https://api.github.com/";
@@ -32,7 +31,7 @@ impl GithubDraftPlatform {
   /// Build the platform from the live host config with a fresh HTTP client.
   pub fn from_context(context: &DraftContext) -> anyhow::Result<Self> {
     let config = context.config.get()?;
-    let token_command = config.section::<GithubConfig>("github").user_token_command.clone();
+    let token_command = config.github.user_token_command.clone();
     let http = http_client::client(&Settings::from_env())?;
     Ok(Self::with_client(http, API_BASE.to_string(), token_command))
   }

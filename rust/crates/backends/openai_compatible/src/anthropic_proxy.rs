@@ -1,5 +1,6 @@
-//! `POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`: an Anthropic Messages request answered
-//! by an OpenAI-compatible upstream. The upstream call goes through the shared HTTP client.
+//! The Anthropic Messages proxy route that an OpenAI-compatible upstream answers:
+//! `POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`. The upstream call goes through the shared
+//! HTTP client.
 
 use std::collections::VecDeque;
 use std::io;
@@ -278,7 +279,7 @@ impl Relay {
     Ok(())
   }
 
-  /// `_iter_anthropic_sse`'s handling of one line: a `data:` line carries one chunk, and `[DONE]` ends the reading.
+  /// One line of the upstream stream: a `data:` line carries one chunk, and `[DONE]` ends the reading.
   fn handle_line(&mut self, line: &[u8]) -> Result<(), (String, String)> {
     let Some(raw) = line.strip_prefix(b"data:") else {
       return Ok(());

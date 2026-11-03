@@ -21,7 +21,7 @@ pub fn gemini_stream_rules(api_base: &str) -> Result<bool, String> {
   Ok(url.host_str() == Some("generativelanguage.googleapis.com"))
 }
 
-/// `anthropic_to_openai_chat_request(payload, upstream_model)`: the chat completions body for `payload`.
+/// The OpenAI chat completions body for an Anthropic Messages request, with the model set to `upstream_model`.
 pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -> ValueResult<Value> {
   let messages = match get(payload, "messages")? {
     Some(Value::Array(messages)) => messages,
@@ -84,7 +84,7 @@ fn value_str(value: Option<&Value>, missing: &str) -> String {
   value.map_or_else(|| missing.to_string(), text_repr::value_str)
 }
 
-/// `_blocks_to_text(content, label)`: a string as it is, or the text of a list of text blocks.
+/// The text of a string as it is, or of a list of text blocks; `label` names the content in an error.
 fn blocks_to_text(content: &Value, label: &str) -> ValueResult<String> {
   match content {
     Value::String(text) => Ok(text.clone()),
@@ -157,7 +157,7 @@ fn flush_user_parts(converted: &mut Vec<Value>, parts: &mut Vec<Value>) {
   }
 }
 
-/// `_convert_user_message`: a string stays one user message; blocks split at each tool result.
+/// The OpenAI chat messages for a user message: a string stays one message, and blocks split at each tool result.
 fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>> {
   let blocks = match message.get("content") {
     None => return Ok(vec![json!({"role": "user", "content": ""})]),
@@ -195,7 +195,8 @@ fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>>
   Ok(converted)
 }
 
-/// `_convert_assistant_message`: the text joins into `content` (null when empty), and each tool use becomes a call.
+/// The OpenAI chat message for an assistant message: the text joins into `content` (null when empty), and each tool
+/// use becomes a call.
 fn convert_assistant_message(message: &Map<String, Value>) -> ValueResult<Value> {
   let blocks = match message.get("content") {
     None => return Ok(json!({"role": "assistant", "content": ""})),
@@ -243,7 +244,8 @@ fn convert_assistant_message(message: &Map<String, Value>) -> ValueResult<Value>
   Ok(Value::Object(converted))
 }
 
-/// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
+/// The OpenAI function declarations for Anthropic tools: each custom tool becomes a function, and a built-in tool
+/// type is refused.
 fn convert_tools(tools: &Value) -> ValueResult<Vec<Value>> {
   let mut converted = Vec::new();
   for raw in iterate(tools)? {
@@ -268,7 +270,8 @@ fn convert_tools(tools: &Value) -> ValueResult<Vec<Value>> {
   Ok(converted)
 }
 
-/// `_convert_tool_choice`: `auto`, `any` (required), `tool` (a named function) and `none`.
+/// The OpenAI `tool_choice` for an Anthropic one: `auto`, `any` (required), `tool` (a named function) and `none`; any
+/// other type is an error.
 fn convert_tool_choice(choice: &Map<String, Value>) -> ValueResult<Value> {
   match choice.get("type").and_then(Value::as_str) {
     Some("auto") => Ok(json!("auto")),
@@ -282,7 +285,7 @@ fn convert_tool_choice(choice: &Map<String, Value>) -> ValueResult<Value> {
   }
 }
 
-/// `_stop_reason(finish_reason)`: the Anthropic reason for an OpenAI one. Any other value passes through as it is.
+/// The Anthropic stop reason for an OpenAI `finish_reason`; any other value passes through as it is.
 fn stop_reason(finish_reason: Option<&Value>) -> Value {
   match finish_reason {
     None | Some(Value::Null) => json!("end_turn"),
@@ -293,7 +296,7 @@ fn stop_reason(finish_reason: Option<&Value>) -> Value {
   }
 }
 
-/// `_usage_from_openai(usage)`: the prompt and completion counts, and zero cache counts.
+/// The Anthropic usage for an OpenAI usage object: the prompt and completion counts, and zero cache counts.
 pub fn usage_from_openai(usage: Option<&Value>) -> ValueResult<Value> {
   let usage = usage.filter(|usage| is_truthy(usage)).cloned().unwrap_or_else(|| json!({}));
   Ok(json!({
@@ -309,7 +312,8 @@ pub fn new_message_id() -> String {
   format!("msg_{}", Uuid::new_v4().simple())
 }
 
-/// `openai_chat_response_to_anthropic(response, requested_model)`: the Anthropic message for a non-streaming answer.
+/// The Anthropic message for a non-streaming OpenAI chat `response`, with `requested_model` as the model when the
+/// response names none.
 pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str) -> ValueResult<Value> {
   let choices = match get(response, "choices")?.filter(|choices| is_truthy(choices)) {
     Some(choices) => choices,
@@ -362,7 +366,8 @@ pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str
   }))
 }
 
-/// `OpenAIChatStreamToAnthropic`: the stateful translation of the OpenAI chat chunks to Anthropic's stream events.
+/// One tool call of the stream: the upstream call index, the Anthropic content block it fills, and the arguments
+/// that arrived before that block opened.
 struct StreamToolCall {
   call_index: Value,
   block_index: u64,
@@ -373,6 +378,7 @@ struct StreamToolCall {
   started: bool,
 }
 
+/// The stateful translation of the OpenAI chat stream's chunks into Anthropic's stream events.
 pub struct OpenAiChatStream {
   message_id: String,
   model: String,
@@ -422,7 +428,8 @@ impl OpenAiChatStream {
     )]
   }
 
-  /// `events_for_chunk(chunk)`: the events one upstream chunk completes.
+  /// The Anthropic events one upstream chunk completes; the stream keeps the usage and finish reason that
+  /// `finish_events` reports.
   pub fn events_for_chunk(&mut self, chunk: &Value) -> ValueResult<Vec<Event>> {
     let mut events = Vec::new();
     if let Some(usage) = get(chunk, "usage")?.filter(|usage| is_truthy(usage)) {
@@ -444,7 +451,7 @@ impl OpenAiChatStream {
     Ok(events)
   }
 
-  /// `finish_events()`: closes the open blocks, then the message's delta and its stop.
+  /// The events that close the stream: the open blocks, then the message's delta and its stop.
   pub fn finish_events(&mut self) -> ValueResult<Vec<Event>> {
     let mut events = Vec::new();
     self.close_text_block(&mut events);
@@ -464,7 +471,7 @@ impl OpenAiChatStream {
     index
   }
 
-  /// `_ensure_text_block`: the open text block's index, opening one (and closing the tool blocks) when none is open.
+  /// The index of the open text block, opening one and closing the tool blocks when none is open.
   fn open_text_block(&mut self, events: &mut Vec<Event>) -> u64 {
     if let Some(index) = self.text_index {
       return index;
@@ -526,7 +533,8 @@ impl OpenAiChatStream {
     events.push(("content_block_stop", json!({"index": call.block_index})));
   }
 
-  /// `_handle_tool_delta`: a call's first delta opens its block; later deltas carry its arguments.
+  /// Applies one streaming tool-call delta: a call's first delta opens its block, and later deltas carry its
+  /// arguments.
   fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> ValueResult<()> {
     let call_index = match get(tool_call, "index")? {
       None | Some(Value::Null) if self.gemini_stream_rules => json!(0),

@@ -74,7 +74,8 @@ pub fn iterate_member(members: Option<&Value>) -> ValueResult<Vec<Value>> {
   }
 }
 
-/// `value[0]`, for a value already known to be truthy.
+/// The Python meaning of `value[0]` for a truthy value: a list's first element or a string's first character, and a
+/// `KeyError` for an object.
 pub fn first_item(value: &Value) -> ValueResult<Value> {
   match value {
     Value::Array(items) => match items.first() {

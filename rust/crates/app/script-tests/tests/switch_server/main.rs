@@ -383,6 +383,84 @@ fn test_preflight_refusal_exits_1_and_changes_nothing_launcher_preflight() {
   preflight_refusal_exits_1_and_changes_nothing("launcher-preflight");
 }
 
+// ---- preflight: the configuration check reads the target's own commit -------------------------------------------
+
+/// The agent gh wrapper: a file the configuration check requires, which the fixture's old commit lacks.
+const AGENT_GH_WRAPPER: &str = "rust/crates/runtime/agents/gh_wrapper/gh";
+
+/// Commits the agent gh wrapper on top of the clone's old commit and returns the new commit. The clone ends at the old
+/// commit, as a fresh world starts.
+fn commit_agent_gh_wrapper(world: &World) -> String {
+  let wrapper = world.clone.join(AGENT_GH_WRAPPER);
+  fs::create_dir_all(wrapper.parent().expect("a parent")).expect("the wrapper directory");
+  fs::write(&wrapper, "#!/usr/bin/env bash\nexit 0\n").expect("the wrapper");
+  fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("the wrapper's mode");
+  world.git(&world.clone, &["add", "rust"]);
+  world.git(&world.clone, &["commit", "-q", "-m", "add the agent gh wrapper"]);
+  let sha = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  world.git(&world.clone, &["checkout", "-q", world.old_sha.as_str()]);
+  sha
+}
+
+/// Points the switch's TMPDIR at a directory of its own and returns it. `mktemp` names what it creates `tmp.*`.
+fn switch_tmpdir(world: &mut World) -> PathBuf {
+  let tmp = world.sandbox.dir("switch-tmp");
+  world.env.insert("TMPDIR".to_string(), tmp.display().to_string());
+  tmp
+}
+
+/// The switch removes each temporary directory it makes on every exit path, so none is left under `tmp`.
+fn assert_no_temporary_directory_left(tmp: &Path) {
+  let left: Vec<String> = fs::read_dir(tmp)
+    .expect("the switch's temporary directory")
+    .map(|entry| entry.expect("a directory entry").file_name().to_string_lossy().into_owned())
+    .filter(|name| name.starts_with("tmp."))
+    .collect();
+  assert!(left.is_empty(), "the switch left temporary directories: {left:?}");
+}
+
+#[test]
+fn test_switch_passes_a_config_check_that_needs_a_file_only_the_target_commit_adds() {
+  let mut world = World::new();
+  let target = commit_agent_gh_wrapper(&world);
+  install_release(&world.releases, &target);
+  write_behavior(&world.releases.join(&target), &[("check_config_requires", json!(AGENT_GH_WRAPPER))]);
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  let tmp = switch_tmpdir(&mut world);
+
+  let run = world.switch(&["rust", &target]);
+
+  // The clone holds the old commit, which lacks the wrapper: the check passes only on the target's own files.
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), target);
+  assert!(world.serves_release(&target), "{}", world.report(&run));
+  assert_no_temporary_directory_left(&tmp);
+}
+
+#[test]
+fn test_a_refusal_by_the_target_config_check_changes_nothing() {
+  let mut world = World::new();
+  // The target's own commit lacks the wrapper, so the refusal is real: the check reads that commit, not the clone.
+  let target = world.rust_sha.clone();
+  write_behavior(&world.releases.join(&target), &[("check_config_requires", json!(AGENT_GH_WRAPPER))]);
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  let tmp = switch_tmpdir(&mut world);
+  let index_before = world.git(&world.clone, &["ls-files", "--stage"]);
+  let worktrees_before = world.git(&world.clone, &["worktree", "list", "--porcelain"]);
+
+  let run = world.switch(&["rust", &target]);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("rejects the home"), "{}", world.report(&run));
+  world.assert_untouched();
+  assert_eq!(world.git(&world.clone, &["status", "--porcelain"]), "", "{}", world.report(&run));
+  assert_eq!(world.git(&world.clone, &["ls-files", "--stage"]), index_before, "{}", world.report(&run));
+  assert_eq!(world.git(&world.clone, &["worktree", "list", "--porcelain"]), worktrees_before);
+  assert_no_temporary_directory_left(&tmp);
+}
+
 // ---- preflight: the session-weight controllers ------------------------------------------------------
 
 #[test]

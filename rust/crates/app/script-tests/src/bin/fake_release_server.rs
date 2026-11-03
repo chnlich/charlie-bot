@@ -50,6 +50,8 @@ static PROBE_CANCEL: LazyLock<Regex> =
 #[derive(Deserialize)]
 struct Behavior {
   check_config: String,
+  /// A file under CHARLIEBOT_REPO_ROOT that `--check-config` requires, as the agent gh wrapper is; empty requires none.
+  check_config_requires: String,
   adopt: bool,
   run_state: String,
   output: String,
@@ -107,6 +109,15 @@ fn serve() -> io::Result<()> {
     if behavior.check_config == "fail" {
       eprintln!("config error: unknown key server.bogus");
       process::exit(1);
+    }
+    if !behavior.check_config_requires.is_empty() {
+      let root = env::var_os("CHARLIEBOT_REPO_ROOT")
+        .ok_or_else(|| io::Error::other("CHARLIEBOT_REPO_ROOT is not set"))?;
+      let required = PathBuf::from(root).join(&behavior.check_config_requires);
+      if !required.exists() {
+        eprintln!("config error: {} is missing", required.display());
+        process::exit(1);
+      }
     }
     process::exit(0);
   }

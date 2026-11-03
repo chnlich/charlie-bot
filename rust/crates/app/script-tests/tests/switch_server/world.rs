@@ -858,6 +858,7 @@ pub fn write_behavior(dir: &Path, overrides: &[(&str, Value)]) {
 fn behavior_defaults() -> Map<String, Value> {
   let Value::Object(defaults) = json!({
     "check_config": "ok",
+    "check_config_requires": "",
     "adopt": true,
     "run_state": "running",
     "output": "message",

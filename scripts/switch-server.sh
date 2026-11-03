@@ -8,7 +8,8 @@
 # server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
 # agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
 # installed: scripts/release.sh installs them ahead of its trial and rehearsal. It refuses a clone with local changes
-# and a target commit that a fetch does not bring. The switch then stops the old server, moves the clone with
+# and a target commit that a fetch does not bring. Its config check reads an export of the target commit, since the
+# clone holds the old commit until the move. The switch then stops the old server, moves the clone with
 # `git reset --keep <commit>` (forward or back), installs the target commit's slice units with
 # scripts/install-slice-units.sh and reloads the user manager, starts the release and
 # reads it back. A refusal changes nothing and exits 1, except that a missing helper binary exits 2 (below). The switch
@@ -1176,6 +1177,23 @@ weight_controller_check() {
   log "weight controllers ready: controllers='$controllers' switches='$(tr '\n' ' ' <<<"$switches")'"
 }
 
+# target_config_check: the target's --check-config on an export of the target commit's files. The check reads files of
+# the target's own commit (web/templates, the agent gh wrapper), and the clone holds the old commit until switch_forward
+# moves it. `git archive` writes nothing into the clone, so its HEAD, index, files and git metadata stay as they are.
+# The export is removed before the function returns, whether the check accepts or refuses.
+target_config_check() {
+  local tree rc
+  tree="$(mktemp -d)" || fail "cannot create a directory for the export of $TARGET_SHA"
+  if ! git -C "$REPO_ROOT" archive --format=tar "$TARGET_SHA" | tar -x -C "$tree"; then
+    rm -rf "$tree"
+    fail "cannot export $TARGET_SHA from $REPO_ROOT"
+  fi
+  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$tree" "$RELEASE_DIR/charliebot-server" --check-config
+  rc=$?
+  rm -rf "$tree" || fail "cannot remove the export $tree"
+  [ "$rc" -eq 0 ] || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
+}
+
 preflight() {
   PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
@@ -1187,9 +1205,7 @@ preflight() {
   git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
   git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
     || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"
-  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" \
-    "$RELEASE_DIR/charliebot-server" --check-config \
-    || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
+  target_config_check
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"

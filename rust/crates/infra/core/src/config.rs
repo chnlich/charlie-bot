@@ -377,10 +377,15 @@ pub struct TelegramConfig {
   pub chat_id: Option<String>,
 }
 
-/// `github:` section: the agent `gh` wrapper's App token command, `~` expanded.
+/// `github:` section: the operator's own GitHub token command and the agent `gh` wrapper's App token command, `~`
+/// expanded.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubConfig {
+  /// The command line whose standard output is the operator's own GitHub token. The draft sender runs it without a
+  /// shell. Absent, a GitHub draft cannot be sent from the operator's account.
+  #[serde(default)]
+  pub user_token_command: Option<String>,
   /// The executable the wrapper calls with `--write <owner>/<repo>`. Absent, the wrapper refuses every
   /// text-carrying write.
   #[serde(default)]
@@ -571,6 +576,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
   }
 
   let mut github: GithubConfig = typed_section(&config_path_text, "github", section("github"), GithubConfig::default)?;
+  github.user_token_command = github.user_token_command.as_deref().map(paths::expanduser);
   github.app_token_command = github.app_token_command.as_deref().map(paths::expanduser);
 
   Ok(CharlieBotConfig {
@@ -959,6 +965,17 @@ mod tests {
     let home = home_with(&format!("{VALID}github:\n  bogus: x\n"));
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("invalid config key github.bogus"), "{error}");
+  }
+
+  #[test]
+  fn github_user_token_command_is_optional_and_expands_a_configured_tilde() {
+    let cfg = load(&home_with(VALID)).unwrap();
+    assert_eq!(cfg.github.user_token_command, None);
+
+    let config_text = format!("{VALID}github:\n  user_token_command: ~/synthetic/user-token-command\n");
+    let cfg = load(&home_with(&config_text)).unwrap();
+    let expected = paths::expanduser("~/synthetic/user-token-command");
+    assert_eq!(cfg.github.user_token_command.as_deref(), Some(expected.as_str()));
   }
 
   #[test]

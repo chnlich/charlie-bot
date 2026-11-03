@@ -145,13 +145,18 @@ ui:
 slack:
   allowed_user_ids: []
 
-# GitHub: the command that prints the operator's own GitHub token, which the
-# draft sender uses for a pull request or comment in the operator's name. The
-# value is a command line run without a shell, so a host sets its own login's
-# token command here and no repository file names a host path. Unset, a GitHub
-# draft cannot be sent.
+# GitHub: two token commands, each a command line run without a shell, so a host
+# sets its own commands here and no repository file names a host path.
+# user_token_command prints the operator's own GitHub token, which the draft
+# sender uses for a pull request or comment in the operator's name; unset, a
+# GitHub draft cannot be sent. app_token_command is the agent gh wrapper's App
+# token command: the executable (one path, `~` expanded) the wrapper runs with
+# `--write <owner>/<repo>` to mint the agent GitHub App's installation token for
+# a text-carrying write; absent, the wrapper refuses every text-carrying write
+# and names this key in the error.
 github:
   user_token_command:
+  app_token_command:
 
 # Discord: the summon entrypoint's account map (Discord user id -> the person
 # that account belongs to).
@@ -171,9 +176,3 @@ publish:
 telegram:
   chat_id:
 
-# GitHub: the agent gh wrapper's App token command. The executable (one path, `~`
-# expanded) the wrapper runs with `--write <owner>/<repo>` to mint the agent GitHub
-# App's installation token for a text-carrying write. Absent, the wrapper refuses
-# every text-carrying write and names this key in the error.
-github:
-  app_token_command:

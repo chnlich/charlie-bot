@@ -222,7 +222,7 @@ fn main_config() -> CharlieBotConfig {
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
-    github: GithubConfig { app_token_command: None },
+    github: GithubConfig { user_token_command: None, app_token_command: None },
     sections: Sections::default(),
   }
 }

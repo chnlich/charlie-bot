@@ -13,14 +13,16 @@ under one of these kinds:
 - repeat: the child already holds it in an earlier message from this parent, in its own task record
   (its goal, acceptance terms or context refs), or in a report it sent this parent;
 - acknowledgement: it only tells the child something was received or noted, and asks for nothing;
-- other_line: it reports progress or a decision on another line of work or on what the parent will
-  do next, and the child's next step does not depend on it;
+- other_line: it reports progress or a decision on another line of work or on the parent's own
+  work, and the child's next step does not depend on it;
 - background: it is background information or file content outside the child's task;
 - other: the child does not need it, for a reason none of the kinds above names.
 
 Give each flag the quoted passage and one sentence of reason that names the earlier message, the
-task field or the child's report it rests on. When the child needs no part of the message, flag every passage. Content
-that asks the child to do something, or that its task record says it needs, is not flagged.
+task field or the child's report it rests on. When the child needs no part of the message, flag every
+passage. Content that asks the child to do something, or that its task record says it needs, is not
+flagged: the task record is where the child's task starts, and an assignment the message itself adds
+is part of the child's task even when the record does not name it yet.
 
 Answer with a JSON array and nothing else:
 [{"kind": "<kind>", "quote": "<passage>", "reason": "<one sentence>"}]

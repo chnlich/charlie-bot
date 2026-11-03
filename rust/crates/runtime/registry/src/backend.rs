@@ -55,6 +55,7 @@ impl Registry {
       backend_reading_limits: Vec::new(),
       usage_resolvers: crate::registry::Ledger::new("usage resolver"),
       sequence_controllers: crate::registry::Ledger::new("sequence controller"),
+      draft_platforms: crate::registry::Ledger::new("draft platform"),
       plan_registry: crate::registry::Ledger::new("plan registry"),
       open_waiting_items: crate::registry::Ledger::new("open waiting items reader"),
       derived_waiting_items: crate::registry::Ledger::new("derived waiting items reader"),

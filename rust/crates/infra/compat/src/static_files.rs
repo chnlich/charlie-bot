@@ -78,10 +78,12 @@ impl FileBodyMemo {
 
 /// The canonical path of each served directory, resolved the first time a request serves from it.
 ///
-/// A mount's path is fixed for the process's life and the directory check above proved it exists, so resolving
-/// it per request walked every component of the home's path for no new answer.
+/// A mount's path is fixed while it serves, so resolving it per request walked every component of the home's path
+/// for no new answer. A symlinked mount can be retargeted (a release switch moves the link), so a containment check
+/// that fails resolves the mount again before refusing.
 static RESOLVED_DIRECTORIES: LazyLock<Mutex<HashMap<PathBuf, PathBuf>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// The mount's canonical path, from the memo or resolved and kept.
 fn resolved_directory(path: &Path) -> PathBuf {
   let mut memo = RESOLVED_DIRECTORIES.lock().expect("the static directory memo mutex is not poisoned");
   if let Some(resolved) = memo.get(path) {
@@ -89,6 +91,16 @@ fn resolved_directory(path: &Path) -> PathBuf {
   }
   let resolved = paths::realpath(path);
   memo.insert(path.to_path_buf(), resolved.clone());
+  resolved
+}
+
+/// Resolve the mount's canonical path again and replace the memo's answer for a mount whose path moved.
+fn reresolved_directory(path: &Path) -> PathBuf {
+  let resolved = paths::realpath(path);
+  RESOLVED_DIRECTORIES
+    .lock()
+    .expect("the static directory memo mutex is not poisoned")
+    .insert(path.to_path_buf(), resolved.clone());
   resolved
 }
 
@@ -124,9 +136,10 @@ pub fn serve(
     return responses::http_exception(StatusCode::METHOD_NOT_ALLOWED);
   }
   let relative = normpath(route_path.trim_start_matches('/'));
-  let directory = resolved_directory(&served.path);
   let full_path = paths::realpath(&served.path.join(&relative));
-  if !paths::is_within(&full_path, &directory) {
+  if !paths::is_within(&full_path, &resolved_directory(&served.path))
+    && !paths::is_within(&full_path, &reresolved_directory(&served.path))
+  {
     return responses::http_exception(StatusCode::NOT_FOUND);
   }
   let metadata = match std::fs::metadata(&full_path) {
@@ -602,6 +615,33 @@ mod tests {
     assert_eq!(&body(&served)[..], b"old body");
     std::fs::write(&file, "new body, longer").unwrap();
     assert_eq!(&body(&served)[..], b"new body, longer");
+  }
+
+  /// A retargeted mount link serves from its new target: the memo's stale canonical path never refuses the file.
+  #[test]
+  fn a_retargeted_mount_serves_from_its_new_target() {
+    let home = tempfile::tempdir().unwrap();
+    let first = home.path().join("first");
+    let second = home.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(first.join("app.js"), "first body").unwrap();
+    std::fs::write(second.join("app.js"), "second body, longer").unwrap();
+    let mount = home.path().join("current");
+    std::os::unix::fs::symlink(&first, &mount).unwrap();
+    let served = StaticDirectory::new(mount.clone());
+    let body = |served: &StaticDirectory| {
+      let response = serve(served, &MimeTypes::builtin(), "/app.js", &Method::GET, &HeaderMap::new());
+      tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+        .unwrap()
+    };
+    assert_eq!(&body(&served)[..], b"first body");
+    std::fs::remove_file(&mount).unwrap();
+    std::os::unix::fs::symlink(&second, &mount).unwrap();
+    assert_eq!(&body(&served)[..], b"second body, longer");
   }
 
   #[test]

@@ -58,8 +58,7 @@ function groupLimitItemOptions(key, isHideable, expanded) {
   };
 }
 
-function renderGroupLimitToggle(key, hasExtraRows, expanded) {
-  if (!hasExtraRows) return '';
+function renderGroupLimitToggle(key, expanded) {
   const safeKey = escapeHtmlAttr(key);
   const label = expanded ? 'Show less' : 'Show all';
   return `<button type="button"
@@ -353,7 +352,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
     let previewRank = 0;
-    let hasExtraRows = false;
     const groupRows = groupSessions.map((s) => {
       // An exempt root always shows and takes no rank, so the limit counts
       // only the other roots; those past it are the extra rows.
@@ -362,9 +360,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       if (!exempt) previewRank += 1;
       // The open session's root never hides, since a hidden root hides its subtree.
       const isHideable = !exempt && !inPreview && s.id !== activeRootId;
-      // Show all draws only when the group hides a root, so a lone visible
-      // extra row never renders an empty toggle.
-      if (isHideable) hasExtraRows = true;
       return {
         session: s,
         options: groupLimitItemOptions(key, isHideable, isLimitExpanded),
@@ -389,6 +384,23 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
       </button>` : '';
 
+    // The limit toggle sits in front of the first row it hides. Expanding then
+    // leaves Show less where the reader clicked it, not below every extra row.
+    let limitTogglePlaced = false;
+    const groupItemsHtml = groupRows.map(({session, options: rowOptions}) => {
+      let limitToggle = '';
+      if (rowOptions.extraClass && !limitTogglePlaced) {
+        limitToggle = renderGroupLimitToggle(key, isLimitExpanded);
+        limitTogglePlaced = true;
+      }
+      return limitToggle + renderSessionTree(
+        session,
+        filter,
+        {...rowOptions, staticTime: !!options.staticTime},
+        childrenOf
+      );
+    }).join('');
+
     // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1);
     // slate-500 holds 3.4:1, under the 4.5:1 floor. The chevron and the hover actions are icons, which
     // the 3:1 non-text floor admits at slate-500.
@@ -404,13 +416,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         <span class="text-xs text-slate-400 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
-        ${groupRows.map(({session, options: rowOptions}) => renderSessionTree(
-          session,
-          filter,
-          {...rowOptions, staticTime: !!options.staticTime},
-          childrenOf
-        )).join('')}
-        ${renderGroupLimitToggle(key, hasExtraRows, isLimitExpanded)}
+        ${groupItemsHtml}
       </div>
     </div>`;
   }

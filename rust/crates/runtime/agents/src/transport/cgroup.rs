@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cgfs::{Cgroup, EntryKind, Hierarchy, LeafSpec};
 use charliebot_core::cgroup::{
-  AGENTS_SLICE, PROCS_FILE_NAME, SESSION_CGROUP_OOM_SCORE_ADJ, agents_slice_dir, session_cgroup_name,
+  AGENTS_SLICE, PROCS_FILE_NAME, SESSION_CGROUP_CREATED_EVENT, SESSION_CGROUP_ENABLED_EVENT,
+  SESSION_CGROUP_OOM_SCORE_ADJ, SESSION_CGROUP_SWEEP_REMOVED_EVENT, agents_slice_dir, session_cgroup_name,
   session_cgroup_path, session_slice_dirs,
 };
 use charliebot_core::config::CharlieBotConfig;
@@ -153,7 +154,7 @@ pub fn ensure_session_cgroup(config: &SessionCgroupConfig, session_id: &str) -> 
       tasks_max = config.tasks_max,
       cpu_weight = config.enable_cpu_weight,
       io_weight = config.enable_io_weight,
-      "session_cgroup_created"
+      event = SESSION_CGROUP_CREATED_EVENT
     );
   }
   Ok(path)
@@ -372,7 +373,12 @@ pub fn sweep_stale_session_cgroups_until_stopped(
   }
   removed.sort();
   if !removed.is_empty() {
-    tracing::info!(target: "charliebot_agents", count = removed.len(), names = ?removed, "session_cgroup_sweep_removed");
+    tracing::info!(
+      target: "charliebot_agents",
+      count = removed.len(),
+      names = ?removed,
+      event = SESSION_CGROUP_SWEEP_REMOVED_EVENT
+    );
   }
   Ok(removed.len())
 }
@@ -425,7 +431,7 @@ pub fn log_session_cgroup_startup(
     tasks_max,
     cpu_weight = enable_cpu_weight,
     io_weight = enable_io_weight,
-    "session_cgroup_enabled"
+    event = SESSION_CGROUP_ENABLED_EVENT
   );
 }
 

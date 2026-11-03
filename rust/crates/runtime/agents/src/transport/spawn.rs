@@ -1075,8 +1075,9 @@ where
   }
 }
 
-/// Parse one line of the backend's NDJSON stream. A blank line and a line that is not JSON read as `None`; the latter
-/// is logged under `backend_line_not_json`. An invalid UTF-8 line is parsed lossily before it is dropped.
+/// Parse one line of the backend's NDJSON stream. An empty or ASCII-whitespace line and a line that is not JSON read
+/// as `None`; a line that is not JSON is logged under `backend_line_not_json`. A line of invalid UTF-8 is parsed
+/// lossily first, and the repaired event is returned when the repair parses.
 pub fn parse_backend_line(line: &[u8]) -> Option<Value> {
   parse_ndjson_line(line, LineStream::Backend)
 }

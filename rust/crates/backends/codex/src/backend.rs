@@ -292,6 +292,10 @@ async fn collect(
   let mut structured_error: Option<String> = None;
   let mut lines = BufReader::new(stdout).lines();
   while let Some(line) = lines.next_line().await? {
+    // `lines` yields UTF-8, so a line blank in Unicode terms is skipped before the byte parse sees it.
+    if line.trim().is_empty() {
+      continue;
+    }
     let Some(event) = parse_backend_line(line.as_bytes()) else {
       continue;
     };

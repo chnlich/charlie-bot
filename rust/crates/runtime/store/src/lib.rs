@@ -1,6 +1,7 @@
 //! The single writer for session metadata and chat event logs.
 
 pub mod aggregator;
+mod aggregator_hold;
 pub mod chat_events;
 pub mod compact;
 mod control;
@@ -42,6 +43,7 @@ mod write_fault_types;
 pub mod write_faults;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
+pub use aggregator_hold::hold_aggregator_builds;
 pub use compact::CompactValue;
 pub use control::ControlGuard;
 pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEvent, SharedChatEventRange};

@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use charliebot_core::event_types;
 
 use crate::aggregator::MessageAggregator;
+use crate::aggregator_hold;
 use crate::compact::CompactValue;
 use crate::event_types::ChatEvent;
 use crate::projection::MessageProjection;
@@ -57,9 +58,12 @@ impl Store {
     Ok(event)
   }
 
-  /// Ensure the live aggregator is caught up before a caller appends under the control lock.
+  /// Ensure the live aggregator is caught up before a caller appends under the control lock. In a task that holds
+  /// aggregator builds ([`crate::aggregator_hold`]), a session without an aggregator gets none.
   pub async fn prime_aggregator(&self, session_id: &str) -> StoreResult<u64> {
-    self.get_or_init_aggregator(session_id).await?;
+    if !aggregator_hold::builds_held() {
+      self.get_or_init_aggregator(session_id).await?;
+    }
     Ok(self.epoch(session_id))
   }
 
@@ -350,6 +354,38 @@ mod tests {
     assert_eq!(store.history_work().file_reads, reads + 1, "aggregator seeding reads the live history once");
     store.prime_aggregator("synthetic").await.unwrap();
     assert_eq!(store.history_work().file_reads, reads + 1, "a cached aggregator does not read history again");
+  }
+
+  /// A held prime builds no aggregator and reads no history, so its announce skips the session. A task that the held
+  /// future spawns builds as usual, and so does the first prime after the hold, from a log that holds the held append.
+  #[tokio::test]
+  async fn a_held_prime_builds_no_aggregator_and_a_spawned_task_is_not_held() {
+    let (_home, store) = make_test_store();
+    let store = Arc::new(store);
+    for session_id in ["held", "spawned"] {
+      store.append_chat_event(session_id, json!({"type": "user", "content": "seed"})).await.unwrap();
+    }
+    let mut subscription = store.subscribe(&streaming::session_channel("held"));
+    let reads = store.history_work().file_reads;
+
+    let spawn_store = Arc::clone(&store);
+    crate::hold_aggregator_builds(async {
+      let epoch = store.prime_aggregator("held").await.unwrap();
+      let event = store.append_chat_event("held", json!({"type": "task_input_acknowledged", "input_ids": []})).await;
+      store.announce_appended_event("held", &event.unwrap(), epoch).await.unwrap();
+      tokio::spawn(async move { spawn_store.prime_aggregator("spawned").await.unwrap() }).await.unwrap();
+    })
+    .await;
+
+    assert!(!store.session_events.aggregators.lock().unwrap().contains_key("held"), "the held prime built none");
+    assert!(store.session_events.aggregators.lock().unwrap().contains_key("spawned"), "the spawned task is not held");
+    assert_eq!(store.history_work().file_reads, reads + 1, "only the spawned task's prime read its log");
+    let frame = tokio::time::timeout(std::time::Duration::from_millis(1), subscription.recv()).await;
+    assert!(frame.is_err(), "the announce skips a session without an aggregator");
+    store.prime_aggregator("held").await.unwrap();
+    assert_eq!(store.history_work().file_reads, reads + 2, "the first prime after the hold reads the log");
+    let seeded = store.cached_chat_events("held").unwrap();
+    assert_eq!(seeded.len(), 2, "the aggregator seed holds the held append");
   }
 
   /// Renderers under the given event types, each rendering nothing; the other hooks stay empty.

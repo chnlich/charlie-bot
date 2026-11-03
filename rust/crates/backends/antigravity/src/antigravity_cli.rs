@@ -300,7 +300,16 @@ mod tests {
       root.to_string_lossy().into_owned(),
       "test",
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+      },
     )
   }
 
@@ -308,7 +317,16 @@ mod tests {
     let runner = AgentRunner::new(
       "antigravity",
       Box::new(capture_backend(root)),
-      LaunchArgs { log_dir: Some(root.join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: Some(root.join("logs")),
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+      },
     );
     let mut request = RunRequest::new(
       "test".into(),
@@ -498,9 +516,14 @@ mod tests {
   #[test]
   fn argv_passes_the_prompt_as_the_print_value_and_splices_the_conversation() {
     let resumed = backend(LaunchArgs {
-      resume_session_id: Some("conv-abc".to_string()),
       extra_flags: vec!["--sandbox".to_string()],
-      ..LaunchArgs::default()
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: Some("conv-abc".to_string()),
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
     });
     let expected: Vec<&str> = vec![
       "/usr/bin/agy",
@@ -517,13 +540,34 @@ mod tests {
       "--sandbox",
     ];
     assert_eq!(resumed.argv("continue"), expected);
-    assert_eq!(backend(LaunchArgs::default()).argv("--dash-prefixed prompt")[1], "--print=--dash-prefixed prompt");
+    assert_eq!(
+      backend(LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+      })
+      .argv("--dash-prefixed prompt")[1],
+      "--print=--dash-prefixed prompt"
+    );
   }
 
   #[test]
   fn the_instructions_are_framed_into_the_print_value() {
-    let instructed =
-      backend(LaunchArgs { instructions_content: Some("Build stuff.".to_string()), ..LaunchArgs::default() });
+    let instructed = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: Some("Build stuff.".to_string()),
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    });
     assert_eq!(
       instructed.argv("do the work")[1],
       format!("--print={}", frame_system_prompt("Build stuff.", "do the work"))
@@ -538,7 +582,17 @@ mod tests {
       ("GOOGLE_API_KEY".to_string(), "secret".to_string()),
       ("OTHER_VAR".to_string(), "keep".to_string()),
     ]);
-    let prepared = backend(LaunchArgs::default()).child_env(env);
+    let prepared = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .child_env(env);
     assert_eq!(prepared.get("PATH").map(String::as_str), Some("/synthetic/local-bin:/usr/bin"));
     assert_eq!(prepared.get("OTHER_VAR").map(String::as_str), Some("keep"));
     assert!(!prepared.contains_key("GEMINI_API_KEY") && !prepared.contains_key("GOOGLE_API_KEY"));
@@ -546,7 +600,17 @@ mod tests {
 
   #[test]
   fn a_success_envelope_becomes_the_session_text_and_usage_events() {
-    let outcome = backend(LaunchArgs::default()).finish(SUCCESS, "", 0);
+    let outcome = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish(SUCCESS, "", 0);
     assert_eq!(outcome.guard_error, None);
     assert_eq!(outcome.exit_code, 0);
     assert_eq!(
@@ -572,7 +636,17 @@ mod tests {
   #[test]
   fn a_print_timeout_in_stderr_fails_a_success_envelope_with_exit_one() {
     let stderr = "[agy] print timeout after 2s with turn in progress; returning partial output\n";
-    let outcome = backend(LaunchArgs::default()).finish(SUCCESS, stderr, 0);
+    let outcome = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish(SUCCESS, stderr, 0);
     assert_eq!(outcome.events.len(), 1);
     assert_eq!(outcome.events[0]["type"], "error");
     assert!(outcome.events[0]["message"].as_str().unwrap().contains("2s"));
@@ -581,33 +655,92 @@ mod tests {
 
   #[test]
   fn a_failed_status_and_a_nonzero_exit_each_report_their_error_with_the_right_exit_code() {
-    let failed = backend(LaunchArgs::default()).finish(r#"{"status":"ERROR","error":"quota exhausted"}"#, "", 0);
+    let failed = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish(r#"{"status":"ERROR","error":"quota exhausted"}"#, "", 0);
     assert_eq!(
       failed.events,
       vec![json!({"type": "error", "message": "quota exhausted", "content": "quota exhausted"})]
     );
     assert_eq!((failed.exit_code, failed.guard_error), (1, None));
 
-    let named = backend(LaunchArgs::default()).finish(r#"{"status":"ERROR","error":"bad model"}"#, "", 1);
+    let named = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish(r#"{"status":"ERROR","error":"bad model"}"#, "", 1);
     assert_eq!(named.events[0]["message"], "agy exited 1: bad model");
     assert_eq!((named.exit_code, named.guard_error), (1, None));
 
-    let silent = backend(LaunchArgs::default()).finish("", "", 137);
+    let silent = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish("", "", 137);
     assert_eq!(silent.events[0]["message"], "Antigravity CLI exited with code 137");
     assert_eq!((silent.exit_code, silent.guard_error), (137, None));
   }
 
   #[test]
   fn a_contract_breach_on_a_zero_exit_names_a_guard_failure_and_keeps_the_exit_code() {
-    let not_json = backend(LaunchArgs::default()).finish("plain text", "", 0);
+    let not_json = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish("plain text", "", 0);
     assert!(not_json.guard_error.unwrap().contains("non-json stdout"));
     assert_eq!(not_json.exit_code, 0);
 
-    let no_conversation = backend(LaunchArgs::default()).finish(r#"{"status":"SUCCESS","response":"x"}"#, "", 0);
+    let no_conversation = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    })
+    .finish(r#"{"status":"SUCCESS","response":"x"}"#, "", 0);
     assert!(no_conversation.guard_error.unwrap().contains("conversation_id"));
     assert_eq!(no_conversation.events.len(), 1);
 
-    let resumed = backend(LaunchArgs { resume_session_id: Some("other".to_string()), ..LaunchArgs::default() });
+    let resumed = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: Some("other".to_string()),
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: Map::new(),
+    });
     let mismatch = resumed.finish(SUCCESS, "", 0);
     assert!(mismatch.guard_error.unwrap().contains("conv-abc"));
     assert_eq!(mismatch.events.len(), 1);

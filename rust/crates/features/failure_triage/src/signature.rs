@@ -1,10 +1,11 @@
 //! Run cause lines: cleaning, the ordered cause patterns, normalization, the no-cause shapes and the signature keys.
 //!
-//! A run's record names its error material in four places, tried in this order. The first is the error text of its
-//! newest `result` event when that event reports an error. Then come the `error` events of its `events.jsonl` (newest
-//! first), the end of its `agent.stderr.log`, and last the `terminal_reason` of its `result` event. Extraction picks
-//! the first cause the ordered `PATTERNS` list in this file finds across those texts. A record that fits one of the
-//! closed no-cause shapes has no cause to judge.
+//! A run's error material comes from four sources, tried in this order. The first is the error text of the newest
+//! `result` event in the run's event log, when that event reports an error. Then come the `error` events of that log
+//! (newest first), the end of its `agent.stderr.log`, and last the `terminal_reason` of its `result` event. Extraction
+//! picks the first cause the ordered `PATTERNS` list in this file finds across those texts. A backend notice line, the
+//! `[<backend>:<kind>] {json}` shape, is no cause, so extraction drops it from every text. A record whose only material
+//! is notice lines, or that fits one of the closed no-cause shapes, has no cause to judge.
 
 use std::sync::LazyLock;
 
@@ -47,6 +48,12 @@ static BANNER: LazyLock<Vec<Regex>> = LazyLock::new(|| {
   .into_iter()
   .map(|pattern| Regex::new(pattern).expect("every banner expression is valid"))
   .collect()
+});
+
+/// A backend notice line: the `[<backend>:<kind>] {json}` shape a backend writes when it reports its own state. The
+/// notice names no cause of the failure.
+static BACKEND_NOTICE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"^\[[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+\] \{.*\}$").expect("the backend-notice expression is valid")
 });
 
 static UUID: LazyLock<Regex> = LazyLock::new(|| {
@@ -121,12 +128,22 @@ fn line_level(line: &str) -> Option<LogLevel> {
   Some(if level == "ERROR" { LogLevel::Error } else { LogLevel::Other })
 }
 
-/// The cause material of one error text: the text itself when no line carries a log level, or its ERROR-level lines.
-/// A log dump with no ERROR line has no cause material, so extraction continues to an older error event.
+/// Whether a line is a backend notice.
+fn is_backend_notice(line: &str) -> bool {
+  BACKEND_NOTICE.is_match(line.trim())
+}
+
+/// The cause material of one error text: its lines without backend notices, and of those the ERROR-level lines when any
+/// line carries a log level. A log dump with no ERROR line has no cause material, so extraction continues to an older
+/// error event. Text made only of notice lines has none either.
 fn cause_material(text: &str) -> Option<String> {
+  let lines: Vec<&str> = text.lines().filter(|line| !is_backend_notice(line)).collect();
+  if lines.is_empty() {
+    return None;
+  }
   let mut leveled = false;
   let mut errors = Vec::new();
-  for line in text.lines() {
+  for line in lines.iter().copied() {
     match line_level(line) {
       Some(LogLevel::Error) => {
         leveled = true;
@@ -137,7 +154,7 @@ fn cause_material(text: &str) -> Option<String> {
     }
   }
   if !leveled {
-    return Some(text.to_string());
+    return Some(lines.join("\n"));
   }
   if errors.is_empty() { None } else { Some(errors.join("\n")) }
 }
@@ -176,7 +193,6 @@ static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
     CausePattern::new("no-cron-task-file", r"no cron task file under .* names session_id", MatchShape::Fragment),
     CausePattern::new("missing-python-module", r"No module named '([^']+)'", MatchShape::Fragment),
     CausePattern::new("skill-yaml", r"failed to load skill \S+: missing YAML frontmatter", MatchShape::Fragment),
-    CausePattern::new("unrecognized-model", r"\[claude-code:unrecognized_model\].*", MatchShape::Fragment),
     CausePattern::new("mem-cap", "内存上限触发", MatchShape::Fragment),
     CausePattern::new("ratelimit", r"RateLimitError:.*", MatchShape::WholeText),
     CausePattern::new(
@@ -210,7 +226,7 @@ static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
   ]
 });
 
-/// The four shapes of a record whose cause is not in the record.
+/// The five shapes of a record whose cause is not in the record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoCauseShape {
   /// The error text is blank after cleaning.
@@ -221,6 +237,8 @@ pub enum NoCauseShape {
   TerminalReason,
   /// The record holds an exit code and no error text.
   ExitCodeOnly,
+  /// The record's only cause text is a backend notice, which names no cause.
+  BackendNotice,
 }
 
 impl NoCauseShape {
@@ -231,6 +249,7 @@ impl NoCauseShape {
       NoCauseShape::BannerOnly => "the record holds only the LiteLLM banner",
       NoCauseShape::TerminalReason => "the record holds only a terminal_reason with no HTTP status",
       NoCauseShape::ExitCodeOnly => "the record holds only the exit code",
+      NoCauseShape::BackendNotice => "the record's only cause text is a backend notice, which names no cause",
     }
   }
 }
@@ -342,27 +361,25 @@ fn containing_line(text: &str, start: usize, end: usize) -> &str {
 /// The cause of one run, from the error text its newest result event reports, its error-event contents in file order,
 /// its stderr tail and its terminal reason. The result text is the first candidate, then the error events newest first,
 /// then the stderr tail. When no candidate matches a pattern, the result text names the cause if there is one.
-/// Otherwise the newest error event names it, then the stderr tail, and only then the terminal reason.
+/// Otherwise the newest error event names it, then the stderr tail, then a terminal reason that carries an HTTP status.
+/// Backend notice lines name no cause: a record whose only material is notices takes a no-cause shape.
 pub fn extract_run_cause(
   error_texts: &[&str],
   result_error: Option<&str>,
   stderr: &str,
   terminal_reason: Option<&str>,
 ) -> ExtractedCause {
-  let error_materials: Vec<String> = error_texts
-    .iter()
-    .map(|text| clean(text))
-    .filter(|text| !text.is_empty())
-    .filter_map(|text| cause_material(&text))
-    .collect();
-  let result_material = result_error.map(clean).filter(|text| !text.is_empty()).and_then(|text| cause_material(&text));
+  let error_cleaned: Vec<String> = error_texts.iter().map(|text| clean(text)).filter(|text| !text.is_empty()).collect();
+  let error_materials: Vec<String> = error_cleaned.iter().filter_map(|text| cause_material(text)).collect();
+  let result_cleaned = result_error.map(clean).filter(|text| !text.is_empty());
+  let result_material = result_cleaned.as_deref().and_then(cause_material);
+  let stderr_clean = clean(stderr);
+  let stderr_material = cause_material(&stderr_clean).unwrap_or_default();
   for text in result_material.iter().chain(error_materials.iter().rev()) {
     if let Some(line) = match_cause(text) {
       return ExtractedCause::Cause { line, anchor: anchor(text) };
     }
   }
-  let stderr_clean = clean(stderr);
-  let stderr_material = cause_material(&stderr_clean).unwrap_or_default();
   if !stderr_material.is_empty()
     && let Some(line) = match_cause(&stderr_material)
   {
@@ -381,11 +398,24 @@ pub fn extract_run_cause(
   if !stderr_material.is_empty() {
     return ExtractedCause::Cause { line: stderr_material.clone(), anchor: anchor(&stderr_material) };
   }
+  if let Some(reason) = terminal_reason
+    && has_http_status(reason)
+  {
+    let line = format!("terminal_reason={reason}");
+    return ExtractedCause::Cause { line: line.clone(), anchor: anchor(&line) };
+  }
+  let notice = result_cleaned
+    .iter()
+    .chain(error_cleaned.iter().rev())
+    .chain(std::iter::once(&stderr_clean))
+    .flat_map(|text| text.lines())
+    .map(str::trim)
+    .find(|line| is_backend_notice(line));
+  if let Some(notice) = notice {
+    return ExtractedCause::NoCause { shape: NoCauseShape::BackendNotice, anchor: anchor(notice) };
+  }
   if let Some(reason) = terminal_reason {
     let line = format!("terminal_reason={reason}");
-    if has_http_status(reason) {
-      return ExtractedCause::Cause { line: line.clone(), anchor: anchor(&line) };
-    }
     return ExtractedCause::NoCause { shape: NoCauseShape::TerminalReason, anchor: anchor(&line) };
   }
   if !error_texts.is_empty() || result_error.is_some() || !stderr.is_empty() {
@@ -422,6 +452,16 @@ mod tests {
 
   fn cause(line: &str) -> ExtractedCause {
     ExtractedCause::Cause { line: line.to_string(), anchor: line.to_string() }
+  }
+
+  /// A backend notice in the shape the agent stderr log carries.
+  const SYNTHETIC_NOTICE: &str = r#"[claude-code:unrecognized_model] {"model":"synthetic-model","query_source":"sdk"}"#;
+
+  #[test]
+  fn a_cause_line_beside_a_backend_notice_still_names_the_cause() {
+    let text = format!("{SYNTHETIC_NOTICE}\nAssertionError: expected two");
+    let extracted = extract_run_cause(&[], None, &text, None);
+    assert_eq!(extracted, cause("AssertionError: expected two"));
   }
 
   #[test]
@@ -464,7 +504,7 @@ mod tests {
   }
 
   #[test]
-  fn the_four_no_cause_shapes_are_closed_and_distinct() {
+  fn the_five_no_cause_shapes_are_closed_and_distinct() {
     let empty = extract_run_cause(&["\u{1b}[0m   "], None, "", None);
     assert_eq!(empty, ExtractedCause::NoCause { shape: NoCauseShape::EmptyText, anchor: String::new() });
     let whitespace = extract_run_cause(&["   \n\t"], None, "", None);
@@ -490,11 +530,18 @@ mod tests {
     let exit = extract_run_cause(&[], None, "", None);
     assert_eq!(exit, ExtractedCause::NoCause { shape: NoCauseShape::ExitCodeOnly, anchor: String::new() });
 
+    let notice = extract_run_cause(&[SYNTHETIC_NOTICE], None, "", None);
+    assert_eq!(
+      notice,
+      ExtractedCause::NoCause { shape: NoCauseShape::BackendNotice, anchor: SYNTHETIC_NOTICE.to_string() }
+    );
+
     for (cause, shape) in [
       (empty, NoCauseShape::EmptyText),
       (banner, NoCauseShape::BannerOnly),
       (terminal, NoCauseShape::TerminalReason),
       (exit, NoCauseShape::ExitCodeOnly),
+      (notice, NoCauseShape::BackendNotice),
     ] {
       assert!(matches!(cause, ExtractedCause::NoCause { shape: found, .. } if found == shape));
       assert_eq!(run_signature("work", Some(1), "synthetic-backend", &cause), "run:work:1:no-cause:synthetic-backend");

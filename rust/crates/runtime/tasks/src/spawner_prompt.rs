@@ -123,6 +123,9 @@ fn decode_error(bytes: &[u8], start: usize, end: usize, reason: &str) -> String 
 /// The section that states the contract of a task whose record carries no type (`WORKFLOW_NO_REVIEWER_SECTION`).
 pub const WORKFLOW_NO_REVIEWER_SECTION: &str = "workflow_no_reviewer";
 
+/// The section that holds the iteration report contract the improve loop renders (`ITERATION_REPORTS_SECTION`).
+pub const ITERATION_REPORTS_SECTION: &str = "iteration_reports";
+
 /// The persistent workflow sections of a task type, bindings section first (`WORKFLOW_PROMPT_SECTION`). Verify and
 /// cold-read tasks have no workflow section.
 pub fn workflow_prompt_sections(task_type: TaskType) -> Option<&'static [&'static str]> {
@@ -206,7 +209,7 @@ fn required_worker_sections() -> Vec<&'static str> {
     "task_spec_source_files",
     WORKFLOW_NO_REVIEWER_SECTION,
     "task",
-    "iteration_reports",
+    ITERATION_REPORTS_SECTION,
     "worktree_persistence",
     "user_decisions",
     "memory",

@@ -28,14 +28,14 @@
 }
 /* Specificity: plain .hidden cannot beat the id selector above. */
 #ext-usage-toggle.hidden { display: none; }
-/* Collapsed hides the detail rows, expanded hides the summary row; both key
+/* Collapsed hides the detail rows, expanded hides the summary row. Both key
    off the strip's .collapsed class, which renderExtUsage reapplies from the
-   in-memory boolean on every render (initial load, websocket push, 10-minute
-   poll). The 60s repaint never rebuilds children and stays unaware of it. */
+   in-memory boolean on every render: initial load, websocket push, 10-minute
+   poll. The 60s repaint never rebuilds children and stays unaware of it. */
 #ext-usage-strip.collapsed [data-key] { display: none; }
 #ext-usage-strip:not(.collapsed) [data-field="summary"] { display: none; }
 /* Reserve the chip's corner on every row so resting content never sits under
-   it; horizontally scrolled content may briefly pass beneath the chip — the
+   it. Horizontally scrolled content may briefly pass beneath the chip, the
    accepted trade-off for any control that does not scroll with the content. */
 #ext-usage-strip [data-key],
 #ext-usage-strip [data-field="summary"] { padding-right: 44px; }

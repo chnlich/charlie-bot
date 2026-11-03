@@ -27,7 +27,10 @@
 # server start, the rehearsal reads that config with both releases' charliebot-server --check-config, as the switch
 # preflight reads a home: the home serves both releases and the switch back, so a key that either release refuses
 # fails every start, and the check stops the rehearsal in seconds with the refusing release and its error text in the
-# report.
+# report. Each check reads a checkout at its release's own commit, because the check also reads files of that commit
+# (web/templates and the agent gh wrapper): the old check reads the old checkout, and the new check reads a detached
+# worktree at the new commit, as the switch moves the checkout to the target before the new server starts. The
+# rehearsal checkout stays at the old commit for the first server start.
 #
 # Before each switch the rehearsal seeds one live run, because a live switch always has one: the manager turn that
 # requested it. The seed is a manager-turn record whose process is a sleep the new server re-attaches by its recorded
@@ -364,14 +367,26 @@ export CHARLIEBOT_SWITCH_STOP_WAIT_S="$STOP_WAIT_S"
 export PATH="$ORIGINAL_PATH"
 unset CHARLIE_CODE_API_KEY AIGW_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY
 
-# check_config LABEL COMMIT RELEASE: the release's server reads the rehearsal home's config, as the switch preflight
-# reads a home before it starts a server on it. A key that one release does not accept fails every start on the home,
-# so the refusal stops the rehearsal here, in seconds, with the refusing release and its error text in the report,
-# instead of at a server that never reaches server_ready.
+# release_checkout LABEL COMMIT: a detached worktree of the rehearsal checkout at COMMIT, for the LABEL release's
+# configuration check. The check reads files of the release's own commit, and the switch gives a release the checkout
+# at its commit before it starts the release's server. A detached worktree leaves $REPO at the old commit for the first
+# server start.
+release_checkout() {
+  local label=$1 commit=$2 dir
+  dir="$TREE/checkout-$label"
+  git -C "$REPO" worktree add -q --detach "$dir" "$commit" \
+    || preflight_fail "create the $label release's checkout at $commit for its configuration check"
+  printf '%s\n' "$dir"
+}
+
+# check_config LABEL COMMIT RELEASE REPO: the release's server reads the rehearsal home's config and the REPO checkout
+# at the release's commit, as the switch preflight reads a home before it starts a server on it. A key or a file that the
+# release does not accept fails every start on the home, so the refusal stops the rehearsal here, in seconds, with the
+# refusing release and its error text in the report, instead of at a server that never reaches server_ready.
 check_config() {
-  local label=$1 commit=$2 release=$3 output line
+  local label=$1 commit=$2 release=$3 repo=$4 output line
   output="$TREE/check-config-$label.log"
-  if CHARLIEBOT_HOME="$CB_HOME" CHARLIEBOT_REPO_ROOT="$REPO" "$release/charliebot-server" --check-config \
+  if CHARLIEBOT_HOME="$CB_HOME" CHARLIEBOT_REPO_ROOT="$repo" "$release/charliebot-server" --check-config \
     > "$output" 2>&1; then
     log "CONFIG $label: $commit accepts the rehearsal home's config"
     return 0
@@ -382,8 +397,10 @@ check_config() {
   exit 1
 }
 
-check_config old "$OLD_COMMIT" "$RELEASES/$OLD_COMMIT"
-check_config new "$NEW_COMMIT" "$RELEASES/$NEW_COMMIT"
+# $REPO is the old checkout, and the new release's check runs in a worktree at its own commit.
+NEW_CHECKOUT="$(release_checkout new "$NEW_COMMIT")" || exit 2
+check_config old "$OLD_COMMIT" "$RELEASES/$OLD_COMMIT" "$REPO"
+check_config new "$NEW_COMMIT" "$RELEASES/$NEW_COMMIT" "$NEW_CHECKOUT"
 
 SOCK="rehearsal-$$"
 export CHARLIEBOT_TMUX_SOCKET="$SOCK"

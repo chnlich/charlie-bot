@@ -1,5 +1,6 @@
 //! The `mock-home` program writes the synthetic session home of the improve rounds. It reads a served copy back
-//! against its manifest, resets a task-tree home after a server start, and prints the data version.
+//! against its manifest, resets a task-tree home after a server start, prints the data version, and runs the steps of
+//! the startup lab's recovery check (`recovery_check`).
 //!
 //! Exit codes: 0 on success; 1 when `check` finds a mismatch, or on any error; 2 for a usage error.
 
@@ -8,6 +9,7 @@ use std::process::ExitCode;
 
 use charliebot_mock_home::check::{CheckOutcome, check};
 use charliebot_mock_home::generate::generate;
+use charliebot_mock_home::recovery_check::{digest, seed};
 use charliebot_mock_home::task_tree::reset;
 use charliebot_mock_home::{DATA_VERSION, DEFAULT_SEED, PRODUCTION_SESSIONS, Shape};
 use clap::{Parser, Subcommand};
@@ -45,6 +47,29 @@ enum Action {
   Reset { output: PathBuf },
   /// Print the data version. The home lives in `~/improve/mock-home/<version>/`.
   Version,
+  /// Add the recovery check's sessions to SESSIONS, a copy of a task-tree home, and list their live runs in LIVE_RUNS.
+  RecoverySeed { sessions: PathBuf, live_runs: PathBuf },
+  /// Give a live run of the recovery check in SESSIONS the process PID: its pid, start time and a fresh started_at.
+  RecoveryAttach { sessions: PathBuf, session_id: String, run_id: String, pid: u32 },
+  /// Print how many live runs in LIVE_RUNS of an open task have no ended_at yet in SESSIONS, a trial's sessions.
+  RecoveryUnended { sessions: PathBuf, live_runs: PathBuf },
+  /// Print the digest of the files under the trial home HOME that its server wrote after STAMP, against SEED.
+  RecoveryFiles {
+    seed: PathBuf,
+    home: PathBuf,
+    stamp: PathBuf,
+    /// The lab directory, whose trial, run and build paths the digest replaces.
+    #[arg(long)]
+    lab: PathBuf,
+  },
+  /// Print the counted events of the trial server log LOG, with the ids of SEED kept and fresh ids replaced.
+  RecoveryItems {
+    log: PathBuf,
+    seed: PathBuf,
+    /// The lab directory, whose trial, run and build paths the digest replaces.
+    #[arg(long)]
+    lab: PathBuf,
+  },
 }
 
 /// A session count of at least one.
@@ -64,6 +89,12 @@ fn check_exit_code(outcome: CheckOutcome) -> ExitCode {
   }
 }
 
+/// Prints a digest to stdout.
+fn print(digest: anyhow::Result<String>) -> anyhow::Result<ExitCode> {
+  print!("{}", digest?);
+  Ok(ExitCode::SUCCESS)
+}
+
 fn main() -> ExitCode {
   let result = match Cli::parse().command {
     Action::Generate { output, sessions, seed, shape } => {
@@ -75,6 +106,16 @@ fn main() -> ExitCode {
       println!("{DATA_VERSION}");
       Ok(ExitCode::SUCCESS)
     }
+    Action::RecoverySeed { sessions, live_runs } => seed::seed(&sessions, &live_runs).map(|()| ExitCode::SUCCESS),
+    Action::RecoveryAttach { sessions, session_id, run_id, pid } => {
+      seed::attach_live_run(&sessions, &session_id, &run_id, pid).map(|()| ExitCode::SUCCESS)
+    }
+    Action::RecoveryUnended { sessions, live_runs } => seed::unended_live_runs(&sessions, &live_runs).map(|count| {
+      println!("{count}");
+      ExitCode::SUCCESS
+    }),
+    Action::RecoveryFiles { seed, home, stamp, lab } => print(digest::files(&seed, &home, &stamp, &lab)),
+    Action::RecoveryItems { log, seed, lab } => print(digest::items(&log, &seed, &lab)),
   };
   match result {
     Ok(code) => code,

@@ -393,7 +393,10 @@ static SIGNATURE_POOL: LazyLock<SignaturePool> = LazyLock::new(SignaturePool::st
 /// A signature read resolves a session's file below this handle, so it walks only the session's own components.
 /// The store holds the same kind of handle for its identity reads; this one keeps search's reads off the home's
 /// path prefix. A directory that is not there answers None, and the batch reads by path instead.
-static SESSIONS_DIR: LazyLock<Mutex<Option<(PathBuf, Arc<File>)>>> = LazyLock::new(|| Mutex::new(None));
+/// The sessions directory's path and its open handle, so a store built on another home opens its own.
+type SessionsDirMemo = Mutex<Option<(PathBuf, Arc<File>)>>;
+
+static SESSIONS_DIR: LazyLock<SessionsDirMemo> = LazyLock::new(|| Mutex::new(None));
 
 fn sessions_dir_handle(dir: &Path) -> Option<Arc<File>> {
   let mut memo = SESSIONS_DIR.lock().expect("the sessions directory memo mutex is not poisoned");

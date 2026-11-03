@@ -417,10 +417,11 @@ fn trial_preflight(sandbox: &Sandbox, home: &Path, release: &Path) -> Run {
   harness::run(&mut command)
 }
 
-/// A release directory holding the CLI shim and a server file, with the checksums the rehearsal verifies.
-fn write_release(directory: &Path) -> PathBuf {
+/// A release directory holding the CLI shim and a `charliebot-server` of `server_body`, with the checksums the
+/// rehearsal verifies. Returns the file the shim records each call in.
+fn write_release(directory: &Path, server_body: &str) -> PathBuf {
   let calls = write_cli_shim(directory);
-  fs::write(directory.join("charliebot-server"), "fake server binary\n").expect("the release server");
+  write_executable(&directory.join("charliebot-server"), server_body);
   let mut checksums = String::new();
   for name in ["charliebot", "charliebot-server"] {
     let bytes = fs::read(directory.join(name)).expect("a release file");
@@ -430,17 +431,39 @@ fn write_release(directory: &Path) -> PathBuf {
   calls
 }
 
-/// Runs the rehearsal preflight for `home` and `new_release`, with `current` selecting an old release of the same
-/// shape.
-fn rehearsal_preflight(sandbox: &Sandbox, home: &Path, new_release: &Path) -> Run {
+/// A `charliebot-server` stub that accepts any home: the stand-in for a release whose configuration check passes.
+const ACCEPTING_SERVER: &str = "exit 0\n";
+
+/// The refusal a server prints when its config model lacks a key the home carries: the shape the old release printed
+/// for the rehearsal home's guard switch.
+const REFUSING_SERVER: &str =
+  "printf 'charliebot-server: unknown config key server.enable_local_work_guard: unknown field\\n' >&2\nexit 1\n";
+
+/// The rehearsal fixture's commits: origin/main as the new release and its parent as the old one, both real because
+/// the rehearsal requires both to sit on the origin/main it fetches. A test resolves them before it installs a git
+/// stub, which would otherwise answer the reads.
+fn fixture_commits(sandbox: &Sandbox) -> (String, String) {
+  let env = sandbox.env();
+  let new_commit = git(&env, &harness::repo_root(), &["rev-parse", "origin/main"]);
+  let old_commit = git(&env, &harness::repo_root(), &["rev-parse", "origin/main~"]);
+  (old_commit, new_commit)
+}
+
+/// Runs the rehearsal preflight for `home` and `new_release`, with `current` selecting an old release whose
+/// `charliebot-server` is `old_server_body`, under the fixture commits `(old, new)` from `fixture_commits`.
+fn rehearsal_preflight(
+  sandbox: &Sandbox,
+  home: &Path,
+  new_release: &Path,
+  old_server_body: &str,
+  (old_commit, new_commit): (String, String),
+) -> Run {
   let releases = sandbox.dir("releases");
-  let old_commit = "1".repeat(40);
+  let mut env = live_env(sandbox, home);
   let old_release = releases.join(&old_commit);
   fs::create_dir(&old_release).expect("the old release");
-  write_release(&old_release);
+  write_release(&old_release, old_server_body);
   symlink(&old_commit, releases.join("current")).expect("the current link");
-  let new_commit = "2".repeat(40);
-  let mut env = live_env(sandbox, home);
   env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
   let mut command = harness::command("bash", &env);
   command.arg(harness::repo_root().join("scripts/release/switch-rehearsal.sh")).arg(&new_commit).arg(new_release);
@@ -603,9 +626,9 @@ fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
   let sandbox = Sandbox::new();
   let home = live_home(&sandbox, false);
   let new_release = sandbox.dir("new-release");
-  let calls = write_release(&new_release);
+  let calls = write_release(&new_release, ACCEPTING_SERVER);
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release);
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, fixture_commits(&sandbox));
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
@@ -621,9 +644,9 @@ fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credent
   let sandbox = Sandbox::new();
   let home = live_home(&sandbox, true);
   let new_release = sandbox.dir("new-release");
-  let calls = write_release(&new_release);
+  let calls = write_release(&new_release, ACCEPTING_SERVER);
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release);
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, fixture_commits(&sandbox));
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
@@ -640,16 +663,10 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
   let sandbox = Sandbox::new();
   let home = live_home(&sandbox, true);
   let new_release = sandbox.dir("new-release");
-  write_release(&new_release);
-  let cli = new_release.join("charliebot");
-  let body =
-    fs::read_to_string(&cli).unwrap().replace("if [ \"$1 $2\" = \"release-helper free-port\" ]; then exit 1; fi\n", "");
-  fs::write(&cli, body).unwrap();
-  let mut checksums = String::new();
-  for name in ["charliebot", "charliebot-server"] {
-    checksums.push_str(&format!("{:x}  {name}\n", sha2::Sha256::digest(fs::read(new_release.join(name)).unwrap())));
-  }
-  fs::write(new_release.join("sha256sums.txt"), checksums).unwrap();
+  write_release(&new_release, ACCEPTING_SERVER);
+  allow_free_port(&new_release);
+  // The commits come before the git stub, which fails every git call it sees.
+  let commits = fixture_commits(&sandbox);
   sandbox.stub(
     "git",
     "tree=${4%/origin.git}\nprintf 'key not-a-real-key\n' > \"$tree/logs/server_test.log\"\n\
@@ -658,7 +675,7 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
      printf 'key not-a-real-key\n' > \"$tree/home/.charliebot/sessions/test/data/chat_events.jsonl\"\nexit 1\n",
   );
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release);
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, commits);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   let logs = sandbox.root().join("logs");
@@ -666,6 +683,80 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
   for path in ["logs/server_test.log", "rehearsal-home/sessions/test/data/chat_events.jsonl"] {
     assert_eq!(fs::read_to_string(evidence.join(path)).unwrap(), "key [redacted]\n");
   }
+}
+
+// ---- the config check before the first server start ------------------------------------------------------------------
+
+/// A tmux stub whose private server never starts: a rehearsal that reaches tmux stops there in seconds, so a script
+/// without the config check fails fast instead of waiting out a server that never reaches server_ready.
+const TMUX_STOP: &str = "exit 1\n";
+
+/// Removes the shim's free-port refusal, so the preflight picks a real port and the rehearsal runs past it, and
+/// rewrites the checksums the rehearsal verifies for the changed CLI.
+fn allow_free_port(release: &Path) {
+  let cli = release.join("charliebot");
+  let body =
+    fs::read_to_string(&cli).unwrap().replace("if [ \"$1 $2\" = \"release-helper free-port\" ]; then exit 1; fi\n", "");
+  fs::write(&cli, body).unwrap();
+  let mut checksums = String::new();
+  for name in ["charliebot", "charliebot-server"] {
+    checksums.push_str(&format!("{:x}  {name}\n", sha2::Sha256::digest(fs::read(release.join(name)).unwrap())));
+  }
+  fs::write(release.join("sha256sums.txt"), checksums).unwrap();
+}
+
+#[test]
+fn test_rehearsal_config_check_stops_at_a_key_the_old_release_refuses_and_names_it() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("tmux", TMUX_STOP);
+  let home = live_home(&sandbox, false);
+  let new_release = sandbox.dir("new-release");
+  write_release(&new_release, ACCEPTING_SERVER);
+  allow_free_port(&new_release);
+  let (old_commit, new_commit) = fixture_commits(&sandbox);
+
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, REFUSING_SERVER, (old_commit.clone(), new_commit));
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(
+    run.stderr.contains(&format!("the release {old_commit} refused the rehearsal home's config")),
+    "{}",
+    run.describe()
+  );
+  assert!(
+    run.stderr.contains("server.enable_local_work_guard"),
+    "the report does not name the refused key: {}",
+    run.describe()
+  );
+  assert!(!run.stderr.contains("start the private tmux server"), "the rehearsal passed the check: {}", run.describe());
+}
+
+#[test]
+fn test_the_rehearsal_home_the_script_writes_passes_the_built_server_check() {
+  let sandbox = Sandbox::new();
+  let rendered_home = sandbox.dir("rendered-home");
+  let home_path = rendered_home.display().to_string();
+  sandbox.stub("tmux", &format!("rm -rf '{home_path}'\ncp -a \"$CHARLIEBOT_HOME\" '{home_path}'\n{TMUX_STOP}"));
+  let home = live_home(&sandbox, false);
+  let new_release = sandbox.dir("new-release");
+  write_release(&new_release, ACCEPTING_SERVER);
+  allow_free_port(&new_release);
+
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, fixture_commits(&sandbox));
+
+  // Both stub servers accept, so the rehearsal stops at the tmux stub with the home rendered.
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("start the private tmux server"), "{}", run.describe());
+  let config = fs::read_to_string(rendered_home.join("config.yaml")).expect("the rendered config");
+  assert!(!config.contains("enable_local_work_guard"), "{config}");
+  let mut env = sandbox.env();
+  env.insert("CHARLIEBOT_HOME".to_string(), rendered_home.display().to_string());
+  env.insert("CHARLIEBOT_REPO_ROOT".to_string(), harness::repo_root().display().to_string());
+  let mut command = harness::command(harness::built_binary("charliebot-server"), &env);
+  command.arg("--check-config");
+  let check = harness::run(&mut command);
+  assert_eq!(check.code, 0, "{}", check.describe());
+  assert!(check.stdout.contains("config ok"), "{}", check.describe());
 }
 
 // ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------

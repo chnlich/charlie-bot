@@ -927,10 +927,11 @@ mod tests {
   use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
-    FakeGit, GIT_PROGRAM_LOCK, ProcessGroupGuard, child_manager, feature_context, feature_context_with_host_backends,
-    host_probe_count, manager, set_host_login, write_prompted_task, write_task,
+    FakeGit, GIT_PROGRAM_LOCK, child_manager, feature_context, feature_context_with_host_backends, host_probe_count,
+    manager, set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
+  use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
 
   #[test]
   fn cron_expression_uses_minute_grid_and_croniter_day_union() {
@@ -1206,7 +1207,7 @@ mod tests {
     let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
     dispatcher.set_executor(None);
     let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
-    let mut process_guard = crate::test_support::ProcessGroupGuard::new();
+    let process_guard = ProcessGroupGuard::new();
     adapter.launch(&leaf.id, &run.id).unwrap();
 
     let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
@@ -1327,7 +1328,7 @@ mod tests {
     let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
     dispatcher.set_executor(None);
     let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
-    let mut process_guard = crate::test_support::ProcessGroupGuard::new();
+    let process_guard = ProcessGroupGuard::new();
     adapter.launch(&leaf.id, &run.id).unwrap();
 
     let harness_path = features.store.run_dir(&leaf.id, &run.id).join("harness_instructions.md");
@@ -1656,7 +1657,7 @@ mod tests {
       .await
       .unwrap();
     let leaf_id = features.store.child_ids(&node_id).unwrap().first().cloned().expect("the fire created a worker leaf");
-    let mut guard = ProcessGroupGuard::new();
+    let guard = ProcessGroupGuard::new();
     let mut tracked = false;
     let run = tokio::time::timeout(std::time::Duration::from_secs(15), async {
       loop {
@@ -1850,7 +1851,7 @@ mod tests {
   /// `processes`, so the test ends even when it fails before `end_round`.
   async fn wait_for_running_round(
     features: &Arc<FeatureContext>,
-    processes: &mut ProcessGroupGuard,
+    processes: &ProcessGroupGuard,
     node_id: &str,
   ) -> (String, RunRecord) {
     let outcome = tokio::time::timeout(std::time::Duration::from_secs(15), async {
@@ -1933,10 +1934,10 @@ mod tests {
     let (_home, features) = feature_context();
     install_execution(&features).await;
     let (_path, node) = held_worker_task(&features, "code-health").await;
-    let mut processes = ProcessGroupGuard::new();
+    let processes = ProcessGroupGuard::new();
     let scheduler = CronScheduler::new(Arc::clone(&features));
     scheduler.tick_at(utc_at(0, 30)).await.unwrap();
-    let (first_round, first_run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let (first_round, first_run) = wait_for_running_round(&features, &processes, &node.id).await;
 
     // Several due ticks arrived while the first round was still running: one judgment at 00:04 consumes the
     // occurrences 00:01-00:04, no second round joins the running one.
@@ -1962,7 +1963,7 @@ mod tests {
     assert_eq!(round_count(&features, &node.id), 2);
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
     assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:05:00+00:00"));
-    let (second_round, second_run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let (second_round, second_run) = wait_for_running_round(&features, &processes, &node.id).await;
     end_round(&features, &second_round, &second_run).await;
   }
 
@@ -1971,9 +1972,9 @@ mod tests {
     let (_home, features) = feature_context();
     install_execution(&features).await;
     let (_path, node) = held_worker_task(&features, "code-health").await;
-    let mut processes = ProcessGroupGuard::new();
+    let processes = ProcessGroupGuard::new();
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
 
     // A restart gives the new scheduler no state of its own: the running round is still in flight in its runs.
     let restarted = CronScheduler::new(Arc::clone(&features));
@@ -1989,10 +1990,10 @@ mod tests {
     let (_home, features) = feature_context();
     install_execution(&features).await;
     let (_path, node) = held_worker_task(&features, "code-health").await;
-    let mut processes = ProcessGroupGuard::new();
+    let processes = ProcessGroupGuard::new();
     let scheduler = CronScheduler::new(Arc::clone(&features));
     scheduler.tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
 
     let Err(super::RunError::RoundInFlight { task, round: refused }) = scheduler.run_now("code-health").await else {
       panic!("a manual fire with a round in flight is refused");
@@ -2009,14 +2010,14 @@ mod tests {
     let (_home, features) = feature_context();
     install_execution(&features).await;
     let (_path, node) = held_worker_task(&features, "code-health").await;
-    let mut processes = ProcessGroupGuard::new();
+    let processes = ProcessGroupGuard::new();
     let scheduler = CronScheduler::new(Arc::clone(&features));
     match scheduler.run_now("code-health").await {
       Ok(_) => {}
       Err(super::RunError::Failed(message)) => panic!("the manual fire failed: {message}"),
       Err(_) => panic!("the manual fire was refused"),
     }
-    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
 
     // The next occurrence after the manual fire is due two minutes later.
     scheduler.tick_at(chrono::Utc::now() + chrono::Duration::minutes(2)).await.unwrap();
@@ -2185,8 +2186,8 @@ mod tests {
     scheduler.tick_at(utc_at(2, 30)).await.unwrap();
     assert_eq!(skipped_events(&features, &node.id).len(), 2, "the fire that approval unblocks records no skip");
     assert_eq!(round_count(&features, &node.id), 1, "the first fire after approval starts its worker");
-    let mut processes = ProcessGroupGuard::new();
-    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let processes = ProcessGroupGuard::new();
+    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
     end_round(&features, &round, &run).await;
   }
 
@@ -2205,9 +2206,9 @@ mod tests {
         "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
       }),
     );
-    let mut processes = ProcessGroupGuard::new();
+    let processes = ProcessGroupGuard::new();
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &mut processes, &node.id).await;
+    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
     assert!(skipped_events(&features, &node.id).is_empty());
     assert_eq!(round_count(&features, &node.id), 1);
     end_round(&features, &round, &run).await;
@@ -2250,9 +2251,9 @@ mod tests {
         "timezone": "UTC", "session_id": handled.id, "backend": GATED_BACKEND,
       }),
     );
-    let mut processes = ProcessGroupGuard::new();
+    let processes = ProcessGroupGuard::new();
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &mut processes, &plain.id).await;
+    let (round, run) = wait_for_running_round(&features, &processes, &plain.id).await;
     assert_eq!(host_probe_count(&home, GATED_ALIAS), 0, "no backend of these tasks names the host");
     assert!(skipped_events(&features, &handled.id).is_empty());
     assert_eq!(handler_results(&features, &handled.id), 1, "the handler runs despite the host's wait");

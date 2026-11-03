@@ -26,7 +26,9 @@ use charliebot_agents::gh_wrapper;
 use charliebot_agents::one_shot::{assistant_text, frame_system_prompt};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
-use charliebot_agents::transport::spawn::{AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, spawn_one_shot};
+use charliebot_agents::transport::spawn::{
+  AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, parse_backend_line, spawn_one_shot,
+};
 
 /// The log event that reports writing the instructions file.
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
@@ -290,7 +292,11 @@ async fn collect(
   let mut structured_error: Option<String> = None;
   let mut lines = BufReader::new(stdout).lines();
   while let Some(line) = lines.next_line().await? {
-    let Some(event) = parse_line(&line) else {
+    // `lines` yields UTF-8, so a line blank in Unicode terms is skipped before the byte parse sees it.
+    if line.trim().is_empty() {
+      continue;
+    }
+    let Some(event) = parse_backend_line(line.as_bytes()) else {
       continue;
     };
     for translated in translator.translate_event(&event)? {
@@ -314,20 +320,6 @@ async fn collect(
   }
   let status = child.wait().await?;
   Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code(status)))
-}
-
-/// One NDJSON line parsed, or `None` for a blank line or a line that is not JSON (logged).
-fn parse_line(line: &str) -> Option<Value> {
-  if line.trim().is_empty() {
-    return None;
-  }
-  match serde_json::from_str::<Value>(line) {
-    Ok(event) => Some(event),
-    Err(error) => {
-      tracing::debug!(target: "charliebot_agents", error = %error, "backend_line_not_json");
-      None
-    }
-  }
 }
 
 /// Reads the whole stderr so the child never blocks on a full pipe, and keeps its first bytes.

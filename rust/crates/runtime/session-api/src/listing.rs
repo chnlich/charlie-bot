@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
@@ -38,12 +38,14 @@ struct SessionsListMemoState {
 /// One rendered listing body, its corpus, its inputs, and the gzip form a request asked for.
 ///
 /// The gzip form lives beside the body it compressed: a request that matches the inputs serves both without hashing or
-/// comparing the body, which the memo would otherwise do to find the compressed bytes it already holds.
+/// comparing the body, which the memo would otherwise do to find the compressed bytes it already holds. Both are
+/// `Bytes` handles, so a served response shares the stored buffer through a refcount bump; a full listing's compressed
+/// form is hundreds of kilobytes, and copying it per request cost more than the rest of the response.
 struct WholeListingBody {
   source: ListingSource,
   inputs: Vec<RowInputs>,
-  body: Vec<u8>,
-  gzip: Option<Vec<u8>>,
+  body: Bytes,
+  gzip: Option<Bytes>,
 }
 
 /// The corpus one listing body rendered from, compared before the per-row inputs are rebuilt.
@@ -209,11 +211,30 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
   Ok(ListingCorpus { rows: listed.rows, derived, sequence_fields: listed.sequence_fields })
 }
 
-/// The chat page's sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
+/// The sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
+///
+/// The chat page renders these rows into its sidebar text, and the listing route answers them as JSON.
 pub struct PageRows {
   rows: Arc<Vec<Arc<SessionMetadata>>>,
   derived: Arc<DerivedSidebarMap>,
   sequence_fields: HashMap<String, Map<String, Value>>,
+}
+
+impl PageRows {
+  /// The corpus rows, in listing order.
+  pub fn rows(&self) -> &[Arc<SessionMetadata>] {
+    &self.rows
+  }
+
+  /// The derived sidebar overlay of each row.
+  pub fn derived(&self) -> &Arc<DerivedSidebarMap> {
+    &self.derived
+  }
+
+  /// The sequence controllers' listing fields of the rows they bind.
+  pub fn sequence_fields(&self) -> &HashMap<String, Map<String, Value>> {
+    &self.sequence_fields
+  }
 }
 
 /// The page corpus one request built, reused while every input that shapes it still holds.
@@ -263,7 +284,8 @@ impl PageCorpusEntry {
   }
 }
 
-/// Read the chat page's sidebar corpus without rendering a row.
+/// Read the sidebar corpus without rendering a row. A memo hit still polls the sidebar state, because the periodic
+/// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
@@ -277,6 +299,8 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
       .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.derived)))
   };
   if let Some((rows, derived)) = cached {
+    // A memo hit still polls, because the periodic self-heal sweep is what catches an edit from outside the server.
+    sidebar::count_memoized_read(store, registry, &rows)?;
     let sequence_fields = store.sequence_listing_fields(&rows)?;
     return Ok(PageRows { rows, derived, sequence_fields });
   }
@@ -528,7 +552,7 @@ pub fn sessions_list_response(
         Ok(values) => values,
         Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
       };
-      let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+      let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&Value::Array(values)));
       state.whole_body =
         Some(WholeListingBody { source: ListingSource::of(rows, derived, sequence_fields), inputs, body, gzip: None });
     }
@@ -540,7 +564,7 @@ pub fn sessions_list_response(
   if let Some(compressed) = &whole.gzip {
     return json_bytes_response(compressed.clone(), true);
   }
-  let compressed = charliebot_compat::compression::gzip_memoized_body(&whole.body);
+  let compressed = Bytes::from(charliebot_compat::compression::gzip_memoized_body(&whole.body));
   state.whole_body.as_mut().expect("the body is rendered when the inputs changed").gzip = Some(compressed.clone());
   json_bytes_response(compressed, true)
 }
@@ -670,7 +694,7 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   }
 }
 
-fn json_bytes_response(body: Vec<u8>, gzip: bool) -> Response {
+fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut response = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/json")

@@ -368,29 +368,62 @@ pub fn headless_config(options: &[BackendOption]) -> anyhow::Result<Value> {
   Ok(config)
 }
 
+/// How this server came to own a turn. Each origin fixes the duties the turn carries: who holds its directory claim,
+/// where its events arrive, and whether the process that pinned it is known.
+enum TurnOrigin {
+  /// A run this server started and claimed, whose raw-log relay owns its events.
+  RelayClaimed,
+  /// A live run adopted from its record on disk, with the start time of the process that pinned it.
+  Adopted { process_start: String },
+  /// A control-stream turn driven over HTTP, which receives the server's events itself.
+  #[cfg(test)]
+  Control,
+}
+
+impl TurnOrigin {
+  /// Whether this turn holds its directory claim, which finishing releases.
+  fn holds_claim(&self) -> bool {
+    matches!(self, TurnOrigin::RelayClaimed)
+  }
+
+  /// Whether this turn's events arrive through the raw-log relay rather than the control stream.
+  fn relays_events(&self) -> bool {
+    match self {
+      TurnOrigin::RelayClaimed | TurnOrigin::Adopted { .. } => true,
+      #[cfg(test)]
+      TurnOrigin::Control => false,
+    }
+  }
+
+  /// Whether finishing this turn interrupts the run it pins.
+  fn interrupts_on_finish(&self) -> bool {
+    !matches!(self, TurnOrigin::Adopted { .. })
+  }
+
+  /// The start time of the process that pinned this turn, when it was adopted.
+  fn pinned_start(&self) -> Option<&str> {
+    match self {
+      TurnOrigin::RelayClaimed => None,
+      TurnOrigin::Adopted { process_start } => Some(process_start),
+      #[cfg(test)]
+      TurnOrigin::Control => None,
+    }
+  }
+}
+
 /// One turn's claim on an opencode session.
 pub struct Turn {
   pub session_id: String,
   pub directory: String,
   process_id: u32,
-  process_start: Option<String>,
   server: Weak<OpenCodeServer>,
-  claim_held: bool,
-  relay_only: bool,
-  adopted: bool,
+  origin: TurnOrigin,
   cleanup_shells: bool,
   #[cfg(test)]
   events: Mutex<VecDeque<TurnEvent>>,
   #[cfg(test)]
   ready: Notify,
   finished: AtomicBool,
-}
-
-struct TurnRegistration {
-  claim_held: bool,
-  relay_only: bool,
-  adopted: bool,
-  process_start: Option<String>,
 }
 
 #[derive(Debug)]
@@ -419,7 +452,7 @@ impl Turn {
 
   /// Unregister this turn and run its session cleanup.
   pub async fn finish(&self) -> anyhow::Result<()> {
-    self.finish_inner(!self.adopted).await
+    self.finish_inner(self.origin.interrupts_on_finish()).await
   }
 
   async fn finish_for_stop(&self) -> anyhow::Result<()> {
@@ -451,7 +484,7 @@ impl Turn {
       .await
     };
     server.unregister(self);
-    let release = if self.claim_held { server.release_claim(&self.directory).await } else { Ok(()) };
+    let release = if self.origin.holds_claim() { server.release_claim(&self.directory).await } else { Ok(()) };
     match (turn_steps, release) {
       (Err(error), Err(release_error)) => {
         tracing::error!(
@@ -721,7 +754,7 @@ impl OpenCodeServer {
       .collect::<Vec<_>>();
     for turn in turns {
       self.track(tokio::spawn(async move {
-        let start = turn.process_start.as_deref().expect("an adopted turn has a pinned relay process");
+        let start = turn.origin.pinned_start().expect("an adopted server holds only adopted turns");
         while relay::same_process(turn.process_id, start) {
           tokio::time::sleep(Duration::from_millis(25)).await;
         }
@@ -996,12 +1029,7 @@ impl OpenCodeServer {
     directory: &str,
     process_id: u32,
   ) -> anyhow::Result<Arc<Turn>> {
-    self.register_inner(
-      session_id,
-      directory,
-      process_id,
-      TurnRegistration { claim_held: true, relay_only: true, adopted: false, process_start: None },
-    )
+    self.register_inner(session_id, directory, process_id, TurnOrigin::RelayClaimed)
   }
 
   fn register_adopted(
@@ -1011,23 +1039,13 @@ impl OpenCodeServer {
     process_id: u32,
     process_start: String,
   ) -> anyhow::Result<Arc<Turn>> {
-    self.register_inner(
-      session_id,
-      directory,
-      process_id,
-      TurnRegistration { claim_held: false, relay_only: true, adopted: true, process_start: Some(process_start) },
-    )
+    self.register_inner(session_id, directory, process_id, TurnOrigin::Adopted { process_start })
   }
 
   /// Register a control-stream turn for dispatch tests.
   #[cfg(test)]
   pub fn register(self: &Arc<Self>, session_id: &str, directory: &str, process_id: u32) -> anyhow::Result<Arc<Turn>> {
-    self.register_inner(
-      session_id,
-      directory,
-      process_id,
-      TurnRegistration { claim_held: false, relay_only: false, adopted: false, process_start: None },
-    )
+    self.register_inner(session_id, directory, process_id, TurnOrigin::Control)
   }
 
   fn register_inner(
@@ -1035,7 +1053,7 @@ impl OpenCodeServer {
     session_id: &str,
     directory: &str,
     process_id: u32,
-    registration: TurnRegistration,
+    origin: TurnOrigin,
   ) -> anyhow::Result<Arc<Turn>> {
     let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
     if state.turns.contains_key(session_id) {
@@ -1045,11 +1063,8 @@ impl OpenCodeServer {
       session_id: session_id.to_string(),
       directory: directory.to_string(),
       process_id,
-      process_start: registration.process_start,
       server: Arc::downgrade(self),
-      claim_held: registration.claim_held,
-      relay_only: registration.relay_only,
-      adopted: registration.adopted,
+      origin,
       cleanup_shells: true,
       #[cfg(test)]
       events: Mutex::new(VecDeque::new()),
@@ -1362,7 +1377,7 @@ impl OpenCodeServer {
     }
     let turn = self.state.lock().expect("opencode server state mutex is not poisoned").turns.get(&session_id).cloned();
     if let Some(turn) = turn {
-      if !turn.relay_only {
+      if !turn.origin.relays_events() {
         #[cfg(test)]
         turn.push(TurnEvent::Event(event));
       }
@@ -1604,14 +1619,15 @@ pub(crate) async fn finish_active_turn(pid: u32) -> anyhow::Result<()> {
     .get(&pid)
     .and_then(Weak::upgrade);
   if let Some(turn) = turn {
-    if turn.adopted {
-      if let Some(server) = turn.server.upgrade() {
-        server.interrupt(&turn.session_id).await?;
+    match &turn.origin {
+      TurnOrigin::Adopted { .. } => {
+        if let Some(server) = turn.server.upgrade() {
+          server.interrupt(&turn.session_id).await?;
+        }
       }
-    } else if turn.relay_only {
-      turn.finish_for_stop().await?;
-    } else {
-      turn.finish().await?;
+      TurnOrigin::RelayClaimed => turn.finish_for_stop().await?,
+      #[cfg(test)]
+      TurnOrigin::Control => turn.finish().await?,
     }
   }
   Ok(())

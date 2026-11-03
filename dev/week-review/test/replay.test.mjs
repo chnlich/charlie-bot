@@ -138,9 +138,9 @@ test('the tally counts the baseline, the edited test half, the flips and the fai
       error: 'every light backend failed' }),
   ];
   writeJsonl(path.join(roundDir, 'flags.jsonl'), rows);
-  const answered = (event_id, half, verdict) => ({
+  const answered = (event_id, child, half, verdict) => ({
     event_id,
-    child: 'x',
+    child,
     half,
     state: 'sent',
     after_verdict: verdict,
@@ -149,9 +149,9 @@ test('the tally counts the baseline, the edited test half, the flips and the fai
     error: null,
   });
   writeJsonl(path.join(roundDir, 'rejudge.jsonl'), [
-    answered('t1', 'tuning', 'needed'),
-    answered('t2', 'tuning', 'needed'),
-    answered('u1', 'test', 'needed'),
+    answered('t1', 'c1', 'tuning', 'needed'),
+    answered('t2', 'c1', 'tuning', 'needed'),
+    answered('u1', 'c2', 'test', 'needed'),
     {
       event_id: 'f1',
       child: 'c2',

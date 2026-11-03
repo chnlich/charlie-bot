@@ -85,6 +85,12 @@ function writeJsonl(file, rows) {
   fs.writeFileSync(file, rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
 }
 
+// A message's identity within a round: the child it went to and its event id. One event can reach several children,
+// so the event id alone does not name a row.
+export function messageKey(child, eventId) {
+  return JSON.stringify([child, eventId]);
+}
+
 function groupBy(items, keyOf) {
   const groups = new Map();
   for (const item of items) {
@@ -248,11 +254,11 @@ async function rejudgeEdited({ baseline, rows, roundDir, model, prompts, judgePa
           1,
         )}\n`,
       );
-      for (const answer of judged.answers) answers.set(answer.id, answer);
+      for (const answer of judged.answers) answers.set(messageKey(packet.child, answer.id), answer);
     } catch (error) {
       failedPackets += 1;
       process.stderr.write(`${packet.name}: ${error.message}\n`);
-      for (const id of packet.messageIds) causes.set(id, `${packet.name}: ${error.message}`);
+      for (const id of packet.messageIds) causes.set(messageKey(packet.child, id), `${packet.name}: ${error.message}`);
     }
   });
   await runPool(tasks, judgeParallel);
@@ -312,7 +318,7 @@ export async function runReplayRound({
     if (row.state === 'not_sent') {
       return { ...base, after_verdict: null, after_kinds: null, after_reason: null, error: null };
     }
-    const answer = judged.answers.get(row.event_id);
+    const answer = judged.answers.get(messageKey(row.child, row.event_id));
     if (answer) {
       return {
         ...base,
@@ -322,7 +328,7 @@ export async function runReplayRound({
         error: null,
       };
     }
-    const cause = judged.causes.get(row.event_id) ?? 'the judge gave no answer for this message';
+    const cause = judged.causes.get(messageKey(row.child, row.event_id)) ?? 'the judge gave no answer for this message';
     return { ...base, after_verdict: null, after_kinds: null, after_reason: null, error: `rejudge failed: ${cause}` };
   });
   writeJsonl(path.join(roundDir, 'rejudge.jsonl'), rejudge);
@@ -362,17 +368,22 @@ export async function runReplayRound({
 export function tallyRound(roundDir) {
   const run = readJson(path.join(roundDir, 'run.json'));
   const rows = readJsonl(path.join(roundDir, 'flags.jsonl'));
-  const rejudge = new Map(readJsonl(path.join(roundDir, 'rejudge.jsonl')).map((row) => [row.event_id, row]));
+  const rejudgeRows = readJsonl(path.join(roundDir, 'rejudge.jsonl'));
+  const rejudge = new Map(rejudgeRows.map((row) => [messageKey(row.child, row.event_id), row]));
+  const afterOf = (row) => rejudge.get(messageKey(row.child, row.event_id));
   const flipFile = path.join(roundDir, 'flip.jsonl');
-  const flip = fs.existsSync(flipFile) ? new Map(readJsonl(flipFile).map((row) => [row.event_id, row])) : null;
+  const flip = fs.existsSync(flipFile)
+    ? new Map(readJsonl(flipFile).map((row) => [messageKey(row.child, row.event_id), row]))
+    : null;
+  const flipOf = (row) => flip.get(messageKey(row.child, row.event_id));
 
   const flagged = (row) => row.check === 'ok' && row.flags.length > 0;
   const bad = rows.filter((row) => isUnneeded(row.label_verdict));
   const good = rows.filter((row) => row.label_verdict === 'needed');
   const test = rows.filter((row) => row.half === 'test');
-  const evaluated = test.filter((row) => typeof rejudge.get(row.event_id).after_verdict === 'string');
-  const afterUnneeded = evaluated.filter((row) => isUnneeded(rejudge.get(row.event_id).after_verdict));
-  const afterUnrelated = evaluated.filter((row) => rejudge.get(row.event_id).after_verdict === 'unrelated');
+  const evaluated = test.filter((row) => typeof afterOf(row).after_verdict === 'string');
+  const afterUnneeded = evaluated.filter((row) => isUnneeded(afterOf(row).after_verdict));
+  const afterUnrelated = evaluated.filter((row) => afterOf(row).after_verdict === 'unrelated');
   const afterShare = evaluated.length === 0 ? null : afterUnneeded.length / evaluated.length;
   const testBad = test.filter((row) => isUnneeded(row.label_verdict));
   const testUnrelated = test.filter((row) => row.label_verdict === 'unrelated');
@@ -382,7 +393,7 @@ export function tallyRound(roundDir) {
   const failures = [];
   for (const row of rows) {
     if (row.state === 'check_failed') failures.push({ half: row.half, stage: 'check', cause: row.error });
-    const after = rejudge.get(row.event_id);
+    const after = afterOf(row);
     if (row.state === 'sent' && after.error !== null) {
       failures.push({ half: row.half, stage: 'rejudge', cause: after.error });
     }
@@ -395,8 +406,8 @@ export function tallyRound(roundDir) {
 
   let flipStats = null;
   if (flip) {
-    const pairs = test.filter((row) => row.check === 'ok' && flip.get(row.event_id).check === 'ok');
-    const differ = pairs.filter((row) => flagKey(row.flags) !== flagKey(flip.get(row.event_id).flags));
+    const pairs = test.filter((row) => row.check === 'ok' && flipOf(row).check === 'ok');
+    const differ = pairs.filter((row) => flagKey(row.flags) !== flagKey(flipOf(row).flags));
     flipStats = { pairs: pairs.length, differ: differ.length, items: flip.size };
   }
 

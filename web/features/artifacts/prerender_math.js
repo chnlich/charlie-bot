@@ -1,21 +1,18 @@
 'use strict';
-// Math pre-render driver for `charliebot artifact wrap`: reads a content
-// fragment, replaces every math span of the four KaTeX delimiter classes with
-// katex.renderToString markup (pages ship pre-rendered), and writes the
-// transformed fragment to stdout.
+// Math pre-render driver for `charliebot artifact wrap`.
+//
+// It reads a content fragment, replaces every math span of the four KaTeX
+// delimiter classes with katex.renderToString markup, and writes the result to
+// stdout. Pages therefore ship pre-rendered.
 //
 //   node web/features/artifacts/prerender_math.js <fragment-path> <katex.min.js-path>
 //
-// The vendored katex.min.js (UMD build) is resolved by the caller
-// (`charliebot artifact wrap`, rust/crates/features/artifacts/src/cli/wrap.rs) and passed explicitly.
-//
-// The delimiter scan is web/static/js/math-scanner.js's mathSpan — the same
-// scanner the chat markdown extension tokenizes with, so the chat parse and
-// this driver find the same delimiters. This driver adds the protected-range
-// walk (which regions the scan never enters) and the katex.renderToString call;
-// web/tests/chat_math_extension.test.js pins the scanner's cases through the chat
-// parse, and rust/crates/features/artifacts/src/cli/wrap.rs runs this driver
-// end to end.
+// The caller resolves the vendored katex.min.js (UMD build) and passes it
+// explicitly. The delimiter scan is `mathSpan` from web/static/js/math-scanner.js,
+// the same scanner the chat markdown extension tokenizes with. This driver adds
+// the protected-range walk, which the scan never enters, and the render call.
+// web/tests/chat_math_extension.test.js pins the scanner's cases through the
+// chat parse, and rust/crates/features/artifacts/src/cli/wrap.rs runs it end to end.
 
 const fs = require('node:fs');
 const { mathSpan } = require('../../../web/static/js/math-scanner.js');
@@ -38,9 +35,9 @@ function scanMathSpans(text) {
       spans.push({ start: i, end: i + hit.raw.length, raw: hit.raw, display: hit.display });
       i += hit.raw.length;
     } else if (text[i] === '\\') {
-      // Escape pair: the char after a backslash never opens a span (marked's
-      // escape tokenizer does this on the chat path): \$ stays literal,
-      // \\ consumes both backslashes so a following $ still opens.
+      // Escape pair: the char after a backslash never opens a span, because
+      // marked's escape tokenizer does this on the chat path. `\$` stays
+      // literal, and `\\` consumes both backslashes so a following `$` opens.
       i += 2;
     } else {
       i++;
@@ -51,9 +48,9 @@ function scanMathSpans(text) {
 
 // Regions whose bytes the scan copies verbatim: the protected blocks (same tag
 // list as renderChatMath's ignoredTags, minus option), HTML comments, and tag
-// interiors — math inside them is never page text, and marked never matches
+// interiors. Math inside them is never page text, and marked never matches
 // there either. An unterminated protected block or comment runs to the end,
-// mirroring how the DOM layer closes it.
+// the way the DOM layer closes it.
 const PROTECTED_OPEN_RE = /<(script|noscript|style|textarea|pre|code)(\s[^>]*)?>/gi;
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const TAG_RE = /<\/?[A-Za-z][^>]*>/g;

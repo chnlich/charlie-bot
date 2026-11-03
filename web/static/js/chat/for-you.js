@@ -6,9 +6,9 @@
 // The For-you view: the session page's reading layer for web and worker sessions.
 //
 // For you shows the user's messages, the agent's web replies (web_reply), the
-// web reply notices (web_reply_notice) and error rows, and nothing else. It
-// reads the store's server order, never the segment order that Everything
-// shows.
+// web reply notices (web_reply_notice), draft cards waiting for the user's
+// click (draft) and error rows, and nothing else. It reads the store's server
+// order, never the segment order that Everything shows.
 // The shared span rule (shared.js splitTurnSpan) carries an input that arrives
 // after a turn's first assistant message into the next turn. The segment order
 // would put that input below the web replies that followed it. When none of
@@ -27,7 +27,8 @@
 // ---------------------------------------------------------------------------
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
-const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice'];
+const STATUS = 'status';
+const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice', 'draft'];
 // The manual view choice of each session on this page: a reload empties it, as
 // the sidebar's expanded nodes reset.
 const manualViews = new Map();

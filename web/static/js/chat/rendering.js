@@ -787,7 +787,21 @@ function mdDiv(text) {
 // the same floor.
 const BUBBLE_TIME_CLASS = "text-slate-300";
 
+// Message roles a package renders. A registered role takes the whole message and returns its HTML; the core roles
+// below keep their own branches. A package registers its renderer when its script loads.
+const messageRoleRenderers = new Map();
+
+function registerMessageRoleRenderer(role, render) {
+  if (typeof role !== 'string' || role === '') throw new Error('Invalid message role registration');
+  if (typeof render !== 'function') throw new Error('Invalid message role renderer');
+  if (messageRoleRenderers.has(role)) throw new Error('Duplicate message role renderer: ' + role);
+  messageRoleRenderers.set(role, render);
+}
+
 function renderMessage(msg, sessionId) {
+  const roleRenderer = messageRoleRenderers.get(msg.role);
+  if (roleRenderer) return roleRenderer(msg, sessionId);
+
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
     var cls = colorClass || BUBBLE_TIME_CLASS;
@@ -1058,6 +1072,7 @@ const GLOBALS = {
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
   registerMessagePostProcessor,
+  registerMessageRoleRenderer,
   registerSeparatorButton,
   buildRoundButtonGroup,
   repaintRoundButtons,

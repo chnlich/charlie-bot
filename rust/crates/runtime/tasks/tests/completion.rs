@@ -73,6 +73,7 @@ impl CompletionHarness {
     let completion = startup.require::<TaskCompletion>().expect("completion is registered");
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
     let run_completion: Arc<dyn RunFinishedCompletion> = completion.clone();
+    dispatch_support::install_presend_services(&startup);
     startup
       .insert(Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), sequence_completion, run_completion))
       .expect("dispatcher enters startup state once");

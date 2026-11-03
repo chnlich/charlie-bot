@@ -119,8 +119,17 @@ impl Dispatcher {
       return Err(StoreError::invalid("input_id and request_id are mutually exclusive"));
     }
     // The pre-send check is the one admission gate for agent messages: both agent routes admit
-    // through here, so a parent-to-child message reaches the child only through it.
+    // through here, so a parent-to-child message reaches the child only through it. A message whose
+    // existing refusals already apply — an archived task, or a sender that is not the parent — keeps
+    // that refusal without spending a model call. The locked section below repeats both checks, so
+    // a race still ends in the existing refusal.
     let presend_record = if event_type == event_types::AGENT_MESSAGE {
+      let meta = self.store.load_task_meta(session_id).await?;
+      let state = self.store.node_state(session_id)?;
+      if state.task_state()? != "open" {
+        return Err(StoreError::archived(session_id));
+      }
+      self.authorize_agent_message(&meta, event_type, fields.from_session.as_deref())?;
       crate::presend_check::gate(
         crate::presend_check::GateDeps { features: &self.features, memory: &self.presend_refusals },
         session_id,

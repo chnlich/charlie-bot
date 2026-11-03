@@ -51,6 +51,9 @@ const MAX_CHILD_REPORT_CHARS: usize = 800;
 /// The rendered refusal truncates a quote at this length; the event record keeps the full quote.
 const REFUSAL_QUOTE_CHARS: usize = 80;
 
+/// The heading that opens the passages block in the check's prompt.
+pub const PASSAGES_HEADING: &str = "PASSAGES TO JUDGE";
+
 /// One `--keep` argument: the flag number of the last refused check and the sender's reason.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct KeepEntry {
@@ -388,8 +391,8 @@ fn push_passage(body: &str, start: usize, end: usize, passages: &mut Vec<String>
   }
 }
 
-/// The check's whole input: the context sections, then the passages to judge inside a fence the
-/// quotes come from verbatim.
+/// The context part of the check's input: the context sections, then the passages to judge inside a
+/// fence the quotes come from verbatim. [`check_prompt`] puts the judge instructions before it.
 pub fn probe_input(context: &PresendContext, passages: &str) -> String {
   let earlier = if context.earlier_messages.is_empty() {
     "(none)".to_string()
@@ -423,9 +426,15 @@ pub fn probe_input(context: &PresendContext, passages: &str) -> String {
     format!("EARLIER MESSAGES from this parent to the child (oldest first):\n{earlier}"),
     format!("CHILD REPORTS since the last earlier message:\n{reports}"),
     format!("LOCAL FILES the message points to:\n{files}"),
-    format!("PASSAGES TO JUDGE (quote verbatim from this text):\n<<<PASSAGES\n{passages}\nPASSAGES>>>"),
+    format!("{PASSAGES_HEADING} (quote verbatim from this text):\n<<<PASSAGES\n{passages}\nPASSAGES>>>"),
   ]
   .join("\n\n")
+}
+
+/// The one prompt the check reads: `prompts/presend_check.md`'s judge instructions, then the
+/// context sections and the passages fence the quotes come from.
+pub fn check_prompt(judge: &str, context: &PresendContext, passages: &str) -> String {
+  format!("{}\n\n{}", judge.trim_end_matches('\n'), probe_input(context, passages))
 }
 
 /// Parse the model's answer into flags. An answer that is not a JSON array fails the check; an
@@ -482,6 +491,7 @@ pub async fn run_check(
     "presend-check",
   )?;
   let system_prompt = sections[SYSTEM_SECTION].trim_end_matches('\n').to_string();
+  let judge_prompt = sections[JUDGE_SECTION].trim_end_matches('\n').to_string();
 
   // The context reads are synchronous store and file reads; they run off the async runtime.
   let store = Arc::clone(&features.store);
@@ -496,7 +506,7 @@ pub async fn run_check(
   })
   .await
   .context("joining the presend context reader")??;
-  let prompt = probe_input(&context, passages);
+  let prompt = check_prompt(&judge_prompt, &context, passages);
 
   let mut last_error = None;
   for option in autonamer::iter_light_backends(&cfg, Arc::clone(&pool)) {
@@ -546,8 +556,9 @@ pub fn context_from_events(
   message: &str,
   as_of_event_id: Option<&str>,
 ) -> PresendContext {
-  let child_events = events_as_of(child_events, as_of_event_id);
-  let parent_events = events_as_of(parent_events, as_of_event_id);
+  let as_of_time = as_of_timestamp(child_events, parent_events, as_of_event_id);
+  let child_events = events_as_of(child_events, as_of_event_id, as_of_time);
+  let parent_events = events_as_of(parent_events, as_of_event_id, as_of_time);
   let earlier_messages: Vec<(&str, String)> = child_events
     .iter()
     .filter(|event| {
@@ -601,15 +612,49 @@ pub fn context_from_events(
   }
 }
 
-/// The events strictly before the one with `as_of_event_id`; all of them when the id is absent.
-fn events_as_of<'a>(events: &'a [SharedChatEvent], as_of_event_id: Option<&str>) -> &'a [SharedChatEvent] {
-  let Some(as_of_event_id) = as_of_event_id else { return events };
-  let Some(position) =
-    events.iter().position(|event| event.get("id").and_then(CompactValue::as_str) == Some(as_of_event_id))
-  else {
-    return events;
-  };
-  &events[..position]
+/// The timestamp of the event with `as_of_event_id`, so the log that does not hold the id is cut at
+/// the same moment.
+fn as_of_timestamp(
+  child_events: &[SharedChatEvent],
+  parent_events: &[SharedChatEvent],
+  as_of_event_id: Option<&str>,
+) -> Option<UtcDateTime> {
+  let as_of_event_id = as_of_event_id?;
+  child_events
+    .iter()
+    .chain(parent_events.iter())
+    .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(as_of_event_id))
+    .and_then(|event| event.get("timestamp").and_then(CompactValue::as_str))
+    .and_then(|timestamp| UtcDateTime::parse(timestamp).ok())
+}
+
+/// The events strictly before the one with `as_of_event_id`: the events before it in the log that
+/// holds it, and, in the other log, the events stamped before its time. Every event when the id is
+/// absent from both logs.
+fn events_as_of<'a>(
+  events: &'a [SharedChatEvent],
+  as_of_event_id: Option<&str>,
+  as_of_time: Option<UtcDateTime>,
+) -> Vec<&'a SharedChatEvent> {
+  if let Some(as_of_event_id) = as_of_event_id
+    && let Some(position) =
+      events.iter().position(|event| event.get("id").and_then(CompactValue::as_str) == Some(as_of_event_id))
+  {
+    return events[..position].iter().collect();
+  }
+  match as_of_time {
+    Some(as_of_time) => events
+      .iter()
+      .filter(|event| {
+        event
+          .get("timestamp")
+          .and_then(CompactValue::as_str)
+          .and_then(|timestamp| UtcDateTime::parse(timestamp).ok())
+          .is_some_and(|timestamp| timestamp < as_of_time)
+      })
+      .collect(),
+    None => events.iter().collect(),
+  }
 }
 
 /// The local files the message points to: the `~/` and absolute paths it names that exist as files,
@@ -783,11 +828,15 @@ mod tests {
       child_event("m2", parent, "the message under replay", "2026-10-19T23:00:00Z"),
       child_event("m3", parent, "sent after it", "2026-10-19T23:10:00Z"),
     ];
-    let parent_events = vec![report_event("r1", child, "late report", "2026-10-19T23:30:00Z")];
+    let parent_events = vec![
+      report_event("r1", child, "before the replayed message", "2026-10-19T22:30:00Z"),
+      report_event("r2", child, "after the replayed message", "2026-10-19T23:30:00Z"),
+    ];
     let context = context_from_events(None, &child_events, &parent_events, parent, child, "m", Some("m2"));
     assert_eq!(context.earlier_messages, vec!["earlier one".to_string()]);
-    // The report lands after the last earlier message the as-of cut leaves, so it counts.
-    assert_eq!(context.child_reports, vec!["late report".to_string()]);
+    // The parent's log holds no event with the child's id, so it is cut at that event's time: a
+    // report sent after the replayed message is not part of the context the live check read.
+    assert_eq!(context.child_reports, vec!["before the replayed message".to_string()]);
   }
 
   #[test]
@@ -806,6 +855,15 @@ mod tests {
     let (before, after) = probe.split_once("<<<PASSAGES\n").expect("the passages fence opens");
     assert!(after.starts_with("the passages\nPASSAGES>>>"), "{after}");
     assert!(before.contains("127.0.0.1 localhost"), "{before}");
+  }
+
+  #[test]
+  fn the_check_prompt_carries_the_judge_instructions_before_the_passages() {
+    let context =
+      PresendContext { task_record: json!(null), earlier_messages: vec![], child_reports: vec![], files: vec![] };
+    let prompt = check_prompt("Flag each passage under one of these kinds.", &context, "the passages");
+    assert!(prompt.starts_with("Flag each passage under one of these kinds.\n\nCHILD TASK RECORD:"), "{prompt}");
+    assert!(prompt.contains("<<<PASSAGES\nthe passages\nPASSAGES>>>"), "{prompt}");
   }
 
   // --- gate tests over a real dispatcher -----------------------------------
@@ -940,6 +998,7 @@ mod tests {
     );
     let (parent, child) = parent_and_child(&features, "refused").await;
     let dispatcher = dispatcher(&features);
+    start_user_line(&dispatcher, &parent.id).await;
     let content = format!("Please go on.\n{FLAGGED}\nAlso the other cluster waits.");
 
     let error = dispatcher
@@ -1089,6 +1148,7 @@ mod tests {
     let home = tempdir_with_config(r#"[]"#);
     let (parent, child) = parent_and_child(&home.features, "keep-none").await;
     let dispatcher = dispatcher(&home.features);
+    start_user_line(&dispatcher, &parent.id).await;
     let error = dispatcher
       .admit_input(
         &child.id,
@@ -1107,6 +1167,7 @@ mod tests {
     let home = tempdir_with_config(ANSWER_ONE_FLAG);
     let (parent, child) = parent_and_child(&home.features, "keep-range").await;
     let dispatcher = dispatcher(&home.features);
+    start_user_line(&dispatcher, &parent.id).await;
     let content = format!("go on\n{FLAGGED}");
     dispatcher
       .admit_input(&child.id, event_types::AGENT_MESSAGE, &content, "agent", agent_fields(&parent.id))
@@ -1130,6 +1191,7 @@ mod tests {
     let home = tempdir_with_config("not a json array at all");
     let (parent, child) = parent_and_child(&home.features, "failing").await;
     let dispatcher = dispatcher(&home.features);
+    start_user_line(&dispatcher, &parent.id).await;
     let error = dispatcher
       .admit_input(&child.id, event_types::AGENT_MESSAGE, "go on", "agent", agent_fields(&parent.id))
       .await
@@ -1149,6 +1211,7 @@ mod tests {
     let calls_file = home.calls_file.clone();
     let (parent, child) = parent_and_child(&home.features, "mixed").await;
     let dispatcher = dispatcher(&home.features);
+    start_user_line(&dispatcher, &parent.id).await;
     let content = format!("go on\n{FLAGGED}");
     dispatcher
       .admit_input(&child.id, event_types::AGENT_MESSAGE, &content, "agent", agent_fields(&parent.id))

@@ -1523,6 +1523,12 @@ mod tests {
       .await
       .expect("the child task is created");
     install_dispatcher(&features);
+    // A real user request on the parent line, so the parent's agent messages are authorized.
+    dispatch::dispatcher(&features)
+      .unwrap()
+      .admit_input("synthetic-parent", event_types::USER, "start this line", "user", json!({}))
+      .await
+      .expect("the user line starts");
     let token = register_agent_run(&features, "synthetic-parent", "synthetic-run").await;
     let router = routes(&features);
 

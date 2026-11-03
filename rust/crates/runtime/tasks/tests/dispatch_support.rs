@@ -6,12 +6,20 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::Registry;
+use charliebot_registry::RegistryError;
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
+  TransportKind,
+};
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
@@ -337,6 +345,7 @@ impl Harness {
         Ok(())
       })
       .expect("origin slots register");
+    registry.register_package("dispatch_support_presend", register_presend_stub).expect("presend stub registers");
     let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks::default());
     let store = Arc::new(
@@ -381,6 +390,8 @@ impl Harness {
     startup
       .insert(Dispatcher::new(Arc::clone(&store), Arc::clone(&features), sequence_completion, run_completion))
       .expect("dispatcher enters startup state once");
+    // The pre-send check reads the light backend pool, the agent environment and the checkout.
+    install_presend_services(&startup);
     let dispatcher = charliebot_tasks::dispatch::dispatcher(&features).expect("dispatcher is in startup state");
     Harness { _home: home, registry, store, completion, dispatcher, features, hooks }
   }
@@ -510,6 +521,103 @@ impl Default for Harness {
   }
 }
 
+const PRESEND_BACKEND_ID: &str = "presend-light";
+
+/// The startup entries the pre-send check reads: the light backend pool, the agent environment, and
+/// the checkout that holds the check's prompt. A harness with its own startup state calls this too.
+pub fn install_presend_services(startup: &StartupState) {
+  startup.insert(BackendPool::default()).expect("the backend pool enters startup state once");
+  startup.insert(AgentBaseEnvironment { values: Env::default() }).expect("the agent environment enters once");
+  let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the tasks crate has a repo root");
+  startup
+    .insert(RepoRoot::new(Some(repo_root.as_os_str().to_os_string())).expect("the repo root is valid"))
+    .expect("the repo root enters startup state once");
+}
+
+/// The light backend the pre-send check calls: it flags nothing, so the harness admits every
+/// parent-to-child message. The harness runs its work through executors, so nothing else selects it.
+pub struct PresendStubBackend;
+
+impl AgentBackend for PresendStubBackend {
+  fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+    None
+  }
+
+  fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {
+    Ok(())
+  }
+
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    panic!("the presend stub answers its native one-shot and never builds a command")
+  }
+
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+    Ok(env)
+  }
+
+  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+    None
+  }
+
+  fn translator(&self) -> Box<dyn Translate> {
+    Box::new(IdentityTranslate)
+  }
+
+  fn transport(&self) -> TransportKind {
+    TransportKind::RawLog
+  }
+
+  fn one_shot_text<'a>(
+    &'a mut self,
+    _base_env: &'a Env,
+    _prompt: &'a str,
+    _system: &'a str,
+    _timeout: Option<std::time::Duration>,
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    let answer: BoxFuture<'a, anyhow::Result<String>> = Box::pin(async { Ok("[]".to_string()) });
+    Some(answer)
+  }
+}
+
+struct IdentityTranslate;
+
+impl Translate for IdentityTranslate {
+  fn translate(&mut self, event: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![event])
+  }
+}
+
+struct PresendStubFactory;
+
+impl BackendFactory for PresendStubFactory {
+  fn build(
+    &self,
+    _option: Option<&BackendOption>,
+    _cfg: &CharlieBotConfig,
+    _launch: LaunchArgs,
+  ) -> anyhow::Result<Box<dyn AgentBackend>> {
+    Ok(Box::new(PresendStubBackend))
+  }
+}
+
+fn register_presend_stub(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.backend_type(BackendTypeRegistration {
+    type_name: "presend-stub",
+    traits: BackendTraits {
+      resume: ResumeStyle::NativeId,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: |_| Ok(()),
+    factory: Arc::new(PresendStubFactory),
+    lifecycle: None,
+    translate_fallback: false,
+  })
+}
+
 pub fn config(home: &Path) -> CharlieBotConfig {
   CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
@@ -533,16 +641,26 @@ pub fn config(home: &Path) -> CharlieBotConfig {
       scratch_dir: "/synthetic/scripts".to_string(),
     },
     backends: BackendsConfig {
-      pool: vec![BACKEND_ID.to_string()],
+      pool: vec![PRESEND_BACKEND_ID.to_string(), BACKEND_ID.to_string()],
       routing: None,
-      options: vec![BackendOption {
-        id: BACKEND_ID.to_string(),
-        label: "Synthetic".to_string(),
-        model: "synthetic-model".to_string(),
-        prompt_overlay: None,
-        backend_type: "codex".to_string(),
-        type_fields: Mapping::new(),
-      }],
+      options: vec![
+        BackendOption {
+          id: PRESEND_BACKEND_ID.to_string(),
+          label: "Presend stub".to_string(),
+          model: "presend-stub-model".to_string(),
+          prompt_overlay: None,
+          backend_type: "presend-stub".to_string(),
+          type_fields: Mapping::new(),
+        },
+        BackendOption {
+          id: BACKEND_ID.to_string(),
+          label: "Synthetic".to_string(),
+          model: "synthetic-model".to_string(),
+          prompt_overlay: None,
+          backend_type: "codex".to_string(),
+          type_fields: Mapping::new(),
+        },
+      ],
     },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },

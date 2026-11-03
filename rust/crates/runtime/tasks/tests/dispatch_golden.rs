@@ -198,9 +198,23 @@ fn replace_fixture_values(value: &mut Value) {
 }
 
 fn normalize_output(output: &mut Value) {
+  strip_presend_check(output);
   let mut ids = HashMap::new();
   let mut next_id = 0usize;
   normalize_value(output, &mut ids, &mut next_id);
+}
+
+/// The pre-send check's event record is a Rust-only field the Python fixture predates; this parity
+/// test compares the dispatch facts the two servers share.
+fn strip_presend_check(value: &mut Value) {
+  match value {
+    Value::Array(values) => values.iter_mut().for_each(strip_presend_check),
+    Value::Object(fields) => {
+      fields.remove("presend_check");
+      fields.values_mut().for_each(strip_presend_check);
+    }
+    _ => {}
+  }
 }
 
 fn parse_event_lines(output: &mut Value) {

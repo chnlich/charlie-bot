@@ -292,6 +292,22 @@ impl AgentBackend for ScriptBackend {
     Box::new(IdentityTranslate)
   }
 
+  /// The pre-send check's model call is the one light one-shot on the admission path: the
+  /// scripted backend answers it with no flags, so a harness admits every parent-to-child message.
+  fn one_shot_text<'a>(
+    &'a mut self,
+    _base_env: &'a Env,
+    prompt: &'a str,
+    _system: &'a str,
+    _timeout: Option<std::time::Duration>,
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    if prompt.contains(crate::presend_check::PASSAGES_HEADING) {
+      let answer: BoxFuture<'a, anyhow::Result<String>> = Box::pin(async { Ok("[]".to_string()) });
+      return Some(answer);
+    }
+    None
+  }
+
   fn transport(&self) -> TransportKind {
     if self.final_stdout { TransportKind::FinalStdout } else { TransportKind::RawLog }
   }

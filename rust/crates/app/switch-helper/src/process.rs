@@ -21,6 +21,12 @@ pub fn instance(pid: u32, pid_start: &str) -> bool {
   matches!(stat(pid), Some((state, start)) if start == pid_start && state != "Z")
 }
 
+/// Whether a pid still names a live process, for a recorded pid that carries no start time. A zombie has ended: its
+/// argv is gone and nothing can follow it, so it never counts.
+pub fn alive(pid: u32) -> bool {
+  matches!(stat(pid), Some((state, _)) if state != "Z")
+}
+
 /// The kernel's boot time in seconds since the epoch, from `/proc/stat`.
 pub fn boot_time() -> Result<i64> {
   let text = fs::read_to_string("/proc/stat").context("read /proc/stat")?;

@@ -512,6 +512,13 @@ preflight
   /// One mode of the home helper. The scan takes the running build as `rust <sha>` words, as the test always passed
   /// them. The sourced script's REPO_ROOT is the clone, where the builds' registrations live.
   pub fn home_helper(&self, mode: &str) -> Run {
+    let run = self.home_helper_unchecked(mode);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    run
+  }
+
+  /// One mode of the home helper without the exit-code assertion, for the tests that read a refusal.
+  pub fn home_helper_unchecked(&self, mode: &str) -> Run {
     let scan_impl = if mode == "scan" { format!(" rust {}", self.old_sha) } else { String::new() };
     let script = format!("source \"$1\" rust {} && REPO_ROOT=\"$3\" && home_helper \"$2\"{scan_impl}", self.rust_sha);
     let mut env = self.sandbox.env();
@@ -520,9 +527,7 @@ preflight
     env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), self.releases.display().to_string());
     let mut command = harness::command("bash", &env);
     command.args(["-c", script.as_str(), "bash"]).arg(repo_switch()).arg(mode).arg(&self.clone);
-    let run = harness::run(&mut command);
-    assert_eq!(run.code, 0, "{}", run.describe());
-    run
+    harness::run(&mut command)
   }
 
   /// The live lines of a real scan of the home, recorded while the runs' processes still ran.

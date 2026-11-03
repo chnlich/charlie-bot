@@ -8,7 +8,10 @@
 # server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
 # agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
 # installed: scripts/release.sh installs them ahead of its trial and rehearsal. It refuses a clone with local changes
-# and a target commit that a fetch does not bring. Its last step runs each release's --check-config on an export of
+# and a target commit that a fetch does not bring. Its scan refuses a restart while an improve loop's controller still
+# runs in the server: the loop's active lock is present and the server pid its state names is live, whatever status the
+# state file holds — `charliebot improve stop` writes `stopped` while the current iteration keeps running. Its last
+# step runs each release's --check-config on an export of
 # the commit that release starts on: the target's own commit, and the old release on OLD_SHA, the clone's commit, since
 # the clone holds the old commit until the move. The switch then stops the old server, moves the clone with
 # `git reset --keep <commit>` (forward or back), installs the target commit's slice units with

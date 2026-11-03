@@ -102,7 +102,12 @@ pub fn loops_dir_in(home: &Path, session_id: &str) -> PathBuf {
 
 /// The active-lock path of one session.
 pub fn active_lock_path(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {
-  loops_dir(cfg, session_id).join(ACTIVE_LOCK_FILE)
+  active_lock_path_in(&cfg.charliebot_home, session_id)
+}
+
+/// The active-lock path of one session under a profile home, for a reader that has no loaded config.
+pub fn active_lock_path_in(home: &Path, session_id: &str) -> PathBuf {
+  loops_dir_in(home, session_id).join(ACTIVE_LOCK_FILE)
 }
 
 /// One loop's directory.
@@ -149,6 +154,56 @@ pub fn read_loop_plan(loop_dir: &Path) -> anyhow::Result<Option<String>> {
   Ok(Some(std::fs::read_to_string(&plan_path).with_context(|| format!("read {}", plan_path.display()))?))
 }
 
+/// The loop id the session's active lock names. The lock holds the running loop's id and a newline.
+pub fn read_active_lock_loop_id(lock: &Path) -> anyhow::Result<i64> {
+  let text = std::fs::read_to_string(lock).with_context(|| format!("read {}", lock.display()))?;
+  text.trim().parse::<i64>().with_context(|| format!("{} does not name a loop id", lock.display()))
+}
+
+/// One loop's controller signals, as a liveness reader outside the crate reads them.
+#[derive(Debug)]
+pub struct LoopController {
+  /// The loop's status, as its state file spells it.
+  pub status: String,
+  /// The pid of the server process whose controller runs the loop.
+  pub server_pid: i64,
+}
+
+/// One loop directory's controller signals, `None` when the directory holds no state file. A liveness reader outside
+/// the crate — the switch helper's scan — takes the controller's signals only through this reader, so their
+/// definitions stay here.
+pub fn read_loop_controller(loop_dir: &Path) -> anyhow::Result<Option<LoopController>> {
+  let Some(state) = read_loop_state_value(loop_dir)? else {
+    return Ok(None);
+  };
+  let Some(server_pid) = state.get("server_pid").and_then(Value::as_i64) else {
+    anyhow::bail!("{} has no server_pid for the controller", loop_dir.join(STATE_FILE).display());
+  };
+  let status = status_in_state(&state).with_context(|| format!("read {}", loop_dir.join(STATE_FILE).display()))?;
+  Ok(Some(LoopController { status: status_text(status), server_pid }))
+}
+
+/// The loop status one state value holds, as `ImproveState` reads it: a missing `status` is the `LoopStatus` default,
+/// and an unknown one fails.
+fn status_in_state(state: &Value) -> anyhow::Result<LoopStatus> {
+  #[derive(Deserialize)]
+  struct StatusOnly {
+    #[serde(default)]
+    status: LoopStatus,
+  }
+  let StatusOnly { status } = serde_json::from_value(state.clone())?;
+  Ok(status)
+}
+
+/// The status text the state file spells: the serialization of the status enum.
+fn status_text(status: LoopStatus) -> String {
+  serde_json::to_value(status)
+    .expect("a loop status serializes")
+    .as_str()
+    .expect("a loop status serializes to text")
+    .to_string()
+}
+
 /// Read and decode the state file at `path`, the one reader of `state.json` in this module. The caller checks that the
 /// file exists, and the read and parse errors name the path.
 fn read_state_file<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
@@ -166,8 +221,8 @@ pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -
 }
 
 /// The state file of one loop directory as its JSON value, or `None` when the directory holds no state file. The value
-/// is not checked against `ImproveState`, so a state file that does not match it still reads. The switch helper's scan
-/// takes only the status and the controller's PID from it.
+/// is not checked against `ImproveState`, so a state file that does not match it still reads; the readers that need
+/// single fields take them from it.
 pub fn read_loop_state_value(loop_dir: &Path) -> anyhow::Result<Option<Value>> {
   let path = loop_dir.join(STATE_FILE);
   if !path.is_file() {

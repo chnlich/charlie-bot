@@ -375,6 +375,11 @@ fn test_preflight_refusal_exits_1_and_changes_nothing_improve_loop() {
 }
 
 #[test]
+fn test_preflight_refusal_exits_1_and_changes_nothing_stopped_improve_loop() {
+  preflight_refusal_exits_1_and_changes_nothing("improve-loop-stopped");
+}
+
+#[test]
 fn test_preflight_refusal_exits_1_and_changes_nothing_dirty_clone() {
   preflight_refusal_exits_1_and_changes_nothing("dirty-clone");
 }
@@ -642,6 +647,7 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
     "unknown-backend-run" => Some("oc-retired"),
     _ => None,
   };
+  let mut controller = None;
   match case {
     "checksum" => {
       let path = release.join("charliebot-server");
@@ -654,9 +660,10 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
       world.seed_live_run("run-blocked", backend);
       world.start_release();
     }
-    "improve-loop" => {
-      let controller = world.spawn_live();
-      seed_improve_loop(&world, controller);
+    "improve-loop" | "improve-loop-stopped" => {
+      let status = if case == "improve-loop-stopped" { "stopped" } else { "running" };
+      controller = Some(world.spawn_live());
+      seed_improve_loop(&world, controller.expect("a controller process"), status);
       world.start_release();
     }
     "dirty-clone" => fs::write(world.clone.join("scripts/start-server.sh"), "# local edit\n").expect("the local edit"),
@@ -682,6 +689,14 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
     let output = format!("{}{}", run.stdout, run.stderr);
     assert!(output.contains("launcher preflight"), "{}", world.report(&run));
   }
+  if let Some(pid) = controller {
+    let status = if case == "improve-loop-stopped" { "stopped" } else { "running" };
+    let output = format!("{}{}", run.stdout, run.stderr);
+    assert!(output.contains("a restart would lose live work:"), "{}", world.report(&run));
+    assert!(output.contains("improve loop 1"), "{}", world.report(&run));
+    assert!(output.contains(&format!("(status {status})")), "{}", world.report(&run));
+    assert!(output.contains(&pid.to_string()), "{}", world.report(&run));
+  }
   if case.ends_with("-run") {
     assert!(run.stdout.contains("a restart would lose live work:"), "{}", world.report(&run));
     let lines: Vec<String> = world.home_helper("scan").stdout.lines().map(String::from).collect();
@@ -701,12 +716,89 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
   }
 }
 
-/// An improve loop marked running under a live controller process.
-fn seed_improve_loop(world: &World, controller_pid: u32) {
-  let loop_dir = world.home.join("sessions").join(SESSION).join("loops").join("1");
+/// An improve loop whose active lock names it, with `status` in its state and a live controller process.
+fn seed_improve_loop(world: &World, controller_pid: u32, status: &str) {
+  let loops_dir = world.home.join("sessions").join(SESSION).join("loops");
+  let loop_dir = loops_dir.join("1");
   fs::create_dir_all(&loop_dir).expect("the loop directory");
-  let state = json!({"status": "running", "server_pid": controller_pid});
+  let state = json!({"status": status, "server_pid": controller_pid});
   fs::write(loop_dir.join("state.json"), state.to_string()).expect("the loop state");
+  fs::write(loops_dir.join("active.lock"), "1\n").expect("the active lock");
+}
+
+/// The scan's block lines over the test home.
+fn scan_blocks(world: &World) -> Vec<String> {
+  world.home_helper("scan").stdout.lines().filter(|line| line.starts_with("block\t")).map(String::from).collect()
+}
+
+/// A loop that `charliebot improve stop` marked stopped keeps its controller and its active lock while the current
+/// iteration runs: the scan still blocks the restart, and the block line names the loop, its status and its signal.
+#[test]
+fn test_scan_blocks_a_stopped_loop_whose_controller_still_runs() {
+  let mut world = World::new();
+  let controller = world.spawn_live();
+  seed_improve_loop(&world, controller, "stopped");
+
+  let blocks = scan_blocks(&world);
+
+  assert_eq!(blocks.len(), 1, "{blocks:?}");
+  assert!(blocks[0].contains("improve loop 1"), "{}", blocks[0]);
+  assert!(blocks[0].contains("(status stopped)"), "{}", blocks[0]);
+  assert!(blocks[0].contains("active lock"), "{}", blocks[0]);
+  assert!(blocks[0].contains(&controller.to_string()), "{}", blocks[0]);
+}
+
+/// The loop's end removes the active lock: the same loop then no longer blocks, whatever its state file holds.
+#[test]
+fn test_scan_passes_a_loop_whose_lock_its_end_removed() {
+  let mut world = World::new();
+  let controller = world.spawn_live();
+  seed_improve_loop(&world, controller, "stopped");
+  let lock = world.home.join("sessions").join(SESSION).join("loops").join("active.lock");
+  fs::remove_file(&lock).expect("remove the active lock");
+
+  assert!(scan_blocks(&world).is_empty(), "{}", world.home_helper("scan").stdout);
+}
+
+/// A lock the end path leaked while the server kept running — the failure and completion leaks — still blocks, because
+/// the scan cannot tell it from a live controller.
+#[test]
+fn test_scan_blocks_a_lock_leaked_in_the_same_server_lifetime() {
+  let mut world = World::new();
+  let controller = world.spawn_live();
+  seed_improve_loop(&world, controller, "completed");
+
+  let blocks = scan_blocks(&world);
+
+  assert_eq!(blocks.len(), 1, "{blocks:?}");
+  assert!(blocks[0].contains("improve loop 1"), "{}", blocks[0]);
+  assert!(blocks[0].contains("(status completed)"), "{}", blocks[0]);
+}
+
+/// A lock leaked by a controller that no longer runs — the server is gone — never blocks: the restart cannot end it.
+#[test]
+fn test_scan_passes_a_lock_whose_controller_no_longer_runs() {
+  let mut world = World::new();
+  let controller = world.spawn_live();
+  seed_improve_loop(&world, controller, "stopped");
+  let mut child = world.live.pop().expect("the controller process");
+  stop(&mut child);
+
+  assert!(scan_blocks(&world).is_empty(), "{}", world.home_helper("scan").stdout);
+}
+
+/// An active lock that names no loop id fails the scan instead of passing it.
+#[test]
+fn test_scan_fails_on_an_active_lock_that_names_no_loop() {
+  let world = World::new();
+  let loops_dir = world.home.join("sessions").join(SESSION).join("loops");
+  fs::create_dir_all(&loops_dir).expect("the loops directory");
+  fs::write(loops_dir.join("active.lock"), "not-a-loop\n").expect("the active lock");
+
+  let run = world.home_helper_unchecked("scan");
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("does not name a loop id"), "{}", run.describe());
 }
 
 /// The target of `path` when it is a symlink.

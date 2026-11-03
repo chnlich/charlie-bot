@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::text_repr;
-use charliebot_improve::command::{loops_dir_in, read_loop_state_value};
+use charliebot_improve::command::{active_lock_path_in, loops_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use regex::Regex;
@@ -90,24 +90,41 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
     }
   }
   // A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
+  // The controller's end path saves the terminal status and then removes the session's active lock
+  // (rust/crates/features/improve/src/sequence.rs), and `charliebot improve stop` saves `stopped` while the current
+  // iteration still runs, so the saved status is no liveness signal. The active lock is one: the controller holds it
+  // from the loop's reservation until the end path removes it, and it names the loop it belongs to. The named loop's
+  // state carries the controller's server pid, and a pid that no longer runs proves the lock is a leak from an earlier
+  // server lifetime — that leak never blocks. A leak in the same server lifetime, where a loop's end path failed after
+  // the terminal status save and before the lock removal, still blocks: the scan cannot tell it from a live
+  // controller, and the operator clears it by hand.
   for session in sorted_directories(&sessions).map_err(failed)? {
     let Some(session_id) = session.file_name().and_then(|name| name.to_str()) else {
       continue;
     };
-    for loop_dir in sorted_directories(&loops_dir_in(&home, session_id)).map_err(failed)? {
-      let Some(state) = read_loop_state_value(&loop_dir).map_err(failed)? else {
-        continue;
-      };
-      let running = state.get("status").and_then(Value::as_str) == Some("running");
-      let Some(controller) = state.get("server_pid").and_then(Value::as_i64) else {
-        continue;
-      };
-      if running && Path::new(&format!("/proc/{controller}")).exists() {
-        println!(
-          "block\timprove loop {} is running under pid {controller}",
-          loop_dir.file_name().unwrap_or_default().to_string_lossy()
-        );
-      }
+    let lock = active_lock_path_in(&home, session_id);
+    if !lock.is_file() {
+      continue;
+    }
+    let loop_id = read_active_lock_loop_id(&lock).map_err(failed)?;
+    let loop_directory = loops_dir_in(&home, session_id).join(loop_id.to_string());
+    let Some(controller) = read_loop_controller(&loop_directory).map_err(failed)? else {
+      return Err(failed(format!(
+        "the active lock of session {session_id} names loop {loop_id}, whose state file is missing"
+      )));
+    };
+    let Ok(pid) = u32::try_from(controller.server_pid) else {
+      return Err(failed(format!(
+        "improve loop {loop_id} of session {session_id} has the server pid {}",
+        controller.server_pid
+      )));
+    };
+    if process::alive(pid) {
+      println!(
+        "block\timprove loop {loop_id} of session {session_id} (status {}) is alive: its active lock is present and \
+         server pid {pid} runs",
+        controller.status
+      );
     }
   }
   Ok(())

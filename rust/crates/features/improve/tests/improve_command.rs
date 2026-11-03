@@ -225,3 +225,80 @@ fn a_missing_plan_file_reads_as_none() {
 
   assert_eq!(plan, None);
 }
+
+#[test]
+fn a_controller_read_takes_the_status_and_the_server_pid() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let cfg = config(home.path());
+  let state = command::reserve_loop_state(&cfg, SESSION, &reservation("make it faster", "improve/test", None))
+    .expect("the reservation succeeds");
+
+  let controller = command::read_loop_controller(&command::loop_dir(&cfg, SESSION, state.loop_id))
+    .expect("the signals read")
+    .expect("a reserved loop has a state file");
+
+  assert_eq!(controller.status, "running");
+  assert_eq!(controller.server_pid, i64::from(std::process::id()));
+}
+
+#[test]
+fn a_controller_read_spells_the_status_the_state_file_holds() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let loop_dir = home.path().join("loops").join("2");
+  std::fs::create_dir_all(&loop_dir).expect("the loop directory");
+  let state = json!({"status": "stopped", "server_pid": 3427420});
+  std::fs::write(loop_dir.join("state.json"), state.to_string()).expect("the state file");
+
+  let controller = command::read_loop_controller(&loop_dir).expect("the signals read").expect("a state file");
+
+  assert_eq!(controller.status, "stopped");
+  assert_eq!(controller.server_pid, 3427420);
+}
+
+#[test]
+fn a_state_without_a_status_reads_as_the_default_running() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let loop_dir = home.path().join("loops").join("3");
+  std::fs::create_dir_all(&loop_dir).expect("the loop directory");
+  let state = json!({"server_pid": 3427420});
+  std::fs::write(loop_dir.join("state.json"), state.to_string()).expect("the state file");
+
+  let controller = command::read_loop_controller(&loop_dir).expect("the signals read").expect("a state file");
+
+  assert_eq!(controller.status, "running");
+}
+
+#[test]
+fn a_state_with_an_unknown_status_fails_the_controller_read() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let loop_dir = home.path().join("loops").join("4");
+  std::fs::create_dir_all(&loop_dir).expect("the loop directory");
+  let state = json!({"status": "paused", "server_pid": 3427420});
+  std::fs::write(loop_dir.join("state.json"), state.to_string()).expect("the state file");
+
+  let error = command::read_loop_controller(&loop_dir).expect_err("an unknown status is a hard failure");
+
+  assert!(format!("{error:#}").contains("unknown variant `paused`"), "the error names the status: {error:#}");
+}
+
+#[test]
+fn a_state_without_a_server_pid_fails_the_controller_read() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let loop_dir = home.path().join("loops").join("5");
+  std::fs::create_dir_all(&loop_dir).expect("the loop directory");
+  let state = json!({"status": "running"});
+  std::fs::write(loop_dir.join("state.json"), state.to_string()).expect("the state file");
+
+  let error = command::read_loop_controller(&loop_dir).expect_err("a missing server pid is a hard failure");
+
+  assert!(error.to_string().contains("server_pid"), "the error names the field: {error}");
+}
+
+#[test]
+fn the_active_lock_names_its_loop_id() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let lock = home.path().join("active.lock");
+  std::fs::write(&lock, "7\n").expect("the lock");
+
+  assert_eq!(command::read_active_lock_loop_id(&lock).expect("the loop id"), 7);
+}

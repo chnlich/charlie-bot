@@ -21,7 +21,7 @@ function escapeRegExp(text) {
 // The same pattern the recovered review used, with the home directory taken from the running user.
 export function pathPattern(home) {
   return new RegExp(
-    `(?:/absolute_filepath)?((?:~|${escapeRegExp(home)}|/tmp)/[!#-&+-:=?-Z^_a-z~]+|(?<![\\w/.~-])artifacts/[\\w.\\-]+)`,
+    "(?:/absolute_filepath)?((?:~|" + escapeRegExp(home) + "|/tmp)/[^\\s`'\"()\\[\\]<>,;|*]+|(?<![\\w/.~-])artifacts/[\\w.\\-]+)",
     'g',
   );
 }
@@ -59,8 +59,7 @@ export function mergeFiles({ text, sender, child, root, home }) {
     const raw = match[1].replace(/[.:,]+$/, '');
     let filePath = raw.startsWith('~') ? home + raw.slice(1) : raw;
     if (filePath.startsWith('artifacts/')) {
-      const candidates = [path.join(root, sender, filePath), path.join(root, child, filePath)];
-      filePath = candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+      filePath = path.join(root, sender, filePath);
     }
     filePath = filePath.replace(/:\d+(-\d+)?$/, '');
     if (seen.has(filePath)) continue;

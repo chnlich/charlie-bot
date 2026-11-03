@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { mergeFiles, FILE_CAP } from '../lib/files.mjs';
 import { PACKET_LIMIT, buildChildPackets } from '../lib/packets.mjs';
-import { VERDICTS, checkAnswers, parseAnswers, splitAnswers } from '../lib/judge.mjs';
+import { VERDICTS, checkAnswers, parseAnswers, runPool, splitAnswers } from '../lib/judge.mjs';
 import { readCredential } from '../lib/gateway.mjs';
 import { sampleIndices } from '../lib/rejudge.mjs';
 import { summarize } from '../lib/tally.mjs';
@@ -92,8 +92,8 @@ test('a window selects the parent messages a child recorded in the window, and t
 });
 
 test('merged files take one state each: text, own, missing, directory, binary and truncated', () => {
-  const home = path.join(scratch, 'merge', 'home');
-  const root = path.join(scratch, 'merge', 'sessions');
+  const home = path.join(scratch, 'merge');
+  const root = path.join(home, 'sessions');
   writeFile(path.join(home, 'notes', 'a.txt'), 'alpha\r\nbeta');
   writeFile(path.join(home, 'bin.dat'), Buffer.from([0xff, 0xfe, 0x00]));
   writeFile(path.join(home, 'big.txt'), 'x'.repeat(FILE_CAP + 5));
@@ -101,18 +101,19 @@ test('merged files take one state each: text, own, missing, directory, binary an
   writeFile(path.join(root, 'C', 'artifacts', 'own.md'), 'the child wrote this');
   const text = [
     'read ~/notes/a.txt, then ~/notes/a.txt again.',
-    'page artifacts/plan.html; own artifacts/own.md.',
+    'page artifacts/plan.html; own ~/sessions/C/artifacts/own.md; absent artifacts/own.md.',
     'binary ~/bin.dat, directory ~/notes, missing ~/gone.txt, long ~/big.txt.',
   ].join(' ');
   const files = mergeFiles({ text, sender: 'P', child: 'C', root, home });
   const byPath = new Map(files.map((file) => [file.path, file]));
-  assert.equal(files.length, 7, 'a repeated path is merged once');
+  assert.equal(files.length, 8, 'a repeated path is merged once');
   assert.equal(byPath.get('~/notes/a.txt').state, 'read');
   assert.equal(byPath.get('~/notes/a.txt').text, 'alpha\nbeta');
   assert.equal(byPath.get('artifacts/plan.html').state, 'read');
   assert.ok(byPath.get('artifacts/plan.html').text.includes('Hello'));
   assert.ok(!byPath.get('artifacts/plan.html').text.includes('p{}'), 'style text is not shown');
-  assert.equal(byPath.get('artifacts/own.md').state, 'own');
+  assert.equal(byPath.get('~/sessions/C/artifacts/own.md').state, 'own', 'a file in the child session shows its name');
+  assert.equal(byPath.get('artifacts/own.md').state, 'missing', 'an artifacts path resolves in the parent session only');
   assert.equal(byPath.get('~/bin.dat').state, 'binary');
   assert.equal(byPath.get('~/notes').state, 'directory');
   assert.equal(byPath.get('~/gone.txt').state, 'missing');
@@ -209,4 +210,19 @@ test('a seeded sample is the same on every run, and holds distinct messages', ()
   assert.equal(new Set(first).size, 20);
   assert.ok(first.every((index) => index >= 0 && index < 50));
   assert.throws(() => sampleIndices(5, 6, 1), /cannot sample/);
+});
+
+test('a pool rejects with the first failure while every in-flight task settles', async () => {
+  let ran = false;
+  await assert.rejects(
+    runPool(
+      [
+        () => Promise.reject(new Error('first failure')),
+        () => new Promise((resolve) => setTimeout(() => resolve((ran = true)), 10)),
+      ],
+      2,
+    ),
+    /first failure/,
+  );
+  assert.equal(ran, true, 'the task already in flight still ran to its end');
 });

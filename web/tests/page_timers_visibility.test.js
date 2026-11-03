@@ -170,7 +170,6 @@ function buildSidebarContext() {
     updateRelativeTimes() {},
     formatTokens: (n) => String(n),
     switchTab() {},
-    registerTab() {},
     showToast() {},
     BACKEND_OPTIONS: {},
     BACKEND_TYPES: {},

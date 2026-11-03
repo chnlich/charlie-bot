@@ -26,8 +26,6 @@ const {readStatic, readPackageStatic, chatModules, runStaticModules} = require('
 // The page's script order for these modules: markdown-renderer.js first, then
 // the chat modules. The message rows render through its prose rules.
 function loadPageModules(context) {
-  // The Status tab registers at load (chat/status-panel.js); no case here switches tabs.
-  context.registerTab = () => {};
   vm.createContext(context);
   vm.runInContext(readStatic('markdown-renderer.js'), context, {filename: 'markdown-renderer.js'});
   runStaticModules(context, chatModules());
@@ -516,7 +514,7 @@ test('a web status message adds no row to For you', () => {
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
-test('a Status tab round trip keeps the For-you list where the reader left it', () => {
+test('a Status-view round trip keeps the For-you list where the reader left it', () => {
   const rig = forYouRig(fixture(), {clientHeight: 60});
   installScrollTopClamp(rig.root);
   scrollTo(rig.timers, rig.root, 0);
@@ -524,7 +522,7 @@ test('a Status tab round trip keeps the For-you list where the reader left it', 
   assert.equal(rig.engine.pinnedIntent, false, 'an upward scroll unpins the reader');
   const rows = [...rig.root.children];
 
-  // The Status tab hides the Chat column: the list reads 0 px high, and the engine writes nothing.
+  // The Status view hides the list: it reads 0 px high, and the engine writes nothing.
   rig.root.clientHeight = 0;
   rig.engine.handleResize();
   settle(rig.timers);

@@ -661,16 +661,16 @@ test('a bottom-pinned reader stays pinned through a strip round trip', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The Status tab hides the Chat column, so the list has no height while the tab
+// The Status view hides the list, so the list has no height while the panel
 // shows. The engine projects nothing and writes no scroll position until the
-// column returns, and the return projects from the reader's own place: the
+// list returns, and the return projects from the reader's own place: the
 // anchor of a history reader, the bottom of a pinned one.
 // ---------------------------------------------------------------------------
 
 const SHOWN_HEIGHT = 300;
 
-// The Chat column hides as the Status tab selects: the list reads 0 px high. The
-// return sets the height back and runs the engine's resize, as the ResizeObserver does.
+// The list hides as the Status view selects: it reads 0 px high. The return sets
+// the height back and runs the engine's resize, as the ResizeObserver does.
 function hideColumn(state) {
   state.root.clientHeight = 0;
   state.engine.handleResize();
@@ -702,7 +702,7 @@ function historyRig(prefix, turns, anchorTurn = Math.floor(turns / 2)) {
   return {...state, anchorId, beforeTop: state.root.scrollTop, beforeY: anchorY(state.root, anchorId)};
 }
 
-test('a history reader keeps the message and its offset through a Status tab round trip', () => {
+test('a history reader keeps the message and its offset through a Status-view round trip', () => {
   const rig = historyRig('sv_', 10, 5);
   const rowsBefore = [...rig.root.children];
 
@@ -731,7 +731,7 @@ function nearBottomRig(prefix) {
   return {...state, anchorId: state.engine.readingPlace().readingAnchor.id};
 }
 
-test('a near-bottom reader whose list grew while the Status tab shows keeps the follow off', () => {
+test('a near-bottom reader whose list grew while the Status view shows keeps the follow off', () => {
   const rig = nearBottomRig('sw_');
   hideColumn(rig);
   // The return finds the list 36px taller: the reader's position clamps to the new bottom.
@@ -745,13 +745,13 @@ test('a near-bottom reader whose list grew while the Status tab shows keeps the 
   assert.ok(distanceFromBottom(rig.root) > 0, 'the arrival lands below the reader, which does not follow');
 });
 
-test('a pinned reader lands on the newest message after arrivals while the Status tab shows', () => {
+test('a pinned reader lands on the newest message after arrivals while the Status view shows', () => {
   const state = mountEngine(ePage('pn_', 6), {clientHeight: SHOWN_HEIGHT, clampScrollTop: true});
   settle(state.timers);
   assert.equal(state.engine.pinnedIntent, true, 'mounted pinned');
 
   hideColumn(state);
-  state.engine.appendMessage(eMsg('assistant', 'pn-live', 'arrived under the Status tab'), false);
+  state.engine.appendMessage(eMsg('assistant', 'pn-live', 'arrived under the Status view'), false);
   settle(state.timers);
   assert.equal(state.root.querySelector('[data-message-id="pn-live"]'), null, 'the hidden list takes no arrival');
 

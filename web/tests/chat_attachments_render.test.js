@@ -84,8 +84,6 @@ function loadChatScript() {
     },
   };
 
-  // The Status tab registers at load (chat/status-panel.js); no case here switches tabs.
-  context.registerTab = () => {};
   vm.createContext(context);
   runStaticModules(context, chatModules());
   vm.runInContext(readPackageStatic('features', 'artifacts', 'artifact-cards.js'), context, {filename: 'artifact-cards.js'});

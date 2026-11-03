@@ -186,9 +186,6 @@
         <div id="tab-buttons" class="flex gap-1">
           {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
-          <!-- The Status tab: shown for a web session only (chat/status-panel.js). Its badge holds this
-               session's waiting count, hidden at 0. -->
-          <button onclick="switchTab('status')" id="btn-status" class="hidden tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Status<span id="status-waiting-count" class="hidden ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white"></span></button>
         </div>
         {% include 'partials/concurrency_badge.html' %}
       </header>
@@ -204,6 +201,10 @@
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">For you</button>
           <button type="button" data-chat-view-option="everything" onclick="setChatView('everything')" aria-pressed="false"
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Everything</button>
+          <!-- The Status view: shown for a web session only (chat/for-you.js). Its badge holds this
+               session's waiting count, hidden at 0 (chat/status-panel.js). -->
+          <button type="button" data-chat-view-option="status" onclick="setChatView('status')" aria-pressed="false"
+                  class="hidden px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Status<span id="status-waiting-count" class="hidden ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white"></span></button>
         </div>
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           <!-- Streaming target (initialized from pending_draft if present) -->
@@ -213,6 +214,11 @@
                  {% if pending_draft and pending_draft.content %}data-md{% endif %}>{% if pending_draft and pending_draft.content %}{{ pending_draft.content }}{% endif %}</div>
           </div>
         </div>
+
+        <!-- The Status view panel: takes the message list's place while Status is selected.
+             chat/status-panel.js renders it; chat/for-you.js owns the visibility. -->
+        <div id="status-panel"
+             class="hidden flex-1 min-h-0 min-w-0 overflow-y-auto bg-slate-900 p-4 text-xs space-y-1"></div>
 
         <!-- Scroll-to-bottom floating button -->
         <button id="scroll-to-bottom"
@@ -271,9 +277,6 @@
           </div>
         </div>
       </div>
-      <!-- ===== STATUS TAB: the session status beside the chat column (chat/status-panel.js) ===== -->
-      <div id="tab-status"
-           class="hidden flex-1 min-h-0 min-w-0 overflow-y-auto bg-slate-900 p-4 text-xs space-y-1"></div>
       {% for part in page_parts('tab_panels') %}{% include part %}{% endfor %}
       </div><!-- end tab content wrapper -->
 

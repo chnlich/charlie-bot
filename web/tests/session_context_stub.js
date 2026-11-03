@@ -91,8 +91,6 @@ function baseSessionContext(overrides = {}) {
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     escapeHtml: (v) => v,
-    // The Status tab registers at load (chat/status-panel.js); a case that switches tabs loads tabs.js.
-    registerTab: () => {},
     switchTab: () => {},
     tabAfterSessionSwitch: () => 'chat',
     marked: {parse: (txt) => txt},

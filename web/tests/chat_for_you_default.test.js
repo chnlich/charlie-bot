@@ -42,11 +42,16 @@ function pageRig() {
   const elements = new Map([
     ['messages', root],
     ['streaming-msg', stream],
+    ['status-panel', new FakeElement('DIV', {id: 'status-panel', className: 'hidden'})],
+    ['scroll-to-bottom', new FakeElement('BUTTON', {id: 'scroll-to-bottom', className: 'hidden'})],
+    ['input-area', new FakeElement('DIV', {id: 'input-area'})],
     ['thinking', new FakeElement('DIV', {id: 'thinking', className: 'hidden'})],
     ['thinking-time', new FakeElement('SPAN', {id: 'thinking-time'})],
   ]);
-  const toggles = ['foryou', 'everything'].map((option) => {
-    const btn = new FakeElement('BUTTON');
+  // The toggle as index.html renders it: For you and Everything always, the
+  // Status option hidden until a web session opens.
+  const toggles = ['foryou', 'everything', 'status'].map((option) => {
+    const btn = new FakeElement('BUTTON', option === 'status' ? {className: 'hidden'} : {});
     btn.dataset.chatViewOption = option;
     return btn;
   });
@@ -131,16 +136,20 @@ function pressed(rig) {
   return rig.toggles.map((btn) => btn.getAttribute('aria-pressed'));
 }
 
+function el(rig, id) {
+  return rig.context.document.getElementById(id);
+}
+
 test('a root web session opens in For you', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {}), 'foryou');
-  assert.deepEqual(pressed(rig), ['true', 'false']);
+  assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
 test('a child web session opens in For you', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {task_parent_id: 'parent-1'}), 'foryou');
-  assert.deepEqual(pressed(rig), ['true', 'false']);
+  assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
 test('a Slack thread session opens in Everything', () => {
@@ -159,22 +168,65 @@ test('a worker session opens in For you, root or child', () => {
   assert.equal(openedView(rig, {profile: 'worker', task_parent_id: 'parent-1'}), 'foryou');
 });
 
-// The toggle carries two options, For you and Everything, in every session: the Status tab is not a
-// message view, so the switch refuses it.
-test('the view toggle offers For you and Everything in every session, and refuses the Status value', () => {
+// The toggle carries the Status option for a web session only: a thread session
+// and a worker session toggle between For you and Everything.
+test('the view toggle offers Status for a web session only', () => {
   const rig = pageRig();
   openedView(rig, {});
-  assert.deepEqual(rig.toggles.map((btn) => btn.dataset.chatViewOption), ['foryou', 'everything']);
+  assert.deepEqual(rig.toggles.map((btn) => btn.dataset.chatViewOption), ['foryou', 'everything', 'status']);
+  assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a web session shows the Status option');
+
   openedView(rig, {slack_origin: SLACK_ORIGIN});
-  assert.deepEqual(rig.toggles.map((btn) => btn.dataset.chatViewOption), ['foryou', 'everything']);
-  assert.throws(() => rig.context.setChatView('status'), /Unknown chat view: status/);
+  assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a Slack thread session hides the Status option');
+  openedView(rig, {id: 'session-w', profile: 'worker'});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a worker session hides the Status option');
+});
+
+test('selecting Status hides the list, shows the panel, and keeps the engine on its message view', () => {
+  const rig = pageRig();
+  openedView(rig, {});
+  rig.context.setChatView('status');
+  assert.equal(rig.root.classList.contains('hidden'), true, 'the list is display:none');
+  assert.equal(el(rig, 'status-panel').classList.contains('hidden'), false, 'the panel shows');
+  assert.equal(el(rig, 'scroll-to-bottom').classList.contains('hidden'), true,
+      'the scroll-to-bottom button hides with the list');
+  assert.equal(el(rig, 'input-area').classList.contains('hidden'), false,
+      'the input box stays visible and usable under the panel');
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'foryou', 'the engine still mounts the message view');
+  assert.deepEqual(pressed(rig), ['false', 'false', 'true']);
+
+  rig.context.setChatView('foryou');
+  assert.equal(rig.root.classList.contains('hidden'), false, 'the return shows the list');
+  assert.equal(el(rig, 'status-panel').classList.contains('hidden'), true, 'the panel hides');
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'foryou', 'the return remounts no list');
+});
+
+test('a session left at Status re-opens with the panel and returns to the message view chosen before Status',
+    () => {
+  const rig = pageRig();
+  openedView(rig, {});
+  rig.context.setChatView('status');
+
+  openedView(rig, {id: 'session-b'});
+  assert.equal(el(rig, 'status-panel').classList.contains('hidden'), true,
+      'the other session opens on its list');
+  assert.equal(rig.root.classList.contains('hidden'), false);
+
+  assert.equal(openedView(rig, {}), 'foryou', 'the re-open mounts the message view chosen before Status');
+  assert.equal(el(rig, 'status-panel').classList.contains('hidden'), false,
+      'the re-open shows the panel again, before a reload');
+  assert.equal(rig.root.classList.contains('hidden'), true, 'and hides the list');
+
+  rig.context.setChatView('foryou');
+  assert.equal(rig.root.classList.contains('hidden'), false, 'leaving Status shows the list');
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'foryou', 'the message view is the one before Status');
 });
 
 test('a manual switch holds for its session across a re-open, and other sessions keep their default', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {}), 'foryou');
   rig.context.setChatView('everything');
-  assert.deepEqual(pressed(rig), ['false', 'true']);
+  assert.deepEqual(pressed(rig), ['false', 'true', 'false']);
 
   assert.equal(openedView(rig, {}), 'everything', 'the same session re-opens in its choice');
   assert.equal(openedView(rig, {id: 'session-b'}), 'foryou', 'another root session keeps the default');

@@ -1,12 +1,13 @@
 // ---------------------------------------------------------------------------
-// Session status panel (the Status tab)
+// Session status panel (the Status view)
 // ---------------------------------------------------------------------------
-// A web session's status shows in the Status tab (#tab-status), a top-level tab
-// beside Chat. Selecting the tab hides the Chat column and shows the panel in
-// its place, and the panel scrolls by itself. The waiting count shows on the
-// tab's badge. A thread session and a worker session show neither the tab nor
-// the badge. A web session is one that Chat.ForYou.isWebSession (for-you.js)
-// accepts. This file registers the tab (tabs.js).
+// A web session's status shows in the Status view (#status-panel), a panel in
+// the Chat column that takes the message list's place while Status is selected
+// in the view toggle. The selection and the panel's visibility belong to
+// chat/for-you.js's applyChatView; this file renders the panel's content and
+// the waiting count on the toggle option's badge. A thread session and a worker
+// session show neither the option nor the badge. A web session is one that
+// Chat.ForYou.isWebSession (for-you.js) accepts.
 //
 // The status is the session's web_status at open, then the web_status messages
 // of this session, live or in history. The newest updated_at wins, so an older
@@ -16,22 +17,19 @@
 (function() {
   const Chat = globalThis.Chat;
 
-  const VIEW_ID = 'tab-status';
-  const BUTTON_ID = 'btn-status';
+  const VIEW_ID = 'status-panel';
   const BADGE_ID = 'status-waiting-count';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
 
   // The session the page shows the status for, and what it draws from. A null
-  // panelSessionId means the page shows none of the surfaces. statusTabShown
-  // holds the Status tab's visibility.
+  // panelSessionId means the page shows none of the surfaces.
   let panelSessionId = null;
   let panelStatus = null;
   let panelDescendants = [];
   let panelChildren = [];
   let panelDerived = [];
-  let statusTabShown = false;
   let panelFetchGen = 0;
 
   function textSpan(className, text) {
@@ -236,7 +234,7 @@
     return span;
   }
 
-  // A Waiting on you item. contextOpen: the Status tab shows an own item's
+  // A Waiting on you item. contextOpen: the Status view shows an own item's
   // context open; the descendant rows keep it folded.
   function waitingItem(item, contextOpen) {
     const el = document.createElement('div');
@@ -315,7 +313,7 @@
     return row;
   }
 
-  // ---- Status tab ----------------------------------------------------------
+  // ---- Status panel --------------------------------------------------------
 
   // The descendants' items, grouped by session: one header per session, its
   // items under it with their contexts folded. A session whose items all
@@ -366,7 +364,7 @@
     return row;
   }
 
-  function statusTabBody(el) {
+  function statusPanelBody(el) {
     if (!panelStatus) {
       const none = statusRow('none');
       none.appendChild(textSpan('text-slate-400', 'No status yet'));
@@ -397,20 +395,21 @@
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
 
-  // The Status tab redraws on every status update, and the badge follows the
-  // same state.
+  // The panel redraws on every status update, and the badge follows the
+  // same state. The panel may be hidden while Status is not selected; its
+  // content stays current, so selecting it shows the newest state.
   function renderPanel() {
     const view = document.getElementById(VIEW_ID);
     if (view) {
       clearChildren(view);
-      if (statusTabShown && panelSessionId) statusTabBody(view);
+      if (panelSessionId) statusPanelBody(view);
     }
     renderWaitingBadge();
   }
 
-  // The Status tab's waiting count: this session's own Waiting on you items
+  // The toggle option's waiting count: this session's own Waiting on you items
   // only, less the ones the login-sheet line carries — a child session's
-  // waiting items show in the Status tab's child rows. Hidden at 0 and when
+  // waiting items show in the Status view's child rows. Hidden at 0 and when
   // the page shows no web session.
   function renderWaitingBadge() {
     const badge = document.getElementById(BADGE_ID);
@@ -419,32 +418,6 @@
     badge.textContent = count ? String(count) : '';
     badge.classList.toggle('hidden', !count);
   }
-
-  // The Status tab's show and hide, through the tab registry (tabs.js). The panel
-  // takes the Chat column's place; the message list stays in the DOM, and the turn
-  // engine projects nothing while the column has no height.
-  function setStatusTabShown(shown) {
-    const view = document.getElementById(VIEW_ID);
-    if (view) view.classList.toggle('hidden', !shown);
-    statusTabShown = shown;
-    renderPanel();
-  }
-
-  // The Status button shows for a web session only: a thread session and a worker
-  // session get no Status tab.
-  function setStatusButtonShown(shown) {
-    const btn = document.getElementById(BUTTON_ID);
-    if (btn) btn.classList.toggle('hidden', !shown);
-  }
-
-  registerTab({
-    id: 'status',
-    showsChat: false,
-    fullScreenOnMobile: false,
-    keepOnSessionSwitch: false,
-    onShow: () => setStatusTabShown(true),
-    onHide: () => setStatusTabShown(false),
-  });
 
   // A web_status message's status replaces the panel's, unless the panel already
   // holds a newer one.
@@ -481,14 +454,14 @@
   }
 
   // Session open (first load and SPA switch): the session's own status, then the
-  // history's web_status messages, then the descendant rows. The page returns to
-  // Chat on a session switch (tabs.js), so the tab is not shown here.
+  // history's web_status messages, then the descendant rows. Whether the panel
+  // shows comes from the session's remembered view choice (chat/for-you.js
+  // applyChatView, called by the same open path).
   function openSessionStatusPanel(session, messages) {
     if (!Chat.ForYou.isWebSession(session)) {
       clearSessionStatusPanel();
       return;
     }
-    setStatusButtonShown(true);
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
     panelDescendants = [];
@@ -500,7 +473,6 @@
   }
 
   function clearSessionStatusPanel() {
-    setStatusButtonShown(false);
     panelSessionId = null;
     panelStatus = null;
     panelDescendants = [];

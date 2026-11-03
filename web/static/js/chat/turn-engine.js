@@ -1678,7 +1678,10 @@
         // A follow-append re-arms the pin intent; it never clears it here —
         // only a genuine user scroll may do that (handleScroll).
         this.jumpToBottom();
-      } else if (typeof showScrollToBottom === 'function') {
+      } else if (this.container.clientHeight > 0 && typeof showScrollToBottom === 'function') {
+        // A non-follow append invites the reader down only when the reader can
+        // see the list: a hidden container (the Status view, a covered tab)
+        // holds no viewport to jump from, and the return applies the pin state.
         showScrollToBottom();
       }
       this.scheduleIdle();

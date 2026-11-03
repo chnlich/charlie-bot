@@ -22,30 +22,32 @@
 // session until the page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
-// (what shows, the web-session test and the default view), the empty-state row
-// and the toggle.
+// (what shows, the web-session test and the default view), the empty-state row,
+// the toggle and the one function that applies a session's view choice.
 // ---------------------------------------------------------------------------
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
 const STATUS = 'status';
 const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice', 'draft'];
-// The manual view choice of each session on this page: a reload empties it, as
-// the sidebar's expanded nodes reset.
+// The manual view choice of each session on this page: the message view the
+// engine mounts, and whether the Status view is selected on top of it. A reload
+// empties the map, as the sidebar's expanded nodes reset.
 const manualViews = new Map();
-// The profile of the session this page shows, set by every open path
-// (session-view.js renderSessionView). The worker's For you holds only its
-// summary card, so the row filter and the empty row need to know it.
-let currentProfile = null;
+// The session this page shows, set by every open path (session-view.js
+// renderSessionView). The worker's For you holds only its summary card, so the
+// row filter and the empty row need to know it; the toggle's Status option
+// shows for a web session only.
+let currentSession = null;
 let summaryCardRenderer = null;
 
 function setSession(session) {
-  currentProfile = session ? (session.profile || null) : null;
+  currentSession = session;
 }
 
 // A worker session's For you holds its one summary card and nothing else —
 // no message rows, no empty-state row.
 function isWorker() {
-  return currentProfile === 'worker';
+  return currentSession != null && currentSession.profile === 'worker';
 }
 
 // A later chat module registers the worker card renderer. The projection calls
@@ -100,7 +102,7 @@ function buildEmptyLine() {
   return btn;
 }
 
-// A web session: a manager session with no Slack or Discord origin. The Status tab
+// A web session: a manager session with no Slack or Discord origin. The Status view
 // reads the same test.
 function isWebSession(session) {
   return session.profile === 'manager' && session.slack_origin == null && session.discord_origin == null;
@@ -113,24 +115,76 @@ function defaultView(session) {
   return isWebSession(session) ? FOR_YOU : EVERYTHING;
 }
 
-function viewFor(session) {
-  return manualViews.get(session.id) || defaultView(session);
+// What a session shows: the message view the engine mounts, and whether the
+// Status view is selected on top of it. A session with no manual choice reads
+// its default.
+function shownFor(session) {
+  return manualViews.get(session.id) || {view: defaultView(session), status: false};
 }
 
-// The toggle's buttons carry aria-pressed, and their styles follow it.
-function renderToggle(view) {
+// The message view the engine mounts for a session.
+function viewFor(session) {
+  return shownFor(session).view;
+}
+
+// The toggle's buttons carry aria-pressed, and their styles follow it. The
+// Status option shows for a web session only: a thread session and a worker
+// session toggle between For you and Everything.
+function renderToggle(view, statusShown) {
+  const statusAllowed = currentSession != null && isWebSession(currentSession);
   document.querySelectorAll('[data-chat-view-option]').forEach((btn) => {
-    btn.setAttribute('aria-pressed', String(btn.dataset.chatViewOption === view));
+    const isStatus = btn.dataset.chatViewOption === STATUS;
+    btn.classList.toggle('hidden', isStatus && !statusAllowed);
+    const selected = isStatus ? statusShown
+      : !statusShown && btn.dataset.chatViewOption === view;
+    btn.setAttribute('aria-pressed', String(selected));
   });
+}
+
+// The one function that applies a session's two view values: the message view
+// the engine mounts, and whether the Status view is selected. It sets the
+// visibility of the list, the scroll-to-bottom button and the status panel
+// together. setChatView and the session-switch path (session-view.js) both go
+// through it, so the engine only ever receives a For you or Everything view.
+// Selecting the Status view calls no engine.setView: the list keeps its nodes,
+// and its zero height under display:none holds the engine's projection while
+// the panel shows; the return restores the reader's place on the engine's
+// hidden-container path.
+function applyChatView(sessionId, view, statusShown, engine) {
+  manualViews.set(sessionId, {view, status: statusShown});
+  const messages = document.getElementById('messages');
+  const panel = document.getElementById('status-panel');
+  const scrollButton = document.getElementById('scroll-to-bottom');
+  // The panel and the scroll button are chrome a harness may mount without,
+  // as status-panel.js's renderPanel reads them.
+  if (panel) panel.classList.toggle('hidden', !statusShown);
+  messages.classList.toggle('hidden', statusShown);
+  if (statusShown) {
+    // The button points at the hidden list; the return restores it from the
+    // engine's pin state.
+    if (scrollButton) scrollButton.classList.add('hidden');
+  } else if (engine) {
+    if (engine.view !== view) engine.setView(view);
+    if (scrollButton) scrollButton.classList.toggle('hidden', engine.pinnedIntent);
+  }
+  renderToggle(view, statusShown);
+}
+
+// The session-switch path (session-view.js): the caller mounted the session's
+// message view, and this applies the Status selection the session remembers on
+// top of it. A re-open of a session left at the Status view shows the panel
+// again, before a page reload.
+function applySessionChatView(session, view, engine) {
+  applyChatView(session.id, view, shownFor(session).status, engine);
 }
 
 // The toggle's switch. The choice holds for this session until the page reloads.
 function setChatView(view) {
   const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
   if (!engine) throw new Error('No turn engine is mounted for the chat view');
-  engine.setView(view);
-  manualViews.set(SESSION_ID, view);
-  renderToggle(view);
+  // Status rides on the message view the engine already mounts, so a selection
+  // of it never remounts the list.
+  applyChatView(SESSION_ID, view === STATUS ? engine.view : view, view === STATUS, engine);
 }
 
 // The turn engine projects these rules, so they register with it; the page reads the same object as
@@ -148,7 +202,7 @@ const ForYou = {
   isWebSession,
   defaultView,
   viewFor,
-  renderToggle,
+  applySessionChatView,
 };
 Chat.registerForYouRules(ForYou);
 Chat.wire({setChatView}, {ForYou});

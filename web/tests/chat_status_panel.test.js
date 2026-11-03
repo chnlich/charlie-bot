@@ -15,10 +15,10 @@ const {readStatic} = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // The session status surfaces (chat/status-panel.js) on a page of the real chat,
-// sidebar, tab and WebSocket modules. The Status tab (#tab-status) takes the Chat
-// column's place when it is selected, and the waiting count shows on the tab's
-// badge. The tabs are the real tabs.js, so a switch runs the tab's own show and
-// hide. Rows are read back by their data attributes, so a case asserts structure
+// sidebar, tab and WebSocket modules. The Status view panel (#status-panel) takes
+// the message list's place while Status is selected in the Chat view toggle
+// (chat/for-you.js), and the waiting count shows on the toggle option's badge.
+// Rows are read back by their data attributes, so a case asserts structure
 // and the values the view carries, not the labels. The phone layout comes from a
 // platform stub that switchLayout drives the way platform.js does: a mode change
 // runs each onChange callback.
@@ -82,16 +82,26 @@ function panelRig() {
   root.appendChild(stream);
   // The elements carry the template's classes (index.html), the way the page's markup builds them.
   const chat = new FakeElement('DIV', {id: 'tab-chat', className: 'flex-1 flex flex-col min-h-0 min-w-0 relative'});
-  const view = new FakeElement('DIV', {
-    id: 'tab-status',
+  const panel = new FakeElement('DIV', {
+    id: 'status-panel',
     className: 'hidden flex-1 min-h-0 min-w-0 overflow-y-auto bg-slate-900 p-4 text-xs space-y-1',
   });
   const badge = new FakeElement('SPAN', {id: 'status-waiting-count', className: 'hidden'});
-  const button = new FakeElement('BUTTON', {id: 'btn-status', className: 'hidden'});
   const chatButton = new FakeElement('BUTTON', {id: 'btn-chat', className: 'bg-blue-600/20 text-blue-300'});
+  // The view toggle as index.html renders it: For you and Everything always, the
+  // Status option hidden until a web session opens. The badge is the option's span.
+  const toggles = ['foryou', 'everything', 'status'].map((option) => {
+    const btn = new FakeElement('BUTTON', option === 'status' ? {className: 'hidden'} : {});
+    btn.dataset.chatViewOption = option;
+    if (option === 'status') btn.appendChild(badge);
+    return btn;
+  });
+  const scrollButton = new FakeElement('BUTTON', {id: 'scroll-to-bottom', className: 'hidden'});
+  const inputArea = new FakeElement('DIV', {id: 'input-area'});
   const elements = new Map([
-    ['messages', root], ['streaming-msg', stream], ['tab-chat', chat], ['tab-status', view],
-    ['status-waiting-count', badge], ['btn-status', button], ['btn-chat', chatButton],
+    ['messages', root], ['streaming-msg', stream], ['tab-chat', chat], ['status-panel', panel],
+    ['status-waiting-count', badge], ['btn-chat', chatButton],
+    ['scroll-to-bottom', scrollButton], ['input-area', inputArea],
   ]);
   const page = {web_status: null, descendants: [], children: [], derived_waiting: []};
   const statusGets = [];
@@ -105,7 +115,8 @@ function panelRig() {
   context.document.createTreeWalker = () => ({});
   context.document.getElementById = (id) => elements.get(id) || null;
   context.document.querySelector = () => null;
-  context.document.querySelectorAll = () => [];
+  context.document.querySelectorAll = (selector) =>
+    selector === '[data-chat-view-option]' ? toggles : [];
   const timers = makeEngineTimers();
   installEngineTimers(context, timers);
   context.setInterval = () => 0;
@@ -126,7 +137,7 @@ function panelRig() {
   context.WebSocket = createFakeWebSocketClass();
   context.eventCursor = 0;
   context.reconnectDelay = 1000;
-  // tabs.js loads in the connection layer, before the chat modules whose Status tab registers on it.
+  // tabs.js loads in the connection layer, before the sidebar module that calls switchTab on it.
   vm.createContext(context);
   vm.runInContext(readStatic('tabs.js'), context, {filename: 'tabs.js'});
   createChatSidebarContext(context);
@@ -135,7 +146,7 @@ function panelRig() {
   // The message list is the other suites' subject: a live message lands there
   // through the stub, and the status panel reads the message it is handed.
   context.appendMessageObject = () => {};
-  return {context, root, chat, view, badge, button, page, statusGets, layout,
+  return {context, root, chat, panel, badge, toggles, scrollButton, inputArea, page, statusGets, layout,
     FakeWebSocket: context.WebSocket};
 }
 
@@ -154,6 +165,16 @@ function allElements(el) {
 // The descendant GET resolves in microtasks: a case reads the panel after one turn of the queue.
 function settled() {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+// Selects the Status view the way the toggle's click does.
+function selectStatus(rig) {
+  rig.context.setChatView('status');
+}
+
+// The toggle's Status option, hidden until a web session opens.
+function statusOption(rig) {
+  return rig.toggles[2];
 }
 
 // Opens a session the way switchSession does: SESSION_ID first, then the render.
@@ -181,29 +202,29 @@ async function openSession(rig, session, messages = []) {
   await settled();
 }
 
-// The Status tab's rows, in order.
-function viewKinds(view) {
-  return view.children.map((el) => el.dataset.statusRow);
+// The Status view's rows, in order.
+function viewKinds(panel) {
+  return panel.children.map((el) => el.dataset.statusRow);
 }
 
-function viewRow(view, kind) {
-  return view.children.find((el) => el.dataset.statusRow === kind);
+function viewRow(panel, kind) {
+  return panel.children.find((el) => el.dataset.statusRow === kind);
 }
 
-function viewWaitingItems(view) {
-  return viewRow(view, 'waiting').querySelectorAll('[data-waiting-item]');
+function viewWaitingItems(panel) {
+  return viewRow(panel, 'waiting').querySelectorAll('[data-waiting-item]');
 }
 
-function viewRemainingItems(view) {
-  return viewRow(view, 'remaining').querySelectorAll('[data-remaining-item]');
+function viewRemainingItems(panel) {
+  return viewRow(panel, 'remaining').querySelectorAll('[data-remaining-item]');
 }
 
-function viewChildItems(view) {
-  return view.querySelectorAll('[data-child-item]');
+function viewChildItems(panel) {
+  return panel.querySelectorAll('[data-child-item]');
 }
 
-function viewChildNowItems(view) {
-  return view.querySelectorAll('[data-child-now-item]');
+function viewChildNowItems(panel) {
+  return panel.querySelectorAll('[data-child-now-item]');
 }
 
 // The socket of the open page: an open event, then one server frame.
@@ -215,7 +236,7 @@ async function deliver(rig, frame) {
   await settled();
 }
 
-test('the Status tab badge carries this session\'s waiting count and hides at 0', async () => {
+test('the Status view badge carries this session\'s waiting count and hides at 0', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(2, 1);
   await openSession(rig, {web_status: STATUS});
@@ -232,27 +253,27 @@ test('the Status tab badge carries this session\'s waiting count and hides at 0'
   assert.equal(rig.badge.classList.contains('hidden'), true, 'no status hides the badge');
 });
 
-test('the Status tab scrolls as one page with no height cap', async () => {
+test('the Status view panel scrolls by itself with no height cap', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  assert.equal(rig.view.classList.contains('overflow-y-auto'), true, 'the whole view scrolls');
-  assert.equal(/max-h-/.test(rig.view.className), false, 'no height cap cuts the waiting items off');
+  selectStatus(rig);
+  assert.equal(rig.panel.classList.contains('overflow-y-auto'), true, 'the panel scrolls by itself');
+  assert.equal(/max-h-/.test(rig.panel.className), false, 'no height cap cuts the waiting items off');
 });
 
-test('the Status tab shows Goal, Remaining, Now, Waiting on you, children and child Now rows in order', async () => {
+test('the Status view shows Goal, Remaining, Now, Waiting on you, children and child Now rows in order', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(2, 1);
   rig.page.children = NOW_CHILDREN;
   await openSession(rig, {web_status: WITH_REMAINING});
-  rig.context.switchTab('status');
-  assert.equal(rig.view.classList.contains('hidden'), false);
-  assert.deepEqual(viewKinds(rig.view), ['goal', 'remaining', 'now', 'waiting', 'children', 'children-now']);
-  assert.equal(viewRow(rig.view, 'goal').children[1].textContent, WITH_REMAINING.goal);
+  selectStatus(rig);
+  assert.equal(rig.panel.classList.contains('hidden'), false);
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'remaining', 'now', 'waiting', 'children', 'children-now']);
+  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, WITH_REMAINING.goal);
 });
 
-test('the Status tab lists open Remaining items first and folds the done ones closed by default', async () => {
+test('the Status view lists open Remaining items first and folds the done ones closed by default', async () => {
   const rig = panelRig();
   const remaining = [
     {text: 'open one', done: false},
@@ -262,13 +283,13 @@ test('the Status tab lists open Remaining items first and folds the done ones cl
   ];
   await openSession(rig, {web_status: {...STATUS, remaining,
     remaining_updated_at: WITH_REMAINING.remaining_updated_at}});
-  rig.context.switchTab('status');
-  const row = viewRow(rig.view, 'remaining');
+  selectStatus(rig);
+  const row = viewRow(rig.panel, 'remaining');
   const value = row.children[1];
   assert.equal(value.children[0].textContent, '2 of 4 left');
   assert.equal(value.children[1].dataset.statusUpdated, WITH_REMAINING.remaining_updated_at);
 
-  const openItems = viewRemainingItems(rig.view).filter((el) => el.dataset.remainingItem === 'open');
+  const openItems = viewRemainingItems(rig.panel).filter((el) => el.dataset.remainingItem === 'open');
   assert.deepEqual(openItems.map((el) => el.children[1].textContent), ['open one', 'open two'],
       'the open items read in written order, the done ones folded');
   const toggle = value.querySelector('[data-remaining-done-toggle]');
@@ -280,7 +301,7 @@ test('the Status tab lists open Remaining items first and folds the done ones cl
   toggle.onclick();
   assert.equal(toggle.getAttribute('aria-expanded'), 'true');
   assert.equal(doneBody.classList.contains('hidden'), false);
-  const doneItems = viewRemainingItems(rig.view).filter((el) => el.dataset.remainingItem === 'done');
+  const doneItems = viewRemainingItems(rig.panel).filter((el) => el.dataset.remainingItem === 'done');
   assert.deepEqual(doneItems.map((el) => el.children[1].textContent), ['done one', 'done two'],
       'opened, the fold lists the done items in written order');
 });
@@ -292,27 +313,27 @@ test('a Remaining list of all done items shows the zero count and the fold, and 
     remaining: [{text: 'only done', done: true}],
     remaining_updated_at: '2026-10-16T20:30:00Z',
   }});
-  rig.context.switchTab('status');
-  const row = viewRow(rig.view, 'remaining');
+  selectStatus(rig);
+  const row = viewRow(rig.panel, 'remaining');
   assert.equal(row.children[1].children[0].textContent, '0 of 1 left');
-  assert.equal(viewRemainingItems(rig.view).filter((el) => el.dataset.remainingItem === 'open').length, 0);
+  assert.equal(viewRemainingItems(rig.panel).filter((el) => el.dataset.remainingItem === 'open').length, 0);
   assert.equal(row.querySelectorAll('[data-remaining-done-toggle]').length, 1);
 });
 
-test('a status without Remaining draws no Remaining row in the Status tab', async () => {
+test('a status without Remaining draws no Remaining row in the Status view', async () => {
   for (const status of [STATUS, {...STATUS, remaining: []}]) {
     const rig = panelRig();
     await openSession(rig, {web_status: status});
-    rig.context.switchTab('status');
-    assert.equal(viewRow(rig.view, 'remaining'), undefined);
+    selectStatus(rig);
+    assert.equal(viewRow(rig.panel, 'remaining'), undefined);
   }
 });
 
 test('the Now row carries the full text and its update time', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  const row = viewRow(rig.view, 'now');
+  selectStatus(rig);
+  const row = viewRow(rig.panel, 'now');
   assert.equal(row.children[1].children[0].textContent, STATUS.now);
   assert.equal(row.querySelector('[data-status-updated]').dataset.statusUpdated, STATUS.updated_at);
 });
@@ -323,8 +344,8 @@ test('own Waiting on you items show open Contexts; the empty list reads "Nothing
     ...STATUS,
     waiting: [{text: 'Decide the size', context: 'The sweep costs $5 an hour.', link: null}],
   }});
-  rig.context.switchTab('status');
-  const item = viewWaitingItems(rig.view)[0];
+  selectStatus(rig);
+  const item = viewWaitingItems(rig.panel)[0];
   const toggle = item.querySelector('[data-context-toggle]');
   const body = item.querySelector('[data-context-body]');
   assert.equal(toggle.getAttribute('aria-expanded'), 'true', 'an own item shows its Context open');
@@ -337,9 +358,9 @@ test('own Waiting on you items show open Contexts; the empty list reads "Nothing
 
   const empty = panelRig();
   await openSession(empty, {web_status: {...STATUS, waiting: []}});
-  empty.context.switchTab('status');
-  assert.equal(viewRow(empty.view, 'waiting').querySelectorAll('[data-waiting-empty]').length, 1);
-  assert.equal(viewWaitingItems(empty.view).length, 0);
+  selectStatus(empty);
+  assert.equal(viewRow(empty.panel, 'waiting').querySelectorAll('[data-waiting-empty]').length, 1);
+  assert.equal(viewWaitingItems(empty.panel).length, 0);
 });
 
 test('a link inside an item context becomes an anchor through safeLink', async () => {
@@ -352,8 +373,8 @@ test('a link inside an item context becomes an anchor through safeLink', async (
       link: null,
     }],
   }});
-  rig.context.switchTab('status');
-  const body = viewWaitingItems(rig.view)[0].querySelector('[data-context-body]');
+  selectStatus(rig);
+  const body = viewWaitingItems(rig.panel)[0].querySelector('[data-context-body]');
   const anchors = allElements(body).filter((el) => el.tagName === 'A');
   assert.deepEqual(anchors.map((el) => el.href), ['https://example.com/plan', '/absolute_filepath/tmp/page.html']);
 });
@@ -361,8 +382,8 @@ test('a link inside an item context becomes an anchor through safeLink', async (
 test('an item without context renders no fold', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Approve the deploy', link: null}]}});
-  rig.context.switchTab('status');
-  assert.equal(viewWaitingItems(rig.view)[0].querySelectorAll('[data-context]').length, 0);
+  selectStatus(rig);
+  assert.equal(viewWaitingItems(rig.panel)[0].querySelectorAll('[data-context]').length, 0);
 });
 
 test('descendant items group by session with the id cut to eight characters and their Contexts folded', async () => {
@@ -379,12 +400,12 @@ test('descendant items group by session with the id cut to eight characters and 
     waiting: [{text: 'Child two item', link: null}],
   }];
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  const row = viewRow(rig.view, 'children');
+  selectStatus(rig);
+  const row = viewRow(rig.panel, 'children');
   const headers = row.querySelectorAll('[data-child-group]');
   assert.deepEqual(headers.map((el) => el.textContent),
     ['Child one · ' + CHILD_ID.slice(0, 8), 'Child two · ' + OTHER_CHILD_ID.slice(0, 8)]);
-  const items = viewChildItems(rig.view);
+  const items = viewChildItems(rig.panel);
   assert.equal(items.length, 2, 'one line per descendant item under its group');
   const body = items[0].querySelector('[data-context-body]');
   assert.equal(items[0].querySelector('[data-context-toggle]').getAttribute('aria-expanded'), 'false',
@@ -419,9 +440,9 @@ test('the panel collapses its user-act items, own and descendant, into one login
       {text: 'Log into the admin console', link: null, tier: 'user-act'},
     ],
   }});
-  rig.context.switchTab('status');
+  selectStatus(rig);
   // The one line covers own and descendant items and links to the day's login sheet.
-  const sheet = viewRow(rig.view, 'login-sheet');
+  const sheet = viewRow(rig.panel, 'login-sheet');
   assert.ok(sheet, 'the login-sheet line shows when user-act items exist');
   const text = allElements(sheet).find((el) => el.textContent === '3 actions that only you can do today');
   assert.ok(text, 'the line counts both sessions\' items, an item judged earlier included');
@@ -430,9 +451,9 @@ test('the panel collapses its user-act items, own and descendant, into one login
     ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date())]);
   // The user-act items stay out of the item rows; the child group whose items
   // all moved shows no header.
-  assert.deepEqual(viewWaitingItems(rig.view).map((el) => el.textContent.includes('Approve the deploy')), [true]);
-  assert.deepEqual(viewChildItems(rig.view).map((el) => el.textContent.includes('Decide the size')), [true]);
-  assert.deepEqual(viewRow(rig.view, 'children').querySelectorAll('[data-child-group]').map((el) => el.textContent),
+  assert.deepEqual(viewWaitingItems(rig.panel).map((el) => el.textContent.includes('Approve the deploy')), [true]);
+  assert.deepEqual(viewChildItems(rig.panel).map((el) => el.textContent.includes('Decide the size')), [true]);
+  assert.deepEqual(viewRow(rig.panel, 'children').querySelectorAll('[data-child-group]').map((el) => el.textContent),
     ['Child one · ' + CHILD_ID.slice(0, 8)]);
   // The badge counts what the panel shows, so the user-act item stays out of it.
   assert.equal(rig.badge.textContent, '1');
@@ -450,29 +471,29 @@ test('a derived user-act item the server holds counts in the login-sheet line an
     since: '2026-11-01T21:43:00-07:00',
   }];
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  const sheet = viewRow(rig.view, 'login-sheet');
+  selectStatus(rig);
+  const sheet = viewRow(rig.panel, 'login-sheet');
   assert.ok(sheet, 'the derived user-act item shows in the login-sheet line');
   assert.ok(allElements(sheet).find((el) => el.textContent === '1 action that only you can do today'));
-  assert.equal(viewWaitingItems(rig.view).some((el) => el.textContent.includes('Approve the ssh login')), false);
+  assert.equal(viewWaitingItems(rig.panel).some((el) => el.textContent.includes('Approve the ssh login')), false);
   // The badge counts only the session's stored waiting items.
   assert.equal(rig.badge.textContent, '2');
 });
 
-test('without user-act items the Status tab shows no login-sheet line', async () => {
+test('without user-act items the Status view shows no login-sheet line', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  assert.equal(viewRow(rig.view, 'login-sheet'), undefined);
-  assert.deepEqual(viewKinds(rig.view), ['goal', 'now', 'waiting']);
+  selectStatus(rig);
+  assert.equal(viewRow(rig.panel, 'login-sheet'), undefined);
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 
 test('the child Now rows list each open child with its Now, update time and Open link', async () => {
   const rig = panelRig();
   rig.page.children = NOW_CHILDREN;
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  const items = viewChildNowItems(rig.view);
+  selectStatus(rig);
+  const items = viewChildNowItems(rig.panel);
   assert.equal(items.length, 2, 'one row per child');
   assert.equal(items[0].children[0].textContent, 'Child one · ' + CHILD_ID.slice(0, 8) + ': Waiting for the sweep');
   assert.equal(items[0].querySelectorAll('[data-status-updated]').length, 1, 'the row carries its update time');
@@ -481,23 +502,23 @@ test('the child Now rows list each open child with its Now, update time and Open
   assert.equal(link[0].href, '/?session=' + CHILD_ID, 'the row links to its child session page');
 });
 
-test('without children rows the Status tab ends at Waiting on you', async () => {
+test('without children rows the Status view ends at Waiting on you', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  assert.deepEqual(viewKinds(rig.view), ['goal', 'now', 'waiting']);
+  selectStatus(rig);
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 
-test('a session with no status shows "No status yet" in the Status tab, with the child rows beside it', async () => {
+test('a session with no status shows "No status yet" in the Status view, with the child rows beside it', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: null});
-  rig.context.switchTab('status');
-  assert.deepEqual(viewKinds(rig.view), ['none', 'children']);
-  assert.equal(viewRow(rig.view, 'none').textContent, 'No status yet');
+  selectStatus(rig);
+  assert.deepEqual(viewKinds(rig.panel), ['none', 'children']);
+  assert.equal(viewRow(rig.panel, 'none').textContent, 'No status yet');
 });
 
-test('waiting ages show for own items and for descendant items in the Status tab', async () => {
+test('waiting ages show for own items and for descendant items in the Status view', async () => {
   const rig = panelRig();
   const now = Date.now();
   const ownSince = new Date(now - 6.5 * 60 * 60 * 1000).toISOString();
@@ -512,12 +533,12 @@ test('waiting ages show for own items and for descendant items in the Status tab
     ...STATUS,
     waiting: [{text: 'Own decision', link: null, since: ownSince, since_exact: true}],
   }});
-  rig.context.switchTab('status');
-  assert.equal(viewWaitingItems(rig.view)[0].querySelector('[data-waiting-age]').textContent, '6h');
-  assert.equal(viewChildItems(rig.view)[0].querySelector('[data-waiting-age]').textContent, '至少 3d');
+  selectStatus(rig);
+  assert.equal(viewWaitingItems(rig.panel)[0].querySelector('[data-waiting-age]').textContent, '6h');
+  assert.equal(viewChildItems(rig.panel)[0].querySelector('[data-waiting-age]').textContent, '至少 3d');
 });
 
-test('a live web_status message redraws the badge and the shown Status tab', async () => {
+test('a live web_status message redraws the badge and the shown Status view', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
   await deliver(rig, {
@@ -526,15 +547,15 @@ test('a live web_status message redraws the badge and the shown Status tab', asy
       timestamp: '2026-10-16T21:00:00Z'},
   });
   assert.equal(rig.badge.textContent, '1', 'the badge follows the live status');
-  rig.context.switchTab('status');
-  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now);
+  selectStatus(rig);
+  assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, NEWER.now);
 
   await deliver(rig, {
     type: 'message',
     message: {role: 'web_status', id: 'w2', content: 'Status updated: Now', web_status: OLDER, timestamp: 't2'},
   });
-  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now,
-      'an older message does not move the Status tab back');
+  assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, NEWER.now,
+      'an older message does not move the Status view back');
 });
 
 test('a web_status message from history replaces the status only when it is newer', async () => {
@@ -542,8 +563,8 @@ test('a web_status message from history replaces the status only when it is newe
   await openSession(rig, {web_status: NEWER}, [
     {role: 'web_status', id: 'w0', content: 'Status updated: Now', web_status: OLDER, timestamp: 't0'},
   ]);
-  rig.context.switchTab('status');
-  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now,
+  selectStatus(rig);
+  assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, NEWER.now,
       'an older message in history does not move the view back');
 
   const other = panelRig();
@@ -551,87 +572,101 @@ test('a web_status message from history replaces the status only when it is newe
     {role: 'web_status', id: 'w1', content: 'Status updated: Now', web_status: OLDER, timestamp: 't1'},
     {role: 'web_status', id: 'w2', content: 'Status updated: Now', web_status: NEWER, timestamp: 't2'},
   ]);
-  other.context.switchTab('status');
-  assert.equal(viewRow(other.view, 'now').children[1].children[0].textContent, NEWER.now,
+  selectStatus(other);
+  assert.equal(viewRow(other.panel, 'now').children[1].children[0].textContent, NEWER.now,
       'the newest message in history sets the status');
 });
 
-test('a web_status_subtree notice triggers one GET and redraws the shown Status tab', async () => {
+test('a web_status_subtree notice triggers one GET and redraws the shown Status view', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: STATUS});
   assert.equal(rig.statusGets.length, 1, 'the open fetches the child rows once');
-  rig.context.switchTab('status');
-  assert.equal(viewChildItems(rig.view).length, 1);
+  selectStatus(rig);
+  assert.equal(viewChildItems(rig.panel).length, 1);
 
   rig.page.descendants = descendantRows(2, 2);
   await deliver(rig, {type: 'web_status_subtree', source_session_id: OTHER_CHILD_ID});
   assert.equal(rig.statusGets.length, 2, 'the notice triggers exactly one GET');
-  assert.equal(viewChildItems(rig.view).length, 4, 'the Status tab redraws with the new rows');
+  assert.equal(viewChildItems(rig.panel).length, 4, 'the Status view redraws with the new rows');
 });
 
-test('a session switch resets the Status tab and draws the session it opens', async () => {
+test('a session left at Status re-opens with the panel shown and the list hidden', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {id: 'session-a', web_status: STATUS});
-  rig.context.switchTab('status');
+  selectStatus(rig);
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'the panel takes the list\'s place');
+  assert.equal(rig.root.classList.contains('hidden'), true, 'the list is display:none');
+  assert.equal(rig.scrollButton.classList.contains('hidden'), true, 'the scroll-to-bottom button hides with the list');
+  assert.equal(rig.inputArea.classList.contains('hidden'), false, 'the input box stays visible and usable');
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'foryou', 'the engine keeps its message view');
 
   rig.page.descendants = [];
   await openSession(rig, {id: 'session-b', web_status: NEWER});
-  assert.equal(rig.view.classList.contains('hidden'), true, 'the session switch returns the page to Chat');
-  assert.equal(rig.chat.classList.contains('hidden'), false, 'and shows the Chat column');
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'the other session opens on its list');
+  assert.equal(rig.root.classList.contains('hidden'), false, 'and shows the message list');
   assert.equal(rig.badge.classList.contains('hidden'), false, 'the new session\'s badge shows');
   assert.equal(rig.badge.textContent, String(NEWER.waiting.length), 'session-a\'s badge count is gone');
-  rig.context.switchTab('status');
-  assert.equal(viewRow(rig.view, 'now').children[1].children[0].textContent, NEWER.now);
-  assert.equal(viewChildItems(rig.view).length, 0, 'the child rows of session-a are gone');
-  assert.equal(rig.statusGets.length, 2);
+
+  await openSession(rig, {id: 'session-a', web_status: STATUS});
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'the re-open shows the panel again');
+  assert.equal(rig.root.classList.contains('hidden'), true, 'and hides the list');
+  selectStatus(rig);  // the toggle click that leaves Status
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'foryou',
+      'leaving Status shows the message view chosen before Status');
+  selectStatus(rig);
+  assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, STATUS.now);
+  assert.equal(viewChildItems(rig.panel).length, 0, 'the child rows of session-b are gone');
+  assert.equal(rig.statusGets.length, 3);
 });
 
-test('a thread session and a worker session show neither the Status button nor its badge', async () => {
+test('the toggle offers Status for a web session only, and its badge follows the session kinds', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  assert.equal(rig.button.classList.contains('hidden'), false, 'a web session shows the Status button');
+  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a web session shows the Status option');
+  assert.equal(rig.badge.classList.contains('hidden'), false, 'the option\'s badge carries the count');
 
   await openSession(rig, {id: 'session-b', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}});
-  assert.equal(rig.button.classList.contains('hidden'), true, 'a Slack thread session shows no Status button');
+  assert.equal(statusOption(rig).classList.contains('hidden'), true,
+      'a Slack thread session shows no Status option');
   assert.equal(rig.badge.classList.contains('hidden'), true, 'and no badge');
   await deliver(rig, {
     type: 'message',
     message: {role: 'web_status', id: 'w1', content: 'Status updated: Now', web_status: NEWER, timestamp: 't'},
   });
-  assert.equal(rig.button.classList.contains('hidden'), true, 'a web_status message does not show the button');
+  assert.equal(statusOption(rig).classList.contains('hidden'), true,
+      'a web_status message does not show the option');
   assert.equal(rig.statusGets.length, 1, 'the thread session makes no descendant GET');
 
   // A worker session's page renders its own transcript; the status hook takes the session alone.
   rig.context.openSessionStatusPanel({id: 'session-c', profile: 'worker'}, []);
-  assert.equal(rig.button.classList.contains('hidden'), true, 'a worker session shows no Status button');
+  assert.equal(statusOption(rig).classList.contains('hidden'), true, 'a worker session shows no Status option');
 });
 
-test('a child web session shows the Status button, and a discord thread session does not', async () => {
+test('a child web session shows the Status option, and a discord thread session does not', async () => {
   const rig = panelRig();
   await openSession(rig, {id: 'child-a', task_parent_id: 'parent-1', web_status: STATUS});
-  assert.equal(rig.button.classList.contains('hidden'), false, 'a child web session shows the Status button');
+  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a child web session shows the Status option');
   await openSession(rig, {id: 'thread-d', discord_origin: {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'}});
-  assert.equal(rig.button.classList.contains('hidden'), true, 'a Discord thread session shows no Status button');
+  assert.equal(statusOption(rig).classList.contains('hidden'), true,
+      'a Discord thread session shows no Status option');
 });
 
-test('the Status tab registers beside Chat with the plan\'s values', async () => {
+test('selecting Status hides the list and shows the panel in its place', async () => {
   const rig = panelRig();
-  const tab = vm.runInContext("registeredTabs.get('status')", rig.context);
-  assert.deepEqual(
-    {
-      showsChat: tab.showsChat,
-      fullScreenOnMobile: tab.fullScreenOnMobile,
-      keepOnSessionSwitch: tab.keepOnSessionSwitch,
-    },
-    {showsChat: false, fullScreenOnMobile: false, keepOnSessionSwitch: false});
-
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  assert.equal(rig.view.classList.contains('hidden'), false, 'the Status tab shows its panel');
-  assert.equal(rig.chat.classList.contains('hidden'), true, 'and takes the Chat column\'s place');
-  assert.equal(rig.context.tabAfterSessionSwitch(), 'chat', 'the next session opens on Chat');
+  selectStatus(rig);
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'the panel takes the list\'s place');
+  assert.equal(rig.root.classList.contains('hidden'), true, 'the list is display:none, not covered');
+  assert.equal(rig.scrollButton.classList.contains('hidden'), true, 'the scroll-to-bottom button hides');
+  assert.equal(rig.inputArea.classList.contains('hidden'), false, 'the input box stays visible');
+
+  rig.context.setChatView('everything');
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'leaving Status hides the panel');
+  assert.equal(rig.root.classList.contains('hidden'), false, 'and shows the list');
+  assert.equal(rig.context.Chat.activeTurnEngineFor(rig.root).view, 'everything',
+      'the engine mounts the view the toggle names');
 });
 
 test('a web_status message renders as a system line in Everything', () => {
@@ -642,28 +677,28 @@ test('a web_status message renders as a system line in Everything', () => {
   assert.equal(status, system.replace('data-message-role="system"', 'data-message-role="web_status"'));
 });
 
-test('a phone Status tab stacks each label above its value, with no label column', async () => {
+test('a phone Status view stacks each label above its value, with no label column', async () => {
   const rig = panelRig();
   switchLayout(rig, 'mobile');
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  assert.equal(allElements(rig.view).filter((el) => el.classList.contains('w-28')).length, 0);
-  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), true);
-  assert.equal(viewWaitingItems(rig.view).length, 2);
+  selectStatus(rig);
+  assert.equal(allElements(rig.panel).filter((el) => el.classList.contains('w-28')).length, 0);
+  assert.equal(viewRow(rig.panel, 'goal').classList.contains('flex-col'), true);
+  assert.equal(viewWaitingItems(rig.panel).length, 2);
 });
 
-test('a platform.onChange switch redraws the shown Status tab in the new layout', async () => {
+test('a platform.onChange switch redraws the shown Status view in the new layout', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  rig.context.switchTab('status');
-  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), false, 'desktop keeps a label column');
+  selectStatus(rig);
+  assert.equal(viewRow(rig.panel, 'goal').classList.contains('flex-col'), false, 'desktop keeps a label column');
 
-  const view = rig.view;
+  const view = rig.panel;
   switchLayout(rig, 'mobile');
-  assert.equal(rig.view, view, 'the view element is the same');
-  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), true,
+  assert.equal(rig.panel, view, 'the view element is the same');
+  assert.equal(viewRow(rig.panel, 'goal').classList.contains('flex-col'), true,
       'a phone stacks each label above its value');
 
   switchLayout(rig, 'desktop');
-  assert.equal(viewRow(rig.view, 'goal').classList.contains('flex-col'), false, 'back to the label column');
+  assert.equal(viewRow(rig.panel, 'goal').classList.contains('flex-col'), false, 'back to the label column');
 });

@@ -30,7 +30,12 @@ use charliebot_store::control_events::{self, ACTOR_SYSTEM};
 use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
 };
-use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, visit_events_from_end};
+use charliebot_store::run_records::{
+  self, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
+  OBSERVATION_NATIVE_SESSION_ID, OBSERVATION_PROMPT_SNAPSHOT_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH,
+  OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RunKind, RunOutcome, RunOutcomeKind, RunRecord,
+  visit_events_from_end,
+};
 use charliebot_store::{ChatEventHistory, NodeFacts, RunFacts, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -516,7 +521,7 @@ impl TaskExecutionAdapter {
       .record_observation(
         &meta.id,
         &run.id,
-        Map::from_iter([("prompt_snapshot_ref".to_string(), json!(snapshot_path.to_string_lossy()))]),
+        Map::from_iter([(OBSERVATION_PROMPT_SNAPSHOT_REF.to_string(), json!(snapshot_path.to_string_lossy()))]),
       )
       .await?;
     if !coherent.declared || coherent.overlay_error.is_some() {
@@ -1250,10 +1255,10 @@ impl TaskExecutionAdapter {
         &meta.id,
         &run.id,
         Map::from_iter([
-          ("repo_path".to_string(), json!(repo_path.to_string_lossy())),
-          ("base_branch".to_string(), json!(base_branch)),
-          ("branch_name".to_string(), json!(branch_name)),
-          ("worktree_path".to_string(), json!(worktree_path.to_string_lossy())),
+          (OBSERVATION_REPO_PATH.to_string(), json!(repo_path.to_string_lossy())),
+          (OBSERVATION_BASE_BRANCH.to_string(), json!(base_branch)),
+          (OBSERVATION_BRANCH_NAME.to_string(), json!(branch_name)),
+          (OBSERVATION_WORKTREE_PATH.to_string(), json!(worktree_path.to_string_lossy())),
         ]),
       )
       .await?;
@@ -1282,11 +1287,11 @@ impl TaskExecutionAdapter {
         session_id,
         run_id,
         Map::from_iter([
-          ("native_session_id".to_string(), json!(native_session_id)),
-          ("model".to_string(), json!(option.model)),
-          ("raw_log_ref".to_string(), json!(raw_path.to_string_lossy())),
-          ("events_ref".to_string(), json!(run_dir.join(run_records::RUN_EVENTS_NAME).to_string_lossy())),
-          ("result_ref".to_string(), json!(raw_path.to_string_lossy())),
+          (OBSERVATION_NATIVE_SESSION_ID.to_string(), json!(native_session_id)),
+          (OBSERVATION_MODEL.to_string(), json!(option.model)),
+          (OBSERVATION_RAW_LOG_REF.to_string(), json!(raw_path.to_string_lossy())),
+          (OBSERVATION_EVENTS_REF.to_string(), json!(run_dir.join(run_records::RUN_EVENTS_NAME).to_string_lossy())),
+          (OBSERVATION_RESULT_REF.to_string(), json!(raw_path.to_string_lossy())),
         ]),
       )
       .await?;
@@ -2195,9 +2200,9 @@ impl TaskExecutionAdapter {
               &session_id,
               &run_id,
               Map::from_iter([
-                ("native_session_id".to_string(), json!(native_session_id)),
+                (OBSERVATION_NATIVE_SESSION_ID.to_string(), json!(native_session_id)),
                 (
-                  "model".to_string(),
+                  OBSERVATION_MODEL.to_string(),
                   json!(
                     extras
                       .get("model")
@@ -2206,8 +2211,8 @@ impl TaskExecutionAdapter {
                       .unwrap_or(&option.model)
                   ),
                 ),
-                ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
-                ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
+                (OBSERVATION_RAW_LOG_REF.to_string(), json!(raw_log.to_string_lossy())),
+                (OBSERVATION_RESULT_REF.to_string(), json!(raw_log.to_string_lossy())),
               ]),
             )
             .await?;
@@ -2431,7 +2436,7 @@ impl TaskExecutionAdapter {
       .record_observation(
         session_id,
         run_id,
-        Map::from_iter([("events_ref".to_string(), json!(event_path.to_string_lossy()))]),
+        Map::from_iter([(OBSERVATION_EVENTS_REF.to_string(), json!(event_path.to_string_lossy()))]),
       )
       .await?;
     Ok(())

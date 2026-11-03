@@ -404,7 +404,8 @@ Caveats:
   `sbatch --wrap "srun bash script.sh"` so the outer `srun` binds the GPUs.
 - `sacct` formats times in the local time zone of the process that runs it. Before you align `sacct` times with other logs, check that zone.
 - The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
-- On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh neptune true`.
+- verify-on-create rejects a trigger whose ssh probe fails, and a BatchMode probe cannot start a browser key
+  approval: on a host that gates keys behind one, complete the approval before registering the trigger.
 
 Keep `--message` a short label (capped at `MAX_TRIGGER_MESSAGE_CHARS`): the wake lands back in the same session with full history, so the label only names which watch fired.
 

@@ -145,6 +145,14 @@ ui:
 slack:
   allowed_user_ids: []
 
+# GitHub: the command that prints the operator's own GitHub token, which the
+# draft sender uses for a pull request or comment in the operator's name. The
+# value is a command line run without a shell, so a host sets its own login's
+# token command here and no repository file names a host path. Unset, a GitHub
+# draft cannot be sent.
+github:
+  user_token_command:
+
 # Discord: the summon entrypoint's account map (Discord user id -> the person
 # that account belongs to).
 discord:

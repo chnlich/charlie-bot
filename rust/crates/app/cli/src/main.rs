@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 28 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 29 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
 //! the not-ported JSON error and exits 1.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 28] = [
+const COMMANDS: [&str; 29] = [
   "artifact",
   "compaction-context",
   "config",
@@ -27,6 +27,7 @@ const COMMANDS: [&str; 28] = [
   "feishu",
   "files",
   "gc-trash",
+  "github",
   "google",
   "improve",
   "linear",
@@ -111,6 +112,7 @@ fn run_subcommand(
     "feishu" => commands::feishu::main(args),
     "files" => commands::files::main(args),
     "gc-trash" => commands::gc_trash::main(args, host),
+    "github" => charliebot_github::cli::main(args),
     "google" => commands::google::main(args),
     "improve" => charliebot_improve::cli::improve_main(args),
     "linear" => commands::linear::main(args),

@@ -11,7 +11,7 @@ use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use charliebot_core::run_token::SESSION_ID_ENV;
-use charliebot_core::text_repr::is_truthy;
+use charliebot_core::text_repr::{STARLETTE_JSON, is_truthy, json_dumps};
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{ForkptyResult, Winsize, forkpty};
@@ -363,8 +363,7 @@ async fn send_exit_frame(socket: &mut WebSocket, session_id: &str) {
 }
 
 pub(super) async fn send_json(socket: &mut WebSocket, value: &Value) -> Result<(), axum::Error> {
-  let text =
-    String::from_utf8(charliebot_compat::json::starlette_bytes(value)).expect("Starlette JSON bytes are valid UTF-8");
+  let text = json_dumps(value, &STARLETTE_JSON);
   socket.send(Message::Text(text.into())).await
 }
 

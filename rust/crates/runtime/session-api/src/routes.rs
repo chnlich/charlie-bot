@@ -104,13 +104,19 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let response = blocking_store(move || {
-    let listing::ListingCorpus { mut rows, derived, sequence_fields } =
-      listing::active_listing_corpus(&features.store, &features.registry)?;
-    let roots = features.store.subtree_roots_shared()?;
-    let sequence = roots.sequence;
-    let views = roots.views;
-    rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
-    Ok(listing::sessions_list_response(&request, &features.store, &rows, &derived, &sequence_fields, &ACTIVE_MEMOS))
+    // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
+    // subtree roots or the overlays move.
+    let page = listing::active_page_rows(&features.store, &features.registry)?;
+    // The periodic self-heal sweep rechecks the rows this route serves; the page's read does not schedule it.
+    sidebar::count_memoized_read(&features.store, &features.registry, page.rows())?;
+    Ok(listing::sessions_list_response(
+      &request,
+      &features.store,
+      page.rows(),
+      page.derived(),
+      page.sequence_fields(),
+      &ACTIVE_MEMOS,
+    ))
   })
   .await;
   response.unwrap_or_else(store_error)

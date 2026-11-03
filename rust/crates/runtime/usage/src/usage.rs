@@ -151,6 +151,105 @@ impl UsageFold {
       Some(format!("{:.4}", self.total_cost).parse().expect("a formatted float parses back"))
     }
   }
+
+  /// The usage value this fold resolves, through the tier its reading kind selects; `None` before any event arrived.
+  fn resolve(
+    &self,
+    registry: &Registry,
+    event_count: usize,
+    run_kind: RunKind,
+    backend_option: Option<&BackendOption>,
+  ) -> StoreResult<Option<Value>> {
+    if event_count == 0 {
+      return Ok(None);
+    }
+    let cost = self.cost();
+    let usage = match self.reading_kind {
+      ReadingKind::Claude => Some(self.resolve_claude(registry, cost, run_kind, backend_option)?),
+      ReadingKind::Snapshot => Some(self.resolve_snapshot(registry, cost, run_kind)?),
+      ReadingKind::Resolved => Some(self.resolve_reading(cost)),
+      ReadingKind::Unset => Some(json!({
+        (event_types::CONTEXT_TOKENS): null,
+        (event_types::CONTEXT_FULL): null,
+        (event_types::CONTEXT_COMPACT_AT): null,
+        (event_types::RESULT_TOTAL_COST_USD): cost,
+        "model": "",
+      })),
+    };
+    Ok(usage)
+  }
+
+  fn resolve_claude(
+    &self,
+    registry: &Registry,
+    cost: Option<f64>,
+    run_kind: RunKind,
+    backend_option: Option<&BackendOption>,
+  ) -> StoreResult<Value> {
+    let context_tokens = self.post_compact_tokens.unwrap_or(self.chosen_prompt_tokens);
+    let limits = registry.reading_limits_for(CLAUDE_READING_KIND, run_kind, backend_option);
+    let (context_full, compact_at) = match limits {
+      Some(limits) => {
+        let declared = limits.declared_window.map(|value| value as i64);
+        let model_window = self.model_windows.get(&self.chosen_model).and_then(int_value);
+        let full = match (model_window, declared) {
+          (Some(model), Some(declared)) => Some(model.min(declared)),
+          (_, declared) => declared,
+        };
+        (full, subtract_reserve(full, limits))
+      }
+      None => (None, None),
+    };
+    Ok(usage_value(Some(context_tokens), context_full, compact_at, &self.chosen_model, cost))
+  }
+
+  fn resolve_snapshot(&self, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
+    let snapshot = self.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
+    let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
+    let token_sum = match tokens {
+      Some(tokens) => add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?,
+      None => 0,
+    };
+    let (context_full, compact_at) = match snapshot.get("limit").and_then(Value::as_object) {
+      Some(limit) => {
+        let input = limit.get("input").and_then(int_value);
+        let output = limit.get("output").and_then(int_value);
+        // Only a missing key defaults to zero.
+        let output_for_input = output.or_else(|| (!limit.contains_key("output")).then_some(0));
+        let context = limit.get("context").and_then(int_value);
+        if let (Some(input), Some(output)) = (input, output_for_input) {
+          (Some(input), snapshot_compact_at(input, output, registry, run_kind))
+        } else if let (Some(context), Some(output)) = (context, output)
+          && limit.contains_key("output")
+        {
+          (Some(context), snapshot_compact_at(context, output, registry, run_kind))
+        } else {
+          (None, None)
+        }
+      }
+      None => (None, None),
+    };
+    let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
+    Ok(usage_value(Some(token_sum), context_full, compact_at, &model, cost))
+  }
+
+  fn resolve_reading(&self, cost: Option<f64>) -> Value {
+    let reading = self.reading.as_ref().expect("resolved reading kind carries a reading");
+    let number = |key: &str| {
+      reading.get(key).and_then(|value| match value {
+        Value::Bool(_) => None,
+        value => int_value(value),
+      })
+    };
+    let model = reading.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
+    usage_value(
+      number(event_types::CONTEXT_TOKENS),
+      number(event_types::CONTEXT_FULL),
+      number(event_types::CONTEXT_COMPACT_AT),
+      &model,
+      cost,
+    )
+  }
 }
 
 struct FactsMemoEntry {
@@ -230,7 +329,7 @@ impl SessionUsage {
         return Ok((Some(Value::Object(usage)), fold));
       }
     }
-    Ok((resolve_fold_tier(&fold, &self.registry, event_count, usage_run_kind(meta), backend_option)?, fold))
+    Ok((fold.resolve(&self.registry, event_count, usage_run_kind(meta), backend_option)?, fold))
   }
 
   fn usage_resolver(&self, backend_id: &str) -> StoreResult<Option<Arc<dyn UsageResolver>>> {
@@ -319,110 +418,12 @@ pub fn fold_usage<E: EventFields>(
 ) -> StoreResult<Option<Value>> {
   let mut fold = UsageFold::default();
   fold.feed(events)?;
-  resolve_fold_tier(&fold, registry, events.len(), run_kind, backend_option)
+  fold.resolve(registry, events.len(), run_kind, backend_option)
 }
 
 /// The run kind the session usage view assigns to a node profile.
 pub fn usage_run_kind(meta: &SessionMetadata) -> RunKind {
   if meta.profile == TaskProfile::Manager { RunKind::ManagerTurn } else { RunKind::Work }
-}
-
-fn resolve_fold_tier(
-  fold: &UsageFold,
-  registry: &Registry,
-  event_count: usize,
-  run_kind: RunKind,
-  backend_option: Option<&BackendOption>,
-) -> StoreResult<Option<Value>> {
-  if event_count == 0 {
-    return Ok(None);
-  }
-  let cost = fold.cost();
-  let usage = match fold.reading_kind {
-    ReadingKind::Claude => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
-    ReadingKind::Snapshot => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
-    ReadingKind::Resolved => Some(resolve_reading(fold, cost)),
-    ReadingKind::Unset => Some(json!({
-      (event_types::CONTEXT_TOKENS): null,
-      (event_types::CONTEXT_FULL): null,
-      (event_types::CONTEXT_COMPACT_AT): null,
-      (event_types::RESULT_TOTAL_COST_USD): cost,
-      "model": "",
-    })),
-  };
-  Ok(usage)
-}
-
-fn resolve_claude(
-  fold: &UsageFold,
-  registry: &Registry,
-  cost: Option<f64>,
-  run_kind: RunKind,
-  backend_option: Option<&BackendOption>,
-) -> StoreResult<Value> {
-  let context_tokens = fold.post_compact_tokens.unwrap_or(fold.chosen_prompt_tokens);
-  let limits = registry.reading_limits_for(CLAUDE_READING_KIND, run_kind, backend_option);
-  let (context_full, compact_at) = match limits {
-    Some(limits) => {
-      let declared = limits.declared_window.map(|value| value as i64);
-      let model_window = fold.model_windows.get(&fold.chosen_model).and_then(int_value);
-      let full = match (model_window, declared) {
-        (Some(model), Some(declared)) => Some(model.min(declared)),
-        (_, declared) => declared,
-      };
-      (full, subtract_reserve(full, limits))
-    }
-    None => (None, None),
-  };
-  Ok(usage_value(Some(context_tokens), context_full, compact_at, &fold.chosen_model, cost))
-}
-
-fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
-  let snapshot = fold.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
-  let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
-  let token_sum = match tokens {
-    Some(tokens) => add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?,
-    None => 0,
-  };
-  let (context_full, compact_at) = match snapshot.get("limit").and_then(Value::as_object) {
-    Some(limit) => {
-      let input = limit.get("input").and_then(int_value);
-      let output = limit.get("output").and_then(int_value);
-      // Only a missing key defaults to zero.
-      let output_for_input = output.or_else(|| (!limit.contains_key("output")).then_some(0));
-      let context = limit.get("context").and_then(int_value);
-      if let (Some(input), Some(output)) = (input, output_for_input) {
-        (Some(input), snapshot_compact_at(input, output, registry, run_kind))
-      } else if let (Some(context), Some(output)) = (context, output)
-        && limit.contains_key("output")
-      {
-        (Some(context), snapshot_compact_at(context, output, registry, run_kind))
-      } else {
-        (None, None)
-      }
-    }
-    None => (None, None),
-  };
-  let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
-  Ok(usage_value(Some(token_sum), context_full, compact_at, &model, cost))
-}
-
-fn resolve_reading(fold: &UsageFold, cost: Option<f64>) -> Value {
-  let reading = fold.reading.as_ref().expect("resolved reading kind carries a reading");
-  let number = |key: &str| {
-    reading.get(key).and_then(|value| match value {
-      Value::Bool(_) => None,
-      value => int_value(value),
-    })
-  };
-  let model = reading.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
-  usage_value(
-    number(event_types::CONTEXT_TOKENS),
-    number(event_types::CONTEXT_FULL),
-    number(event_types::CONTEXT_COMPACT_AT),
-    &model,
-    cost,
-  )
 }
 
 fn subtract_reserve(full: Option<i64>, limits: ContextLimits) -> Option<i64> {

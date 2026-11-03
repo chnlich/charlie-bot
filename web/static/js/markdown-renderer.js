@@ -53,7 +53,7 @@ function scanFences(lines) {
 
 function fixNestedFences(md) {
   // The scanner matches only fence lines (three or more backticks or tildes
-  // at a line's start), so a draft carrying neither character run is identity
+  // at a line's start). A draft carrying neither character run is identity
   // before the split-scan-join pass runs.
   if (md.indexOf('```') === -1 && md.indexOf('~~~') === -1) return md;
   var lines = md.split('\n');
@@ -81,25 +81,28 @@ function applyFenceUpgrades(lines, upgrades) {
 }
 
 // The streaming paint's state, owned here and driven by usage.js's
-// paintStreamDraft: null on every render path except the streaming paint's
-// parse, where it holds an array that recordCodeTokens fills with the parse's code
-// tokens in document order. The block still growing at the draft's end is the
-// LAST of them (an unterminated fence runs to EOF), so renderer.code can skip
-// its highlight by token identity — no model of marked's block structure
-// needed, which line-level fence scanning cannot supply (list and blockquote
-// dedent the lines a fence rule would see). That block's content changes
-// again before it settles, so a cache miss on it renders escaped-plain
-// instead of re-running highlight per paint — the paint where the fence
-// closes, and the committed render after the turn, highlight it once and the
-// cache serves every later paint.
+// paintStreamDraft. It is null on every render path except the streaming
+// paint's parse. There it holds an array that recordCodeTokens fills with the
+// parse's code tokens in document order.
+//
+// The block still growing at the draft's end is the LAST of them, because an
+// unterminated fence runs to EOF. renderer.code can therefore skip its
+// highlight by token identity, with no model of marked's block structure.
+// Line-level fence scanning cannot supply that model: list and blockquote
+// dedent the lines a fence rule would see.
+//
+// That block's content changes again before it settles, so a cache miss on it
+// renders escaped-plain instead of re-running highlight per paint. The paint
+// where the fence closes, and the committed render after the turn, highlight
+// it once, and the cache serves every later paint.
 var streamPaintCodeTokens = null;
 
-// The page parse's deferral state, driven by renderProseMarkdown below: true
-// only around one of its parses, with the body text the flush needs to settle
-// the memo entry. renderer.code records each deferred block's marker id, its
-// (lang, code) highlight key, and the exact block html it emitted, so the
-// flush can swap the highlighted bytes into both the DOM node and the memo
-// entry without re-parsing the body.
+// The page parse's deferral state, driven by renderProseMarkdown below. It is
+// true only around one of its parses, and carries the body text the flush
+// needs to settle the memo entry. renderer.code records each deferred block's
+// marker id, its (lang, code) highlight key, and the exact block html it
+// emitted. The flush then swaps the highlighted bytes into both the DOM node
+// and the memo entry, without re-parsing the body.
 var deferCodeHighlights = false;
 var deferredBodyText = '';
 var deferredSeq = 0;
@@ -107,7 +110,7 @@ var deferredBlocks = new Map();
 var highlightFlushScheduled = false;
 
 // Every streaming paint re-parses the whole accumulated draft, so unchanged
-// code blocks re-highlight on every paint, and highlightAuto scores the block
+// code blocks re-highlight on every paint. highlightAuto scores the block
 // against every registered language (~0.26 s per 24 KB on the served
 // highlight.js 11.9.0 common build). Highlight output is a pure function of
 // (lang, code), so a bounded LRU serves repeat blocks without re-running it.
@@ -125,28 +128,28 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
 // ---------------------------------------------------------------------------
 // Wide-character 2ch boxes. The code font stack ('Fira Code', ui-monospace,
 // monospace) carries no CJK glyphs, so a wide char falls back to a system
-// font whose 1em advance is ~1.667 columns of the Latin mono font — while an
-// ASCII diagram authored in a monospace editor reserves exactly 2 columns per wide
-// char, and every CJK label pushes the right edge left by another 1/3
-// column. CSS has no wcwidth equivalent, so the render side wraps
-// each East_Asian_Width W/F character in a fixed 2ch inline box; `ch` follows
-// the actually-rendered monospace font, so 2ch is exactly two Latin columns
-// on every client, with or without Fira Code. The spans are layout-only and
+// font. That font's 1em advance is ~1.667 columns of the Latin mono font. An
+// ASCII diagram authored in a monospace editor reserves exactly 2 columns per
+// wide char. Every CJK label then pushes the right edge left by another 1/3
+// column. CSS has no wcwidth equivalent, so the render side wraps each
+// East_Asian_Width W/F character in a fixed 2ch inline box. `ch` follows the
+// actually-rendered monospace font, so 2ch is exactly two Latin columns on
+// every client, with or without Fira Code. The spans are layout-only and
 // invisible to textContent, so copy and selection stay byte-identical.
 //
-// Ambiguous-width characters (box-drawing ─│, ±, ·, arrows) are NOT
-// boxed: their glyphs come from the Latin monospace font itself and already
-// render one column — which is exactly why the box-drawing rails of a CJK
-// diagram align while its CJK labels drift. Boxing them at 2ch would
-// double widths that are already correct.
+// Ambiguous-width characters (box-drawing ─│, ±, ·, arrows) are NOT boxed.
+// Their glyphs come from the Latin monospace font itself and already render
+// one column. That is exactly why the box-drawing rails of a CJK diagram
+// align while its CJK labels drift. Boxing them at 2ch would double widths
+// that are already correct.
 // ---------------------------------------------------------------------------
 
 // Ordered [lo, hi] code-point ranges of East_Asian_Width W(ide) and
 // F(ullwidth) — the wcwidth 2-cell set — from Unicode 16.0.0's
 // EastAsianWidth.txt (291 ranges, file order). Membership goes through this
-// generated table and a binary search, not a \p{East_Asian_Width} escape:
+// generated table and a binary search, not a \p{East_Asian_Width} escape.
 // ECMAScript property escapes cover General_Category, Script and binary
-// properties only, and East_Asian_Width throws SyntaxError in V8 — a regex
+// properties only, and East_Asian_Width throws SyntaxError in V8. A regex
 // literal is an early error, so it would take this whole file's parse down
 // with it. Regenerate after a Unicode upgrade by re-running (output: the
 // table below, 4 ranges per line):
@@ -240,16 +243,16 @@ function wc2chIsWide(cp) {
   return false;
 }
 
-// Tag/text split of the single-pass scan: the capture group makes
+// Tag/text split of the single-pass scan. The capture group makes
 // String.prototype.split keep each tag as an odd-index segment, and tags pass
-// through verbatim, so a character inside a tag (attribute value, class name)
-// is never wrapped. escapeText and highlight.js emit only ASCII tags and
-// entities around escaped text, so wide chars only ever appear in text
+// through verbatim. A character inside a tag (attribute value, class name) is
+// therefore never wrapped. escapeText and highlight.js emit only ASCII tags
+// and entities around escaped text, so wide chars only ever appear in text
 // segments.
 var WC2CH_TAG_SPLIT_RE = /(<[^>]*>)/g;
 // Any character below U+1100 — the lowest W/F range's floor in WC2CH_RANGES —
 // is never wrappable, so a text segment the probe misses skips the per-char
-// scan whole. The probe is conservative in the safe direction: a non-W/F char
+// scan whole. The probe is conservative in the safe direction. A non-W/F char
 // at or above U+1100 still takes the scan, and astral characters arrive as
 // surrogate units (≥ U+1100) that the scan already consumes as pairs.
 var WC2CH_PRESENT_RE = /[\u1100-\uFFFF]/;
@@ -300,14 +303,14 @@ function wrapWideChars(html) {
   return out.join('');
 }
 
-// Re-wraps of one inner HTML are pure repeats: a streamed draft re-renders its
+// Re-wraps of one inner HTML are pure repeats. A streamed draft re-renders its
 // completed blocks from the highlight cache on every paint, and the flush's
 // marker swap re-wraps the bytes its settled block just wrapped. The wrap is a
-// pure function of the input string, so a bounded LRU serves the repeats; the
+// pure function of the input string, so a bounded LRU serves the repeats. The
 // cap bounds retained outputs to one wrapped block per entry, keyed by bytes
 // the highlight cache already holds. The tool-preview mounts (chat/rendering.js)
-// stay on the direct wrap: their re-renders carry new
-// truncated bodies, so caching them would only evict the block entries.
+// stay on the direct wrap: their re-renders carry new truncated bodies, so
+// caching them would only evict the block entries.
 var WRAP_CACHE_CAP = 64;
 var wrapWideCharsCache = new Map();
 
@@ -345,12 +348,12 @@ function cachedHighlight(lang, code, run) {
   return value;
 }
 
-// A complete block's raw ends on its closing fence line (marked strips the
+// A complete block's raw ends on its closing fence line. marked strips the
 // trailing newline from a terminated token's raw but keeps it on an
-// unterminated one); an unterminated block's raw ends on content. The one
-// shape this misreads — a long-fence draft whose content ends on a shorter
-// bare fence line — reads as complete and keeps the per-paint highlight,
-// so a misread costs coverage, never bytes.
+// unterminated one. An unterminated block's raw therefore ends on content.
+// The one shape this misreads — a long-fence draft whose content ends on a
+// shorter bare fence line — reads as complete and keeps the per-paint
+// highlight. A misread then costs coverage, never bytes.
 function endsOnClosingFence(raw) {
   var body = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
   var lastLine = body.slice(body.lastIndexOf('\n') + 1);
@@ -358,31 +361,32 @@ function endsOnClosingFence(raw) {
 }
 
 // The streaming paint's parse: lex once, record the code tokens by plain
-// recursion (marked's walkTokens hook routes the same walk through
-// Promise.all — ~215k promise allocations per replay on the 98 KB draft
-// corpus), then render those same token objects, so the renderer's identity
-// check sees what was recorded.
+// recursion, then render those same token objects. The renderer's identity
+// check then sees what was recorded. The walkTokens hook routes the same walk
+// through Promise.all, which costs ~215k promise allocations per replay on the
+// 98 KB draft corpus.
 //
 // The parse is incremental across paints: the frozen prefix's HTML carries
 // forward, and only the tail after the last safe boundary re-lexes. A
-// boundary is safe when a blank line ends it and nothing can cross the blank:
-// a list continues across blank lines and a code block's unterminated fence
-// runs to EOF, so a cut may follow a `space` token only when the token before
-// it is neither. Reference definitions resolve document-wide, so the first
-// paint whose new text carries one re-parses whole from then on (hasDefs) —
-// a frozen prefix could not resolve a tail reference the full parse resolves.
+// boundary is safe when a blank line ends it and nothing can cross the blank.
+// A list continues across blank lines, and a code block's unterminated fence
+// runs to EOF. A cut may therefore follow a `space` token only when the token
+// before it is neither. Reference definitions resolve document-wide, so the
+// first paint whose new text carries one re-parses whole from then on
+// (hasDefs). A frozen prefix could not resolve a tail reference the full
+// parse resolves.
 var streamParseState = null;
-// The label class matches marked's def tokenizer (an escaped char or any
-// non-bracket non-backslash), so a definition the lexer accepts — including
-// one with an escaped `]` in the label — can never slip past this guard.
+// The label class matches marked's def tokenizer: an escaped char, or any
+// non-bracket non-backslash char. A definition the lexer accepts, including
+// one with an escaped `]` in the label, can never slip past this guard.
 var STREAM_REF_DEF_RE = /^[ \t]{0,3}\[(?:\\.|[^\[\]\n\\])+\]:/m;
 
 function streamSafeCut(tokens, source, base) {
   // Latest absolute end offset of a `space` token whose preceding token is
-  // neither a list nor a code block, or -1. Token raws do not tile the input —
+  // neither a list nor a code block, or -1. Token raws do not tile the input:
   // a link reference definition is consumed into tokens.links with no token
-  // emitted — so offsets come from locating each raw in the source, not from
-  // summing lengths.
+  // emitted. Offsets therefore come from locating each raw in the source, not
+  // from summing lengths.
   var cursor = base;
   var cut = -1;
   var index = -1;
@@ -390,10 +394,10 @@ function streamSafeCut(tokens, source, base) {
     var found = source.indexOf(tokens[i].raw, cursor);
     if (found < 0) return { cut: -1, index: -1 };
     var end = found + tokens[i].raw.length;
-    // A cut is only safe at a line start: a blank line's trailing spaces can
-    // carry the next line's indentation (a partially streamed `    code`
-    // indent lexes as a code block from the line start but as a paragraph
-    // from three spaces in), so a space token that stops mid-line never cuts.
+    // A cut is only safe at a line start. A blank line's trailing spaces can
+    // carry the next line's indentation. A partially streamed `    code`
+    // indent lexes as a code block from the line start, but as a paragraph
+    // from three spaces in. A space token that stops mid-line never cuts.
     if (i > 0 && tokens[i].type === 'space' && tokens[i].raw.slice(-1) === '\n') {
       var prev = tokens[i - 1].type;
       if (prev !== 'list' && prev !== 'code') {
@@ -420,9 +424,10 @@ function parseStreamDraft(fixed) {
         streamParseState = { fixed: fixed, cut: state.cut, html: state.html, hasDefs: false };
         html += tailTokens.length ? marked.parser(tailTokens) : '';
       } else {
-        // The absorbed span renders a second time into the frozen prefix; its
-        // code blocks are never the recorder's last token (a cut's space token
-        // follows a non-code token), so the identity skip cannot hide them.
+        // The absorbed span renders a second time into the frozen prefix. Its
+        // code blocks are never the recorder's last token, because a cut's
+        // space token follows a non-code token. The identity skip therefore
+        // cannot hide them.
         var absorbed = tailTokens.slice(0, cut.index);
         absorbed.links = tailTokens.links;
         streamParseState = { fixed: fixed, cut: cut.cut, html: state.html + marked.parser(absorbed), hasDefs: false };
@@ -465,16 +470,16 @@ function recordCodeTokens(tokens) {
 // a **Goal** / **Now** / **Waiting on you** block whose lines single
 // newlines separate. Marked's defaults (breaks off) render those lines as
 // one <p> and the browser shows the newlines as spaces, so the three items
-// read as one run-on line. The global breaks option would re-linebreak
-// every paragraph of every message, so the rule narrows to the block:
-// when a paragraph's every line starts with one of the three labels — the
-// first line required to be **Goal**, the colon after a label ASCII or
-// full-width and left to the line body — render one <p>
-// with a <br> between consecutive lines, each line keeping its inline
+// read as one run-on line. The global breaks option would re-linebreak every
+// paragraph of every message, so the rule narrows to the block. It applies
+// when a paragraph's every line starts with one of the three labels. The first
+// line must be **Goal**, and the colon after a label may be ASCII or
+// full-width and belongs to the line body. Such a paragraph renders as one
+// <p> with a <br> between consecutive lines, and each line keeps its inline
 // rendering. Every other paragraph returns false and takes marked's default
-// paragraph bytes, as does a matched paragraph whose inline tokens do not
+// paragraph bytes. So does a matched paragraph whose inline tokens do not
 // split cleanly on the line boundaries (a code span or hard break crossing
-// one): the default then renders it as before. Registered in the same use()
+// one). The default then renders it as before. Registered in the same use()
 // below, so the completed-message parse, the streaming paint, and the
 // Rendered Markdown modal all take it. Thread sessions and older messages
 // still open with a status block, so this rule keeps rendering those.
@@ -490,10 +495,11 @@ function statusBlockParagraphLines(text) {
 // Marked.js renderer: highlight.js syntax highlighting + code block headers
 // ---------------------------------------------------------------------------
 (function() {
-  // This file loads before chat/shared.js, so escapeHtml is unavailable here. Local
-  // text/attribute escapers keep message-text tags and
-  // attributes from ever becoming DOM nodes (invariant: rendered chat message body
-  // contains no tag and no attribute that originated from the message text itself).
+  // This file loads before chat/shared.js, so escapeHtml is unavailable here.
+  // Local text/attribute escapers keep message-text tags and attributes from
+  // ever becoming DOM nodes. The invariant: a rendered chat message body
+  // contains no tag and no attribute that originated from the message text
+  // itself.
   function escapeText(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -502,8 +508,8 @@ function statusBlockParagraphLines(text) {
   }
 
   const renderer = new marked.Renderer();
-  // The growing tail's escape, carried across paints: escapeText maps each
-  // character independently, so escape(prefix + delta) is escape(prefix) +
+  // The growing tail's escape, carried across paints. escapeText maps each
+  // character independently, so escape(prefix + delta) equals escape(prefix) +
   // escape(delta) exactly, and a tail that grows by appends re-escapes only
   // the new bytes. The skip path refreshes both strings every paint it runs;
   // any other paint leaves them stale for the next stream's first paint to
@@ -533,9 +539,9 @@ function statusBlockParagraphLines(text) {
     const lang = (typeof token === 'object' ? token.lang : arguments[1]) || '';
     const trimmed = code.replace(/\n$/, '');
     const resolvedLang = (lang && hljs.getLanguage(lang)) ? lang : '';
-    // The growing tail skips by token identity: recordCodeTokens recorded this
-    // parse's code tokens in document order, the unterminated block is the
-    // last of them, and its raw not ending on a closing fence says it never
+    // The growing tail skips by token identity. recordCodeTokens recorded this
+    // parse's code tokens in document order, and the unterminated block is the
+    // last of them. Its raw not ending on a closing fence says it never
     // closed. The cache check first keeps a completed block that shares the
     // tail's cache key on the bytes already highlighted.
     const isGrowingTail = streamPaintCodeTokens !== null
@@ -545,8 +551,8 @@ function statusBlockParagraphLines(text) {
     const displayLang = escapeText(lang || 'text');
     const isMarkdown = (lang === 'markdown' || lang === 'md');
     // The page parse defers the highlight off the first paint (see
-    // renderProseMarkdown); the growing tail's own escape already covers the
-    // streaming shape, and the two deferrals never co-occur because
+    // renderProseMarkdown). The growing tail's own escape already covers the
+    // streaming shape, and the two deferrals never co-occur:
     // streamPaintCodeTokens is non-null only inside the streaming paint.
     if (deferCodeHighlights && !isGrowingTail) {
       const id = String(++deferredSeq);
@@ -586,8 +592,8 @@ function statusBlockParagraphLines(text) {
     const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
     return `<img src="${src}" alt="${alt}"${title}>`;
   };
-  // One token list per line: the tokens' raws concatenate to the paragraph
-  // text, and only a text token can carry one of its line breaks — any other
+  // One token list per line. The tokens' raws concatenate to the paragraph
+  // text, and only a text token can carry one of its line breaks. Any other
   // token spanning a newline means the block is not a clean label-per-line
   // run, and the caller falls back. Splitting a text token is lossless: its
   // renderer escapes per character, so the pieces render to the same bytes as
@@ -620,21 +626,23 @@ function statusBlockParagraphLines(text) {
     if (!lines) return false;
     return `<p>${lines.map((line) => this.parser.parseInline(line)).join('<br>')}</p>\n`;
   };
-  // Inline math pass-through: the four KaTeX delimiter classes ($...$,
-  // $$...$$, \(...\), \[...\]) become whole inline tokens carrying the literal
-  // source span, so marked's escape rule never eats \_ and the em rule never
-  // wraps _{subscripts} in <em> — KaTeX receives the bytes the model wrote.
+  // Inline math pass-through. The four KaTeX delimiter classes ($...$, $$...$$,
+  // \(...\), \[...\]) become whole inline tokens carrying the literal source
+  // span. Marked's escape rule then never eats \_ and the em rule never wraps
+  // _{subscripts} in <em>, so KaTeX receives the bytes the model wrote.
   // Rendering itself stays with renderChatMath's auto-render walk on the DOM
   // text node; this extension only decides what survives the parse. The
   // delimiter scan is math-scanner.js's mathSpan (loaded just before this
-  // file), shared with the wrap pre-render driver; web/tests/chat_math_extension.test.js
-  // and the driver's tests run the same case list against both consumers.
+  // file), shared with the wrap pre-render driver.
+  // web/tests/chat_math_extension.test.js and the driver's tests run the same
+  // case list against both consumers.
   const mathExtension = {
     name: 'math',
     level: 'inline',
     // marked cuts the text token one char past the returned index (measured in
-    // src, which arrives shifted by one), so the walk re-enters this tokenizer
-    // at the next potential open instead of letting inlineText swallow it.
+    // src, which arrives shifted by one). The walk therefore re-enters this
+    // tokenizer at the next potential open instead of letting inlineText
+    // swallow it.
     start(src) {
       let cut;
       for (const probe of ['$', '\\(', '\\[']) {
@@ -664,17 +672,17 @@ function statusBlockParagraphLines(text) {
       if (typeof src === 'string' && src.startsWith('~')) return { type: 'text', raw: '~', text: '~' };
       return undefined;
     },
-    // A chat URL is a maximal printable-ASCII run [\x21-\x7E]+: anything glued
+    // A chat URL is a maximal printable-ASCII run [\x21-\x7E]+. Anything glued
     // onto it that is not printable ASCII (CJK, full-width punctuation, curly
-    // quotes, emoji, any non-ASCII prose) is prose, and the link ends just
-    // before the first such character. Stock marked stops a bare URL only at
-    // whitespace, so a URL before Chinese prose swallows the tail into href and
-    // link text, and the polluted href then fails every downstream consumer
+    // quotes, emoji, any non-ASCII prose) is prose. The link ends just before
+    // the first such character. Stock marked stops a bare URL only at
+    // whitespace, so a URL before Chinese prose swallows the tail into href
+    // and link text. The polluted href then fails every downstream consumer
     // (link cards, missing-file probe, click). chat/file-links.js's
-    // FILE_SERVER_LINK_SOURCE stops at the same boundary when it scans code and
-    // text carriers for file-server links — two copies of one definition, kept
-    // in sync by the comments in both files (the modules load independently, so
-    // sharing a constant would couple their load order).
+    // FILE_SERVER_LINK_SOURCE stops at the same boundary when it scans code
+    // and text carriers for file-server links. That is two copies of one
+    // definition, kept in sync by the comments in both files: the modules load
+    // independently, so sharing a constant would couple their load order.
     url(src) {
       const cap = this.rules.inline.url.exec(src);
       if (!cap) return undefined;
@@ -689,12 +697,12 @@ function statusBlockParagraphLines(text) {
           tokens: [{ type: 'text', raw: cap[0], text: cap[0] }],
         };
       }
-      // Interleave to a fixed point: _backpedal trims trailing ASCII punctuation
-      // (an unbalanced `)` or a sentence-final period) exactly as stock marked
-      // does, then the ASCII-boundary cut; a cut can expose a fresh ASCII
-      // punctuation tail, so iterate until neither rule moves the boundary. A
-      // pure-ASCII match never moves past the backpedal, so every ASCII
-      // behavior stays byte-identical to stock marked.
+      // Interleave to a fixed point. _backpedal trims trailing ASCII
+      // punctuation (an unbalanced `)` or a sentence-final period) exactly as
+      // stock marked does, then the ASCII-boundary cut runs. A cut can expose
+      // a fresh ASCII punctuation tail, so iterate until neither rule moves
+      // the boundary. A pure-ASCII match never moves past the backpedal, so
+      // every ASCII behavior stays byte-identical to stock marked.
       let run = cap[0];
       let prev;
       do {
@@ -729,25 +737,25 @@ function statusBlockParagraphLines(text) {
 // re-entry renders. The streaming draft paint (usage.js) stays off this memo
 // on purpose: its content grows every delta, so it would only evict.
 //
-// A body's first parse defers the code highlight off the first paint: the
-// highlight is pure per-block work (highlightAuto scores every registered
-// language, ~0.26 s per 24 KB on the served common build — the dominant slice
-// of a code-heavy page's cold render), so the parse emits escaped-plain blocks
-// with data-hl markers and the scheduled flush swaps the highlighted bytes
-// into the DOM nodes and the memo entry, timeboxed across frames. A memo hit
-// on a settled entry renders highlighted bytes directly; on a not-yet-flushed
-// entry it re-emits the same markers, which the one pending flush covers.
+// A body's first parse defers the code highlight off the first paint. The
+// highlight is pure per-block work. highlightAuto scores every registered
+// language, ~0.26 s per 24 KB on the served common build, the dominant slice
+// of a code-heavy page's cold render. The parse therefore emits escaped-plain
+// blocks with data-hl markers, and the scheduled flush swaps the highlighted
+// bytes into the DOM nodes and the memo entry, timeboxed across frames. A
+// memo hit on a settled entry renders highlighted bytes directly; on a
+// not-yet-flushed entry it re-emits the same markers, which the one pending
+// flush covers.
 // ---------------------------------------------------------------------------
 const PROSE_PARSE_CACHE_CAP = 64;
 const proseParseCache = new Map();
 
 // The walk's input and output per body source, keyed on the same string the
 // parse memo keys on (data-raw decodes back to it). The KaTeX walk is a pure
-// function of the body's pre-walk HTML, so a repeat message render — the
-// session re-entry — serves the walked bytes instead of re-running KaTeX over
-// unchanged nodes. Same cap and
-// recency rule as the parse cache; entries are strictly larger than their
-// keys, so the cap bounds the pair together.
+// function of the body's pre-walk HTML. A repeat message render (the session
+// re-entry) therefore serves the walked bytes instead of re-running KaTeX
+// over unchanged nodes. Same cap and recency rule as the parse cache; entries
+// are strictly larger than their keys, so the cap bounds the pair together.
 const PROSE_MATH_CACHE_CAP = 64;
 const proseMathCache = new Map();
 
@@ -774,9 +782,9 @@ function renderProseMarkdown(text) {
 }
 
 function scheduleCodeHighlightFlush(root) {
-  // The turn-engine prerender post-processes detached fragments; a root
-  // handed in here while records are pending joins the flush's sweep, so its
-  // markers get the swap even before the fragment attaches.
+  // The turn-engine prerender post-processes detached fragments. A root handed
+  // in here while records are pending joins the flush's sweep, so its markers
+  // get the swap even before the fragment attaches.
   if (root && deferredBlocks.size) registerHighlightRoot(root);
   if (highlightFlushScheduled || !deferredBlocks.size) return;
   highlightFlushScheduled = true;
@@ -808,15 +816,14 @@ function registerHighlightRoot(root) {
 function flushDeferredCodeHighlights() {
   if (!deferredBlocks.size) return;
   // The flush swaps the highlighted bytes into every marker the document and
-  // the registered roots still hold — the turn-engine prerenders atoms
-  // detached and holds the fragment alive until the segment materializes, so
-  // a root sweep settles the block before it ever attaches. The 8 ms timebox
-  // bounds each pass's highlight work — highlightAuto on one block can exceed
-  // it, so the deadline is checked between records. A record no sweep finds
-  // retries on a bounded backoff (the attach can land much later, on a
-  // scroll) and gives up after HIGHLIGHT_FLUSH_MAX_ATTEMPTS; the memo entry
-  // settles on the first pass either way, so every later render serves the
-  // settled bytes.
+  // the registered roots still hold. The turn-engine prerenders atoms detached
+  // and holds the fragment alive until the segment materializes, so a root
+  // sweep settles the block before it ever attaches. The 8 ms timebox bounds
+  // each pass's highlight work: highlightAuto on one block can exceed it, so
+  // the deadline is checked between records. A record no sweep finds retries
+  // on a bounded backoff (the attach can land much later, on a scroll) and
+  // gives up after HIGHLIGHT_FLUSH_MAX_ATTEMPTS. The memo entry settles on the
+  // first pass either way, so every later render serves the settled bytes.
   const deadline = performance.now() + 8;
   const roots = [];
   for (const ref of highlightRootRefs) {
@@ -825,12 +832,12 @@ function flushDeferredCodeHighlights() {
     else highlightRootRefs.delete(ref);
   }
   for (const [id, rec] of deferredBlocks) {
-    // The settled bytes build once per record and the retries only re-sweep
-    // for markers: a pass that finds none repeats up to
-    // HIGHLIGHT_FLUSH_MAX_ATTEMPTS times, so re-running the block build and
-    // the memo swap per pass turns every bounded retry into that work again.
-    // The memo swap rides the same first build — plainBlock embeds the
-    // record's unique id, so a later pass can never find it again.
+    // The settled bytes build once per record, and the retries only re-sweep
+    // for markers. A pass that finds none repeats up to
+    // HIGHLIGHT_FLUSH_MAX_ATTEMPTS times. Re-running the block build and the
+    // memo swap per pass would turn every bounded retry into that work again.
+    // The memo swap rides the same first build: plainBlock embeds the record's
+    // unique id, so a later pass can never find it again.
     if (rec.settledBlock === undefined) {
       const run = () => (rec.lang
         ? hljs.highlight(rec.code, { language: rec.lang }).value
@@ -843,9 +850,9 @@ function flushDeferredCodeHighlights() {
         // replacement string would read $$/$&/$`/$' patterns out of them.
         const settled = cached.replace(rec.plainBlock, () => rec.settledBlock);
         proseParseCache.set(rec.text, settled);
-        // The walked pair holds the same plain block in both halves — the
-        // walk never touches code blocks — so the same swap keeps the pair on
-        // the settled bytes and the next render born-walked.
+        // The walked pair holds the same plain block in both halves, because
+        // the walk never touches code blocks. The same swap therefore keeps
+        // the pair on the settled bytes and the next render born-walked.
         const memo = proseMathCache.get(rec.text);
         if (memo !== undefined) {
           proseMathCache.set(rec.text, {
@@ -893,14 +900,14 @@ function flushDeferredCodeHighlights() {
 }
 
 // KaTeX auto-render can only transform text around its four configured
-// delimiters, and every one of them starts with '$', '\(' or '\[' — characters
-// marked never synthesizes and escapeHtml never adds or removes, so a source
-// carrying none of the three renders byte-identically without the walk. But
-// character references decode when the browser parses the rendered HTML, so an
-// entity-encoded delimiter initial also reaches the walk's text nodes: any
-// numeric reference, or a named reference of the four delimiter characters
-// (dollar/bsol/lpar/lparen/lsqb/lbrack), forces the walk — a false walk is the
-// safe direction.
+// delimiters, and every one of them starts with '$', '\(' or '\['. Marked
+// never synthesizes those characters, and escapeHtml never adds or removes
+// them, so a source carrying none of the three renders byte-identically
+// without the walk. But character references decode when the browser parses
+// the rendered HTML, so an entity-encoded delimiter initial also reaches the
+// walk's text nodes. Any numeric reference, or a named reference of the four
+// delimiter characters (dollar/bsol/lpar/lparen/lsqb/lbrack), forces the
+// walk. A false walk is the safe direction.
 const MATH_ENTITY_RE = /&(?:#[0-9]|#[xX][0-9a-fA-F]|dollar|bsol|lparen|lpar|lsqb|lbrack)/;
 
 function hasMathDelimiter(text) {
@@ -1036,16 +1043,16 @@ function copyCode(btn) {
   });
 }
 
-// highlight.js compiles each grammar on first use — ~100 ms across the pinned
-// 36-language common build — and the cost lands inside the first paint that
-// highlights code (a streamed turn's paint, or a committed render's highlight
-// flush). One idle auto-highlight over a prose-plus-fence snippet makes the
+// highlight.js compiles each grammar on first use, ~100 ms across the pinned
+// 36-language common build. The cost lands inside the first paint that
+// highlights code: a streamed turn's paint, or a committed render's highlight
+// flush. One idle auto-highlight over a prose-plus-fence snippet makes the
 // scorer compile the grammars chat content exercises (prose, fenced code) in
-// one pass, off the render path; a real block then pays only its own scoring.
-// Idle-callback scheduling only: a setTimeout fallback would land this warm in
-// the same timer queue the deferred highlight flush drives, and environments
-// without requestIdleCallback (the render-test vm harnesses) compile each
-// block on first paint.
+// one pass, off the render path. A real block then pays only its own scoring.
+// Idle-callback scheduling only: a setTimeout fallback would land
+// this warm in the same timer queue the deferred highlight flush drives.
+// Environments without requestIdleCallback (the render-test vm harnesses)
+// compile each block on first paint.
 (function warmHighlighterAtIdle() {
   if (typeof hljs === 'undefined' || typeof hljs.highlightAuto !== 'function') return;
   if (typeof requestIdleCallback !== 'function') return;

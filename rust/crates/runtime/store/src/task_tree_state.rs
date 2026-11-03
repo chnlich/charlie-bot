@@ -31,6 +31,11 @@ pub struct TaskFacts {
   pub boundary_open: bool,
   pub close_events: Vec<SharedChatEvent>,
   pub close_requests: Vec<SharedChatEvent>,
+  /// The request id of every `task_close_requested` line. Unlike `close_requests`, it keeps a line whose id repeats and a
+  /// line before a clone start, as a scan of the raw history does.
+  pub close_request_ids: HashSet<String>,
+  /// The first `task_closed` line of each request id, over the same lines as `close_request_ids`.
+  pub first_close_by_request: HashMap<String, SharedChatEvent>,
   pub delivered_reports: HashSet<(String, String)>,
   pub events_by_id: EventIdIndex,
   pub covered: usize,

@@ -9,7 +9,6 @@ publish.workspace = true
 anyhow.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-compat.workspace = true
-charliebot-core.workspace = true
 charliebot-registry.workspace = true
 clap.workspace = true
 futures-util.workspace = true

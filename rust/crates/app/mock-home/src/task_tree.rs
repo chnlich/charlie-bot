@@ -9,10 +9,18 @@
 //! nodes). That start made 593 full passes and skipped 7,410 sessions, and every count scales with the session
 //! count. Full passes use that start's odds per event-log size band.
 //!
+//! The nodes form production's tree, so the node passes read other nodes' logs as production's do (`HomePlan::plant_tree`). A
+//! parent is a manager with one of the largest logs, and a child's parent is drawn in proportion to the parents' log
+//! bytes. A closed child's `task_closed` reports to its parent, and the parent's log holds that report. A pass then
+//! folds the parent's log to find the report (`recover_pending_reports`). A closed worker of a type other than implement
+//! closed on its newest run's automatic request, so the replay of an earlier successful run tries that close again
+//! and primes the child's and the parent's aggregators before it finds the task closed (`replay_followups`).
+//!
 //! No state in the home makes a lab server start an agent or signal a process. An open task's manager confirms
-//! every input, and an unended run sits in a closed task. Every run's pid is at or above Linux's PID_MAX_LIMIT,
-//! every node is a root, a sequence run names an unconfigured cron task, and a pending trigger fires on 2030-01-01.
-//! The boot marker and every file time are fixed around `marker_time()`, so `reset` restores them from the seed's plan.
+//! every input, a child's report among them, and an unended run sits in a closed task. Every run's pid is at or above
+//! Linux's PID_MAX_LIMIT, a parent is a root, a sequence run names an unconfigured cron task, and a pending trigger
+//! fires on 2030-01-01. No worker is a cold read, whose replay can start a run. The boot marker and every file time are
+//! fixed around `marker_time()`, so `reset` restores them from the seed's plan.
 
 use std::fs::{self, File};
 use std::path::Path;
@@ -48,6 +56,34 @@ const LAB_REPO: &str = "/nonexistent/charliebot-lab-repo";
 const LAB_CRON_TASK: &str = "lab-sequence";
 /// The plan's stream is separate from the content stream, so `reset` can replay the plan without writing content.
 const PLAN_STREAM: u64 = 0x7461_736b_7472_6565;
+/// The session ids' stream. A parent's log names its children's ids, so the plan holds every id before a log is written.
+const ID_STREAM: u64 = 0x6e6f_6465_2d69_6473;
+
+/// The production tree of 2026-11-03 (8,722 sessions): 374 parents, all managers, and 7,148 children. The parents
+/// are mostly among the largest logs, and each parent's child count grows about in proportion to its log bytes.
+const PARENT_SHARE: f64 = 374.0 / 8722.0;
+/// The share of the task sessions other than parents that have a parent.
+const CHILD_SHARE: f64 = 0.977;
+/// The workers' task types in that tree, by worker count. The 788 cold reads count as untyped workers, because a cold
+/// read's replay can start a run.
+const WORKER_TYPES: [(Option<TaskType>, f64); 5] = [
+  (Some(TaskType::Implement), 1679.0),
+  (None, 2243.0 + 788.0),
+  (Some(TaskType::Verify), 1106.0),
+  (Some(TaskType::QuickEdit), 539.0),
+  (Some(TaskType::ScriptRun), 509.0),
+];
+/// The share of closed workers with a finished last run that closed on its automatic request and reported to their
+/// parent; the rest were archived by the user, without a report. A sample of 296 closed workers held 241 such closes.
+const AUTO_CLOSE_SHARE: f64 = 0.84;
+/// The task types of the 195 workers whose worktree existed in that home, by count. A worker kept for its worktree
+/// draws its type from these.
+const WORKTREE_WORKER_TYPES: [(Option<TaskType>, f64); 4] = [
+  (Some(TaskType::Implement), 93.0),
+  (Some(TaskType::QuickEdit), 48.0),
+  (None, 44.0),
+  (Some(TaskType::ScriptRun), 10.0),
+];
 
 /// The reference start's node count, and its full-pass count for each keep reason.
 const REFERENCE_NODES: f64 = 8003.0;
@@ -153,21 +189,49 @@ struct RunPlan {
   pid_start: u64,
 }
 
-/// One session: its keep reason (none for a skip), its node, its file time, its runs and its trigger files.
+/// One session: its id, its keep reason (none for a skip), its node and place in the tree, its file time, its runs,
+/// its close and its trigger files.
 struct SessionPlan {
+  id: String,
   reason: Option<KeepReason>,
   profile: TaskProfile,
   has_task: bool,
+  /// A worker's task type; `None` for a manager and for an untyped worker.
+  task_type: Option<TaskType>,
+  /// The index of the parent's plan.
+  parent: Option<usize>,
   started_at: NaiveDateTime,
   modified_at: NaiveDateTime,
   runs: Vec<RunPlan>,
+  /// The `task_closed` fact of a session that is not open.
+  close: Option<ClosePlan>,
   pending_triggers: usize,
   fired_triggers: usize,
+}
+
+/// How a closed session closed: the request, who closed it and how, and the plan index of the parent it reported to.
+struct ClosePlan {
+  request_id: String,
+  actor: &'static str,
+  outcome: &'static str,
+  summary: &'static str,
+  report_to: Option<usize>,
+}
+
+/// One child report in a parent's log: the stable report id, the child and the child's close event.
+struct ReportPlan {
+  id: String,
+  child_id: String,
+  close_event_id: String,
+  outcome: &'static str,
+  summary: &'static str,
 }
 
 /// The plan of every session, in the order `generate` writes them. One seed and one size list give one plan.
 struct HomePlan {
   sessions: Vec<SessionPlan>,
+  /// The child reports each parent's log holds, by plan index, in child order.
+  reports: Vec<Vec<ReportPlan>>,
 }
 
 /// The boot marker: the start of the last clean walk before the planned server start.
@@ -211,11 +275,15 @@ impl HomePlan {
   fn new(sizes: &[u64], seed: u64) -> Self {
     let count = sizes.len();
     let mut rng = Rng::new(seed ^ PLAN_STREAM);
+    let mut id_rng = Rng::new(seed ^ ID_STREAM);
     let reasons = Self::keep_reasons(sizes, &mut rng);
     let tasks = Self::exact_flags(&reasons, TASK_SHARE, KeepReason::needs_task, &mut rng);
     let with_runs = Self::exact_flags(&reasons, RUNS_SHARE, KeepReason::needs_runs, &mut rng);
     let mut sessions: Vec<SessionPlan> = (0..count)
-      .map(|index| Self::session(reasons[index], sizes[index], tasks[index], with_runs[index], &mut rng))
+      .map(|index| {
+        let id = session::session_id(&mut id_rng);
+        Self::session(id, reasons[index], sizes[index], tasks[index], with_runs[index], &mut rng)
+      })
       .collect();
 
     let open: Vec<usize> = (0..count).filter(|index| reasons[*index] == Some(KeepReason::StateOpen)).collect();
@@ -230,7 +298,115 @@ impl HomePlan {
     for _ in 0..fired {
       sessions[holders[rng.below(holders.len() as u64) as usize]].fired_triggers += 1;
     }
-    Self { sessions }
+    // The tree draws come after every draw above, so the keep reasons, runs and triggers stay those of a plan without
+    // the tree.
+    Self::plant_tree(&mut sessions, sizes, &mut rng);
+    Self::type_workers(&mut sessions, &mut rng);
+    Self::plan_closes(&mut sessions, &mut rng);
+    let reports = Self::reports(&sessions);
+    Self { sessions, reports }
+  }
+
+  /// Gives the tree its parents and children. The parents are the managers with a task and a finished run whose logs are
+  /// the largest, `PARENT_SHARE` of the sessions. Each other task session gets a parent with odds `CHILD_SHARE`, drawn in
+  /// proportion to the parents' log bytes. A parent stays a root.
+  fn plant_tree(sessions: &mut [SessionPlan], sizes: &[u64], rng: &mut Rng) {
+    let mut managers: Vec<usize> = (0..sessions.len())
+      .filter(|index| {
+        let session = &sessions[*index];
+        session.profile == TaskProfile::Manager
+          && session.has_task
+          && session.runs.iter().any(|run| run.end == RunEnd::Finished)
+      })
+      .collect();
+    managers.sort_by_key(|index| (std::cmp::Reverse(sizes[*index]), *index));
+    managers.truncate((PARENT_SHARE * sessions.len() as f64).round() as usize);
+    let parents = managers;
+    let mut cumulative = Vec::with_capacity(parents.len());
+    let mut total = 0.0;
+    for parent in &parents {
+      total += sizes[*parent] as f64;
+      cumulative.push(total);
+    }
+    for (index, session) in sessions.iter_mut().enumerate() {
+      if !session.has_task || parents.contains(&index) || rng.unit() >= CHILD_SHARE {
+        continue;
+      }
+      let point = rng.unit() * total;
+      let slot = cumulative.partition_point(|bound| *bound <= point).min(parents.len() - 1);
+      session.parent = Some(parents[slot]);
+    }
+  }
+
+  /// Draws each worker's task type: from `WORKTREE_WORKER_TYPES` for a worker kept for its worktree, else from
+  /// `WORKER_TYPES`. A worker kept for its sequence ref stays an implement task.
+  fn type_workers(sessions: &mut [SessionPlan], rng: &mut Rng) {
+    for session in sessions.iter_mut().filter(|session| session.profile == TaskProfile::Worker) {
+      let types: &[(Option<TaskType>, f64)] = match session.reason {
+        Some(KeepReason::SequenceRef) => continue,
+        Some(KeepReason::WorktreeExists) => &WORKTREE_WORKER_TYPES,
+        _ => &WORKER_TYPES,
+      };
+      let total: f64 = types.iter().map(|(_, weight)| weight).sum();
+      let point = rng.unit() * total;
+      let mut bound = 0.0;
+      for (task_type, weight) in types.iter().copied() {
+        bound += weight;
+        if point < bound {
+          session.task_type = task_type;
+          break;
+        }
+      }
+    }
+  }
+
+  /// Plans the `task_closed` fact of every session that is not open. A worker whose last run finished closes on that
+  /// run's automatic request and reports to its parent with odds `AUTO_CLOSE_SHARE`; the user archived the other
+  /// workers, with no report. The user archived a manager, and an archived manager reports to its parent.
+  fn plan_closes(sessions: &mut [SessionPlan], rng: &mut Rng) {
+    for session in sessions.iter_mut().filter(|session| session.reason != Some(KeepReason::StateOpen)) {
+      let auto_odds = rng.unit();
+      let summary = text::phrase(rng);
+      let archived_id = plan_id(rng);
+      let last_finished = session.runs.last().filter(|run| run.end == RunEnd::Finished && run.kind == RunKind::Work);
+      session.close = Some(match (session.profile, last_finished) {
+        (TaskProfile::Worker, Some(run)) if auto_odds < AUTO_CLOSE_SHARE => ClosePlan {
+          request_id: format!("auto:{}", run.id),
+          actor: ACTOR_SYSTEM,
+          outcome: "completed",
+          summary,
+          report_to: session.parent,
+        },
+        (TaskProfile::Worker, _) => {
+          ClosePlan { request_id: archived_id, actor: ACTOR_USER, outcome: "archived", summary, report_to: None }
+        }
+        (TaskProfile::Manager, _) => ClosePlan {
+          request_id: archived_id,
+          actor: ACTOR_USER,
+          outcome: "archived",
+          summary,
+          report_to: session.parent,
+        },
+      });
+    }
+  }
+
+  /// The child reports each parent's log holds, by parent index, in child order.
+  fn reports(sessions: &[SessionPlan]) -> Vec<Vec<ReportPlan>> {
+    let mut reports: Vec<Vec<ReportPlan>> = sessions.iter().map(|_| Vec::new()).collect();
+    for child in sessions {
+      let Some(close) = &child.close else { continue };
+      let Some(parent) = close.report_to else { continue };
+      let close_event_id = control_events::stable_close_event_id(&child.id, &close.request_id);
+      reports[parent].push(ReportPlan {
+        id: control_events::stable_child_report_id(&child.id, &close_event_id, &sessions[parent].id),
+        child_id: child.id.clone(),
+        close_event_id,
+        outcome: close.outcome,
+        summary: close.summary,
+      });
+    }
+    reports
   }
 
   /// Each session's keep reason. The full-pass sessions are a weighted draw without replacement by size band; the
@@ -273,7 +449,14 @@ impl HomePlan {
     flags
   }
 
-  fn session(reason: Option<KeepReason>, size: u64, has_task: bool, has_runs: bool, rng: &mut Rng) -> SessionPlan {
+  fn session(
+    id: String,
+    reason: Option<KeepReason>,
+    size: u64,
+    has_task: bool,
+    has_runs: bool,
+    rng: &mut Rng,
+  ) -> SessionPlan {
     let profile = match reason {
       Some(KeepReason::StateOpen) => TaskProfile::Manager,
       Some(KeepReason::SequenceRef | KeepReason::WorktreeExists) => TaskProfile::Worker,
@@ -296,7 +479,21 @@ impl HomePlan {
       }
     };
     let runs = if has_runs { Self::runs(reason, profile, size, started_at, modified_at, rng) } else { Vec::new() };
-    SessionPlan { reason, profile, has_task, started_at, modified_at, runs, pending_triggers: 0, fired_triggers: 0 }
+    let task_type = (profile == TaskProfile::Worker).then_some(TaskType::Implement);
+    SessionPlan {
+      id,
+      reason,
+      profile,
+      has_task,
+      task_type,
+      parent: None,
+      started_at,
+      modified_at,
+      runs,
+      close: None,
+      pending_triggers: 0,
+      fired_triggers: 0,
+    }
   }
 
   /// The runs of one session, in start order. A sequence-ref session holds cron steps; an unended session's last run has
@@ -379,17 +576,22 @@ struct TaskLog {
 /// Writes one node's event log of about `target` bytes.
 ///
 /// The log opens with `task_created`. Each run then takes an equal span of turns, and the last span ends with the
-/// final user message. A finished run's `run_finished` fact closes its span and confirms the span's inputs. A closed
-/// task ends with `task_closed`.
+/// final user message. A parent's child reports open the spans of its finished runs. A finished run's `run_finished` fact
+/// closes its span and confirms the span's inputs, its reports among them. A closed task ends with its planned
+/// `task_closed`.
 fn write_task_log(
   path: &Path,
-  session_id: &str,
-  session: &SessionPlan,
+  plan: &HomePlan,
+  index: usize,
   target: u64,
   rng: &mut Rng,
   text: &SyntheticText,
   final_text: &str,
 ) -> Result<TaskLog> {
+  let session = &plan.sessions[index];
+  let reports = &plan.reports[index];
+  let session_id = session.id.as_str();
+  let parent_id = session.parent.map(|parent| plan.sessions[parent].id.as_str());
   let mut log = EventLog::create(path, session.started_at)?;
   let actor = match session.profile {
     TaskProfile::Manager => ACTOR_USER,
@@ -402,16 +604,38 @@ fn write_task_log(
     actor,
     session_id,
     &request_id,
-    None,
+    parent_id,
     None,
     Some(&event_id),
     Some(created_at),
   ))?;
   let spans = session.runs.len().max(1);
+  // Each child report lands in a span whose run finished, so that run's finish confirms it as an input.
+  let finished_spans: Vec<usize> =
+    (0..session.runs.len()).filter(|span| session.runs[*span].end == RunEnd::Finished).collect();
+  let report_span = |report: usize| finished_spans[report * finished_spans.len() / reports.len()];
   let mut run_inputs = Vec::with_capacity(session.runs.len());
   for span in 0..spans {
     let limit = target as i64 * (span as i64 + 1) / spans as i64;
     let mut inputs = Vec::new();
+    for (_, report) in reports.iter().enumerate().filter(|(index, _)| report_span(*index) == span) {
+      let reported_at = UtcDateTime::parse(&log.next_stamp()).expect("an event stamp parses");
+      log.push(&control_events::build_control_event(
+        event_types::CHILD_REPORT,
+        ACTOR_SYSTEM,
+        &report.child_id,
+        Some(&report.id),
+        Some(reported_at),
+        [
+          ("child_session_id".to_string(), Value::String(report.child_id.clone())),
+          ("child_event_id".to_string(), Value::String(report.close_event_id.clone())),
+          ("outcome".to_string(), json!(report.outcome)),
+          ("summary".to_string(), json!(report.summary)),
+          ("result_refs".to_string(), json!([])),
+        ],
+      ))?;
+      inputs.push(report.id.clone());
+    }
     log.write_turns(limit, rng, text, &mut |rng: &mut Rng, event: &mut Value| inputs.push(label_input(rng, event)))?;
     if span + 1 == spans {
       let mut last = session::final_event(final_text, &log.next_stamp());
@@ -438,22 +662,24 @@ fn write_task_log(
       run_inputs.push(inputs);
     }
   }
-  if session.reason != Some(KeepReason::StateOpen) {
-    let request_id = plan_id(rng);
+  if let Some(close) = &session.close {
     let closed_at = UtcDateTime::parse(&log.next_stamp()).expect("an event stamp parses");
     log.push(&control_events::build_control_event(
       event_types::TASK_CLOSED,
-      ACTOR_AGENT,
+      close.actor,
       session_id,
-      Some(&control_events::stable_close_event_id(session_id, &request_id)),
+      Some(&control_events::stable_close_event_id(session_id, &close.request_id)),
       Some(closed_at),
       [
-        ("request_id".to_string(), json!(request_id)),
-        ("outcome".to_string(), json!("completed")),
-        ("summary".to_string(), json!(text::phrase(rng))),
+        ("request_id".to_string(), json!(close.request_id)),
+        ("outcome".to_string(), json!(close.outcome)),
+        ("summary".to_string(), json!(close.summary)),
         ("result_refs".to_string(), json!([])),
         ("run_ids".to_string(), json!(session.runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>())),
-        ("report_to".to_string(), Value::Null),
+        (
+          "report_to".to_string(),
+          close.report_to.map_or(Value::Null, |parent| Value::String(plan.sessions[parent].id.clone())),
+        ),
       ],
     ))?;
   }
@@ -470,7 +696,7 @@ struct NodeMetadata {
   task: Option<TaskSpec>,
 }
 
-fn task_spec(profile: TaskProfile, rng: &mut Rng) -> TaskSpec {
+fn task_spec(profile: TaskProfile, task_type: Option<TaskType>, rng: &mut Rng) -> TaskSpec {
   match profile {
     TaskProfile::Manager => TaskSpec { goal: text::phrase(rng).to_string(), ..TaskSpec::default() },
     TaskProfile::Worker => TaskSpec {
@@ -478,7 +704,7 @@ fn task_spec(profile: TaskProfile, rng: &mut Rng) -> TaskSpec {
       acceptance: vec![text::phrase(rng).to_string()],
       repo_path: Some(LAB_REPO.to_string()),
       base_branch: Some("main".to_string()),
-      task_type: Some(TaskType::Implement),
+      task_type,
       ..TaskSpec::default()
     },
   }
@@ -582,14 +808,14 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
   fs::create_dir(staging.join(WORKTREES_DIR)).context("cannot create the worktree directory")?;
   let mut manifest_sessions = Vec::with_capacity(sessions);
   let mut total = 0;
-  for (session, size) in plan.sessions.iter().zip(&sizes) {
-    let id = session::session_id(&mut rng);
+  for (index, (session, size)) in plan.sessions.iter().zip(&sizes).enumerate() {
+    let id = session.id.clone();
     let session_dir = staging.join(&id);
     fs::create_dir_all(layout::data_dir(&session_dir))
       .with_context(|| format!("cannot create {}", session_dir.display()))?;
     let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng));
-    let log =
-      write_task_log(&layout::chat_events_path(&session_dir), &id, session, *size, &mut rng, &text, &final_text)?;
+    let log_path = layout::chat_events_path(&session_dir);
+    let log = write_task_log(&log_path, &plan, index, *size, &mut rng, &text, &final_text)?;
     let metadata = NodeMetadata {
       session: SessionMetadata {
         id: id.clone(),
@@ -606,8 +832,8 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
         has_unread: false,
         starred: false,
       },
-      task_parent_id: None,
-      task: session.has_task.then(|| task_spec(session.profile, &mut rng)),
+      task_parent_id: session.parent.map(|parent| plan.sessions[parent].id.clone()),
+      task: session.has_task.then(|| task_spec(session.profile, session.task_type, &mut rng)),
     };
     session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     for (run, inputs) in session.runs.iter().zip(log.run_inputs) {
@@ -658,6 +884,14 @@ pub fn reset(home: &Path) -> Result<()> {
   let worktrees = fs::canonicalize(home)?.join(WORKTREES_DIR);
   let mut restored_worktrees = 0;
   for (session, listed) in plan.sessions.iter().zip(&manifest.sessions) {
+    if session.id != listed.id {
+      bail!(
+        "{} lists session {} where this plan has {}: generate the home again with this mock-home",
+        home.display(),
+        listed.id,
+        session.id
+      );
+    }
     let session_dir = home.join(&listed.id);
     let log_path = layout::chat_events_path(&session_dir);
     let bytes = fs::metadata(&log_path).with_context(|| format!("cannot stat {}", log_path.display()))?.len();
@@ -726,5 +960,14 @@ mod tests {
     let (followups, worker_followups) = (replayed(false), replayed(true));
     assert!((followups / scaled(6907.0, sessions) - 1.0).abs() < 0.15, "{followups} follow-ups");
     assert!((worker_followups / scaled(327.0, sessions) - 1.0).abs() < 0.15, "{worker_followups} worker follow-ups");
+
+    // A report that no finished parent run confirms is a pending input, and a lab start would dispatch it.
+    let parents: Vec<usize> = plan.sessions.iter().filter_map(|session| session.parent).collect();
+    assert!(parents.iter().all(|parent| plan.sessions[*parent].parent.is_none()), "every parent is a root");
+    for (parent, _) in plan.reports.iter().enumerate().filter(|(_, reports)| !reports.is_empty()) {
+      assert!(parents.contains(&parent), "only a parent holds reports");
+      assert!(plan.sessions[parent].runs.iter().any(|run| run.end == RunEnd::Finished), "a report's run finished");
+    }
+    assert!(plan.sessions.iter().all(|session| session.task_type != Some(TaskType::ColdRead)), "no cold read");
   }
 }

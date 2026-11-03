@@ -1,4 +1,4 @@
-//! The session usage owner.
+//! The session usage owner. The crate root states the vocabulary this module's comments use.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 const FACTS_MEMO_CAP: usize = 8;
 
-/// The tier a fold last read its context from.
+/// The reading kind a fold last read its context from.
 ///
 /// Each reading event sets the kind it produced, and the fold resolves through that kind.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -121,7 +121,7 @@ impl UsageFold {
 
   fn feed_result<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
     if let Some(model_usage) = truthy_object(event.field("modelUsage"), "result.modelUsage")? {
-      // One result event per run: its model-usage table converts once and reads as the Value form.
+      // One result event per run: its model-usage table converts once into an owned JSON object.
       let model_usage = model_usage.to_owned_value();
       let model_usage = model_usage.as_object().expect("a truthy modelUsage object reads as an object");
       for (model_name, info_value) in model_usage {
@@ -603,10 +603,10 @@ mod tests {
     std::fs::write(path, format!("{body}\n")).unwrap();
   }
 
-  /// The generic fold reads compact events in place: over one corpus the shared-form fold answers
-  /// exactly what the Value-form fold answers, with no per-event conversion in between.
+  /// The generic fold reads compact events in place. Over one corpus, the fold over compact events answers
+  /// exactly what the fold over owned JSON values answers, with no per-event conversion in between.
   #[test]
-  fn the_compact_form_fold_answers_what_the_value_form_fold_answers() {
+  fn the_fold_over_compact_events_answers_what_the_fold_over_owned_values_answers() {
     let events = vec![
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3}}}),
       json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "synthetic body"}], "usage": {"input_tokens": 20, "output_tokens": 5}}, "timestamp": "2026-01-01T00:00:00Z"}),

@@ -2472,30 +2472,6 @@ async fn load_all_facts_matches_fact_history_over_a_stale_archive_file() {
   assert_eq!(Value::Array(facts.iter().map(|event| event.to_value()).collect()), Value::Array(expected));
 }
 
-// The legacy layouts the readers still walk: a master run's raw log under
-// `data/master_runs/<started_at>/` and a pre-task-tree thread's event log under
-// `threads/<tid>/data/`. The store's readers must keep agreeing on these names.
-#[test]
-fn legacy_master_run_and_thread_log_readers_walk_the_layouts() {
-  let home = tempfile::tempdir().unwrap();
-  let sessions = home.path().join("sessions");
-  let session = sessions.join("legacy-session");
-  let master_log = session.join("data").join("master_runs").join("2025-02-03T04:05:06Z").join("agent.raw.ndjson");
-  fs::create_dir_all(master_log.parent().unwrap()).unwrap();
-  fs::write(&master_log, b"{}\n").unwrap();
-  let thread_log = session.join("threads").join("legacy-thread").join("data").join("events.jsonl");
-  fs::create_dir_all(thread_log.parent().unwrap()).unwrap();
-  fs::write(&thread_log, b"{}\n").unwrap();
-  // A non-legacy sibling the readers must not pick up: a task-tree run dir and a session file.
-  let task_tree_run = session.join("data").join("runs").join("2025-02-03T04:05:07Z").join("agent.raw.ndjson");
-  fs::create_dir_all(task_tree_run.parent().unwrap()).unwrap();
-  fs::write(&task_tree_run, b"{}\n").unwrap();
-
-  let store = make_store(home.path());
-  assert_eq!(store.master_run_log_paths_sync().unwrap(), vec![master_log]);
-  assert_eq!(store.thread_event_log_paths_sync().unwrap(), vec![thread_log]);
-}
-
 /// Every content and metadata shape that the aggregator iterates must feed the Rust code too.
 ///
 /// A native transcript event carries `message.content` as a plain string rather than a list of

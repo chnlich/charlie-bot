@@ -607,14 +607,43 @@ pub struct ReplayCheck {
   pub check_ms: u64,
 }
 
+/// The chat logs a replay batch has read, for the batch's most recent sessions only. Items arrive grouped by
+/// parent and child, so a run of messages reads each log once instead of once per message; the bound keeps the
+/// batch's memory to a few logs, since a parent log can hold more than a hundred megabytes.
+#[derive(Default)]
+pub struct LogCache(Mutex<Vec<(PathBuf, Arc<Vec<SharedChatEvent>>)>>);
+
+/// How many logs a batch keeps: the child and the parent of the message in flight, with room for one more pair.
+const LOG_CACHE_LOGS: usize = 4;
+
+impl LogCache {
+  /// The events of the session's chat log, read now or taken from the cache, which the read refreshes.
+  fn events(&self, session_dir: &Path) -> anyhow::Result<Arc<Vec<SharedChatEvent>>> {
+    let path = layout::chat_events_path(session_dir);
+    let mut cache = self.0.lock().expect("the replay log cache mutex is not poisoned");
+    if let Some(index) = cache.iter().position(|(cached, _)| *cached == path) {
+      let entry = cache.remove(index);
+      let events = Arc::clone(&entry.1);
+      cache.push(entry);
+      return Ok(events);
+    }
+    let events = Arc::new(read_chat_log(&path)?.into_iter().map(Arc::new).collect::<Vec<_>>());
+    cache.push((path, Arc::clone(&events)));
+    if cache.len() > LOG_CACHE_LOGS {
+      cache.remove(0);
+    }
+    Ok(events)
+  }
+}
+
 /// The check of one historical message, as the server ran it at that message's time: the passages are the
 /// message's content as the child recorded it, and the context is built as of the message's event in both
 /// logs. Fails when the event is not in the child's log or its sender is not the child's task parent.
-pub async fn replay_check(host: &CheckHost<'_>, item: &ReplayItem) -> anyhow::Result<ReplayCheck> {
+pub async fn replay_check(host: &CheckHost<'_>, logs: &LogCache, item: &ReplayItem) -> anyhow::Result<ReplayCheck> {
   let started = std::time::Instant::now();
   let sessions = host.cfg.charliebot_home.join("sessions");
   let child_dir = sessions.join(&item.child);
-  let child_events = shared_events(&child_dir)?;
+  let child_events = logs.events(&child_dir)?;
   let meta = read_session_metadata(&layout::metadata_path(&child_dir))
     .map_err(|error| anyhow::anyhow!("reading the metadata of child session {}: {error}", item.child))?
     .with_context(|| format!("child session {} has no metadata", item.child))?;
@@ -629,11 +658,11 @@ pub async fn replay_check(host: &CheckHost<'_>, item: &ReplayItem) -> anyhow::Re
     bail!("event {} came from {sender:?}, not from the task parent {parent_id}", item.event);
   }
   let content = message.get("content").and_then(CompactValue::as_str).unwrap_or_default().to_string();
-  let parent_events = shared_events(&sessions.join(&parent_id))?;
+  let parent_events = logs.events(&sessions.join(&parent_id))?;
   let context = context_from_events(
     meta.task.as_ref(),
-    &child_events,
-    &parent_events,
+    child_events.as_slice(),
+    parent_events.as_slice(),
     &parent_id,
     &item.child,
     &content,
@@ -644,11 +673,6 @@ pub async fn replay_check(host: &CheckHost<'_>, item: &ReplayItem) -> anyhow::Re
   Ok(ReplayCheck { backend, flags: number(flags), check_ms: started.elapsed().as_millis() as u64 })
 }
 
-/// The events of one session's chat log, shared as the store shares them.
-fn shared_events(session_dir: &Path) -> anyhow::Result<Vec<SharedChatEvent>> {
-  Ok(read_chat_log(&layout::chat_events_path(session_dir))?.into_iter().map(Arc::new).collect())
-}
-
 /// Replay the items' checks with at most `parallel` in flight, and return the outcomes in item order. A
 /// failed check is an `Err` with its cause; the other checks still run.
 pub async fn replay_checks(
@@ -656,8 +680,10 @@ pub async fn replay_checks(
   items: &[ReplayItem],
   parallel: usize,
 ) -> Vec<Result<ReplayCheck, String>> {
+  let logs = LogCache::default();
+  let logs = &logs;
   stream::iter(items.iter())
-    .map(move |item| async move { replay_check(host, item).await.map_err(|error| format!("{error:#}")) })
+    .map(move |item| async move { replay_check(host, logs, item).await.map_err(|error| format!("{error:#}")) })
     .buffered(parallel)
     .collect()
     .await

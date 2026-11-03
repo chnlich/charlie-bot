@@ -727,58 +727,6 @@ impl Store {
     Ok(records)
   }
 
-  /// Return every existing legacy master-run raw log path.
-  pub fn master_run_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
-    self.legacy_log_paths(MASTER_RUNS_DIR_NAME, RAW_LOG_NAME)
-  }
-
-  /// Return every existing legacy thread event log path.
-  pub fn thread_event_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for session in read_directory(&self.cfg.sessions_dir(), true)? {
-      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
-        continue;
-      }
-      let threads = session.path().join(THREADS_DIR_NAME);
-      for thread in read_directory(&threads, true)? {
-        if !thread.file_type().map_err(|error| path_error(&thread.path(), error))?.is_dir() {
-          continue;
-        }
-        let path = thread.path().join(DATA_DIR_NAME).join(EVENTS_LOG_NAME);
-        if path.is_file() {
-          paths.push(path);
-        }
-      }
-    }
-    paths.sort();
-    Ok(paths)
-  }
-
-  fn legacy_log_paths(&self, container: &str, name: &str) -> StoreResult<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for session in read_directory(&self.cfg.sessions_dir(), true)? {
-      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
-        continue;
-      }
-      let parent = if container == MASTER_RUNS_DIR_NAME {
-        session.path().join(DATA_DIR_NAME).join(container)
-      } else {
-        session.path().join(container)
-      };
-      for run in read_directory(&parent, true)? {
-        if !run.file_type().map_err(|error| path_error(&run.path(), error))?.is_dir() {
-          continue;
-        }
-        let path = run.path().join(name);
-        if path.is_file() {
-          paths.push(path);
-        }
-      }
-    }
-    paths.sort();
-    Ok(paths)
-  }
-
   /// Return the newest run by the canonical `(started_at, id)` order.
   pub fn newest_run_record_sync(&self, session_id: &str) -> StoreResult<Option<RunRecord>> {
     Ok(self.list_run_records_sync(session_id)?.pop())

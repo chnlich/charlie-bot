@@ -253,11 +253,13 @@ mod tests {
     fn add_run(&self, session: &str, run_id: &str, exit_code: i32, backend: &str, events: &str, stderr: &str) {
       let run_dir = self.home.join("sessions").join(session).join("data").join("runs").join(run_id);
       fs::create_dir_all(&run_dir).unwrap();
-      let metadata = format!(r#"{{"id":"{run_id}","kind":"work","exit_code":{exit_code},"backend":"{backend}"}}"#);
-      fs::write(run_dir.join("metadata.json"), metadata).unwrap();
+      let mut record = serde_json::json!({"id": run_id, "kind": "work", "exit_code": exit_code, "backend": backend});
       if !events.is_empty() {
-        fs::write(run_dir.join("events.jsonl"), events).unwrap();
+        let events_path = run_dir.join("events.jsonl");
+        fs::write(&events_path, events).unwrap();
+        record["events_ref"] = serde_json::json!(events_path.to_string_lossy());
       }
+      fs::write(run_dir.join("metadata.json"), record.to_string()).unwrap();
       if !stderr.is_empty() {
         fs::write(run_dir.join("agent.stderr.log"), stderr).unwrap();
       }
@@ -408,6 +410,22 @@ mod tests {
       assert_eq!(row.decided_by, Some("code"), "{row:?}");
       assert_eq!(row.fix_scope, NO_CAUSE_FIX_SCOPE);
     }
+  }
+
+  #[tokio::test]
+  async fn a_backend_notice_only_record_is_real_bug_in_code_without_a_judge_call() {
+    let fixture = Fixture::new();
+    let notice = r#"[claude-code:unrecognized_model] {"model":"synthetic-model","query_source":"sdk"}"#;
+    fixture.add_run("session", "run-a", 1, "synthetic", &error_event(notice), "");
+    fixture.add_run("session", "run-b", 1, "synthetic", "", &format!("{notice}\n"));
+    let judge = JudgeScript { results: RefCell::new(HashMap::new()), calls: Cell::new(0) };
+    let rows = scan(&fixture.options(), &judge).await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].verdict, RowVerdict::RealBug);
+    assert_eq!(rows[0].decided_by, Some("code"));
+    assert_eq!(rows[0].count, 2);
+    assert_eq!(rows[0].example_error, notice);
+    assert_eq!(judge.calls.get(), 0);
   }
 
   #[tokio::test]

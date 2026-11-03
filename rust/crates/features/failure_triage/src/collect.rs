@@ -4,6 +4,9 @@
 //! A run counts as failed when its exit code is non-zero or its `run_finished` fact says `interrupted` with no
 //! `run_stop_requested` fact. A run with a stop fact is a requested stop and is skipped. Log lines count only at the
 //! `error` level, and their own stamp places them in the window.
+//!
+//! A failed run's events come from the log its record names: `events_ref`, else `result_ref`. A record that names
+//! neither has no events, and a named log that is missing fails the scan.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -20,9 +23,7 @@ use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout::{chat_events_path, runs_dir};
-use charliebot_store::run_records::{
-  self, EVENTS_LOG_NAME, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events,
-};
+use charliebot_store::run_records::{self, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events};
 use jiff::Timestamp;
 use jiff::civil;
 use jiff::tz::TimeZone;
@@ -185,6 +186,8 @@ struct RunFields {
   kind: String,
   exit_code: Option<i32>,
   backend: String,
+  /// The event log the record names, or `None` when it names neither `events_ref` nor `result_ref`.
+  event_log: Option<PathBuf>,
 }
 
 fn run_fields(path: &Path) -> Result<RunFields> {
@@ -197,7 +200,17 @@ fn run_fields(path: &Path) -> Result<RunFields> {
     kind: value.get("kind").and_then(serde_json::Value::as_str).unwrap_or("work").to_string(),
     exit_code: value.get("exit_code").and_then(serde_json::Value::as_i64).map(|code| code as i32),
     backend: value.get("backend").and_then(serde_json::Value::as_str).unwrap_or("unknown").to_string(),
+    event_log: named_event_log(&value),
   })
+}
+
+/// The event log a run record names: its `events_ref`, else its `result_ref`. The record's fields give the path, so no
+/// file name is joined onto the run directory.
+fn named_event_log(record: &serde_json::Value) -> Option<PathBuf> {
+  ["events_ref", "result_ref"]
+    .into_iter()
+    .find_map(|key| record.get(key).and_then(serde_json::Value::as_str))
+    .map(PathBuf::from)
 }
 
 /// The `run_finished` outcomes and `run_stop_requested` facts of one session.
@@ -255,7 +268,7 @@ fn collect_runs(options: &ScanOptions, groups: &mut BTreeMap<String, Group>) -> 
       if !failed {
         continue;
       }
-      let events = read_run_events(&run_dir.join(EVENTS_LOG_NAME))?;
+      let events = read_named_events(record.event_log.as_deref())?;
       let stderr = read_tail(&run_dir.join(STDERR_LOG_NAME), STDERR_TAIL_BYTES)?;
       let error_refs: Vec<&str> = events.errors.iter().map(String::as_str).collect();
       let cause =
@@ -305,7 +318,7 @@ fn load_session_facts(path: &Path) -> Result<SessionFacts> {
   Ok(facts)
 }
 
-/// One run's cause material from its `events.jsonl`.
+/// One run's cause material from its event log.
 #[derive(Debug, Default)]
 struct RunEvents {
   /// The `error` contents in file order.
@@ -316,8 +329,23 @@ struct RunEvents {
   terminal_reason: Option<String>,
 }
 
-/// A run's events from its `events.jsonl`. The log is walked newest first and the walk stops after [`EVENT_LIMIT`]
-/// error events, so a long log costs no more than that.
+/// The events of the log a run record names. A record that names no log has no events, and a named log that is missing
+/// is an error that names the file.
+fn read_named_events(log: Option<&Path>) -> Result<RunEvents> {
+  let Some(path) = log else {
+    return Ok(RunEvents::default());
+  };
+  match fs::metadata(path) {
+    Ok(_) => read_run_events(path),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+      bail!("the run record names the event log {}, which is missing", path.display())
+    }
+    Err(error) => Err(error).with_context(|| format!("stating {}", path.display())),
+  }
+}
+
+/// The events of one run event log. The log is walked newest first and the walk stops after [`EVENT_LIMIT`] error
+/// events, so a long log costs no more than that. A line that is not JSON is skipped.
 fn read_run_events(path: &Path) -> Result<RunEvents> {
   let mut run = RunEvents::default();
   let mut newest_result_seen = false;
@@ -515,6 +543,7 @@ pub fn require_log_dir(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_store::run_records::{EVENTS_LOG_NAME, RAW_LOG_NAME};
   use std::io::Write;
   use std::str::FromStr;
   use std::time::SystemTime;
@@ -529,6 +558,7 @@ mod tests {
     .expect("the test window is valid")
   }
 
+  /// Write one run's record, its files and its session facts. Events name their log in the record, as a worker does.
   fn write_run(
     home: &Path,
     session: &str,
@@ -540,10 +570,13 @@ mod tests {
   ) {
     let run_dir = home.join("sessions").join(session).join("data").join("runs").join(run_id);
     fs::create_dir_all(&run_dir).unwrap();
-    fs::write(run_dir.join(RUN_METADATA_NAME), metadata).unwrap();
+    let mut record: serde_json::Value = serde_json::from_str(metadata).unwrap();
     if !events.is_empty() {
-      fs::write(run_dir.join(EVENTS_LOG_NAME), events).unwrap();
+      let events_path = run_dir.join(EVENTS_LOG_NAME);
+      fs::write(&events_path, events).unwrap();
+      record["events_ref"] = serde_json::json!(events_path.to_string_lossy());
     }
+    fs::write(run_dir.join(RUN_METADATA_NAME), record.to_string()).unwrap();
     if !stderr.is_empty() {
       fs::write(run_dir.join(STDERR_LOG_NAME), stderr).unwrap();
     }
@@ -715,6 +748,52 @@ mod tests {
        (request_id: <uuid>) LiteLLM: model group 'deepseek-flash' failed with the error above. \
        No fallback was attempted."
     );
+  }
+
+  #[test]
+  fn a_run_whose_events_live_only_in_its_raw_log_is_signed_by_its_result_error() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let log_dir = root.path().join("logs");
+    fs::create_dir_all(&log_dir).unwrap();
+    let run_dir = home.join("sessions").join("session").join("data").join("runs").join("run-raw");
+    let raw_path = run_dir.join(RAW_LOG_NAME);
+    let metadata = format!(
+      r#"{{"id":"run-raw","kind":"work","exit_code":1,"backend":"claude-code-improve-host3","result_ref":"{}"}}"#,
+      raw_path.display()
+    );
+    let notice = r#"[claude-code:unrecognized_model] {"model":"synthetic-model","query_source":"sdk"}"#;
+    write_run(&home, "session", "run-raw", &metadata, "", &format!("{notice}\n"), "");
+    let raw = concat!(
+      r#"{"type":"system","subtype":"init"}"#,
+      "\n",
+      "a line that is not JSON\n",
+      r#"{"type":"result","is_error":true,"api_error_status":401,"#,
+      r#""result":"Failed to authenticate. API Error: 401 Not allowed to access model"}"#,
+      "\n",
+      "a trailing line that is not JSON\n",
+    );
+    fs::write(&raw_path, raw).unwrap();
+    let collected = collect(&options(&home, &log_dir)).unwrap();
+    assert_eq!(collected.len(), 1, "{collected:?}");
+    assert_eq!(collected[0].signature, "run:work:1:Failed to authenticate");
+    assert!(collected[0].example_error.contains("401"), "{}", collected[0].example_error);
+  }
+
+  #[test]
+  fn a_named_event_log_that_is_missing_is_an_error_that_names_the_file() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let log_dir = root.path().join("logs");
+    fs::create_dir_all(&log_dir).unwrap();
+    let missing = home.join("sessions").join("session").join("data").join("runs").join("run-a").join(EVENTS_LOG_NAME);
+    let metadata = format!(
+      r#"{{"id":"run-a","kind":"work","exit_code":1,"backend":"synthetic","events_ref":"{}"}}"#,
+      missing.display()
+    );
+    write_run(&home, "session", "run-a", &metadata, "", "", "");
+    let error = collect(&options(&home, &log_dir)).unwrap_err();
+    assert!(format!("{error:#}").contains(&missing.display().to_string()), "{error:#}");
   }
 
   #[test]

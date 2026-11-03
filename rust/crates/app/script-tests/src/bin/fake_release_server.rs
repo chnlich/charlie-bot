@@ -23,6 +23,7 @@ use charliebot_core::event_types;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::logging;
 use charliebot_core::logline;
+use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
@@ -111,8 +112,7 @@ fn serve() -> io::Result<()> {
       process::exit(1);
     }
     if !behavior.check_config_requires.is_empty() {
-      let root =
-        env::var_os("CHARLIEBOT_REPO_ROOT").ok_or_else(|| io::Error::other("CHARLIEBOT_REPO_ROOT is not set"))?;
+      let root = env::var_os(REPO_ROOT_ENV).ok_or_else(|| io::Error::other(format!("{REPO_ROOT_ENV} is not set")))?;
       let required = PathBuf::from(root).join(&behavior.check_config_requires);
       if !required.exists() {
         eprintln!("config error: {} is missing", required.display());

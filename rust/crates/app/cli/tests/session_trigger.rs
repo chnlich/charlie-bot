@@ -251,6 +251,9 @@ fn stub_ssh_running_locally(sandbox: &Sandbox) {
   charliebot_shell_harness::write_executable(&sandbox.bin.join("ssh"), "#!/bin/sh\nshift 11\neval \"$*\"\n");
 }
 
+/// What the remote shell prints for a launch that starts: its home, then the wrapper's PID.
+const REMOTE_REPLY: &str = "/home/remote\n24680\n";
+
 /// A stub `ssh` in the sandbox's bin directory: it records its argv NUL-separated, prints `stdout`, and exits `code`.
 fn stub_ssh(sandbox: &Sandbox, stdout: &str, stderr: &str, code: i32) -> PathBuf {
   let argv_file = sandbox.root.path().join("ssh-argv");
@@ -513,7 +516,7 @@ fn test_unparseable_remote_pid_exits_3_and_posts_nothing() {
 #[test]
 fn test_launch_remote_parses_the_wrapper_pid() {
   let sandbox = Sandbox::new();
-  let argv_file = stub_ssh(&sandbox, "24680\n", "", 0);
+  let argv_file = stub_ssh(&sandbox, REMOTE_REPLY, "", 0);
   let stub = StubApi::start(registering(sandbox.home.clone()));
   sandbox.write_config(stub.port);
 
@@ -536,7 +539,7 @@ fn test_launch_remote_parses_the_wrapper_pid() {
   assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
   let out: Value = serde_json::from_str(&run.stdout).expect("stdout is JSON");
   let launch_id = out["launch_id"].as_str().expect("text");
-  let remote_dir = format!("/tmp/charliebot_runs/{launch_id}");
+  let remote_dir = format!("/home/remote/charliebot_runs/{launch_id}");
   assert_eq!(out["host"], "remote.example.com");
   assert_eq!(out["pid"], 24680);
   assert_eq!(out["cwd"], "/data");
@@ -549,7 +552,10 @@ fn test_launch_remote_parses_the_wrapper_pid() {
   assert!(wrapper.contains("echo $!"), "{wrapper}");
   assert!(wrapper.contains("cd /data && "), "{wrapper}");
   assert!(wrapper.contains("} < /dev/null >"), "{wrapper}");
-  assert!(wrapper.contains(&format!("{{ (echo hi\n); echo $? > {remote_dir}/exit; }}")), "{wrapper}");
+  assert!(wrapper.contains("echo \"$HOME\" && "), "{wrapper}");
+  assert!(wrapper.contains(&format!("mkdir -p \"$HOME\"/charliebot_runs/{launch_id} && ")), "{wrapper}");
+  let exit_write = format!("{{ (echo hi\n); echo $? > \"$HOME\"/charliebot_runs/{launch_id}/exit; }}");
+  assert!(wrapper.contains(&exit_write), "{wrapper}");
   let bodies = stub.bodies();
   assert_eq!(
     bodies[0]["watch_targets"],
@@ -566,7 +572,7 @@ fn test_launch_remote_parses_the_wrapper_pid() {
 #[test]
 fn test_launch_remote_without_cwd_runs_in_the_login_directory() {
   let sandbox = Sandbox::new();
-  let argv_file = stub_ssh(&sandbox, "24680\n", "", 0);
+  let argv_file = stub_ssh(&sandbox, REMOTE_REPLY, "", 0);
   let stub = StubApi::start(registering(sandbox.home.clone()));
   sandbox.write_config(stub.port);
 
@@ -624,7 +630,7 @@ fn test_launch_remote_ssh_failure_raises() {
 #[test]
 fn test_launch_remote_unparseable_pid_raises() {
   let sandbox = Sandbox::new();
-  stub_ssh(&sandbox, "not-a-pid\n", "", 0);
+  stub_ssh(&sandbox, "/home/remote\nnot-a-pid\n", "", 0);
   let stub = StubApi::start(Box::new(accept_any));
   sandbox.write_config(stub.port);
 
@@ -644,7 +650,7 @@ fn test_launch_remote_unparseable_pid_raises() {
   ]);
 
   assert_eq!(run.code, Some(3), "stderr: {}", run.stderr);
-  assert!(run.stderr.contains("failed to parse remote PID from ssh stdout"), "stderr: {}", run.stderr);
+  assert!(run.stderr.contains("failed to parse the remote home and PID from ssh stdout"), "stderr: {}", run.stderr);
 }
 
 /// Bounds the skip probe: 10 seconds around the ssh command.
@@ -708,7 +714,8 @@ fn test_launch_remote_end_to_end_localhost() {
   assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
   let out: Value = serde_json::from_str(&run.stdout).expect("stdout is JSON");
   let _group = GroupGuard(pid_of(&out));
-  let remote_dir = PathBuf::from(format!("/tmp/charliebot_runs/{}", out["launch_id"].as_str().expect("text")));
+  let remote_dir = user_home.join("charliebot_runs").join(out["launch_id"].as_str().expect("text"));
+  assert_eq!(out["log"], remote_dir.join("log").display().to_string());
   let _cleanup = RemoteRunDir(remote_dir.clone());
   assert_eq!(wait_for_exit_code(&remote_dir.join("exit")), "0");
   assert!(fs::read_to_string(remote_dir.join("log")).expect("the log reads").contains("hi"));
@@ -741,7 +748,9 @@ fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
   assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
   let out: Value = serde_json::from_str(&run.stdout).expect("stdout is JSON");
   let _group = GroupGuard(pid_of(&out));
-  let remote_dir = PathBuf::from(format!("/tmp/charliebot_runs/{}", out["launch_id"].as_str().expect("text")));
+  // The stub shell runs with the test's HOME, so the run directory lands under the sandbox root.
+  let remote_dir = sandbox.root.path().join("charliebot_runs").join(out["launch_id"].as_str().expect("text"));
+  assert_eq!(out["log"], remote_dir.join("log").display().to_string());
   let _cleanup = RemoteRunDir(remote_dir.clone());
   assert_eq!(wait_for_exit_code(&remote_dir.join("exit")), "0");
   assert!(fs::read_to_string(remote_dir.join("log")).expect("the log reads").contains("hi"));

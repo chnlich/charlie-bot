@@ -23,7 +23,14 @@ use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 
 /// The remote side of one launch stages its log, exit file and PID file under this directory, named by launch id.
-pub const REMOTE_RUNS_DIR: &str = "/tmp/charliebot_runs";
+///
+/// `$HOME` is expanded by the remote shell. The launch reads the expanded home back, so the launch record and the
+/// watch targets hold absolute paths. The directory sits under the home, not `/tmp`: a login pod's `/tmp` is local
+/// disk that a pod restart drops, and its home is an export that survives the restart.
+pub const REMOTE_RUNS_DIR: &str = "$HOME/charliebot_runs";
+
+/// The remote home variable that `REMOTE_RUNS_DIR` starts with.
+const REMOTE_HOME: &str = "$HOME";
 
 /// The bound on one ssh start and on one remote kill.
 const SSH_LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -71,10 +78,11 @@ pub fn shell_quote(text: &str) -> String {
 
 /// The `bash -lc` payload: CMD in a subshell, then the exit code written to the exit file.
 ///
-/// The echo stays outside the subshell, so an `exit` inside CMD ends only the subshell and the exit file is still
-/// written. The newline before `)` keeps a trailing `# comment` in CMD from swallowing the closing paren.
-fn wrapper_command(cmd: &str, exit_file: &str) -> String {
-  format!("({cmd}\n); echo $? > {}", shell_quote(exit_file))
+/// `exit_word` is the exit file as a shell word. The echo stays outside the subshell, so an `exit` inside CMD ends only
+/// the subshell and the exit file is still written. The newline before `)` keeps a trailing `# comment` in CMD from
+/// swallowing the closing paren.
+fn wrapper_command(cmd: &str, exit_word: &str) -> String {
+  format!("({cmd}\n); echo $? > {exit_word}")
 }
 
 /// Start the wrapper on this host in its own session. The log is appended to, and its parent directories are created.
@@ -84,7 +92,7 @@ pub fn launch_local(cmd: &str, cwd: &Path, log_path: &Path, exit_file: &Path) ->
     std::fs::create_dir_all(dir).map_err(io)?;
   }
   let log = OpenOptions::new().create(true).append(true).open(log_path).map_err(io)?;
-  let payload = wrapper_command(cmd, &exit_file.display().to_string());
+  let payload = wrapper_command(cmd, &shell_quote(&exit_file.display().to_string()));
   let mut command = Command::new("bash");
   command
     .args(["-lc", payload.as_str()])
@@ -101,22 +109,41 @@ pub fn launch_local(cmd: &str, cwd: &Path, log_path: &Path, exit_file: &Path) ->
   Ok(Launch { pid, host: None, log: log_path.display().to_string(), exit_file: exit_file.display().to_string() })
 }
 
-/// Start the wrapper on `host` over ssh and `setsid`, and return its remote PID.
+/// A remote run path as a shell word. The `$HOME` prefix stays a double-quoted variable, which the shell expands
+/// without word splitting; the rest is quoted by `shell_quote`.
+fn remote_shell_word(remote_path: &str) -> String {
+  let rest = remote_path.strip_prefix(REMOTE_HOME).expect("a remote run path starts with the remote home variable");
+  format!("\"{REMOTE_HOME}\"{}", shell_quote(rest))
+}
+
+/// A remote run path with the remote home that the launch read back in place of `$HOME`.
+fn absolute_remote_path(remote_path: &str, remote_home: &str) -> String {
+  let rest = remote_path.strip_prefix(REMOTE_HOME).expect("a remote run path starts with the remote home variable");
+  format!("{remote_home}{rest}")
+}
+
+/// Start the wrapper on `host` over ssh and `setsid`, and return its remote PID with the absolute paths of its log and
+/// exit file.
 ///
-/// Without `cwd` the command runs in the ssh login directory. An ssh failure or an unparseable PID is `Ssh`.
+/// Without `cwd` the command runs in the ssh login directory. An ssh failure or an unparseable reply is `Ssh`.
 pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) -> Result<Launch, LaunchError> {
   let io = |error: io::Error| LaunchError::Io(error.to_string());
   let remote_dir = format!("{REMOTE_RUNS_DIR}/{launch_id}");
   let remote_log = format!("{remote_dir}/log");
   let remote_exit = format!("{remote_dir}/exit");
-  let pid_file = shell_quote(&format!("{remote_dir}/pid"));
+  let pid_file = remote_shell_word(&format!("{remote_dir}/pid"));
   // The brace group carries the stream redirections for both wrapper steps, so the backgrounded setsid process
   // holds no ssh channel fd and ssh returns.
-  let inner = format!("{{ {}; }} < /dev/null > {} 2>&1", wrapper_command(cmd, &remote_exit), shell_quote(&remote_log));
+  let inner = format!(
+    "{{ {}; }} < /dev/null > {} 2>&1",
+    wrapper_command(cmd, &remote_shell_word(&remote_exit)),
+    remote_shell_word(&remote_log)
+  );
   let cd = cwd.map_or(String::new(), |dir| format!("cd {} && ", shell_quote(dir)));
+  // The remote shell echoes its home before the PID, so the launch can record absolute paths.
   let wrapper = format!(
-    "mkdir -p {} && {cd}{{ setsid bash -lc {} & echo $! > {pid_file} && cat {pid_file}; }}",
-    shell_quote(&remote_dir),
+    "mkdir -p {} && echo \"{REMOTE_HOME}\" && {cd}{{ setsid bash -lc {} & echo $! > {pid_file} && cat {pid_file}; }}",
+    remote_shell_word(&remote_dir),
     shell_quote(&inner)
   );
   let quoted = shell_quote(&wrapper);
@@ -131,14 +158,22 @@ pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) 
     let code = return_code(captured.status);
     return Err(LaunchError::Ssh(format!("ssh to {host} failed (rc={code}): {stderr}")));
   }
-  // The PID is the last non-blank line of the remote shell's output: `cat` of the PID file after the `$!` write.
-  let pid =
-    captured.stdout.lines().rev().find(|line| !line.trim().is_empty()).and_then(|line| line.trim().parse::<i32>().ok());
-  let Some(pid) = pid else {
-    let stdout = text_repr::str_repr(&captured.stdout);
-    return Err(LaunchError::Ssh(format!("failed to parse remote PID from ssh stdout: {stdout}")));
+  // The last two non-blank lines are the remote home and the PID from `cat` of the PID file after the `$!` write.
+  let lines: Vec<&str> = captured.stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+  let parsed = match lines.as_slice() {
+    [.., remote_home, pid] => pid.parse::<i32>().ok().map(|pid| (*remote_home, pid)),
+    _ => None,
   };
-  Ok(Launch { pid, host: Some(host.to_string()), log: remote_log, exit_file: remote_exit })
+  let Some((remote_home, pid)) = parsed else {
+    let stdout = text_repr::str_repr(&captured.stdout);
+    return Err(LaunchError::Ssh(format!("failed to parse the remote home and PID from ssh stdout: {stdout}")));
+  };
+  Ok(Launch {
+    pid,
+    host: Some(host.to_string()),
+    log: absolute_remote_path(&remote_log, remote_home),
+    exit_file: absolute_remote_path(&remote_exit, remote_home),
+  })
 }
 
 /// Kill the wrapper's process group after a rejected or unverified registration.

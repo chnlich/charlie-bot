@@ -18,6 +18,7 @@ charliebot-tasks.workspace = true
 form_urlencoded.workspace = true
 futures-util.workspace = true
 http.workspace = true
+libc.workspace = true
 lru.workspace = true
 memchr.workspace = true
 serde.workspace = true

@@ -123,7 +123,7 @@ The trial writes its own evidence under that directory.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
 
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
-Links to the evidence files go only into the final message (Step 9), which stays on this host.
+Step 9 carries the evidence files to the user.
 
 Push the branch and open one pull request against `main` through the posting script:
 
@@ -309,13 +309,24 @@ The runner empties `/tmp/improve-<direction>-tmp/` when the next round's scope s
 
 ## Step 9: report once at the end
 
-Write one message at the end of the round.
-It names the topic, the pull-request link, and the evidence summary with the file-server links of the evidence files.
-The links name the copy on this host, under `~/improve/<direction>/evidence/`, which the launcher copies back after the round.
-A reader who opens a link reads that copy, because the evidence files themselves stay on the remote host.
-When the round opened no pull request, it gives the reason.
-The message wakes the task session, which replies to the user.
-It stays on this host; the evidence-file links appear nowhere on GitHub.
+Before the round ends, write the round's final report to `report.md` in its evidence directory.
+The report carries the same content as the final message, so it survives a lost final message.
 
+Write one final message at the end of the round.
+It names:
+
+- the topic;
+- the pull-request link;
+- the evidence summary;
+- the absolute path of the round's evidence directory on the remote host.
+
+It names no file-server URL, because the remote host holds no CharlieBot URL and the round constructs none.
+The message wakes the task session, which replies to the user.
+
+The task session mints the file-server links for the report from the copy that the launcher places at `~/improve/<direction>/evidence/<round>/` on this host after the round.
+Its reply carries those links, and a reader who opens one reads that copy, because the evidence files themselves stay on the remote host.
+No evidence link appears on GitHub.
+
+When the round opened no pull request, it gives the reason.
 A round that cannot finish its wait leaves its pull request open and reports that.
 Step 2 adopts the pull request in the next round, so the wait resumes without a new topic.

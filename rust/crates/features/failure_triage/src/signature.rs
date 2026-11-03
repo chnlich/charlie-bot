@@ -159,15 +159,21 @@ fn cause_material(text: &str) -> Option<String> {
   if errors.is_empty() { None } else { Some(errors.join("\n")) }
 }
 
-/// What part of the cause material a pattern's hit names.
+/// What part of the cause material a pattern's hit names. The shape follows what the hit alone says about the failure:
+///
+/// - [`MatchShape::Fragment`] when the matched text names the failure: a module name, a cron task file, a scope unit,
+///   or the memory-cap text. The key is the fragment.
+/// - [`MatchShape::WholeLine`] when the hit is a class word that many failures share, such as `timed out`, `killed` or
+///   `401`. The key is the normalized line that holds the hit, so two messages of one class keep two keys.
+/// - [`MatchShape::WholeText`] for the Python inventory classes whose matched fragment is too narrow to identify the
+///   failure. The key is the whole cleaned text.
 #[derive(Clone, Copy)]
 enum MatchShape {
   /// The matched fragment.
   Fragment,
-  /// The whole cleaned text, for the Python inventory classes whose matched fragment is too narrow to identify the
-  /// failure.
+  /// The whole cleaned text.
   WholeText,
-  /// The line holding the hit, for a class whose match is a single word.
+  /// The line holding the hit.
   WholeLine,
 }
 
@@ -203,14 +209,14 @@ static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
     CausePattern::new(
       "auth",
       r"(?i)(Failed to authenticate|oauth_org_not_allowed|invalid x-api-key|401|Unauthorized|authentication_error)",
-      MatchShape::Fragment,
+      MatchShape::WholeLine,
     ),
     CausePattern::new(
       "timeout",
       r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)",
-      MatchShape::Fragment,
+      MatchShape::WholeLine,
     ),
-    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", MatchShape::Fragment),
+    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", MatchShape::WholeLine),
     CausePattern::new("traceback", r"Traceback \(most recent call last\)", MatchShape::WholeText),
     CausePattern::new("compile-error", r"(?m)^error(\[E\d+\])?:.*", MatchShape::WholeText),
     CausePattern::new("worktree", r"(?i)(worktree|already exists|not a git repository)", MatchShape::WholeText),
@@ -625,6 +631,53 @@ mod tests {
       "run:work:1:API Error: <n> litellm.BadRequestError: OpenAIException - Insufficient Balance \
        (request_id: <uuid>) LiteLLM: model group 'deepseek-flash' failed with the error above. \
        No fallback was attempted."
+    );
+  }
+
+  /// A result error whose class word is the auth pattern's `401`. The message after the status names the failure.
+  const TAGS_CONFIGURATION_RESULT: &str = "Failed to authenticate. API Error: 401 Not allowed to access model due to \
+    tags configuration. Passed model=deepseek-flash and tags=['deepseek']";
+
+  #[test]
+  fn an_auth_class_word_keys_the_line_that_names_the_failure() {
+    let extracted = extract_run_cause(&[], Some(TAGS_CONFIGURATION_RESULT), "", None);
+    assert_eq!(
+      run_signature("manager_turn", Some(1), "synthetic-backend", &extracted),
+      "run:manager_turn:1:Failed to authenticate. API Error: <n> Not allowed to access model due to tags \
+       configuration. Passed model=deepseek-flash and tags=['deepseek']"
+    );
+  }
+
+  /// The signature of one result error, for a run of the synthetic backend.
+  fn result_signature(result: &str) -> String {
+    run_signature("work", Some(1), "synthetic-backend", &extract_run_cause(&[], Some(result), "", None))
+  }
+
+  #[test]
+  fn auth_failures_with_other_messages_get_other_signatures() {
+    let expired = result_signature("Failed to authenticate. API Error: 401 OAuth token has expired");
+    assert_eq!(expired, "run:work:1:Failed to authenticate. API Error: <n> OAuth token has expired");
+    assert_ne!(expired, result_signature(TAGS_CONFIGURATION_RESULT));
+  }
+
+  #[test]
+  fn auth_failures_that_differ_only_in_request_id_share_one_signature() {
+    let first = result_signature(
+      "Failed to authenticate. API Error: 401 Not allowed (request_id: 0a401b2c-3d4e-4f50-8a61-7b8c9d0e1f2a)",
+    );
+    let second = result_signature(
+      "Failed to authenticate. API Error: 401 Not allowed (request_id: 9c7d6e5f-4a3b-4c2d-8e1f-0a9b8c7d6e5f)",
+    );
+    assert_eq!(first, second);
+  }
+
+  #[test]
+  fn timeouts_with_other_messages_get_other_signatures() {
+    let gateway = extract_run_cause(&["Request timed out after 30 s waiting for the gateway"], None, "", None);
+    let stream = extract_run_cause(&["Connection timed out while reading the model stream"], None, "", None);
+    assert_ne!(
+      run_signature("work", Some(1), "synthetic-backend", &gateway),
+      run_signature("work", Some(1), "synthetic-backend", &stream)
     );
   }
 

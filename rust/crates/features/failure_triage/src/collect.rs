@@ -776,7 +776,7 @@ mod tests {
     fs::write(&raw_path, raw).unwrap();
     let collected = collect(&options(&home, &log_dir)).unwrap();
     assert_eq!(collected.len(), 1, "{collected:?}");
-    assert_eq!(collected[0].signature, "run:work:1:Failed to authenticate");
+    assert_eq!(collected[0].signature, "run:work:1:Failed to authenticate. API Error: <n> Not allowed to access model");
     assert!(collected[0].example_error.contains("401"), "{}", collected[0].example_error);
   }
 

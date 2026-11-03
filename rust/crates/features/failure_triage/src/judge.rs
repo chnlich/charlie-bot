@@ -109,7 +109,7 @@ pub fn user_prompt(input: &JudgeInput) -> String {
     prompt.push_str("(none)\n");
   } else {
     for candidate in &input.candidates {
-      prompt.push_str(&format!("### {}\n{}\n\n", candidate.heading, candidate.snippet));
+      prompt.push_str(&format!("### {}\n{}\n\n", candidate.heading, candidate.body));
     }
   }
   prompt
@@ -332,7 +332,7 @@ mod tests {
   fn candidates(headings: &[&str]) -> Vec<LessonCandidate> {
     headings
       .iter()
-      .map(|heading| LessonCandidate { heading: (*heading).to_string(), snippet: String::new(), score: 1 })
+      .map(|heading| LessonCandidate { heading: (*heading).to_string(), body: String::new(), score: 1 })
       .collect()
   }
 

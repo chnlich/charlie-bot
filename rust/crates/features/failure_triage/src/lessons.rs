@@ -3,7 +3,8 @@
 //!
 //! One entry is one `## ` heading and the body under it, up to the next heading. The search runs through `rg`, and the
 //! ranking maps each matching line back to the entry that holds it. The top three entries become the judge's candidate
-//! list; three keeps the judge input inside one short call.
+//! list, each carried in full, so a cause an entry states deep in its body reaches the judge prompt; three keeps the
+//! judge input inside one short call.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -16,8 +17,6 @@ use anyhow::{Context, Result, bail};
 pub const LESSONS_FILE_NAME: &str = "LESSONS.md";
 /// The number of candidate entries the judge reads.
 pub const CANDIDATE_LIMIT: usize = 3;
-/// The longest entry snippet the judge reads, in characters.
-pub const SNIPPET_CHARS: usize = 400;
 /// Tokens that name a normalized placeholder rather than a phrase, so they match no entry.
 const PLACEHOLDER_TOKENS: [&str; 6] = ["uuid", "path", "session", "redacted", "hex", "ts"];
 
@@ -26,8 +25,8 @@ const PLACEHOLDER_TOKENS: [&str; 6] = ["uuid", "path", "session", "redacted", "h
 pub struct LessonCandidate {
   /// The heading text after `## `.
   pub heading: String,
-  /// The first [`SNIPPET_CHARS`] characters of the entry body, whitespace collapsed.
-  pub snippet: String,
+  /// The entry's whole body, up to the next heading.
+  pub body: String,
   /// The number of distinct cause-line tokens the entry matched.
   pub score: usize,
 }
@@ -46,7 +45,6 @@ struct Entry {
   heading: String,
   /// The entry's body, up to the next heading.
   body: String,
-  snippet: String,
 }
 
 impl LessonIndex {
@@ -60,8 +58,7 @@ impl LessonIndex {
       let line_number = index + 1;
       if let Some(rest) = line.strip_prefix("## ") {
         if let Some((start_line, heading)) = heading.take() {
-          let snippet = snippet(&body);
-          entries.push(Entry { start_line, heading, snippet, body: std::mem::take(&mut body) });
+          entries.push(Entry { start_line, heading, body: std::mem::take(&mut body) });
         }
         heading = Some((line_number, rest.trim().to_string()));
         body.clear();
@@ -71,8 +68,7 @@ impl LessonIndex {
       }
     }
     if let Some((start_line, heading)) = heading.take() {
-      let snippet = snippet(&body);
-      entries.push(Entry { start_line, heading, snippet, body });
+      entries.push(Entry { start_line, heading, body });
     }
     Ok(LessonIndex { file: path.to_path_buf(), entries })
   }
@@ -134,7 +130,7 @@ impl LessonIndex {
         .into_iter()
         .map(|(index, score)| {
           let entry = &self.entries[index];
-          LessonCandidate { heading: entry.heading.clone(), snippet: entry.snippet.clone(), score }
+          LessonCandidate { heading: entry.heading.clone(), body: entry.body.clone(), score }
         })
         .collect(),
     )
@@ -158,11 +154,6 @@ fn tokens(cause_line: &str) -> Vec<String> {
     }
   }
   seen.into_iter().collect()
-}
-
-fn snippet(body: &str) -> String {
-  let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
-  collapsed.chars().take(SNIPPET_CHARS).collect()
 }
 
 #[cfg(test)]
@@ -232,5 +223,37 @@ Nothing here matches the scope guard.
     let index = LessonIndex::load(&path).unwrap();
     assert_eq!(index.archive_heading(signature).as_deref(), Some("2026-11-02 — archived"));
     assert_eq!(index.archive_heading("run:work:5:the previous round still runs: unit improve-ux.scopa exists"), None);
+  }
+
+  #[test]
+  fn an_entry_whose_cause_text_sits_past_the_first_400_characters_reaches_the_judge_prompt_in_full() {
+    let filler = "The summary runner archives one report per round and lists every skipped scope with the reason it \
+                  recorded, so a later reader can trace why a round did not run its usual work and which round \
+                  produced the text. The report keeps the round's start time, the scopes it considered, and the \
+                  outcome of each one, and a reader who wants the numbers opens the round's own summary file. The \
+                  archive keeps one report per round even when two rounds share a scope, so the counts a reader sees \
+                  are per round, not per scope.";
+    let cause_text =
+      "the launcher assumed every run on its backend is a round worker, so the cron task file lookup ran too late";
+    let intro = "The failure came from how the launcher started rounds: ";
+    let entry = format!("## 2026-10-29 — synthetic cron launcher\n\n{filler}\n\n{intro}{cause_text}.\n");
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(LESSONS_FILE_NAME);
+    std::fs::write(&path, format!("# LESSONS\n\n{entry}\n")).unwrap();
+    let index = LessonIndex::load(&path).unwrap();
+
+    let candidates = index.retrieve("no cron task file under <path> names session_id").unwrap();
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    assert_eq!(candidates[0].heading, "2026-10-29 — synthetic cron launcher");
+    let offset = candidates[0].body.find(cause_text).expect("the cause text is in the body");
+    assert!(offset > 400, "the cause text starts at {offset}, inside the old 400-character cap");
+
+    let prompt = crate::judge::user_prompt(&crate::judge::JudgeInput {
+      signature: "run:manager_turn:6:no cron task file under <path> names session_id".to_string(),
+      kind: "manager_turn".to_string(),
+      error_text: "no cron task file under <path> names session_id".to_string(),
+      candidates,
+    });
+    assert!(prompt.contains(cause_text), "{prompt}");
   }
 }

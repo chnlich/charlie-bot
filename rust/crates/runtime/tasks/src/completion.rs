@@ -847,7 +847,24 @@ impl TaskCompletion {
     Ok(true)
   }
 
+  /// The answer a close request with `request_id` already has: 202 while a `task_close_requested` line names it, else
+  /// 200 with the first `task_closed` line that names it. The node's fold keeps both kinds of line as the raw history
+  /// holds them, so the answer reads no log while the facts are folded or sealed.
   fn replay_close_request(&self, session_id: &str, request_id: &str) -> StoreResult<Option<(usize, Value)>> {
+    let facts = self.store().node_facts(session_id)?;
+    let Ok(task) = facts.task() else {
+      return self.replay_close_request_scanned(session_id, request_id);
+    };
+    if task.close_request_ids.contains(request_id) {
+      return Ok(Some((202, self.pending_close_answer(session_id, request_id)?)));
+    }
+    Ok(task.first_close_by_request.get(request_id).map(|event| {
+      (200, json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: event.get("id").map(CompactValue::to_value)}))
+    }))
+  }
+
+  /// [`Self::replay_close_request`] for a history whose task facts failed to fold: the history is scanned unfolded.
+  fn replay_close_request_scanned(&self, session_id: &str, request_id: &str) -> StoreResult<Option<(usize, Value)>> {
     // Scans the full fact history through shared event views, so a replayed run does not clone every event.
     let events = self.store().load_all_facts_view_sync(session_id)?;
     for event in events.iter() {
@@ -2236,6 +2253,48 @@ mod tests {
       let run = run_record(&meta.id, format!("{}-synthetic-run-{index:03}", meta.id));
       features.store.register_run_locked(&guard, &meta.id, run, None).await.unwrap();
     }
+  }
+
+  /// A close-request replay answers from the node's facts as a scan of the raw history answers, a repeated event id
+  /// and the lines before a clone start included, and it reads no log while the facts are sealed.
+  #[tokio::test]
+  async fn a_close_request_replay_answers_from_the_facts_as_the_raw_history_does() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let node = test_fixtures::manager_session(&features, "replay-node", "fable", None, "claude-replay").await;
+    let closed = |id: &str, request_id: &str| json!({"id": id, "type": "task_closed", "request_id": request_id});
+    let requested =
+      |id: &str, request_id: &str| json!({"id": id, "type": "task_close_requested", "request_id": request_id});
+    for event in [
+      closed("closed-before-clone", "before-clone"),
+      json!({"id": "repeated", "type": "user", "content": "first line with the id"}),
+      requested("repeated", "behind-a-repeated-id"),
+      json!({"id": "clone", "type": "clone_start"}),
+      requested("request-pending", "pending"),
+      closed("closed-first", "closed"),
+      closed("closed-second", "closed"),
+      json!({"type": "task_closed", "request_id": "without-id"}),
+    ] {
+      features.store.append_chat_event(&node.id, event).await.unwrap();
+    }
+    let completion = TaskCompletion::new(std::sync::Arc::clone(&features));
+    let request_ids = ["before-clone", "behind-a-repeated-id", "pending", "closed", "without-id", "absent"];
+    let scanned: Vec<_> = request_ids
+      .iter()
+      .map(|request_id| completion.replay_close_request_scanned(&node.id, request_id).unwrap())
+      .collect();
+    features.store.node_facts(&node.id).unwrap();
+    features.store.evict_recovery_history(&node.id);
+    let reads = features.store.history_work().file_reads;
+
+    let folded: Vec<_> =
+      request_ids.iter().map(|request_id| completion.replay_close_request(&node.id, request_id).unwrap()).collect();
+
+    assert_eq!(folded, scanned);
+    let statuses: Vec<_> = scanned.iter().map(|answer| answer.as_ref().map(|(status, _)| *status)).collect();
+    assert_eq!(statuses, [Some(200), Some(202), Some(202), Some(200), Some(200), None]);
+    assert_eq!(scanned[3].as_ref().unwrap().1[CLOSED_EVENT_ID_FIELD], "closed-first");
+    assert_eq!(features.store.history_work().file_reads, reads, "the sealed facts answer without reading the log");
   }
 
   #[tokio::test]

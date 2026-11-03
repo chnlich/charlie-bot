@@ -186,6 +186,8 @@ impl Default for TaskFacts {
       boundary_open: true,
       close_events: Vec::new(),
       close_requests: Vec::new(),
+      close_request_ids: HashSet::new(),
+      first_close_by_request: HashMap::new(),
       delivered_reports: HashSet::new(),
       events_by_id: EventIdIndex::default(),
       covered: 0,
@@ -2461,6 +2463,16 @@ fn fold_task_facts_from(
       Some(event_types::CLONE_START) => facts.has_user_request = false,
       _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
         facts.has_user_request = true;
+      }
+      _ => {}
+    }
+    // A close-request replay looks for these lines in the raw history, so they are kept before the id check below.
+    match (event.get("type").and_then(CompactValue::as_str), event.get("request_id").and_then(CompactValue::as_str)) {
+      (Some(event_types::TASK_CLOSE_REQUESTED), Some(request_id)) => {
+        facts.close_request_ids.insert(request_id.to_string());
+      }
+      (Some(event_types::TASK_CLOSED), Some(request_id)) => {
+        facts.first_close_by_request.entry(request_id.to_string()).or_insert_with(|| Arc::clone(&events[index]));
       }
       _ => {}
     }

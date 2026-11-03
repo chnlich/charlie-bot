@@ -380,6 +380,8 @@ pub struct Store {
   pub(crate) activity_cache: StdMutex<HashMap<String, CachedActivity>>,
   /// The outcomes memo: each node's run facts keyed by the history identity they were folded from.
   pub(crate) run_facts_by_session: StdMutex<HashMap<String, CachedRunFactsAt>>,
+  /// Each boot-scanned node's newest live `prompt_changed` fact of each scope, keyed by the log identity scanned.
+  pub(crate) sealed_prompt_changes: StdMutex<HashMap<String, crate::task_tree_state::SealedPromptChanges>>,
   /// Chat-history walks that read a node's facts from its files without caching them.
   pub(crate) history_fact_walks: AtomicU64,
   pub(crate) run_record_reads: AtomicU64,
@@ -479,6 +481,7 @@ impl Store {
       task_state_tail_reads: AtomicU64::new(0),
       activity_cache: StdMutex::new(HashMap::new()),
       run_facts_by_session: StdMutex::new(HashMap::new()),
+      sealed_prompt_changes: StdMutex::new(HashMap::new()),
       history_fact_walks: AtomicU64::new(0),
       run_record_reads: AtomicU64::new(0),
       task_tree_activity_calls: AtomicU64::new(0),

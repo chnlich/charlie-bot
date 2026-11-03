@@ -346,7 +346,7 @@ enum WalkEntry {
 
 /// The threads one batch of the walk's per-session reads may split across.
 ///
-/// The skip checks, the absence proofs and the history parses each read only their own session's files, before any
+/// The skip checks, the absence proofs and the fact scans each read only their own session's files, before any
 /// node pass writes, so each batch splits across the available cores. On the 7,160-session mock home sixteen threads
 /// left the absence-proof scan at about the walk's fixed per-session cost, so more threads gained nothing.
 const WALK_WORKERS: usize = 16;
@@ -360,8 +360,8 @@ const WALK_PARALLEL_MIN_ITEMS: usize = 64;
 /// controllers mark their interrupted state first.
 ///
 /// A pass that runs to its end logs `task_tree_recovery_phases`, the milliseconds of each phase in run order: the
-/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the history parses, the
-/// node passes and the marker write.
+/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the fact scans, the node
+/// passes and the marker write; and the whole-log reads and run-record reads the node passes made.
 pub async fn reconcile_task_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
@@ -452,38 +452,40 @@ pub async fn reconcile_task_tree(
     return Ok(counters);
   };
   let absence_proofs_ms = phase_ms();
-  // Each node pass begins by folding its whole live log, and parsing and folding that log is most of the pass. The
-  // parses read only their own session's files, so they run in parallel here, and each pass starts from its parse and
-  // fold installed as the cached history. An install checks the log's identity, so a log that a pass appended to after
-  // its parse is read and folded again by its own pass.
+  // Each node pass reads its node's facts, which a full read folds from the whole log. The fact scans read only their
+  // own session's files, so they run in parallel here, and each pass starts from its scanned facts sealed to the log's
+  // identity; the pass loads the log only where a step needs its chat content. A seal checks the log's identity, so a
+  // log that an earlier pass appended to after its scan is read by its own pass.
   let pass_nodes: Vec<(String, bool)> = candidates
     .iter()
     .zip(&no_nodes)
     .map(|(candidate, no_node)| (candidate.session_id.clone(), matches!(no_node, Ok(false))))
     .collect();
-  let parse_features = Arc::clone(features);
-  let (_, parsed_histories) = blocking_batch(pass_nodes, &stop, move |(session_id, takes_pass)| {
-    takes_pass.then(|| parse_features.store.parse_live_history(session_id))
+  let scan_features = Arc::clone(features);
+  let (_, scans) = blocking_batch(pass_nodes, &stop, move |(session_id, takes_pass)| {
+    takes_pass.then(|| scan_features.store.scan_live_facts(session_id))
   })
   .await?;
-  let Some(parsed_histories) = parsed_histories else {
+  let Some(scans) = scans else {
     return Ok(counters);
   };
-  let history_parses_ms = phase_ms();
-  for ((candidate, no_node), parsed) in candidates.into_iter().zip(no_nodes).zip(parsed_histories) {
+  let fact_scans_ms = phase_ms();
+  let file_reads_before_passes = features.store.history_work().file_reads;
+  let run_record_reads_before_passes = features.store.run_record_read_count();
+  for ((candidate, no_node), scan) in candidates.into_iter().zip(no_nodes).zip(scans) {
     if stop.is_cancelled() {
       return Ok(counters);
     }
     let session_id = candidate.session_id;
     let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
-    // A parse that failed or changed under its read leaves the cache cold. The pass then reads the log under its session
-    // lock and fails the node on an error that persists.
-    let installed = parsed.map(|parsed| match parsed? {
-      Some(parsed) => features.store.install_live_history(&session_id, parsed),
+    // A scan that failed or changed under its read seals nothing. The pass then reads the log under its session lock
+    // and fails the node on an error that persists.
+    let sealed = scan.map(|scan| match scan? {
+      Some(scan) => features.store.seal_scanned_facts(&session_id, scan),
       None => Ok(false),
     });
-    if let Some(Err(error)) = installed {
-      tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_history_parse_failed");
+    if let Some(Err(error)) = sealed {
+      tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_fact_scan_failed");
     }
     let result = match no_node {
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
@@ -509,6 +511,8 @@ pub async fn reconcile_task_tree(
     }
   }
   let node_passes_ms = phase_ms();
+  let node_pass_file_reads = features.store.history_work().file_reads - file_reads_before_passes;
+  let node_pass_run_record_reads = features.store.run_record_read_count() - run_record_reads_before_passes;
   if !failed_node && !stop.is_cancelled() {
     write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
   }
@@ -519,9 +523,11 @@ pub async fn reconcile_task_tree(
     listing_ms,
     skip_checks_ms,
     absence_proofs_ms,
-    history_parses_ms,
+    fact_scans_ms,
     node_passes_ms,
     marker_ms,
+    node_pass_file_reads,
+    node_pass_run_record_reads,
     "task_tree_recovery_phases"
   );
   counters.marker = marker.map(UtcDateTime::to_isoformat_text);
@@ -1733,8 +1739,10 @@ mod tests {
     assert_eq!(completed.load(Ordering::SeqCst), 0, "the cancelled node pass never completes");
   }
 
+  /// The boot pass folds a node that needs no work from its fact scan: it loads no event log and keeps none, so a later
+  /// fact read answers from the seal and the first content read loads the log.
   #[tokio::test]
-  async fn boot_recovery_retains_the_parsed_event_list_for_later_reads() {
+  async fn boot_recovery_folds_a_quiet_node_from_its_fact_scan_and_keeps_no_event_list() {
     let (_home, features) = startup_features().await;
     let node = features
       .store
@@ -1760,13 +1768,15 @@ mod tests {
     reconcile_task_tree(&features, &adapter).await.unwrap();
 
     let after_recovery = features.store.history_work();
-    assert_eq!(after_recovery.file_reads - before.file_reads, 1, "recovery parses this event file once");
+    assert_eq!(after_recovery.file_reads, before.file_reads, "the pass reads the node's facts from its scan");
+    assert_eq!(features.store.task_state(&node.id).unwrap(), "open");
+    assert_eq!(features.store.history_work().file_reads, after_recovery.file_reads, "a later fact read uses the seal");
     let events = features.store.load_chat_events_shared_sync(&node.id).unwrap();
     assert!(!events.is_empty());
     assert_eq!(
       features.store.history_work().file_reads,
-      after_recovery.file_reads,
-      "the post-boot read reuses its one cached list"
+      after_recovery.file_reads + 1,
+      "the boot keeps no event list, so the first content read loads the log"
     );
   }
 

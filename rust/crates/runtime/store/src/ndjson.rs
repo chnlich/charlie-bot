@@ -26,17 +26,22 @@ pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
 }
 
 /// [`parse_line_compact`] with the object keys taken from one file's `keys`.
-fn parse_file_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
-  parse_line(raw, |text| {
-    // `serde_json::from_str` is this deserialize followed by the check that only whitespace remains.
-    let mut deserializer = serde_json::Deserializer::from_str(text);
-    let value = ValueSeed(keys).deserialize(&mut deserializer).ok()?;
-    deserializer.end().ok()?;
-    Some(value)
-  })
+pub(crate) fn parse_file_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
+  parse_line(raw, |text| parse_file_text(text, keys))
 }
 
-fn parse_line(raw: &[u8], parse: impl Fn(&str) -> Option<CompactValue>) -> Option<CompactValue> {
+/// One line's text parsed with the object keys taken from one file's `keys`; `None` for malformed JSON.
+pub(crate) fn parse_file_text(text: &str, keys: &ParseKeys) -> Option<CompactValue> {
+  // `serde_json::from_str` is this deserialize followed by the check that only whitespace remains.
+  let mut deserializer = serde_json::Deserializer::from_str(text);
+  let value = ValueSeed(keys).deserialize(&mut deserializer).ok()?;
+  deserializer.end().ok()?;
+  Some(value)
+}
+
+/// The skip contract of one line: a blank line is `None`, and `parse` reads the line's text, with invalid UTF-8 replaced
+/// by U+FFFD.
+pub(crate) fn parse_line(raw: &[u8], parse: impl Fn(&str) -> Option<CompactValue>) -> Option<CompactValue> {
   if raw.iter().all(u8::is_ascii_whitespace) {
     return None;
   }
@@ -62,11 +67,7 @@ thread_local! {
 /// The file maps once and memchr supplies the line boundaries (an mmap plus zero-copy line slices); no
 /// per-line buffer is allocated.
 pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
-  let map = match open_log_map(path)? {
-    Some(map) => map,
-    None => return Ok(Vec::new()),
-  };
-  Ok(parse_mapped_lines(&map, &mut || false).expect("the never-stop closure cannot cancel a read"))
+  read_file_lines(path, parse_file_line)
 }
 
 /// Parse every physical line unless `should_stop` requests cancellation between lines.
@@ -84,6 +85,28 @@ pub(crate) fn read_file_compact_until(
     None => return Ok(Some(Vec::new())),
   };
   Ok(parse_mapped_lines(&map, should_stop))
+}
+
+/// Read every physical line of `path` through `line`, including a final line without `\n`; a line that `line` answers
+/// with `None` adds no event. The lines share one [`ParseKeys`], as a whole-file parse's lines do.
+pub(crate) fn read_file_lines(
+  path: &Path,
+  line: impl Fn(&[u8], &ParseKeys) -> Option<CompactValue>,
+) -> StoreResult<Vec<CompactValue>> {
+  let Some(map) = open_log_map(path)? else {
+    return Ok(Vec::new());
+  };
+  let keys = ParseKeys::default();
+  let mut events = Vec::new();
+  let mut start = 0;
+  for boundary in memchr_iter(b'\n', &map) {
+    events.extend(line(&map[start..boundary], &keys));
+    start = boundary + 1;
+  }
+  if start < map.len() {
+    events.extend(line(&map[start..], &keys));
+  }
+  Ok(events)
 }
 
 /// Map one event log read-only; `None` covers a missing file and a file with no bytes.

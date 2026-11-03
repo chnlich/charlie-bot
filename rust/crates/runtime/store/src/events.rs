@@ -28,7 +28,7 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 /// The whole-log chat-events load size over which a load logs its file, size and wall time. Loads under it never
 /// log, so the log grows only on the boot's large reads.
-const WHOLE_LOG_LOGGED_BYTES: u64 = 1_000_000;
+pub(crate) const WHOLE_LOG_LOGGED_BYTES: u64 = 1_000_000;
 
 /// Archived event values plus the live history's shared cache, traversed without cloning live events.
 pub struct ChatEventHistory {

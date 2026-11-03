@@ -8,6 +8,7 @@ pub mod control_events;
 mod event_state;
 mod event_types;
 mod events;
+mod fact_scan;
 pub mod hooks;
 pub mod layout;
 mod listing;
@@ -15,7 +16,6 @@ pub mod message_events;
 pub mod message_utils;
 pub mod metadata;
 mod ndjson;
-mod parse_ahead;
 pub mod projection;
 mod read_memos;
 mod run_facts;
@@ -43,10 +43,10 @@ pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use compact::CompactValue;
 pub use control::ControlGuard;
 pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEvent, SharedChatEventRange};
+pub use fact_scan::ScannedLiveFacts;
 pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
 pub use listing::{ArchivedPage, MetadataListing, RawMetadata, SharedSubtreeRoots};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
-pub use parse_ahead::ParsedLiveHistory;
 pub use projection::MessageProjection;
 pub use run_records::{
   RetryRunFields, RunBlocker, RunDisplayState, RunFacts, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage,

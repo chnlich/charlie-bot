@@ -316,3 +316,16 @@ pub(crate) enum IdentityStage {
 /// A test hook that observes each history identity read of a session.
 #[cfg(test)]
 pub(crate) type IdentityHook = Arc<dyn Fn(&str, IdentityStage) + Send + Sync>;
+
+/// The newest `prompt_changed` fact of each scope in a live log.
+#[derive(Clone, Default)]
+pub(crate) struct LivePromptChanges {
+  pub(crate) subtree: Option<SharedChatEvent>,
+  pub(crate) node: Option<SharedChatEvent>,
+}
+
+/// A sealed boot scan's prompt facts and the log identity they cover.
+pub(crate) struct SealedPromptChanges {
+  pub(crate) identity: FileIdentity,
+  pub(crate) changes: LivePromptChanges,
+}

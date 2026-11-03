@@ -219,7 +219,7 @@ pub enum PromptScope {
 }
 
 impl PromptScope {
-  fn as_str(self) -> &'static str {
+  pub(crate) fn as_str(self) -> &'static str {
     match self {
       Self::Subtree => "subtree",
       Self::Node => "node",
@@ -500,7 +500,19 @@ impl Store {
     let archived = node_entry.archived;
     let (identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { identity, events, .. } => (identity, events),
-      LiveHistory::Cold(_) => {
+      LiveHistory::Cold(file) => {
+        // Node facts sealed at this log identity: the outcomes memo's facts at the same identity fold the same history.
+        if let Some(file) = file
+          && node_entry.key == NodeFactsKey::File(file)
+          && let Some(sealed) = self
+            .run_facts_by_session
+            .lock()
+            .expect("run facts by session mutex is not poisoned")
+            .get(session_id)
+            .filter(|cached| cached.identity == Some(file))
+        {
+          return Ok(Some(Arc::clone(&sealed.facts)));
+        }
         let Some((_generation, identity, events)) = self.live_events_with_generation_until(session_id, should_stop)?
         else {
           return Ok(None);
@@ -688,36 +700,6 @@ impl Store {
     entry.key = NodeFactsKey::Cached { generation, covered: entry.covered };
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(session_id.to_string(), entry);
     Ok(Some(facts))
-  }
-
-  /// Memoize the facts of a whole live list folded outside the store, as [`Store::node_facts_of`] memoizes its first
-  /// fold of that list. The caller has just made `live` the session's cached list at `generation`, and the session holds
-  /// no archived events.
-  pub(crate) fn seed_node_facts(
-    &self,
-    session_id: &str,
-    generation: u64,
-    list_identity: Arc<()>,
-    live: &Arc<Vec<SharedChatEvent>>,
-    facts: NodeFacts,
-    runs: RunFacts,
-  ) {
-    self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
-    self.history_work.folded_events.fetch_add(live.len() as u64, Ordering::Relaxed);
-    self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
-      identity: Arc::clone(&list_identity),
-      events: Arc::clone(live),
-      covered: live.len(),
-      facts: Arc::new(runs),
-    });
-    let entry = CachedNodeFacts {
-      key: NodeFactsKey::Cached { generation, covered: live.len() },
-      list_identity,
-      archived: 0,
-      covered: live.len(),
-      facts: Arc::new(facts),
-    };
-    self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(session_id.to_string(), entry);
   }
 
   /// Keep a node's folded task facts past recovery eviction, keyed by the file identity they cover.
@@ -1535,12 +1517,9 @@ impl Store {
     scope: PromptScope,
   ) -> StoreResult<()> {
     self.require_control_guard(guard)?;
-    let events = self.load_chat_events_shared_sync(session_id)?;
+    let last = self.newest_live_prompt_change(session_id, scope)?;
+    let last = last.as_deref();
     let scope_name = scope.as_str();
-    let last = events.iter().rev().find(|event| {
-      event.get("type").and_then(CompactValue::as_str) == Some(event_types::PROMPT_CHANGED)
-        && event.get("scope").and_then(CompactValue::as_str) == Some(scope_name)
-    });
     let current_ref = scope.metadata_ref(meta);
     if last.is_some_and(|event| event.get("new_ref").and_then(CompactValue::as_str) == current_ref) {
       return Ok(());
@@ -1563,6 +1542,22 @@ impl Store {
     );
     self.append_control_fact(guard, session_id, event).await?;
     Ok(())
+  }
+
+  /// The live log's newest `prompt_changed` fact of `scope`. A cold cache whose log keeps the identity of a sealed boot
+  /// scan answers from that scan; any other read takes it from the live events.
+  pub(crate) fn newest_live_prompt_change(&self, session_id: &str, scope: PromptScope) -> StoreResult<Option<SharedChatEvent>> {
+    if let LiveHistory::Cold(Some(identity)) = self.live_history(session_id)?
+      && let Some(sealed) = self
+        .sealed_prompt_changes
+        .lock()
+        .expect("sealed prompt changes mutex is not poisoned")
+        .get(session_id)
+        .filter(|sealed| sealed.identity == identity)
+    {
+      return Ok(sealed.changes.newest(scope));
+    }
+    Ok(newest_prompt_change(&self.load_chat_events_shared_sync(session_id)?, scope))
   }
 
   /// Run the sequence binding's archive duty for one node (`sequence_controllers.binding_for(sid).on_archive`).
@@ -2630,6 +2625,18 @@ fn fold_node_facts_from(
     }
   }
   Ok(!should_stop())
+}
+
+/// The newest `prompt_changed` fact of `scope` in `events`.
+pub(crate) fn newest_prompt_change(events: &[SharedChatEvent], scope: PromptScope) -> Option<SharedChatEvent> {
+  events
+    .iter()
+    .rev()
+    .find(|event| {
+      event.get("type").and_then(CompactValue::as_str) == Some(event_types::PROMPT_CHANGED)
+        && event.get("scope").and_then(CompactValue::as_str) == Some(scope.as_str())
+    })
+    .cloned()
 }
 
 /// The node and run facts of a session with no archived events, folded from its whole live list as the first fold of

@@ -874,6 +874,9 @@ fn behavior_defaults() -> Map<String, Value> {
     "worktree": "created",
     "task_error": "",
     "first_command": "none",
+    "adds_config_key": "",
+    "reaches_ready": true,
+    "refuses_config_key": "",
   }) else {
     unreachable!("an object literal");
   };

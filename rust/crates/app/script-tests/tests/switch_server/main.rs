@@ -26,6 +26,7 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use regex::Regex;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 use world::{
   SESSION, World, fake_charliebot, fake_pane_server, install_release, pid_start, quote, replace_charliebot,
@@ -459,6 +460,107 @@ fn test_a_refusal_by_the_target_config_check_changes_nothing() {
   assert_eq!(world.git(&world.clone, &["ls-files", "--stage"]), index_before, "{}", world.report(&run));
   assert_eq!(world.git(&world.clone, &["worktree", "list", "--porcelain"]), worktrees_before);
   assert_no_temporary_directory_left(&tmp);
+}
+
+// ---- the old release must accept the home before the new one stops -----------------------------------------------
+
+/// The top-level section the stand-ins append to config.yaml and the old release refuses: a key only the new release
+/// knows.
+const UNKNOWN_SECTION: &str = "github";
+
+/// The text the stand-in appends for `UNKNOWN_SECTION`.
+const UNKNOWN_SECTION_TEXT: &str = "github:\n  enabled: true\n";
+
+fn sha256_of(bytes: &[u8]) -> String {
+  format!("{:x}", Sha256::digest(bytes))
+}
+
+#[test]
+fn test_preflight_refuses_when_the_old_release_rejects_the_config_and_stops_nothing() {
+  let world = World::new();
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  // The config gains the section while the old server runs, and the old release refuses it.
+  let config = world.home.join("config.yaml");
+  let mut text = fs::read_to_string(&config).expect("the config");
+  text.push_str(UNKNOWN_SECTION_TEXT);
+  fs::write(&config, text).expect("the config");
+  write_behavior(&world.releases.join(&world.old_sha), &[("refuses_config_key", json!(UNKNOWN_SECTION))]);
+
+  let run = world.switch(&["rust", &world.rust_sha]);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unknown config key(s) 'github'"), "{}", world.report(&run));
+  world.assert_untouched();
+}
+
+#[test]
+fn test_rollback_keeps_the_serving_new_release_when_the_old_release_rejects_the_config() {
+  let mut world = World::new();
+  world.env.insert("CHARLIEBOT_SWITCH_DELEGATION_WAIT_S".to_string(), "2".to_string());
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  let new_sha = world.new_sha.clone();
+  write_behavior(&world.releases.join(&world.old_sha), &[("refuses_config_key", json!(UNKNOWN_SECTION))]);
+  // The new release adds the section as it starts, after the preflight, and its delegation check then fails.
+  write_behavior(
+    &world.releases.join(&new_sha),
+    &[("adds_config_key", json!(UNKNOWN_SECTION)), ("task_state", json!("running")), ("first_command", json!("none"))],
+  );
+  let config = world.home.join("config.yaml");
+  let before_new_release = fs::read(&config).expect("the config");
+
+  let run = world.switch(&["rust", &new_sha]);
+
+  assert_eq!(run.code, 5, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(
+    report.contains("--check-config refuses the home: charliebot-server: unknown config key(s) 'github'"),
+    "{report}"
+  );
+  assert!(
+    report.contains(&format!(
+      "SWITCH CHECK FAILED, NEW RELEASE KEEPS SERVING: the delegation check failed; rust {new_sha} serves port {}",
+      world.port
+    )),
+    "{report}"
+  );
+  assert!(world.serves_release(&new_sha), "{}", world.report(&run));
+  assert_eq!(fs::read_link(world.releases.join("current")).expect("current"), PathBuf::from(&new_sha));
+  // The switch wrote no config: the file holds what the new release added as it started, and nothing more.
+  let mut written = before_new_release;
+  written.extend_from_slice(UNKNOWN_SECTION_TEXT.as_bytes());
+  assert_eq!(sha256_of(&fs::read(&config).expect("the config")), sha256_of(&written), "{}", world.report(&run));
+}
+
+#[test]
+fn test_rollback_exits_3_without_starting_the_old_release_when_the_old_release_rejects_the_config() {
+  let world = World::new();
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  let new_sha = world.new_sha.clone();
+  write_behavior(&world.releases.join(&world.old_sha), &[("refuses_config_key", json!(UNKNOWN_SECTION))]);
+  // The new release adds the section and exits before server_ready, so no server serves the port when the rollback
+  // checks the old release.
+  write_behavior(
+    &world.releases.join(&new_sha),
+    &[("adds_config_key", json!(UNKNOWN_SECTION)), ("reaches_ready", json!(false))],
+  );
+
+  let run = world.switch(&["rust", &new_sha]);
+
+  assert_eq!(run.code, 3, "{}", world.report(&run));
+  assert!(
+    world.report(&run).contains(&format!(
+      "RESTORE FAILED: rust {} --check-config refuses the home: charliebot-server: unknown config key(s) 'github'",
+      world.old_sha
+    )),
+    "{}",
+    world.report(&run)
+  );
+  // One launch for the server the test started and one for the new release; the rollback started nothing.
+  world.assert_server_scope_records(2);
+  assert!(world.listener_pids().is_empty(), "a server still listens on port {}", world.port);
 }
 
 // ---- preflight: the session-weight controllers ------------------------------------------------------
@@ -1014,7 +1116,7 @@ fn test_preflight_exits_2_when_neither_release_has_switch_helper() {
 // ---- the switch on a real pane --------------------------------------------------------------------------------------
 
 #[test]
-fn test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3() {
+fn test_switch_on_a_real_pane_restores_then_round_trips_then_refuses_at_preflight() {
   let mut world = World::new();
   // This release ignores SIGTERM, so a zero stop wait reaches the SIGKILL path at once.
   world.env.insert("CHARLIEBOT_SWITCH_STOP_WAIT_S".to_string(), "0".to_string());
@@ -1060,14 +1162,14 @@ fn test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3() {
   assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), old_sha);
   assert!(world.serves_release(&old_sha), "the old release does not serve");
 
-  // A switch whose new release cannot adopt, followed by a restore whose old release rejects its config, leaves the
-  // server down, which is exit 3.
+  // An old release that rejects its config is refused by the preflight, before the switch stops anything, so the old
+  // server keeps serving. The rollback's refusal, which leaves the port empty, is exit 3 in its own test.
   write_behavior(&world.releases.join(&old_sha), &[("check_config", json!("fail"))]);
   write_behavior(&world.releases.join(&new_sha), &[("adopt", json!(false))]);
   let run = world.switch(&["rust", &new_sha]);
-  assert_eq!(run.code, 3, "{}", world.report(&run));
-  // The switch started the new release (one more scope) before its readback failed; the restore then could not start
-  // the old release.
-  world.assert_server_scope_records(6);
-  assert!(world.listener_pids().is_empty(), "a server still listens on port {}", world.port);
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("rejects the home"), "{}", world.report(&run));
+  // The preflight launched nothing, so the scope count stays where the round trip left it.
+  world.assert_server_scope_records(5);
+  world.assert_untouched();
 }

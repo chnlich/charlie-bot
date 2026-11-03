@@ -70,6 +70,13 @@ struct Behavior {
   /// The first tool result written to the delegated run's event log: `none`, `ok` (a Bash command that did not error),
   /// `failed` (a Bash command that errored) or `not-command` (another tool).
   first_command: String,
+  /// A top-level key appended to config.yaml when the server starts, as an edit another session makes during a switch;
+  /// empty appends nothing.
+  adds_config_key: String,
+  /// Whether the server gets to `server_ready`; `false` exits before it listens.
+  reaches_ready: bool,
+  /// A top-level key that `--check-config` refuses when config.yaml names it; empty refuses nothing.
+  refuses_config_key: String,
 }
 
 /// One run of the probe session, in the order the server created it.
@@ -114,6 +121,16 @@ fn serve() -> io::Result<()> {
       eprintln!("config error: unknown key server.bogus");
       process::exit(1);
     }
+    if !behavior.refuses_config_key.is_empty() {
+      let home = PathBuf::from(
+        env::var_os(CHARLIEBOT_HOME_ENV)
+          .ok_or_else(|| io::Error::other(format!("{CHARLIEBOT_HOME_ENV} is not set")))?,
+      );
+      if config_names_key(&home, &behavior.refuses_config_key)? {
+        eprintln!("charliebot-server: unknown config key(s) '{}'", behavior.refuses_config_key);
+        process::exit(1);
+      }
+    }
     if !behavior.check_config_requires.is_empty() {
       let root = env::var_os(REPO_ROOT_ENV).ok_or_else(|| io::Error::other(format!("{REPO_ROOT_ENV} is not set")))?;
       let required = PathBuf::from(root).join(&behavior.check_config_requires);
@@ -134,6 +151,12 @@ fn serve() -> io::Result<()> {
   let config = fs::read_to_string(home.join(CONFIG_FILENAME))?;
   let port: u16 = capture(r"(?m)^\s*port:\s*(\d+)", &config)?.parse().map_err(io::Error::other)?;
   let key = capture(r"access_key:\s*(\S+)", &fs::read_to_string(home.join(CREDENTIALS_FILENAME))?)?;
+  if !behavior.adds_config_key.is_empty() {
+    append_config_key(&home, &behavior.adds_config_key)?;
+  }
+  if !behavior.reaches_ready {
+    return Err(io::Error::other("the stand-in exits before server_ready"));
+  }
   recovery_logs(&home, behavior.adopt)?;
   let listener = TcpListener::bind(("127.0.0.1", port))?;
   log("server_ready", json!({"ready_in_ms": 1}));
@@ -459,6 +482,18 @@ impl Server {
     fs::write(run_dir.join(RUN_EVENTS_NAME), events)?;
     Ok(task)
   }
+}
+
+/// Whether config.yaml of the home names `key` at its top level.
+fn config_names_key(home: &Path, key: &str) -> io::Result<bool> {
+  let config = fs::read_to_string(home.join(CONFIG_FILENAME))?;
+  Ok(config.lines().any(|line| line.split_once(':').is_some_and(|(name, _)| name == key)))
+}
+
+/// Appends a top-level section named `key` to config.yaml, as an edit another session makes to the shared config.
+fn append_config_key(home: &Path, key: &str) -> io::Result<()> {
+  let mut config = OpenOptions::new().append(true).open(home.join(CONFIG_FILENAME))?;
+  writeln!(config, "{key}:\n  enabled: true")
 }
 
 /// The event lines of the stand-in's first tool result, in the shape a claude-code run writes them: the assistant's

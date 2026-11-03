@@ -8,11 +8,12 @@
 # server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
 # agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
 # installed: scripts/release.sh installs them ahead of its trial and rehearsal. It refuses a clone with local changes
-# and a target commit that a fetch does not bring. Its config check reads an export of the target commit, since the
-# clone holds the old commit until the move. The switch then stops the old server, moves the clone with
+# and a target commit that a fetch does not bring. Its last step runs each release's --check-config on an export of
+# the commit that release starts on: the target's own commit, and the old release on OLD_SHA, the clone's commit, since
+# the clone holds the old commit until the move. The switch then stops the old server, moves the clone with
 # `git reset --keep <commit>` (forward or back), installs the target commit's slice units with
-# scripts/install-slice-units.sh and reloads the user manager, starts the release and
-# reads it back. A refusal changes nothing and exits 1, except that a missing helper binary exits 2 (below). The switch
+# scripts/install-slice-units.sh and reloads the user manager, starts the release and reads it back. A refusal changes
+# nothing and exits 1 with the refusing release's text, except that a missing helper binary exits 2 (below). The switch
 # runs detached under setsid, because stopping the old server ends the master turn that started this command. The
 # command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
 # delegation check passed; 2 when the switch failed and the previous implementation serves again; 3 when the restore
@@ -1224,21 +1225,35 @@ weight_controller_check() {
   log "weight controllers ready: controllers='$controllers' switches='$(tr '\n' ' ' <<<"$switches")'"
 }
 
-# target_config_check: the target's --check-config on an export of the target commit's files. The check reads files of
-# the target's own commit (web/templates, the agent gh wrapper), and the clone holds the old commit until switch_forward
-# moves it. `git archive` writes nothing into the clone, so its HEAD, index, files and git metadata stay as they are.
-# The export is removed before the function returns, whether the check accepts or refuses.
-target_config_check() {
-  local tree rc
-  tree="$(mktemp -d)" || fail "cannot create a directory for the export of $TARGET_SHA"
-  if ! git -C "$REPO_ROOT" archive --format=tar "$TARGET_SHA" | tar -x -C "$tree"; then
+# config_check BINARY COMMIT: runs BINARY's --check-config on an export of COMMIT's files, with the home as
+# CHARLIEBOT_HOME. It returns 0 when the release accepts the home. It returns 1 and prints the text on stdout when the
+# release refuses the home, or when the export cannot be made or removed. Each release reads the files of the commit it
+# starts on (web/templates, the agent gh wrapper), and the clone holds the old commit until switch_forward moves it.
+# `git archive` writes nothing into the clone, so its HEAD, index, files and git metadata stay as they are. The check
+# writes no config. The export is removed before the function returns, whether the check accepts or refuses. The
+# callers decide what a refusal means: the preflight stops, and a rollback keeps a serving new release.
+config_check() {
+  local binary=$1 commit=$2 tree text rc
+  tree="$(mktemp -d)" || {
+    echo "cannot create a directory for the export of $commit"
+    return 1
+  }
+  if ! git -C "$REPO_ROOT" archive --format=tar "$commit" | tar -x -C "$tree"; then
     rm -rf "$tree"
-    fail "cannot export $TARGET_SHA from $REPO_ROOT"
+    echo "cannot export $commit from $REPO_ROOT"
+    return 1
   fi
-  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$tree" "$RELEASE_DIR/charliebot-server" --check-config
+  text="$(CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$tree" "$binary" --check-config 2>&1)"
   rc=$?
-  rm -rf "$tree" || fail "cannot remove the export $tree"
-  [ "$rc" -eq 0 ] || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
+  rm -rf "$tree" || {
+    echo "cannot remove the export $tree"
+    return 1
+  }
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$text"
+    return 1
+  fi
+  return 0
 }
 
 preflight() {
@@ -1252,7 +1267,6 @@ preflight() {
   git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
   git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
     || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"
-  target_config_check
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
@@ -1273,6 +1287,15 @@ preflight() {
   wait_for_quiet_disk \
     || fail "the root disk read stayed above ${DISK_QUIET_MB} MB/s within ${DISK_WAIT_S}s;" \
       "the heaviest readers are the lines above"
+  # The last step: the target and the old release must both accept the home as it stands, because a rollback starts
+  # the old release, and the config may have changed since the old server started.
+  local refusal
+  refusal="$(config_check "$RELEASE_DIR/charliebot-server" "$TARGET_SHA")" \
+    || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR: ${refusal//$'\n'/; }"
+  log "config check: rust $TARGET_SHA accepts $HOME_DIR"
+  refusal="$(config_check "$RELEASES_DIR/$PREV_CURRENT/charliebot-server" "$OLD_SHA")" \
+    || fail "$OLD_IMPL --check-config of $OLD_SHA rejects the home $HOME_DIR: ${refusal//$'\n'/; }"
+  log "config check: $OLD_IMPL accepts $HOME_DIR at $OLD_SHA"
   log "preflight passed: $OLD_IMPL -> $WANT; clone at $OLD_SHA; pane $PANE; port $PORT"
 }
 
@@ -1348,9 +1371,33 @@ restore_failed() {
   exit 3
 }
 
+# new_serving: the new release is the listener on the port and answers the version route. It does not poll: the rollback
+# decides from the state the switch left.
+new_serving() {
+  listener_is "$WANT" && version_ok
+}
+
+# restore_config_refused REFUSAL: the old release refuses the home, so the rollback cannot start it. While the new
+# release still serves, nothing is stopped and the switch exits 5. Otherwise the port has no server: the rollback exits 3.
+restore_config_refused() {
+  log "restore: $OLD_IMPL --check-config refuses the home: $1"
+  if new_serving; then
+    log "SWITCH CHECK FAILED, NEW RELEASE KEEPS SERVING: $FAILURE; $WANT serves port $PORT"
+    exit 5
+  fi
+  restore_failed "$OLD_IMPL --check-config refuses the home: $1"
+}
+
 # restore: put back the clone, the current link and the previous implementation, then exit 2.
 restore() {
+  local refusal
   log "restoring $OLD_IMPL at $OLD_SHA"
+  if [ "$OLD_STOPPED" = 1 ]; then
+    # The old release starts only after this check, so the check comes before the new release stops.
+    refusal="$(config_check "$RELEASES_DIR/$PREV_CURRENT/charliebot-server" "$OLD_SHA")" \
+      || restore_config_refused "${refusal//$'\n'/; }"
+    log "restore: $OLD_IMPL accepts $HOME_DIR at $OLD_SHA"
+  fi
   if { [ "$OLD_STOPPED" = 1 ] || [ "$NEW_STARTED" = 1 ]; } && pane_busy; then
     tm send-keys -t "$PANE" C-c
     if ! wait_pane_idle "$CTRL_C_WAIT_S"; then
@@ -1374,6 +1421,7 @@ restore() {
 
 # die: a step after the switch began failed; the previous state comes back.
 die() {
+  FAILURE="$*"
   log "step failed: $*"
   restore
 }

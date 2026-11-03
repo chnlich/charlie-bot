@@ -264,6 +264,19 @@ mod tests {
     }
   }
 
+  /// The agent base environment the CLI's composition root builds, so a spawn from this host resolves `gh` to the
+  /// wrapper.
+  fn agent_base(home: &Path) -> AgentBaseEnvironment {
+    let server_bin_dir = home.join("release");
+    fs::create_dir_all(&server_bin_dir).unwrap();
+    write_executable(&server_bin_dir.join("charliebot"), "test fixture; this file is not run\n");
+    charliebot_agents::agent_environment::agent_base_environment(
+      &server_bin_dir,
+      &charliebot_agents::gh_wrapper::dir_under(&crate::test_support::repo_root()),
+    )
+    .unwrap()
+  }
+
   fn test_host(home: &Path) -> CliHost {
     let mut registry = Registry::new();
     registry.register_package("features.artifacts", crate::register).unwrap();
@@ -273,7 +286,7 @@ mod tests {
       cfg,
       registry,
       repo_root: PathBuf::from("/synthetic/checkout"),
-      base_env: AgentBaseEnvironment { values: std::env::vars().collect() },
+      base_env: agent_base(home),
       pool: Arc::new(BackendPool::default()),
     }
   }

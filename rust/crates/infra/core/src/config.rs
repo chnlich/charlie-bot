@@ -54,7 +54,7 @@ const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
 const FIELD_NAMES: &[&str] =
-  &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run"];
+  &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run", "github"];
 
 /// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
 const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
@@ -377,6 +377,16 @@ pub struct TelegramConfig {
   pub chat_id: Option<String>,
 }
 
+/// `github:` section: the agent `gh` wrapper's App token command, `~` expanded.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubConfig {
+  /// The executable the wrapper calls with `--write <owner>/<repo>`. Absent, the wrapper refuses every
+  /// text-carrying write.
+  #[serde(default)]
+  pub app_token_command: Option<String>,
+}
+
 /// One profile's parsed `config.yaml`.
 #[derive(Debug, Clone)]
 pub struct CharlieBotConfig {
@@ -389,6 +399,7 @@ pub struct CharlieBotConfig {
   pub ui: UiConfig,
   pub telegram: TelegramConfig,
   pub remote_run: RemoteRunConfig,
+  pub github: GithubConfig,
   /// Every registered package section, parsed by its package's parser. An omitted section holds the
   /// parser's result for an empty mapping, which is the package's defaults.
   pub sections: Sections,
@@ -559,6 +570,9 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
     sections.insert(package_section.key, parsed);
   }
 
+  let mut github: GithubConfig = typed_section(&config_path_text, "github", section("github"), GithubConfig::default)?;
+  github.app_token_command = github.app_token_command.as_deref().map(paths::expanduser);
+
   Ok(CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
     headless_chrome_bin,
@@ -568,6 +582,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
     ui: typed_section(&config_path_text, "ui", section("ui"), || UiConfig { home_services: Vec::new() })?,
     telegram: typed_section(&config_path_text, "telegram", section("telegram"), || TelegramConfig { chat_id: None })?,
     remote_run: typed_section(&config_path_text, "remote_run", section("remote_run"), RemoteRunConfig::default)?,
+    github,
     sections: Sections(sections),
   })
 }
@@ -929,6 +944,21 @@ mod tests {
     let home = home_with(&config_text);
     let cfg = load(&home).unwrap();
     assert_eq!(cfg.paths.scratch_dir, paths::expanduser("~/synthetic-scripts"));
+  }
+
+  #[test]
+  fn github_app_token_command_is_optional_and_expands_a_configured_tilde() {
+    let cfg = load(&home_with(VALID)).unwrap();
+    assert_eq!(cfg.github.app_token_command, None);
+
+    let config_text = format!("{VALID}github:\n  app_token_command: ~/synthetic/app-token-command\n");
+    let cfg = load(&home_with(&config_text)).unwrap();
+    let expected = paths::expanduser("~/synthetic/app-token-command");
+    assert_eq!(cfg.github.app_token_command.as_deref(), Some(expected.as_str()));
+
+    let home = home_with(&format!("{VALID}github:\n  bogus: x\n"));
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.contains("invalid config key github.bogus"), "{error}");
   }
 
   #[test]

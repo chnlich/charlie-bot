@@ -14,6 +14,7 @@ use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::{self, QUOTA_ERROR_PATTERNS};
 use charliebot_agents::backend_types::{self, BuiltBackend};
 use charliebot_agents::event_builders;
+use charliebot_agents::gh_wrapper;
 use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
 use charliebot_agents::runner::{
   AgentRunner, DEFAULT_CLEANUP_TIMEOUT, DEFAULT_POST_RESULT_TIMEOUT, OnSpawnFn, RunRequest, capture_process_diagnostics,
@@ -407,18 +408,25 @@ impl Worker {
     Ok(Arc::new(sink))
   }
 
-  /// The child environment overlay of every process: the launch's own variables, with the stash-guard directory first
-  /// on PATH (`Worker.run`).
+  /// The child environment overlay of every process: the launch's own variables, with the agent `gh` wrapper first
+  /// on PATH and the stash-guard directory directly after it (`Worker.run`).
   fn process_env(&self) -> anyhow::Result<Env> {
     let base_env = self.features.startup.require::<AgentBaseEnvironment>()?;
     let checkout = self.features.startup.require::<RepoRoot>()?;
     let guard_dir = checkout.path().join(GIT_STASH_GUARD_DIR);
+    let gh_wrapper_dir = gh_wrapper::dir_under(checkout.path());
     let mut env = self.extra_env.clone();
     let inherited = env.get("PATH").or_else(|| base_env.values.get("PATH")).cloned();
-    let path = match inherited {
-      Some(old_path) if !old_path.is_empty() => format!("{}:{old_path}", guard_dir.display()),
-      _ => guard_dir.display().to_string(),
-    };
+    // The gh wrapper leads the agent PATH (agent_environment puts it there); the stash guard never displaces it.
+    let mut entries: Vec<PathBuf> = inherited.map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    if entries.first().is_none_or(|first| first != &gh_wrapper_dir) {
+      entries.insert(0, gh_wrapper_dir);
+    }
+    entries.insert(1, guard_dir);
+    let path = std::env::join_paths(&entries)
+      .context("the worker PATH entries join with the path separator")?
+      .into_string()
+      .map_err(|_| anyhow::anyhow!("the worker PATH is not valid Unicode"))?;
     env.insert("PATH".to_string(), path);
     Ok(env)
   }

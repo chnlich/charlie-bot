@@ -188,7 +188,10 @@ impl AgentRunner {
       request.session_id.as_deref(),
       &request.environment_overlay,
     );
-    let final_env = backend.prepare_env(child_environment)?;
+    let mut final_env = backend.prepare_env(child_environment)?;
+    // After `prepare_env`: a backend that prepends a directory to PATH (codex, antigravity and charlie-code put
+    // `~/.local/bin` first, where the personal gh lives) must not silently bypass the wrapper.
+    crate::gh_wrapper::require_gh_wrapper(&mut final_env)?;
     // A Serve type with no registered transport takes the raw-log path below.
     if transport == TransportKind::Serve
       && let Some(serve) = request.registry.serve_transport(&self.backend_type)
@@ -1505,8 +1508,122 @@ mod tests {
   }
 
   fn test_request(prompt: String, cwd: PathBuf, values: Env, cgroup_base: PathBuf) -> RunRequest {
+    // Every agent environment carries the wrapper; a test that checks the spawn path supplies its own.
+    let mut values = values;
+    if !values.contains_key(crate::gh_wrapper::WRAPPER_PATH_VAR) {
+      let wrapper_dir = cgroup_base.parent().expect("the cgroup base has a parent").join("gh-wrapper-stub");
+      fs::create_dir_all(&wrapper_dir).unwrap();
+      let wrapper = wrapper_dir.join("gh");
+      fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+      use std::os::unix::fs::PermissionsExt;
+      let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+      permissions.set_mode(0o755);
+      fs::set_permissions(&wrapper, permissions).unwrap();
+      let path = values.remove("PATH").unwrap_or_else(|| "/bin:/usr/bin".to_string());
+      values.insert("PATH".to_string(), format!("{}:{path}", wrapper_dir.display()));
+      values.insert(crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string());
+    }
     let cgroup_config = SessionCgroupConfig { base_dir: cgroup_base, ..SessionCgroupConfig::disabled() };
     RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_config, Arc::new(Registry::new()))
+  }
+
+  /// A directory with one executable stub file, as the gh wrapper check resolves it.
+  fn gh_stub_dir(root: &Path, name: &str) -> PathBuf {
+    let directory = root.join(name);
+    fs::create_dir(&directory).unwrap();
+    let script = directory.join("gh");
+    fs::write(&script, "#!/bin/sh\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    directory
+  }
+
+  #[tokio::test]
+  async fn a_spawn_whose_path_resolves_another_gh_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let wrapper_dir = gh_stub_dir(root.path(), "wrapper");
+    let other_dir = gh_stub_dir(root.path(), "other");
+    let backend: Box<dyn AgentBackend> = Box::new(ShellBackend::new("printf ok"));
+    let runner = AgentRunner::new(
+      "shell",
+      backend,
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([
+        ("PATH".to_string(), format!("{}:/bin", other_dir.display())),
+        (crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper_dir.join("gh").display().to_string()),
+      ]),
+      root.path().join("cgroups"),
+    );
+
+    let error = runner.run(request).await.unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains(&other_dir.join("gh").display().to_string()), "{message}");
+    assert!(message.contains(&wrapper_dir.join("gh").display().to_string()), "{message}");
+  }
+
+  /// A backend that puts a directory with the personal gh first in `prepare_env` must not bypass the wrapper: the
+  /// spawn goes ahead with the wrapper directory first in the final PATH.
+  #[tokio::test]
+  async fn a_backend_that_prepends_a_gh_directory_keeps_the_wrapper_first() {
+    let root = tempfile::tempdir().unwrap();
+    let wrapper_dir = gh_stub_dir(root.path(), "wrapper");
+    let local_bin = gh_stub_dir(root.path(), "local-bin");
+    let observed = root.path().join("child-path");
+    let script = format!("printf '%s\\n' \"$PATH\" > '{}'", observed.display());
+    let backend: Box<dyn AgentBackend> = Box::new(ShellBackend::prepending_path(script, local_bin.clone()));
+    let runner = AgentRunner::new(
+      "shell",
+      backend,
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([
+        ("PATH".to_string(), format!("{}:/bin", wrapper_dir.display())),
+        (crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper_dir.join("gh").display().to_string()),
+      ]),
+      root.path().join("cgroups"),
+    );
+
+    let outcome = runner.run(request).await.unwrap();
+
+    assert_eq!(outcome.exit_code, Some(0));
+    let child_path = fs::read_to_string(&observed).unwrap();
+    let entries: Vec<&str> = child_path.trim_end().split(':').collect();
+    assert_eq!(entries, [wrapper_dir.to_str().unwrap(), local_bin.to_str().unwrap(), "/bin"]);
+  }
+
+  #[tokio::test]
+  async fn a_spawn_whose_path_resolves_the_wrapper_starts() {
+    let root = tempfile::tempdir().unwrap();
+    let wrapper_dir = gh_stub_dir(root.path(), "wrapper");
+    let backend: Box<dyn AgentBackend> = Box::new(ShellBackend::new("printf '%s\\n' '{\"type\":\"result\"}'"));
+    let runner = AgentRunner::new(
+      "shell",
+      backend,
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([
+        ("PATH".to_string(), format!("{}:/bin", wrapper_dir.display())),
+        (crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper_dir.join("gh").display().to_string()),
+      ]),
+      root.path().join("cgroups"),
+    );
+
+    let outcome = runner.run(request).await.unwrap();
+
+    assert_eq!(outcome.exit_code, Some(0));
   }
 
   /// The signal that the blocking pool is full, and the release that empties it.
@@ -1517,15 +1634,26 @@ mod tests {
     refusal: Option<String>,
     /// Taken by `prepare_env`, the launch's last step before its spawn, to hold one blocking-pool thread until release.
     pool_fill: Mutex<Option<PoolFill>>,
+    /// Prepended to PATH in `prepare_env`, the way codex, antigravity and charlie-code put their CLI directory first.
+    path_prepend: Option<PathBuf>,
   }
 
   impl ShellBackend {
     fn new(script: impl Into<String>) -> Self {
-      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(None) }
+      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(None), path_prepend: None }
     }
 
     fn refusing_uploads(script: impl Into<String>, refusal: &str) -> Self {
-      Self { script: script.into(), refusal: Some(refusal.to_string()), pool_fill: Mutex::new(None) }
+      Self {
+        script: script.into(),
+        refusal: Some(refusal.to_string()),
+        pool_fill: Mutex::new(None),
+        path_prepend: None,
+      }
+    }
+
+    fn prepending_path(script: impl Into<String>, directory: PathBuf) -> Self {
+      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(None), path_prepend: Some(directory) }
     }
 
     fn filling_the_blocking_pool(
@@ -1533,7 +1661,7 @@ mod tests {
       filled: tokio::sync::oneshot::Sender<()>,
       release: std::sync::mpsc::Receiver<()>,
     ) -> Self {
-      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(Some((filled, release))) }
+      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(Some((filled, release))), path_prepend: None }
     }
   }
 
@@ -1602,6 +1730,11 @@ mod tests {
       if let Some((filled, release)) = self.pool_fill.lock().expect("pool fill state is not poisoned").take() {
         drop(tokio::task::spawn_blocking(move || release.recv()));
         filled.send(()).expect("the test waits for the filled pool");
+      }
+      let mut env = env;
+      if let Some(directory) = &self.path_prepend {
+        let old_path = env.get("PATH").cloned().unwrap_or_default();
+        env.insert("PATH".to_string(), format!("{}:{old_path}", directory.display()));
       }
       Ok(env)
     }

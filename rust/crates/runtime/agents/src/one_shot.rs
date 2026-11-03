@@ -115,6 +115,22 @@ mod tests {
   use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
   use serde_json::json;
 
+  /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+  fn agent_test_env(root: &Path, path: &str) -> Env {
+    use std::os::unix::fs::PermissionsExt;
+    let wrapper_dir = root.join("gh-wrapper");
+    fs::create_dir_all(&wrapper_dir).unwrap();
+    let wrapper = wrapper_dir.join("gh");
+    fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).unwrap();
+    Env::from([
+      ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+      (crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+    ])
+  }
+
   struct ScriptedBackend {
     script: String,
     native_answer: Option<String>,
@@ -210,10 +226,8 @@ mod tests {
       registry: Arc::new(Registry::new()),
     };
 
-    let base_env = Env::from([
-      ("PATH".to_string(), "/synthetic/agent-entry-points:/synthetic/system-bin:/bin:/usr/bin".to_string()),
-      ("PYDANTIC_DISABLE_PLUGINS".to_string(), "__all__".to_string()),
-    ]);
+    let mut base_env = agent_test_env(root.path(), "/synthetic/agent-entry-points:/synthetic/system-bin:/bin:/usr/bin");
+    base_env.insert("PYDANTIC_DISABLE_PLUGINS".to_string(), "__all__".to_string());
     let answer = agent_one_shot_text(built, &base_env, "prompt", "system", None).await.unwrap();
 
     assert_eq!(answer, "first");
@@ -240,7 +254,8 @@ mod tests {
 
   #[tokio::test]
   async fn dispatcher_takes_the_native_one_shot_and_falls_back_to_the_tool_capable_one() {
-    let base_env = Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]);
+    let root = tempfile::tempdir().unwrap();
+    let base_env = agent_test_env(root.path(), "/bin:/usr/bin");
     let native = BuiltBackend {
       backend: Box::new(ScriptedBackend {
         script: "exit 1".to_string(),

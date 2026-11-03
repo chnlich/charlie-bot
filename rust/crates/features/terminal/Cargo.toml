@@ -21,5 +21,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+charliebot-agents.workspace = true
 charliebot-shell-harness.workspace = true
 tokio-tungstenite.workspace = true

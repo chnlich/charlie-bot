@@ -1,9 +1,12 @@
 //! The Claude child environment edits that the package registers reach a spawned process through the runner.
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::gh_wrapper;
 use charliebot_agents::runner::{AgentRunner, RunRequest};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_registry::Registry;
@@ -36,6 +39,21 @@ async fn registered_claude_child_edits_apply_at_the_spawn_boundary() {
   assert_eq!(worker_event["auto_memory"], "1");
 }
 
+/// Add the agent `gh` wrapper to a spawn environment: the runner refuses a spawn whose PATH does not resolve it.
+fn with_gh_wrapper(root: &Path, mut env: Env) -> Env {
+  let wrapper_dir = root.join("gh-wrapper");
+  fs::create_dir_all(&wrapper_dir).unwrap();
+  let wrapper = wrapper_dir.join("gh");
+  fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+  let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(&wrapper, permissions).unwrap();
+  let path = env.remove("PATH").unwrap_or_else(|| "/bin".to_string());
+  env.insert("PATH".to_string(), format!("{}:{path}", wrapper_dir.display()));
+  env.insert(gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string());
+  env
+}
+
 async fn run_one_shell(
   root: &Path,
   name: &str,
@@ -55,7 +73,7 @@ async fn run_one_shell(
   let mut request = RunRequest::new(
     "prompt".to_string(),
     root.to_path_buf(),
-    AgentBaseEnvironment { values: env },
+    AgentBaseEnvironment { values: with_gh_wrapper(root, env) },
     SessionCgroupConfig { base_dir: root.join("cgroups"), ..SessionCgroupConfig::disabled() },
     registry,
   );

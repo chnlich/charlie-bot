@@ -290,6 +290,7 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
+    github: Default::default(),
     sections: Sections::default(),
   }
 }
@@ -342,6 +343,22 @@ fn config_with_features_from_config(
   config_with_features_from_config_and_agent_path(cfg, registry, install_queue, "/usr/bin".to_string())
 }
 
+/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
+fn gh_wrapper_env(base: &Path, path: &str) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = base.join("gh-wrapper");
+  std::fs::create_dir_all(&wrapper_dir).unwrap();
+  let wrapper = wrapper_dir.join("gh");
+  std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+  let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+  permissions.set_mode(0o755);
+  std::fs::set_permissions(&wrapper, permissions).unwrap();
+  Env::from([
+    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+    (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+  ])
+}
+
 fn config_with_features_from_config_and_agent_path(
   cfg: Arc<CharlieBotConfig>,
   registry: Arc<Registry>,
@@ -375,13 +392,10 @@ fn config_with_features_from_config_and_agent_path(
     },
   )?;
   let startup = Arc::new(StartupState::default());
-  startup.insert(AgentBaseEnvironment {
-    values: Env::from([
-      ("PATH".to_string(), agent_path),
-      ("CLAUDECODE".to_string(), "stale-parent".to_string()),
-      (charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string()),
-    ]),
-  })?;
+  let mut agent_env = gh_wrapper_env(&cfg.charliebot_home, &agent_path);
+  agent_env.insert("CLAUDECODE".to_string(), "stale-parent".to_string());
+  agent_env.insert(charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string());
+  startup.insert(AgentBaseEnvironment { values: agent_env })?;
   startup.insert(BackendPool::default())?;
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
     .ancestors()
@@ -1497,7 +1511,12 @@ cat <<'CB_RESULT'
     environment.get("session").and_then(charliebot_store::compact::CompactValue::as_str),
     Some("environment-session")
   );
-  assert_eq!(environment.get("path").and_then(charliebot_store::compact::CompactValue::as_str), Some("/usr/bin"));
+  // The child inherits the agent environment's PATH unchanged; no session-specific directory is prepended.
+  let inherited_path = features.startup.require::<AgentBaseEnvironment>()?.values["PATH"].clone();
+  assert_eq!(
+    environment.get("path").and_then(charliebot_store::compact::CompactValue::as_str),
+    Some(inherited_path.as_str())
+  );
   assert_eq!(
     environment.get("ceiling").and_then(charliebot_store::compact::CompactValue::as_str),
     Some(home.to_string_lossy().as_ref())

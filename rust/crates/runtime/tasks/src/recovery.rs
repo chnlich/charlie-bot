@@ -5,9 +5,7 @@
 //! are recovered; pending inputs dispatch. A replay step whose owning task has not landed fails the pass with an error
 //! that names the owner; the call sites are listed in `README.md`.
 
-use std::collections::BTreeMap;
-#[cfg(feature = "test-hooks")]
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
@@ -349,8 +347,9 @@ enum WalkEntry {
 /// controllers mark their interrupted state first.
 ///
 /// A pass that runs to its end logs `task_tree_recovery_phases`, the milliseconds of each phase in run order: the
-/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the fact scans, the node
-/// passes and the marker write; and the whole-log reads and run-record reads the node passes made. Three fields split the
+/// sequence controllers' reconcile, the session listing, the skip checks, the absence proofs, the fact scans with their
+/// seals, the node passes and the marker write; the whole-log reads and run-record reads the node passes made; and
+/// `recipient_fact_scans`, the report recipients outside the passes that the fact scans covered. Three fields split the
 /// node passes by step ([`StepTotals`]): `node_pass_step_ms`, `node_pass_step_file_reads` and
 /// `node_pass_step_file_read_bytes`. A run follow that an earlier pass started in the background can read while a later
 /// pass runs; its reads count toward that later pass's running step.
@@ -472,26 +471,58 @@ pub async fn reconcile_task_tree(
   let Some(scans) = scans else {
     return Ok(counters);
   };
+  // Every scan is sealed before the first pass, so a pass that reads another node's facts answers from that node's
+  // scan. A read that failed, or a scan that changed under its read, seals nothing. That node's pass then reads its
+  // files itself and fails the node on an error that persists.
+  let candidate_ids: HashSet<&str> = candidates.iter().map(|candidate| candidate.session_id.as_str()).collect();
+  let mut recipients = BTreeSet::new();
+  for (candidate, scan) in candidates.iter().zip(scans) {
+    let sealed = scan.map(|scan| match scan? {
+      Some(scan) => {
+        let others = scan.report_recipients().filter(|recipient| !candidate_ids.contains(recipient));
+        recipients.extend(others.map(str::to_string));
+        features.store.seal_scanned_facts(&candidate.session_id, scan)
+      }
+      None => Ok(false),
+    });
+    if let Some(Err(error)) = sealed {
+      tracing::warn!(target: "charliebot_tasks", session_id = %candidate.session_id, error = %error, "task_recovery_read_ahead_failed");
+    }
+  }
+  // A pass checks each close report against its recipient's facts, so the recipients that no pass covers are scanned
+  // and sealed here as well. A recipient that no scan seals is read whole by the pass that checks it, and that pass
+  // meets any error there.
+  let recipients: Vec<String> = recipients.into_iter().collect();
+  let recipient_bytes = recipients
+    .iter()
+    .map(|recipient| std::fs::metadata(features.store.chat_events_path(recipient)).map_or(0, |metadata| metadata.len()))
+    .collect();
+  let recipient_features = Arc::clone(features);
+  let (recipients, recipient_scans) = blocking_batch(recipients, Some(recipient_bytes), &stop, move |recipient| {
+    recipient_features.store.scan_live_facts(recipient)
+  })
+  .await?;
+  let Some(recipient_scans) = recipient_scans else {
+    return Ok(counters);
+  };
+  for (recipient, scan) in recipients.iter().zip(recipient_scans) {
+    let sealed =
+      scan.and_then(|scan| scan.map_or(Ok(false), |scan| features.store.seal_scanned_facts(recipient, scan)));
+    if let Err(error) = sealed {
+      tracing::warn!(target: "charliebot_tasks", session_id = %recipient, error = %error, "task_recovery_recipient_scan_failed");
+    }
+  }
+  let recipient_fact_scans = recipients.len();
   let fact_scans_ms = phase_ms();
   let file_reads_before_passes = features.store.history_work().file_reads;
   let run_record_reads_before_passes = features.store.run_record_read_count();
   let mut step_totals = StepTotals::default();
-  for ((candidate, no_node), scan) in candidates.into_iter().zip(no_nodes).zip(scans) {
+  for (candidate, no_node) in candidates.into_iter().zip(no_nodes) {
     if stop.is_cancelled() {
       return Ok(counters);
     }
     let session_id = candidate.session_id;
     let mut pass_timer = NodePassTimer::start(&features.store, session_id.clone());
-    // A read that failed, or a scan that changed under its read, seals nothing. The pass then reads the session's files
-    // itself and fails the node on an error that persists.
-    let sealed = scan.map(|scan| match scan? {
-      Some(scan) => features.store.seal_scanned_facts(&session_id, scan),
-      None => Ok(false),
-    });
-    pass_timer.steps.end("seal_scanned_facts");
-    if let Some(Err(error)) = sealed {
-      tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_read_ahead_failed");
-    }
     let result = match no_node {
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
       Ok(false) => {
@@ -534,6 +565,7 @@ pub async fn reconcile_task_tree(
     marker_ms,
     node_pass_file_reads,
     node_pass_run_record_reads,
+    recipient_fact_scans,
     node_pass_step_ms = %node_pass_step_ms,
     node_pass_step_file_reads = %node_pass_step_file_reads,
     node_pass_step_file_read_bytes = %node_pass_step_file_read_bytes,

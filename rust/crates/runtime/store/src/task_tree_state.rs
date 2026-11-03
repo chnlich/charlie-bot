@@ -219,6 +219,8 @@ pub(crate) struct TreeIndex {
   pub(crate) revision: String,
   pub(crate) derived_archived_ids: Arc<Vec<String>>,
   pub(crate) archive_by_id: HashMap<String, bool>,
+  /// Identifies this build, so a reader can tell one index apart from a later build that carries the same revision.
+  pub(crate) build_id: u64,
 }
 
 /// The most ancestors one chain walk follows before it reports the chain as overlong.

@@ -110,18 +110,21 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
   if (messages.length === 0) throw new Error('the window holds no parent-to-child messages');
 
   const parentEvents = new Map();
-  const filesByMessage = new Map();
   const packets = [];
-  const packetOfMessage = new Map();
   for (const [child, group] of groupBy(messages, (message) => message.target)) {
     const meta = sessions.get(child);
     const parent = meta.task_parent_id;
     if (!parentEvents.has(parent)) parentEvents.set(parent, parentEventsOf({ sessionsRoot, parent }));
-    const items = group.map((message) => {
-      const files = mergeFiles({ text: message.content, sender: parent, child, root: sessionsRoot, home: homeDir });
-      filesByMessage.set(message.event_id, files);
-      return { kind: 'message', event_id: message.event_id, sent_at: message.sent_at, content: message.content, files };
-    });
+    for (const message of group) {
+      message.files = mergeFiles({ text: message.content, sender: parent, child, root: sessionsRoot, home: homeDir });
+    }
+    const items = group.map((message) => ({
+      kind: 'message',
+      event_id: message.event_id,
+      sent_at: message.sent_at,
+      content: message.content,
+      files: message.files,
+    }));
     items.push(...reportsFrom({ parentEvents: parentEvents.get(parent), child, fromMs, toMs: reportsUntilMs }));
     const childPackets = buildChildPackets({
       child,
@@ -130,9 +133,12 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
       parentName: sessions.get(parent).name ?? null,
       items,
     });
+    // One event can reach several children, so a message's packet is recorded on the message itself, within its
+    // child's group; a map keyed by event id alone would point at the last child's packet.
+    const messageById = new Map(group.map((message) => [message.event_id, message]));
     for (const packet of childPackets) {
       packets.push(packet);
-      for (const id of packet.messageIds) packetOfMessage.set(id, packet.name);
+      for (const id of packet.messageIds) messageById.get(id).packet = packet.name;
     }
   }
   for (const packet of packets) {
@@ -170,9 +176,8 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
     [...judgments].map(([name, saved]) => [name, new Map(saved.answers.map((item) => [item.id, item]))]),
   );
   const records = messages.map((message) => {
-    const packet = packetOfMessage.get(message.event_id);
-    const answer = answerMaps.get(packet).get(message.event_id);
-    const files = filesByMessage.get(message.event_id);
+    const answer = answerMaps.get(message.packet).get(message.event_id);
+    const files = message.files;
     return {
       event_id: message.event_id,
       sender: message.sender,
@@ -181,7 +186,7 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
       target_profile: message.target_meta.profile ?? null,
       target_created_at: message.target_meta.created_at ?? null,
       sent_at: message.sent_at,
-      packet,
+      packet: message.packet,
       message_chars: charCount(message.content),
       files: files.map(({ path: filePath, state, chars }) => ({ path: filePath, state, chars: chars ?? null })),
       has_file: files.some(isMerged),

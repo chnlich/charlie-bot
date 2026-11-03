@@ -30,9 +30,9 @@ use crate::task_reparent;
 pub(crate) use crate::task_tree_state::IdentityStage;
 pub(crate) use crate::task_tree_state::{
   CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
-  EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
+  CachedTreePage, EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
 };
-pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity};
+pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity, TaskTreeRow};
 use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, task_below_caller};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -241,22 +241,27 @@ impl PromptScope {
   }
 }
 
-/// One child row of a task-tree page: the node's derived facts, read in one pass over the history.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaskTreeRow {
-  pub session_id: String,
-  pub task_state: String,
-  pub work_state: String,
-  pub archived: bool,
-  pub child_count: usize,
-  pub open_descendant_count: usize,
-  pub running_descendant_count: usize,
-}
-
 /// One page of a parent's child rows, and whether a further matching row follows them.
 pub struct TaskTreePage {
   pub rows: Vec<TaskTreeRow>,
   pub has_more: bool,
+}
+
+/// The inputs that name one tree page: the index build, the run-record generation and the request's page fields.
+#[derive(Clone, Copy)]
+struct TreePageKey<'a> {
+  build_id: u64,
+  records_generation: u64,
+  parent_id: Option<&'a str>,
+  include_archived: bool,
+  after: Option<&'a (UtcDateTime, String)>,
+  limit: usize,
+}
+
+/// The identity of one session's live history file, resolved from the open sessions directory.
+fn history_identity_at(sessions_dir: &fs::File, session_id: &str) -> StoreResult<Option<FileIdentity>> {
+  let relative = format!("{session_id}/{}/{}", layout::DATA_DIR_NAME, layout::CHAT_EVENTS_FILE_NAME);
+  FileIdentity::read_at(sessions_dir, &relative)
 }
 
 /// A shared task-tree index snapshot for read-only projections.
@@ -269,6 +274,11 @@ impl TaskTreeSnapshot {
   /// The revision that binds task-tree page cursors to this snapshot.
   pub fn revision(&self) -> &str {
     &self.index.revision
+  }
+
+  /// Identifies the index build this snapshot was taken from.
+  pub fn build_id(&self) -> u64 {
+    self.index.build_id
   }
 
   /// Return one task's metadata from the snapshot.
@@ -295,6 +305,9 @@ pub(crate) struct NodeReads<'a> {
   identities: HashMap<String, Option<FileIdentity>>,
   states: HashMap<String, TaskState>,
   activities: HashMap<String, TaskTreeActivity>,
+  /// Whether a verdict judged a process through `/proc`. Such a verdict depends on state no file records, so the
+  /// page it belongs to cannot be served from the memo.
+  proc_dependent: bool,
 }
 
 impl<'a> NodeReads<'a> {
@@ -305,7 +318,20 @@ impl<'a> NodeReads<'a> {
       identities: HashMap::new(),
       states: HashMap::new(),
       activities: HashMap::new(),
+      proc_dependent: false,
     }
+  }
+
+  /// Take identities already read for this pass, so the page reads no history twice.
+  fn seed_identities(&mut self, ids: Vec<String>, identities: Vec<Option<FileIdentity>>) {
+    for (session_id, identity) in ids.into_iter().zip(identities) {
+      self.identities.entry(session_id).or_insert(identity);
+    }
+  }
+
+  /// The histories this pass read, with the identity each was read at.
+  fn identities_read(&self) -> Vec<(String, Option<FileIdentity>)> {
+    self.identities.iter().map(|(session_id, identity)| (session_id.clone(), *identity)).collect()
   }
 
   fn identity(&mut self, session_id: &str) -> StoreResult<Option<FileIdentity>> {
@@ -355,6 +381,7 @@ impl<'a> NodeReads<'a> {
       Some(activity) => activity,
       None => {
         let (activity, read_proc) = self.derive_activity(session_id, identity)?;
+        self.proc_dependent |= read_proc;
         if !read_proc {
           self.store.memoize_activity(session_id, identity, self.generation, activity.clone());
         }
@@ -967,7 +994,8 @@ impl Store {
   /// whose root holds thousands of sessions, the whole list costs about 5 microseconds per row. A 100-row page of
   /// 7,160 rows therefore paid for the 7,060 it truncated away.
   ///
-  /// The rows are computed under `tree_rows_lock`, which serializes page computations.
+  /// The rows are computed under `tree_rows_lock`, which serializes page computations. A page whose stored
+  /// identities all still hold is served without that lock: it reads no history verdict, only the identities.
   pub fn task_tree_page(
     &self,
     snapshot: &TaskTreeSnapshot,
@@ -976,7 +1004,19 @@ impl Store {
     after: Option<(UtcDateTime, &str)>,
     limit: usize,
   ) -> StoreResult<TaskTreePage> {
+    let build_id = snapshot.build_id();
+    let records_generation = self.records_generation();
+    let after_key = after.map(|(created_at, session_id)| (created_at, session_id.to_string()));
+    let key =
+      TreePageKey { build_id, records_generation, parent_id, include_archived, after: after_key.as_ref(), limit };
+    if let Some(page) = self.memoized_tree_page(key)? {
+      return Ok(page);
+    }
     let _computing = self.tree_rows_lock.lock().expect("tree rows lock is not poisoned");
+    // Another request may have filled the memo while this one waited for the computation lock.
+    if let Some(page) = self.memoized_tree_page(key)? {
+      return Ok(page);
+    }
     #[cfg(test)]
     {
       let hook = self.tree_rows_hook.lock().expect("tree rows hook mutex is not poisoned").clone();
@@ -985,7 +1025,11 @@ impl Store {
       }
     }
     let mut reads = NodeReads::new(self);
+    let candidates = self.page_candidates(snapshot, parent_id, after, limit)?;
+    let identities = self.history_identities(&candidates)?;
+    reads.seed_identities(candidates, identities);
     let mut rows = Vec::new();
+    let mut has_more = false;
     for session_id in snapshot.child_ids(parent_id) {
       if let Some((after_time, after_id)) = after
         && (snapshot.meta(session_id)?.created_at, session_id.as_str()) <= (after_time, after_id)
@@ -997,11 +1041,83 @@ impl Store {
         continue;
       }
       if rows.len() == limit {
-        return Ok(TaskTreePage { rows, has_more: true });
+        has_more = true;
+        break;
       }
       rows.push(row);
     }
-    Ok(TaskTreePage { rows, has_more: false })
+    // A run record written during the pass leaves the rows a mix of two verdicts; no memo entry names that page.
+    if self.records_generation() == records_generation && !reads.proc_dependent {
+      let (ids, identity_values) = reads.identities_read().into_iter().unzip();
+      *self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned") = Some(CachedTreePage {
+        build_id,
+        records_generation,
+        parent_id: parent_id.map(str::to_string),
+        include_archived,
+        after: after_key,
+        limit,
+        ids: Arc::new(ids),
+        identity_values,
+        rows: rows.clone(),
+        has_more,
+      });
+    }
+    Ok(TaskTreePage { rows, has_more })
+  }
+
+  /// The child ids a page can return, in order: one more than `limit` names the row that proves `has_more`.
+  ///
+  /// The archived filter runs on a computed row, so this list may hold ids the page drops; the row pass reads any
+  /// further id it needs one stat at a time.
+  fn page_candidates(
+    &self,
+    snapshot: &TaskTreeSnapshot,
+    parent_id: Option<&str>,
+    after: Option<(UtcDateTime, &str)>,
+    limit: usize,
+  ) -> StoreResult<Vec<String>> {
+    let mut ids = Vec::with_capacity(limit.saturating_add(1));
+    for session_id in snapshot.child_ids(parent_id) {
+      if let Some((after_time, after_id)) = after
+        && (snapshot.meta(session_id)?.created_at, session_id.as_str()) <= (after_time, after_id)
+      {
+        continue;
+      }
+      ids.push(session_id.clone());
+      if ids.len() == limit.saturating_add(1) {
+        break;
+      }
+    }
+    Ok(ids)
+  }
+
+  /// The stored page for `key`, when every history it read still has the identity it was read at.
+  ///
+  /// The identity read is the whole cost of a hit: the rows, their activity and their lifecycle states were derived
+  /// from exactly these histories, and the key's generations name every metadata and run-record write since.
+  fn memoized_tree_page(&self, key: TreePageKey<'_>) -> StoreResult<Option<TaskTreePage>> {
+    let (ids, identity_values, rows, has_more) = {
+      let memo = self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned");
+      let Some(memo) = memo.as_ref() else { return Ok(None) };
+      if memo.build_id != key.build_id
+        || memo.records_generation != key.records_generation
+        || memo.parent_id.as_deref() != key.parent_id
+        || memo.include_archived != key.include_archived
+        || memo.after.as_ref() != key.after
+        || memo.limit != key.limit
+      {
+        return Ok(None);
+      }
+      (Arc::clone(&memo.ids), memo.identity_values.clone(), memo.rows.clone(), memo.has_more)
+    };
+    let current = self.history_identities(ids.as_slice())?;
+    if current != identity_values {
+      return Ok(None);
+    }
+    if self.records_generation() != key.records_generation {
+      return Ok(None);
+    }
+    Ok(Some(TaskTreePage { rows, has_more }))
   }
 
   fn tree_row(&self, index: &TreeIndex, reads: &mut NodeReads, session_id: &str) -> StoreResult<TaskTreeRow> {
@@ -1037,15 +1153,17 @@ impl Store {
     #[cfg(test)]
     self.run_identity_hook(session_id, IdentityStage::BeforeStat);
     let identity = match self.sessions_dir_handle()? {
-      Some(sessions_dir) => {
-        let relative = format!("{session_id}/{}/{}", layout::DATA_DIR_NAME, layout::CHAT_EVENTS_FILE_NAME);
-        FileIdentity::read_at(sessions_dir, &relative)?
-      }
+      Some(sessions_dir) => history_identity_at(&sessions_dir, session_id)?,
       None => None,
     };
     #[cfg(test)]
     self.run_identity_hook(session_id, IdentityStage::AfterStat);
     Ok(identity)
+  }
+
+  /// The history identities of `ids`, in the argument order.
+  fn history_identities(&self, ids: &[String]) -> StoreResult<Vec<Option<FileIdentity>>> {
+    ids.iter().map(|session_id| self.history_identity(session_id)).collect()
   }
 
   #[cfg(test)]
@@ -2109,6 +2227,7 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     revision: String::new(),
     derived_archived_ids: Arc::new(Vec::new()),
     archive_by_id: HashMap::new(),
+    build_id: store.next_tree_index_build_id.fetch_add(1, Ordering::Relaxed),
   };
   let mut memo = HashMap::new();
   let mut structural = Vec::with_capacity(index.metas.len());
@@ -4272,6 +4391,58 @@ pub(crate) mod tests {
     }
     *store.tree_rows_hook.lock().unwrap() = None;
     assert_eq!(peak.load(Ordering::SeqCst), 1, "concurrent tree requests share one computation at a time");
+  }
+
+  #[tokio::test]
+  async fn a_repeat_tree_page_serves_the_stored_rows_until_an_input_moves() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "memo-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "memo-child", Some(&root.id), TaskProfile::Manager).await;
+
+    let first = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    let calls = store.task_tree_activity_call_count();
+    let second = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert_eq!(second.rows, first.rows);
+    assert_eq!(
+      store.task_tree_activity_call_count(),
+      calls,
+      "a repeat page serves the stored rows without deriving their activity again"
+    );
+
+    append(&store, &child.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+    let after_append =
+      store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert_eq!(after_append.rows[0].task_state, "completed", "a changed history identity recomputes the page");
+
+    // A rebuild can carry the same revision while a metadata-derived field moved, so the build bounds the memo.
+    store.invalidate_tree_index();
+    let calls = store.task_tree_activity_call_count();
+    store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert!(store.task_tree_activity_call_count() > calls, "a new index build computes the page again");
+  }
+
+  #[tokio::test]
+  async fn a_page_whose_activity_read_proc_is_not_served_from_the_memo() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "proc-root", None, TaskProfile::Manager).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &node.id, queued_run(&node.id, "live"), None).await.unwrap();
+    drop(guard);
+    let pid = std::process::id();
+    let pid_start = charliebot_core::proc_identity::read_pid_stat(pid).unwrap().pid_start;
+    store.record_launch(&node.id, "live", pid, &pid_start).await.unwrap();
+
+    let first = store.task_tree_page(&store.task_tree_snapshot().unwrap(), None, true, None, 100).unwrap();
+    assert_eq!(first.rows[0].work_state, "running");
+    let calls = store.task_tree_activity_call_count();
+    let second = store.task_tree_page(&store.task_tree_snapshot().unwrap(), None, true, None, 100).unwrap();
+    assert_eq!(second.rows, first.rows);
+    assert!(
+      store.task_tree_activity_call_count() > calls,
+      "a verdict judged through /proc depends on no file, so the page is derived again"
+    );
   }
 
   #[tokio::test]

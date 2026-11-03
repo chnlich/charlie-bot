@@ -34,6 +34,7 @@ use crate::streaming::StreamingManager;
 use crate::task_tree_state::IdentityHook;
 use crate::task_tree_state::{
   CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
+  CachedTreePage,
 };
 use crate::{ControlGuard, StoreError, StoreResult};
 
@@ -344,7 +345,7 @@ impl Store {
 pub struct Store {
   pub(crate) cfg: CharlieBotConfig,
   /// The open sessions directory that anchors each history-identity read to a shorter path walk.
-  sessions_dir: OnceLock<fs::File>,
+  sessions_dir: OnceLock<Arc<fs::File>>,
   pub(crate) slots: Vec<MetadataSlot>,
   pub(crate) account_labels: Arc<dyn AccountLabelKeeper>,
   pub(crate) anchor_reconciler: Arc<dyn AnchorFieldReconciler>,
@@ -413,7 +414,12 @@ pub struct Store {
   pub(crate) thinking_state: ThinkingState,
   pub(crate) task_tree_index: StdMutex<Option<CachedTreeIndex>>,
   pub(crate) task_tree_index_builds: AtomicU64,
+  /// The identity the next task-tree index build takes, so a reader can tell two builds apart.
+  pub(crate) next_tree_index_build_id: AtomicU64,
   pub(crate) task_tree_generation: AtomicU64,
+  /// The last tree page computed, kept while the index build, the run-record generation and every history it read
+  /// still hold.
+  pub(crate) tree_page_memo: StdMutex<Option<CachedTreePage>>,
   #[cfg(any(test, feature = "write-faults"))]
   pub(crate) write_faults: Arc<crate::write_fault_types::WriteFaults>,
 }
@@ -502,7 +508,9 @@ impl Store {
       thinking_state: ThinkingState::default(),
       task_tree_index: StdMutex::new(None),
       task_tree_index_builds: AtomicU64::new(0),
+      next_tree_index_build_id: AtomicU64::new(0),
       task_tree_generation: AtomicU64::new(0),
+      tree_page_memo: StdMutex::new(None),
       #[cfg(any(test, feature = "write-faults"))]
       write_faults: Arc::default(),
     })
@@ -517,9 +525,9 @@ impl Store {
   ///
   /// The handle is opened once and held for the store's life. A read through it resolves the current
   /// directory entry, so a replaced history file still reads its new inode.
-  pub(crate) fn sessions_dir_handle(&self) -> StoreResult<Option<&fs::File>> {
+  pub(crate) fn sessions_dir_handle(&self) -> StoreResult<Option<Arc<fs::File>>> {
     if let Some(handle) = self.sessions_dir.get() {
-      return Ok(Some(handle));
+      return Ok(Some(Arc::clone(handle)));
     }
     let dir = self.cfg.sessions_dir();
     let handle = match fs::File::open(&dir) {
@@ -527,7 +535,7 @@ impl Store {
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", dir.display()))),
     };
-    Ok(Some(self.sessions_dir.get_or_init(|| handle)))
+    Ok(Some(Arc::clone(self.sessions_dir.get_or_init(|| Arc::new(handle)))))
   }
 
   /// The typed configuration this store was built from.

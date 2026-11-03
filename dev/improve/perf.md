@@ -71,4 +71,4 @@ A reviewer checks the numbers from the line alone, without a rerun.
 Write that the absolute values differ from production, because the host and the content differ.
 Compare the before and after values only within one round, so that no reader sets them against production numbers.
 
-The raw measurement logs stay in the round's evidence directory from the landing protocol; their links go only into the final message.
+The raw measurement logs stay in the round's evidence directory from the landing protocol; Step 9 of the landing protocol carries them to the user.

@@ -58,5 +58,5 @@ The pair at each width shows the change to the user.
 Write in the pull request's `## Evidence` section what the screenshots show, in words.
 For each width, name the defect that the before screenshot shows and the state that the after screenshot shows.
 Both sides come from one round on one server and one mock home, so the pair at each width shows only the change.
-The four screenshots stay in the round's evidence directory from the landing protocol; their links go only into the final message.
+The four screenshots stay in the round's evidence directory from the landing protocol; Step 9 of the landing protocol carries them to the user.
 The reviewer judges the change from the words, so the words must say what each screenshot shows.

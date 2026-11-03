@@ -6,13 +6,13 @@ use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use charliebot_store::metadata::{SessionMetadata, SessionStatus};
 use charliebot_store::{Store, StoreResult};
@@ -50,11 +50,17 @@ struct FileSignature {
 /// which a signature read resolves from that directory's open handle.
 ///
 /// `below_sessions` is None when a store's sessions directory does not contain the path, so the read
-/// falls back to the path form.
+/// falls back to the path form. `data_dir` and `file_name` split that relative path at its last
+/// component, so a signature read can resolve the file from the session's `data` directory handle.
+/// `data_handle` is that handle, opened on the first signature read and shared by every clone of this
+/// entry, so a repeat query re-reads the same watched files without a lookup.
 #[derive(Clone)]
 struct WatchedFile {
   path: PathBuf,
   below_sessions: Option<CString>,
+  data_dir: Option<CString>,
+  file_name: Option<CString>,
+  data_handle: Arc<OnceLock<Option<Arc<File>>>>,
 }
 
 /// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
@@ -296,9 +302,13 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 /// threads. The pool lives for the process: a repeat query re-checks one `stat` per watched file, 200 on the mock
 /// home, and starting that many threads costs more than the reads they share.
 ///
-/// When `sessions_dir` is open, a read resolves the file below it instead of walking the home's whole path to the
-/// session's `data` directory, which is most of the route's kernel time on a repeat query.
-fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File>>) -> Vec<io::Result<FileSignature>> {
+/// When `sessions_dir` is open, a read resolves the file below it instead of walking the home's whole path. The
+/// signature path also holds the session's `data` directory open, so a read walks one name rather than three path
+/// components, which is most of the route's kernel time on a repeat query.
+fn file_signatures(
+  paths: &Arc<Vec<WatchedFile>>,
+  sessions_dir: Option<&Arc<SessionsDir>>,
+) -> Vec<io::Result<FileSignature>> {
   let pool = &*SIGNATURE_POOL;
   if paths.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
     return paths.iter().map(|file| file_signature(file, sessions_dir.map(Arc::as_ref))).collect();
@@ -330,18 +340,28 @@ fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File
 }
 
 /// One watched file's identity, resolved from the open sessions directory when the file lies below it.
-fn file_signature(file: &WatchedFile, sessions_dir: Option<&File>) -> io::Result<FileSignature> {
-  match (sessions_dir, &file.below_sessions) {
-    (Some(dir), Some(relative)) => file_signature_at(dir, relative),
-    _ => file_signature_unlogged(&file.path),
+///
+/// A file below the sessions directory resolves from its session's open `data` directory when that handle is
+/// present, and from the sessions directory's own handle otherwise. A `data` directory the store rotates a chat log
+/// out of keeps its handle, so the file name still resolves to the live log.
+fn file_signature(file: &WatchedFile, sessions_dir: Option<&SessionsDir>) -> io::Result<FileSignature> {
+  let (Some(sessions), Some(relative)) = (sessions_dir, &file.below_sessions) else {
+    return file_signature_unlogged(&file.path);
+  };
+  if let (Some(data_dir), Some(file_name)) = (&file.data_dir, &file.file_name) {
+    let handle = file.data_handle.get_or_init(|| open_dir_at(&sessions.handle, data_dir).map(Arc::new));
+    if let Some(handle) = handle {
+      return file_signature_at(handle, file_name);
+    }
   }
+  file_signature_at(&sessions.handle, relative)
 }
 
 /// One chunk of one signature batch: the shared paths, the sessions directory handle, the chunk's half-open range,
 /// and its reply channel.
 struct SignatureJob {
   paths: Arc<Vec<WatchedFile>>,
-  sessions_dir: Option<Arc<File>>,
+  sessions_dir: Option<Arc<SessionsDir>>,
   start: usize,
   end: usize,
   reply: Sender<(usize, Vec<io::Result<FileSignature>>)>,
@@ -393,28 +413,49 @@ static SIGNATURE_POOL: LazyLock<SignaturePool> = LazyLock::new(SignaturePool::st
 /// A signature read resolves a session's file below this handle, so it walks only the session's own components.
 /// The store holds the same kind of handle for its identity reads; this one keeps search's reads off the home's
 /// path prefix. A directory that is not there answers None, and the batch reads by path instead.
-/// The sessions directory's path and its open handle, so a store built on another home opens its own.
-type SessionsDirMemo = Mutex<Option<(PathBuf, Arc<File>)>>;
+struct SessionsDir {
+  path: PathBuf,
+  handle: File,
+}
 
-static SESSIONS_DIR: LazyLock<SessionsDirMemo> = LazyLock::new(|| Mutex::new(None));
+static SESSIONS_DIR: LazyLock<Mutex<Option<Arc<SessionsDir>>>> = LazyLock::new(|| Mutex::new(None));
 
-fn sessions_dir_handle(dir: &Path) -> Option<Arc<File>> {
+fn sessions_dir_handle(dir: &Path) -> Option<Arc<SessionsDir>> {
   let mut memo = SESSIONS_DIR.lock().expect("the sessions directory memo mutex is not poisoned");
-  if let Some((path, handle)) = memo.as_ref()
-    && path == dir
+  if let Some(sessions) = memo.as_ref()
+    && sessions.path == dir
   {
-    return Some(Arc::clone(handle));
+    return Some(Arc::clone(sessions));
   }
-  let handle = Arc::new(File::open(dir).ok()?);
-  *memo = Some((dir.to_path_buf(), Arc::clone(&handle)));
-  Some(handle)
+  let handle = File::open(dir).ok()?;
+  let sessions = Arc::new(SessionsDir { path: dir.to_path_buf(), handle });
+  *memo = Some(Arc::clone(&sessions));
+  Some(sessions)
 }
 
 /// The watched file at `path`, with its path below `sessions_dir` when it has one.
 fn watched_file(sessions_dir: &Path, path: PathBuf) -> WatchedFile {
   let below_sessions =
     path.strip_prefix(sessions_dir).ok().and_then(|relative| CString::new(relative.as_os_str().as_bytes()).ok());
-  WatchedFile { path, below_sessions }
+  let (data_dir, file_name) = below_sessions.as_ref().and_then(split_last_component).unzip();
+  WatchedFile { path, below_sessions, data_dir, file_name, data_handle: Arc::new(OnceLock::new()) }
+}
+
+/// The parent and last components of a relative path, `None` for a path that names one component only.
+fn split_last_component(relative: &CString) -> Option<(CString, CString)> {
+  let bytes = relative.as_bytes();
+  let cut = bytes.iter().rposition(|byte| *byte == b'/')?;
+  Some((CString::new(&bytes[..cut]).ok()?, CString::new(&bytes[cut + 1..]).ok()?))
+}
+
+/// The directory at `relative`, resolved below the open directory `dir`.
+fn open_dir_at(dir: &File, relative: &CString) -> Option<File> {
+  let fd =
+    unsafe { libc::openat(dir.as_raw_fd(), relative.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+  if fd < 0 {
+    return None;
+  }
+  Some(unsafe { File::from_raw_fd(fd) })
 }
 
 fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
@@ -621,7 +662,7 @@ mod tests {
       paths.push(super::watched_file(&sessions_dir, path));
     }
     let paths = Arc::new(paths);
-    let handle = Arc::new(fs::File::open(&sessions_dir).unwrap());
+    let handle = super::sessions_dir_handle(&sessions_dir).expect("the sessions directory opens");
     let batch = super::file_signatures(&paths, Some(&handle));
     assert_eq!(batch.len(), paths.len());
     for (index, (answer, file)) in batch.iter().zip(paths.iter()).enumerate() {
@@ -633,6 +674,29 @@ mod tests {
       assert_eq!(signature.size, (format!("event {index}\n").len() as u64), "path {index} answers for itself");
       assert_eq!(*signature, super::file_signature_unlogged(&file.path).unwrap(), "path {index} matches a direct read");
     }
+  }
+
+  /// A signature read resolves the file below the session's open `data` directory, so a chat log the store
+  /// rotates into `data/archives` and replaces under the same name is a new identity, never the archived one.
+  #[test]
+  fn data_dir_handle_reads_the_file_the_name_names() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions_dir = home.path().join("sessions");
+    let data = sessions_dir.join("session-a").join("data");
+    fs::create_dir_all(&data).unwrap();
+    let path = data.join("chat_events.jsonl");
+    fs::write(&path, "first\n").unwrap();
+    let watched = super::watched_file(&sessions_dir, path.clone());
+    let sessions = super::sessions_dir_handle(&sessions_dir).expect("the sessions directory opens");
+    let first = super::file_signature(&watched, Some(&sessions)).expect("the written file reads");
+    assert_eq!(first, super::file_signature_unlogged(&path).unwrap(), "the handle read matches a direct read");
+
+    fs::create_dir_all(data.join("archives")).unwrap();
+    fs::rename(&path, data.join("archives").join("chat_events.1.jsonl")).unwrap();
+    fs::write(&path, "second, longer\n").unwrap();
+    let second = super::file_signature(&watched, Some(&sessions)).expect("the replaced file reads");
+    assert_ne!(second.inode, first.inode, "a replacement inside data is a new identity");
+    assert_eq!(second, super::file_signature_unlogged(&path).unwrap(), "the replaced file reads by name");
   }
 
   struct TestLabels;

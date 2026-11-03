@@ -439,6 +439,33 @@ const ACCEPTING_SERVER: &str = "exit 0\n";
 const REFUSING_SERVER: &str =
   "printf 'charliebot-server: unknown config key server.enable_local_work_guard: unknown field\\n' >&2\nexit 1\n";
 
+/// The file the rehearsal fixture's new commit adds.
+const FIXTURE_NEW_FILE: &str = "rehearsal-fixture";
+
+/// A `charliebot-server` whose configuration check needs a file only its own commit adds: the shape of the agent gh
+/// wrapper check, which refused a checkout at the old commit.
+fn server_needing_the_new_file() -> String {
+  format!(
+    r#"if [ ! -f "$CHARLIEBOT_REPO_ROOT/{FIXTURE_NEW_FILE}" ]; then
+  echo "charliebot-server: the agent gh wrapper must exist at $CHARLIEBOT_REPO_ROOT/{FIXTURE_NEW_FILE}" >&2
+  exit 1
+fi
+"#
+  )
+}
+
+/// A `charliebot-server` that refuses a checkout carrying the new commit's file: the old release's check reads the
+/// checkout at its own commit.
+fn server_needing_the_old_checkout() -> String {
+  format!(
+    r#"if [ -f "$CHARLIEBOT_REPO_ROOT/{FIXTURE_NEW_FILE}" ]; then
+  echo "charliebot-server: the old release read a checkout at the new commit" >&2
+  exit 1
+fi
+"#
+  )
+}
+
 /// The rehearsal script under test, in this repository.
 fn rehearsal_script() -> PathBuf {
   harness::repo_root().join("scripts/release/switch-rehearsal.sh")
@@ -769,6 +796,37 @@ fn test_rehearsal_config_check_stops_at_a_key_the_old_release_refuses_and_names_
     run.describe()
   );
   assert!(!run.stderr.contains("start the private tmux server"), "the rehearsal passed the check: {}", run.describe());
+}
+
+#[test]
+fn test_rehearsal_config_check_reads_each_releases_own_checkout() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("tmux", TMUX_STOP);
+  let home = live_home(&sandbox, false);
+  let new_release = sandbox.dir("new-release");
+  write_release(&new_release, &server_needing_the_new_file());
+  allow_free_port(&new_release);
+  let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
+
+  // The fixture's new commit adds rehearsal-fixture. The new release's check needs it, and the old release's check
+  // refuses a checkout that carries it, so each check must read a checkout at its own commit.
+  let run = rehearsal_preflight(
+    &sandbox,
+    &home,
+    &new_release,
+    &server_needing_the_old_checkout(),
+    &script,
+    (old_commit.clone(), new_commit.clone()),
+  );
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(&format!("CONFIG old: {old_commit} accepts")), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("CONFIG new: {new_commit} accepts")), "{}", run.describe());
+  assert!(
+    run.stderr.contains("start the private tmux server"),
+    "the rehearsal stopped before tmux: {}",
+    run.describe()
+  );
 }
 
 #[test]

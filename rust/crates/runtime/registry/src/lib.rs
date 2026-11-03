@@ -9,6 +9,7 @@
 pub mod backend;
 pub mod caller;
 pub mod context;
+pub mod draft;
 pub mod lifespan;
 pub mod midturn_delivery;
 pub mod pages;

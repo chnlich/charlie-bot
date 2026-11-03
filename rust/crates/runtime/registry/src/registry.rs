@@ -27,6 +27,7 @@ use serde_json::{Map, Value};
 use tokio::io::AsyncWrite;
 use tokio::sync::watch;
 
+use crate::draft::DraftPlatformFactory;
 use crate::route_claims::RouteClaims;
 use crate::sequence::{SequenceBinding, SequenceController};
 use crate::sidebar::SidebarContribution;
@@ -161,6 +162,8 @@ pub struct Registry {
   pub(crate) backend_reading_limits: Vec<BackendReadingLimitsRegistration>,
   pub(crate) usage_resolvers: Ledger<UsageResolverConstructor>,
   pub(crate) sequence_controllers: Ledger<Arc<dyn SequenceController>>,
+  /// Each platform's draft support, keyed by the platform name its drafts carry.
+  pub(crate) draft_platforms: Ledger<DraftPlatformFactory>,
   /// The one reader of a session's plan registry, which `features/artifacts` registers.
   pub(crate) plan_registry: Ledger<PlanRegistryFn>,
   /// The one reader of every open session's Waiting on you items, which `features/web_reply` registers.
@@ -220,6 +223,7 @@ impl Registry {
       backend_reading_limits,
       usage_resolvers,
       sequence_controllers,
+      draft_platforms,
       plan_registry,
       open_waiting_items,
       derived_waiting_items,
@@ -278,6 +282,7 @@ impl Registry {
     }
     append_ledger_inventory(&mut inventory, usage_resolvers);
     append_ledger_inventory(&mut inventory, sequence_controllers);
+    append_ledger_inventory(&mut inventory, draft_platforms);
     append_ledger_inventory(&mut inventory, plan_registry);
     append_ledger_inventory(&mut inventory, open_waiting_items);
     append_ledger_inventory(&mut inventory, derived_waiting_items);
@@ -1726,6 +1731,22 @@ impl Registry {
   /// The registered controllers in registration order.
   pub fn sequence_controllers(&self) -> impl Iterator<Item = &Arc<dyn SequenceController>> {
     self.sequence_controllers.values()
+  }
+
+  /// Register one platform's draft support. A repeated platform name fails.
+  pub fn draft_platform(&mut self, name: &'static str, factory: DraftPlatformFactory) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.draft_platforms.insert(package, name, factory)
+  }
+
+  /// The constructor of the platform registered under `name`, or `None` when no package registered it.
+  pub fn draft_platform_factory(&self, name: &str) -> Option<DraftPlatformFactory> {
+    self.draft_platforms.get(name).cloned()
+  }
+
+  /// The registered platform names in registration order.
+  pub fn draft_platform_names(&self) -> impl Iterator<Item = &'static str> {
+    self.draft_platforms.pairs().map(|(name, _)| name)
   }
 
   /// Whether a registered controller owns `meta`.

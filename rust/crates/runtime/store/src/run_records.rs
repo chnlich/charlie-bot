@@ -15,7 +15,6 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
 use charliebot_core::text_repr::{self, JsonStyle};
-use memmap2::Mmap;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, getpgid};
@@ -171,7 +170,7 @@ pub fn visit_events_from_end<T>(
 /// the first 256 bytes skips a line without parsing it. Each line's start is one backward `memrchr` from the
 /// previous line's start, so a walk that stops at a line leaves the older bytes unscanned.
 pub struct NewestFirstEvents<'k> {
-  map: Option<Mmap>,
+  map: Option<fsutil::FileBytes>,
   end: usize,
   keep_types: &'k [&'k str],
   pending: std::vec::IntoIter<Value>,
@@ -190,7 +189,7 @@ pub struct EventScanStats {
 impl<'k> NewestFirstEvents<'k> {
   /// Map `path` for a walk of the events `keep_types` names; a missing file has no events.
   pub fn open(path: &Path, keep_types: &'k [&'k str]) -> anyhow::Result<Self> {
-    let map = match fsutil::map_file(path) {
+    let map = match fsutil::read_or_map_file(path) {
       Ok(map) => map,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
       Err(error) => return Err(error).with_context(|| format!("opening event log {}", path.display())),

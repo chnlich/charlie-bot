@@ -5,7 +5,6 @@ use std::path::Path;
 use charliebot_core::fsutil;
 use charliebot_core::text_repr::{self, JsonStyle};
 use memchr::memchr_iter;
-use memmap2::Mmap;
 use serde::de::DeserializeSeed;
 use serde_json::Value;
 
@@ -110,8 +109,8 @@ pub(crate) fn read_file_lines(
 }
 
 /// Map one event log read-only; `None` covers a missing file and a file with no bytes.
-fn open_log_map(path: &Path) -> StoreResult<Option<Mmap>> {
-  match fsutil::map_file(path) {
+fn open_log_map(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
+  match fsutil::read_or_map_file(path) {
     Ok(map) => Ok(map),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
     Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),

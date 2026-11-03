@@ -48,17 +48,18 @@ type UsageParts = (Value, Value, Option<Map<String, Value>>);
 
 /// The newest usage in one rollout, read backwards from its last line. `None` when no line carries a token count.
 pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<RolloutUsage>> {
-  // An empty file has no mapping, and no line either.
-  let Some(mapping) = fsutil::map_file(path).with_context(|| format!("mapping rollout {}", path.display()))? else {
+  // An empty file has no bytes, and no line either.
+  let Some(bytes) = fsutil::read_or_map_file(path).with_context(|| format!("reading rollout {}", path.display()))?
+  else {
     return Ok(None);
   };
   let mut usage: Option<UsageParts> = None;
   let mut model: Option<String> = None;
-  let mut end = mapping.len();
+  let mut end = bytes.len();
   while end > 0 {
-    let start = memrchr(b'\n', &mapping[..end]).map_or(0, |newline| newline + 1);
+    let start = memrchr(b'\n', &bytes[..end]).map_or(0, |newline| newline + 1);
     if start < end {
-      inspect_rollout_line(&mapping[start..end], path, &mut usage, &mut model)?;
+      inspect_rollout_line(&bytes[start..end], path, &mut usage, &mut model)?;
       if usage.is_some() && model.is_some() {
         break;
       }

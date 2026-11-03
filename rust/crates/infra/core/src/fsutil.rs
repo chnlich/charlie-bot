@@ -1,7 +1,7 @@
 //! Atomic file publication and the read-only mapping that the log walkers scan backward.
 
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -118,7 +118,32 @@ pub fn page_bytes() -> u64 {
     .get()
 }
 
-/// Map `path` read-only, or return `None` when the file holds no bytes (an empty mapping is invalid).
+/// The size up to which [`read_or_map_file`] reads a file instead of mapping it.
+///
+/// A mapping costs an `mmap`, a fault per page touched and a `munmap`, and the two calls take the process's mapping lock
+/// for writing. The boot walk opens thousands of small logs from sixteen threads, so they queue on that lock; one read
+/// of a file this small copies less than the mapping costs.
+const READ_WHOLE_MAX_BYTES: u64 = 64 * 1024;
+
+/// A file's bytes: read into memory up to [`READ_WHOLE_MAX_BYTES`], mapped read-only above it.
+pub enum FileBytes {
+  Read(Vec<u8>),
+  Mapped(Mmap),
+}
+
+impl std::ops::Deref for FileBytes {
+  type Target = [u8];
+
+  fn deref(&self) -> &[u8] {
+    match self {
+      FileBytes::Read(bytes) => bytes,
+      FileBytes::Mapped(map) => map,
+    }
+  }
+}
+
+/// The bytes of `path`, or `None` when the file holds no bytes (an empty mapping is invalid). A file of up to
+/// [`READ_WHOLE_MAX_BYTES`] is read whole; a larger one is mapped read-only.
 ///
 /// A backward walk over a mapped log faults the pages it crosses, while a `read` per page pays one syscall per page
 /// and gets none of the kernel's readahead. On a cold copy of a large log that is the difference between seconds and
@@ -126,12 +151,18 @@ pub fn page_bytes() -> u64 {
 ///
 /// The mapping is safe against the writers these readers meet because they only append. A rotated log publishes
 /// through `rename` onto a new inode, and a truncating writer is not allowed here.
-pub fn map_file(path: &Path) -> io::Result<Option<Mmap>> {
-  let file = File::open(path)?;
-  if file.metadata()?.len() == 0 {
+pub fn read_or_map_file(path: &Path) -> io::Result<Option<FileBytes>> {
+  let mut file = File::open(path)?;
+  let len = file.metadata()?.len();
+  if len == 0 {
     return Ok(None);
+  }
+  if len <= READ_WHOLE_MAX_BYTES {
+    let mut bytes = Vec::with_capacity(usize::try_from(len).expect("a small file's length fits in usize"));
+    file.read_to_end(&mut bytes)?;
+    return Ok(Some(FileBytes::Read(bytes)));
   }
   // SAFETY: the log is append-only while mapped, as the doc comment above requires; no writer truncates it in place.
   let map = unsafe { Mmap::map(&file)? };
-  Ok(Some(map))
+  Ok(Some(FileBytes::Mapped(map)))
 }

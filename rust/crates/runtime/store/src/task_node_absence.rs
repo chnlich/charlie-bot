@@ -81,7 +81,7 @@ impl Store {
 
 /// Whether one event log names a task boundary or prompt-change event. A missing file holds none.
 fn file_holds_task_event(path: &Path) -> StoreResult<bool> {
-  let map = match charliebot_core::fsutil::map_file(path) {
+  let map = match charliebot_core::fsutil::read_or_map_file(path) {
     Ok(Some(map)) => map,
     Ok(None) => return Ok(false),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),

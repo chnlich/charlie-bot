@@ -362,7 +362,7 @@ impl Store {
 /// supplies the line boundaries. A non-blank line that is not wrapped in `{}` fails the copy. A CR before the
 /// newline is dropped.
 fn copy_reference_file(out: &mut impl Write, source: &Path, take: usize) -> StoreResult<(usize, usize)> {
-  let map = match fsutil::map_file(source) {
+  let map = match fsutil::read_or_map_file(source) {
     Ok(map) => map,
     Err(error) => return Err(StoreError::new(format!("{}: {error}", source.display()))),
   };

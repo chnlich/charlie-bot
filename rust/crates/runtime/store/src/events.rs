@@ -8,7 +8,6 @@ use std::time::Instant;
 
 use charliebot_core::{fsutil, str_methods, text_repr};
 use memchr::{memchr_iter, memchr2, memchr2_iter};
-use memmap2::Mmap;
 use serde_json::Value;
 
 use crate::chat_events::{decode_line, is_chat_events_archive};
@@ -1136,8 +1135,8 @@ fn visit_file_facts_from_end<T>(
   Ok(visit_reverse_fact_lines(&mut walk, types, visit))
 }
 
-fn open_fact_file(path: &Path) -> StoreResult<Option<Mmap>> {
-  match fsutil::map_file(path) {
+fn open_fact_file(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
+  match fsutil::read_or_map_file(path) {
     Ok(map) => Ok(map),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
     Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),

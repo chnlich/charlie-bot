@@ -35,6 +35,10 @@
     T: 'bg-purple-100 text-purple-700',
   };
 
+  // The added-line figures are body text on the row's slate-50 and the summary's white. green-700 holds 4.9:1 and
+  // 5.0:1 there; green-600 held 3.2:1 and 3.3:1, under the 4.5:1 floor for text this size.
+  const ADDED_COUNT_CLASS = 'text-green-700';
+
   function show(el) { el.classList.remove('hidden'); el.classList.add('flex'); }
   function hide(el) { el.classList.add('hidden'); el.classList.remove('flex'); }
   function setError(msg) {
@@ -278,7 +282,7 @@
     const counts = document.createElement('span');
     counts.className = 'flex font-mono text-xs whitespace-nowrap shrink-0 max-sm:row-start-2 max-sm:col-start-3';
     const add = document.createElement('span');
-    add.className = 'w-10 text-right text-green-600';
+    add.className = 'w-10 text-right ' + ADDED_COUNT_CLASS;
     add.textContent = `+${file.additions}`;
     const del = document.createElement('span');
     del.className = 'ml-1.5 w-10 text-left text-red-600';
@@ -337,7 +341,7 @@
     count.className = 'text-base font-semibold text-slate-800';
     count.textContent = `${data.total_files} ${data.total_files === 1 ? 'file' : 'files'} changed`;
     const add = document.createElement('span');
-    add.className = 'ml-1.5 text-green-600';
+    add.className = 'ml-1.5 ' + ADDED_COUNT_CLASS;
     add.textContent = `+${data.total_additions.toLocaleString('en-US')}`;
     const del = document.createElement('span');
     del.className = 'ml-1.5 text-red-600';

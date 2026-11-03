@@ -193,7 +193,7 @@ impl AgentBackend for CharlieCodeBackend {
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    Box::new(CharlieCodeTranslator::default())
+    Box::new(CharlieCodeTranslator::new())
   }
 
   fn transport(&self) -> TransportKind {
@@ -255,7 +255,16 @@ mod tests {
   fn the_bare_prompt_goes_to_task_md_and_the_flags_name_it() {
     let root = tempfile::tempdir().unwrap();
     let instructions = root.path().join("AGENTS.md").to_string_lossy().into_owned();
-    let launch = LaunchArgs { instructions_file: Some(PathBuf::from(&instructions)), ..LaunchArgs::default() };
+    let launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: Some(PathBuf::from(&instructions)),
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      backend_kwargs: serde_json::Map::new(),
+    };
     let mut backend = backend(root.path(), option("api_base: http://test.invalid/v1\n"), launch);
     backend.prepare_transport(root.path()).unwrap();
 
@@ -288,7 +297,24 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let host =
       CliHost { path: root.path().join("empty").to_string_lossy().into_owned(), home: root.path().to_path_buf() };
-    let error = CharlieCodeBackend::from_launch(&host, "m", option("{}\n"), None, LaunchArgs::default()).err().unwrap();
+    let error = CharlieCodeBackend::from_launch(
+      &host,
+      "m",
+      option("{}\n"),
+      None,
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+      },
+    )
+    .err()
+    .unwrap();
     assert!(format!("{error:#}").contains("requires api_base"));
   }
 
@@ -298,12 +324,37 @@ mod tests {
     let shot = json!({"filename": "dir/error-shot.PNG", "path": "/synthetic/uploads/error-shot.PNG"});
     let notes = json!({"filename": "notes.txt", "path": "/synthetic/uploads/notes.txt"});
 
-    let mut text_only =
-      backend(root.path(), option("api_base: http://test.invalid/v1\nimage_input: false\n"), LaunchArgs::default());
+    let mut text_only = backend(
+      root.path(),
+      option("api_base: http://test.invalid/v1\nimage_input: false\n"),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+      },
+    );
     let refusal = text_only.accept_uploads(std::slice::from_ref(&shot)).unwrap_err();
     assert!(refusal.contains("error-shot.PNG"), "the refusal names the image: {refusal}");
 
-    let mut accepting = backend(root.path(), option("api_base: http://test.invalid/v1\n"), LaunchArgs::default());
+    let mut accepting = backend(
+      root.path(),
+      option("api_base: http://test.invalid/v1\n"),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+      },
+    );
     accepting.accept_uploads(&[shot, notes]).unwrap();
     accepting.prepare_transport(root.path()).unwrap();
     let command = accepting.build_command("prompt").unwrap();

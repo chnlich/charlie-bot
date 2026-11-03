@@ -49,8 +49,8 @@ function scanMathSpans(text) {
 // Regions whose bytes the scan copies verbatim: the protected blocks (same tag
 // list as renderChatMath's ignoredTags, minus option), HTML comments, and tag
 // interiors. Math inside them is never page text, and marked never matches
-// there either. An unterminated protected block or comment runs to the end,
-// the way the DOM layer closes it.
+// there either. An unterminated protected block runs to the end. An
+// unterminated comment matches no range, so math inside it is rendered.
 const PROTECTED_OPEN_RE = /<(script|noscript|style|textarea|pre|code)(\s[^>]*)?>/gi;
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const TAG_RE = /<\/?[A-Za-z][^>]*>/g;

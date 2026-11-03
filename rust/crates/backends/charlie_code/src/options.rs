@@ -13,7 +13,8 @@ const TOP_P: &str = "top_p";
 const TEMPERATURE: &str = "temperature";
 
 /// The `charlie-code` option's type-specific fields in `CharlieCodeBackend`'s declaration order, each with the value
-/// the backend takes when an entry omits it. `charliebot config get backends` renders them.
+/// the backend takes when an entry omits it. `from_fields` accepts exactly these keys, and `charliebot config get
+/// backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Null),
@@ -24,18 +25,6 @@ pub const SCHEMA: &[OptionField] = &[
   OptionField::field(TIMEOUT_SECONDS, OptionFieldDefault::Null),
   OptionField::float_field(TOP_P, OptionFieldDefault::Null),
   OptionField::float_field(TEMPERATURE, OptionFieldDefault::Null),
-];
-
-const FIELDS: [&str; 9] = [
-  API_BASE_KEY,
-  CONTEXT_WINDOW_KEY,
-  CREDENTIAL_KEY,
-  PROXY_URL_KEY,
-  IMAGE_INPUT,
-  STREAM,
-  TIMEOUT_SECONDS,
-  TOP_P,
-  TEMPERATURE,
 ];
 
 /// The type-specific fields of one `charlie-code` backend option.
@@ -65,7 +54,7 @@ impl CharlieCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(name) if FIELDS.contains(&name) => {}
+        Some(name) if SCHEMA.iter().any(|field| field.name == name) => {}
         Some(name) => return Err(format!("unknown charlie-code option field {name:?}")),
         None => return Err(format!("charlie-code option key must be a string: {key:?}")),
       }

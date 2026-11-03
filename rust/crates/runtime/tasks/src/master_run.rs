@@ -513,7 +513,12 @@ impl RunProcess for TurnProcess<'_> {
         .collect();
       let built =
         backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
-      if launch.backend_kwargs.get("midturn_delivery").and_then(Value::as_bool).unwrap_or(false) {
+      if launch
+        .backend_kwargs
+        .get(charliebot_registry::midturn_delivery::BACKEND_KWARG)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+      {
         charliebot_registry::midturn_delivery::bind_process(&self.item.task_run.run_id, built.backend.midturn_run_id())
           .await?;
       }

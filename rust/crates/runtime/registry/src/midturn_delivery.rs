@@ -27,6 +27,11 @@ use tokio::sync::watch;
 /// dispatcher's replay-line parser both read it, so they match this name instead of spelling it.
 pub const IS_REPLAY_FIELD: &str = "isReplay";
 
+/// The `backend_kwargs` key that turns the live user-input path on for one Run. The backend's
+/// `midturn_launch_kwargs` writes it, and the task dispatcher reads it before binding the process, so both match
+/// this name instead of spelling it.
+pub const BACKEND_KWARG: &str = "midturn_delivery";
+
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
 pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 

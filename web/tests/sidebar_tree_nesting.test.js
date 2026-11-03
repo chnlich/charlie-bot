@@ -288,6 +288,8 @@ test('the five-row preview counts root rows only and hides a capped root with it
   }
   assert.match(html, /<div class="tree-subtree session-group-limit-extra hidden[^"]*" data-session-group-limit-extra="Work">/);
   assert.match(html, /<span class="text-xs text-slate-400 ml-auto">10<\/span>/);
+  // The toggle leads the rows it hides, so the control stays where it was clicked.
+  assert.ok(html.indexOf('>Show all</button>') < html.indexOf('id="session-work-6"'));
 });
 
 test('four roots with many children stay under the preview cap', () => {
@@ -348,6 +350,8 @@ test('cron roots show in place without ranks and only the non-cron roots past ra
   }
   assert.match(html, />Show less<\/button>/);
   assert.match(html, /id="session-cron-child"/);
+  // Show less keeps the leading place above the rows it expanded.
+  assert.ok(html.indexOf('>Show less</button>') < html.indexOf('id="session-work-8"'));
 });
 
 test('five non-cron roots and two cron roots show all seven roots with no Show all', () => {

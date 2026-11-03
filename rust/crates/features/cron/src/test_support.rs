@@ -18,11 +18,6 @@ use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use futures_util::future::BoxFuture;
-use nix::errno::Errno;
-use nix::sys::prctl::set_child_subreaper;
-use nix::sys::signal::{Signal, killpg};
-use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{Pid, getpgid};
 use serde_json::Map;
 use serde_json::Value;
 use serde_yaml::Mapping;
@@ -372,68 +367,6 @@ esac
     calls = calls.display(),
     tip = FAKE_TIP,
   )
-}
-
-pub struct ProcessGroupGuard {
-  groups: Vec<Pid>,
-}
-
-impl ProcessGroupGuard {
-  pub fn new() -> Self {
-    if let Err(error) = set_child_subreaper(true) {
-      panic!("cron test process guard could not become a child subreaper: {error}");
-    }
-    Self { groups: Vec::new() }
-  }
-
-  pub fn track(&mut self, pid: u32) {
-    match getpgid(Some(Pid::from_raw(pid as i32))) {
-      Ok(group) => self.groups.push(group),
-      Err(Errno::ESRCH) => {}
-      Err(error) => panic!("cron test process guard could not inspect process {pid}: {error}"),
-    }
-  }
-}
-
-impl Drop for ProcessGroupGuard {
-  fn drop(&mut self) {
-    for group in &self.groups {
-      let _ = killpg(*group, Signal::SIGKILL);
-    }
-    for _ in 0..100 {
-      for group in &self.groups {
-        while matches!(
-          waitpid(Pid::from_raw(-group.as_raw()), Some(WaitPidFlag::WNOHANG)),
-          Ok(status) if status != WaitStatus::StillAlive
-        ) {}
-      }
-      if self.groups.iter().all(|group| killpg(*group, None::<Signal>).is_err()) {
-        return;
-      }
-      std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    let remaining = self
-      .groups
-      .iter()
-      .copied()
-      .filter(|group| killpg(*group, None::<Signal>).is_ok())
-      .map(Pid::as_raw)
-      .collect::<Vec<_>>();
-    if !remaining.is_empty() {
-      let message = format!("cron test process guard could not reap process groups {remaining:?}");
-      if std::thread::panicking() {
-        eprintln!("{message}");
-      } else {
-        panic!("{message}");
-      }
-    }
-  }
-}
-
-impl Default for ProcessGroupGuard {
-  fn default() -> Self {
-    Self::new()
-  }
 }
 
 pub async fn manager(features: &FeatureContext, request_id: &str) -> anyhow::Result<SessionMetadata> {

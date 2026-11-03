@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::text_repr;
-use charliebot_improve::command::{active_lock_path_in, loops_dir_in, read_active_lock_loop_id, read_loop_controller};
+use charliebot_improve::command::{active_lock_path_in, loop_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use regex::Regex;
@@ -107,8 +107,7 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       continue;
     }
     let loop_id = read_active_lock_loop_id(&lock).map_err(failed)?;
-    let loop_directory = loops_dir_in(&home, session_id).join(loop_id.to_string());
-    let Some(controller) = read_loop_controller(&loop_directory).map_err(failed)? else {
+    let Some(controller) = read_loop_controller(&loop_dir_in(&home, session_id, loop_id)).map_err(failed)? else {
       return Err(failed(format!(
         "the active lock of session {session_id} names loop {loop_id}, whose state file is missing"
       )));

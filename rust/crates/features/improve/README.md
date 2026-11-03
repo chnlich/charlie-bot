@@ -15,7 +15,10 @@ failure and selects again on the next iteration.
 - `command::ImproveState`, `command::ImproveLoopAlreadyRunningError` and `command::Reservation` with
   `reserve_loop_state`
 - `command::resolve_path`, which follows the symlinks in the path's existing prefix
-- `command::loops_dir`, `active_lock_path`, `loop_dir`, `loop_goal_path` and `loop_plan_path`
+- `command::loops_dir`, `active_lock_path`, `loop_dir`, `loop_goal_path` and `loop_plan_path`, with the `_in` forms of
+  `loops_dir`, `active_lock_path` and `loop_dir` that take a profile home
+- `command::read_active_lock_loop_id` and `read_loop_controller` with `LoopController`, the controller liveness
+  signals the switch helper's scan reads
 - `command::read_loop_goal` and `read_loop_plan`
 - `command::load_loop_state`, `save_loop_state`, `require_loop_state` and `clear_active_loop_lock`
 - `command::find_running_loop` and `stop_improve_loop`

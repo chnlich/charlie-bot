@@ -112,7 +112,12 @@ pub fn active_lock_path_in(home: &Path, session_id: &str) -> PathBuf {
 
 /// One loop's directory.
 pub fn loop_dir(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> PathBuf {
-  loops_dir(cfg, session_id).join(loop_id.to_string())
+  loop_dir_in(&cfg.charliebot_home, session_id, loop_id)
+}
+
+/// One loop's directory under a profile home, for a reader that has no loaded config.
+pub fn loop_dir_in(home: &Path, session_id: &str, loop_id: i64) -> PathBuf {
+  loops_dir_in(home, session_id).join(loop_id.to_string())
 }
 
 fn state_path(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -> PathBuf {

@@ -13,7 +13,7 @@ use charliebot_cli_common::resolve;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_store::chat_events::{self, LineRule};
-use charliebot_store::metadata::{REQUESTER_WORDS_HEADING, requester_words_heading_line};
+use charliebot_store::metadata::{KEEP_WORKTREE_FIELD, REQUESTER_WORDS_HEADING, requester_words_heading_line};
 use charliebot_tasks::routes as task_routes;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
@@ -166,13 +166,13 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   invocation.insert(task_routes::DELEGATE_BASE_BRANCH_FIELD.to_string(), optional_string(&cli.base_branch));
   invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(cli.task_spec_file));
   invocation.insert(task_routes::DELEGATE_REVIEWER_CONTEXT_FILE_FIELD.to_string(), Value::Null);
-  invocation.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
+  invocation.insert(KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
   invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), optional_string(&cli.backend));
 
   let mut payload = Map::new();
   payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
   payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(task_spec));
-  payload.insert(task_routes::DELEGATE_KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
+  payload.insert(KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
   payload.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
   payload.insert(event_types::DELEGATE_INVOCATION.to_string(), Value::Object(invocation));
   if let Some(base_branch) = &cli.base_branch {

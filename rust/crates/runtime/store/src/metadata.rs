@@ -52,6 +52,9 @@ pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
 pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
 /// The session-metadata field holding each rated round's feedback, keyed by the rated event's id.
 pub const ROUND_RATINGS: &str = "round_ratings";
+/// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
+/// thread record carry the same name, so it is spelled once, here.
+pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
 
 /// Datetime stored as UTC with a `Z` suffix and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

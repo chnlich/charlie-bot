@@ -19,7 +19,9 @@ use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, WORK_STATE};
+use charliebot_store::metadata::{
+  KEEP_WORKTREE_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, WORK_STATE,
+};
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
   TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller,
@@ -56,7 +58,7 @@ const TASK_SPEC_FIELDS: &[Field] = &[
   Field::optional("repo_path", FieldType::NullableString),
   Field::optional("base_branch", FieldType::NullableString),
   Field::optional("task_type", FieldType::NullableEnum(TASK_TYPE_CHOICES)),
-  Field::optional("keep_worktree", FieldType::Boolean),
+  Field::optional(KEEP_WORKTREE_FIELD, FieldType::Boolean),
   Field::optional("cold_read", FieldType::NullableModel { class_name: "ColdReadSpec", model: &COLD_READ_SPEC }),
 ];
 const TASK_SPEC: BodyModel = BodyModel::optional(TASK_SPEC_FIELDS).forbid_extra().checked(cold_read_matches_task_type);

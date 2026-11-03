@@ -935,6 +935,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
   OwnerRow { name: "has_unread", owner: "runtime/store", hint: "Use `charliebot_store::metadata::HAS_UNREAD`." },
   OwnerRow {
+    name: "keep_worktree",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::KEEP_WORKTREE_FIELD`.",
+  },
+  OwnerRow {
     name: "has_pending_trigger",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::HAS_PENDING_TRIGGER`.",

@@ -3,8 +3,8 @@
 // The strip DOM is built dynamically from the payload: one self-describing row
 // per account, with a provider pill on each row. A quota bar is identified by
 // the window length the provider reported, never by the position the limit
-// arrived in, so a provider dropping or adding a window changes which bars
-// appear instead of relabelling the ones that remain.
+// arrived in. A provider that drops or adds a window then changes which bars
+// appear, instead of relabelling the ones that remain.
 // ---------------------------------------------------------------------------
 // Per-row element refs + captured data, rebuilt on every render so the 60s
 // client-side refresh can recompute labels without a server round-trip.
@@ -40,9 +40,9 @@ function _writeCollapsedPreference(collapsed) {
   }
 }
 
-// A user toggle updates the in-memory boolean immediately, persists it
-// (guarded), and reapplies the collapsed class + chip glyph without
-// rebuilding any rows — the strip's children never change on a toggle.
+// A user toggle updates the in-memory boolean immediately and persists it
+// (guarded). It then reapplies the collapsed class and chip glyph without
+// rebuilding any rows: the strip's children never change on a toggle.
 function _setExtUsageCollapsed(collapsed) {
   _extUsageCollapsed = collapsed;
   _writeCollapsedPreference(collapsed);
@@ -148,9 +148,9 @@ function _barColor(pct) {
   return 'bg-emerald-500';
 }
 
-// Text-colour sibling of the bar thresholds: the committed stylesheet has no
-// text-…-500 utilities and no plain emerald-400 text utility, so the summary
-// percentage maps each bar hue to its nearest existing -400 text class.
+// Text-colour sibling of the bar thresholds. The summary percentage maps each
+// bar hue to a -400 text class: red and yellow keep their hue, and the emerald
+// bar uses green.
 // (Class-name literals must stay out of this comment: the Tailwind scanner
 // reads comments as candidate tokens.)
 const _BAR_TEXT_COLORS = {
@@ -275,9 +275,10 @@ function _buildCreditsGroup(row, credits) {
 // and failed. Both must short-circuit the quota path, where an empty windows list
 // renders as "plan · no cap" — an uncapped-plan claim about an unknown quota.
 //
-// The row stays muted at opacity-60, but its words must stay readable: on the
+// The row stays muted at opacity-60, but its words must stay readable. On the
 // strip's slate-800 background the note at slate-300 renders 4.7:1 and the
-// account name at slate-200 renders 5.4:1, above the 4.5:1 a 12px line needs.
+// account name at slate-200 renders 5.4:1. Both sit above the 4.5:1 a 12px line
+// needs.
 // The former colours disappeared under the same opacity: slate-600 for the
 // note at 1.5:1, slate-500 for the name at 2.0:1.
 function _buildStatusRow(key, providerData, field, text) {
@@ -482,9 +483,10 @@ function _refreshResetTimers() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Evaluate the collapsed default exactly once: a recorded preference wins; a
-  // missing/invalid one falls back to the platform (mobile → collapsed, and
-  // expanded when platform is unavailable — rather show data than hide it).
+  // Evaluate the collapsed default exactly once: a recorded preference wins.
+  // A missing or invalid one falls back to the platform: collapsed on mobile,
+  // and expanded when the platform is unavailable — rather show data than hide
+  // it.
   // The platform-derived default is never written back to storage.
   const stored = _readCollapsedPreference();
   _extUsageCollapsed = stored !== null

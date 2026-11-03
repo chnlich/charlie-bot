@@ -149,6 +149,26 @@ export function runCheckBatch({ items, charliebot, home, repoRoot, parallel }) {
   });
 }
 
+// The order a batch is sent in: by sender, then child, then send time. The server reads each log once per run of
+// messages, so the order decides how many log reads a batch costs. Ties keep the input order.
+export function batchOrder(bases) {
+  const compare = (x, y) => {
+    if (x.sender !== y.sender) return x.sender < y.sender ? -1 : 1;
+    if (x.child !== y.child) return x.child < y.child ? -1 : 1;
+    return Date.parse(x.sent_at) - Date.parse(y.sent_at);
+  };
+  return bases.map((base, index) => index).sort((a, b) => compare(bases[a], bases[b]) || a - b);
+}
+
+// Puts a batch's values back in input order: `order[position]` is the input index of the value at `position`.
+export function restoreOrder(order, values) {
+  const restored = new Array(order.length);
+  order.forEach((index, position) => {
+    restored[index] = values[position];
+  });
+  return restored;
+}
+
 // The window's messages and the rebuilt labels must be the same set; a store that moved since the rebuild fails here.
 function loadBaseline({ rebuild, home }) {
   const labels = readJsonl(path.join(rebuild, 'labels.jsonl'));
@@ -286,25 +306,50 @@ export async function runReplayRound({
   const promptSha = sha256(fs.readFileSync(promptPath, 'utf8'));
   const baseline = loadBaseline({ rebuild, home });
 
-  const items = baseline.labels.map((label) => ({ child: label.target, event: label.event_id }));
-  const checkRows = await runCheckBatch({ items, charliebot, home, repoRoot, parallel: checkParallel });
-  const rows = baseline.labels.map((label, index) => {
-    const content = baseline.byEvent.get(label.event_id).content;
-    return editOf(checkRow(baseOf(label), checkRows[index]), content);
+  // The batch runs in batchOrder; its rows come back in that order and are put back in label order here.
+  const bases = baseline.labels.map(baseOf);
+  const order = batchOrder(bases);
+  const itemOf = (base) => ({ child: base.child, event: base.event_id });
+  const checkRows = await runCheckBatch({
+    items: order.map((index) => itemOf(bases[index])),
+    charliebot,
+    home,
+    repoRoot,
+    parallel: checkParallel,
+  });
+  const checkByLabel = restoreOrder(
+    order,
+    checkRows.map((row, position) => checkRow(bases[order[position]], row)),
+  );
+  const rows = bases.map((base, index) => {
+    const content = baseline.byEvent.get(base.event_id).content;
+    return editOf(checkByLabel[index], content);
   });
   writeJsonl(path.join(roundDir, 'flags.jsonl'), rows);
 
   let flipCount = 0;
   if (flipTest) {
-    // The second check of each test-half message, on the same items; the flag sets of the two runs are compared.
-    const testRows = rows.filter((row) => row.half === 'test');
-    const flipItems = testRows.map((row) => ({ child: row.child, event: row.event_id }));
-    const flipRows = await runCheckBatch({ items: flipItems, charliebot, home, repoRoot, parallel: checkParallel });
-    flipCount = flipRows.length;
-    const flipChecks = testRows.map((row, index) => {
-      const { event_id, child, sender, sent_at, half, label_verdict } = row;
-      return checkRow({ event_id, child, sender, sent_at, half, label_verdict }, flipRows[index]);
+    // The second check of each test-half message, in the same batch order; the flag sets of the two runs are compared.
+    const testBases = rows
+      .filter((row) => row.half === 'test')
+      .map(({ event_id, child, sender, sent_at, half, label_verdict }) => ({
+        event_id,
+        child,
+        sender,
+        sent_at,
+        half,
+        label_verdict,
+      }));
+    const flipOrder = batchOrder(testBases);
+    const flipRows = await runCheckBatch({
+      items: flipOrder.map((index) => itemOf(testBases[index])),
+      charliebot,
+      home,
+      repoRoot,
+      parallel: checkParallel,
     });
+    flipCount = flipRows.length;
+    const flipChecks = flipOrder.map((index, position) => checkRow(testBases[index], flipRows[position]));
     writeJsonl(path.join(roundDir, 'flip.jsonl'), flipChecks);
   }
 

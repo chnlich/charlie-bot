@@ -9,12 +9,14 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 
 import {
+  batchOrder,
   deleteFlagged,
   flagKey,
   halfOf,
   median,
   parseBatch,
   percentile,
+  restoreOrder,
   runCheckBatch,
   tallyRound,
 } from '../lib/replay.mjs';
@@ -80,6 +82,19 @@ test('a batch answer is accepted only when it has one row per item, in item orde
   assert.throws(() => parseBatch(JSON.stringify(rows[0]), items), /answered 1 of 2 items/);
   const swapped = [rows[1], rows[0]].map((row) => JSON.stringify(row)).join('\n');
   assert.throws(() => parseBatch(swapped, items), /not the item sent/);
+});
+
+test('a batch runs grouped by parent and child, and its rows go back to the order of the labels', () => {
+  const bases = [
+    { sender: 'p2', child: 'c1', sent_at: '2026-10-14T01:00:00Z', event_id: 'a' },
+    { sender: 'p1', child: 'c2', sent_at: '2026-10-14T02:00:00Z', event_id: 'b' },
+    { sender: 'p1', child: 'c1', sent_at: '2026-10-14T03:00:00Z', event_id: 'c' },
+    { sender: 'p1', child: 'c1', sent_at: '2026-10-14T01:30:00Z', event_id: 'd' },
+  ];
+  const order = batchOrder(bases);
+  assert.deepEqual(order.map((index) => bases[index].event_id), ['d', 'c', 'b', 'a']);
+  const sentOrder = order.map((index) => bases[index].event_id);
+  assert.deepEqual(restoreOrder(order, sentOrder), ['a', 'b', 'c', 'd']);
 });
 
 test('the batch runner passes the items on stdin and returns the rows the command prints', async () => {

@@ -8,6 +8,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
+use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files, validation};
@@ -20,7 +21,6 @@ use crate::merge::{self, BuildFailure, BuildMode};
 
 const VIEWER_PATH: &str = "/perfetto";
 const MERGED_PATH: &str = "/perfetto/merged";
-const FILE_SERVER_MOUNT: &str = "/absolute_filepath";
 const DEFAULT_PATTERN: &str = "*.json";
 const QUOTE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
 

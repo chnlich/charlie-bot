@@ -510,7 +510,7 @@ fn first_command_lines(kind: &str) -> io::Result<Vec<u8>> {
     {"type": "tool_use", "id": "toolu_1", "name": tool, "input": {}},
   ]}});
   let result = json!({"type": "user", "message": {"content": [
-    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "abc1234", "is_error": is_error},
+    {"type": "tool_result", (event_types::TOOL_USE_ID): "toolu_1", "content": "abc1234", "is_error": is_error},
   ]}});
   let mut lines = event_line(&call);
   lines.extend(event_line(&result));

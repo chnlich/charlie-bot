@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use charliebot_core::timefmt;
 use charliebot_registry::Registry;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
@@ -288,7 +289,7 @@ fn probe_signature(store: &Store, registry: &Registry, session_id: &str) -> Vec<
     .map(|(path, metadata)| {
       json!([
         path.file_name().unwrap_or_default().to_string_lossy(),
-        metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000,
+        timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64,
         metadata.size(),
       ])
     })
@@ -331,7 +332,9 @@ fn probe_signature(store: &Store, registry: &Registry, session_id: &str) -> Vec<
 
 fn stat_signature(path: &Path) -> Option<Value> {
   match fs::metadata(path) {
-    Ok(metadata) => Some(json!([metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000, metadata.size()])),
+    Ok(metadata) => {
+      Some(json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()]))
+    }
     Err(_) => None,
   }
 }

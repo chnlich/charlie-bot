@@ -18,6 +18,7 @@ use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::text_repr;
+use charliebot_core::timefmt;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
@@ -914,7 +915,7 @@ fn events_file_not_found() -> Response {
 }
 
 fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Bytes> {
-  let mtime_ns = metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000;
+  let mtime_ns = timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64;
   let size = metadata.size();
   let key = (path.to_path_buf(), mtime_ns, size);
   if let Some(body) =

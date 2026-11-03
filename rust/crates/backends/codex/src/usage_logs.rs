@@ -6,18 +6,20 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::text_repr::value_str;
+use charliebot_core::timefmt;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
 use memchr::{memmem, memrchr};
 use serde_json::{Map, Value};
 
-use super::rollout::{self, SESSION_META, TURN_CONTEXT, mtime_ns, token_count_payload, walk_files};
+use super::rollout::{self, SESSION_META, TURN_CONTEXT, token_count_payload, walk_files};
 use super::text::{count_or_zero, object_or_empty, truthy};
 use super::usage_quota::CodexQuotaAccount;
 use super::usage_sweep;
@@ -103,7 +105,7 @@ pub fn session_id(path: &Path, codex_home: &Path) -> anyhow::Result<String> {
 /// `turn_context` lines, and the file's first model also covers a `token_count` event that precedes it.
 fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result<(String, Vec<UsageRecord>)> {
   let metadata = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
-  let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+  let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
   let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
   let lines = marker_lines(&bytes)?;
   let session = session_id(path, codex_home)?;

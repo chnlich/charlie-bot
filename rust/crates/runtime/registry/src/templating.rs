@@ -30,7 +30,7 @@ use axum::response::Response;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
 use charliebot_compat::headers::header_text;
 use charliebot_compat::{jinja, responses};
-use charliebot_core::{git, text_repr};
+use charliebot_core::{git, text_repr, timefmt};
 use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
 use serde_json::json;
@@ -564,7 +564,7 @@ fn walk_static_directory(
       }
       walk_static_directory(&path, &relative, prefix, pairs, paths, ancestors)?;
     } else if metadata.is_file() {
-      let mtime_ns = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();
+      let mtime_ns = timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64;
       pairs.push((rel.clone(), mtime_ns, metadata.size()));
       paths.insert(rel, path);
     }

@@ -10,6 +10,7 @@ use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
 use charliebot_core::text_repr::is_truthy;
+use charliebot_core::timefmt;
 use charliebot_registry::FeatureContext;
 use flate2::{Compression, GzBuilder};
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
@@ -179,7 +180,7 @@ fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, 
     path_rows.push((
       path.to_string_lossy().into_owned(),
       metadata.size(),
-      metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec(),
+      timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64,
     ));
   }
   let payload = CacheKeyPayload { paths: path_rows, slim, mode };

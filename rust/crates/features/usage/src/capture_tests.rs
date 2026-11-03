@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::*;
 use crate::ledger::LedgerRow;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigSchema};
+use charliebot_core::timefmt;
 use charliebot_registry::usage::{RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
 use charliebot_registry::{Registry, RegistryError};
 use rusqlite::types::Value as SqlValue;
@@ -44,7 +45,7 @@ impl UsageSourceImpl for External {
   fn read(&self, path: &Path, _account: &str, _previous: Option<&str>) -> anyhow::Result<(String, Vec<UsageRecord>)> {
     EXTERNAL_READS.fetch_add(1, Ordering::SeqCst);
     let metadata = fs::metadata(path)?;
-    let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+    let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
     Ok((
       signature,
       vec![UsageRecord {
@@ -114,7 +115,7 @@ impl UsageSourceImpl for CliStub {
     }
     let records = items.iter().map(|item| stub_record(item, self.name, account)).collect::<anyhow::Result<Vec<_>>>()?;
     let metadata = fs::metadata(path)?;
-    Ok((format!("{}:{}", mtime_ns(&metadata), metadata.len()), records))
+    Ok((format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len()), records))
   }
 
   fn live_cli_sessions(&self) -> anyhow::Result<HashSet<String>> {
@@ -673,7 +674,7 @@ fn charliebot_capture_replaces_a_bare_stat_signature_with_the_p2_signature() {
     result_line(TS_A, 10, 0, 0, 2).as_bytes(),
   );
   let metadata = fs::metadata(&path).unwrap();
-  let bare_signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+  let bare_signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
   let captured = BTreeMap::from([(path.to_string_lossy().into_owned(), bare_signature)]);
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
   assert_eq!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap(), 1);
@@ -958,7 +959,12 @@ fn codex_p2_signature_rereads_the_unchanged_rollout_once() {
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
   let metadata = fs::metadata(&path).unwrap();
   ledger
-    .record_file(HOST, path.to_str().unwrap(), &format!("p2:{}:{}", mtime_ns(&metadata), metadata.len()), &[])
+    .record_file(
+      HOST,
+      path.to_str().unwrap(),
+      &format!("p2:{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len()),
+      &[],
+    )
     .unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Codex"), 1);
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Codex"), 0);
@@ -1260,7 +1266,7 @@ fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
     output: 5,
     sessions: Vec::new(),
   };
-  let bare = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+  let bare = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
   assert_eq!(ledger.record_file(HOST, path.to_str().unwrap(), &bare, &[stale]).unwrap(), 1);
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the bare pair is no current signature
   let rows = page_rows(&mut ledger);

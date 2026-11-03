@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::os::unix::fs::MetadataExt;
 
 use charliebot_core::memo::BoundedMemo;
+use charliebot_core::timefmt;
 
 /// The memo signature shared by the NDJSON, archive, and trigger readers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,10 +15,7 @@ pub(crate) struct FileSignature {
 
 impl FileSignature {
   pub(crate) fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-    Self {
-      mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
-      size: metadata.size(),
-    }
+    Self { mtime_ns: timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), size: metadata.size() }
   }
 }
 

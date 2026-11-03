@@ -669,8 +669,7 @@ fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
   let new_release = sandbox.dir("new-release");
   let calls = write_release(&new_release, ACCEPTING_SERVER);
 
-  let run =
-    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
@@ -688,8 +687,7 @@ fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credent
   let new_release = sandbox.dir("new-release");
   let calls = write_release(&new_release, ACCEPTING_SERVER);
 
-  let run =
-    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
@@ -716,8 +714,7 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
      printf 'key not-a-real-key\n' > \"$tree/home/.charliebot/sessions/test/data/chat_events.jsonl\"\nexit 1\n",
   );
 
-  let run =
-    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
 
   assert_eq!(run.code, 2, "{}", run.describe());
   let logs = sandbox.root().join("logs");
@@ -786,8 +783,7 @@ fn test_the_rehearsal_home_the_script_writes_passes_the_built_server_check() {
   allow_free_port(&new_release);
   let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
 
-  let run =
-    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &script, (old_commit, new_commit));
+  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &script, (old_commit, new_commit));
 
   // Both stub servers accept, so the rehearsal stops at the tmux stub with the home rendered.
   assert_eq!(run.code, 2, "{}", run.describe());

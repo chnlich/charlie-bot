@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::exit::source_chain;
 use charliebot_cli_common::json_out;
 use charliebot_core::credentials;
 use charliebot_core::home;
@@ -491,14 +492,14 @@ fn post(
       .redirect(reqwest::redirect::Policy::none())
       .timeout(limits.request_timeout)
       .build()
-      .map_err(|error| format!("{url}: request failed: {error}"))?;
+      .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
     let mut response = client
       .post(url)
       .bearer_auth(api_key)
       .json(body)
       .send()
       .await
-      .map_err(|error| format!("{url}: request failed: {}", request_error(&error)))?;
+      .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
       sleep(limits.rate_limit_wait);
       response = client
@@ -507,11 +508,11 @@ fn post(
         .json(body)
         .send()
         .await
-        .map_err(|error| format!("{url}: request failed: {}", request_error(&error)))?;
+        .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
     }
     let status = response.status().as_u16();
     let body_text =
-      response.text().await.map_err(|error| format!("{url}: request failed: {}", request_error(&error)))?;
+      response.text().await.map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
     if status != 200 {
       return Err(format!("{url}: HTTP {status}: {body_text}"));
     }
@@ -522,11 +523,6 @@ fn post(
     }
     Ok(payload)
   })
-}
-
-/// An HTTP error as its Display text: the URL and the cause.
-fn request_error(error: &reqwest::Error) -> String {
-  error.to_string()
 }
 
 /// Compact JSON: escaped non-ASCII, `", "` between items.
@@ -1151,6 +1147,26 @@ mod tests {
 
       assert!(error.contains("500"), "{error}");
       assert!(error.contains("gateway down"), "{error}");
+    });
+  }
+
+  #[test]
+  fn a_transport_failure_reports_the_cause_beyond_the_url_error() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      // A port nothing listens on: take one from the kernel, then release it.
+      let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+      let port = listener.local_addr().unwrap().port();
+      drop(listener);
+      let url = format!("http://127.0.0.1:{port}/v1/systemone");
+      write_rules(&home, &url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = request("implement", "Understand the caching layer.", &[STRONG[0]], Some(SESSION));
+      let error = route_in_home(&home.home, &home.rules_path(), &payload, &test_limits(), &mut |_| {}).unwrap_err();
+
+      assert!(error.contains("request failed:"), "{error}");
+      assert!(error.contains(&format!("error sending request for url ({url})")), "the failure names the URL: {error}");
+      assert!(error.contains("Connection refused"), "the failure names the cause, not only the URL: {error}");
     });
   }
 

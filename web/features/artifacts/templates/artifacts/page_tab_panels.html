@@ -15,7 +15,9 @@
         <div id="plan-stale-notice" class="hidden px-4 py-1.5 text-xs text-yellow-400 bg-yellow-900/20 border-b border-yellow-700/40">
           Viewing an older version — the latest version may differ.
         </div>
-        <div id="plan-empty-state" class="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-gray-500">
+        <!-- The note reads at gray-400 on the gray-900 panel, 7.24:1. gray-500 reads 3.67:1 there,
+             under the 4.5:1 floor for 14px text. -->
+        <div id="plan-empty-state" class="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-gray-400">
           <span>No plans registered for this session.</span>
           <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
         </div>

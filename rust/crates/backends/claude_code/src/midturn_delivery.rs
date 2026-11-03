@@ -21,7 +21,7 @@ pub fn launch_kwargs(
     return Ok(Map::new());
   };
   Ok(Map::from_iter([
-    ("midturn_delivery".to_string(), Value::Bool(true)),
+    (charliebot_registry::midturn_delivery::BACKEND_KWARG.to_string(), Value::Bool(true)),
     ("midturn_run_id".to_string(), Value::String(run_id)),
   ]))
 }

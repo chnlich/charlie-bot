@@ -235,7 +235,7 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("claude_session_id must be a string"),
     }
     .filter(|value| !value.is_empty());
-    let midturn_delivery = match launch.backend_kwargs.get("midturn_delivery") {
+    let midturn_delivery = match launch.backend_kwargs.get(charliebot_registry::midturn_delivery::BACKEND_KWARG) {
       None | Some(Value::Null) => false,
       Some(Value::Bool(value)) => *value,
       Some(_) => bail!("midturn_delivery must be a boolean"),

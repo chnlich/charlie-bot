@@ -439,23 +439,64 @@ const ACCEPTING_SERVER: &str = "exit 0\n";
 const REFUSING_SERVER: &str =
   "printf 'charliebot-server: unknown config key server.enable_local_work_guard: unknown field\\n' >&2\nexit 1\n";
 
-/// The rehearsal fixture's commits: origin/main as the new release and its parent as the old one, both real because
-/// the rehearsal requires both to sit on the origin/main it fetches. A test resolves them before it installs a git
-/// stub, which would otherwise answer the reads.
-fn fixture_commits(sandbox: &Sandbox) -> (String, String) {
-  let env = sandbox.env();
-  let new_commit = git(&env, &harness::repo_root(), &["rev-parse", "origin/main"]);
-  let old_commit = git(&env, &harness::repo_root(), &["rev-parse", "origin/main~"]);
-  (old_commit, new_commit)
+/// The rehearsal script under test, in this repository.
+fn rehearsal_script() -> PathBuf {
+  harness::repo_root().join("scripts/release/switch-rehearsal.sh")
 }
 
-/// Runs the rehearsal preflight for `home` and `new_release`, with `current` selecting an old release whose
-/// `charliebot-server` is `old_server_body`, under the fixture commits `(old, new)` from `fixture_commits`.
+/// Commits for a rehearsal that stops before its git setup reads them: the preflight refuses first, so the values only
+/// have to be full shas.
+fn unused_commits() -> (String, String) {
+  ("1".repeat(40), "2".repeat(40))
+}
+
+/// The fixture repository's commit identity: the sandbox carries no git user configuration.
+const FIXTURE_IDENTITY: [&str; 4] = ["-c", "user.name=Rehearsal fixture", "-c", "user.email=fixture@example.invalid"];
+
+/// A `git` call in the fixture repository, under [`FIXTURE_IDENTITY`].
+fn fixture_git(env: &Env, cwd: &Path, args: &[&str]) -> String {
+  let mut all = FIXTURE_IDENTITY.to_vec();
+  all.extend_from_slice(args);
+  git(env, cwd, &all)
+}
+
+/// The rehearsal's source: a copy of its script and of the files the script reads before its first server start, in a
+/// throwaway repository whose origin/main holds two commits. A build host's synced tree can hold one synthetic commit
+/// only, and the rehearsal requires both of its commits on the origin/main it fetches. Returns the script path and the
+/// commits `(old, new)`.
+fn rehearsal_source(sandbox: &Sandbox) -> (PathBuf, String, String) {
+  let source = sandbox.dir("source-repo");
+  for relative in [
+    "scripts/release/switch-rehearsal.sh",
+    "scripts/release/standin-approval-policy.yaml",
+    "scripts/switch-server.sh",
+    "scripts/install-slice-units.sh",
+  ] {
+    let destination = source.join(relative);
+    fs::create_dir_all(destination.parent().expect("the file has a directory")).expect("the source directory");
+    fs::copy(harness::repo_root().join(relative), &destination).expect("the rehearsal source file");
+  }
+  let env = sandbox.env();
+  fixture_git(&env, &source, &["init", "-q", "-b", "main"]);
+  fixture_git(&env, &source, &["add", "-A"]);
+  fixture_git(&env, &source, &["commit", "-q", "-m", "the old release"]);
+  let old_commit = fixture_git(&env, &source, &["rev-parse", "HEAD"]);
+  fs::write(source.join("rehearsal-fixture"), "the new release's tree\n").expect("the fixture marker");
+  fixture_git(&env, &source, &["add", "-A"]);
+  fixture_git(&env, &source, &["commit", "-q", "-m", "the new release"]);
+  let new_commit = fixture_git(&env, &source, &["rev-parse", "HEAD"]);
+  fixture_git(&env, &source, &["update-ref", "refs/remotes/origin/main", &new_commit]);
+  (source.join("scripts/release/switch-rehearsal.sh"), old_commit, new_commit)
+}
+
+/// Runs the rehearsal preflight for `home` and `new_release` from `script`, with `current` selecting an old release
+/// whose `charliebot-server` is `old_server_body`, at the `(old, new)` commits the source names.
 fn rehearsal_preflight(
   sandbox: &Sandbox,
   home: &Path,
   new_release: &Path,
   old_server_body: &str,
+  script: &Path,
   (old_commit, new_commit): (String, String),
 ) -> Run {
   let releases = sandbox.dir("releases");
@@ -466,7 +507,7 @@ fn rehearsal_preflight(
   symlink(&old_commit, releases.join("current")).expect("the current link");
   env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
   let mut command = harness::command("bash", &env);
-  command.arg(harness::repo_root().join("scripts/release/switch-rehearsal.sh")).arg(&new_commit).arg(new_release);
+  command.arg(script).arg(&new_commit).arg(new_release);
   harness::run(&mut command)
 }
 
@@ -628,7 +669,8 @@ fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
   let new_release = sandbox.dir("new-release");
   let calls = write_release(&new_release, ACCEPTING_SERVER);
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, fixture_commits(&sandbox));
+  let run =
+    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
@@ -646,7 +688,8 @@ fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credent
   let new_release = sandbox.dir("new-release");
   let calls = write_release(&new_release, ACCEPTING_SERVER);
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, fixture_commits(&sandbox));
+  let run =
+    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
@@ -665,8 +708,6 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
   let new_release = sandbox.dir("new-release");
   write_release(&new_release, ACCEPTING_SERVER);
   allow_free_port(&new_release);
-  // The commits come before the git stub, which fails every git call it sees.
-  let commits = fixture_commits(&sandbox);
   sandbox.stub(
     "git",
     "tree=${4%/origin.git}\nprintf 'key not-a-real-key\n' > \"$tree/logs/server_test.log\"\n\
@@ -675,7 +716,8 @@ fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
      printf 'key not-a-real-key\n' > \"$tree/home/.charliebot/sessions/test/data/chat_events.jsonl\"\nexit 1\n",
   );
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, commits);
+  let run =
+    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
 
   assert_eq!(run.code, 2, "{}", run.describe());
   let logs = sandbox.root().join("logs");
@@ -713,9 +755,10 @@ fn test_rehearsal_config_check_stops_at_a_key_the_old_release_refuses_and_names_
   let new_release = sandbox.dir("new-release");
   write_release(&new_release, ACCEPTING_SERVER);
   allow_free_port(&new_release);
-  let (old_commit, new_commit) = fixture_commits(&sandbox);
+  let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, REFUSING_SERVER, (old_commit.clone(), new_commit));
+  let run =
+    rehearsal_preflight(&sandbox, &home, &new_release, REFUSING_SERVER, &script, (old_commit.clone(), new_commit));
 
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(
@@ -741,8 +784,10 @@ fn test_the_rehearsal_home_the_script_writes_passes_the_built_server_check() {
   let new_release = sandbox.dir("new-release");
   write_release(&new_release, ACCEPTING_SERVER);
   allow_free_port(&new_release);
+  let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
 
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, fixture_commits(&sandbox));
+  let run =
+    rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &script, (old_commit, new_commit));
 
   // Both stub servers accept, so the rehearsal stops at the tmux stub with the home rendered.
   assert_eq!(run.code, 2, "{}", run.describe());

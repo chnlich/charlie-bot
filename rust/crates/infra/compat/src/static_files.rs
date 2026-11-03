@@ -6,10 +6,12 @@
 //! request until the check first passes, so a directory that appears later serves without a restart. A missing one
 //! answers 500.
 
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use axum::body::Body;
 use axum::response::Response;
@@ -25,6 +27,82 @@ use crate::responses;
 
 /// A body at least this long goes out in more than one message.
 const CHUNK_SIZE: usize = 64 * 1024;
+
+/// The whole-file bodies served recently, oldest first.
+///
+/// A page load asks for the same few static files, and every request read its file again: the read, its
+/// allocation and the body's message list cost more than the metadata read the request already made. The key
+/// holds the file's path and the `(mtime, size)` identity its ETag is built from, so a file that moved is read
+/// again on the next request.
+#[derive(Default)]
+struct FileBodyMemo {
+  bodies: HashMap<FileBodyKey, Bytes>,
+  order: VecDeque<FileBodyKey>,
+}
+
+/// One file's identity beside the path its bytes were read from.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FileBodyKey {
+  path: PathBuf,
+  mtime_ns: i128,
+  size: u64,
+}
+
+/// How many whole-file bodies the memo holds.
+const FILE_BODY_MEMO_ENTRIES: usize = 64;
+
+/// The largest body the memo holds; a larger file is read and sent without being kept.
+const FILE_BODY_MEMO_MAX_BYTES: usize = 256 * 1024;
+
+static FILE_BODY_MEMO: LazyLock<Mutex<FileBodyMemo>> = LazyLock::new(|| Mutex::new(FileBodyMemo::default()));
+
+impl FileBodyMemo {
+  fn get(&self, key: &FileBodyKey) -> Option<Bytes> {
+    self.bodies.get(key).cloned()
+  }
+
+  fn store(&mut self, key: FileBodyKey, body: Bytes) {
+    if body.len() > FILE_BODY_MEMO_MAX_BYTES {
+      return;
+    }
+    if self.bodies.insert(key.clone(), body).is_none() {
+      self.order.push_back(key);
+      while self.order.len() > FILE_BODY_MEMO_ENTRIES {
+        if let Some(oldest) = self.order.pop_front() {
+          self.bodies.remove(&oldest);
+        }
+      }
+    }
+  }
+}
+
+/// The canonical path of each served directory, resolved the first time a request serves from it.
+///
+/// A mount's path is fixed while it serves, so resolving it per request walked every component of the home's path
+/// for no new answer. A symlinked mount can be retargeted (a release switch moves the link), so a containment check
+/// that fails resolves the mount again before refusing.
+static RESOLVED_DIRECTORIES: LazyLock<Mutex<HashMap<PathBuf, PathBuf>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The mount's canonical path, from the memo or resolved and kept.
+fn resolved_directory(path: &Path) -> PathBuf {
+  let mut memo = RESOLVED_DIRECTORIES.lock().expect("the static directory memo mutex is not poisoned");
+  if let Some(resolved) = memo.get(path) {
+    return resolved.clone();
+  }
+  let resolved = paths::realpath(path);
+  memo.insert(path.to_path_buf(), resolved.clone());
+  resolved
+}
+
+/// Resolve the mount's canonical path again and replace the memo's answer for a mount whose path moved.
+fn reresolved_directory(path: &Path) -> PathBuf {
+  let resolved = paths::realpath(path);
+  RESOLVED_DIRECTORIES
+    .lock()
+    .expect("the static directory memo mutex is not poisoned")
+    .insert(path.to_path_buf(), resolved.clone());
+  resolved
+}
 
 /// One served directory.
 pub struct StaticDirectory {
@@ -58,9 +136,10 @@ pub fn serve(
     return responses::http_exception(StatusCode::METHOD_NOT_ALLOWED);
   }
   let relative = normpath(route_path.trim_start_matches('/'));
-  let directory = paths::realpath(&served.path);
   let full_path = paths::realpath(&served.path.join(&relative));
-  if !paths::is_within(&full_path, &directory) {
+  if !paths::is_within(&full_path, &resolved_directory(&served.path))
+    && !paths::is_within(&full_path, &reresolved_directory(&served.path))
+  {
     return responses::http_exception(StatusCode::NOT_FOUND);
   }
   let metadata = match std::fs::metadata(&full_path) {
@@ -207,7 +286,7 @@ fn file_response(
     let body = if head_only {
       Body::empty()
     } else {
-      match read_body(path, 0, file_headers.size, true) {
+      match whole_file_body(path, metadata) {
         Ok(body) => body,
         Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
       }
@@ -235,7 +314,7 @@ fn file_response(
     let body = if head_only {
       Body::empty()
     } else {
-      match read_body(path, start, end, false) {
+      match range_body(path, start, end) {
         Ok(body) => body,
         Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
       }
@@ -409,14 +488,35 @@ fn random_hex(count: usize) -> std::io::Result<String> {
   Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// The bytes `[start, end)` of `path`: one message when the first chunk ends
-/// the body, a stream of `CHUNK_SIZE` messages otherwise. `whole_file` selects the whole-file rule
-/// (a full first chunk always announces more) over the range rule (more only while bytes remain).
-fn read_body(path: &Path, start: u64, end: u64, whole_file: bool) -> std::io::Result<Body> {
-  let slice = if whole_file { Bytes::from(std::fs::read(path)?) } else { read_file_range(path, start, end)? };
+/// The whole file's body: the bytes the memo holds while the file's identity still holds, else a read that the
+/// memo keeps for the next request.
+fn whole_file_body(path: &Path, metadata: &std::fs::Metadata) -> std::io::Result<Body> {
+  let key = FileBodyKey {
+    path: path.to_path_buf(),
+    mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+    size: metadata.size(),
+  };
+  if let Some(bytes) = FILE_BODY_MEMO.lock().expect("the static file body memo mutex is not poisoned").get(&key) {
+    return Ok(streamed_body(bytes, true));
+  }
+  let bytes = Bytes::from(std::fs::read(path)?);
+  FILE_BODY_MEMO.lock().expect("the static file body memo mutex is not poisoned").store(key, bytes.clone());
+  Ok(streamed_body(bytes, true))
+}
+
+/// The bytes `[start, end)` of `path` as a body: one message when the first chunk ends the body, a stream of
+/// `CHUNK_SIZE` messages otherwise.
+fn range_body(path: &Path, start: u64, end: u64) -> std::io::Result<Body> {
+  Ok(streamed_body(read_file_range(path, start, end)?, false))
+}
+
+/// The body of `slice`: one message when the first chunk ends it, a stream of `CHUNK_SIZE` messages otherwise.
+/// `whole_file` selects the whole-file rule (a full first chunk always announces more) over the range rule (more
+/// only while bytes remain).
+fn streamed_body(slice: Bytes, whole_file: bool) -> Body {
   let single_message = if whole_file { slice.len() < CHUNK_SIZE } else { slice.len() <= CHUNK_SIZE };
   if single_message {
-    return Ok(Body::from(slice));
+    return Body::from(slice);
   }
   let mut messages: Vec<Bytes> = (0..slice.len())
     .step_by(CHUNK_SIZE)
@@ -425,7 +525,7 @@ fn read_body(path: &Path, start: u64, end: u64, whole_file: bool) -> std::io::Re
   if whole_file && slice.len().is_multiple_of(CHUNK_SIZE) {
     messages.push(Bytes::new());
   }
-  Ok(Body::from_stream(stream::iter(messages.into_iter().map(Ok::<_, std::io::Error>))))
+  Body::from_stream(stream::iter(messages.into_iter().map(Ok::<_, std::io::Error>)))
 }
 
 /// Seek to `[start, end)` and read only that range.
@@ -493,6 +593,55 @@ mod tests {
       Err(RangeError::Malformed("Range header: range must be requested"))
     ));
     assert!(matches!(parse_range_header("bytes", 100), Err(RangeError::Malformed("Malformed range header."))));
+  }
+
+  /// A served asset is read again once its file moves, so an edited file never answers with the bytes it replaced.
+  #[test]
+  fn an_edited_file_is_served_from_disk_again() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("static");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("app.js");
+    std::fs::write(&file, "old body").unwrap();
+    let served = StaticDirectory::new(root);
+    let body = |served: &StaticDirectory| {
+      let response = serve(served, &MimeTypes::builtin(), "/app.js", &Method::GET, &HeaderMap::new());
+      tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+        .unwrap()
+    };
+    assert_eq!(&body(&served)[..], b"old body");
+    std::fs::write(&file, "new body, longer").unwrap();
+    assert_eq!(&body(&served)[..], b"new body, longer");
+  }
+
+  /// A retargeted mount link serves from its new target: the memo's stale canonical path never refuses the file.
+  #[test]
+  fn a_retargeted_mount_serves_from_its_new_target() {
+    let home = tempfile::tempdir().unwrap();
+    let first = home.path().join("first");
+    let second = home.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(first.join("app.js"), "first body").unwrap();
+    std::fs::write(second.join("app.js"), "second body, longer").unwrap();
+    let mount = home.path().join("current");
+    std::os::unix::fs::symlink(&first, &mount).unwrap();
+    let served = StaticDirectory::new(mount.clone());
+    let body = |served: &StaticDirectory| {
+      let response = serve(served, &MimeTypes::builtin(), "/app.js", &Method::GET, &HeaderMap::new());
+      tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+        .unwrap()
+    };
+    assert_eq!(&body(&served)[..], b"first body");
+    std::fs::remove_file(&mount).unwrap();
+    std::os::unix::fs::symlink(&second, &mount).unwrap();
+    assert_eq!(&body(&served)[..], b"second body, longer");
   }
 
   #[test]

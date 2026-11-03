@@ -397,7 +397,7 @@ export async function runReplayRound({
       not_sent: rows.filter((row) => row.state === 'not_sent').length,
       check_failed: rows.filter((row) => row.state === 'check_failed').length,
     },
-    check_items: items.length,
+    check_items: order.length,
     flip_check_items: flipCount,
     judge_model: model,
     judge_packets: judged.packets.length,

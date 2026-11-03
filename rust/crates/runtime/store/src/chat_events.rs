@@ -194,6 +194,12 @@ pub fn append_event(path: &Path, event: &Value) -> StoreResult<()> {
   ndjson::append(path, event)
 }
 
+/// The events of the chat log at `path`, read whole in file order: the parse the store's own reads use. A missing log
+/// holds no events. The offline replay reads a historical log with it, so the replay's context is the server's.
+pub fn read_chat_log(path: &Path) -> StoreResult<Vec<crate::compact::CompactValue>> {
+  ndjson::read_file_compact(path)
+}
+
 /// Walk the chat-events log at `path` in file order and return the first value that `find` maps out of an event. The
 /// read stops at the line that matches. A missing file has no events, a blank or unparsable line is skipped, and a line
 /// that parses to something other than a JSON object fails the read.

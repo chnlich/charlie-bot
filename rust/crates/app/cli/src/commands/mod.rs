@@ -10,6 +10,7 @@ pub mod gc_trash;
 pub mod google;
 pub mod linear;
 pub mod preflight_charlie_code;
+pub mod presend_check;
 pub mod release_helper;
 pub mod router;
 pub mod scan_guard;

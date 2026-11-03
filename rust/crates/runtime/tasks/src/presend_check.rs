@@ -17,14 +17,19 @@ use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::backend_types;
 use charliebot_agents::one_shot_text;
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::str_methods::take_chars;
+use charliebot_registry::Registry;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::chat_events::read_chat_log;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{TaskSpec, UtcDateTime};
+use charliebot_store::layout;
+use charliebot_store::metadata::{TaskSpec, UtcDateTime, read_session_metadata};
 use charliebot_store::{SharedChatEvent, StoreError, StoreResult};
+use futures_util::{StreamExt, stream};
 use serde_json::{Value, json};
 
 use crate::autonamer;
@@ -242,14 +247,7 @@ pub async fn gate(
     }
     Ok(Ok((backend, flags))) => (backend, flags),
   };
-  let flags: Vec<Flag> = flags
-    .into_iter()
-    .enumerate()
-    .map(|(index, mut flag)| {
-      flag.n = index as u32 + 1;
-      flag
-    })
-    .collect();
+  let flags = number(flags);
   if flags.is_empty() {
     deps.memory.clear(parent_id, child_id);
     tracing::info!(target: "charliebot_tasks", parent = %parent_id, child = %child_id, check_id = %check_id, backend = %backend, "presend_check_passed");
@@ -437,42 +435,114 @@ pub fn check_prompt(judge: &str, context: &PresendContext, passages: &str) -> St
   format!("{}\n\n{}", judge.trim_end_matches('\n'), probe_input(context, passages))
 }
 
-/// Parse the model's answer into flags. An answer that is not a JSON array fails the check; an
-/// entry whose kind is unknown, whose quote is not verbatim from the passages, or whose reason is
-/// empty is dropped, because a dropped flag cannot match a passage on the re-send.
+/// Parse the model's answer into flags. The answer must be a JSON array and every entry must be a
+/// well-formed flag: a known kind, a quote that is verbatim from the passages, and a non-empty
+/// reason. Any other answer or entry fails the check, naming the entry; a partial list would
+/// deliver a message the check did not finish judging.
 pub fn parse_flags(answer: &str, passages: &str) -> anyhow::Result<Vec<Flag>> {
   let stripped = autonamer::strip_markdown_fences(answer.trim());
   let value: Value = serde_json::from_str(stripped.trim())
     .map_err(|error| anyhow::anyhow!("the presend check answer is not valid JSON: {error}"))?;
   let items = value.as_array().ok_or_else(|| anyhow::anyhow!("the presend check answer is not a JSON array"))?;
-  let mut flags = Vec::new();
-  for item in items {
-    let kind = item.get("kind").and_then(Value::as_str).unwrap_or_default();
-    let Some(quote) = item.get("quote").and_then(Value::as_str).map(str::trim).filter(|quote| !quote.is_empty()) else {
-      tracing::warn!(target: "charliebot_tasks", error = "flag without a quote", "presend_flag_dropped");
-      continue;
-    };
-    let Some(reason) = item.get("reason").and_then(Value::as_str).map(str::trim).filter(|reason| !reason.is_empty())
-    else {
-      tracing::warn!(target: "charliebot_tasks", error = "flag without a reason", "presend_flag_dropped");
-      continue;
-    };
-    if !FLAG_KINDS.contains(&kind) {
-      tracing::warn!(target: "charliebot_tasks", kind, "presend_flag_dropped");
-      continue;
-    }
-    if !passages.contains(quote) {
-      tracing::warn!(target: "charliebot_tasks", error = "quote is not verbatim from the passages", "presend_flag_dropped");
-      continue;
-    }
-    flags.push(Flag { n: 0, kind: kind.to_string(), quote: quote.to_string(), reason: reason.to_string() });
-  }
-  Ok(flags)
+  items.iter().enumerate().map(|(index, item)| parse_flag(index + 1, item, passages)).collect()
 }
 
-/// The model check over one batch of passages: the light backends in pool rotation, each answer
-/// parsed against the passages. Each call gets the budget left until `deadline`, so a hung backend
-/// cannot outlive the check's limit. Fails when every backend fails or answers off shape.
+/// One entry of the answer, checked against the contract. `entry` is its 1-based place in the answer.
+fn parse_flag(entry: usize, item: &Value, passages: &str) -> anyhow::Result<Flag> {
+  let kind = item
+    .get("kind")
+    .and_then(Value::as_str)
+    .ok_or_else(|| anyhow::anyhow!("presend check flag {entry} has no kind"))?;
+  if !FLAG_KINDS.contains(&kind) {
+    bail!("presend check flag {entry} has the unknown kind {kind:?}");
+  }
+  let quote = item
+    .get("quote")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|quote| !quote.is_empty())
+    .ok_or_else(|| anyhow::anyhow!("presend check flag {entry} has no quote"))?;
+  if !passages.contains(quote) {
+    bail!("presend check flag {entry}'s quote is not verbatim from the passages");
+  }
+  let reason = item
+    .get("reason")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|reason| !reason.is_empty())
+    .ok_or_else(|| anyhow::anyhow!("presend check flag {entry} has no reason"))?;
+  Ok(Flag { n: 0, kind: kind.to_string(), quote: quote.to_string(), reason: reason.to_string() })
+}
+
+/// The handles a check reads from its host: the config, the light backend pool and registry, the
+/// agent base environment a backend runs under, and the checkout whose `prompts/` holds the
+/// instructions. The server composes it from its features; the offline replay composes it from the
+/// CLI host. Both run [`judge`] on it, so the replay makes the server's check.
+pub struct CheckHost<'a> {
+  pub cfg: &'a CharlieBotConfig,
+  pub pool: Arc<BackendPool>,
+  pub registry: Arc<Registry>,
+  pub base_env: &'a AgentBaseEnvironment,
+  pub repo_root: &'a Path,
+}
+
+/// The model check over one context: the light backends in pool rotation, each answer parsed
+/// against the passages. Each call gets the budget left until `deadline`, so a hung backend cannot
+/// outlive the check's limit. Fails when every backend fails or answers off shape. The flags are
+/// not numbered yet.
+pub async fn judge(
+  host: &CheckHost<'_>,
+  parent_id: &str,
+  context: &PresendContext,
+  passages: &str,
+  deadline: std::time::Instant,
+) -> anyhow::Result<(String, Vec<Flag>)> {
+  let sections = spawner_prompt::load_marker_sections(
+    &host.repo_root.join("prompts").join(PROMPT_FILENAME),
+    &[SYSTEM_SECTION, JUDGE_SECTION],
+    "presend-check",
+  )?;
+  let system_prompt = sections[SYSTEM_SECTION].trim_end_matches('\n').to_string();
+  let judge_prompt = sections[JUDGE_SECTION].trim_end_matches('\n').to_string();
+  let prompt = check_prompt(&judge_prompt, context, passages);
+
+  let mut last_error = None;
+  for option in autonamer::iter_light_backends(host.cfg, Arc::clone(&host.pool)) {
+    let option = option?;
+    let backend_id = option.id.clone();
+    let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()).filter(|left| !left.is_zero())
+    else {
+      bail!("the presend check exceeded its {}s limit", CHECK_TIME_LIMIT.as_secs());
+    };
+    let launch = LaunchArgs { cgroup_session_id: Some(parent_id.to_string()), ..LaunchArgs::default() };
+    let outcome = match backend_types::build_backend(Arc::clone(&host.registry), &option, host.cfg, launch) {
+      Ok(built) => {
+        ("RuntimeError", one_shot_text(built, &host.base_env.values, &prompt, &system_prompt, Some(remaining)).await)
+      }
+      Err(error) => ("ValueError", Err(error)),
+    };
+    match outcome {
+      (_, Ok(answer)) => match parse_flags(&answer, passages) {
+        Ok(flags) => return Ok((backend_id, flags)),
+        Err(error) => last_error = Some(error.to_string()),
+      },
+      (error_type, Err(error)) => {
+        let message = format!("{error:#}");
+        if charliebot_agents::backend_pool::is_quota_error(&message) {
+          host.pool.cool(&backend_id, None);
+        }
+        last_error = Some(format!("{error_type}: {message}"));
+      }
+    }
+  }
+  bail!(
+    "every light backend failed the presend check: {}",
+    last_error.unwrap_or_else(|| "no light backend is configured".to_string())
+  )
+}
+
+/// The model check of a live message: the context as of now, judged by [`judge`] on the server's
+/// handles.
 pub async fn run_check(
   features: &Arc<FeatureContext>,
   parent_id: &str,
@@ -485,13 +555,13 @@ pub async fn run_check(
   let pool = features.startup.require::<BackendPool>()?;
   let base_env = features.startup.require::<AgentBaseEnvironment>()?;
   let repo_root = features.startup.require::<RepoRoot>()?;
-  let sections = spawner_prompt::load_marker_sections(
-    &repo_root.path().join("prompts").join(PROMPT_FILENAME),
-    &[SYSTEM_SECTION, JUDGE_SECTION],
-    "presend-check",
-  )?;
-  let system_prompt = sections[SYSTEM_SECTION].trim_end_matches('\n').to_string();
-  let judge_prompt = sections[JUDGE_SECTION].trim_end_matches('\n').to_string();
+  let host = CheckHost {
+    cfg: &cfg,
+    pool,
+    registry: Arc::clone(&features.registry),
+    base_env: &base_env,
+    repo_root: repo_root.path(),
+  };
 
   // The context reads are synchronous store and file reads; they run off the async runtime.
   let store = Arc::clone(&features.store);
@@ -506,41 +576,106 @@ pub async fn run_check(
   })
   .await
   .context("joining the presend context reader")??;
-  let prompt = check_prompt(&judge_prompt, &context, passages);
+  judge(&host, parent_id, &context, passages, deadline).await
+}
 
-  let mut last_error = None;
-  for option in autonamer::iter_light_backends(&cfg, Arc::clone(&pool)) {
-    let option = option?;
-    let backend_id = option.id.clone();
-    let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()).filter(|left| !left.is_zero())
-    else {
-      bail!("the presend check exceeded its {}s limit", CHECK_TIME_LIMIT.as_secs());
-    };
-    let launch = LaunchArgs { cgroup_session_id: Some(parent_id.to_string()), ..LaunchArgs::default() };
-    let outcome = match backend_types::build_backend(Arc::clone(&features.registry), &option, &cfg, launch) {
-      Ok(built) => {
-        ("RuntimeError", one_shot_text(built, &base_env.values, &prompt, &system_prompt, Some(remaining)).await)
-      }
-      Err(error) => ("ValueError", Err(error)),
-    };
-    match outcome {
-      (_, Ok(answer)) => match parse_flags(&answer, passages) {
-        Ok(flags) => return Ok((backend_id, flags)),
-        Err(error) => last_error = Some(error.to_string()),
-      },
-      (error_type, Err(error)) => {
-        let message = format!("{error:#}");
-        if charliebot_agents::backend_pool::is_quota_error(&message) {
-          pool.cool(&backend_id, None);
-        }
-        last_error = Some(format!("{error_type}: {message}"));
-      }
-    }
+/// The flags of one check, numbered from 1 in the order the check returned them.
+fn number(flags: Vec<Flag>) -> Vec<Flag> {
+  flags
+    .into_iter()
+    .enumerate()
+    .map(|(index, mut flag)| {
+      flag.n = index as u32 + 1;
+      flag
+    })
+    .collect()
+}
+
+/// One message of the offline replay: the child session it went to, and the event id of the message in that
+/// child's log.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct ReplayItem {
+  pub child: String,
+  pub event: String,
+}
+
+/// One replayed check: the backend that answered, the numbered flags, and the wall time of the check.
+#[derive(Debug)]
+pub struct ReplayCheck {
+  pub backend: String,
+  pub flags: Vec<Flag>,
+  pub check_ms: u64,
+}
+
+/// The check of one historical message, as the server ran it at that message's time: the passages are the
+/// message's content as the child recorded it, and the context is built as of the message's event in both
+/// logs. Fails when the event is not in the child's log or its sender is not the child's task parent.
+pub async fn replay_check(host: &CheckHost<'_>, item: &ReplayItem) -> anyhow::Result<ReplayCheck> {
+  let started = std::time::Instant::now();
+  let sessions = host.cfg.charliebot_home.join("sessions");
+  let child_dir = sessions.join(&item.child);
+  let child_events = shared_events(&child_dir)?;
+  let meta = read_session_metadata(&layout::metadata_path(&child_dir))
+    .map_err(|error| anyhow::anyhow!("reading the metadata of child session {}: {error}", item.child))?
+    .with_context(|| format!("child session {} has no metadata", item.child))?;
+  let message = child_events
+    .iter()
+    .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(item.event.as_str()))
+    .with_context(|| format!("event {} is not in the log of child session {}", item.event, item.child))?;
+  let parent_id =
+    meta.task_parent_id.clone().with_context(|| format!("child session {} has no task parent", item.child))?;
+  let sender = message.get("from_session").and_then(CompactValue::as_str).unwrap_or_default();
+  if sender != parent_id {
+    bail!("event {} came from {sender:?}, not from the task parent {parent_id}", item.event);
   }
-  bail!(
-    "every light backend failed the presend check: {}",
-    last_error.unwrap_or_else(|| "no light backend is configured".to_string())
-  )
+  let content = message.get("content").and_then(CompactValue::as_str).unwrap_or_default().to_string();
+  let parent_events = shared_events(&sessions.join(&parent_id))?;
+  let context = context_from_events(
+    meta.task.as_ref(),
+    &child_events,
+    &parent_events,
+    &parent_id,
+    &item.child,
+    &content,
+    Some(item.event.as_str()),
+  );
+  let deadline = std::time::Instant::now() + CHECK_TIME_LIMIT;
+  let (backend, flags) = judge(host, &parent_id, &context, &content, deadline).await?;
+  Ok(ReplayCheck { backend, flags: number(flags), check_ms: started.elapsed().as_millis() as u64 })
+}
+
+/// The events of one session's chat log, shared as the store shares them.
+fn shared_events(session_dir: &Path) -> anyhow::Result<Vec<SharedChatEvent>> {
+  Ok(read_chat_log(&layout::chat_events_path(session_dir))?.into_iter().map(Arc::new).collect())
+}
+
+/// Replay the items' checks with at most `parallel` in flight, and return the outcomes in item order. A
+/// failed check is an `Err` with its cause; the other checks still run.
+pub async fn replay_checks(
+  host: &CheckHost<'_>,
+  items: &[ReplayItem],
+  parallel: usize,
+) -> Vec<Result<ReplayCheck, String>> {
+  stream::iter(items.iter())
+    .map(move |item| async move { replay_check(host, item).await.map_err(|error| format!("{error:#}")) })
+    .buffered(parallel)
+    .collect()
+    .await
+}
+
+/// The JSON row the replay prints for one item: the backend, the numbered flags and the check's wall time, or
+/// the cause of the failed check.
+pub fn replay_row(item: &ReplayItem, outcome: &Result<ReplayCheck, String>) -> Value {
+  match outcome {
+    Ok(check) => json!({
+      "child": item.child,
+      "event": item.event,
+      "backend": check.backend,
+      "check_ms": check.check_ms,
+      "flags": check.flags.iter().map(Flag::to_value).collect::<Vec<_>>(),
+    }),
+    Err(error) => json!({"child": item.child, "event": item.event, "error": error}),
+  }
 }
 
 /// The context one check reads, built as of `as_of_event_id`: the events up to that event id, so an
@@ -745,23 +880,34 @@ mod tests {
   }
 
   #[test]
-  fn parse_flags_accepts_the_contract_shape_and_drops_unusable_entries() {
+  fn parse_flags_accepts_the_contract_shape_and_fails_on_any_malformed_entry() {
     let passages = "one two three";
     let answer = concat!(
       "```json\n",
       r#"[{"kind":"repeat","quote":"one two","reason":"sent before"},"#,
-      r#"{"kind":"nope","quote":"three","reason":"x"},"#,
-      r#"{"kind":"other","quote":"missing from passages","reason":"x"},"#,
-      r#"{"kind":"background","quote":"three","reason":""},"#,
-      r#"{"kind":"other","reason":"no quote"}]"#,
+      r#"{"kind":"background","quote":"three","reason":"outside the task"}]"#,
       "\n```"
     );
     let flags = parse_flags(answer, passages).unwrap();
-    assert_eq!(flags.len(), 1);
+    assert_eq!(flags.len(), 2);
     assert_eq!(flags[0].kind, "repeat");
     assert_eq!(flags[0].quote, "one two");
+    assert!(parse_flags("[]", passages).unwrap().is_empty());
     assert!(parse_flags("no json here", passages).is_err());
     assert!(parse_flags("{\"kind\":\"other\"}", passages).is_err());
+    // Each malformed entry fails the whole answer, and the error names the entry's place in it.
+    for malformed in [
+      r#"{"kind":"nope","quote":"three","reason":"x"}"#,
+      r#"{"kind":"other","quote":"missing from passages","reason":"x"}"#,
+      r#"{"kind":"background","quote":"three","reason":""}"#,
+      r#"{"kind":"other","reason":"no quote"}"#,
+      r#"{"quote":"three","reason":"no kind"}"#,
+      r#""three""#,
+    ] {
+      let answer = format!(r#"[{{"kind":"repeat","quote":"one two","reason":"sent before"}}, {malformed}]"#);
+      let error = parse_flags(&answer, passages).expect_err("a malformed entry fails the answer");
+      assert!(error.to_string().contains("flag 2"), "{error}");
+    }
   }
 
   #[test]
@@ -1231,6 +1377,71 @@ mod tests {
     let detail = error.to_string();
     assert!(detail.contains("[1] other_line · "), "{detail}");
     assert!(!detail.contains("repeat"), "{detail}");
+  }
+
+  /// Append one agent message from the parent to the child's chat log, as the child recorded it.
+  fn append_parent_message(sessions: &std::path::Path, parent_id: &str, child_id: &str, event_id: &str, content: &str) {
+    let log = charliebot_store::layout::chat_events_path(&sessions.join(child_id));
+    charliebot_store::chat_events::append_event(
+      &log,
+      &json!({
+        "id": event_id,
+        "type": event_types::AGENT_MESSAGE,
+        "from_session": parent_id,
+        "content": content,
+        "timestamp": "2026-10-15T10:00:00Z",
+      }),
+    )
+    .unwrap();
+  }
+
+  /// The replay's check host over the features, composed as the CLI composes it from its host.
+  async fn replay_outcomes(features: &FeatureContext, items: &[ReplayItem]) -> Vec<Result<ReplayCheck, String>> {
+    let cfg = features.config.get().unwrap();
+    let base_env = features.startup.require::<charliebot_agents::agent_environment::AgentBaseEnvironment>().unwrap();
+    let pool = features.startup.require::<BackendPool>().unwrap();
+    let repo_root = features.startup.require::<charliebot_core::RepoRoot>().unwrap();
+    let host = CheckHost {
+      cfg: &cfg,
+      pool,
+      registry: Arc::clone(&features.registry),
+      base_env: &base_env,
+      repo_root: repo_root.path(),
+    };
+    replay_checks(&host, items, 1).await
+  }
+
+  #[tokio::test]
+  async fn the_replay_runs_the_shared_check_on_a_historical_message_and_numbers_its_flags() {
+    let home = tempdir_with_config(ANSWER_ONE_FLAG);
+    let sessions = home.config_path.parent().unwrap().join("sessions");
+    let (parent, child) = parent_and_child(&home.features, "replay").await;
+    append_parent_message(&sessions, &parent.id, &child.id, "evt-replay-1", &format!("go on\n{FLAGGED}"));
+    let items = [ReplayItem { child: child.id.clone(), event: "evt-replay-1".into() }];
+    let outcomes = replay_outcomes(&home.features, &items).await;
+    let check = outcomes[0].as_ref().expect("the replayed check answers");
+    assert_eq!(check.backend, "stub");
+    assert_eq!(check.flags.len(), 1);
+    assert_eq!(check.flags[0].n, 1);
+    assert_eq!(check.flags[0].quote, FLAGGED);
+    assert_eq!(call_count(&home.calls_file), 1, "one model call for the one message");
+    let row = replay_row(&items[0], &outcomes[0]);
+    assert_eq!(row["flags"][0]["kind"], "repeat");
+  }
+
+  #[tokio::test]
+  async fn a_malformed_flag_entry_fails_the_replayed_check() {
+    let malformed = format!(
+      r#"[{{"kind":"repeat","quote":"{FLAGGED}","reason":"sent before"}},{{"kind":"other","quote":"{FLAGGED}","reason":""}}]"#
+    );
+    let home = tempdir_with_config(&malformed);
+    let sessions = home.config_path.parent().unwrap().join("sessions");
+    let (parent, child) = parent_and_child(&home.features, "malformed-replay").await;
+    append_parent_message(&sessions, &parent.id, &child.id, "evt-malformed-1", &format!("go on\n{FLAGGED}"));
+    let items = [ReplayItem { child: child.id.clone(), event: "evt-malformed-1".into() }];
+    let outcomes = replay_outcomes(&home.features, &items).await;
+    let error = outcomes[0].as_ref().expect_err("the malformed entry fails the check");
+    assert!(error.contains("flag 2 has no reason"), "{error}");
   }
 
   /// A tempdir whose home holds the stub config, plus the paths the tests read back.

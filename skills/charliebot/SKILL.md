@@ -155,7 +155,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 - **Long-running remote command**:
   1. `charliebot session trigger --cmd '...' --host H --cwd P --max-wait N --message "..."` — starts the command on H and registers its wake in one step. Stdout prints one JSON object: `trigger_id`, `fire_at` and the launch record (`launch_id`, `host`, `pid`, `log`, `exit_file`), also written to `<session>/launches/<launch_id>/metadata.json`. Exit 3 means the ssh start failed and nothing was registered; exit 2 means the registration was rejected and the started process was killed.
   2. After the registration prints its result, end the turn.
-  3. On wake (trigger fired): the wake message carries the exit code and the log path; pull the log if needed. The remote files sit under `/tmp/charliebot_runs/<launch_id>/` (`log`, `exit`); `ssh H rm -rf /tmp/charliebot_runs/<launch_id>` cleans up remote staging.
+  3. On wake (trigger fired): the wake message carries the exit code and the log path; pull the log if needed. The remote files sit under `$HOME/charliebot_runs/<launch_id>/` (`log`, `exit`); `ssh H 'rm -rf "$HOME/charliebot_runs/<launch_id>"'` cleans up remote staging.
 
   In normal master usage, do not pass `--session`; the server-written environment supplies it and mismatches with an explicit `--session` are rejected. Existing explicit `--session` still works for old callers.
 

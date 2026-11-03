@@ -34,22 +34,25 @@
   <!-- Form bar -->
   <div class="border-b border-slate-200 px-4 py-3 bg-slate-50">
     <form id="diff-form" class="flex flex-wrap items-end gap-3">
-      <div class="flex flex-col gap-1">
+      <div class="flex flex-col gap-1 max-sm:basis-full">
         <label for="repo-input" class="text-xs text-slate-600">Repo</label>
         <input id="repo-input" list="repo-list" type="text" placeholder="/path/to/repo"
-               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-80" />
+               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-80 max-sm:w-full" />
         <datalist id="repo-list"></datalist>
       </div>
-      <div class="flex flex-col gap-1">
-        <label for="base-input" class="text-xs text-slate-600">Base</label>
-        <input id="base-input" list="branches-list" type="text" placeholder="main"
-               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48" />
-      </div>
-      <div class="flex flex-col gap-1">
-        <label for="head-input" class="text-xs text-slate-600">Head</label>
-        <input id="head-input" list="branches-list" type="text" placeholder="HEAD"
-               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48" />
-        <datalist id="branches-list"></datalist>
+      <!-- On a phone Base and Head share one row, Head keeping its 12 rem width; on desktop the wrapper is not a box. -->
+      <div class="contents max-sm:flex max-sm:basis-full max-sm:gap-3">
+        <div class="flex flex-col gap-1 max-sm:flex-1 max-sm:min-w-0">
+          <label for="base-input" class="text-xs text-slate-600">Base</label>
+          <input id="base-input" list="branches-list" type="text" placeholder="main"
+                 class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48 max-sm:w-full" />
+        </div>
+        <div class="flex flex-col gap-1 max-sm:shrink-0">
+          <label for="head-input" class="text-xs text-slate-600">Head</label>
+          <input id="head-input" list="branches-list" type="text" placeholder="HEAD"
+                 class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48" />
+          <datalist id="branches-list"></datalist>
+        </div>
       </div>
       <div class="flex flex-col gap-1">
         <label for="mode-select" class="text-xs text-slate-600">Mode</label>
@@ -83,7 +86,20 @@
       <span>Loading files…</span>
     </div>
     <div id="error" class="hidden px-3 py-2 rounded bg-red-50 border border-red-300 text-red-700 text-sm"></div>
+    <section id="start" class="hidden">
+      <p class="max-w-2xl text-sm leading-6 text-slate-600">
+        Compare lists every file that changed between two refs of a repository, with its line counts.
+        Fill in <b>Repo</b>, then <b>Base</b> (where the work started, such as <code>main</code>) and <b>Head</b>
+        (the branch or commit to review), and press Compare. The totals then sit above the file list, and each file
+        opens into its diff.
+      </p>
+      <div id="start-repos" class="flex flex-wrap items-center gap-2 mt-3 text-xs text-slate-600 hidden">
+        <span>Repositories in your workspace:</span>
+        <div id="start-repo-list" class="flex flex-wrap gap-1.5"></div>
+      </div>
+    </section>
     <div id="empty" class="hidden text-sm text-slate-500 italic">No differences between these refs.</div>
+    <div id="summary" class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-3 hidden"></div>
     <div id="diff-output"></div>
   </main>
 

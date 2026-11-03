@@ -12,7 +12,10 @@
   const modeSelect = document.getElementById('mode-select');
   const formatSelect = document.getElementById('format-select');
   const form = document.getElementById('diff-form');
-  const statusEl = document.getElementById('status');
+  const startEl = document.getElementById('start');
+  const startReposEl = document.getElementById('start-repos');
+  const startRepoListEl = document.getElementById('start-repo-list');
+  const summaryEl = document.getElementById('summary');
   const loadingEl = document.getElementById('loading');
   const errorEl = document.getElementById('error');
   const emptyEl = document.getElementById('empty');
@@ -39,7 +42,12 @@
     errorEl.classList.remove('hidden');
   }
   function clearError() { errorEl.classList.add('hidden'); errorEl.textContent = ''; }
-  function clearOutput() { outputEl.innerHTML = ''; emptyEl.classList.add('hidden'); }
+  function clearOutput() {
+    outputEl.innerHTML = '';
+    emptyEl.classList.add('hidden');
+    summaryEl.innerHTML = '';
+    summaryEl.classList.add('hidden');
+  }
   function responseDetail(data, status) {
     const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${status}`;
     return typeof detail === 'string' ? detail : JSON.stringify(detail);
@@ -99,15 +107,35 @@
       if (!r.ok) return;
       const repos = await r.json();
       repoList.innerHTML = '';
+      startRepoListEl.innerHTML = '';
       for (const repo of repos) {
         const opt = document.createElement('option');
         opt.value = repo.path;
         opt.label = repo.label;
         repoList.appendChild(opt);
+        startRepoListEl.appendChild(startRepoButton(repo));
       }
+      if (repos.length > 0) startReposEl.classList.remove('hidden');
     } catch (e) {
       // Free-text fallback — datalist is just a hint.
     }
+  }
+
+  // One start-guide button per repository: a click fills Repo and moves the cursor to Base.
+  function startRepoButton(repo) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className =
+      'font-mono text-xs px-2 py-1 max-w-full truncate rounded border border-slate-300 bg-white text-slate-800 ' +
+      'hover:border-blue-500 hover:text-blue-700';
+    button.textContent = repo.label;
+    button.title = repo.path;
+    button.addEventListener('click', () => {
+      repoInput.value = repo.path;
+      loadBranches(repo.path);
+      baseInput.focus();
+    });
+    return button;
   }
 
   async function loadBranches(repo) {
@@ -223,29 +251,50 @@
     const row = document.createElement('div');
     row.className = 'border border-slate-200 rounded mb-2 overflow-hidden';
 
+    // Desktop: one line of chevron, status, counts, then the path. Phone (max-sm): a grid of two lines, the file name
+    // first and the counts with the directory under it; the name spans the row, so it is never cut short.
     const header = document.createElement('button');
     header.type = 'button';
-    header.className = 'w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left';
+    header.className =
+      'w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left ' +
+      'max-sm:grid max-sm:grid-cols-[auto_auto_5.5rem_minmax(0,1fr)] max-sm:gap-x-3 max-sm:gap-y-0.5';
 
     const chevron = document.createElement('span');
     chevron.textContent = '▶';
-    chevron.className = 'text-slate-400 text-xs shrink-0 transition-transform';
+    chevron.className = 'text-slate-400 text-xs shrink-0 transition-transform max-sm:row-span-2';
 
-    const pathEl = document.createElement('span');
-    pathEl.textContent = file.path;
-    pathEl.className = 'font-mono text-sm text-slate-800 flex-1 truncate';
+    const badge = statusBadge(file.status);
+    badge.classList.add('max-sm:row-span-2');
 
+    // The line counts sit in a fixed-width pair, so the + and - figures of every row line up in one column.
     const counts = document.createElement('span');
-    counts.className = 'font-mono text-xs whitespace-nowrap shrink-0';
+    counts.className = 'flex font-mono text-xs whitespace-nowrap shrink-0 max-sm:row-start-2 max-sm:col-start-3';
     const add = document.createElement('span');
-    add.className = 'text-green-600';
+    add.className = 'w-10 text-right text-green-600';
     add.textContent = `+${file.additions}`;
     const del = document.createElement('span');
-    del.className = 'text-red-600 ml-1';
+    del.className = 'ml-1.5 w-10 text-left text-red-600';
     del.textContent = `-${file.deletions}`;
     counts.append(add, del);
 
-    header.append(chevron, statusBadge(file.status), pathEl, counts);
+    const pathEl = document.createElement('span');
+    pathEl.title = file.path;
+    pathEl.className = 'flex flex-1 min-w-0 font-mono text-sm whitespace-nowrap max-sm:contents';
+    const slash = file.path.lastIndexOf('/');
+    if (slash >= 0) {
+      const dir = document.createElement('span');
+      dir.textContent = file.path.slice(0, slash + 1);
+      dir.className = 'min-w-0 truncate text-slate-500 max-sm:row-start-2 max-sm:col-start-4';
+      pathEl.append(dir);
+    }
+    const name = document.createElement('span');
+    name.textContent = file.path.slice(slash + 1);
+    name.className =
+      'shrink-0 font-semibold text-slate-900 max-sm:col-span-2 max-sm:col-start-3 ' +
+      'max-sm:whitespace-normal max-sm:break-all';
+    pathEl.append(name);
+
+    header.append(chevron, badge, counts, pathEl);
 
     const body = document.createElement('div');
     body.className = 'hidden';
@@ -273,11 +322,31 @@
     return row;
   }
 
+  // The comparison's totals and range, above the file list. The form's status line stays free for Open in code-server.
+  function renderSummary(data) {
+    const sep = data.mode === 'three-dot' ? '...' : '..';
+    const count = document.createElement('span');
+    count.className = 'text-base font-semibold text-slate-800';
+    count.textContent = `${data.total_files} ${data.total_files === 1 ? 'file' : 'files'} changed`;
+    const add = document.createElement('span');
+    add.className = 'ml-1.5 text-green-600';
+    add.textContent = `+${data.total_additions.toLocaleString('en-US')}`;
+    const del = document.createElement('span');
+    del.className = 'ml-1.5 text-red-600';
+    del.textContent = `-${data.total_deletions.toLocaleString('en-US')}`;
+    count.append(add, del);
+    const range = document.createElement('span');
+    range.className = 'font-mono text-xs text-slate-500 break-words';
+    range.textContent = `${data.base}${sep}${data.head} · ${data.mode}`;
+    summaryEl.append(count, range);
+    summaryEl.classList.remove('hidden');
+  }
+
   async function compare(params) {
     clearError();
     clearOutput();
+    startEl.classList.add('hidden');
     show(loadingEl);
-    statusEl.textContent = '';
     const token = ++comparisonToken;
     const qs = diffQuery(params);
 
@@ -303,10 +372,7 @@
     window.dispatchEvent(new CustomEvent('cbdiff:compared', { detail: { comparison } }));
 
     const files = data.files || [];
-    const sep = data.mode === 'three-dot' ? '...' : '..';
-    statusEl.textContent =
-      `${data.total_files} files · +${data.total_additions.toLocaleString('en-US')} ` +
-      `-${data.total_deletions.toLocaleString('en-US')} · ${data.mode} · ${data.base}${sep}${data.head}`;
+    renderSummary(data);
 
     if (files.length === 0) {
       emptyEl.classList.remove('hidden');
@@ -357,10 +423,12 @@
     modeSelect.value = q.mode;
     formatSelect.value = q.outputFormat;
 
+    const named = q.repo && q.base && q.head;
+    if (!named) startEl.classList.remove('hidden');
     await loadRepos();
     if (q.repo) await loadBranches(q.repo);
 
-    if (q.repo && q.base && q.head) {
+    if (named) {
       compare(q);
     }
   })();

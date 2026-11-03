@@ -15,7 +15,7 @@ use charliebot_registry::backend::{
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::registry::HostLogin;
 use charliebot_registry::{Registry, RegistryError};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use futures_util::future::BoxFuture;
 use serde_json::Map;
@@ -436,7 +436,17 @@ async fn task_manager(
           request_id: request_id.to_string(),
           task_parent_id: parent_id.map(str::to_string),
           profile: TaskProfile::Manager,
-          task: Some(TaskSpec { goal: "Synthetic cron manager".to_string(), ..TaskSpec::default() }),
+          task: Some(TaskSpec {
+            goal: "Synthetic cron manager".to_string(),
+            acceptance: Vec::new(),
+            context_refs: Vec::new(),
+            repo_path: None,
+            base_branch: None,
+            task_type: None,
+            keep_worktree: false,
+            cold_read: None,
+            approver: TaskApprover::User,
+          }),
           name: Some("Synthetic cron manager".to_string()),
           backend: Some("synthetic".to_string()),
           group: None,

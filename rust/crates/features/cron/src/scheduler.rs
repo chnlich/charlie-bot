@@ -11,7 +11,7 @@ use charliebot_registry::sequence::SequenceExecutor;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::CompactValue;
 use charliebot_store::control_events::ACTOR_SYSTEM;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, TaskSpec, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunDisplayState, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, TaskCaller};
 use chrono::{Datelike, LocalResult, Offset};
@@ -420,7 +420,17 @@ impl CronScheduler {
           request_id,
           task_parent_id: Some(parent.id.clone()),
           profile: TaskProfile::Worker,
-          task: Some(TaskSpec { goal, repo_path: task.repo.clone(), ..TaskSpec::default() }),
+          task: Some(TaskSpec {
+            goal,
+            acceptance: Vec::new(),
+            context_refs: Vec::new(),
+            repo_path: task.repo.clone(),
+            base_branch: None,
+            task_type: None,
+            keep_worktree: false,
+            cold_read: None,
+            approver: TaskApprover::User,
+          }),
           name: Some(format!("{} · {}", task.name, firing)),
           backend: None,
           group: None,

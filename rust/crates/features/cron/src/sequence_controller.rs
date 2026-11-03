@@ -181,7 +181,7 @@ impl CronSequenceController {
       },
       None => {
         tracing::error!(variable = REPO_ROOT_ENV, "cron_listing_repo_root_missing");
-        loader::CronSnapshot { tasks: bound_configs_for_listing(&home), ..loader::CronSnapshot::default() }
+        loader::CronSnapshot { tasks: bound_configs_for_listing(&home), errors: Vec::new(), fingerprint: 0 }
       }
     }
   }
@@ -772,7 +772,7 @@ mod tests {
 
   use charliebot_core::event_types;
   use charliebot_registry::sequence::SequenceBinding;
-  use charliebot_store::metadata::{TaskProfile, TaskSpec, UtcDateTime};
+  use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
   use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::Map;
   use serde_json::{Value, json};
@@ -953,7 +953,17 @@ mod tests {
           request_id: "synthetic-step-spec-leaf".to_string(),
           task_parent_id: Some(parent.id.clone()),
           profile: TaskProfile::Worker,
-          task: Some(TaskSpec { goal: "synthetic scheduled steps".to_string(), ..TaskSpec::default() }),
+          task: Some(TaskSpec {
+            goal: "synthetic scheduled steps".to_string(),
+            acceptance: Vec::new(),
+            context_refs: Vec::new(),
+            repo_path: None,
+            base_branch: None,
+            task_type: None,
+            keep_worktree: false,
+            cold_read: None,
+            approver: TaskApprover::User,
+          }),
           name: Some("Synthetic scheduled steps".to_string()),
           backend: Some("synthetic".to_string()),
           group: None,

@@ -151,6 +151,7 @@ function renderToggle(view, statusShown) {
 // the panel shows; the return restores the reader's place on the engine's
 // hidden-container path.
 function applyChatView(sessionId, view, statusShown, engine) {
+  const wasStatusShown = Boolean(manualViews.get(sessionId)?.status);
   manualViews.set(sessionId, {view, status: statusShown});
   const messages = document.getElementById('messages');
   const panel = document.getElementById('status-panel');
@@ -165,6 +166,16 @@ function applyChatView(sessionId, view, statusShown, engine) {
     if (scrollButton) scrollButton.classList.add('hidden');
   } else if (engine) {
     if (engine.view !== view) engine.setView(view);
+    else if (wasStatusShown) {
+      // The hidden-container return projects on the engine's ResizeObserver,
+      // which delivers a frame or two after the unhide: a reader who returns
+      // with arrived content already in the list sits at the stale position
+      // over the grown list until it runs. This unhide is the size recovery,
+      // so it runs the same resize projection here, synchronously — a pinned
+      // reader is at the bottom in the return's first frame, and a history
+      // reader's anchor restores before the first paint.
+      engine.handleResize();
+    }
     if (scrollButton) scrollButton.classList.toggle('hidden', engine.pinnedIntent);
   }
   renderToggle(view, statusShown);

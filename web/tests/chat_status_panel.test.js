@@ -7,6 +7,11 @@ const {
   fakeEngineNode,
   makeEngineTimers,
   installEngineTimers,
+  installScrollTopClamp,
+  settle,
+  distanceFromBottom,
+  eMsg,
+  eTurn,
 } = require('./turn_engine_harness');
 const {baseSessionContext, createChatSidebarContext} = require('./session_context_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
@@ -146,8 +151,8 @@ function panelRig() {
   // The message list is the other suites' subject: a live message lands there
   // through the stub, and the status panel reads the message it is handed.
   context.appendMessageObject = () => {};
-  return {context, root, chat, panel, badge, toggles, scrollButton, inputArea, page, statusGets, layout,
-    FakeWebSocket: context.WebSocket};
+  return {context, root, stream, chat, panel, badge, toggles, scrollButton, inputArea, page, statusGets, layout,
+    timers, FakeWebSocket: context.WebSocket};
 }
 
 // A layout switch as platform.js makes it: the mode changes, then each callback runs with the new and old mode.
@@ -680,6 +685,58 @@ test('a streaming paint while Status shows leaves the scroll-to-bottom button hi
   rig.context.restoreBottomPin(rig.root, false, false);
   assert.equal(rig.scrollButton.classList.contains('hidden'), true,
       'the hidden list raises no jump button over the panel');
+});
+
+// The live readback's failing arrival timing (sitrep_status_view_live_readback_v1,
+// case 5, observations A and B): a bottom-pinned reader selects Status, and the
+// session's running turn lands visible content in the hidden list — a committed
+// turn appended to the engine's store, and a streaming-draft update whose paint
+// grows the list's streaming fixture — before the reader leaves Status. After
+// the return no event of any kind arrives, and the plan's bound is the bottom
+// within two frames of the return. The engine's return projection rides the
+// ResizeObserver's own frame scheduling, so the fake runs the return through the
+// page's toggle path alone: on the unfixed code nothing reprojects at the
+// unhide, and the reader stays off the bottom.
+test('content that entered the hidden list pins the return at the bottom with no further event', async () => {
+  const rig = panelRig();
+  installScrollTopClamp(rig.root);
+  rig.root.clientHeight = 300;
+  await openSession(rig, {web_status: STATUS}, [...eTurn('h0_', 0), ...eTurn('h1_', 0)]);
+  settle(rig.timers);
+  // Everything is the readback's failing view: its streaming fixture lives in
+  // the list, so a draft update grows the list the reader returns to.
+  rig.context.setChatView('everything');
+  settle(rig.timers);
+  assert.equal(distanceFromBottom(rig.root), 0, 'the reader starts pinned at the bottom');
+
+  selectStatus(rig);
+  const engine = rig.context.Chat.activeTurnEngineFor(rig.root);
+  // The browser's ResizeObserver marks the hidden list at the switch; the fake
+  // runs that zero-height pass by hand before the arrivals.
+  rig.root.clientHeight = 0;
+  engine.handleResize();
+
+  // Arrival kinds while Status shows, each the engine-facing effect of its page
+  // path: the draft paint (usage.js paintStreamDraft) grows the fixture and
+  // restores the pin, the committed turn lands through appendMessage.
+  const draftBlock = new FakeElement('DIV');
+  draftBlock.__baseHeight = 80;
+  rig.stream.appendChild(draftBlock);
+  rig.context.restoreBottomPin(rig.root, engine.shouldFollow(), false);
+  engine.appendMessage(eMsg('assistant', 'live-s0', 'a step streamed while Status showed'), false);
+  engine.appendMessage(eMsg('web_reply', 'live-r0', 'the reply that arrived while Status showed'), false);
+  engine.appendMessage(eMsg('separator', 'live-p0', '', {event_index: 5001}), false);
+
+  // The reader leaves Status; nothing arrives afterwards.
+  rig.root.clientHeight = 300;
+  rig.context.setChatView('everything');
+  assert.equal(rig.root.classList.contains('hidden'), false, 'the return shows the list');
+  assert.equal(distanceFromBottom(rig.root), 0, 'the return is at the bottom with no further event');
+
+  settle(rig.timers);
+  assert.equal(distanceFromBottom(rig.root), 0, 'the bottom holds with no event to repair it');
+  assert.ok(rig.root.querySelector('[data-message-id="live-r0"]'),
+      'the turn that entered the hidden list is in the list after the return');
 });
 
 test('a web_status message renders as a system line in Everything', () => {

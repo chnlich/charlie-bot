@@ -148,9 +148,9 @@ function _barColor(pct) {
   return 'bg-emerald-500';
 }
 
-// Text-colour sibling of the bar thresholds. The committed stylesheet has no
-// text-…-500 utilities and no plain emerald-400 text utility. The summary
-// percentage therefore maps each bar hue to its nearest existing -400 text class.
+// Text-colour sibling of the bar thresholds. The summary percentage maps each
+// bar hue to a -400 text class: red and yellow keep their hue, and the emerald
+// bar uses green.
 // (Class-name literals must stay out of this comment: the Tailwind scanner
 // reads comments as candidate tokens.)
 const _BAR_TEXT_COLORS = {

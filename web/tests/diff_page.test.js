@@ -55,7 +55,8 @@ class FakeNode {
 }
 
 // Loads diff_page.js into a vm context with the given URL query and API answers. Returns the page's handles.
-function loadDiffPage({search = '', repos = [], manifest = null}) {
+// phone sets the media query the page reads for its starting format.
+function loadDiffPage({search = '', repos = [], manifest = null, phone = false}) {
   const elements = new Map();
   for (const [id, spec] of Object.entries(PAGE_ELEMENTS)) {
     const element = Object.assign(new FakeNode(), spec);
@@ -94,6 +95,7 @@ function loadDiffPage({search = '', repos = [], manifest = null}) {
     window: {
       dispatchEvent() { return true; },
       addEventListener() {},
+      matchMedia() { return {matches: phone}; },
     },
   };
   vm.createContext(context);
@@ -173,4 +175,18 @@ test('a file row keeps the directory apart from the file name, with the full pat
 
   const [, , , topPath] = top.children;
   assert.deepEqual(topPath.children.map((node) => node.textContent), ['README.md']);
+});
+
+test('a phone starts line-by-line, a wider window side-by-side, and the URL names its own format', async () => {
+  const phone = loadDiffPage({phone: true});
+  await settle();
+  assert.equal(phone.elements.get('format-select').value, 'line-by-line');
+
+  const desktop = loadDiffPage({});
+  await settle();
+  assert.equal(desktop.elements.get('format-select').value, 'side-by-side');
+
+  const named = loadDiffPage({phone: true, search: '?outputFormat=side-by-side'});
+  await settle();
+  assert.equal(named.elements.get('format-select').value, 'side-by-side');
 });

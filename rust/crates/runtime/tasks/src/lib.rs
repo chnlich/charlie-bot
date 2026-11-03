@@ -12,6 +12,7 @@ pub mod master_run;
 pub mod master_state;
 pub mod master_trigger;
 pub mod midturn_delivery;
+pub mod presend_check;
 pub mod prompts;
 pub mod recovery;
 pub mod review;

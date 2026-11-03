@@ -6,6 +6,11 @@ use std::time::Duration;
 /// One internal-API request: local loopback, generous for cold starts.
 pub const HTTP_INTERNAL_API_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// One `session send` request: the server's pre-send check holds the send for up to
+/// `presend_check::CHECK_TIME_LIMIT` (120 s) before it answers, so the CLI waits that out with
+/// margin instead of timing out while the server is still checking.
+pub const HTTP_SESSION_SEND_TIMEOUT: Duration = Duration::from_secs(150);
+
 /// Best-effort fetch of `/api/internal/version` on the CLI error path, bounded so a hung
 /// server never stalls CLI error reporting.
 pub const HTTP_VERSION_SKEW_TIMEOUT: Duration = Duration::from_secs(2);

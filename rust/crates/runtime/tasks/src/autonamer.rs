@@ -282,7 +282,7 @@ pub fn fuzzy_match_group(group: &str, existing_groups: &[String]) -> String {
     .unwrap_or_else(|| group.to_string())
 }
 
-fn strip_markdown_fences(text: &str) -> &str {
+pub(crate) fn strip_markdown_fences(text: &str) -> &str {
   let expression =
     regex::Regex::new(r"(?s)^```(?:json)?\s*\n?(.*?)\n?\s*```$").expect("markdown-fence expression is valid");
   let Some(captures) = expression.captures(text) else { return text };

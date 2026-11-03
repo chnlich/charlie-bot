@@ -1,0 +1,53 @@
+{
+  "argv": [
+    "session",
+    "send",
+    "target-id",
+    "--message",
+    "HostKey、PidFile、UsePAM 三项 23:43 已发过，请核对",
+    "--keep",
+    "1=请核对 worker 说明书是否含这三项",
+    "--session",
+    "caller-id"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "status": "accepted"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"status\": \"accepted\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/session-message",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "caller-id",
+          "target_session_id": "target-id",
+          "content": "HostKey、PidFile、UsePAM 三项 23:43 已发过，请核对",
+          "keep": [
+            {
+              "n": 1,
+              "reason": "请核对 worker 说明书是否含这三项"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

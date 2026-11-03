@@ -18,6 +18,9 @@ pub fn task_http_error(error: StoreError) -> Response {
       StatusCode::CONFLICT,
       &serde_json::json!({ "detail": { "message": message, "blockers": blockers } }),
     ),
+    StoreError::Refused(_) => {
+      responses::json(StatusCode::UNPROCESSABLE_ENTITY, &serde_json::json!({ "detail": message }))
+    }
   }
 }
 

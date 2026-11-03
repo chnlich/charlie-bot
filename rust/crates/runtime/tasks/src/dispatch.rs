@@ -23,7 +23,7 @@ use crate::event_text::{truthy_string, value_str};
 
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
-const ADMIT_FIELDS: [&str; 8] = [
+const ADMIT_FIELDS: [&str; 9] = [
   "input_id",
   "request_id",
   "uploaded_files",
@@ -32,6 +32,7 @@ const ADMIT_FIELDS: [&str; 8] = [
   "from_session_name",
   "input_mode",
   "fields",
+  "keep",
 ];
 
 /// The executor that reserves a run and launches the claimed input batch.
@@ -56,6 +57,7 @@ pub struct Dispatcher {
   sequence_completion: Arc<dyn SequenceCompletion>,
   run_completion: Arc<dyn RunFinishedCompletion>,
   executor: RwLock<Option<Arc<dyn DispatchExecutor>>>,
+  presend_refusals: crate::presend_check::RefusalMemory,
 }
 
 impl Dispatcher {
@@ -66,7 +68,14 @@ impl Dispatcher {
     sequence_completion: Arc<dyn SequenceCompletion>,
     run_completion: Arc<dyn RunFinishedCompletion>,
   ) -> Dispatcher {
-    Dispatcher { store, features, sequence_completion, run_completion, executor: RwLock::new(None) }
+    Dispatcher {
+      store,
+      features,
+      sequence_completion,
+      run_completion,
+      executor: RwLock::new(None),
+      presend_refusals: crate::presend_check::RefusalMemory::default(),
+    }
   }
 
   /// Install the execution adapter used by later dispatch decisions.
@@ -109,6 +118,21 @@ impl Dispatcher {
     if fields.input_id.is_some() && fields.request_id.is_some() {
       return Err(StoreError::invalid("input_id and request_id are mutually exclusive"));
     }
+    // The pre-send check is the one admission gate for agent messages: both agent routes admit
+    // through here, so a parent-to-child message reaches the child only through it.
+    let presend_record = if event_type == event_types::AGENT_MESSAGE {
+      crate::presend_check::gate(
+        crate::presend_check::GateDeps { features: &self.features, memory: &self.presend_refusals },
+        session_id,
+        content,
+        fields.from_session.as_deref(),
+        fields.keep.as_deref(),
+        fields.request_id.as_deref(),
+      )
+      .await?
+    } else {
+      None
+    };
 
     let epoch = self.store.prime_aggregator(session_id).await?;
     let mut restore_announcements = Vec::new();
@@ -162,6 +186,9 @@ impl Dispatcher {
         payload.push(("input_mode".to_string(), Value::String(input_mode.to_string())));
       }
       payload.extend(fields.extra_fields.clone());
+      if let Some(record) = presend_record {
+        payload.push(("presend_check".to_string(), record));
+      }
       let mut event = charliebot_store::control_events::build_control_event(
         event_type,
         actor,
@@ -991,6 +1018,9 @@ struct AdmitFields {
   from_session: Option<String>,
   from_session_name: Option<String>,
   input_mode: Option<String>,
+  /// The `--keep` arguments a `session send` re-send carries; the pre-send check reads them and the
+  /// event payload never does (the reasons live in its `presend_check` record).
+  keep: Option<Vec<crate::presend_check::KeepEntry>>,
   extra_fields: Map<String, Value>,
 }
 
@@ -1026,6 +1056,16 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
     Some(Value::Object(fields)) => fields.clone(),
     Some(_) => return Err(StoreError::invalid("task input field fields must be an object or null")),
   };
+  let keep = match object.get("keep") {
+    None | Some(Value::Null) => None,
+    Some(Value::Array(items)) => Some(
+      items
+        .iter()
+        .map(crate::presend_check::KeepEntry::from_value)
+        .collect::<StoreResult<Vec<crate::presend_check::KeepEntry>>>()?,
+    ),
+    Some(_) => return Err(StoreError::invalid("task input field keep must be a list or null")),
+  };
   Ok(AdmitFields {
     input_id: optional_string("input_id")?,
     request_id: optional_string("request_id")?,
@@ -1034,6 +1074,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
     from_session: optional_string("from_session")?,
     from_session_name: optional_string("from_session_name")?,
     input_mode: optional_string("input_mode")?,
+    keep,
     extra_fields,
   })
 }

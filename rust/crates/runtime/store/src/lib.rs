@@ -86,6 +86,9 @@ pub enum StoreError {
   Archived(String),
   /// A lifecycle conflict with its blockers: `TaskConflictError` and `RunIdentityConflictError` (409).
   Conflict(Vec<String>),
+  /// An admission the server refuses before the input is stored: `TaskPresendRefusedError` (422). Its detail is the
+  /// rendered refusal the sender reads.
+  Refused(String),
 }
 
 impl StoreError {
@@ -119,6 +122,11 @@ impl StoreError {
     Self::Conflict(blockers)
   }
 
+  /// Construct the presend-check refusal whose detail is the rendered refusal the sender reads.
+  pub fn refused(detail: impl Into<String>) -> Self {
+    Self::Refused(detail.into())
+  }
+
   /// Return the HTTP status associated with this error, when one exists.
   pub fn status_code(&self) -> Option<u16> {
     match self {
@@ -127,6 +135,7 @@ impl StoreError {
       Self::Invalid(_) => Some(400),
       Self::Forbidden(_) => Some(403),
       Self::Archived(_) | Self::Conflict(_) => Some(409),
+      Self::Refused(_) => Some(422),
     }
   }
 
@@ -147,6 +156,7 @@ impl fmt::Display for StoreError {
       }
       Self::Archived(session_id) => write!(f, "task {session_id} is archived"),
       Self::Conflict(blockers) => f.write_str(&blockers.join("; ")),
+      Self::Refused(detail) => f.write_str(detail),
     }
   }
 }

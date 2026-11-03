@@ -68,6 +68,8 @@ pub struct ApiCall<'a> {
   pub readback: Option<Readback<'a>>,
   /// Status codes the command maps to an exit code other than 1.
   pub rejection_exit_codes: &'a [(u16, i32)],
+  /// The request bound this call overrides the context's with, when one is set.
+  pub request_timeout: Option<Duration>,
 }
 
 /// Issue one internal-API call and return its parsed JSON response.
@@ -94,7 +96,7 @@ pub fn call_api(
       url: url.clone(),
       headers: headers.clone(),
       body: body.clone(),
-      timeout: Duration::from_secs_f64(ctx.request_timeout),
+      timeout: call.request_timeout.unwrap_or(Duration::from_secs_f64(ctx.request_timeout)),
     };
     let lost = match transport(&request) {
       Err(TransportError::ConnectPhase(message)) => {
@@ -200,6 +202,27 @@ pub fn post(
     params: None,
     readback,
     rejection_exit_codes,
+    request_timeout: None,
+  })
+}
+
+/// One POST whose request bound is `request_timeout` instead of the default: the send behind
+/// `charliebot session send` waits out the server's pre-send check.
+pub fn post_with_request_timeout(
+  endpoint: &str,
+  payload: Value,
+  readback: Option<Readback<'_>>,
+  rejection_exit_codes: &[(u16, i32)],
+  request_timeout: Duration,
+) -> Result<Value, CliExit> {
+  run_call(ApiCall {
+    method: Method::Post,
+    endpoint: endpoint.to_string(),
+    payload: Some(payload),
+    params: None,
+    readback,
+    rejection_exit_codes,
+    request_timeout: Some(request_timeout),
   })
 }
 
@@ -217,6 +240,7 @@ pub fn patch(
     params: None,
     readback,
     rejection_exit_codes,
+    request_timeout: None,
   })
 }
 
@@ -229,6 +253,7 @@ pub fn get(endpoint: &str, params: Option<Vec<(String, String)>>) -> Result<Valu
     params,
     readback: None,
     rejection_exit_codes: &[],
+    request_timeout: None,
   })
 }
 
@@ -289,6 +314,7 @@ mod tests {
       params: None,
       readback: None,
       rejection_exit_codes: &[],
+      request_timeout: None,
     }
   }
 
@@ -467,6 +493,7 @@ mod tests {
       params: Some(vec![("k".to_string(), "v".to_string())]),
       readback: None,
       rejection_exit_codes: &[],
+      request_timeout: None,
     };
 
     let value = call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::new()).unwrap();

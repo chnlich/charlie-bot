@@ -224,3 +224,126 @@ pub fn work_item(queue: &Arc<MasterQueue>, features: &Arc<FeatureContext>, sessi
     completion: None,
   }
 }
+
+// --- the presend-check stub backend ----------------------------------------
+
+use std::fs;
+
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_registry::RegistryError;
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle, Translate,
+  TransportKind,
+};
+
+/// A one-shot backend that answers `answer` verbatim and appends every prompt it receives to
+/// `calls_file`, so a test counts the model calls without starting a process.
+pub struct PresendStubBackend {
+  answer: String,
+  calls_file: PathBuf,
+}
+
+impl AgentBackend for PresendStubBackend {
+  fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+    None
+  }
+
+  fn prepare_transport(&mut self, _log_dir: &std::path::Path) -> anyhow::Result<()> {
+    Ok(())
+  }
+
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    panic!("the presend stub answers its native one-shot and never builds a command")
+  }
+
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+    Ok(env)
+  }
+
+  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+    None
+  }
+
+  fn translator(&self) -> Box<dyn Translate> {
+    Box::new(IdentityTranslate)
+  }
+
+  fn transport(&self) -> TransportKind {
+    TransportKind::RawLog
+  }
+
+  fn one_shot_text<'a>(
+    &'a mut self,
+    _base_env: &'a Env,
+    prompt: &'a str,
+    _system: &'a str,
+    _timeout: Option<std::time::Duration>,
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    use std::io::Write;
+    let mut calls = fs::OpenOptions::new().create(true).append(true).open(&self.calls_file).unwrap();
+    writeln!(calls, "{}", prompt.len()).unwrap();
+    let answer = self.answer.clone();
+    Some(Box::pin(async move { Ok(answer) }))
+  }
+}
+
+pub struct IdentityTranslate;
+
+impl Translate for IdentityTranslate {
+  fn translate(&mut self, event: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![event])
+  }
+}
+
+pub struct StubFactory;
+
+impl BackendFactory for StubFactory {
+  fn build(
+    &self,
+    option: Option<&BackendOption>,
+    _cfg: &CharlieBotConfig,
+    _launch: LaunchArgs,
+  ) -> anyhow::Result<Box<dyn AgentBackend>> {
+    let option = option.expect("the stub builds a configured backend");
+    let answer = option
+      .type_fields
+      .get("answer")
+      .and_then(serde_yaml::Value::as_str)
+      .expect("the stub option carries answer")
+      .to_string();
+    let calls_file = PathBuf::from(
+      option
+        .type_fields
+        .get("calls_file")
+        .and_then(serde_yaml::Value::as_str)
+        .expect("the stub option carries calls_file"),
+    );
+    Ok(Box::new(PresendStubBackend { answer, calls_file }))
+  }
+}
+
+pub fn register_presend_stub(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.backend_type(BackendTypeRegistration {
+    type_name: "presend-stub",
+    traits: BackendTraits {
+      resume: ResumeStyle::NativeId,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: |_| Ok(()),
+    factory: Arc::new(StubFactory),
+    lifecycle: None,
+    translate_fallback: false,
+  })
+}
+
+pub fn presend_stub_config(answer: &str, calls_file: &Path) -> String {
+  format!(
+    "backends:\n  pool: [stub]\n  options:\n    - id: stub\n      label: Stub\n      type: presend-stub\n      model: synthetic-model\n      answer: {answer:?}\n      calls_file: {calls_file}\n",
+    answer = answer,
+    calls_file = calls_file.to_string_lossy().escape_default(),
+  )
+}

@@ -21,6 +21,7 @@ use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_cli_common::route;
+use charliebot_cli_common::timeouts;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::run_token::SESSION_ID_ENV;
@@ -207,6 +208,10 @@ struct SendArgs {
   /// Read the message text from this file
   #[arg(long, group = "source")]
   file: Option<String>,
+  /// Keep the refused check's passage <n> and record <reason>; repeatable. The numbers refer to
+  /// the last refused check of this parent-child pair.
+  #[arg(long, value_name = "N=REASON")]
+  keep: Vec<String>,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
   #[arg(long)]
   session: Option<String>,
@@ -495,18 +500,40 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
       return Err(CliExit::usage("one of --message or --file is required"));
     }
   };
-  let result = client::post(
+  let mut payload = json!({
+    "session_id": session_id,
+    (task_routes::SESSION_MESSAGE_TARGET_SESSION_ID_FIELD): args.target,
+    "content": content,
+  });
+  if !args.keep.is_empty() {
+    payload["keep"] = json!(keep_entries(&args.keep)?);
+  }
+  let result = client::post_with_request_timeout(
     task_routes::SESSION_MESSAGE_PATH,
-    json!({
-      "session_id": session_id,
-      (task_routes::SESSION_MESSAGE_TARGET_SESSION_ID_FIELD): args.target,
-      "content": content,
-    }),
+    payload,
     None,
     &[(422, EXIT_SEND_REFUSED)],
+    timeouts::HTTP_SESSION_SEND_TIMEOUT,
   )?;
   print_result(&result);
   Ok(())
+}
+
+/// Parse each `--keep <n>=<reason>` argument into its request entry.
+fn keep_entries(arguments: &[String]) -> Result<Vec<Value>, CliExit> {
+  arguments
+    .iter()
+    .map(|argument| match argument.split_once('=') {
+      Some((number, reason)) if !reason.is_empty() => {
+        let n: u32 = number
+          .trim()
+          .parse()
+          .map_err(|_| CliExit::usage(format!("--keep expects <n>=<reason> with a flag number, not {argument:?}")))?;
+        Ok(json!({ "n": n, "reason": reason }))
+      }
+      _ => Err(CliExit::usage(format!("--keep expects <n>=<reason> with a flag number, not {argument:?}"))),
+    })
+    .collect()
 }
 
 /// `find_local_task_close`: the close fact THIS request's own identity binds to — the event whose

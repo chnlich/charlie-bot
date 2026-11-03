@@ -730,10 +730,15 @@ async fn send_message(
   responses::json(StatusCode::ACCEPTED, &response)
 }
 
+const KEEP_ENTRY_BODY_FIELDS: &[Field] =
+  &[Field::required("n", FieldType::Integer), Field::required("reason", FieldType::String)];
+const KEEP_ENTRY_BODY: BodyModel = BodyModel::required(KEEP_ENTRY_BODY_FIELDS);
+
 const SESSION_MESSAGE_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required(SESSION_MESSAGE_TARGET_SESSION_ID_FIELD, FieldType::String),
   Field::required("content", FieldType::String),
+  Field::optional("keep", FieldType::ModelList { model: &KEEP_ENTRY_BODY }),
 ];
 const SESSION_MESSAGE_BODY: BodyModel = BodyModel::required(SESSION_MESSAGE_BODY_FIELDS).forbid_extra();
 
@@ -741,15 +746,28 @@ struct SessionMessageRequest {
   session_id: String,
   target_session_id: String,
   content: String,
+  keep: Option<Vec<crate::presend_check::KeepEntry>>,
 }
 
 fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageRequest, Box<Response>> {
   let values = body.validate(&SESSION_MESSAGE_BODY)?;
   let values = values.expect("a required request body validates to an object");
+  let keep = match values.get("keep") {
+    None | Some(Value::Null) => None,
+    Some(Value::Array(items)) => {
+      let mut entries = Vec::with_capacity(items.len());
+      for item in items {
+        entries.push(crate::presend_check::KeepEntry::from_value(item).map_err(task_http_error)?);
+      }
+      Some(entries)
+    }
+    _ => unreachable!("validated keep is a list"),
+  };
   Ok(SessionMessageRequest {
     session_id: validated_string(&values, "session_id"),
     target_session_id: validated_string(&values, SESSION_MESSAGE_TARGET_SESSION_ID_FIELD),
     content: validated_string(&values, "content"),
+    keep,
   })
 }
 
@@ -813,6 +831,7 @@ async fn session_message(State(features): State<Arc<FeatureContext>>, request: a
     "request_id": request_id,
     "from_session": caller.id,
     "from_session_name": caller.name,
+    "keep": request.keep,
   });
   if let Err(error) = dispatch
     .admit_input(
@@ -1429,6 +1448,122 @@ mod tests {
     drop(guard);
     features.store.record_launch(session_id, run_id, 424242, "12345").await.unwrap();
     run_token::sign_run_token(&claims, "synthetic-access-key").unwrap()
+  }
+
+  /// The feature context for the pre-send-check route tests: the stub backend answers the check's
+  /// model call with `answer` and logs every prompt length it receives to `calls_file`.
+  fn presend_feature_context(answer: &str, calls_file: &std::path::Path) -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
+      .unwrap();
+    std::fs::write(home.path().join("config.yaml"), crate::test_fixtures::presend_stub_config(answer, calls_file))
+      .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("tests.presend", crate::test_fixtures::register_presend_stub).unwrap();
+    let registry = Arc::new(registry);
+    let config_value = registry.load_config(home.path()).unwrap();
+    let store = Arc::new(
+      Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
+        .unwrap(),
+    );
+    let config_registry = Arc::clone(&registry);
+    let config_home = home.path().to_path_buf();
+    let config = Arc::new(HotReload::new(
+      config_value.config_file(),
+      "task_routes_test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join(CREDENTIALS_FILENAME),
+      "task_routes_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let features =
+      Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+    // The check reads the pool, the agent environment and the checkout out of the startup state.
+    features.startup.insert(charliebot_agents::backend_pool::BackendPool::default()).unwrap();
+    features
+      .startup
+      .insert(charliebot_agents::agent_environment::AgentBaseEnvironment {
+        values: charliebot_registry::backend::Env::default(),
+      })
+      .unwrap();
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
+    features.startup.insert(charliebot_core::RepoRoot::new(Some(repo_root.into_os_string())).unwrap()).unwrap();
+    (home, features)
+  }
+
+  #[tokio::test]
+  async fn both_agent_message_routes_refuse_a_parent_to_child_message_the_check_flags() {
+    let calls_file = std::env::temp_dir().join(format!("presend-route-calls-{}", std::process::id()));
+    let _ = std::fs::remove_file(&calls_file);
+    let answer = format!(
+      r#"[{{"kind":"other_line","quote":"{flagged}","reason":"the child does not depend on it"}}]"#,
+      flagged = "the other cluster waits"
+    );
+    let (_home, features) = presend_feature_context(&answer, &calls_file);
+    create_upload_session(&features, "synthetic-parent").await;
+    features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-presend-child".to_string(),
+          task_parent_id: Some("synthetic-parent".to_string()),
+          profile: TaskProfile::Worker,
+          task: None,
+          name: Some("Synthetic child".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: Some("synthetic-child".to_string()),
+        },
+        TaskCaller::Operator,
+        serde_json::Map::new(),
+      )
+      .await
+      .expect("the child task is created");
+    install_dispatcher(&features);
+    let token = register_agent_run(&features, "synthetic-parent", "synthetic-run").await;
+    let router = routes(&features);
+
+    // The route behind `charliebot session send`.
+    let relay_body = br#"{"session_id":"synthetic-parent","target_session_id":"synthetic-child","content":"Please go on. the other cluster waits."}"#;
+    let response = send_body(
+      &router,
+      Method::POST,
+      "/api/internal/session-message",
+      relay_body.to_vec(),
+      Some("application/json"),
+      Some(&format!("Bearer {token}")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "the relay route runs the check");
+    let body = response_json(response).await;
+    assert!(body["detail"].as_str().unwrap().contains("[1] other_line"), "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("the other cluster waits"), "{body}");
+
+    // The agent route behind a run token, POST /api/chat/<child>/message.
+    let chat_body = br#"{"content":"Please go on. the other cluster waits.","request_id":"presend-route-check-1"}"#;
+    let response = send_body(
+      &router,
+      Method::POST,
+      "/api/chat/synthetic-child/message",
+      chat_body.to_vec(),
+      Some("application/json"),
+      Some(&format!("Bearer {token}")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "the chat route runs the check");
+    let body = response_json(response).await;
+    assert!(body["detail"].as_str().unwrap().contains("[1] other_line"), "{body}");
+
+    // Neither route reached the child.
+    let events = features.store.load_chat_events_sync("synthetic-child").unwrap();
+    assert!(
+      !events.iter().any(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::AGENT_MESSAGE)),
+      "nothing reached the child: {events:?}"
+    );
+    let _ = std::fs::remove_file(&calls_file);
   }
 
   #[tokio::test]

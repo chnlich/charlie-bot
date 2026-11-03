@@ -27,6 +27,7 @@ pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   "from_session_name",
   "input_mode",
   "event_index",
+  "presend_check",
 ];
 
 fn task_id_namespace() -> Uuid {

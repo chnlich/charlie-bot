@@ -20,12 +20,16 @@ use charliebot_agents::event_builders::{
 const COMMAND_NOTE_CHARS: usize = 80;
 
 /// One charlie-code stream's translator.
-#[derive(Default)]
 pub struct CharlieCodeTranslator {
   commands_by_id: HashMap<String, String>,
 }
 
 impl CharlieCodeTranslator {
+  /// A translator for one stream, with no command text recorded yet.
+  pub fn new() -> Self {
+    Self { commands_by_id: HashMap::new() }
+  }
+
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let Some(event) = event.as_object() else {
       bail!("charlie-code event is not a JSON object: {event}");
@@ -178,7 +182,7 @@ mod tests {
 
   #[test]
   fn a_success_stream_keeps_the_tool_pair_ids_and_the_usage() {
-    let mut translator = CharlieCodeTranslator::default();
+    let mut translator = CharlieCodeTranslator::new();
     assert_eq!(
       translator.translate_event(&json!({"type": "command", "step": 1, "id": "s-1", "command": "pwd"})).unwrap(),
       vec![json!({"type": "tool_use", "name": "Bash", "input": {"command": "pwd"}, "id": "s-1"})]
@@ -211,7 +215,7 @@ mod tests {
 
   #[test]
   fn a_failure_keeps_the_error_message() {
-    let mut translator = CharlieCodeTranslator::default();
+    let mut translator = CharlieCodeTranslator::new();
     assert_eq!(
       translator.translate_event(&json!({"type": "error", "message": "rate limit: retry later"})).unwrap(),
       vec![json!({"type": "error", "message": "rate limit: retry later", "content": "rate limit: retry later"})]
@@ -220,7 +224,7 @@ mod tests {
 
   #[test]
   fn a_progress_note_quotes_its_command_in_minutes_or_seconds() {
-    let mut translator = CharlieCodeTranslator::default();
+    let mut translator = CharlieCodeTranslator::new();
     translator.translate_event(&json!({"type": "command", "id": "s-1", "command": "make   build\nall"})).unwrap();
     let note = translator
       .translate_event(
@@ -240,7 +244,7 @@ mod tests {
 
   #[test]
   fn a_context_field_that_is_not_an_integer_reads_as_unknown() {
-    let mut translator = CharlieCodeTranslator::default();
+    let mut translator = CharlieCodeTranslator::new();
     let events = translator
       .translate_event(&json!({
         "type": "context",

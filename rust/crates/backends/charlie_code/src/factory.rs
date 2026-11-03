@@ -64,7 +64,20 @@ mod tests {
     let cfg = Registry::new().load_config(home.path()).unwrap();
     let host = CliHost { path: String::new(), home: home.path().to_path_buf() };
     let error = CharlieCodeFactory::new(host)
-      .build(Some(&option("api_base: http://test.invalid/v1\ncredential: endpoint\n")), &cfg, LaunchArgs::default())
+      .build(
+        Some(&option("api_base: http://test.invalid/v1\ncredential: endpoint\n")),
+        &cfg,
+        LaunchArgs {
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          log_dir: None,
+          cgroup_session_id: None,
+          backend_kwargs: serde_json::Map::new(),
+        },
+      )
       .err()
       .map(|error| format!("{error:#}"))
       .expect("an empty key is refused");

@@ -942,7 +942,6 @@ dependencies = [
  "anyhow",
  "charliebot-cli-common",
  "charliebot-compat",
- "charliebot-core",
  "charliebot-registry",
  "clap",
  "futures-util",

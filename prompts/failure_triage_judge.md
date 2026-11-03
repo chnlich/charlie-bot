@@ -2,10 +2,12 @@
 
 Classify one CharlieBot failure signature from its error text, its run kind and the
 candidate LESSONS entries.
-- known_pattern: a candidate entry describes this failure and its cause.
+- known_pattern: a candidate entry describes the failure that the error text states, and
+  that failure's cause.
 - real_bug: CharlieBot code or configuration is wrong, and a change fixes it.
 - needs_decision: the failure follows from a deliberate limit or policy, and Chao
   decides whether to change it.
+When the error text states no cause of the failure, the verdict is real_bug.
 Answer in the JSON schema, `why` first. For known_pattern, `lessons_ref` holds the
 heading of the matching candidate.
 

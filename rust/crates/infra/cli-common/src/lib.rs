@@ -10,6 +10,7 @@
 pub mod args;
 pub mod base_url;
 pub mod client;
+pub mod draft;
 pub mod exit;
 pub mod files;
 pub mod headers;

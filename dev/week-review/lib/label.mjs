@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 
 import { buildChildPackets } from './packets.mjs';
 import { isMerged, mergeFiles } from './files.mjs';
-import { checkAnswers, callClaude, judgeInput, parseAnswers, runPool } from './judge.mjs';
+import { callClaude, checkAnswers, judgeInput, parseAnswers, runPool, splitAnswers } from './judge.mjs';
 import { formatTally } from './tally.mjs';
 import { parentEventsOf, readSessionMetadata, reportsFrom, windowMessages } from './window.mjs';
 
@@ -47,13 +47,17 @@ function writeJsonl(file, rows) {
   fs.writeFileSync(file, rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
 }
 
-// One judge pass over a packet. A message the pass skipped is judged once more, alone, with the same instructions.
+// One judge pass over a packet. A message the pass left unanswered is judged once more, alone, with the same
+// instructions; the retry keeps only the answers for those messages, as the recovered review's fill step did.
 async function judgePacket({ packet, prompt, model }) {
   const where = packet.name;
   const result = await callClaude({ model, input: judgeInput({ prompt, packetText: packet.text }), where });
-  let answers = parseAnswers(result, where);
-  if (!Array.isArray(answers)) throw new Error(`${where}: the answer is not an array`);
-  const answered = new Set(answers.map((answer) => answer?.id));
+  const first = parseAnswers(result, where);
+  if (!Array.isArray(first)) throw new Error(`${where}: the answer is not an array`);
+  const kept = splitAnswers(first, packet.messageIds);
+  const dropped = [...kept.dropped];
+  let answers = kept.kept;
+  const answered = new Set(answers.map((answer) => answer.id));
   const missing = packet.messageIds.filter((id) => !answered.has(id));
   let fillResult = null;
   if (missing.length > 0) {
@@ -62,10 +66,17 @@ async function judgePacket({ packet, prompt, model }) {
       input: judgeInput({ prompt, packetText: packet.text, ids: missing }),
       where: `${where} (fill)`,
     });
-    answers = [...answers, ...parseAnswers(fillResult, `${where} (fill)`)];
+    const filled = parseAnswers(fillResult, `${where} (fill)`);
+    if (!Array.isArray(filled)) throw new Error(`${where} (fill): the answer is not an array`);
+    const retry = splitAnswers(filled, missing);
+    dropped.push(...retry.dropped);
+    answers = [...answers, ...retry.kept];
+  }
+  if (dropped.length > 0) {
+    process.stderr.write(`${where}: dropped ${dropped.length} answer(s) for ids outside the packet: ${dropped.join(', ')}\n`);
   }
   checkAnswers(answers, packet.messageIds, where);
-  return { answers, result, fillResult };
+  return { answers, result, fillResult, dropped };
 }
 
 // A judgment saved by an earlier run of the same window is reused; a judgment from another judge is refused.
@@ -148,6 +159,7 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
       answers: judged.answers,
       result: judged.result,
       fill_result: judged.fillResult,
+      dropped_ids: judged.dropped,
     };
     fs.writeFileSync(file, `${JSON.stringify(saved, null, 1)}\n`);
     judgments.set(packet.name, saved);
@@ -206,6 +218,7 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
     parents: new Set(records.map((record) => record.sender)).size,
     packets: packets.length,
     fill_passes: [...judgments.values()].filter((saved) => saved.fill_result !== null).length,
+    dropped_answers: [...judgments.values()].reduce((total, saved) => total + saved.dropped_ids.length, 0),
   };
   fs.writeFileSync(path.join(out, 'run.json'), `${JSON.stringify(run, null, 1)}\n`);
   return { run, records };

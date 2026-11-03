@@ -8,6 +8,8 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use time::OffsetDateTime;
 
+use super::spawn;
+
 /// A filter whose rejected type is provable from the raw line's first JSON key.
 #[derive(Clone, Debug)]
 pub struct TypeLineFilter {
@@ -53,7 +55,7 @@ fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
 
 /// Parse raw NDJSON lines, skipping blank and malformed lines.
 pub fn parse_raw_lines(raw_bytes: &[u8]) -> Vec<Value> {
-  raw_bytes.split(|byte| *byte == b'\n').filter_map(parse_line).collect()
+  raw_bytes.split(|byte| *byte == b'\n').filter_map(spawn::parse_raw_line).collect()
 }
 
 /// Parse the raw-log prefix ending at a cursor byte offset.
@@ -70,28 +72,6 @@ pub fn raw_events_before_cursor(raw_path: &Path, cursor: u64) -> anyhow::Result<
     raw_path.display()
   );
   Ok(parse_raw_lines(&raw_bytes[..cursor]))
-}
-
-fn parse_line(line: &[u8]) -> Option<Value> {
-  if line.is_empty() || line.iter().all(u8::is_ascii_whitespace) {
-    return None;
-  }
-  match serde_json::from_slice(line) {
-    Ok(value) => Some(value),
-    Err(error) => match std::str::from_utf8(line) {
-      Ok(_) => {
-        tracing::debug!(target: "charliebot_agents", error = %error, "raw_line_not_json");
-        None
-      }
-      Err(_) => match serde_json::from_str(&String::from_utf8_lossy(line)) {
-        Ok(value) => Some(value),
-        Err(repaired_error) => {
-          tracing::debug!(target: "charliebot_agents", error = %repaired_error, "raw_line_not_json");
-          None
-        }
-      },
-    },
-  }
 }
 
 /// Apply a stateful raw-event translator to each accepted event in file order.
@@ -119,7 +99,7 @@ where
   let events = raw_bytes
     .split(|byte| *byte == b'\n')
     .filter(|line| !line_filter.is_some_and(|filter| filter.rejects(line)))
-    .filter_map(parse_line);
+    .filter_map(spawn::parse_raw_line);
   project_raw_events(events, &mut translate)
 }
 

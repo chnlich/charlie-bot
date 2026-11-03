@@ -1075,7 +1075,27 @@ where
   }
 }
 
+/// Parse one line of the backend's NDJSON stream. A blank line and a line that is not JSON read as `None`; the latter
+/// is logged under `backend_line_not_json`. An invalid UTF-8 line is parsed lossily before it is dropped.
 pub fn parse_backend_line(line: &[u8]) -> Option<Value> {
+  parse_ndjson_line(line, LineStream::Backend)
+}
+
+/// Parse one line of a recorded raw log. Its contract is `parse_backend_line`'s, under `raw_line_not_json`.
+pub fn parse_raw_line(line: &[u8]) -> Option<Value> {
+  parse_ndjson_line(line, LineStream::RawLog)
+}
+
+/// The stream a line came from, which selects the log event that reports a line that is not JSON.
+#[derive(Clone, Copy)]
+enum LineStream {
+  /// The backend's live stdout.
+  Backend,
+  /// The raw log a producer wrote.
+  RawLog,
+}
+
+fn parse_ndjson_line(line: &[u8], stream: LineStream) -> Option<Value> {
   if line.is_empty() || line.iter().all(u8::is_ascii_whitespace) {
     return None;
   }
@@ -1083,17 +1103,24 @@ pub fn parse_backend_line(line: &[u8]) -> Option<Value> {
     Ok(event) => Some(event),
     Err(error) => match std::str::from_utf8(line) {
       Ok(_) => {
-        tracing::debug!(target: "charliebot_agents", error = %error, "backend_line_not_json");
+        log_not_json(stream, &error);
         None
       }
       Err(_) => match serde_json::from_str(&String::from_utf8_lossy(line)) {
         Ok(event) => Some(event),
         Err(repaired_error) => {
-          tracing::debug!(target: "charliebot_agents", error = %repaired_error, "backend_line_not_json");
+          log_not_json(stream, &repaired_error);
           None
         }
       },
     },
+  }
+}
+
+fn log_not_json(stream: LineStream, error: &serde_json::Error) {
+  match stream {
+    LineStream::Backend => tracing::debug!(target: "charliebot_agents", error = %error, "backend_line_not_json"),
+    LineStream::RawLog => tracing::debug!(target: "charliebot_agents", error = %error, "raw_line_not_json"),
   }
 }
 

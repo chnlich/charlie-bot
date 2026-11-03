@@ -1,27 +1,18 @@
 //! The task-tree shape: a synthetic home whose task tree has the scale and proportions of a production start.
 //!
-//! At startup the task-tree walk (`charliebot_tasks::recovery`) reads every session. It gives a full node pass to each
-//! session that one keep reason holds, and skips the rest. The walk checks the reasons in this order: an open task, a
-//! chat log or metadata file written after the boot marker, a run with no end, a run with a sequence ref, and a run
-//! whose worktree exists. This shape gives every session exactly one of these reasons, or none. It writes the files that
-//! the walk and the later trigger recovery read: task facts, run records, trigger files, worktrees and the marker.
+//! On startup, the task-tree walk (`charliebot_tasks::recovery`) gives a full node pass to each session that one keep
+//! reason holds, and skips the rest. The walk checks five reasons in order: an open task, a chat log or metadata file
+//! after the marker, an unended run, a sequence ref, and an existing worktree. Every session has one reason, or none.
+//! The shape writes the task facts, run records, trigger files, worktrees and marker for the walk and trigger recovery.
 //!
-//! The counts come from one production start (11-01 12:04 PT, 8,003 nodes). It made 593 full passes: 296 open tasks,
-//! 100 files after the marker, 19 runs with no end, 34 sequence refs and 144 existing worktrees. It skipped 7,410
-//! sessions. The store held task metadata in 83.1 % of its sessions and run directories in 72.9 %. It held about 4,800
-//! trigger files, about 25 of them pending. Every count scales with the session count. Full-pass sessions hold larger
-//! event logs than the rest, so the full passes are drawn with that start's odds per size band (`FULL_PASS_ODDS`).
+//! `REFERENCE_KEEPS`, `TASK_SHARE`, `RUNS_SHARE` and `FULL_PASS_ODDS` hold one production start's counts (8,003
+//! nodes). That start made 593 full passes and skipped 7,410 sessions, and every count scales with the session
+//! count. Full passes use that start's odds per event-log size band.
 //!
-//! No state in the home makes a lab server start an agent or signal a process:
-//! - an open task belongs to a manager whose finished turns confirm every input, so no input waits for a launch;
-//! - every launched run carries a pid at or above Linux's PID_MAX_LIMIT (2^22), which no process can hold;
-//! - a run with no end sits in a closed task, and the walk ends it as interrupted;
-//! - every node is a root, so no recovery step reports to a parent;
-//! - a sequence run names the cron controller's kind and a cron task that no lab home configures;
-//! - a pending trigger waits on an open task and fires on 2030-01-01.
-//!
-//! The boot marker and every file time are fixed instants around `marker_time()`. A server start rewrites the marker,
-//! so `reset` restores the marker, the times and the worktrees from the plan that the seed gives.
+//! No state in the home makes a lab server start an agent or signal a process. An open task's manager confirms
+//! every input, and an unended run sits in a closed task. Every run's pid is at or above Linux's PID_MAX_LIMIT,
+//! every node is a root, a sequence run names an unconfigured cron task, and a pending trigger fires on 2030-01-01.
+//! The boot marker and every file time are fixed around `marker_time()`, so `reset` restores them from the seed's plan.
 
 use std::fs::{self, File};
 use std::path::Path;
@@ -68,8 +59,8 @@ const REFERENCE_KEEPS: [(KeepReason, f64); 5] = [
   (KeepReason::WorktreeExists, 144.0),
 ];
 /// The odds that a session took a full pass in the reference start, by event-log size band: (lower bound in bytes,
-/// odds). 5 of the 11 logs of 50 MB or more took one, 40 of 145 between 10 and 50 MB, 57 of 716 between 1 and 10 MB,
-/// and 491 of 7,210 under 1 MB. The whole-log reads of that start give the counts above 1 MB.
+/// odds). 5 of the 11 logs of 50 MB or more took one, and 40 of 145 between 10 and 50 MB. The bands between 1 and
+/// 10 MB and under 1 MB took 57 of 716 and 491 of 7,210. The whole-log reads of that start give the counts above 1 MB.
 const FULL_PASS_ODDS: [(u64, f64); 4] =
   [(50_000_000, 5.0 / 11.0), (10_000_000, 40.0 / 145.0), (1_000_000, 57.0 / 716.0), (0, 491.0 / 7210.0)];
 /// The store-wide shares of sessions with task metadata and with a run directory.
@@ -264,8 +255,8 @@ impl HomePlan {
     reasons
   }
 
-  /// One flag per session: set for each session whose reason `forced` holds, and for a seeded draw of the rest that
-  /// brings the set count to `share` of the sessions.
+  /// One flag per session. It is set for each session whose reason `forced` holds, and for a seeded draw of the
+  /// rest. The draw brings the set count to `share` of the sessions.
   fn exact_flags(
     reasons: &[Option<KeepReason>],
     share: f64,
@@ -387,9 +378,9 @@ struct TaskLog {
 
 /// Writes one node's event log of about `target` bytes.
 ///
-/// The log opens with `task_created`. Each run then takes an equal span of turns, the last span ends with the final
-/// user message, and a finished run's `run_finished` fact closes its span and confirms the span's inputs. A closed task
-/// ends with `task_closed`.
+/// The log opens with `task_created`. Each run then takes an equal span of turns, and the last span ends with the
+/// final user message. A finished run's `run_finished` fact closes its span and confirms the span's inputs. A closed
+/// task ends with `task_closed`.
 fn write_task_log(
   path: &Path,
   session_id: &str,

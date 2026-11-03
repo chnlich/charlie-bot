@@ -149,11 +149,20 @@ exec "$@"
 
 const CARGO: &str = r#"# Fake cargo: record the build environment, then write the release tools where cargo puts them.
 printf 'CARGO_HOME=%s\nTMPDIR=%s\n' "$CARGO_HOME" "$TMPDIR" >"$FAKE_CARGO_ENV"
+if [[ -n ${FAKE_CARGO_LOG:-} ]]; then
+  printf 'build\n' >>"$FAKE_CARGO_LOG"
+fi
+if [[ -n ${FAKE_CARGO_SLEEP:-} ]]; then
+  sleep "$FAKE_CARGO_SLEEP"
+fi
 mkdir -p "$CARGO_TARGET_DIR/release"
-for tool in charliebot improve-sandbox mock-home; do
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/release/$tool"
-  chmod 755 "$CARGO_TARGET_DIR/release/$tool"
-done
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/release/charliebot"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/release/mock-home"
+# The built improve-sandbox runs the command after `--`, as the real program does.
+printf '#!/usr/bin/env bash\nshift\n[[ ${1-} == -- ]] || exit 1\nshift\nexec "$@"\n' \
+  >"$CARGO_TARGET_DIR/release/improve-sandbox"
+chmod 755 "$CARGO_TARGET_DIR/release/charliebot" "$CARGO_TARGET_DIR/release/mock-home" \
+  "$CARGO_TARGET_DIR/release/improve-sandbox"
 "#;
 
 const GH: &str = r#"# Fake gh: answer from the fixture that FAKE_GH_PRS names, one line per open pull request: number, head, file.

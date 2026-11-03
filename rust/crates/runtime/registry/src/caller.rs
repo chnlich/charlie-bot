@@ -8,11 +8,9 @@ use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use axum::response::Response;
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
-use charliebot_core::run_token::{self, RunTokenClaims};
+use charliebot_core::run_token::{self, CALLER_SESSION_HEADER, RunTokenClaims};
 
 use crate::FeatureContext;
-
-const CALLER_SESSION_HEADER: &str = "x-charliebot-caller-session";
 
 /// The caller of a structural route: an operator or an agent bound to a verified run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +123,7 @@ mod tests {
       headers.insert(header::AUTHORIZATION, HeaderValue::from_str(authorization).unwrap());
     }
     if let Some(caller_session) = caller_session {
-      headers.insert("x-charliebot-caller-session", HeaderValue::from_str(caller_session).unwrap());
+      headers.insert(CALLER_SESSION_HEADER, HeaderValue::from_str(caller_session).unwrap());
     }
     headers
   }

@@ -4730,11 +4730,9 @@ pub(crate) mod tests {
     );
     assert_eq!(task_spec_hash(&verify).unwrap(), "9e765c73c0cf10b2fbaef99cb808d77a04b4451cc5924cdaa17b7ddf4c6f106b");
 
-    // A declared context-work task writes the flag. A record written before the flag existed reads as false.
-    let declared = TaskSpec { context_work: true, ..implement.clone() };
-    assert_eq!(serde_json::to_value(&declared).unwrap()["context_work"], true);
-    let written_before = r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null}"#;
-    assert!(!serde_json::from_str::<TaskSpec>(written_before).unwrap().context_work);
+    // A record written while the context-work flag existed still reads, and the read drops the retired key.
+    let written_with_flag = r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null,"context_work":true}"#;
+    assert_eq!(serde_json::from_str::<TaskSpec>(written_with_flag).unwrap(), verify);
   }
 }
 

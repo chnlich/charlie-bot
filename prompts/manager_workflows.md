@@ -58,7 +58,7 @@ Answer questions, explain concepts, and update memory yourself.
 This keeps direct answers, explanations, and memory updates in the manager's task context.
 Reads of code and files follow Direct Work in `prompts/master.md`.
 
-See `charliebot delegate --help` for flags, task-type profiles, and `--keep-worktree` and `--context-work` usage.
+See `charliebot delegate --help` for flags, task-type profiles, `--keep-worktree` usage, and the kinds of work that carry `## Requester Words`.
 
 ## Improve Loop
 

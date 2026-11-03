@@ -95,8 +95,12 @@ async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
   let (_, other) = render(&home, "/approval?date=2026-01-01").await;
   assert!(other.contains("Delete the backup volume"), "{other}");
   assert!(!other.contains("Chose the layout."), "{other}");
-  assert!(other.contains("No actions that only you can do on 2026-01-01."), "{other}");
-  assert!(other.contains("No digest entries and no policy table changes on 2026-01-01."), "{other}");
+  // The day sits in a span that refuses a line break, so a phone never splits 2026-01-01.
+  assert!(other.contains("No actions that only you can do on <span class=\"day\">2026-01-01</span>."), "{other}");
+  assert!(
+    other.contains("No digest entries and no policy table changes on <span class=\"day\">2026-01-01</span>."),
+    "{other}"
+  );
 }
 
 #[tokio::test]

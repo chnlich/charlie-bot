@@ -163,6 +163,7 @@ option schema	backends.codex	codex
 option schema	backends.gemini	gemini
 option schema	backends.anthropic_compatible	cc-anthropic-compatible
 option schema	backends.opencode	opencode
+child env function	runtime.agents	local_work_guard
 child env function	backends.claude_code	claude_child_env
 reading limits	backends.claude_code	claude
 reading limits	backends.opencode	snapshot

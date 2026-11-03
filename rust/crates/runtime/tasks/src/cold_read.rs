@@ -567,15 +567,17 @@ mod tests {
         min_free_disk_gib: 0,
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
+        enable_local_work_guard: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, strong: None, options },
+      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      remote_run: charliebot_core::config::RemoteRunConfig::default(),
       sections: Sections::default(),
     }
   }

@@ -11,8 +11,13 @@
 # is skipped, because its work belongs to the caller.
 #
 # The branch state is read only after origin/main is fetched, because a stale
-# origin/main would make merged work look live. The script only reads: it writes
-# no branch, worktree or pull request.
+# origin/main would make merged work look live. The launches that read this list
+# start in a burst beside the other launches, whose runners and workers fetch
+# this checkout's refs/remotes/origin/main too: fetching into that shared ref, or
+# into FETCH_HEAD, races their ref locks. This script therefore fetches into the
+# ref its own prefix owns and compares every branch against that ref, and the
+# clones' refs/remotes/origin/main stay with their owners. Otherwise the script
+# only reads: it writes no branch, worktree or pull request.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -29,9 +34,18 @@ common_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-d
 main_root=$(dirname "$common_dir")
 
 # Fetch origin/main before any branch is compared against it. The explicit
-# refspec updates the tracking ref the comparisons read, whatever fetch
-# configuration the clone carries.
-if ! git -C "$main_root" fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main; then
+# refspec writes the ref this prefix owns, whatever fetch configuration the clone
+# carries, and --no-write-fetch-head leaves the shared FETCH_HEAD alone.
+main_ref="refs/improve/inflight/${own_prefix//[^A-Za-z0-9._-]/_}"
+origin_url=$(git -C "$main_root" remote get-url origin) || {
+  printf 'cannot read the origin of %s\n' "$main_root" >&2
+  exit 1
+}
+# The fetch names the URL instead of the remote, because a named remote's fetch
+# also updates the remote's tracking ref, and that update is the shared write
+# this fetch must not make.
+if ! git -C "$main_root" fetch --quiet --no-tags --no-write-fetch-head "$origin_url" \
+  +refs/heads/main:"$main_ref"; then
   printf 'cannot fetch origin/main in %s\n' "$main_root" >&2
   exit 1
 fi
@@ -78,18 +92,19 @@ list_worktree_branches() {
 # commit whose subject origin/main has since the merge base also counts.
 commits_landed() {
   local root=$1
-  local merge_base=$2
-  local branch=$3
+  local main_ref=$2
+  local merge_base=$3
+  local branch=$4
   local sign sha subject
   local -A main_subjects=()
   while IFS= read -r subject; do
     main_subjects["$subject"]=1
-  done < <(git -C "$root" log --format=%s "$merge_base..origin/main")
+  done < <(git -C "$root" log --format=%s "$merge_base..$main_ref")
   while read -r sign sha subject; do
     if [[ $sign == + && -z ${main_subjects[$subject]:-} ]]; then
       return 1
     fi
-  done < <(git -C "$root" cherry -v origin/main "$branch")
+  done < <(git -C "$root" cherry -v "$main_ref" "$branch")
   return 0
 }
 
@@ -101,8 +116,9 @@ commits_landed() {
 # a path that never held the branch's version carries the branch's own change.
 versions_landed() {
   local root=$1
-  local merge_base=$2
-  local branch=$3
+  local main_ref=$2
+  local merge_base=$3
+  local branch=$4
   local meta path version entry
   local -A main_versions=()
   local -a paths=()
@@ -119,7 +135,7 @@ versions_landed() {
     read -r _ _ _ version _ <<<"$meta"
     main_versions["$path"$'\t'"$version"]=1
   done < <(git --literal-pathspecs -C "$root" log --format= --raw --no-renames --no-abbrev \
-    "$merge_base..origin/main" -- "${paths[@]}" | grep '^:')
+    "$merge_base..$main_ref" -- "${paths[@]}" | grep '^:')
   for entry in "${branch_versions[@]}"; do
     if [[ -z ${main_versions[$entry]:-} ]]; then
       return 1
@@ -131,13 +147,15 @@ versions_landed() {
 # Whether a branch carries a change that origin/main does not already contain.
 #
 # The branch has landed when its commits or its versions are on origin/main.
-# Both checks read origin/main, so a stale origin/main would make merged work
-# look live; this is why the fetch above comes first.
+# Both checks read the fetched ref, so a stale fetch would make merged work look
+# live; this is why the fetch above comes first.
 branch_is_in_flight() {
   local root=$1
-  local merge_base=$2
-  local branch=$3
-  if commits_landed "$root" "$merge_base" "$branch" || versions_landed "$root" "$merge_base" "$branch"; then
+  local main_ref=$2
+  local merge_base=$3
+  local branch=$4
+  if commits_landed "$root" "$main_ref" "$merge_base" "$branch" ||
+    versions_landed "$root" "$main_ref" "$merge_base" "$branch"; then
     return 1
   fi
   return 0
@@ -156,11 +174,11 @@ list_worktree_branch() {
   if [[ $branch == "$own_prefix"* ]]; then
     return
   fi
-  if ! merge_base=$(git -C "$main_root" merge-base origin/main "$branch"); then
+  if ! merge_base=$(git -C "$main_root" merge-base "$main_ref" "$branch"); then
     printf 'skip branch %s: no merge base with origin/main\n' "$branch" >&2
     return
   fi
-  if branch_is_in_flight "$main_root" "$merge_base" "$branch"; then
+  if branch_is_in_flight "$main_root" "$main_ref" "$merge_base" "$branch"; then
     git -C "$main_root" diff --name-only --no-renames "$merge_base" "$branch"
   fi
   if [[ -d $worktree ]]; then

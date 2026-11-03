@@ -7,8 +7,6 @@
     "{root}/task_spec.md",
     "--keep-worktree",
     "0",
-    "--context-work",
-    "0",
     "--request-id",
     "delegate-missing",
     "--task-type",
@@ -43,7 +41,6 @@
           "session_id": "s1",
           "description": "## Goal\nA delegation that never landed\n\n## Source Files\n- (none)\n\n## Required Behavior\nDo work.\n\n## Acceptance Tests\nCheck it.\n\n## Reviewer Checklist\nReview it.\n\n## Out of Scope\nNone.\n",
           "keep_worktree": false,
-          "context_work": false,
           "task_type": "quick-edit",
           "delegate_invocation": {
             "task_type": "quick-edit",
@@ -52,7 +49,6 @@
             "task_spec_file": "{root}/task_spec.md",
             "reviewer_context_file": null,
             "keep_worktree": false,
-            "context_work": false,
             "backend": null
           },
           "request_id": "delegate-missing"

@@ -109,19 +109,14 @@ fn with_backend(mut body: Value, backend: &str) -> Value {
   body
 }
 
-/// A delegation body that declares context work.
-fn with_context_work(mut body: Value) -> Value {
-  body["context_work"] = json!(true);
-  body
-}
-
-/// A stack whose `backends.strong` names `strong`.
-async fn strong_stack(scripts: &Scripts, ids: &[&str], pool: &[&str], strong: &str) -> anyhow::Result<Stack> {
-  let stack = stack_with(scripts, ids, pool).await?;
+/// Point the stack's `backends.routing` at a script that consumes the request and answers `answer` verbatim.
+fn install_router(stack: &Stack, answer: &str) -> anyhow::Result<()> {
+  let path = stack.cfg.charliebot_home.join("synthetic-router.sh");
+  std::fs::write(&path, format!("set -eu\ncat >/dev/null\nprintf '%s' '{answer}'\n"))?;
   let mut cfg = (*stack.cfg).clone();
-  cfg.backends.strong = Some(strong.to_string());
-  stack.replace_config(cfg)?;
-  Ok(stack)
+  cfg.backends.routing =
+    Some(charliebot_core::config::RoutingConfig { command: vec!["/bin/sh".to_string(), path.display().to_string()] });
+  stack.replace_config(cfg)
 }
 
 /// A string field of a response body.
@@ -722,116 +717,29 @@ async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyh
   Ok(())
 }
 
-/// Context work from a manager resolves to `backends.strong` for each task type that takes it, and the record keeps the
-/// declaration. A repo-less script-run takes the same path as a repo task.
+/// An unpinned implement asks the router when `backends.routing` is set, runs on the backend the router names, and keeps
+/// the route and its reason on the child record. Without routing, the same delegation takes the pool.
 #[tokio::test]
-async fn context_work_resolves_to_backends_strong_for_each_task_type() -> anyhow::Result<()> {
-  let guard = ProcessGroupGuard::new();
-  let dir = tempfile::tempdir()?;
-  let (_origin, repo) = init_repo_with_origin(dir.path())?;
-  let scripts = Scripts::new((0..3).map(|_| HANG.to_string()).collect());
-  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
-  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
-  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
-  let router = routes::routes(&stack.features);
-
-  let repo_less_script = json!({
-    "session_id": manager.id,
-    "description": "## Goal\n\nprofile the run\n",
-    "task_type": "script-run",
-    "repo_path": null,
-    "base_branch": null,
-    "context_work": true,
-  });
-  let bodies = [
-    repo_less_script,
-    with_context_work(delegate_body(&manager.id, &repo, "quick-edit")),
-    with_context_work(delegate_body(&manager.id, &repo, "implement")),
-  ];
-  for body in bodies {
-    let (status, response) = post_delegate(&router, body).await?;
-    assert_eq!(status, StatusCode::OK, "{response}");
-    assert_launched_on(&stack, &guard, &response, "kimi-k2.5").await?;
-    let child = session_of(&stack, &text(&response, "session_id")?).await?;
-    assert!(child.task.as_ref().is_some_and(|task| task.context_work), "the record keeps the declaration");
-  }
-  Ok(())
-}
-
-/// An explicit `--backend` wins over `backends.strong`, and the declaration is still recorded.
-#[tokio::test]
-async fn explicit_backend_wins_over_context_work_and_the_declaration_is_kept() -> anyhow::Result<()> {
+async fn an_unpinned_implement_takes_the_routers_answer() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![HANG.to_string()]);
-  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
+  let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
+  install_router(&stack, r#"{"routed":true,"backends":["kimi-k2.5"],"reason":"context p=0.9"}"#)?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
   user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
-
-  let body = with_context_work(with_backend(delegate_body(&manager.id, &repo, "quick-edit"), "codex-o3"));
-  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
-  assert_eq!(status, StatusCode::OK, "{response}");
-  assert_launched_on(&stack, &guard, &response, "codex-o3").await?;
-  let child = session_of(&stack, &text(&response, "session_id")?).await?;
-  assert!(child.task.as_ref().is_some_and(|task| task.context_work), "the record keeps the declaration");
-  Ok(())
-}
-
-/// Context work with no `backends.strong` is refused with 400 naming the key, even when a backend is named, and nothing
-/// is created.
-#[tokio::test]
-async fn context_work_without_backends_strong_is_refused() -> anyhow::Result<()> {
-  let dir = tempfile::tempdir()?;
-  let (_origin, repo) = init_repo_with_origin(dir.path())?;
-  let scripts = Scripts::new(vec![]);
-  let stack = stack_with(&scripts, &OPTIONS, &["opus"]).await?;
-  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
-  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
-
-  let body = with_context_work(with_backend(delegate_body(&manager.id, &repo, "implement"), "codex-o3"));
-  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
-  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
-  assert!(text(&response, "detail")?.contains("backends.strong"), "{response}");
-  assert!(stack.store().child_ids(&manager.id)?.is_empty());
-  assert!(scripts.builds().is_empty());
-  Ok(())
-}
-
-/// Verify refuses context work: the server holds verify to the pool whatever the declaration says.
-#[tokio::test]
-async fn context_work_on_verify_is_refused() -> anyhow::Result<()> {
-  let scripts = Scripts::new(vec![]);
-  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
-  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
 
   let (status, response) =
-    post_delegate(&routes::routes(&stack.features), with_context_work(verify_body(&manager.id))).await?;
-  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
-  assert!(text(&response, "detail")?.contains("reject context_work"), "{response}");
-  assert!(stack.store().child_ids(&manager.id)?.is_empty());
-  Ok(())
-}
-
-/// A delegation that declares no context work takes the pool, even with `backends.strong` set, and its record reads as
-/// no context work.
-#[tokio::test]
-async fn context_work_zero_takes_the_pool_even_when_backends_strong_is_set() -> anyhow::Result<()> {
-  let guard = ProcessGroupGuard::new();
-  let dir = tempfile::tempdir()?;
-  let (_origin, repo) = init_repo_with_origin(dir.path())?;
-  let scripts = Scripts::new(vec![HANG.to_string()]);
-  let stack = strong_stack(&scripts, &OPTIONS, &["opus"], "kimi-k2.5").await?;
-  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
-  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
-
-  let mut body = delegate_body(&manager.id, &repo, "implement");
-  body["context_work"] = json!(false);
-  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+    post_delegate(&routes::routes(&stack.features), delegate_body(&manager.id, &repo, "implement")).await?;
   assert_eq!(status, StatusCode::OK, "{response}");
-  assert_launched_on(&stack, &guard, &response, "opus").await?;
+  assert_launched_on(&stack, &guard, &response, "kimi-k2.5").await?;
   let child = session_of(&stack, &text(&response, "session_id")?).await?;
-  assert!(child.task.as_ref().is_some_and(|task| !task.context_work), "no declaration is recorded");
+  assert_eq!(
+    child.extra("route"),
+    Some(&json!({"backends": ["kimi-k2.5"], "reason": "context p=0.9"})),
+    "the child record keeps the route"
+  );
   Ok(())
 }
 

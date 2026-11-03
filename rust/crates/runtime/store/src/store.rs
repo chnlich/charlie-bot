@@ -24,7 +24,8 @@ use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
-  CC_SESSION_STARTED_AT, MetadataReadError, RoundRating, SessionMetadata, SessionStatus, UtcDateTime, WORK_STATE,
+  CC_SESSION_STARTED_AT, HAS_UNREAD, MetadataReadError, ROUND_RATINGS, RoundRating, SessionMetadata, SessionStatus,
+  UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -610,29 +611,6 @@ impl Store {
     layout::threads_dir(&self.session_dir(session_id)).join(thread_id).join(METADATA_FILE_NAME)
   }
 
-  /// Read one thread metadata file from disk.
-  pub fn read_thread_metadata(&self, path: &Path) -> StoreResult<Option<crate::metadata::ThreadMetadata>> {
-    let raw = match fs::read_to_string(path) {
-      Ok(raw) => raw,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
-    };
-    if raw.trim().is_empty() {
-      return Ok(None);
-    }
-    serde_json::from_str(&raw)
-      .map(Some)
-      .map_err(|error| StoreError::new(format!("{}: invalid thread metadata: {error}", path.display())))
-  }
-
-  /// Atomically write a thread metadata file using the model field and slot order.
-  pub fn write_thread_metadata(&self, path: &Path, metadata: &crate::metadata::ThreadMetadata) -> StoreResult<()> {
-    let parent = path.parent().expect("thread metadata path has a parent");
-    fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;
-    fsutil::atomic_write_text(path, &metadata.to_json_string(&self.slots))
-      .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
-  }
-
   /// Invalidate cached metadata and listing snapshots after an external write or deletion.
   pub fn invalidate_cache(&self, session_id: &str) {
     self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").remove(session_id);
@@ -1029,10 +1007,7 @@ impl Store {
       )
       .await?;
     if meta.is_some() {
-      let rating_name = rating.map(|rating| match rating {
-        RoundRating::ThumbsUp => "thumbs_up",
-        RoundRating::ThumbsDown => "thumbs_down",
-      });
+      let rating_name = rating.map(RoundRating::as_str);
       tracing::info!(session_id, round_id, rating = ?rating_name, "round_rated");
     }
     Ok(meta)
@@ -1105,7 +1080,7 @@ impl Store {
     };
     let Some(meta) = meta else { return Ok(None) };
     let mut fields = Map::new();
-    fields.insert("has_unread".to_string(), Value::Bool(false));
+    fields.insert(HAS_UNREAD.to_string(), Value::Bool(false));
     self.broadcast_sidebar(session_id, charliebot_core::event_types::UNREAD_CHANGED, fields).await?;
     Ok(Some(meta))
   }
@@ -1222,7 +1197,7 @@ impl Store {
     };
     let Some(meta) = meta else { return Ok(None) };
     let mut fields = Map::new();
-    fields.insert("has_unread".to_string(), Value::Bool(true));
+    fields.insert(HAS_UNREAD.to_string(), Value::Bool(true));
     self.broadcast_sidebar(session_id, charliebot_core::event_types::UNREAD_CHANGED, fields).await?;
     Ok(Some(meta))
   }
@@ -1274,7 +1249,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "id",
         "name",
         "status",
-        "has_unread",
+        HAS_UNREAD,
         "has_running_tasks",
         WORK_STATE,
         "has_pending_trigger",
@@ -1308,7 +1283,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "native_prompt_hash",
         "native_backend",
         "native_model",
-        "round_ratings",
+        ROUND_RATINGS,
         "group",
         "archive_offset",
       ],

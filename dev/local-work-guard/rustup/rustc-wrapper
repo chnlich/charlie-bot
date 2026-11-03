@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# RUSTC_WRAPPER: cargo runs each rustc through this script as `rustc-wrapper <rustc> <args>`. The queries that cargo
+# makes of rustc run as they are. A compile is refused, which also covers a toolchain that `cargo +toolchain` names
+# and so skips the placeholder.
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+for arg in "$@"; do
+  case $arg in
+    -vV|-V|--version|--print|--print=*) exec "$@" ;;
+  esac
+done
+exec bash "$here/../refuse.sh" cargo

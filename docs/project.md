@@ -123,7 +123,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 1. **Task Delegation** (Master → Worker):
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
-   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file> --keep-worktree 0 --context-work 0` (`rust/crates/app/cli/src/commands/delegate.rs`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
+   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file> --keep-worktree 0` (`rust/crates/app/cli/src/commands/delegate.rs`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
    - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`delegate_task_tree` in `rust/crates/runtime/tasks/src/routes.rs`); the tree's executor launches it (`execute_run` in `rust/crates/runtime/tasks/src/execution.rs`)
 
 2. **Worker Execution** (Phase 1 — Implement):

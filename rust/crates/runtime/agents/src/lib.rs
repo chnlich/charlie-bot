@@ -7,6 +7,7 @@ pub mod cli_base;
 pub mod cli_host;
 pub mod event_builders;
 pub mod launch_loop;
+pub mod local_work_guard;
 pub mod one_shot;
 pub mod runner;
 pub mod runs;
@@ -18,8 +19,10 @@ use charliebot_registry::{Registry, RegistryError};
 pub use backend_types::build_backend;
 pub use one_shot::{agent_one_shot_text, one_shot_text};
 
-/// Register session cgroup and backend pool startup steps before package registration.
+/// Register session cgroup and backend pool startup steps before package registration, and the local work guard's
+/// variables for every agent child process.
 pub fn register_runtime(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.pre_recovery_step("session_cgroups", agent_environment::session_cgroup_step)?;
-  registry.pre_recovery_step("backend_pool", backend_pool::pre_recovery_step)
+  registry.pre_recovery_step("backend_pool", backend_pool::pre_recovery_step)?;
+  registry.child_env("local_work_guard", local_work_guard::child_env)
 }

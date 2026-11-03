@@ -450,20 +450,17 @@ mod tests {
         min_free_disk_gib: 0,
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
+        enable_local_work_guard: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),
         worktree_dir: "/synthetic".to_string(),
         scratch_dir: "/synthetic".to_string(),
       },
-      backends: BackendsConfig {
-        pool: ids.iter().map(|id| (*id).to_string()).collect(),
-        routing: None,
-        strong: None,
-        options,
-      },
+      backends: BackendsConfig { pool: ids.iter().map(|id| (*id).to_string()).collect(), routing: None, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      remote_run: charliebot_core::config::RemoteRunConfig::default(),
       sections: Sections::default(),
     }
   }
@@ -490,8 +487,8 @@ mod tests {
       timeout: JUDGE_TIMEOUT,
     };
     // Another shared caller takes the first slot, so the judge must try beta before alpha. No "synthetic" type is
-    // registered, so each build fails and the last error names the last member tried: alpha only under the shared
-    // rotation order, beta under the pool's own declaration order.
+    // registered, so each build fails and the last error names the last member tried. That member is alpha under the
+    // shared rotation order, and beta under the pool's own declaration order.
     assert_eq!(pool.select(&config, "light_oneshot", &[]).unwrap().unwrap().id, "alpha");
     let error = judge_signature(&backends, &judge_input()).await.unwrap_err().to_string();
     assert!(error.contains("backend alpha"), "{error}");

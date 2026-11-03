@@ -9,8 +9,6 @@
     "--task-spec-file",
     "{root}/task_spec.md",
     "--keep-worktree",
-    "0",
-    "--context-work",
     "0"
   ],
   "cwd": "{root}/home/sessions/abc",

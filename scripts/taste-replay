@@ -3,9 +3,17 @@
 # (condition A), then with the domain's rows that were active when the row was decided (condition B). A match
 # measures agreement with the user's recorded choice; the held-out row is never shown to the model.
 #
+# A row is held out only when its chosen equals one of the row's options under the answer normalization below.
+# A chosen that adds the user's qualifier to an option can never match a verbatim answer, so those rows are
+# skipped and the results page and the JSON report both counts.
+#
 # Every model call runs with the repo's one-shot argv (tools disabled, no session persistence) in a new empty
 # directory, so the model sees only its prompt. The model is the manager default backend's model:
 # `backends.options[0].model` from `charliebot config get backends`.
+#
+# Each answer is appended to <output-dir>/answers.jsonl as its call returns. A rerun with the same output
+# directory continues from the answered row and condition pairs, so a failed call in a long run loses no
+# answers. The run still stops at the first failed call.
 #
 # Usage: scripts/taste-replay <output-dir>
 # Environment: CHARLIEBOT_BIN names the charliebot CLI to run. Without it, the release CLI under
@@ -17,16 +25,28 @@ CALL_TIMEOUT_SECONDS=300
 SYSTEM_PROMPT="You are helping reproduce a user's past choice. Read the question, then answer with exactly one option, copied verbatim, and nothing else."
 ISOLATION="Each call runs with tools disabled (--disallowed-tools $DISALLOWED_TOOLS) and --no-session-persistence, in a new empty directory. The model sees only the prompt."
 AS_OF_RULE="Condition B adds the domain's rows decided before the held-out row's decided_at, minus rows that a row decided before that moment supersedes, minus retracted rows. Covered rows stay in."
+HOLDOUT_RULE="A row is held out only when its chosen equals one of the row's options under the answer normalization (whitespace collapsed, quote and corner-bracket marks stripped, lowercased). A chosen that adds the user's qualifier to an option can never match a verbatim answer, so the row is skipped and counted."
 
-# Each answer's match: the first non-empty line, without its list marker, equals the chosen option after whitespace
-# collapse, quote stripping and lowercasing.
-MATCH_PROGRAM='
+# The answer normalization that both the holdout check and the match check use: whitespace collapsed, quote and
+# corner-bracket marks stripped, lowercased.
+NORM_PROGRAM='
 def norm:
   gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")
   | sub("^[\"'"'"'“”「」]+"; "") | sub("[\"'"'"'“”「」]+$"; "") | ascii_downcase;
-($answer | split("\n") | map(select(test("\\S"))) | (.[0] // "")
+'
+
+# Each answer's match: the first non-empty line, without its list marker, equals the chosen option under the
+# answer normalization.
+MATCH_PROGRAM="$NORM_PROGRAM"'($answer | split("\n") | map(select(test("\\S"))) | (.[0] // "")
   | sub("^\\s*(?:[0-9]+[.)]|[-*])\\s*"; "")) as $first
 | ($first | norm) == ($chosen | norm)
+'
+
+# A row's chosen is one of its options under the answer normalization; a chosen that adds the user's qualifier
+# to an option is not, and that row never goes to the model.
+CHOSEN_IS_AN_OPTION_PROGRAM="$NORM_PROGRAM"'(.options | map(norm)) as $options
+| (.chosen | norm) as $chosen
+| ($options | index($chosen)) != null
 '
 
 RESULTS_PROGRAM='
@@ -45,6 +65,9 @@ def domain_block($answers; $domain):
     generated_at: $generated,
     isolation: $isolation,
     as_of_rule: $as_of,
+    holdout_rule: $holdout,
+    held_out: $held_out,
+    skipped_chosen_not_an_option: $skipped,
     rows: ($answers | map(.row) | unique | length),
     conditions: {A: tally($answers; "A"), B: tally($answers; "B")},
     domains: ($answers | map(.domain) | unique | map({key: ., value: domain_block($answers; .)}) | from_entries),
@@ -58,7 +81,9 @@ def pct: if . == null then "n/a" else (((. * 1000) | round) / 10 | tostring) + "
 def cell($stats): "<td>\($stats.matches)/\($stats.total)</td><td>\($stats.rate | pct)</td>";
 "<h1>Taste replay</h1>\n"
 + "<p class=\"note\">Model: <code>\(.model | @html)</code> (the manager default backend'"'"'s model, "
-+ "<code>backends.options[0]</code>). Rows replayed: \(.rows).</p>\n"
++ "<code>backends.options[0]</code>). Rows held out: \(.held_out). Skipped because the chosen is not one "
++ "of the row'"'"'s options under the answer normalization: \(.skipped_chosen_not_an_option). Rows replayed: "
++ "\(.rows).</p>\n"
 + "<table>\n<tr><th>Condition</th><th>Matches</th><th>Agreement</th></tr>\n"
 + "<tr><td>A: situation and options only</td>\(cell(.conditions.A))</tr>\n"
 + "<tr><td>B: A plus the rows active at the decision time</td>\(cell(.conditions.B))</tr>\n"
@@ -110,10 +135,15 @@ ask() {
     --output-format text --no-session-persistence --model "$model" --system-prompt "$SYSTEM_PROMPT" \
     --disallowed-tools "$DISALLOWED_TOOLS") || {
     rm -rf "$call_dir"
-    die "model call failed"
+    die "model call failed; earlier answers persist in the output directory"
   }
   rm -rf "$call_dir"
   printf '%s' "$answer"
+}
+
+# True when the row's chosen equals one of its options under the answer normalization.
+chosen_is_an_option() {
+  jq -e "$CHOSEN_IS_AN_OPTION_PROGRAM" > /dev/null <<< "$1"
 }
 
 # The rows of a domain as JSON lines: its active rows, or the rows active at a moment when one is given.
@@ -157,25 +187,47 @@ main() {
   echo "taste-replay: preflight model call" >&2
   preflight
 
-  local index_text domain rows held row id chosen decided_at context prompt answer match condition
-  local held_rows=0
+  local index_text domain rows held row id chosen decided_at context prompt answer match condition key
+  local held_rows=0 skipped_rows=0
   index_text=$("$CLI" taste index)
   mapfile -t DOMAINS < <(printf '%s\n' "$index_text" | grep -E '^[^[:space:]]+$' || true)
   [[ ${#DOMAINS[@]} -gt 0 ]] || die "the taste table has no active row to replay"
 
   WORK=$(mktemp -d)
   trap 'rm -rf "$WORK"' EXIT
-  : > "$WORK/answers.jsonl"
+
+  # The answers persist in the output directory, so a rerun continues from the answered pairs.
+  mkdir -p "$output_dir"
+  local ANSWERS="$output_dir/answers.jsonl"
+  declare -A DONE
+  if [[ -s "$ANSWERS" ]]; then
+    jq -res 'map(.row + "/" + .condition) | .[]' "$ANSWERS" > "$WORK/done" \
+      || die "$ANSWERS is not valid answers JSONL"
+    while IFS= read -r key; do
+      DONE[$key]=1
+    done < "$WORK/done"
+    echo "taste-replay: resuming with ${#DONE[@]} answered pairs" >&2
+  fi
+
   for domain in "${DOMAINS[@]}"; do
     rows=$(query_rows "$domain")
     held=$(printf '%s\n' "$rows" | jq -c 'select((.options | length) >= 2)')
     while IFS= read -r row; do
       [[ -n "$row" ]] || continue
+      if ! chosen_is_an_option "$row"; then
+        skipped_rows=$((skipped_rows + 1))
+        continue
+      fi
       held_rows=$((held_rows + 1))
       id=$(jq -r '.id' <<< "$row")
       chosen=$(jq -r '.chosen' <<< "$row")
       decided_at=$(jq -r '.decided_at' <<< "$row")
       for condition in A B; do
+        key="$id/$condition"
+        if [[ -n "${DONE[$key]:-}" ]]; then
+          echo "taste-replay: $id condition $condition already answered" >&2
+          continue
+        fi
         if [[ $condition == A ]]; then
           prompt=$(base_prompt <<< "$row")
         else
@@ -188,15 +240,16 @@ main() {
         jq -cn --arg row "$id" --arg domain "$domain" --arg condition "$condition" --arg chosen "$chosen" \
           --arg answer "$answer" --argjson match "$match" \
           '{row: $row, domain: $domain, condition: $condition, chosen: $chosen, answer: $answer, match: $match}' \
-          >> "$WORK/answers.jsonl"
+          >> "$ANSWERS"
       done
     done <<< "$held"
   done
-  [[ $held_rows -gt 0 ]] || die "no active row has two or more options to replay"
+  [[ $held_rows -gt 0 ]] || die "no active row has two or more options whose chosen is one of them"
 
-  mkdir -p "$output_dir"
   jq -s --arg model "$MODEL" --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg isolation "$ISOLATION" --arg as_of "$AS_OF_RULE" "$RESULTS_PROGRAM" "$WORK/answers.jsonl" \
+    --arg isolation "$ISOLATION" --arg as_of "$AS_OF_RULE" \
+    --arg holdout "$HOLDOUT_RULE" --argjson held_out "$held_rows" --argjson skipped "$skipped_rows" \
+    "$RESULTS_PROGRAM" "$ANSWERS" \
     > "$output_dir/results.json"
   {
     cat <<'HTML_HEAD'
@@ -222,7 +275,7 @@ HTML_HEAD
 </html>
 HTML_TAIL
   } > "$output_dir/results.html"
-  jq -r '"taste-replay: \(.rows) rows; A \(.conditions.A.matches)/\(.conditions.A.total), B \(.conditions.B.matches)/\(.conditions.B.total)"' \
+  jq -r '"taste-replay: \(.held_out) rows held out, \(.skipped_chosen_not_an_option) skipped; A \(.conditions.A.matches)/\(.conditions.A.total), B \(.conditions.B.matches)/\(.conditions.B.total)"' \
     "$output_dir/results.json" >&2
   echo "taste-replay: wrote $output_dir/results.html and $output_dir/results.json" >&2
 }

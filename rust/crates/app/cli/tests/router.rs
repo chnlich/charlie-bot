@@ -147,7 +147,7 @@ fn rules_text(url: &str) -> String {
      instructions: \"Which class of work is this?\"\n\
      classes:\n\
      \x20 routine: {{when: \"Routine work: fixes, tests and short actions.\", run_on: pool}}\n\
-     \x20 context: {{when: \"Context work: a first read or a design.\", run_on: session}}\n\
+     \x20 context: {{when: \"Context class: a first read or a design.\", run_on: session}}\n\
      roles:\n\
      \x20 implement: [routine, context]\n"
   )

@@ -16,7 +16,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
-use charliebot_store::{PatchTask, TaskCaller};
+use charliebot_store::{PatchTask, TaskCaller, control_events};
 use charliebot_tasks::completion::pause_reason;
 use charliebot_tasks::review;
 use process_guard::ProcessGroupGuard;
@@ -165,14 +165,14 @@ async fn wait_for_run(
   }
 }
 
+/// The first review of *work_run_id*, read by its attempt-1 run id. A scan of the run records cannot name it: once
+/// that review fails, its queued retry sorts first until the retry launches, because the record order puts a run
+/// without `started_at` ahead of every launched run.
 async fn wait_for_review(stack: &Stack, session_id: &str, work_run_id: &str) -> anyhow::Result<RunRecord> {
+  let first_attempt = control_events::stable_run_id(session_id, &format!("review:{work_run_id}:1"));
   let deadline = Instant::now() + Duration::from_secs(10);
   loop {
-    if let Some(run) = stack
-      .run_records(session_id)?
-      .into_iter()
-      .find(|run| run.kind == RunKind::Review && run.review_of_run_id.as_deref() == Some(work_run_id))
-    {
+    if let Some(run) = stack.store().read_run_sync(session_id, &first_attempt)? {
       return Ok(run);
     }
     anyhow::ensure!(Instant::now() < deadline, "work run {work_run_id} did not register its review");

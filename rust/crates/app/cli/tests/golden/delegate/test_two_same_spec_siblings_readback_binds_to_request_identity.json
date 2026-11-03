@@ -7,8 +7,6 @@
     "{root}/task_spec.md",
     "--keep-worktree",
     "0",
-    "--context-work",
-    "0",
     "--request-id",
     "sibling-2",
     "--task-type",
@@ -44,7 +42,6 @@
           "session_id": "s1",
           "description": "## Goal\nFix the flaky test the same way twice.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
           "keep_worktree": false,
-          "context_work": false,
           "task_type": "quick-edit",
           "delegate_invocation": {
             "task_type": "quick-edit",
@@ -53,7 +50,6 @@
             "task_spec_file": "{root}/task_spec.md",
             "reviewer_context_file": null,
             "keep_worktree": false,
-            "context_work": false,
             "backend": null
           },
           "request_id": "sibling-2"

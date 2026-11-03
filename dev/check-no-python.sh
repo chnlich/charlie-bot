@@ -25,6 +25,7 @@ EXEMPT_PATHS=(
   'dev/remote-run/README.md' # the refused-toolchain list names the pytest and unittest entry forms it must name
   'dev/remote-run/common.sh' # reads the project's .venv interpreter and asks uv for the matching one on the build host
   'dev/remote-run/setup.sh' # installs the project's pinned CPython on the build host through uv
+  'dev/local-work-guard/README.md' # the mechanism table names the python directory of the refusing hooks
 )
 
 exempt() {
@@ -35,7 +36,9 @@ exempt() {
   return 1
 }
 
-py_files=$(git ls-files '*.py')
+# The local work guard's hooks are Python modules that an interpreter loads by path, so the guard can refuse Python
+# runs with them. That directory is the one place a tracked .py file stands.
+py_files=$(git ls-files '*.py' ':!dev/local-work-guard/python/')
 if [[ -n "$py_files" ]]; then
   printf 'Python files:\n%s\n' "$py_files" >&2
   status=1

@@ -1,10 +1,10 @@
 //! Run cause lines: cleaning, the ordered cause patterns, normalization, the no-cause shapes and the signature keys.
 //!
-//! A run's record names its error material in four places, tried in this order: the error text of its newest `result`
-//! event when that event reports an error, the `error` events of its `events.jsonl` (newest first), the end of its
-//! `agent.stderr.log`, and the `terminal_reason` of its `result` event. Extraction picks the first cause the ordered
-//! `PATTERNS` list in this file finds across those texts. A record that fits one of the closed no-cause shapes has no
-//! cause to judge.
+//! A run's record names its error material in four places, tried in this order. The first is the error text of its
+//! newest `result` event when that event reports an error. Then come the `error` events of its `events.jsonl` (newest
+//! first), the end of its `agent.stderr.log`, and last the `terminal_reason` of its `result` event. Extraction picks
+//! the first cause the ordered `PATTERNS` list in this file finds across those texts. A record that fits one of the
+//! closed no-cause shapes has no cause to judge.
 
 use std::sync::LazyLock;
 
@@ -143,7 +143,7 @@ fn cause_material(text: &str) -> Option<String> {
 }
 
 /// One ordered cause pattern. `whole_text` makes the pattern's hit name the whole cleaned text, as the Python
-/// inventory does for the classes whose matched fragment is too narrow to identify the failure; `whole_line` names the
+/// inventory does for the classes whose matched fragment is too narrow to identify the failure. `whole_line` names the
 /// line the hit sits on, for a class whose match is a single word.
 struct CausePattern {
   /// The Python inventory's class name. The signature keeps the normalized cause line, not this name.
@@ -332,8 +332,8 @@ fn containing_line(text: &str, start: usize, end: usize) -> &str {
 
 /// The cause of one run, from the error text its newest result event reports, its error-event contents in file order,
 /// its stderr tail and its terminal reason. The result text is the first candidate, then the error events newest first,
-/// then the stderr tail. When no candidate matches a pattern, the result text names the cause if there is one, else the
-/// newest error event does, else the stderr tail does, and only then the terminal reason.
+/// then the stderr tail. When no candidate matches a pattern, the result text names the cause if there is one.
+/// Otherwise the newest error event names it, then the stderr tail, and only then the terminal reason.
 pub fn extract_run_cause(
   error_texts: &[&str],
   result_error: Option<&str>,

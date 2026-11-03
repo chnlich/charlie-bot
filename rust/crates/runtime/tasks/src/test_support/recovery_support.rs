@@ -397,15 +397,17 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       min_free_disk_gib,
       enable_session_cpu_weight: true,
       enable_session_io_weight: true,
+      enable_local_work_guard: false,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),
       worktree_dir: home.join("worktrees").display().to_string(),
       scratch_dir: home.join("scripts").display().to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, strong: None, options },
+    backends: BackendsConfig { pool, routing: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
+    remote_run: charliebot_core::config::RemoteRunConfig::default(),
     sections: Sections::default(),
   }
 }

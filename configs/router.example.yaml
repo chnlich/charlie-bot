@@ -27,10 +27,10 @@ jev:
 instructions: Which class of CharlieBot work is this? Choose routine unless the work clearly meets the condition of another class.
 classes:
   routine:
-    when: Default. Fixes a bug, adds tests, changes config, runs a script or a job, queries state, follows a written plan or an approved design, lands reviewed work, or revises a page from review findings.
+    when: Default. Fixes a bug, adds tests, changes config, runs a script or a job, queries or counts state, follows a written plan or an approved design, lands reviewed work, or revises a page to close review or cold-read findings.
     run_on: pool
   context:
-    when: A first read of unfamiliar material, an understanding, a design draft or a plan, or a diagnosis of an unexplained failure.
+    when: A first read of unfamiliar material, a diagnosis of an unexplained failure, an explanation of a mechanism or a cause (an explain or debugging page included), an understanding page, or a design or plan draft (a new plan version that changes the design included).
     run_on: session
 roles:
   implement: [routine, context]

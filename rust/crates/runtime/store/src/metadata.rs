@@ -42,12 +42,16 @@ pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
+/// The session-metadata field saying whether the session has output the user has not read.
+pub const HAS_UNREAD: &str = "has_unread";
 /// The session-metadata field saying whether a trigger waits for the session.
 pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 /// The session-metadata field holding the number of triggers waiting for the session.
 pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
 /// The session-metadata field holding the next instant a waiting trigger fires.
 pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
+/// The session-metadata field holding each rated round's feedback, keyed by the rated event's id.
+pub const ROUND_RATINGS: &str = "round_ratings";
 
 /// Datetime stored as UTC with a `Z` suffix and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -179,12 +183,54 @@ impl TaskApprover {
   }
 }
 
+/// The wire spelling of a thumbs-up round rating.
+pub const THUMBS_UP: &str = "thumbs_up";
+/// The wire spelling of a thumbs-down round rating.
+pub const THUMBS_DOWN: &str = "thumbs_down";
+
 /// Round feedback value persisted in `round_ratings`.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RoundRating {
   ThumbsUp,
   ThumbsDown,
+}
+
+impl RoundRating {
+  /// The wire spelling stored in `round_ratings` and named in a rate request.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::ThumbsUp => THUMBS_UP,
+      Self::ThumbsDown => THUMBS_DOWN,
+    }
+  }
+
+  /// The rating that a stored or requested wire value names.
+  pub fn from_wire(value: &str) -> Option<Self> {
+    match value {
+      THUMBS_UP => Some(Self::ThumbsUp),
+      THUMBS_DOWN => Some(Self::ThumbsDown),
+      _ => None,
+    }
+  }
+}
+
+impl Serialize for RoundRating {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: Serializer,
+  {
+    serializer.serialize_str(self.as_str())
+  }
+}
+
+impl<'de> Deserialize<'de> for RoundRating {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let value = String::deserialize(deserializer)?;
+    Self::from_wire(&value).ok_or_else(|| serde::de::Error::unknown_variant(&value, &[THUMBS_UP, THUMBS_DOWN]))
+  }
 }
 
 /// Round ratings in source order, the order the serialized object keeps.
@@ -259,12 +305,6 @@ pub struct ColdReadSpec {
   pub trigger: String,
 }
 
-/// Whether a flag is off. A task record leaves an off `context_work` out. A task without context work therefore
-/// keeps its canonical text, and the spec hash it names, as they were before the flag existed.
-fn is_false(value: &bool) -> bool {
-  !*value
-}
-
 /// Task body carried by a v2 session.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -283,9 +323,6 @@ pub struct TaskSpec {
   pub task_type: Option<TaskType>,
   #[serde(default)]
   pub keep_worktree: bool,
-  /// The delegation's context-work declaration. The route resolves a true record's backend from `backends.strong`.
-  #[serde(default, skip_serializing_if = "is_false")]
-  pub context_work: bool,
   #[serde(default)]
   pub cold_read: Option<ColdReadSpec>,
   #[serde(default, skip_serializing_if = "TaskApprover::is_user")]
@@ -315,11 +352,13 @@ impl<'de> Deserialize<'de> for TaskSpec {
       #[serde(default)]
       keep_worktree: bool,
       #[serde(default)]
-      context_work: bool,
-      #[serde(default)]
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
+      // The retired context-work flag. Sessions written while it existed still carry it; the read
+      // accepts it and drops it.
+      #[serde(default, rename = "context_work")]
+      _retired_context_work: Option<bool>,
     }
     let fields = Fields::deserialize(deserializer)?;
     if fields.task_type == Some(TaskType::ColdRead) && fields.cold_read.is_none() {
@@ -337,11 +376,22 @@ impl<'de> Deserialize<'de> for TaskSpec {
       base_branch: fields.base_branch,
       task_type: fields.task_type,
       keep_worktree: fields.keep_worktree,
-      context_work: fields.context_work,
       cold_read: fields.cold_read,
       approver: fields.approver,
     })
   }
+}
+
+/// The heading of the optional Requester Words section a task spec may carry.
+pub const REQUESTER_WORDS_HEADING: &str = "Requester Words";
+
+/// The line index of the `## Requester Words` heading in a task spec, or `None` when the spec does not carry the
+/// section. The prompt gate and the delegate quote check read this one definition of "the spec carries Requester
+/// Words".
+pub fn requester_words_heading_line(task_spec: &str) -> Option<usize> {
+  task_spec.lines().position(|line| {
+    line.strip_prefix("## ").is_some_and(|name| name.trim_end_matches([' ', '\t']) == REQUESTER_WORDS_HEADING)
+  })
 }
 
 /// Provenance pointer to a chat event.
@@ -408,34 +458,6 @@ pub struct ThreadMetadata {
   pub task_type: Option<TaskType>,
   #[serde(flatten)]
   pub extra: Map<String, Value>,
-}
-
-impl ThreadMetadata {
-  /// Render this thread using registered field order and preserve unregistered keys.
-  pub fn to_json_string(&self, slots: &[MetadataSlot]) -> String {
-    let mut declared = Vec::new();
-    push(&mut declared, "id", &self.id);
-    push(&mut declared, "session_id", &self.session_id);
-    push(&mut declared, "description", &self.description);
-    push(&mut declared, "status", &self.status);
-    push(&mut declared, "created_at", &self.created_at);
-    push(&mut declared, "started_at", &self.started_at);
-    push(&mut declared, "completed_at", &self.completed_at);
-    push(&mut declared, "pid", &self.pid);
-    push(&mut declared, "pid_start", &self.pid_start);
-    push(&mut declared, "exit_code", &self.exit_code);
-    push(&mut declared, "branch_name", &self.branch_name);
-    push(&mut declared, "base_branch", &self.base_branch);
-    push(&mut declared, "repo_path", &self.repo_path);
-    push(&mut declared, "worktree_path", &self.worktree_path);
-    push(&mut declared, "context", &self.context);
-    push(&mut declared, "backend", &self.backend);
-    push(&mut declared, "model", &self.model);
-    push(&mut declared, "keep_worktree", &self.keep_worktree);
-    push(&mut declared, "tried_backends", &self.tried_backends);
-    push(&mut declared, "task_type", &self.task_type);
-    finish_metadata(declared, &self.extra, slots, MetadataFile::Thread)
-  }
 }
 
 /// Session metadata.
@@ -624,7 +646,7 @@ impl SessionMetadata {
     push(&mut declared, "id", &self.id);
     push(&mut declared, "name", &self.name);
     push(&mut declared, "status", &self.status);
-    push(&mut declared, "has_unread", &self.has_unread);
+    push(&mut declared, HAS_UNREAD, &self.has_unread);
     if !exclude_transient {
       push(&mut declared, "has_running_tasks", &self.has_running_tasks);
       push(&mut declared, WORK_STATE, &self.work_state);
@@ -664,7 +686,7 @@ impl SessionMetadata {
     push(&mut declared, "native_prompt_hash", &self.native_prompt_hash);
     push(&mut declared, "native_backend", &self.native_backend);
     push(&mut declared, "native_model", &self.native_model);
-    push(&mut declared, "round_ratings", &self.round_ratings);
+    push(&mut declared, ROUND_RATINGS, &self.round_ratings);
     push(&mut declared, "group", &self.group);
     push(&mut declared, "archive_offset", &self.archive_offset);
     finish_metadata(declared, &self.extra, slots, MetadataFile::Session)
@@ -855,6 +877,16 @@ mod tests {
       ratings.0,
       vec![("round-a".to_string(), RoundRating::ThumbsDown), ("round-b".to_string(), RoundRating::ThumbsUp),]
     );
+  }
+
+  #[test]
+  fn requester_words_heading_line_finds_only_the_exact_heading() {
+    let spec = "## Goal\n\nDo the work.\n\n## Requester Words \n\
+- 「do it」 (session 11111111-2222-4333-8444-555555555555, user)\n";
+    assert_eq!(requester_words_heading_line(spec), Some(4));
+    assert_eq!(requester_words_heading_line("## Goal\n\nDo the work.\n"), None);
+    assert_eq!(requester_words_heading_line("### Requester Words\n"), None);
+    assert_eq!(requester_words_heading_line("## Requester Words and more\n"), None);
   }
 
   #[test]

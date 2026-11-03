@@ -76,6 +76,7 @@ The runner also adds the files that the other directions' clones change on the r
 The list names live work only: an open pull request, or a branch whose change `origin/main` does not already contain.
 A branch that a squash merge or a rebase already landed names no file, and neither does the runner's own checkout.
 Both computations fetch `origin/main` before they compare a branch against it, because a stale ref would make merged work look live.
+The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.
 Pick a topic whose files the list does not name.
 A file that another branch changes would force that branch to resolve our conflict.
 

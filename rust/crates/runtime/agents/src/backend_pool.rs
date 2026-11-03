@@ -616,6 +616,7 @@ mod tests {
         min_free_disk_gib: 0,
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
+        enable_local_work_guard: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),
@@ -625,11 +626,11 @@ mod tests {
       backends: BackendsConfig {
         pool: pool.iter().map(|member| (*member).to_string()).collect(),
         routing: None,
-        strong: None,
         options,
       },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
+      remote_run: charliebot_core::config::RemoteRunConfig::default(),
       sections: Sections::default(),
     }
   }

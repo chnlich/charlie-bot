@@ -1,9 +1,9 @@
 //! `features.failure_triage`: the stateless half of CharlieBot failure triage.
 //!
-//! A scan reads a time window of failed runs and error-level server log lines, groups them by signature, decides
-//! no-cause records and archived signatures in code, retrieves candidate LESSONS entries and judges each remaining
-//! signature with one small model one-shot. `charliebot triage scan` prints the window and one verdict per signature,
-//! and writes nothing. A `--cron` scan derives its window from the bound session's fires.
+//! A scan reads a time window of failed runs and error-level server log lines, then groups them by signature. It
+//! decides no-cause records and archived signatures in code, retrieves candidate LESSONS entries, and judges each
+//! remaining signature with one small model one-shot. `charliebot triage scan` prints the window and one verdict per
+//! signature, and writes nothing. A `--cron` scan derives its window from the bound session's fires.
 //!
 //! This half registers no route and no service.
 

@@ -929,7 +929,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",
   },
+  OwnerRow { name: "round_ratings", owner: "runtime/store", hint: "Use `charliebot_store::metadata::ROUND_RATINGS`." },
+  OwnerRow { name: "thumbs_up", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_UP`." },
+  OwnerRow { name: "thumbs_down", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_DOWN`." },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
+  OwnerRow { name: "has_unread", owner: "runtime/store", hint: "Use `charliebot_store::metadata::HAS_UNREAD`." },
   OwnerRow {
     name: "has_pending_trigger",
     owner: "runtime/store",
@@ -1244,8 +1248,8 @@ const FORMAT_TABLE: &[FormatRow] = &[
     kind: "thread metadata",
     owner: "runtime/store",
     names: &["thread_metadata_path", "METADATA_FILE_NAME"],
-    hint: "Read it through `Store::read_thread_metadata` or `charliebot_store::metadata::read_metadata_object`, and \
-           write it through `Store::write_thread_metadata`.",
+    hint: "Read it through `charliebot_store::metadata::read_metadata_object`; the store writes no thread metadata \
+           file.",
   },
   FormatRow {
     kind: "run metadata",

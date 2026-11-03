@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use charliebot_agents::agent_environment::{self, AgentBaseEnvironment};
+use charliebot_agents::local_work_guard;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
@@ -509,6 +510,7 @@ fn load_inputs(registry: &Arc<Registry>, repo_root: &RepoRoot) -> Result<StatePa
   };
   let cfg = parts.config.get().map_err(|error| error.to_string())?;
   config::require_backends(&cfg).map_err(|error| error.to_string())?;
+  local_work_guard::configure(repo_root.path(), &cfg.server, &cfg.remote_run)?;
   // The approval policy table is required host configuration; an absent or invalid table refuses the start. The
   // check records nothing: `--check-config` is read-only, and the first server-side use records the change.
   charliebot_core::approval_policy::load(&home).map_err(|error| error.to_string())?;

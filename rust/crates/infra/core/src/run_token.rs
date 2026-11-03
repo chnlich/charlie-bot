@@ -25,6 +25,11 @@ pub const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 /// and the CLIs read it back.
 pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 
+/// `CALLER_SESSION_HEADER`: the header an internal-API call carries its calling session in. The
+/// lowercase spelling, because `HeaderName::from_static` on the server accepts only that form; HTTP
+/// header names match case-insensitively.
+pub const CALLER_SESSION_HEADER: &str = "x-charliebot-caller-session";
+
 /// URL-safe base64 with lenient decoding: missing padding and nonzero trailing bits both decode.
 const LENIENT_URL_SAFE: GeneralPurpose = GeneralPurpose::new(
   &base64::alphabet::URL_SAFE,

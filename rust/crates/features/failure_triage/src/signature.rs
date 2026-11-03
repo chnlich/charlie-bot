@@ -142,63 +142,71 @@ fn cause_material(text: &str) -> Option<String> {
   if errors.is_empty() { None } else { Some(errors.join("\n")) }
 }
 
-/// One ordered cause pattern. `whole_text` makes the pattern's hit name the whole cleaned text, as the Python
-/// inventory does for the classes whose matched fragment is too narrow to identify the failure. `whole_line` names the
-/// line the hit sits on, for a class whose match is a single word.
+/// What part of the cause material a pattern's hit names.
+#[derive(Clone, Copy)]
+enum MatchShape {
+  /// The matched fragment.
+  Fragment,
+  /// The whole cleaned text, for the Python inventory classes whose matched fragment is too narrow to identify the
+  /// failure.
+  WholeText,
+  /// The line holding the hit, for a class whose match is a single word.
+  WholeLine,
+}
+
+/// One ordered cause pattern: its inventory class name, its expression, and the part of the cause material a hit
+/// names.
 struct CausePattern {
   /// The Python inventory's class name. The signature keeps the normalized cause line, not this name.
   #[allow(dead_code)]
   name: &'static str,
   expression: Regex,
-  whole_text: bool,
-  whole_line: bool,
+  shape: MatchShape,
 }
 
 impl CausePattern {
-  fn new(name: &'static str, pattern: &str, whole_text: bool) -> CausePattern {
-    CausePattern {
-      name,
-      expression: Regex::new(pattern).expect("every cause expression is valid"),
-      whole_text,
-      whole_line: false,
-    }
-  }
-
-  fn line(name: &'static str, pattern: &str) -> CausePattern {
-    CausePattern {
-      name,
-      expression: Regex::new(pattern).expect("every cause expression is valid"),
-      whole_text: false,
-      whole_line: true,
-    }
+  fn new(name: &'static str, pattern: &str, shape: MatchShape) -> CausePattern {
+    CausePattern { name, expression: Regex::new(pattern).expect("every cause expression is valid"), shape }
   }
 }
 
 static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
   vec![
-    CausePattern::new("scope-exists", r"the previous round still runs: unit \S+sc?ope exists", false),
-    CausePattern::new("no-cron-task-file", r"no cron task file under .* names session_id", false),
-    CausePattern::new("missing-python-module", r"No module named '([^']+)'", false),
-    CausePattern::new("skill-yaml", r"failed to load skill \S+: missing YAML frontmatter", false),
-    CausePattern::new("unrecognized-model", r"\[claude-code:unrecognized_model\].*", false),
-    CausePattern::new("mem-cap", "内存上限触发", false),
-    CausePattern::new("ratelimit", r"RateLimitError:.*", true),
-    CausePattern::new("overloaded", r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)", true),
+    CausePattern::new("scope-exists", r"the previous round still runs: unit \S+sc?ope exists", MatchShape::Fragment),
+    CausePattern::new("no-cron-task-file", r"no cron task file under .* names session_id", MatchShape::Fragment),
+    CausePattern::new("missing-python-module", r"No module named '([^']+)'", MatchShape::Fragment),
+    CausePattern::new("skill-yaml", r"failed to load skill \S+: missing YAML frontmatter", MatchShape::Fragment),
+    CausePattern::new("unrecognized-model", r"\[claude-code:unrecognized_model\].*", MatchShape::Fragment),
+    CausePattern::new("mem-cap", "内存上限触发", MatchShape::Fragment),
+    CausePattern::new("ratelimit", r"RateLimitError:.*", MatchShape::WholeText),
+    CausePattern::new(
+      "overloaded",
+      r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)",
+      MatchShape::WholeText,
+    ),
     CausePattern::new(
       "auth",
       r"(?i)(Failed to authenticate|oauth_org_not_allowed|invalid x-api-key|401|Unauthorized|authentication_error)",
-      false,
+      MatchShape::Fragment,
     ),
-    CausePattern::new("timeout", r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)", false),
-    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", false),
-    CausePattern::new("traceback", r"Traceback \(most recent call last\)", true),
-    CausePattern::new("compile-error", r"(?m)^error(\[E\d+\])?:.*", true),
-    CausePattern::new("worktree", r"(?i)(worktree|already exists|not a git repository)", true),
-    CausePattern::new("assertion", r"(?i)(assertion failed|AssertionError|assert_eq)", true),
-    CausePattern::new("permission", r"(?i)(Permission denied|EACCES|landlock|read-only file system)", true),
-    CausePattern::new("git", r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", true),
-    CausePattern::new("api-error", r"(?i)(API Error|api_error|invalid_request_error)", true),
-    CausePattern::line("failed-word", r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)"),
+    CausePattern::new(
+      "timeout",
+      r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)",
+      MatchShape::Fragment,
+    ),
+    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", MatchShape::Fragment),
+    CausePattern::new("traceback", r"Traceback \(most recent call last\)", MatchShape::WholeText),
+    CausePattern::new("compile-error", r"(?m)^error(\[E\d+\])?:.*", MatchShape::WholeText),
+    CausePattern::new("worktree", r"(?i)(worktree|already exists|not a git repository)", MatchShape::WholeText),
+    CausePattern::new("assertion", r"(?i)(assertion failed|AssertionError|assert_eq)", MatchShape::WholeText),
+    CausePattern::new(
+      "permission",
+      r"(?i)(Permission denied|EACCES|landlock|read-only file system)",
+      MatchShape::WholeText,
+    ),
+    CausePattern::new("git", r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", MatchShape::WholeText),
+    CausePattern::new("api-error", r"(?i)(API Error|api_error|invalid_request_error)", MatchShape::WholeText),
+    CausePattern::new("failed-word", r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", MatchShape::WholeLine),
   ]
 });
 
@@ -309,17 +317,18 @@ fn match_cause(text: &str) -> Option<String> {
   let text = masked.as_ref();
   for pattern in PATTERNS.iter() {
     let Some(found) = pattern.expression.find(text) else { continue };
-    if pattern.whole_text {
-      return Some(text.to_string());
-    }
-    if pattern.whole_line {
-      // The class's own `^|\W` guard is part of the match, so the line is read from the word it found.
-      let matched = &text[found.start()..found.end()];
-      let start = found.start() + matched.len() - matched.trim_start().len();
-      let end = start + matched.trim().len();
-      return Some(containing_line(text, start, end).to_string());
-    }
-    return Some(found.as_str().to_string());
+    let cause = match pattern.shape {
+      MatchShape::Fragment => found.as_str(),
+      MatchShape::WholeText => text,
+      MatchShape::WholeLine => {
+        // The class's own `^|\W` guard is part of the match, so the line is read from the word it found.
+        let matched = &text[found.start()..found.end()];
+        let start = found.start() + matched.len() - matched.trim_start().len();
+        let end = start + matched.trim().len();
+        containing_line(text, start, end)
+      }
+    };
+    return Some(cause.to_string());
   }
   None
 }

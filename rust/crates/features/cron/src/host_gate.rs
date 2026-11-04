@@ -3,7 +3,7 @@
 //! A worker fire of a task whose backend names a host (`host_auth_alias`) probes that host before it creates a worker.
 //! A host that awaits the user's approval holds the fire: the fire records one skip and starts nothing, and no session
 //! wakes. Nothing is stored for the hold. The Waiting on you read derives one user-act item per holder session and host
-//! from the host state and the enabled tasks, so the item shows while the host awaits approval and is gone once it does
+//! from the host state and the enabled tasks. The item shows while the host awaits approval and is gone once it does
 //! not. Master and handler tasks start no worker, so they probe no host.
 
 use std::collections::HashSet;

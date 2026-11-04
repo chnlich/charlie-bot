@@ -48,7 +48,7 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   feature_context_with_entries(&entries)
 }
 
-/// A feature context whose synthetic backend entries each log into a host: every `(backend id, host alias)` pair is an
+/// A feature context whose synthetic backend entries each log into a host. Every `(backend id, host alias)` pair is an
 /// entry that names the host through `host_auth_alias`, as a `cc-anthropic-compatible` entry does.
 pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let mut entries = vec![("synthetic", Mapping::new())];

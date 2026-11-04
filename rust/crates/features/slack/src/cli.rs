@@ -14,10 +14,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::channel_verb::{ReplyArgs, post_reply};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
-use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::{draft as draft_register, files, resolve};
 use charliebot_core::{config, home, paths};
@@ -47,16 +47,6 @@ enum SlackCommand {
   Download(DownloadCommand),
   /// Register a message in the operator's name for approval on a session card
   Draft(DraftArgs),
-}
-
-#[derive(Args)]
-struct ReplyArgs {
-  /// File holding the reply text; - reads stdin
-  #[arg(long)]
-  file: String,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
-  #[arg(long)]
-  session: Option<String>,
 }
 
 #[derive(Args)]

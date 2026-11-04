@@ -9,6 +9,7 @@
 
 pub mod args;
 pub mod base_url;
+pub mod channel_verb;
 pub mod client;
 pub mod draft;
 pub mod exit;
@@ -16,7 +17,6 @@ pub mod files;
 pub mod headers;
 pub mod http;
 pub mod json_out;
-pub mod reply;
 pub mod request;
 pub mod resolve;
 pub mod response;

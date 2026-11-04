@@ -6,21 +6,16 @@
 use std::ffi::OsString;
 
 use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, ReplyArgs, post_check, post_read, post_reply};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
-use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::resolve;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::user_token::{self, Endpoints};
-
-/// The page-size bounds the parser and the endpoint share.
-const READ_LIMIT_MIN: i64 = 1;
-const READ_LIMIT_MAX: i64 = 100;
-const READ_LIMIT_DEFAULT: i64 = 50;
 
 #[derive(Parser)]
 #[command(name = "feishu", subcommand_required = true, arg_required_else_help = true)]
@@ -45,16 +40,6 @@ enum FeishuCommand {
   ConsentUrl(ConsentUrlArgs),
   /// Exchange an authorization code for tokens and store them
   ExchangeCode(ExchangeCodeArgs),
-}
-
-#[derive(Args)]
-struct ReplyArgs {
-  /// File holding the reply text; - reads stdin
-  #[arg(long)]
-  file: String,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
-  #[arg(long)]
-  session: Option<String>,
 }
 
 #[derive(Args)]
@@ -139,17 +124,7 @@ fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
 }
 
 fn read(args: &ReadArgs) -> Result<(), CliExit> {
-  let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  if !(READ_LIMIT_MIN..=READ_LIMIT_MAX).contains(&args.limit) {
-    return Err(CliExit::usage(format!(
-      "--limit must be between {READ_LIMIT_MIN} and {READ_LIMIT_MAX}, got: {}",
-      args.limit
-    )));
-  }
-  let result =
-    client::post("/api/internal/feishu/read", json!({ "session_id": session_id, "limit": args.limit }), None, &[])?;
-  print!("{}", json_out::render(&result, None));
-  Ok(())
+  post_read("/api/internal/feishu/read", args.session.as_deref(), args.limit, None)
 }
 
 /// The server writes the file, so the output path goes over as an absolute path resolved here, in the caller's
@@ -176,10 +151,5 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
 }
 
 fn check() -> Result<(), CliExit> {
-  let result = client::post("/api/internal/feishu/check", json!({}), None, &[])?;
-  print!("{}", json_out::render(&result, None));
-  if result.get("ok").and_then(Value::as_bool) != Some(true) {
-    std::process::exit(1);
-  }
-  Ok(())
+  post_check("/api/internal/feishu/check")
 }

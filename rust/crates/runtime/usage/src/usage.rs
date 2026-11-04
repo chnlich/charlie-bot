@@ -120,7 +120,7 @@ impl UsageFold {
   }
 
   fn feed_result<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
-    if let Some(model_usage) = truthy_object(event.field("modelUsage"), "result.modelUsage")? {
+    if let Some(model_usage) = truthy_object(event.field(event_types::MODEL_USAGE), "result.modelUsage")? {
       // One result event per run: its model-usage table converts once into an owned JSON object.
       let model_usage = model_usage.to_owned_value();
       let model_usage = model_usage.as_object().expect("a truthy modelUsage object reads as an object");

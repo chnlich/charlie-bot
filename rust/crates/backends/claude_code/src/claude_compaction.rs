@@ -8,6 +8,7 @@ use std::time::Duration as StdDuration;
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types::MODEL_USAGE;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{EmitFn, Env};
 use charliebot_store::metadata::UtcDateTime;
@@ -123,7 +124,7 @@ fn newest_cost_state_model_usage(path: &Path) -> anyhow::Result<Map<String, Valu
   let mut newest = Map::new();
   for row in read_transcript_rows(path, COST_STATE_MARKER)? {
     if row.get("type").and_then(Value::as_str) == Some("cost-state") {
-      newest = row.get("modelUsage").and_then(Value::as_object).cloned().unwrap_or_default();
+      newest = row.get(MODEL_USAGE).and_then(Value::as_object).cloned().unwrap_or_default();
     }
   }
   Ok(newest)
@@ -193,7 +194,7 @@ pub fn compaction_env_from(config_dir: &Path, inherited: &Env, run_kind: RunKind
 
 fn models_that_grew(result: &Value, baseline: &Map<String, Value>) -> Vec<String> {
   result
-    .get("modelUsage")
+    .get(MODEL_USAGE)
     .and_then(Value::as_object)
     .into_iter()
     .flat_map(|usage| usage.iter())
@@ -225,7 +226,7 @@ fn cache_read_growth(result: &Value, baseline: &Map<String, Value>, models: &[St
     .iter()
     .map(|name| {
       let current =
-        result.pointer(&format!("/modelUsage/{name}/cacheReadInputTokens")).and_then(Value::as_i64).unwrap_or(0);
+        result.pointer(&format!("/{MODEL_USAGE}/{name}/cacheReadInputTokens")).and_then(Value::as_i64).unwrap_or(0);
       let previous =
         baseline.get(name).and_then(|value| value.get("cacheReadInputTokens")).and_then(Value::as_i64).unwrap_or(0);
       current - previous

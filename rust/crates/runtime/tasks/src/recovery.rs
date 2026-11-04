@@ -42,6 +42,7 @@ use crate::execution::{TaskExecutionAdapter, is_out_of_space_error};
 use crate::master_queue::{MasterQueue, SessionCallbacks};
 use crate::master_run;
 use crate::master_state::{MasterResumeRecord, MasterResumeRequest, ResumeLiveness, TaskRunBinding, TaskSpawnCallback};
+use crate::skip_proof::{SkipProof, SkipProofRow, SkipProofSource};
 use crate::spawner_prompt;
 
 pub use crate::execution::{RUN_END_LANDING_RETRY_INTERVAL, closed_task_stop_request_id};
@@ -56,18 +57,12 @@ fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
   home.join(BOOT_RECOVERY_MARKER_PATH)
 }
 
-/// The boot marker: the start of the last pass that wrote it, the nodes whose pass failed in that pass, and the nodes
-/// whose task was open when it ended. Every node outside `failed_sessions` was clean at or after `pass_started_at`, so
-/// the next boot skips it on the marker's word. A failed node keeps its full pass at every boot until one of its
-/// passes succeeds.
-///
-/// `open_sessions` is what the next boot's skip check needs from this one: a node whose log and metadata predate the
-/// marker gained no event since, so the state this pass saw still holds, and the set answers it without reading the
-/// log's tail. A marker without the key (`None`) makes that check read the tail, as every boot did before.
+/// The boot marker: the start of the last pass that wrote it and the nodes whose pass failed in that pass. Every node
+/// outside `failed_sessions` was clean at or after `pass_started_at`, so the next boot may serve its skip verdict from
+/// the startup-only skip proof; a node the proof cannot serve keeps the marker's file-age rule.
 struct BootMarker {
   pass_started_at: UtcDateTime,
   failed_sessions: BTreeSet<String>,
-  open_sessions: Option<BTreeSet<String>>,
 }
 
 /// The last clean pass's marker, or None when the marker is absent or unreadable. None makes the pass check every node
@@ -102,19 +97,6 @@ fn parse_boot_recovery_marker(raw: &[u8]) -> Result<BootMarker, &'static str> {
     Some(Value::String(pass_started_at)) => UtcDateTime::parse(pass_started_at).map_err(|_| "ValueError")?,
     Some(_) => return Err("TypeError"),
   };
-  let open_sessions = match fields.get("open_sessions") {
-    None => None,
-    Some(Value::Array(items)) => Some(
-      items
-        .iter()
-        .map(|item| match item {
-          Value::String(session_id) => Ok(session_id.clone()),
-          _ => Err("TypeError"),
-        })
-        .collect::<Result<BTreeSet<String>, &'static str>>()?,
-    ),
-    Some(_) => return Err("TypeError"),
-  };
   let failed_sessions = match fields.get("failed_sessions") {
     None => BTreeSet::new(),
     Some(Value::Array(items)) => items
@@ -126,16 +108,15 @@ fn parse_boot_recovery_marker(raw: &[u8]) -> Result<BootMarker, &'static str> {
       .collect::<Result<BTreeSet<String>, &'static str>>()?,
     Some(_) => return Err("TypeError"),
   };
-  Ok(BootMarker { pass_started_at, failed_sessions, open_sessions })
+  Ok(BootMarker { pass_started_at, failed_sessions })
 }
 
-/// Writes the marker. `failed_sessions` and `open_sessions` are each written only when non-empty, so a pass that leaves
-/// no open node writes the marker it always has.
+/// Writes the marker. `failed_sessions` is written only when non-empty, so a pass that leaves no failed node writes the
+/// marker it always has.
 fn write_boot_recovery_marker(
   home: &std::path::Path,
   pass_started_at: UtcDateTime,
   failed_sessions: &BTreeSet<String>,
-  open_sessions: Option<&BTreeSet<String>>,
 ) -> anyhow::Result<()> {
   let path = boot_recovery_marker_path(home);
   let parent = path.parent().context("boot-recovery marker has no parent directory")?;
@@ -144,9 +125,6 @@ fn write_boot_recovery_marker(
   payload.insert("pass_started_at".to_string(), Value::String(pass_started_at.to_isoformat_text()));
   if !failed_sessions.is_empty() {
     payload.insert("failed_sessions".to_string(), serde_json::json!(failed_sessions));
-  }
-  if let Some(open_sessions) = open_sessions.filter(|open_sessions| !open_sessions.is_empty()) {
-    payload.insert("open_sessions".to_string(), serde_json::json!(open_sessions));
   }
   let text = charliebot_core::text_repr::json_dumps(&Value::Object(payload), &charliebot_core::text_repr::DEFAULT_JSON);
   charliebot_core::fsutil::atomic_write_text_synced(&path, &text)
@@ -165,39 +143,22 @@ enum SkipCheck {
 fn boot_skip_check(
   features: &FeatureContext,
   session_id: &str,
-  session_dir: &std::path::Path,
   meta: &SessionMetadata,
   marker: &BootMarker,
+  source: Option<&SkipProofSource>,
 ) -> anyhow::Result<SkipCheck> {
   let marker_instant = marker.pass_started_at.into_inner();
-  let marker_seconds =
-    charliebot_core::timefmt::float_seconds(marker_instant.unix_timestamp(), i64::from(marker_instant.nanosecond()));
-  let mut file_after_marker = false;
-  for path in [layout::chat_events_path(session_dir), layout::metadata_path(session_dir)] {
-    let modified = match std::fs::metadata(&path) {
-      Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => {
-        file_after_marker = true;
-        continue;
-      }
-      Err(error) => return Err(error).with_context(|| format!("stating {}", path.display())),
-    };
-    let modified = OffsetDateTime::from(modified);
-    let modified_seconds =
-      charliebot_core::timefmt::float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
-    if modified_seconds >= marker_seconds - MARKER_MTIME_SLACK_SECONDS {
-      file_after_marker = true;
-    }
-  }
-
-  // The state decides a keep before any file's age does. Two sources answer it: when both files predate the marker,
-  // nothing was appended since the last pass, so the open set it left still holds; otherwise its events may have
-  // moved and the tail is read.
-  let state = match (file_after_marker, marker.open_sessions.as_ref()) {
-    (false, Some(open_sessions)) => open_sessions.contains(session_id),
-    _ => features.store.task_state_fast(session_id)? == "open",
+  let marker_ns =
+    charliebot_core::timefmt::file_time_ns(marker_instant.unix_timestamp(), i64::from(marker_instant.nanosecond()));
+  let slack_ns = (MARKER_MTIME_SLACK_SECONDS as i128) * 1_000_000_000;
+  // A node without a log or metadata file cannot be skipped: the check treats it as changed.
+  let file_after_marker = match source {
+    None => true,
+    Some(source) => source.log_changed_since(marker_ns, slack_ns) || source.meta_changed_since(marker_ns, slack_ns),
   };
-  if state {
+
+  // The state decides a keep before any file's age does.
+  if features.store.task_state_fast(session_id)? == "open" {
     return Ok(SkipCheck::Keep("state_open"));
   }
   if file_after_marker {
@@ -405,8 +366,8 @@ struct FullPassSession {
 enum WalkEntry {
   /// No node: the directory, its metadata file or its metadata is missing.
   Absent,
-  /// The boot marker skips the node's pass.
-  Skipped { session_id: String, newest_backend: Option<String> },
+  /// The boot marker or its skip proof skips the node's pass.
+  Skipped { session_id: String, newest_backend: Option<String>, source: Option<SkipProofSource> },
   /// The node takes its full pass; the keep reason is absent when no marker was read.
   Kept { reason: Option<&'static str>, session: Box<FullPassSession> },
 }
@@ -444,7 +405,10 @@ pub async fn reconcile_task_tree(
   let started_at = UtcDateTime::now();
   let marker = read_boot_recovery_marker(&cfg.charliebot_home)?;
   let marker_text = marker.as_ref().map(|marker| marker.pass_started_at.to_isoformat_text());
+  // The last pass's skip verdicts, each valid only while its node's log and metadata keep the identities it recorded.
+  let skip_proof = SkipProof::read(&cfg.charliebot_home);
   let mut failed_sessions = BTreeSet::new();
+  let mut proven_skips: Vec<SkipProofRow> = Vec::new();
 
   let tree = sequence_tree(features, adapter)?;
   for controller in features.registry.sequence_controllers() {
@@ -467,7 +431,7 @@ pub async fn reconcile_task_tree(
   // applied in the walk's order: the first failing session in that order fails the walk.
   let check_features = Arc::clone(features);
   let (_, entries) = blocking_batch(session_dirs, None, &stop, move |session_dir| {
-    examine_session_dir(&check_features, session_dir, marker.as_ref())
+    examine_session_dir(&check_features, session_dir, marker.as_ref(), &skip_proof)
   })
   .await?;
   let Some(entries) = entries else {
@@ -477,10 +441,17 @@ pub async fn reconcile_task_tree(
   for entry in entries {
     match entry? {
       WalkEntry::Absent => {}
-      WalkEntry::Skipped { session_id, newest_backend } => {
+      WalkEntry::Skipped { session_id, newest_backend, source } => {
         counters.nodes += 1;
         if let Some(backend) = newest_backend.as_deref() {
           features.store.note_run_backend(&session_id, backend);
+        }
+        if let Some(source) = source {
+          proven_skips.push(SkipProofRow {
+            session_id: session_id.clone(),
+            source,
+            newest_backend: newest_backend.clone(),
+          });
         }
         counters.skipped += 1;
       }
@@ -595,9 +566,6 @@ pub async fn reconcile_task_tree(
   let file_reads_before_passes = features.store.history_work().file_reads;
   let run_record_reads_before_passes = features.store.run_record_read_count();
   let mut step_totals = StepTotals::default();
-  // The sessions this pass leaves open, for the next boot's skip checks. A session the walk skips is closed: the skip
-  // check found no open state and nothing appended since, so only kept nodes can be open here.
-  let mut open_sessions: BTreeSet<String> = BTreeSet::new();
   for (candidate, no_node) in candidates.into_iter().zip(no_nodes) {
     if stop.is_cancelled() {
       return Ok(counters);
@@ -625,20 +593,7 @@ pub async fn reconcile_task_tree(
       if is_out_of_space_error(error.as_ref()) {
         adapter.start_run_end_landing_retry(&session_id, None);
       }
-      // A failed pass names its session open, so the next boot reads that session's state itself instead of trusting a
-      // set that does not name it.
-      open_sessions.insert(session_id);
       continue;
-    }
-    match features.store.task_state_for_tree_index(&session_id) {
-      Ok(state) if state != "open" => {}
-      Ok(_) => {
-        open_sessions.insert(session_id);
-      }
-      Err(error) => {
-        tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_open_set_state_failed");
-        open_sessions.insert(session_id);
-      }
     }
   }
   let node_passes_ms = phase_ms();
@@ -646,9 +601,12 @@ pub async fn reconcile_task_tree(
   let node_pass_run_record_reads = features.store.run_record_read_count() - run_record_reads_before_passes;
   let (node_pass_step_ms, node_pass_step_file_reads, node_pass_step_file_read_bytes) = step_totals.texts();
   // The marker advances for every node that the pass completed. A failed node stays in `failed_sessions`, so the next
-  // boot runs its full pass again while the other nodes keep the marker's skip.
+  // boot runs its full pass again while the other nodes keep the marker's rule or the proof's verdict.
   if !stop.is_cancelled() {
-    write_boot_recovery_marker(&cfg.charliebot_home, started_at, &failed_sessions, Some(&open_sessions))?;
+    write_boot_recovery_marker(&cfg.charliebot_home, started_at, &failed_sessions)?;
+    if let Err(error) = crate::skip_proof::write(&cfg.charliebot_home, &proven_skips) {
+      tracing::warn!(target: "charliebot_tasks", error = %error, "skip_proof_write_failed");
+    }
   }
   let marker_ms = phase_ms();
   tracing::info!(
@@ -674,11 +632,13 @@ pub async fn reconcile_task_tree(
   Ok(counters)
 }
 
-/// The skip check of one session directory: whether it holds a node, and whether the boot marker skips that node.
+/// The skip check of one session directory: whether it holds a node, and whether the boot marker or its skip proof
+/// skips that node.
 fn examine_session_dir(
   features: &FeatureContext,
   session_dir: &std::path::Path,
   marker: Option<&BootMarker>,
+  proof: &SkipProof,
 ) -> anyhow::Result<WalkEntry> {
   if !session_dir.is_dir() || !layout::metadata_path(session_dir).is_file() {
     return Ok(WalkEntry::Absent);
@@ -689,16 +649,34 @@ fn examine_session_dir(
     .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
     .to_string();
   let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
+  let source = SkipProofSource::read(session_dir).with_context(|| format!("stating {}", session_dir.display()))?;
+  // A node whose last pass failed takes its full pass, whatever the marker or the proof says about its files.
+  if let Some(marker) = marker {
+    if marker.failed_sessions.contains(&session_id) {
+      let Some(meta) = features.store.get_session_cached_or_read_sync(&session_id)? else {
+        return Ok(WalkEntry::Absent);
+      };
+      return Ok(WalkEntry::Kept {
+        reason: Some("failed_pass"),
+        session: Box::new(FullPassSession { session_id, meta }),
+      });
+    }
+    // A row whose identities still hold answers the node's verdict without reading a tail, a run listing or a
+    // worktree path, so the boot's skip-check cost follows the nodes that changed since the proof was written.
+    if let Some(source) = source
+      && let Some(newest_backend) = proof.served(&session_id, &source)
+    {
+      return Ok(WalkEntry::Skipped { session_id, newest_backend, source: Some(source) });
+    }
+  }
   let Some(meta) = features.store.get_session_cached_or_read_sync(&session_id)? else {
     return Ok(WalkEntry::Absent);
   };
   let reason = match marker {
     None => None,
-    // A node whose last pass failed takes its full pass, whatever the marker says about its files.
-    Some(marker) if marker.failed_sessions.contains(&session_id) => Some("failed_pass"),
-    Some(marker) => match boot_skip_check(features, &session_id, session_dir, &meta, marker)? {
+    Some(marker) => match boot_skip_check(features, &session_id, &meta, marker, source.as_ref())? {
       SkipCheck::Keep(reason) => Some(reason),
-      SkipCheck::Skip { newest_backend } => return Ok(WalkEntry::Skipped { session_id, newest_backend }),
+      SkipCheck::Skip { newest_backend } => return Ok(WalkEntry::Skipped { session_id, newest_backend, source }),
     },
   };
   Ok(WalkEntry::Kept { reason, session: Box::new(FullPassSession { session_id, meta }) })
@@ -2354,7 +2332,7 @@ mod tests {
     let pass_started_at = UtcDateTime::parse("2026-10-21T03:00:00.123456+00:00").expect("the synthetic time parses");
     charliebot_core::fsutil::clear_synced_write_steps();
 
-    write_boot_recovery_marker(home.path(), pass_started_at, &BTreeSet::new(), None).expect("the marker writes");
+    write_boot_recovery_marker(home.path(), pass_started_at, &BTreeSet::new()).expect("the marker writes");
 
     let steps = charliebot_core::fsutil::synced_write_steps();
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
@@ -2381,8 +2359,9 @@ mod tests {
         std::fs::File::open(&path).expect("the durable file exists").set_modified(stamp).expect("the mtime is set");
       }
 
-      let boot_marker = BootMarker { pass_started_at: marker, failed_sessions: BTreeSet::new(), open_sessions: None };
-      let reason = match boot_skip_check(&features, &session_id, &session_dir, &meta, &boot_marker)
+      let boot_marker = BootMarker { pass_started_at: marker, failed_sessions: BTreeSet::new() };
+      let source = SkipProofSource::read(&session_dir).expect("the session's files stat").expect("both files exist");
+      let reason = match boot_skip_check(&features, &session_id, &meta, &boot_marker, Some(&source))
         .expect("the skip check reads")
       {
         SkipCheck::Keep(reason) => Some(reason),
@@ -2393,38 +2372,90 @@ mod tests {
     }
   }
 
-  /// The marker names the sessions its pass left open, and the skip check answers a node whose files predate the marker
-  /// from that set without reading its tail. A marker without the set reads the tail.
+  /// A skip proof serves a node's verdict while the node's log and metadata keep the identities the row recorded, with
+  /// no tail read and no run-record read. The served verdict equals the one the node's own files give. A node changed
+  /// after the row was written, and a missing, stale or torn proof, get the verdict from the node's own files.
   #[tokio::test]
-  async fn a_marker_naming_the_open_sessions_answers_a_skip_check_without_a_tail_read() {
-    let (_home, features) = startup_features().await;
-    let session_id = closed_worker_node(&features, "synthetic-open-set-node", 0).await;
-    let meta = features.store.load_meta(&session_id).await.expect("the meta loads").expect("the node exists");
+  async fn a_skip_proof_serves_its_verdict_only_while_the_node_keeps_its_identities() {
+    let (home, features) = startup_features().await;
+    let session_id = closed_worker_node(&features, "synthetic-proof-node", 1).await;
     let session_dir = features.store.session_dir(&session_id);
-    // The marker follows both files, so the session gained no event since the pass that wrote it.
-    let pass_started_at = UtcDateTime::parse("2030-01-01T00:00:00Z").expect("the synthetic marker parses");
+    let meta = features.store.load_meta(&session_id).await.expect("the meta loads").expect("the node exists");
+    // The marker follows both files, so the node's own check reads no file as changed.
+    let marker = BootMarker {
+      pass_started_at: UtcDateTime::parse("2030-01-01T00:00:00Z").expect("the synthetic marker parses"),
+      failed_sessions: BTreeSet::new(),
+    };
+    let source = SkipProofSource::read(&session_dir).expect("the session's files stat").expect("both files exist");
+
+    // The verdict the node's own files give, and what that check reads.
     let tails = features.store.task_state_tail_read_count();
-
-    for (open_sessions, expected) in
-      [(BTreeSet::new(), None), (BTreeSet::from([session_id.clone()]), Some("state_open"))]
-    {
-      let marker = BootMarker { pass_started_at, failed_sessions: BTreeSet::new(), open_sessions: Some(open_sessions) };
-      let reason =
-        match boot_skip_check(&features, &session_id, &session_dir, &meta, &marker).expect("the skip check reads") {
-          SkipCheck::Keep(reason) => Some(reason),
-          SkipCheck::Skip { .. } => None,
-        };
-      assert_eq!(reason, expected);
-      assert_eq!(features.store.task_state_tail_read_count(), tails, "the open set answered the state");
-    }
-
-    let marker = BootMarker { pass_started_at, failed_sessions: BTreeSet::new(), open_sessions: None };
-    let reason =
-      match boot_skip_check(&features, &session_id, &session_dir, &meta, &marker).expect("the skip check reads") {
-        SkipCheck::Keep(reason) => Some(reason),
-        SkipCheck::Skip { .. } => None,
+    let runs = features.store.run_record_read_count();
+    let own =
+      match boot_skip_check(&features, &session_id, &meta, &marker, Some(&source)).expect("the skip check reads") {
+        SkipCheck::Keep(reason) => panic!("a closed worker node with ended runs skips, not keeps {reason}"),
+        SkipCheck::Skip { newest_backend } => newest_backend,
       };
-    assert_eq!(reason, None, "a marker without the open set leaves the skip to the run checks");
-    assert_eq!(features.store.task_state_tail_read_count(), tails + 1, "a marker without the open set reads the tail");
+    let own_tails = features.store.task_state_tail_read_count() - tails;
+    let own_runs = features.store.run_record_read_count() - runs;
+
+    // The same verdict from the proof, without either read.
+    crate::skip_proof::write(
+      home.path(),
+      &[SkipProofRow { session_id: session_id.clone(), source, newest_backend: own.clone() }],
+    )
+    .expect("the proof writes");
+    let proof = SkipProof::read(home.path());
+    let tails = features.store.task_state_tail_read_count();
+    let runs = features.store.run_record_read_count();
+    match examine_session_dir(&features, &session_dir, Some(&marker), &proof).expect("the session is examined") {
+      WalkEntry::Skipped { newest_backend, .. } => assert_eq!(newest_backend, own, "the proof serves its own verdict"),
+      _ => panic!("the proof skips the node"),
+    }
+    assert_eq!(features.store.task_state_tail_read_count(), tails, "the proof answers without a tail read");
+    assert_eq!(features.store.run_record_read_count(), runs, "the proof answers without a run-record read");
+
+    // A node whose log changed after the row was written runs its own check, and reaches the same verdict.
+    features
+      .store
+      .append_chat_event(&session_id, json!({"id": "late", "type": "assistant", "content": "x"}))
+      .await
+      .expect("the synthetic event appends");
+    let tails = features.store.task_state_tail_read_count();
+    match examine_session_dir(&features, &session_dir, Some(&marker), &proof).expect("the session is examined") {
+      WalkEntry::Skipped { newest_backend, .. } => assert_eq!(newest_backend, own),
+      _ => panic!("a changed node still skips on its own files"),
+    }
+    assert_eq!(features.store.task_state_tail_read_count(), tails + 1, "a changed node reads its own tail");
+    assert!(own_tails > 0 && own_runs > 0, "the reference check read the node's files: {own_tails} {own_runs}");
+
+    // A missing or torn proof serves nothing, so each node reads its own files.
+    std::fs::remove_file(home.path().join(crate::skip_proof::SKIP_PROOF_PATH)).expect("the proof is removed");
+    let missing = SkipProof::read(home.path());
+    match examine_session_dir(&features, &session_dir, Some(&marker), &missing).expect("the session is examined") {
+      WalkEntry::Skipped { .. } => {}
+      _ => panic!("a node without a proof keeps the walk's own verdict"),
+    }
+    std::fs::write(home.path().join(crate::skip_proof::SKIP_PROOF_PATH), b"{\"version\": 1}\nnode\t1\t2")
+      .expect("the torn proof writes");
+    let torn = SkipProof::read(home.path());
+    assert!(torn.served(&session_id, &source).is_none(), "a torn row serves nothing");
+    match examine_session_dir(&features, &session_dir, Some(&marker), &torn).expect("the session is examined") {
+      WalkEntry::Skipped { .. } => {}
+      _ => panic!("a torn proof leaves the walk's own verdict"),
+    }
+    // A proof whose row names the pre-change identities serves nothing either: the row is stale for this node.
+    crate::skip_proof::write(
+      home.path(),
+      &[SkipProofRow { session_id: session_id.clone(), source, newest_backend: own.clone() }],
+    )
+    .expect("the stale proof writes");
+    let stale = SkipProof::read(home.path());
+    let changed = SkipProofSource::read(&session_dir).expect("the session's files stat").expect("both files exist");
+    assert_eq!(stale.served(&session_id, &changed), None, "a row of other identities serves nothing");
+    match examine_session_dir(&features, &session_dir, Some(&marker), &stale).expect("the session is examined") {
+      WalkEntry::Skipped { .. } => {}
+      _ => panic!("a stale proof leaves the walk's own verdict"),
+    }
   }
 }

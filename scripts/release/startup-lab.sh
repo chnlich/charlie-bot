@@ -409,7 +409,7 @@ cmd_time() {
 # line boundary at its offset and two window digests), which the trial copy shares with the seed, so a copy written
 # here covers the seed's logs too.
 cmd_prime() {
-  local build=$1 commit stamp run status=0 checkpoint session copied=0
+  local build=$1 commit stamp run status=0 checkpoint session startup_file copied=0
   commit=$(build_commit "$build")
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run="$LAB/runs/$stamp-$build-hot-prime"
@@ -428,25 +428,37 @@ cmd_prime() {
     copied=$(( copied + 1 ))
   done
   (( copied > 0 )) || fail "the prime start wrote no fact checkpoint; see $run"
+  # The startup-only state files the boot writes beside its checkpoints: the skip proof's rows are valid only while each
+  # node keeps the file identities they name, which a reset restores, so copying it models the previous boot's write.
+  for startup_file in "$run"/startup/*; do
+    [[ -e $startup_file ]] || continue
+    mkdir -p "$HOME_DIR/state"
+    cp "$startup_file" "$HOME_DIR/state/$(basename "$startup_file")"
+    printf 'copied %s into %s\n' "$(basename "$startup_file")" "$HOME_DIR/state"
+  done
   printf 'copied %s fact checkpoints into %s\n' "$copied" "$HOME_DIR"
 }
 
 # The prime serve command: after server_ready, copy every session's fact checkpoint out of the trial home before the
 # trial cleans the tree up.
 cmd_prime_snapshot() {
-  local run=$1 commit=$2 tree log checkpoint session copied=0
+  local run=$1 commit=$2 tree log checkpoint session startup_file copied=0
   tree="$LAB/trials/trial-${commit:0:12}"
   log="$tree/server-1.log"
   until grep -qE '[[:space:]]server_ready[[:space:]]' "$log"; do
     kill -0 "$CHARLIEBOT_SERVE_PID" 2>/dev/null || fail 'the trial server exited before server_ready'
     sleep 0.2
   done
-  mkdir -p "$run/checkpoints"
+  mkdir -p "$run/checkpoints" "$run/startup"
   while IFS= read -r checkpoint; do
     session=$(basename "$(dirname "$(dirname "$checkpoint")")")
     cp "$checkpoint" "$run/checkpoints/$session.json"
     copied=$(( copied + 1 ))
   done < <(find "$tree/home/.charliebot/sessions" -name fact_checkpoint.json)
+  # The startup-only files in the home's state directory, beside the boot marker, for the reset-labelled steady state.
+  for startup_file in "$tree/home/.charliebot"/state/boot_skip_proof.json; do
+    [[ -e $startup_file ]] && cp "$startup_file" "$run/startup/"
+  done
   printf 'primed %s fact checkpoints\n' "$copied"
   [[ -e $run/live-pids.txt ]] && stop_live_runs "$run"
   return 0

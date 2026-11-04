@@ -248,7 +248,7 @@ impl ThreadAdapter for FeishuThreadAdapter {
   }
 
   /// Delete the reactions this app added to the summon. Feishu deletes a reaction by its `reaction_id`, which the list
-  /// call returns, so the bot finds its own `OnIt` among the message's reactions (operator type `app`, operator id the
+  /// call returns. So the bot finds its own `OnIt` among the message's reactions (operator type `app`, operator id the
   /// app id) and deletes each one.
   fn remove_ack<'a>(&'a self, block: &'a Value) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {

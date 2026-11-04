@@ -1,9 +1,9 @@
 //! The Feishu server-side commands behind `charliebot feishu read`, `download` and `check`.
 //!
-//! A read pages the session's thread through the app's client, acks the unread messages it returns (Feishu has no
-//! separate ack verb, so the read is the ack), and flags the pending summon's message with `summon: true`. A download
-//! fetches one image or file of the session's thread with the tenant token and writes it into the session's directory.
-//! The token never leaves the server: the command returns the readback, and the file.
+//! A read pages the session's thread through the app's client and flags the pending summon's message with
+//! `summon: true`. It also acks the unread messages it returns: Feishu has no separate ack verb, so the read is the
+//! ack. A download fetches one image or file of the session's thread with the tenant token and writes it into the
+//! session's directory. The token never leaves the server: the command returns the readback, and the file.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -45,7 +45,7 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
 }
 
 /// The composite ids of the session's pending summons. A summon is pending while its event carries the feishu block
-/// without `nudge_of`, no master_done names its id, no lost-summon backfill marker names it, and it has a mention id.
+/// without `nudge_of` and has a mention id. No master_done and no lost-summon backfill marker may name its id either.
 fn pending_summon_mention_ids(events: &[ChatEvent]) -> anyhow::Result<HashSet<String>> {
   let backfill_key = FEISHU.backfill_key();
   let mut answered: HashSet<String> = HashSet::new();
@@ -213,8 +213,8 @@ async fn check_endpoint(client: &FeishuClient) -> Value {
 
 /// Download one image or file of the session's thread into the session's directory, and return its path and size
 /// (`download`). The message must belong to the session's thread, and `output` must be a path inside the session's
-/// directory. Refusals: 404 unknown session, 409 no Feishu thread, 422 a path outside the session directory or an id
-/// that is not a message id, 404 a message of another thread, 502 Feishu refused the call.
+/// directory. Refusals: 404 unknown session, 409 no Feishu thread, and 422 a path outside the session directory or an
+/// id that is not a message id. Also 404 for a message of another thread, and 502 when Feishu refuses the call.
 pub async fn download(
   bot: &Bot,
   session_id: &str,

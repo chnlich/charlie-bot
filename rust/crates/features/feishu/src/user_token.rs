@@ -1,6 +1,6 @@
-//! The user-token verbs of `charliebot feishu`: `request` calls the Open API as the authorized user, `consent-url`
-//! prints the browser URL that starts a re-authorization, and `exchange-code` stores the tokens a code returns. These
-//! read and write the `feishu` credentials of the profile home, not the app's tenant token.
+//! The user-token verbs of `charliebot feishu`. `request` calls the Open API as the authorized user, and `consent-url`
+//! prints the browser URL that starts a re-authorization. `exchange-code` stores the tokens a code returns. These read
+//! and write the `feishu` credentials of the profile home, not the app's tenant token.
 
 use std::path::{Path, PathBuf};
 

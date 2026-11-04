@@ -1,7 +1,7 @@
-//! The `feishu` verbs. `reply` posts on a session's own Feishu thread, `read` reads that thread and marks the unread
-//! messages it returns as read, `download` saves one image or file of it into the session directory, and `check`
-//! prints the app's setup readback and exits 1 when `ok` is false. `request`, `consent-url` and `exchange-code` drive
-//! the user token.
+//! The `feishu` verbs. `reply` posts on a session's own Feishu thread, and `read` reads that thread and marks the
+//! unread messages as read. `download` saves one image or file of it into the session directory. `check` prints the
+//! app's setup readback and exits 1 when `ok` is false. `request`, `consent-url` and `exchange-code` drive the user
+//! token.
 
 use std::ffi::OsString;
 

@@ -1,9 +1,9 @@
-//! The Feishu long-connection frame: the protobuf envelope the server and Feishu exchange over one WebSocket, the
-//! ping, event and ack shapes, and the reassembly of event payloads that arrive as fragments.
+//! The Feishu long-connection frame: the protobuf envelope the server and Feishu exchange over one WebSocket. It also
+//! holds the ping, event and ack shapes, and the reassembly of event payloads that arrive as fragments.
 //!
 //! Feishu documents the long connection only through its SDKs. The layout here is the official Go SDK's `pbbp2.Frame`
-//! (`ws/pbbp2.pb.go`) and its header names (`ws/const.go`): nine fields, a `method` of 0 for control frames and 1 for
-//! data frames, and a `type` header that names a ping, pong or event.
+//! (`ws/pbbp2.pb.go`) and its header names (`ws/const.go`). A frame has nine fields. Its `method` is 0 for control
+//! frames and 1 for data frames, and a `type` header names a ping, pong or event.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

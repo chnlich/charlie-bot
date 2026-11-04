@@ -20,7 +20,20 @@ const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="rou
 
 function renderToolActivity(tools) {
   if (!Array.isArray(tools) || !tools.length) return '';
-  var rows = tools.map(function(tool, i) {
+  var rows = renderToolRows(tools);
+  var label = tools.length + ' tool call' + (tools.length !== 1 ? 's' : '');
+  return '<div class="mt-2 border border-slate-600/30 rounded-lg overflow-hidden">'
+    + '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="w-full flex items-center justify-between px-3 py-1.5 bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
+    + '<span>' + label + '</span>'
+    + '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + CHEVRON_DOWN_SVG_PATH + '</svg>'
+    + '</button>'
+    + '<div class="hidden bg-slate-800/30 px-3 py-2">' + rows + '</div>'
+    + '</div>';
+}
+
+// The rows of one tool list. A row that started a subagent carries the subagent's card under its header.
+function renderToolRows(tools) {
+  return tools.map(function(tool, i) {
     var summary = toolInputSummary(tool.name, tool.input);
     var text = summary.text;
     var limit = summary.limit;
@@ -54,21 +67,48 @@ function renderToolActivity(tools) {
     }
     var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
     var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
+    var subagentHtml = tool.subagent ? renderSubagentCard(tool.subagent) : '';
     return '<div class="' + borderCls + 'py-1.5">'
       + '<div class="flex items-center gap-2">'
       + toolNameChipHtml(tool.name || '')
       + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + '</span>'
       + '</div>'
+      + subagentHtml
       + outputHtml
       + '</div>';
   }).join('');
-  var label = tools.length + ' tool call' + (tools.length !== 1 ? 's' : '');
-  return '<div class="mt-2 border border-slate-600/30 rounded-lg overflow-hidden">'
-    + '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="w-full flex items-center justify-between px-3 py-1.5 bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
-    + '<span>' + label + '</span>'
-    + '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + CHEVRON_DOWN_SVG_PATH + '</svg>'
-    + '</button>'
-    + '<div class="hidden bg-slate-800/30 px-3 py-2">' + rows + '</div>'
+}
+
+const SUBAGENT_STATUS_CLASS = {
+  running: 'text-amber-400',
+  completed: 'text-emerald-400',
+  failed: 'text-red-400',
+  stopped: 'text-slate-400',
+};
+
+// The card of a subagent under the Agent row that started it. The header stays visible; the subagent's own rows
+// fold below it. The row count in the header is the subagent's tool uses, so the parent's count never includes them.
+function renderSubagentCard(subagent) {
+  var statusCls = SUBAGENT_STATUS_CLASS[subagent.status];
+  var uses = subagent.tool_uses == null ? ''
+    : '<span class="text-slate-500 whitespace-nowrap">' + subagent.tool_uses + ' tool call'
+      + (subagent.tool_uses !== 1 ? 's' : '') + '</span>';
+  var time = subagent.duration_ms == null ? ''
+    : '<span class="text-slate-500 whitespace-nowrap">' + (subagent.duration_ms / 1000).toFixed(1) + 's</span>';
+  var body = '';
+  if (subagent.tools.length) {
+    body = '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="mt-1 text-xs text-slate-400 hover:text-slate-300">'
+      + subagent.tools.length + ' row' + (subagent.tools.length !== 1 ? 's' : '') + '</button>'
+      + '<div class="hidden">' + renderToolRows(subagent.tools) + '</div>';
+  }
+  return '<div class="mt-2 ml-2 px-3 border-l border-slate-600/50">'
+    + '<div class="flex items-center gap-2 text-xs">'
+    + '<span class="text-slate-300 whitespace-nowrap">' + escapeHtml(subagent.type) + '</span>'
+    + '<span class="text-slate-300 truncate flex-1 min-w-0">' + escapeHtml(subagent.description) + '</span>'
+    + '<span class="' + statusCls + ' whitespace-nowrap">' + escapeHtml(subagent.status) + '</span>'
+    + uses + time
+    + '</div>'
+    + body
     + '</div>';
 }
 

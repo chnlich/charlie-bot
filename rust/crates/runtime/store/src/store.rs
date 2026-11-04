@@ -630,6 +630,11 @@ impl Store {
     layout::chat_events_path(&self.session_dir(session_id))
   }
 
+  /// The startup-only fact checkpoint of the session's history ([`crate::fact_checkpoint`]).
+  pub fn fact_checkpoint_path(&self, session_id: &str) -> PathBuf {
+    layout::fact_checkpoint_path(&self.session_dir(session_id))
+  }
+
   /// Path to a legacy thread's metadata file.
   pub fn thread_metadata_path(&self, session_id: &str, thread_id: &str) -> PathBuf {
     layout::threads_dir(&self.session_dir(session_id)).join(thread_id).join(METADATA_FILE_NAME)

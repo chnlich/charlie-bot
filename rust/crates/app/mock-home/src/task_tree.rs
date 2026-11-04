@@ -5,8 +5,8 @@
 //! after the marker, an unended run, a sequence ref, and an existing worktree. Every session has one reason, or none.
 //! The shape writes the task facts, run records, trigger files, worktrees and marker for the walk and trigger recovery.
 //!
-//! `REFERENCE_NODES` and `REFERENCE_KEEPS` hold the 04:45Z release start's counts: 8,856 nodes, 792 full passes and
-//! 8,064 skipped sessions. Every keep count scales with the session count. `TASK_SHARE`, `RUNS_SHARE` and
+//! `REFERENCE_NODES` and `REFERENCE_KEEPS` hold the 09:06Z release start's counts: 8,930 nodes, 574 full passes and
+//! 8,356 skipped sessions. Every keep count scales with the session count. `TASK_SHARE`, `RUNS_SHARE` and
 //! `FULL_PASS_ODDS` hold the shares of an earlier 8,003-node start; full passes use its odds per size band.
 //!
 //! Some large full-pass logs take an archive: their first events move to `data/archives` and the metadata's
@@ -91,14 +91,14 @@ const WORKTREE_WORKER_TYPES: [(Option<TaskType>, f64); 4] = [
   (Some(TaskType::ScriptRun), 10.0),
 ];
 
-/// The 04:45Z release start's node count, and its full-pass count for each keep reason.
-const REFERENCE_NODES: f64 = 8856.0;
+/// The 09:06Z release start's node count, and its full-pass count for each keep reason.
+const REFERENCE_NODES: f64 = 8930.0;
 const REFERENCE_KEEPS: [(KeepReason, f64); 5] = [
-  (KeepReason::StateOpen, 321.0),
-  (KeepReason::FileAfterMarker, 232.0),
+  (KeepReason::StateOpen, 318.0),
+  (KeepReason::FileAfterMarker, 4.0),
   (KeepReason::RunUnended, 20.0),
-  (KeepReason::SequenceRef, 36.0),
-  (KeepReason::WorktreeExists, 183.0),
+  (KeepReason::SequenceRef, 38.0),
+  (KeepReason::WorktreeExists, 194.0),
 ];
 /// The odds that a session took a full pass in the reference start, by event-log size band: (lower bound in bytes,
 /// odds). 5 of the 11 logs of 50 MB or more took one, and 40 of 145 between 10 and 50 MB. The bands between 1 and
@@ -1020,8 +1020,9 @@ fn write_live_runs(staging: &Path, plan: &HomePlan) -> Result<()> {
 ///
 /// A server start rewrites the marker, and a lab start can touch file times or remove a worktree, so each timed start
 /// begins with a reset. An event log whose size differs from the manifest fails the reset: a server wrote into this
-/// home, and only a new `generate` restores it.
-pub fn reset(home: &Path) -> Result<()> {
+/// home, and only a new `generate` restores it. `allow_growth` accepts a log longer than its generated size, which is
+/// the append `append_growth` makes to set up a steady state; a log shorter than its generated size fails either way.
+pub fn reset(home: &Path, allow_growth: bool) -> Result<()> {
   let manifest = Manifest::read(home)?;
   if manifest.shape != Shape::TaskTree {
     bail!("{} holds a {:?} home; only a task-tree home has a generated state to reset", home.display(), manifest.shape);
@@ -1042,7 +1043,7 @@ pub fn reset(home: &Path) -> Result<()> {
     let session_dir = home.join(&listed.id);
     let log_path = layout::chat_events_path(&session_dir);
     let bytes = fs::metadata(&log_path).with_context(|| format!("cannot stat {}", log_path.display()))?.len();
-    if bytes != listed.event_log_bytes {
+    if bytes < listed.event_log_bytes || (bytes > listed.event_log_bytes && !allow_growth) {
       bail!(
         "{} holds {bytes} bytes, not the generated {}: generate the home again",
         log_path.display(),
@@ -1068,6 +1069,62 @@ pub fn reset(home: &Path) -> Result<()> {
   Ok(())
 }
 
+/// Append `bytes` of chat-content events to the task-tree home's full-pass logs of 1 MB or more, in proportion to
+/// each log's size, and print the sessions and bytes appended.
+///
+/// This is the append a steady-state measurement needs: production's 122 scanned logs of 1 MB or more grew by
+/// 17,653,088 bytes between two boots, and a boot after this append folds that tail onto the fact checkpoints the
+/// previous start wrote. The line is a chat-content event, so a scan keeps only its id and type, as it keeps a
+/// production chat line's.
+pub fn append_growth(home: &Path, bytes: u64) -> Result<()> {
+  let manifest = Manifest::read(home)?;
+  if manifest.shape != Shape::TaskTree {
+    bail!("{} holds a {:?} home; only a task-tree home has a generated state", home.display(), manifest.shape);
+  }
+  let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed);
+  let plan = HomePlan::new(&sizes, manifest.seed);
+  let kept: Vec<(usize, u64)> = plan
+    .sessions
+    .iter()
+    .enumerate()
+    .filter(|(index, session)| session.reason.is_some() && sizes[*index] >= 1_000_000)
+    .map(|(index, _)| (index, sizes[index]))
+    .collect();
+  if kept.is_empty() {
+    bail!("{} has no full-pass log of 1 MB or more", home.display());
+  }
+  let total: u64 = kept.iter().map(|(_, size)| *size).sum();
+  let mut written = 0u64;
+  let mut sessions = 0usize;
+  for (index, size) in kept {
+    let share = (u128::from(bytes) * u128::from(size) / u128::from(total)) as u64;
+    if share < 1 {
+      continue;
+    }
+    let id = format!("growth-{}", plan.sessions[index].id);
+    let prefix = format!("{{\"id\": \"{id}\", \"type\": \"assistant\", \"content\": \"");
+    let suffix = "\"}\n";
+    let overhead = (prefix.len() + suffix.len()) as u64;
+    if share <= overhead {
+      continue;
+    }
+    let mut line = prefix;
+    line.push_str(&"x".repeat((share - overhead) as usize));
+    line.push_str(suffix);
+    let path = layout::chat_events_path(&home.join(&plan.sessions[index].id));
+    let mut file = File::options()
+      .append(true)
+      .open(&path)
+      .with_context(|| format!("cannot open {} to append its growth", path.display()))?;
+    std::io::Write::write_all(&mut file, line.as_bytes())
+      .with_context(|| format!("cannot append to {}", path.display()))?;
+    written += line.len() as u64;
+    sessions += 1;
+  }
+  println!("appended {written} bytes to {sessions} full-pass logs of {}", home.display());
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1082,7 +1139,7 @@ mod tests {
   /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
   fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
-    let sessions = 8_855;
+    let sessions = 8_929;
     let (_, _, sizes) = session::planned_home(sessions, 1);
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {
@@ -1101,8 +1158,9 @@ mod tests {
       .flat_map(|session| &session.runs)
       .filter(|run| run.end == RunEnd::Finished)
       .count() as f64;
-    // The 04:45Z start's walk counted 8,357 follow-ups over its 8,856 nodes.
-    assert!((followups / scaled(8357.0, sessions) - 1.0).abs() < 0.15, "{followups} follow-ups");
+    // The 09:06Z start's walk counted 7,938 follow-ups over 8,930 nodes. The run knots spread the finished runs over
+    // this home's kept nodes, and the sum lands within a quarter of that reference.
+    assert!((followups / scaled(7938.0, sessions) - 1.0).abs() < 0.25, "{followups} follow-ups");
 
     // A report that no finished parent run confirms is a pending input, and a lab start would dispatch it.
     let parents: Vec<usize> = plan.sessions.iter().filter_map(|session| session.parent).collect();

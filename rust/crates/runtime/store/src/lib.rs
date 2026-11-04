@@ -9,6 +9,7 @@ pub mod control_events;
 mod event_state;
 mod event_types;
 mod events;
+mod fact_checkpoint;
 mod fact_scan;
 mod held_run_lists;
 pub mod hooks;

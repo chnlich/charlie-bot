@@ -17,7 +17,7 @@ use charliebot_registry::backend::{
   ContextStateFn as TurnContextStateFn, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
 };
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, UtcDateTime};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -828,7 +828,7 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   }
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
   if process.was_built {
-    finish_extras.insert("native_backend".to_string(), json!(option.id));
+    finish_extras.insert(NATIVE_BACKEND.to_string(), json!(option.id));
   }
   let relays = relay_count.load(Ordering::Acquire);
   if relays > 0 {

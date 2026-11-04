@@ -33,6 +33,10 @@
   /* A page with no top bar: the fragment's own slot is the bar. */
   body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
     border-bottom: 1px solid rgba(128, 138, 152, .28); background: rgba(255, 255, 255, .55) }
+  /* On a phone the body padding is the page's content gutter — 14 px on home and token usage, 24 px on approval
+     and host auth — and the page content fills the body's content box. The bar then keeps only its vertical
+     padding, so the badge ends on the same edge as the content below it instead of a further 24 px inside. */
+  @media (max-width: 760px) { body > .cb-slot { padding-left: 0; padding-right: 0 } }
   @media (prefers-color-scheme: dark) {
     body > .cb-slot { background: rgba(18, 18, 19, .55); border-bottom-color: rgba(128, 138, 152, .3) }
   }

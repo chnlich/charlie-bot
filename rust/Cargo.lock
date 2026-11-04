@@ -920,7 +920,6 @@ dependencies = [
  "clap",
  "futures-util",
  "http 1.5.0",
- "percent-encoding",
  "prost",
  "reqwest 0.13.5",
  "serde",

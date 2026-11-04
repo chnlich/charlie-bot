@@ -2014,6 +2014,11 @@ impl TaskCompletion {
     if let Some(replay) = self.replay_close_request(session_id, &effective_request_id)? {
       return Ok(replay);
     }
+    // A task that is already not open cannot close again. The refusal needs no blocker check, and that check's first
+    // use of the task index reads every session of the home; a boot replay of a closed task's run must not pay it.
+    if facts.task_state != "open" {
+      return Err(StoreError::conflict(vec![format!("task {session_id} is no longer open")]));
+    }
     self
       .close_now(
         session_id,

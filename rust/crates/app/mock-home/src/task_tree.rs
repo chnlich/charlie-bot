@@ -888,8 +888,16 @@ fn set_session_times(session_dir: &Path, modified_at: NaiveDateTime) -> Result<(
 }
 
 /// Writes the marker the walk reads, in the bytes the server writes it (`write_boot_recovery_marker`).
-fn write_marker_seed(home: &Path) -> Result<()> {
-  let payload = json!({"pass_started_at": utc(marker_time()).to_isoformat_text()});
+///
+/// The marker names the plan's open sessions, as a server's pass writes the sessions it left open. A build without that
+/// key reads each state itself.
+fn write_marker_seed(home: &Path, plan: &HomePlan) -> Result<()> {
+  let open: Vec<&str> =
+    plan.sessions.iter().filter(|session| session.close.is_none()).map(|session| session.id.as_str()).collect();
+  let mut payload = json!({"pass_started_at": utc(marker_time()).to_isoformat_text()});
+  if !open.is_empty() {
+    payload["open_sessions"] = json!(open);
+  }
   let path = home.join(MARKER_SEED_NAME);
   fs::write(&path, text_repr::json_dumps(&payload, &DEFAULT_JSON))
     .with_context(|| format!("cannot write {}", path.display()))
@@ -956,7 +964,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     total += log.bytes;
   }
   write_imported_chat(staging)?;
-  write_marker_seed(staging)?;
+  write_marker_seed(staging, &plan)?;
   write_live_runs(staging, &plan)?;
   let manifest = Manifest {
     seed,
@@ -1059,7 +1067,7 @@ pub fn reset(home: &Path, allow_growth: bool) -> Result<()> {
       }
     }
   }
-  write_marker_seed(home)?;
+  write_marker_seed(home, &plan)?;
   println!(
     "reset {} sessions in {}: marker {}, {restored_worktrees} worktrees restored",
     manifest.session_count,

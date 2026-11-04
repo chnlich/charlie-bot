@@ -1180,4 +1180,66 @@ mod tests {
     let folded = reference.node_facts("synthetic").unwrap();
     assert_eq!(task_value(folded.task().unwrap()), checkpointed);
   }
+
+  /// A cold node-state read folds the fact checkpoint and the bytes past it, and reaches the task state, run facts and
+  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read falls
+  /// back to the whole-log load that answers the same value.
+  #[tokio::test]
+  async fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_load_the_whole_log() {
+    let (home, writer) = make_test_store();
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    append_first_leg(&writer).await;
+    let first = open();
+    let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
+    assert!(first.seal_scanned_facts("synthetic", &scan).unwrap());
+    append_second_leg(&writer).await;
+    let checkpoint_path = writer.fact_checkpoint_path("synthetic");
+    let log_path = writer.chat_events_path("synthetic");
+    let intact = std::fs::read(&checkpoint_path).unwrap();
+
+    // The state, its run facts and its task facts as one comparable value. Each read runs on a fresh store, so its
+    // event cache is cold and the whole-log load it may make is counted.
+    //
+    // The checkpoint keeps each chat-content line as its id and type, so the facts' event index names the events
+    // without their content; every decision field, the task state and the run facts must match the whole-log fold.
+    let state_value = |store: &Store| {
+      let state = store.node_state("synthetic").unwrap();
+      let mut task = task_value(&store.facts_of("synthetic").unwrap());
+      task.as_object_mut().expect("the task value is an object").remove("events");
+      json!({"state": state.task_state().unwrap(), "runs": runs_value(&state.runs), "task": task})
+    };
+    let cold_value = |store: &Store| {
+      let before = store.history_work().file_reads;
+      let value = state_value(store);
+      (value, store.history_work().file_reads - before)
+    };
+
+    // Reference: no checkpoint, so the whole log answers.
+    std::fs::remove_file(&checkpoint_path).unwrap();
+    let (reference, whole_log_reads) = cold_value(&open());
+    assert_eq!(whole_log_reads, 1, "a missing checkpoint loads the whole log once");
+
+    // Matching: the checkpoint covers the first leg and the read folds the appended second leg onto it.
+    std::fs::write(&checkpoint_path, &intact).unwrap();
+    let (from_checkpoint, reads) = cold_value(&open());
+    assert_eq!(reads, 0, "the checkpoint answers without a whole-log load");
+    assert_eq!(from_checkpoint, reference, "the checkpoint's fold equals the whole-log fold");
+
+    // Torn: the checkpoint's bytes cut in half.
+    std::fs::write(&checkpoint_path, &intact[..intact.len() / 2]).unwrap();
+    let (torn, reads) = cold_value(&open());
+    assert_eq!(reads, 1, "a torn checkpoint loads the whole log");
+    assert_eq!(torn, reference);
+
+    // Stale: a byte inside the covered prefix was rewritten, with the file's length unchanged.
+    let mut rewritten = std::fs::read(&log_path).unwrap();
+    let at = rewritten.windows(11).position(|window| window == b"do the work").expect("the first leg holds the text");
+    rewritten[at] = b'D';
+    std::fs::write(&log_path, &rewritten).unwrap();
+    std::fs::write(&checkpoint_path, &intact).unwrap();
+    let (stale, reads) = cold_value(&open());
+    assert_eq!(reads, 1, "a stale checkpoint loads the whole log");
+    std::fs::remove_file(&checkpoint_path).unwrap();
+    assert_eq!(stale, state_value(&open()), "the rewritten log folds as a whole-log load of it folds");
+  }
 }

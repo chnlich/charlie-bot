@@ -56,12 +56,18 @@ fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
   home.join(BOOT_RECOVERY_MARKER_PATH)
 }
 
-/// The boot marker: the start of the last pass that wrote it, and the nodes whose pass failed in that pass. Every node
-/// outside `failed_sessions` was clean at or after `pass_started_at`, so the next boot skips it on the marker's word.
-/// A failed node keeps its full pass at every boot until one of its passes succeeds.
+/// The boot marker: the start of the last pass that wrote it, the nodes whose pass failed in that pass, and the nodes
+/// whose task was open when it ended. Every node outside `failed_sessions` was clean at or after `pass_started_at`, so
+/// the next boot skips it on the marker's word. A failed node keeps its full pass at every boot until one of its
+/// passes succeeds.
+///
+/// `open_sessions` is what the next boot's skip check needs from this one: a node whose log and metadata predate the
+/// marker gained no event since, so the state this pass saw still holds, and the set answers it without reading the
+/// log's tail. A marker without the key (`None`) makes that check read the tail, as every boot did before.
 struct BootMarker {
   pass_started_at: UtcDateTime,
   failed_sessions: BTreeSet<String>,
+  open_sessions: Option<BTreeSet<String>>,
 }
 
 /// The last clean pass's marker, or None when the marker is absent or unreadable. None makes the pass check every node
@@ -96,6 +102,19 @@ fn parse_boot_recovery_marker(raw: &[u8]) -> Result<BootMarker, &'static str> {
     Some(Value::String(pass_started_at)) => UtcDateTime::parse(pass_started_at).map_err(|_| "ValueError")?,
     Some(_) => return Err("TypeError"),
   };
+  let open_sessions = match fields.get("open_sessions") {
+    None => None,
+    Some(Value::Array(items)) => Some(
+      items
+        .iter()
+        .map(|item| match item {
+          Value::String(session_id) => Ok(session_id.clone()),
+          _ => Err("TypeError"),
+        })
+        .collect::<Result<BTreeSet<String>, &'static str>>()?,
+    ),
+    Some(_) => return Err("TypeError"),
+  };
   let failed_sessions = match fields.get("failed_sessions") {
     None => BTreeSet::new(),
     Some(Value::Array(items)) => items
@@ -107,15 +126,16 @@ fn parse_boot_recovery_marker(raw: &[u8]) -> Result<BootMarker, &'static str> {
       .collect::<Result<BTreeSet<String>, &'static str>>()?,
     Some(_) => return Err("TypeError"),
   };
-  Ok(BootMarker { pass_started_at, failed_sessions })
+  Ok(BootMarker { pass_started_at, failed_sessions, open_sessions })
 }
 
-/// Writes the marker. `failed_sessions` is written only when it names a node, so a clean pass writes the marker it always
-/// has.
+/// Writes the marker. `failed_sessions` and `open_sessions` are each written only when non-empty, so a pass that leaves
+/// no open node writes the marker it always has.
 fn write_boot_recovery_marker(
   home: &std::path::Path,
   pass_started_at: UtcDateTime,
   failed_sessions: &BTreeSet<String>,
+  open_sessions: Option<&BTreeSet<String>>,
 ) -> anyhow::Result<()> {
   let path = boot_recovery_marker_path(home);
   let parent = path.parent().context("boot-recovery marker has no parent directory")?;
@@ -124,6 +144,9 @@ fn write_boot_recovery_marker(
   payload.insert("pass_started_at".to_string(), Value::String(pass_started_at.to_isoformat_text()));
   if !failed_sessions.is_empty() {
     payload.insert("failed_sessions".to_string(), serde_json::json!(failed_sessions));
+  }
+  if let Some(open_sessions) = open_sessions.filter(|open_sessions| !open_sessions.is_empty()) {
+    payload.insert("open_sessions".to_string(), serde_json::json!(open_sessions));
   }
   let text = charliebot_core::text_repr::json_dumps(&Value::Object(payload), &charliebot_core::text_repr::DEFAULT_JSON);
   charliebot_core::fsutil::atomic_write_text_synced(&path, &text)
@@ -144,27 +167,41 @@ fn boot_skip_check(
   session_id: &str,
   session_dir: &std::path::Path,
   meta: &SessionMetadata,
-  marker: UtcDateTime,
+  marker: &BootMarker,
 ) -> anyhow::Result<SkipCheck> {
-  if features.store.task_state_fast(session_id)? == "open" {
-    return Ok(SkipCheck::Keep("state_open"));
-  }
-
-  let marker_instant = marker.into_inner();
+  let marker_instant = marker.pass_started_at.into_inner();
   let marker_seconds =
     charliebot_core::timefmt::float_seconds(marker_instant.unix_timestamp(), i64::from(marker_instant.nanosecond()));
+  let mut file_after_marker = false;
   for path in [layout::chat_events_path(session_dir), layout::metadata_path(session_dir)] {
     let modified = match std::fs::metadata(&path) {
       Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(SkipCheck::Keep("file_after_marker")),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        file_after_marker = true;
+        continue;
+      }
       Err(error) => return Err(error).with_context(|| format!("stating {}", path.display())),
     };
     let modified = OffsetDateTime::from(modified);
     let modified_seconds =
       charliebot_core::timefmt::float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
     if modified_seconds >= marker_seconds - MARKER_MTIME_SLACK_SECONDS {
-      return Ok(SkipCheck::Keep("file_after_marker"));
+      file_after_marker = true;
     }
+  }
+
+  // The state decides a keep before any file's age does. Two sources answer it: when both files predate the marker,
+  // nothing was appended since the last pass, so the open set it left still holds; otherwise its events may have
+  // moved and the tail is read.
+  let state = match (file_after_marker, marker.open_sessions.as_ref()) {
+    (false, Some(open_sessions)) => open_sessions.contains(session_id),
+    _ => features.store.task_state_fast(session_id)? == "open",
+  };
+  if state {
+    return Ok(SkipCheck::Keep("state_open"));
+  }
+  if file_after_marker {
+    return Ok(SkipCheck::Keep("file_after_marker"));
   }
 
   let runs = features.store.list_run_records_sync(session_id)?;
@@ -558,6 +595,9 @@ pub async fn reconcile_task_tree(
   let file_reads_before_passes = features.store.history_work().file_reads;
   let run_record_reads_before_passes = features.store.run_record_read_count();
   let mut step_totals = StepTotals::default();
+  // The sessions this pass leaves open, for the next boot's skip checks. A session the walk skips is closed: the skip
+  // check found no open state and nothing appended since, so only kept nodes can be open here.
+  let mut open_sessions: BTreeSet<String> = BTreeSet::new();
   for (candidate, no_node) in candidates.into_iter().zip(no_nodes) {
     if stop.is_cancelled() {
       return Ok(counters);
@@ -585,6 +625,20 @@ pub async fn reconcile_task_tree(
       if is_out_of_space_error(error.as_ref()) {
         adapter.start_run_end_landing_retry(&session_id, None);
       }
+      // A failed pass names its session open, so the next boot reads that session's state itself instead of trusting a
+      // set that does not name it.
+      open_sessions.insert(session_id);
+      continue;
+    }
+    match features.store.task_state_for_tree_index(&session_id) {
+      Ok(state) if state != "open" => {}
+      Ok(_) => {
+        open_sessions.insert(session_id);
+      }
+      Err(error) => {
+        tracing::warn!(target: "charliebot_tasks", session_id = %session_id, error = %error, "task_recovery_open_set_state_failed");
+        open_sessions.insert(session_id);
+      }
     }
   }
   let node_passes_ms = phase_ms();
@@ -594,7 +648,7 @@ pub async fn reconcile_task_tree(
   // The marker advances for every node that the pass completed. A failed node stays in `failed_sessions`, so the next
   // boot runs its full pass again while the other nodes keep the marker's skip.
   if !stop.is_cancelled() {
-    write_boot_recovery_marker(&cfg.charliebot_home, started_at, &failed_sessions)?;
+    write_boot_recovery_marker(&cfg.charliebot_home, started_at, &failed_sessions, Some(&open_sessions))?;
   }
   let marker_ms = phase_ms();
   tracing::info!(
@@ -642,7 +696,7 @@ fn examine_session_dir(
     None => None,
     // A node whose last pass failed takes its full pass, whatever the marker says about its files.
     Some(marker) if marker.failed_sessions.contains(&session_id) => Some("failed_pass"),
-    Some(marker) => match boot_skip_check(features, &session_id, session_dir, &meta, marker.pass_started_at)? {
+    Some(marker) => match boot_skip_check(features, &session_id, session_dir, &meta, marker)? {
       SkipCheck::Keep(reason) => Some(reason),
       SkipCheck::Skip { newest_backend } => return Ok(WalkEntry::Skipped { session_id, newest_backend }),
     },
@@ -2300,7 +2354,7 @@ mod tests {
     let pass_started_at = UtcDateTime::parse("2026-10-21T03:00:00.123456+00:00").expect("the synthetic time parses");
     charliebot_core::fsutil::clear_synced_write_steps();
 
-    write_boot_recovery_marker(home.path(), pass_started_at, &BTreeSet::new()).expect("the marker writes");
+    write_boot_recovery_marker(home.path(), pass_started_at, &BTreeSet::new(), None).expect("the marker writes");
 
     let steps = charliebot_core::fsutil::synced_write_steps();
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
@@ -2327,13 +2381,50 @@ mod tests {
         std::fs::File::open(&path).expect("the durable file exists").set_modified(stamp).expect("the mtime is set");
       }
 
-      let reason =
-        match boot_skip_check(&features, &session_id, &session_dir, &meta, marker).expect("the skip check reads") {
-          SkipCheck::Keep(reason) => Some(reason),
-          SkipCheck::Skip { .. } => None,
-        };
+      let boot_marker = BootMarker { pass_started_at: marker, failed_sessions: BTreeSet::new(), open_sessions: None };
+      let reason = match boot_skip_check(&features, &session_id, &session_dir, &meta, &boot_marker)
+        .expect("the skip check reads")
+      {
+        SkipCheck::Keep(reason) => Some(reason),
+        SkipCheck::Skip { .. } => None,
+      };
 
       assert_eq!(reason, expected, "a durable file {before:?} before the marker");
     }
+  }
+
+  /// The marker names the sessions its pass left open, and the skip check answers a node whose files predate the marker
+  /// from that set without reading its tail. A marker without the set reads the tail.
+  #[tokio::test]
+  async fn a_marker_naming_the_open_sessions_answers_a_skip_check_without_a_tail_read() {
+    let (_home, features) = startup_features().await;
+    let session_id = closed_worker_node(&features, "synthetic-open-set-node", 0).await;
+    let meta = features.store.load_meta(&session_id).await.expect("the meta loads").expect("the node exists");
+    let session_dir = features.store.session_dir(&session_id);
+    // The marker follows both files, so the session gained no event since the pass that wrote it.
+    let pass_started_at = UtcDateTime::parse("2030-01-01T00:00:00Z").expect("the synthetic marker parses");
+    let tails = features.store.task_state_tail_read_count();
+
+    for (open_sessions, expected) in
+      [(BTreeSet::new(), None), (BTreeSet::from([session_id.clone()]), Some("state_open"))]
+    {
+      let marker = BootMarker { pass_started_at, failed_sessions: BTreeSet::new(), open_sessions: Some(open_sessions) };
+      let reason =
+        match boot_skip_check(&features, &session_id, &session_dir, &meta, &marker).expect("the skip check reads") {
+          SkipCheck::Keep(reason) => Some(reason),
+          SkipCheck::Skip { .. } => None,
+        };
+      assert_eq!(reason, expected);
+      assert_eq!(features.store.task_state_tail_read_count(), tails, "the open set answered the state");
+    }
+
+    let marker = BootMarker { pass_started_at, failed_sessions: BTreeSet::new(), open_sessions: None };
+    let reason =
+      match boot_skip_check(&features, &session_id, &session_dir, &meta, &marker).expect("the skip check reads") {
+        SkipCheck::Keep(reason) => Some(reason),
+        SkipCheck::Skip { .. } => None,
+      };
+    assert_eq!(reason, None, "a marker without the open set leaves the skip to the run checks");
+    assert_eq!(features.store.task_state_tail_read_count(), tails + 1, "a marker without the open set reads the tail");
   }
 }

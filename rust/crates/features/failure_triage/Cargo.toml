@@ -11,7 +11,6 @@ charliebot-agents.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
-charliebot-tasks.workspace = true
 futures-util.workspace = true
 jiff.workspace = true
 regex.workspace = true

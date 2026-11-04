@@ -18,7 +18,6 @@ charliebot-triggers.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 http.workspace = true
-percent-encoding.workspace = true
 prost.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -13,7 +13,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::StoreResult;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
 use charliebot_tasks::dispatch::DispatchExecutor;
 use charliebot_tasks::spawner_backends::{self, SubagentRole};
@@ -139,7 +139,17 @@ impl LoopHarness {
         SESSION_REQUEST,
         None,
         TaskProfile::Manager,
-        Some(TaskSpec { goal: "synthetic manager".to_string(), ..TaskSpec::default() }),
+        Some(TaskSpec {
+          goal: "synthetic manager".to_string(),
+          acceptance: Vec::new(),
+          context_refs: Vec::new(),
+          repo_path: None,
+          base_branch: None,
+          task_type: None,
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+        }),
       )
       .await?;
     stack

@@ -9,9 +9,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 /// The file name of the host's lessons.
 pub const LESSONS_FILE_NAME: &str = "LESSONS.md";
@@ -92,29 +91,11 @@ impl LessonIndex {
     if tokens.is_empty() || self.entries.is_empty() {
       return Ok(Vec::new());
     }
-    let mut command = Command::new("rg");
-    command.arg("--json").arg("--no-config").arg("--color").arg("never").arg("-i").arg("-F");
-    for token in &tokens {
-      command.arg("-e").arg(token);
-    }
-    command.arg("--").arg(&self.file);
-    let output = command.output().with_context(|| "running rg to rank LESSONS entries".to_string())?;
-    if !output.status.success() && output.status.code() != Some(1) {
-      bail!("rg failed to search {}: {}", self.file.display(), String::from_utf8_lossy(&output.stderr).trim());
-    }
+    let matches = crate::ripgrep::matching_lines(&self.file, &tokens)?;
     let mut scores: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-      let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-      if message.get("type").and_then(serde_json::Value::as_str) != Some("match") {
-        continue;
-      }
-      let Some(data) = message.get("data") else { continue };
-      let Some(line_number) = data.get("line_number").and_then(serde_json::Value::as_u64) else { continue };
-      let Some(text) = data.get("lines").and_then(|lines| lines.get("text")).and_then(serde_json::Value::as_str) else {
-        continue;
-      };
-      let Some(index) = self.entry_index(line_number as usize) else { continue };
-      let lowered = text.to_lowercase();
+    for matched in matches {
+      let Some(index) = self.entry_index(matched.line_number) else { continue };
+      let lowered = matched.text.to_lowercase();
       for token in &tokens {
         if lowered.contains(&token.to_lowercase()) {
           scores.entry(index).or_default().insert(token.clone());

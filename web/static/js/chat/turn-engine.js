@@ -1699,7 +1699,10 @@
       const seg = this.segments.find((candidate) => candidate.entries.includes(entry));
       this.rekeyMessage(entry.msg, msg);
       entry.msg = msg;
+      // An entry the pre-render queue has not reached yet has no node to carry the reader's open blocks from.
+      const previous = entry.node;
       this.renderAtom(entry, true);
+      if (previous) Chat.carryOpenBlocks(previous, entry.node);
       seg.cachedSig = null;
       if (seg.kind === 'turn') {
         this.measuredFolded.delete(seg.key);

@@ -77,7 +77,11 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
     context.Chat.renderRoundRatingButtons = () => '';
     context.Chat.markFileLinks = () => {};
     vm.runInContext(readStatic('chat/rendering.js'), context, {filename: 'chat/rendering.js'});
-    context.Chat.buildTurnEngineMessageNode = (msg, sid) => ({innerHTML: context.renderMessage(msg, sid)});
+    // The harness parses no HTML, so the node holds no toggles for the engine to carry open state across.
+    context.Chat.buildTurnEngineMessageNode = (msg, sid) => ({
+      innerHTML: context.renderMessage(msg, sid),
+      querySelectorAll: () => [],
+    });
   } else {
     context.Chat.buildTurnEngineMessageNode = () => createElement();
   }

@@ -112,6 +112,20 @@ function renderSubagentCard(subagent) {
     + '</div>';
 }
 
+// A message that a live update re-renders keeps the blocks its reader opened. A toggle is a button whose next
+// sibling is the block it shows or hides. Toggles pair up by their order under the message, which holds while a
+// new toggle does not appear before an open one.
+function carryOpenBlocks(from, to) {
+  const toggles = (root) => Array.from(root.querySelectorAll('button')).filter((button) => button.nextElementSibling);
+  const targets = toggles(to);
+  toggles(from).forEach((button, i) => {
+    if (i >= targets.length) return;
+    const block = targets[i].nextElementSibling;
+    if (button.nextElementSibling.classList.contains('hidden')) block.classList.add('hidden');
+    else block.classList.remove('hidden');
+  });
+}
+
 function renderRawBackendOutput(text) {
   // Keep literal protocol paths inert during the file-link post-processing.
   return '<details class="prose-msg border border-slate-600/30 rounded-lg overflow-hidden">'
@@ -1123,6 +1137,7 @@ const CHAT_ONLY = {
   installTurnCollapseControl,
   setTurnFoldExpanded,
   toggleTurnFold,
+  carryOpenBlocks,
   evidenceLinkHtml,
   evidenceHref,
   deliveryLinksHtml,

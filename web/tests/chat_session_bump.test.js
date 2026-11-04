@@ -1527,3 +1527,32 @@ test('a server that repeats its cursor ends the chain: the no-progress check is 
   assert.deepEqual(cursors(fetchCalls), stepsFrom100(9), 'the repeated cursor is the last request');
   assert.equal(sentinelsIn(root).length, 0, 'the repeat counts as the end of history');
 });
+
+// A message with one tool block: a toggle button, and the block it shows or hides, folded by default.
+function toolBlockNode(msg) {
+  const el = new FakeElement('DIV');
+  el.dataset.messageId = String(msg.id);
+  el.appendChild(new FakeElement('BUTTON'));
+  el.appendChild(new FakeElement('DIV', {className: 'hidden'}));
+  return el;
+}
+
+test('a live update re-renders a message in place and keeps the tool block its reader opened', () => {
+  const {context, engine} = mountEngine([eMsg('user', 'q1', 'question'), eMsg('assistant', 'a1', 'draft')]);
+  context.Chat.buildTurnEngineMessageNode = toolBlockNode;
+  const withCard = (status) => ({...eMsg('assistant', 'a1', 'draft'), tools: [{name: 'Agent', subagent: {status}}]});
+  const entry = engine.entries[1];
+
+  engine.replaceMessage(withCard('running'));
+  const folded = entry.node;
+  assert.equal(folded.children[1].classList.contains('hidden'), true, 'the block starts folded');
+  folded.children[1].classList.remove('hidden');
+
+  engine.replaceMessage(withCard('completed'));
+
+  assert.equal(engine.entries.length, 2);
+  assert.equal(engine.entries[1], entry, 'the entry keeps its place');
+  assert.notEqual(entry.node, folded, 'the message is rendered again');
+  assert.equal(entry.msg.tools[0].subagent.status, 'completed');
+  assert.equal(entry.node.children[1].classList.contains('hidden'), false, 'the reader\'s open block stays open');
+});

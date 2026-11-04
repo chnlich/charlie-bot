@@ -61,7 +61,7 @@ pub(crate) fn resolve_sidebar_state(
   let force_full = charliebot_store::sidebar_state::register_poll(force);
   if !force && let Some(derived) = charliebot_store::sidebar_state::peek_derived_map(&key) {
     if force_full {
-      schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), sessions.to_vec())?;
+      schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), sessions)?;
     }
     return Ok(derived);
   }
@@ -91,11 +91,7 @@ pub(crate) fn resolve_sidebar_state(
   let mut selected = Vec::new();
   let mut signatures = HashMap::new();
   if force_full && !force {
-    schedule_sidebar_sweep(
-      Arc::clone(store),
-      Arc::clone(registry),
-      active.iter().map(|meta| (*meta).clone()).collect(),
-    )?;
+    schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), &active)?;
   }
   for meta in &active {
     let should_check = should_probe_synchronously(
@@ -180,7 +176,7 @@ pub(crate) fn count_memoized_read(
   sessions: &[Arc<SessionMetadata>],
 ) -> StoreResult<()> {
   if charliebot_store::sidebar_state::register_poll(false) {
-    schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), sessions.to_vec())?;
+    schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), sessions)?;
   }
   Ok(())
 }
@@ -198,7 +194,7 @@ fn should_start_sweep(running: bool, last_started: Option<Instant>, now: Instant
 fn schedule_sidebar_sweep(
   store: Arc<Store>,
   registry: Arc<Registry>,
-  sessions: Vec<Arc<SessionMetadata>>,
+  sessions: &[Arc<SessionMetadata>],
 ) -> StoreResult<()> {
   // In the test build the sweep never runs: its thread would move the shared sidebar generation long after the read
   // that scheduled it returned, which is exactly the window the corpus-memo tests of `listing.rs` compare. No test
@@ -218,6 +214,9 @@ fn schedule_sidebar_sweep(
   if SIDEBAR_SWEEP_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
     return Ok(());
   }
+  // The pass owns its copy of the rows: a poll that schedules no sweep, which is most of them, hands the slice back
+  // without cloning every row's handle.
+  let sessions = sessions.to_vec();
   let spawned = std::thread::Builder::new().name("sidebar-self-heal-sweep".to_string()).spawn(move || {
     let _flight = SidebarSweepFlight;
     let mut selected = Vec::new();

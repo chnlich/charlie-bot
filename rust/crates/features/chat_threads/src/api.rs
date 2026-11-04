@@ -42,7 +42,16 @@ async fn list_chat_threads(State(features): State<Arc<FeatureContext>>, request:
   };
   let threads = views.get(THREADS_VIEW);
   rows.retain(|row| threads.is_some_and(|members| members.contains_key(&row.id)));
-  listing::sessions_list_response(&request, &features.store, &rows, &derived, &sequence_fields, &CHAT_THREADS_MEMOS)
+  // The view filters the corpus into a list of its own, so the source keeps the row-by-row comparison.
+  listing::sessions_list_response(
+    &request,
+    &features.store,
+    &rows,
+    None,
+    &derived,
+    &sequence_fields,
+    &CHAT_THREADS_MEMOS,
+  )
 }
 
 #[cfg(test)]

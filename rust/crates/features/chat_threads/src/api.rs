@@ -71,9 +71,10 @@ mod tests {
   const CHAT_THREADS: (&str, RegisterFn) = ("features.chat_threads", crate::register);
   const SLACK: (&str, RegisterFn) = ("features.slack", charliebot_slack::register);
   const DISCORD: (&str, RegisterFn) = ("features.discord", charliebot_discord::register);
-  /// The server's order: the session-api's listing and per-session routes, this package, then the Slack and Discord
-  /// packages that own the origin slots.
-  const SERVER: [(&str, RegisterFn); 4] = [LISTING, CHAT_THREADS, SLACK, DISCORD];
+  const FEISHU: (&str, RegisterFn) = ("features.feishu", charliebot_feishu::register);
+  /// The server's order: the session-api's listing and per-session routes, this package, then the Slack, Discord and
+  /// Feishu packages that own the origin slots.
+  const SERVER: [(&str, RegisterFn); 5] = [LISTING, CHAT_THREADS, SLACK, DISCORD, FEISHU];
 
   /// The server's composition in miniature: the packages register in the given order, and the app merges their
   /// routers in that order, as `charliebot-server`'s `app::build` does.
@@ -155,6 +156,7 @@ mod tests {
   /// Writes the corpus through the registered slots, so every file carries the origin fields as the store writes them.
   fn seed(features: &FeatureContext) -> Corpus {
     charliebot_registry::thread_origin::register_origin_field("discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
     charliebot_registry::thread_origin::register_origin_field("slack_origin");
     let slots = features.registry.metadata_slots();
     let store = &features.store;

@@ -441,6 +441,7 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
       shutdown_ms = round_ms(shutdown_started.elapsed()),
       discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
       ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
+      feishu_ms = round_ms(step_elapsed(&closes.step_closes, "feishu")),
       host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
       merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
       scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
@@ -456,6 +457,7 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
       shutdown_ms = round_ms(shutdown_started.elapsed()),
       discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
       ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
+      feishu_ms = round_ms(step_elapsed(&closes.step_closes, "feishu")),
       host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
       merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
       scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
@@ -615,7 +617,7 @@ mod tests {
   fn shutdown_line_has_fields_and_each_close_is_numeric() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let _capture = charliebot_core::test_support::install_events(Arc::new(Capture(Arc::clone(&events))));
-    let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack"]
+    let step_closes = ["discord", "ext_usage", "feishu", "host_auth", "merge_pool", "scheduler", "slack"]
       .map(|name| StepTiming { name, elapsed: Duration::ZERO })
       .into();
     let closes =
@@ -632,6 +634,7 @@ mod tests {
       [
         "discord_ms",
         "ext_usage_ms",
+        "feishu_ms",
         "host_auth_ms",
         "http_client_ms",
         "merge_pool_ms",
@@ -647,6 +650,7 @@ mod tests {
       "shutdown_ms",
       "discord_ms",
       "ext_usage_ms",
+      "feishu_ms",
       "host_auth_ms",
       "merge_pool_ms",
       "scheduler_ms",

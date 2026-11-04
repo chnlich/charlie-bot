@@ -7,6 +7,7 @@ use charliebot_chat_threads::thread_entry::{
   unread_after,
 };
 use charliebot_discord::thread_contract::DISCORD;
+use charliebot_feishu::thread_contract::FEISHU;
 use charliebot_slack::thread_contract::SLACK;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
@@ -144,6 +145,7 @@ fn platform_of(case: &Value) -> &'static ThreadPlatform {
   match str_of(case, "platform") {
     "slack" => &SLACK,
     "discord" => &DISCORD,
+    "feishu" => &FEISHU,
     other => panic!("unknown recorded platform {other:?}"),
   }
 }

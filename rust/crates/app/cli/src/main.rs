@@ -109,7 +109,7 @@ fn run_subcommand(
     "delegate" => commands::delegate::main(args),
     "digest" => commands::digest::main(args),
     "discord" => charliebot_discord::cli::main(args),
-    "feishu" => commands::feishu::main(args),
+    "feishu" => charliebot_feishu::cli::main(args),
     "files" => commands::files::main(args),
     "gc-trash" => commands::gc_trash::main(args, host),
     "github" => charliebot_github::cli::main(args),

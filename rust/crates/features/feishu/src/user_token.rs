@@ -1,14 +1,9 @@
-//! `charliebot feishu`: authenticated Feishu Open API requests, token refresh and re-authorization.
-//!
-//! `request` reads `feishu.user_access_token` inside this process, sends one HTTP request and prints
-//! the response body. A 401 or an expired-token code refreshes the token, writes both new tokens to
-//! `credentials.yaml` and retries once. `consent-url` and `exchange-code` run the skill's
-//! re-authorization steps. No command or output carries a token.
+//! The user-token verbs of `charliebot feishu`: `request` calls the Open API as the authorized user, `consent-url`
+//! prints the browser URL that starts a re-authorization, and `exchange-code` stores the tokens a code returns. These
+//! read and write the `feishu` credentials of the profile home, not the app's tenant token.
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::request::{self, Request, RequestArgs};
 use charliebot_cli_common::urlencode::urlencode;
@@ -16,7 +11,6 @@ use charliebot_core::config;
 use charliebot_core::credentials::{self, Credentials};
 use charliebot_core::home;
 use charliebot_core::paths;
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 
 const FEISHU_SECTION: &str = "feishu";
@@ -32,7 +26,7 @@ const INVALID_ACCESS_TOKEN_CODE: i64 = 20005;
 
 /// The endpoints the command calls. Tests point them at local stubs.
 #[derive(Debug, Clone)]
-struct Endpoints {
+pub(crate) struct Endpoints {
   authorize_url: String,
   app_token_url: String,
   refresh_url: String,
@@ -40,7 +34,7 @@ struct Endpoints {
 }
 
 impl Endpoints {
-  fn production() -> Endpoints {
+  pub(crate) fn production() -> Endpoints {
     Endpoints {
       authorize_url: AUTHORIZE_URL.to_string(),
       app_token_url: APP_TOKEN_URL.to_string(),
@@ -50,64 +44,7 @@ impl Endpoints {
   }
 }
 
-#[derive(Parser)]
-#[command(name = "feishu", subcommand_required = true, arg_required_else_help = true)]
-struct FeishuCli {
-  #[command(subcommand)]
-  command: FeishuCommand,
-}
-
-#[derive(Subcommand)]
-enum FeishuCommand {
-  /// Send one authenticated Feishu Open API request.
-  Request(RequestCommand),
-  /// Print the browser URL that starts a re-authorization.
-  ConsentUrl(ConsentUrlArgs),
-  /// Exchange an authorization code for tokens and store them.
-  ExchangeCode(ExchangeCodeArgs),
-}
-
-#[derive(Args)]
-struct RequestCommand {
-  #[command(flatten)]
-  request: RequestArgs,
-}
-
-#[derive(Args)]
-struct ConsentUrlArgs {
-  /// One granted scope; repeat or list several.
-  #[arg(long = "scope", required = true, num_args = 1.., value_name = "SCOPE")]
-  scope: Vec<String>,
-}
-
-#[derive(Args)]
-struct ExchangeCodeArgs {
-  /// The `code` query parameter of the browser redirect.
-  code: String,
-}
-
-/// Run the `feishu` subcommand.
-pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(FeishuCli::command());
-  let argv = std::iter::once(OsString::from("charliebot feishu")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = FeishuCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
-  let endpoints = Endpoints::production();
-  let home_dir = home_dir()?;
-  match cli.command {
-    FeishuCommand::Request(args) => request::write_stdout(&execute_request(&home_dir, &args.request, &endpoints)?),
-    FeishuCommand::ConsentUrl(args) => {
-      println!("{}", consent_url(&home_dir, &args.scope, &endpoints)?);
-      Ok(())
-    }
-    FeishuCommand::ExchangeCode(args) => exchange_code(&home_dir, &args.code, &endpoints),
-  }
-}
-
-fn home_dir() -> Result<PathBuf, CliExit> {
+pub(crate) fn home_dir() -> Result<PathBuf, CliExit> {
   home::charliebot_home_dir().map_err(|_| credential_failure("user_access_token", None))
 }
 
@@ -138,7 +75,7 @@ fn required(credentials: &Credentials, key: &str, home: &Path) -> Result<String,
 }
 
 /// Send one request with the stored token, refreshing and retrying once when it expired.
-fn execute_request(home: &Path, args: &RequestArgs, endpoints: &Endpoints) -> Result<Vec<u8>, CliExit> {
+pub(crate) fn execute_request(home: &Path, args: &RequestArgs, endpoints: &Endpoints) -> Result<Vec<u8>, CliExit> {
   let request = args.prepare()?;
   let credentials = load(home)?;
   let access = required(&credentials, "user_access_token", home)?;
@@ -254,7 +191,7 @@ fn store_tokens(home: &Path, access: &str, refresh: &str) -> Result<(), CliExit>
   credentials::write_credentials(home, updated.as_bytes()).map_err(|error| CliExit::error(error.to_string()))
 }
 
-fn consent_url(home: &Path, scopes: &[String], endpoints: &Endpoints) -> Result<String, CliExit> {
+pub(crate) fn consent_url(home: &Path, scopes: &[String], endpoints: &Endpoints) -> Result<String, CliExit> {
   let credentials = load(home)?;
   let app_id = required(&credentials, "app_id", home)?;
   let query = urlencode(&[
@@ -265,7 +202,7 @@ fn consent_url(home: &Path, scopes: &[String], endpoints: &Endpoints) -> Result<
   Ok(format!("{}?{query}", endpoints.authorize_url))
 }
 
-fn exchange_code(home: &Path, code: &str, endpoints: &Endpoints) -> Result<(), CliExit> {
+pub(crate) fn exchange_code(home: &Path, code: &str, endpoints: &Endpoints) -> Result<(), CliExit> {
   let credentials = load(home)?;
   let app_id = required(&credentials, "app_id", home)?;
   let app_secret = required(&credentials, "app_secret", home)?;

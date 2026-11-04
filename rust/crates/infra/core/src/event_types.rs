@@ -238,11 +238,11 @@ pub fn is_real_user_message(event: &impl EventFields) -> bool {
 }
 
 /// The thread platforms that can summon a session. Each platform listener writes its summon block under its
-/// platform key; the Slack and Discord tests pin both keys to this list.
-pub const THREAD_PLATFORM_KEYS: &[&str] = &["slack", "discord"];
+/// platform key; the Slack, Discord and Feishu tests pin every key to this list.
+pub const THREAD_PLATFORM_KEYS: &[&str] = &["slack", "discord", "feishu"];
 
-/// Return whether an event is a thread platform summon: an `agent_message` whose `slack` or `discord` block has no
-/// `nudge_of`. A nudge wakes a session on a thread it already joined and repeats no request.
+/// Return whether an event is a thread platform summon: an `agent_message` whose `slack`, `discord` or `feishu` block
+/// has no `nudge_of`. A nudge wakes a session on a thread it already joined and repeats no request.
 pub fn is_platform_summon(event: &impl EventFields) -> bool {
   event.field("type").and_then(EventFields::as_str_field) == Some(AGENT_MESSAGE)
     && THREAD_PLATFORM_KEYS

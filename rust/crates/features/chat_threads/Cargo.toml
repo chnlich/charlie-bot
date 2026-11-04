@@ -31,6 +31,7 @@ tracing.workspace = true
 [dev-dependencies]
 charliebot-core.workspace = true
 charliebot-discord.workspace = true
+charliebot-feishu.workspace = true
 charliebot-slack.workspace = true
 charliebot-web-reply.workspace = true
 flate2.workspace = true

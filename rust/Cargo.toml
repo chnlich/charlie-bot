@@ -37,6 +37,7 @@ members = [
     "crates/features/discord",
     "crates/features/drafts",
     "crates/features/explain",
+    "crates/features/feishu",
     "crates/features/failure_triage",
     "crates/features/files",
     "crates/features/github",
@@ -107,6 +108,7 @@ nix = { version = "0.30", features = ["fs", "process", "hostname", "user", "sign
 percent-encoding = "2"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 procfs = { version = "0.18", default-features = false }
+prost = "0.14"
 regex = "1"
 rustix = { version = "1", features = ["process"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
@@ -167,6 +169,7 @@ charliebot-diff-view = { path = "crates/features/diff_view" }
 charliebot-discord = { path = "crates/features/discord" }
 charliebot-drafts = { path = "crates/features/drafts" }
 charliebot-explain = { path = "crates/features/explain" }
+charliebot-feishu = { path = "crates/features/feishu" }
 charliebot-failure-triage = { path = "crates/features/failure_triage" }
 charliebot-files = { path = "crates/features/files" }
 charliebot-gemini = { path = "crates/backends/gemini" }

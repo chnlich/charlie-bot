@@ -506,6 +506,7 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-discord",
+ "charliebot-feishu",
  "charliebot-registry",
  "charliebot-session-api",
  "charliebot-slack",
@@ -570,6 +571,7 @@ dependencies = [
  "charliebot-cron",
  "charliebot-discord",
  "charliebot-failure-triage",
+ "charliebot-feishu",
  "charliebot-github",
  "charliebot-improve",
  "charliebot-memory",
@@ -903,6 +905,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-feishu"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-chat-threads",
+ "charliebot-cli-common",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-triggers",
+ "clap",
+ "futures-util",
+ "http 1.5.0",
+ "percent-encoding",
+ "prost",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "charliebot-files"
 version = "0.1.0"
 dependencies = [
@@ -1146,6 +1178,7 @@ dependencies = [
  "charliebot-drafts",
  "charliebot-explain",
  "charliebot-failure-triage",
+ "charliebot-feishu",
  "charliebot-files",
  "charliebot-gemini",
  "charliebot-github",
@@ -1866,6 +1899,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "either"
+version = "1.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2535,6 +2574,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3060,6 +3108,29 @@ checksum = "e6401bf7b6af22f78b563665d15a22e9aef27775b79b149a66ca022468a4e405"
 dependencies = [
  "bitflags 2.13.2",
  "hex",
+]
+
+[[package]]
+name = "prost"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -62,6 +62,7 @@ mod tests {
     for event_type in [
       "slack_reply",
       "discord_reply",
+      "feishu_reply",
       "web_reply",
       "web_reply_notice",
       "web_status",

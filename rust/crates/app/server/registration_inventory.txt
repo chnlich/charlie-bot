@@ -15,6 +15,7 @@ page_packages	features.drafts	features.drafts
 page_packages	features.slack	features.slack
 page_packages	features.github	features.github
 page_packages	features.discord	features.discord
+page_packages	features.feishu	features.feishu
 page_packages	features.disk_sweep	features.disk_sweep
 page_packages	features.web_reply	features.web_reply
 page_packages	features.approval	features.approval
@@ -52,6 +53,7 @@ routers	features.diag	features.diag
 routers	features.drafts	features.drafts
 routers	features.slack	features.slack
 routers	features.discord	features.discord
+routers	features.feishu	features.feishu
 routers	features.web_reply	features.web_reply
 routers	features.approval	features.approval
 routers	features.approval	features.approval
@@ -74,6 +76,7 @@ service	features.cron	cron_binding_context
 service	features.cron	scheduler
 service	features.slack	slack
 service	features.discord	discord
+service	features.feishu	feishu
 service	features.host_auth	host_auth
 service	features.trace	merge_pool
 service	features.usage	ext_usage
@@ -87,6 +90,7 @@ config section	features.artifacts	publish
 config section	features.code_server	code_server
 config section	features.slack	slack
 config section	features.discord	discord
+config section	features.feishu	feishu
 config section	features.host_auth	host_auth
 config section	features.voice	voice
 config section	backends.claude_code	accounts
@@ -119,6 +123,7 @@ metadata_slots	-	backend_pool:Session
 metadata_slots	-	cron:Session
 metadata_slots	-	slack:Session
 metadata_slots	-	discord:Session
+metadata_slots	-	feishu:Session
 metadata_slots	-	web_reply:Session
 metadata_slots	-	claude_code:Session
 metadata_slots	-	claude_code:Thread
@@ -126,6 +131,7 @@ metadata_slot_validators	-	backend_pool:Session
 metadata_slot_validators	-	cron:Session
 metadata_slot_validators	-	slack:Session
 metadata_slot_validators	-	discord:Session
+metadata_slot_validators	-	feishu:Session
 metadata_slot_validators	-	web_reply:Session
 metadata_slot_validators	-	claude_code:Session
 turn contribution	features.chat_threads	chat_threads
@@ -133,6 +139,7 @@ turn contribution	features.cron	cron
 turn contribution	features.drafts	drafts
 turn contribution	features.slack	slack
 turn contribution	features.discord	discord
+turn contribution	features.feishu	feishu
 turn contribution	features.web_reply	web_reply
 turn contribution	features.memory	memory
 turn contribution	features.taste	taste

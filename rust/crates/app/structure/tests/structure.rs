@@ -41,7 +41,7 @@ use syn::{
 };
 
 const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"];
-const CHAT_CHANNELS: [&str; 2] = ["slack", "discord"];
+const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 
 /// The runtime layers, keyed by the crate's directory name under `rust/crates/runtime`.
 const RUNTIME_LAYERS: [(&str, usize); 8] = [

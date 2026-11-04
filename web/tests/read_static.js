@@ -21,13 +21,12 @@ function readPackageStatic(kind, name, ...parts) {
   return fs.readFileSync(fs.existsSync(included) ? included : path.join(packageRoot, 'static', ...parts), 'utf8');
 }
 
-// Script paths index.html loads, in document order, with the /static/js/ prefix
-// and the ?v= cache query stripped. The vm harnesses derive their module lists
-// from here so a script added to or reordered on the page cannot drift from
-// what the harnesses load.
+// Script paths index.html carries in document order, relative to web/static/js. The page includes each core
+// script into the document, so the vm harnesses derive their module lists from the include tags and a script
+// added to or reordered on the page cannot drift from what the harnesses load.
 function indexScriptPaths() {
   const html = fs.readFileSync(INDEX_HTML, 'utf8');
-  return [...html.matchAll(/<script src="\/static\/js\/([^"?]+)/g)].map((m) => m[1]);
+  return [...html.matchAll(/<script>\{% include 'js\/([^']+)' %\}<\/script>/g)].map((m) => m[1]);
 }
 
 function scopedModules(prefix) {

@@ -12,7 +12,9 @@
 //! render then compiles a fresh environment, so an edit takes effect without a restart, as Jinja2's auto-reload
 //! does. The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
-//! `templates/`, in registration order.
+//! `templates/`, in registration order, then `web/static` and each package's `static/`. The static trees come
+//! last, so a template name always resolves to a template, and a page includes the core script or style the static
+//! route would otherwise serve.
 
 use std::collections::HashMap;
 use std::fs;
@@ -53,6 +55,11 @@ pub struct Templating {
   packages: Vec<&'static str>,
   /// The template search path: `web/templates`, then each page package's `templates/`, in registration order.
   directories: Vec<PathBuf>,
+  /// The loader's search path: `directories`, then `web/static` and each package's `static/`.
+  ///
+  /// A page carries a core script or style inline, so its document includes the file the server would otherwise
+  /// serve at `/static/`. A template keeps the first place, so a template name always resolves to a template.
+  loader: Vec<PathBuf>,
   /// Whether the unique-name check has passed once (it runs when the engine is first built).
   names_checked: AtomicBool,
   /// The cached `git_version()` value, computed at the first render that asks for it.
@@ -134,10 +141,12 @@ impl Templating {
     let mut trees = directories.clone();
     trees.push(repo_root.join("web").join("static"));
     trees.extend(packages.iter().map(|package| package_directory(repo_root, package).join("static")));
+    let loader = trees.clone();
     Templating {
       repo_root: repo_root.to_path_buf(),
       packages: packages.to_vec(),
       directories,
+      loader,
       names_checked: AtomicBool::new(false),
       git_version: OnceLock::new(),
       asset_digest: Mutex::new(AssetDigestState::default()),
@@ -383,7 +392,7 @@ impl Templating {
   }
 
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
-    let mut environment = jinja::environment(jinja::file_system_loader(self.directories.clone()));
+    let mut environment = jinja::environment(jinja::file_system_loader(self.loader.clone()));
     let repo_root = self.repo_root.clone();
     let packages = self.packages.clone();
     // A page part is a template source, so this environment lives only while every source holds its value. A part

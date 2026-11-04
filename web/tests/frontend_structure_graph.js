@@ -59,8 +59,16 @@ function scriptPathOf(src) {
   return `web/${parts[0]}/${parts[1]}/static/${parts.slice(2).join('/')}`;
 }
 
-function scriptSrcs(html) {
-  return [...html.matchAll(/<script\s+src="\/static\/([^"?]+)/g)].map((m) => scriptPathOf(m[1]));
+// The core scripts a document loads, in document order: a <script src> tag's /static path, or the
+// web/static file a core include names. A package part includes its source under the package's own
+// template name, which is not a core script and stays out of the graph, as before.
+function scriptNodes(html) {
+  const found = [];
+  for (const m of html.matchAll(/<script\s+src="\/static\/([^"?]+)/g)) found.push([m.index, scriptPathOf(m[1])]);
+  for (const m of html.matchAll(/<script>\s*\{%\s*include\s+'js\/([^']+)'\s*%\}\s*<\/script>/g)) {
+    found.push([m.index, `web/static/js/${m[1]}`]);
+  }
+  return found.sort((a, b) => a[0] - b[0]).map(([, file]) => file);
 }
 
 const stripJinja = (s) => s.replace(/\{\{[\s\S]*?\}\}/g, 'null').replace(/\{%[\s\S]*?%\}/g, '').replace(/\{#[\s\S]*?#\}/g, '');
@@ -114,7 +122,7 @@ function computeGraph(templates) {
   const ctx = newContext();
   const templateHtml = Object.fromEntries(templates.map((t) => [t, read(t)]));
   const scripts = [];
-  for (const t of templates) for (const s of scriptSrcs(templateHtml[t])) if (!scripts.includes(s)) scripts.push(s);
+  for (const t of templates) for (const s of scriptNodes(templateHtml[t])) if (!scripts.includes(s)) scripts.push(s);
 
   function keysOf(expr) {
     try { return new Set(vm.runInContext(`Object.getOwnPropertyNames(${expr} || {})`, ctx)); } catch (e) { return new Set(); }

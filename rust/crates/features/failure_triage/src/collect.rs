@@ -543,7 +543,7 @@ pub fn require_log_dir(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_store::run_records::{EVENTS_LOG_NAME, RAW_LOG_NAME};
+  use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME};
   use std::io::Write;
   use std::str::FromStr;
   use std::time::SystemTime;
@@ -572,7 +572,7 @@ mod tests {
     fs::create_dir_all(&run_dir).unwrap();
     let mut record: serde_json::Value = serde_json::from_str(metadata).unwrap();
     if !events.is_empty() {
-      let events_path = run_dir.join(EVENTS_LOG_NAME);
+      let events_path = run_dir.join(RUN_EVENTS_NAME);
       fs::write(&events_path, events).unwrap();
       record["events_ref"] = serde_json::json!(events_path.to_string_lossy());
     }
@@ -660,7 +660,7 @@ mod tests {
   #[test]
   fn the_newest_result_event_supplies_the_terminal_reason() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join(EVENTS_LOG_NAME);
+    let path = root.path().join(RUN_EVENTS_NAME);
     fs::write(
       &path,
       concat!(
@@ -689,7 +689,7 @@ mod tests {
   #[test]
   fn the_newest_result_event_supplies_its_error_text_only_when_it_reports_an_error() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join(EVENTS_LOG_NAME);
+    let path = root.path().join(RUN_EVENTS_NAME);
     fs::write(
       &path,
       concat!(
@@ -786,7 +786,7 @@ mod tests {
     let home = root.path().join("home");
     let log_dir = root.path().join("logs");
     fs::create_dir_all(&log_dir).unwrap();
-    let missing = home.join("sessions").join("session").join("data").join("runs").join("run-a").join(EVENTS_LOG_NAME);
+    let missing = home.join("sessions").join("session").join("data").join("runs").join("run-a").join(RUN_EVENTS_NAME);
     let metadata = format!(
       r#"{{"id":"run-a","kind":"work","exit_code":1,"backend":"synthetic","events_ref":"{}"}}"#,
       missing.display()

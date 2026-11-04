@@ -27,7 +27,7 @@ use charliebot_registry::sequence::{
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDateTime};
 use charliebot_store::run_records::{
-  self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text,
+  RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text,
 };
 use charliebot_store::{HistoryWork, PromptScope, Store, StoreError, StoreResult, layout};
 use futures_util::future::BoxFuture;
@@ -153,7 +153,7 @@ fn boot_skip_check(
   let marker_instant = marker.into_inner();
   let marker_seconds =
     charliebot_core::timefmt::float_seconds(marker_instant.unix_timestamp(), i64::from(marker_instant.nanosecond()));
-  for path in [layout::chat_events_path(session_dir), session_dir.join(run_records::METADATA_NAME)] {
+  for path in [layout::chat_events_path(session_dir), layout::metadata_path(session_dir)] {
     let modified = match std::fs::metadata(&path) {
       Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
       Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(SkipCheck::Keep("file_after_marker")),
@@ -615,7 +615,7 @@ fn examine_session_dir(
   session_dir: &std::path::Path,
   marker: Option<&BootMarker>,
 ) -> anyhow::Result<WalkEntry> {
-  if !session_dir.is_dir() || !session_dir.join(run_records::METADATA_NAME).is_file() {
+  if !session_dir.is_dir() || !layout::metadata_path(session_dir).is_file() {
     return Ok(WalkEntry::Absent);
   }
   let session_id = session_dir
@@ -1662,7 +1662,7 @@ mod tests {
   use charliebot_registry::store_hooks::store_hooks;
   use charliebot_registry::{Registry, StartupState};
   use charliebot_store::metadata::TaskSpec;
-  use charliebot_store::run_records::SequenceRef;
+  use charliebot_store::run_records::{self, SequenceRef};
   use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
   use serde_json::{Map, json};
   use std::sync::atomic::Ordering;

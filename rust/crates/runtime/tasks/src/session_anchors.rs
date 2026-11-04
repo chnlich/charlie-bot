@@ -10,8 +10,8 @@ const CONTEXT_RESET_INSTRUCTION: &str = concat!(
   "repeating them. A larger `--turns` value reads earlier turns. Then write ",
   "two or three sentences on where things stand and the conventions in ",
   "force. When your rules open the reply with a status block, put these ",
-  "sentences after the block. Then respond to what follows. A Slack or ",
-  "Discord thread post carries only the answer that ",
+  "sentences after the block. Then respond to what follows. A Slack, Discord, or ",
+  "Feishu thread post carries only the answer that ",
   "`prompts/thread_reply_format.md` defines."
 );
 

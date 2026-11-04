@@ -348,10 +348,10 @@ Corrections and re-posts follow the tier of the write they repeat.
   the GitHub App where the App is installed.
 - A write under a bot identity inside a standing policy's scope is T1.
   It proceeds, and the agent records it with `charliebot digest add`.
-- A Slack-origin or Discord-origin session's reply to its own thread is T1 under the own-thread standing policy,
-  when the reply is inside that policy's scope.
-  It goes out through `charliebot slack reply` or `charliebot discord reply` (contract: prompts/thread_reply_format.md)
-  and is recorded with `charliebot digest add`.
+- A Slack-origin, Discord-origin, or Feishu-origin session's reply to its own thread is T1 under the own-thread
+  standing policy, when the reply is inside that policy's scope.
+  It goes out through `charliebot slack reply`, `charliebot discord reply`, or `charliebot feishu reply`
+  (contract: prompts/thread_reply_format.md) and is recorded with `charliebot digest add`.
   The pages that the reply links are published under the same policy.
 Drafts follow the writing-style skill's coordination-messages genre (skills/writing-style/genres/coordination-messages.md).
 

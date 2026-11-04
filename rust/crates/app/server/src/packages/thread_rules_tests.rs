@@ -79,6 +79,15 @@ fn discord_thread_session() -> SessionMetadata {
   meta
 }
 
+fn feishu_thread_session() -> SessionMetadata {
+  let mut meta = SessionMetadata::new("synthetic-feishu-session", "Synthetic Feishu thread", TaskProfile::Manager);
+  meta.set_extra(
+    "feishu_origin",
+    json!({"tenant_key": "T0SYNTHETIC", "chat_id": "oc_0synthetic", "root_id": "om_0synthetic_root"}),
+  );
+  meta
+}
+
 /// The rule text of one manager turn of `meta`: every segment, joined in the order the launch assembles them.
 fn manager_turn_text(meta: &SessionMetadata) -> String {
   let registry = registry().expect("the listed packages register");
@@ -123,4 +132,9 @@ fn slack_thread_session_carries_the_thread_rule_sentences() {
 #[test]
 fn discord_thread_session_carries_the_thread_rule_sentences() {
   assert_thread_rules("Discord", &discord_thread_session());
+}
+
+#[test]
+fn feishu_thread_session_carries_the_thread_rule_sentences() {
+  assert_thread_rules("Feishu", &feishu_thread_session());
 }

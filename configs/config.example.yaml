@@ -171,6 +171,11 @@ github:
 discord:
   allowed_users: {}
 
+# Feishu: the summon entrypoint's account map (Feishu open_id -> the person that
+# account belongs to). The app id and secret live in credentials.yaml under feishu.
+feishu:
+  allowed_users: {}
+
 # Publish: the outbound publish lane. Set command (an external program's argv) or
 # the directory pair dir + public_base_url, never both: dir is what the static lane
 # serves, and public_base_url is the base of the links readers outside the

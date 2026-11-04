@@ -1,6 +1,6 @@
 # Chat Platforms
 
-This document is what a contributor reads before adding a chat platform to CharlieBot. It explains why the thread entrypoint is one shared core plus one thin adapter per platform, what the core owns, what an adapter must supply, how Slack and Discord fill that contract, and how Telegram would map onto it. It is written from the code in `rust/crates/features/chat_threads/src/thread_entry.rs`, `rust/crates/features/slack/src/slack_listener.rs`, and `rust/crates/features/discord/src/discord_listener.rs`.
+This document is what a contributor reads before adding a chat platform to CharlieBot. It explains why the thread entrypoint is one shared core plus one thin adapter per platform, what the core owns, what an adapter must supply, how Slack, Discord, and Feishu fill that contract, and how Telegram would map onto it. It is written from the code in `rust/crates/features/chat_threads/src/thread_entry.rs`, `rust/crates/features/slack/src/slack_listener.rs`, `rust/crates/features/discord/src/discord_listener.rs`, and `rust/crates/features/feishu/src/listener.rs`.
 
 ---
 
@@ -8,7 +8,7 @@ This document is what a contributor reads before adding a chat platform to Charl
 
 A summon binds one platform thread to one session: the session is created for (or reattached to) that thread, and every round it runs reads and answers that same thread. That thread behavior is identical on every platform — one session per thread, the follow triggers that wake the session when new thread messages arrive, the read-before-reply gate, reply delivery, the round-end audit, and the lost-summon report after a restart — so it lives once, in `rust/crates/features/chat_threads/src/thread_entry.rs`. A platform module supplies only what genuinely differs: its connection (how events reach the server), its event parsing (which events are summons and which are thread traffic), and its API calls (posting, reactions, reading the thread).
 
-The dependency direction is one way. The platform crates depend on the core (`rust/crates/features/slack` and `rust/crates/features/discord` both depend on `rust/crates/features/chat_threads`); the core never depends on a platform crate. The runtime names no platform: each platform package registers a turn contribution (the `TurnContribution` registry in `rust/crates/runtime/registry/src/registry.rs`), and `persist_and_broadcast` (`rust/crates/runtime/store/src/session_events.rs`) calls every contribution's `after_turn` when a `master_done` event lands.
+The dependency direction is one way. The platform crates depend on the core (`rust/crates/features/slack`, `rust/crates/features/discord`, and `rust/crates/features/feishu` each depend on `rust/crates/features/chat_threads`); the core never depends on a platform crate. The runtime names no platform: each platform package registers a turn contribution (the `TurnContribution` registry in `rust/crates/runtime/registry/src/registry.rs`), and `persist_and_broadcast` (`rust/crates/runtime/store/src/session_events.rs`) calls every contribution's `after_turn` when a `master_done` event lands.
 
 ---
 
@@ -32,35 +32,35 @@ A platform describes itself to the core with one `ThreadPlatform` value and one 
 
 ### `ThreadPlatform` fields
 
-| Field | Meaning | Slack | Discord |
-|-------|---------|-------|---------|
-| `name` | Summon event-block key and prefix of every persisted marker; the derived keys spell themselves from it | `slack` | `discord` |
-| `display_name` | Human-facing platform name in prompts, notices, and logs | `Slack` | `Discord` |
-| `reply_event_type` | Wire type of the persisted reply event | `SLACK_REPLY` (`slack_reply`) | `DISCORD_REPLY` (`discord_reply`) |
-| `reply_command` | The reply command the thread reply contract states; the round-end audit reads it off a summon to recognize the older full-prompt contract | `charliebot slack reply` | `charliebot discord reply` |
-| `max_post_chars` | Per-message limit `chunk_text` splits at | `40000` | `2000` |
-| `scope_doc` | The platform's scope doc under prompts/ (what personal information may enter its threads): read fresh into the session's thread reply contract | `slack_reply_scope.md` | `discord_reply_scope.md` |
-| `follow_trigger_prefix` | Trigger-label prefix identifying the session's armed follow record | `slack-thread-follow` | `discord-thread-follow` |
-| `id_key` | Maps one message id to its ordering key | `str` (dotted ts strings sort as strings) | `snowflake_key` (snowflakes sort as integers) |
-| `origin_field` | Field holding the thread origin in the platform's registered session metadata slot | `slack_origin` | `discord_origin` |
-| `watermark_field` | Field holding the newest consumed message id in the platform's registered session metadata slot | `slack_watermark_ts` | `discord_watermark_id` |
-| `id_label` | Key naming a message id in readbacks and refusals (the 412 payload's per-message key) | `ts` | `id` |
-| `mention_key` | Summon-block key of the mention message; a block without it carries no ack to clear | `mention_ts` | `mention_id` |
-| `block_keys` | Summon-block keys a nudge copies from the summon it re-asks | `channel_id`, `thread_ts`, `mention_ts` | `guild_id`, `channel_id`, `thread_id`, `mention_id` |
-| `summon_line` | The whole summon input: one fixed line naming the platform and the event; the round-end audit reads it to recognize the current contract | `Slack 线程召唤` | `Discord 线程召唤` |
+| Field | Meaning | Slack | Discord | Feishu |
+|-------|---------|-------|---------|--------|
+| `name` | Summon event-block key and prefix of every persisted marker; the derived keys spell themselves from it | `slack` | `discord` | `feishu` |
+| `display_name` | Human-facing platform name in prompts, notices, and logs | `Slack` | `Discord` | `Feishu` |
+| `reply_event_type` | Wire type of the persisted reply event | `SLACK_REPLY` (`slack_reply`) | `DISCORD_REPLY` (`discord_reply`) | `FEISHU_REPLY` (`feishu_reply`) |
+| `reply_command` | The reply command the thread reply contract states; the round-end audit reads it off a summon to recognize the older full-prompt contract | `charliebot slack reply` | `charliebot discord reply` | `charliebot feishu reply` |
+| `max_post_chars` | Per-message limit `chunk_text` splits at | `40000` | `2000` | `30000` |
+| `scope_doc` | The platform's scope doc under prompts/ (what personal information may enter its threads): read fresh into the session's thread reply contract | `slack_reply_scope.md` | `discord_reply_scope.md` | `feishu_reply_scope.md` |
+| `follow_trigger_prefix` | Trigger-label prefix identifying the session's armed follow record | `slack-thread-follow` | `discord-thread-follow` | `feishu-thread-follow` |
+| `id_key` | Maps one message id to its ordering key | `str` (dotted ts strings sort as strings) | `snowflake_key` (snowflakes sort as integers) | `TimeThenId` (the `<create_time ms>-<om_id>` composite sorts by milliseconds, then by `om_id`) |
+| `origin_field` | Field holding the thread origin in the platform's registered session metadata slot | `slack_origin` | `discord_origin` | `feishu_origin` |
+| `watermark_field` | Field holding the newest consumed message id in the platform's registered session metadata slot | `slack_watermark_ts` | `discord_watermark_id` | `feishu_watermark_id` |
+| `id_label` | Key naming a message id in readbacks and refusals (the 412 payload's per-message key) | `ts` | `id` | `id` |
+| `mention_key` | Summon-block key of the mention message; a block without it carries no ack to clear | `mention_ts` | `mention_id` | `mention_id` |
+| `block_keys` | Summon-block keys a nudge copies from the summon it re-asks | `channel_id`, `thread_ts`, `mention_ts` | `guild_id`, `channel_id`, `thread_id`, `mention_id` | `chat_id`, `root_id`, `mention_id` |
+| `summon_line` | The whole summon input: one fixed line naming the platform and the event; the round-end audit reads it to recognize the current contract | `Slack 线程召唤` | `Discord 线程召唤` | `飞书 线程召唤` |
 
 Three marker keys derive from `name` and so carry no field of their own: `notice_key` and `backfill_key` name the marker payloads the audit predicates and the boot backfill read (the `slack_notice` and `slack_backfill` payloads), and `ack_event_type` names the ack audit record's wire type (`slack_ack`, `discord_ack`).
 
 ### `ThreadAdapter` methods
 
-| Method | What the core uses it for | Slack (`SlackThreadAdapter`) | Discord (`DiscordThreadAdapter`) |
-|--------|---------------------------|------------------------------|----------------------------------|
-| `post(address, text)` | `post_with_retry` posts every reply chunk and every notice through it | `SlackClient.post_message` (`chat.postMessage` with `thread_ts`) | `DiscordClient.create_message_with_post_key` on the thread (a JSON body) |
-| `add_ack(block)` | Lights the summon ack when the summon round fires | `reactions.add` of `eyes` (`_ACCEPTANCE_REACTION`) on the mention ts | `add_reaction` of `👀` (`_ACCEPTANCE_EMOJI`) on the mention id |
-| `remove_ack(block)` | Closes the summon ack when a reply, notice, or lost-summon report answers it | `reactions.remove`; a `no_reaction` error is the end state, so the clear is idempotent | `remove_own_reaction` of `👀` |
-| `read_eligible(origin, cfg)` | The eligible thread read behind the freshness gate, the ack check, and the reconnect backfill | one `conversations.replies` call; keeps plain (subtype-absent) human messages from allowed users | `get_messages` paged oldest-first, 100 per call from id `0` until a short page; keeps human-authored, non-webhook messages of type 0 or 19 from allowed users |
-| `address_of(origin)` | Builds the address dict `post` accepts | `{"channel_id", "thread_ts"}` from the `SlackOrigin` | `{"guild_id", "thread_id"}` from the `DiscordOrigin` |
-| `log_fields(address)` | Log fields naming the thread on every core log line | `channel`, `thread_ts` | `guild`, `thread` |
+| Method | What the core uses it for | Slack (`SlackThreadAdapter`) | Discord (`DiscordThreadAdapter`) | Feishu (`FeishuThreadAdapter`) |
+|--------|---------------------------|------------------------------|----------------------------------|--------------------------------|
+| `post(address, text)` | `post_with_retry` posts every reply chunk and every notice through it | `SlackClient.post_message` (`chat.postMessage` with `thread_ts`) | `DiscordClient.create_message_with_post_key` on the thread (a JSON body) | `FeishuClient.reply_in_thread` on the root message, with a uuid derived from the post key |
+| `add_ack(block)` | Lights the summon ack when the summon round fires | `reactions.add` of `eyes` (`_ACCEPTANCE_REACTION`) on the mention ts | `add_reaction` of `👀` (`_ACCEPTANCE_EMOJI`) on the mention id | `add_reaction` of `OnIt` (`ACK_EMOJI`) on the mention message id |
+| `remove_ack(block)` | Closes the summon ack when a reply, notice, or lost-summon report answers it | `reactions.remove`; a `no_reaction` error is the end state, so the clear is idempotent | `remove_own_reaction` of `👀` | lists the message's reactions and deletes the one whose operator is the app |
+| `read_eligible(origin, cfg)` | The eligible thread read behind the freshness gate, the ack check, and the reconnect backfill | one `conversations.replies` call; keeps plain (subtype-absent) human messages from allowed users | `get_messages` paged oldest-first, 100 per call from id `0` until a short page; keeps human-authored, non-webhook messages of type 0 or 19 from allowed users | the thread's message list, paged oldest-first; `thread_message` marks each message's eligibility from the allow-list |
+| `address_of(origin)` | Builds the address dict `post` accepts | `{"channel_id", "thread_ts"}` from the `SlackOrigin` | `{"guild_id", "thread_id"}` from the `DiscordOrigin` | `{"chat_id", "root_id"}`, plus `thread_id` once the origin holds it, from the `FeishuOrigin` |
+| `log_fields(address)` | Log fields naming the thread on every core log line | `channel`, `thread_ts` | `guild`, `thread` | `chat`, `thread` (the thread id, else the root id) |
 
 ### What a platform module owns outside the adapter
 
@@ -81,9 +81,49 @@ The adapter is not the whole platform module. Each platform also owns:
 
 ---
 
+## Feishu
+
+The Feishu package (`rust/crates/features/feishu`) fills the same contract. Its own parts are:
+
+- **The connection loop.** `run_listener` in `rust/crates/features/feishu/src/listener.rs` opens the long connection that `POST /callback/ws/endpoint` returns, pings at the interval Feishu sets, and reconnects with backoff from 1 s to 30 s. Each event is acknowledged before it is handled, because Feishu redelivers an event it does not see acknowledged within three seconds. The protobuf frame codec is `rust/crates/features/feishu/src/frame.rs`.
+- **Event parsing and drop rules.** `classify` in `rust/crates/features/feishu/src/event.rs` reads `im.message.receive_v1`. A summon is a group message that mentions the bot and comes from an allow-listed user. A follow is a group message that sits in a thread and comes from an allow-listed user. Every other event is dropped, and the drop reason is logged at debug level.
+- **The session-id namespace and label.** `summon_session_id(tenant_key, chat_id, root)` in `rust/crates/features/feishu/src/adapter.rs` derives a uuid5 under `FEISHU_NS`. The root is the message's `root_id` when the message sits in a thread, and the summon message's own id otherwise. The session label is `飞书 · <chat_id>`.
+- **The origin model.** `FeishuOrigin` (`tenant_key`, `chat_id`, `root_id`, and an optional `thread_id`) lives in `rust/crates/features/feishu/src/metadata.rs`, with its slot validator. Feishu creates the thread on the bot's first reply, so `thread_id` is recorded after that reply.
+- **Message ids.** A Feishu message id is the composite `<create_time ms>-<om_id>`. Only the adapter builds and splits it, and `IdOrdering::TimeThenId` orders it.
+- **The summon block, line, and contract.** The block carries `chat_id`, `root_id`, and `mention_id`. The summon input is `飞书 线程召唤`. `FeishuTurnContribution` in `rust/crates/features/feishu/src/turn_contribution.rs` builds the contract from `rust/crates/features/feishu/src/thread_contract.rs`.
+- **The service gate.** `FeishuService` in `rust/crates/features/feishu/src/service.rs` starts the listener and the boot backfill only when `feishu.app_id` and `feishu.app_secret` are set and `feishu.allowed_users` is not empty.
+- **The CLI and the internal endpoints.** `charliebot feishu reply`, `read`, `download`, and `check` (`rust/crates/features/feishu/src/cli.rs`) call `/api/internal/feishu/*` (`rust/crates/features/feishu/src/api.rs`). `download` writes the file into the session directory. `check` verifies the tenant token, the bot identity, the long-connection endpoint, and that `allowed_users` is set. `charliebot feishu request`, `consent-url`, and `exchange-code` are the user-token verbs, in `rust/crates/features/feishu/src/user_token.rs`.
+- **The reply event type.** `FEISHU_REPLY` lives in `rust/crates/features/feishu/src/event_types.rs`. Its renderer writes "Posted to Feishu: ...".
+
+## Feishu app setup
+
+A Feishu bot is one app in the Feishu Open Platform console. Whichever way the app is created, it needs these settings:
+
+- The bot capability (机器人) turned on.
+- Events delivered by long connection (使用长连接接收事件), with the event `im.message.receive_v1` subscribed under app identity. The console calls this event 接收消息 v2.0.
+- Four API scopes:
+  - `im:message.group_msg` (a sensitive scope): every message that users post in the groups the bot is in. The mention summons and the follow of threads both depend on it, and reading a thread in a group requires it.
+  - `im:message:readonly`: read thread messages, get one message, and download images and files.
+  - `im:message:send_as_bot`: reply as the bot inside a thread.
+  - `im:message.reactions:write_only`: add and delete the `OnIt` acknowledgement reaction.
+
+Two ways create the app:
+
+- **Custom app (自建应用).** In the console, create a custom app. Turn on the bot capability, set the event subscription to long connection, subscribe to `im.message.receive_v1`, and request the four scopes. Feishu accepts the long-connection setting only while a client holds a connection to the app, so start CharlieBot with the app's credentials before saving that setting.
+- **One-click agent app.** Feishu's agent-integration guide (https://open.larkoffice.com/document/mcp_open_tools/integrating-agents-with-feishu/overview.md) creates the app from a link or a QR code. The link expires after ten minutes and works for one user. The preset covers the bot capability, long-connection delivery, `im.message.receive_v1`, and these messaging scopes: `im:message:readonly`, `im:message:send_as_bot`, `im:message.group_at_msg:readonly`, `im:message.p2p_msg:readonly`, and `im:resource`. The preset does not include `im:message.group_msg` or `im:message.reactions:write_only`, so add those two in the console. The guide does not describe the version approval step.
+
+Every change to the bot capability, the event subscription, or the scopes is a new app version. The version takes effect only after an enterprise admin approves it. If you are not an admin of the organization, ask its admin to approve the version.
+
+Then set up CharlieBot:
+
+1. Put the app's values in `credentials.yaml` under `feishu:` as `app_id` and `app_secret`.
+2. Add the bot to a group (the group's settings, then 群机器人, then 添加机器人).
+3. List each allowed user in `config.yaml` under `feishu.allowed_users`, mapping the user's Feishu open_id (the `ou_` id) to the person's name. An empty map admits nobody.
+4. Run `charliebot feishu check`. It exits 1 until every check passes.
+
 ## Adding a platform
 
-A new platform repeats the shape Slack and Discord already fill. Work down this checklist in order; each step instantiates one item of the adapter contract above.
+A new platform repeats the shape Slack, Discord, and Feishu already fill. Work down this checklist in order; each step instantiates one item of the adapter contract above.
 
 1. Describe the platform with one `ThreadPlatform` value — every field of the first table — built from the module's own constants, so each value keeps one home.
 2. Implement `ThreadAdapter` over the platform's client, supplying every method of the second table against the same platform value.

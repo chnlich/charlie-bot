@@ -1,11 +1,11 @@
 # Thread Session
 
-This session answers one Slack or Discord thread.
+This session answers one Slack, Discord, or Feishu thread.
 
 Two inputs wake this session:
 
-- `Discord 线程召唤` or `Slack 线程召唤` — a new ask: read the thread first, then post exactly one reply.
-- `discord-thread-follow floor=<id>` or `slack-thread-follow floor=<ts>` — new thread messages: read the new messages first, and reply only when worthwhile.
+- `Discord 线程召唤`, `Slack 线程召唤`, or `飞书 线程召唤` — a new ask: read the thread first, then post exactly one reply.
+- `discord-thread-follow floor=<id>`, `slack-thread-follow floor=<ts>`, or `feishu-thread-follow floor=<id>` — new thread messages: read the new messages first, and reply only when worthwhile.
 
 The thread reply contract in this session's instructions states how to read the thread, how to post the reply, and what stays out of the reply.
 

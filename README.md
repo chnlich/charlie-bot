@@ -42,7 +42,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 - code-server proxying (browser VS Code)
 - Anthropic Messages-compatible proxy endpoint (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`) fronting OpenAI-compatible backends
-- Slack and Discord summon entrypoints on a shared thread core — see [docs/discord.md](docs/discord.md) and [docs/chat-platforms.md](docs/chat-platforms.md)
+- Slack, Discord, and Feishu summon entrypoints on a shared thread core — see [docs/discord.md](docs/discord.md) and [docs/chat-platforms.md](docs/chat-platforms.md)
 
 ## Screenshots
 
@@ -87,6 +87,7 @@ release.
 - `charliebot compaction-context` — restore the skills a manager session read before Claude compacted its context
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
+- `charliebot feishu` — reply to, read, or download from the Feishu thread a session was summoned from, check the app setup, and run the user-token verbs (`request`, `consent-url`, `exchange-code`)
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
 - `charliebot improve start` — start an iterative improvement loop
 - `charliebot improve stop` — stop this session's running improvement loop after the current iteration

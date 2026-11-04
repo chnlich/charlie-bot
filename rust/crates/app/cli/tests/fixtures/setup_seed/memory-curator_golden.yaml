@@ -1,5 +1,6 @@
 cron: 27 6 * * *
 timezone: local
+project: CharlieBot
 steps:
 - name: selector
   prompt_file: prompts/cron/memory_curator/memory_selector.md

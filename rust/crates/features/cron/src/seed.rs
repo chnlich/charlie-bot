@@ -169,6 +169,13 @@ mod tests {
     assert!(body.contains("cron: 27 6 * * *"), "{body}");
     assert!(!body.lines().any(|line| line.starts_with("name:")), "the host file carries no name key: {body}");
     assert!(body.contains("prompt_file: prompts/cron/memory_curator/memory_selector.md"), "{body}");
+    // The seeded body carries the entry's `project`, so the scheduler binds the
+    // task's session into that group.
+    for name in ["memory-curator", "storage-cool"] {
+      let path = loader::cron_path(&cfg, name);
+      let body = fs::read_to_string(&path).expect("the seeded host file");
+      assert!(body.contains("project: CharlieBot"), "the seeded {name} carries the default entry's project: {body}");
+    }
 
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the second seed");
     assert_eq!(

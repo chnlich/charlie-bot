@@ -4,6 +4,10 @@
 # never touches a file that is already there. Host-specific fields (backend,
 # schedule) belong in the host files, not here.
 #
+# `project` names the session group: when the scheduler first binds a task's
+# session, it creates the node in that group. Every entry here names
+# `CharlieBot`, so a seeded task's session lands in the CharlieBot group.
+#
 # The prompt source of every task is exactly one of `prompt_file`, `steps`,
 # or `handler`. `steps` is an ordered worker list: each step declares
 # `name`, `prompt_file`, and an optional `backend` (a step without one uses the
@@ -14,6 +18,7 @@ scheduled_tasks:
   - name: memory-curator
     cron: "27 6 * * *"
     timezone: local
+    project: CharlieBot
     steps:
       - name: selector
         prompt_file: prompts/cron/memory_curator/memory_selector.md
@@ -27,4 +32,5 @@ scheduled_tasks:
   - name: storage-cool
     cron: "30 4 * * *"
     timezone: local
+    project: CharlieBot
     handler: cool_storage

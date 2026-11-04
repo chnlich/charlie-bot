@@ -1,8 +1,8 @@
 // /diff page: file-level lazy-loading diff2html renderer.
 //
 // Compare fetches a cheap per-file manifest and renders one collapsed row per file.
-// Expanding a row fetches and renders that single file's diff on demand, so a huge
-// cross-branch diff never lands in one payload and only expanded files are in the DOM.
+// Expanding a row fetches and renders that single file's diff on demand. A huge
+// cross-branch diff never lands in one payload, and only expanded files are in the DOM.
 (() => {
   const repoInput = document.getElementById('repo-input');
   const repoList = document.getElementById('repo-list');
@@ -264,7 +264,7 @@
     row.className = 'border border-slate-200 rounded mb-2 overflow-hidden';
 
     // Desktop: one line of chevron, status, counts, then the path. Phone (max-sm): a grid of two lines, the file name
-    // first and the counts with the directory under it; the name spans the row, so it is never cut short.
+    // first and the counts with the directory under it. The name spans the row, so it is never cut short.
     const header = document.createElement('button');
     header.type = 'button';
     header.className =

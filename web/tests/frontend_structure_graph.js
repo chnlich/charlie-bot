@@ -1,14 +1,14 @@
 // Dependency graph of the pages that web/tests/frontend_structure.test.js checks. Prints one JSON
-// object: {packages, pages: {chat}} with, per page, the templates, the nodes in
-// page order, the edges (using node -> defining node -> [names]), the strongly connected
+// object: {packages, pages: {chat}}. Per page it carries the templates, the nodes in page order,
+// and the edges (using node -> defining node -> [names]). It also carries the strongly connected
 // components of two or more nodes, the global names defined in more than one node, and the load
 // errors. A node is a loaded script (repo-relative path), '<template>#bootstrap' for a template's
 // inline <script> bodies, or '<template>#markup' for its inline handler attributes.
 //
 // The graph algorithm ports the restructure's frozen measurement script page_graph.js
-// (~/scripts/20261008_web_frontend_restructure/): the parts of a page run in page order inside a
-// vm context with permissive stubs; definitions are the global, Chat.* and Sidebar.* keys each
-// part adds, plus the top-level let/const/class names from the sucrase tokenizer; uses are the
+// (~/scripts/20261008_web_frontend_restructure/). The parts of a page run in page order inside a
+// vm context with permissive stubs. Definitions are the global, Chat.* and Sidebar.* keys each
+// part adds, plus the top-level let/const/class names from the sucrase tokenizer. Uses are the
 // unshadowed identifier accesses and the name( calls inside string literals. The restructure's
 // fidelity check compares this script's chat page against page_graph.js on one tree, so an
 // algorithm change belongs in both files.

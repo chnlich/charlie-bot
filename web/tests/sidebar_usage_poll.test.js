@@ -524,8 +524,8 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
   assert.equal(workToggle.getAttribute('aria-expanded'), 'true');
   assert.equal(personalToggle.textContent, 'Show all');
 
-  // Re-render by entering a different filter through the pill entry point:
-  // expansion state lives in module memory only, so the enter path wipes it
+  // Re-render by entering a different filter through the pill entry point.
+  // Expansion state lives in module memory only, so the enter path wipes it
   // and both groups fall back to the five-session preview.
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/starred');
@@ -781,7 +781,7 @@ test('switchSession preserves worker icon until authoritative status returns', a
   context.pollSessionStatus = () => new Promise(() => {});
 
   // The sidebar's last paint recorded the row's running state through the
-  // shared seam; the switch's read path repaints the row from facts, so the
+  // shared seam. The switch's read path repaints the row from facts, so the
   // icon survives until the authoritative status returns.
   context.setSessionIndicator('session-b', 'worker_only');
 

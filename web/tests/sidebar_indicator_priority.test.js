@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Indicator priority over the nested sidebar (status.js + groups.js): two
-// independent families, each picking at most one element per row in a fixed
-// order that reads no expansion state. The activity family — the row's own
-// icon (spinner, a legacy row's own gear, the clock), then a parent's gear
-// for a running descendant or a paused worker (a worker row whose latest
-// fact is idle with a pending wake-up trigger). The unread family — the
+// independent families. Each picks at most one element per row in a fixed order
+// that reads no expansion state. The activity family — the row's own icon
+// (spinner, a legacy row's own gear, the clock), then a parent's gear for a
+// running descendant or a paused worker. That paused worker is a worker row
+// whose latest fact is idle with a pending wake-up trigger. The unread family — the
 // row's own filled dot, else the subtree's hollow mark; no activity state
 // gates either family. The clock never stands in for a subtree. Facts
 // arrive through the list paint, the status poll (applySessionStatus) and
@@ -214,8 +214,8 @@ test('a status-poll reply for a leaf repaints its ancestors', async () => {
 // ---------------------------------------------------------------------------
 // The paused worker: a worker row whose Run ended with a wake-up trigger
 // still pending. Its own state is idle, so its own row paints no activity
-// icon, but the delegated-work gear keeps standing in for it on every
-// ancestor row for the whole pause. The fact arrives with the list paint
+// icon. But the delegated-work gear keeps standing in for it on every ancestor
+// row for the whole pause. The fact arrives with the list paint
 // (profile and has_pending_trigger) and with each status-poll reply
 // (has_pending_trigger alone; the poll path takes the worker identity from
 // the list paint's renderedWorkerRows).
@@ -315,8 +315,8 @@ test('the gear hover text names the waiting work too', () => {
 // ---------------------------------------------------------------------------
 // The websocket path: websocket-handlers.js loaded over the real status.js.
 // A running_changed event that takes a worker row to idle usually precedes
-// the trigger fact (the worker registers its wake-up right before its Run
-// ends), so that repaint is left to the status poll the handler starts;
+// the trigger fact, because the worker registers its wake-up right before its
+// Run ends. So that repaint is left to the status poll the handler starts, and
 // every other event repaints at once.
 // ---------------------------------------------------------------------------
 
@@ -469,18 +469,17 @@ test('a running worker leaf paints the spinner, not the delegated-work gear', ()
 
 // ---------------------------------------------------------------------------
 // The full priority table (one visual language; two independent families per
-// row): the activity family — own state first, running spinner or waiting
-// clock, then a parent row's stand-in gear for a running descendant or a
-// paused worker — and the
-// unread family — the row's own dot, else the subtree's hollow mark. The
-// clock never stands in for a subtree. A failed Run paints no activity icon
+// row). The activity family: own state first, running spinner or waiting clock,
+// then a parent row's stand-in gear for a running descendant or a paused
+// worker. The unread family: the row's own dot, else the subtree's hollow mark.
+// The clock never stands in for a subtree. A failed Run paints no activity icon
 // anywhere: the alert-indicator element no longer exists for any state.
 // ---------------------------------------------------------------------------
 
 test('no state paints an alert-indicator element; a failed child reads idle', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['w']);
-  // A failed Run's work verdict is idle (the derivation emits only running
-  // and waiting), and no render path emits the retired alert element in any
+  // A failed Run's work verdict is idle, since the derivation emits only
+  // running and waiting. No render path emits the retired alert element in any
   // state: the paint, the poll seam, and the stand-in all agree.
   context.renderSessionList([row('w', null, {work_state: 'idle', has_unread: true})], 'all');
   assert.equal(/alert-indicator-/.test(nav.innerHTML), false,

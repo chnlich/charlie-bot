@@ -3,7 +3,7 @@ const test = require('node:test');
 
 const {loadGroupsWithCron, row} = require('./sidebar_groups_context_stub');
 
-// The model element must be a sibling of .session-time, never inside it:
+// The model element must be a sibling of .session-time, never inside it.
 // updateRelativeTimes() (web/static/js/utils.js) reassigns .session-time's
 // textContent on every tick and would erase any model text nested in it.
 function sessionTimeInnerHtml(html) {

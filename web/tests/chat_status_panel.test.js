@@ -22,7 +22,7 @@ const {readStatic} = require('./read_static');
 // The session status surfaces (chat/status-panel.js) on a page of the real chat,
 // sidebar, tab and WebSocket modules. The Status view panel (#status-panel) takes
 // the message list's place while Status is selected in the Chat view toggle
-// (chat/for-you.js), and the waiting count shows on the toggle option's badge.
+// (chat/for-you.js). The waiting count shows on the toggle option's badge.
 // Rows are read back by their data attributes, so a case asserts structure
 // and the values the view carries, not the labels. The phone layout comes from a
 // platform stub that switchLayout drives the way platform.js does: a mode change
@@ -619,15 +619,16 @@ test('a streaming paint while Status shows leaves the scroll-to-bottom button hi
 });
 
 // The live readback's failing arrival timing (sitrep_status_view_live_readback_v1,
-// case 5, observations A and B): a bottom-pinned reader selects Status, and the
-// session's running turn lands visible content in the hidden list — a committed
-// turn appended to the engine's store, and a streaming-draft update whose paint
-// grows the list's streaming fixture — before the reader leaves Status. After
-// the return no event of any kind arrives, and the plan's bound is the bottom
-// within two frames of the return. The engine's return projection rides the
-// ResizeObserver's own frame scheduling, so the fake runs the return through the
-// page's toggle path alone: on the unfixed code nothing reprojects at the
-// unhide, and the reader stays off the bottom.
+// case 5, observations A and B): a bottom-pinned reader selects Status. The
+// session's running turn then lands visible content in the hidden list. That
+// content is a committed turn appended to the engine's store, and a
+// streaming-draft update whose paint grows the list's streaming fixture, all
+// before the reader leaves Status. After the return no event of any kind
+// arrives, and the plan's bound is the bottom within two frames of the return.
+// The engine's return projection rides the ResizeObserver's own frame
+// scheduling, so the fake runs the return through the page's toggle path
+// alone. On the unfixed code nothing reprojects at the unhide, and the reader
+// stays off the bottom.
 test('content that entered the hidden list pins the return at the bottom with no further event', async () => {
   const rig = panelRig();
   installScrollTopClamp(rig.root);
@@ -648,8 +649,8 @@ test('content that entered the hidden list pins the return at the bottom with no
   engine.handleResize();
 
   // Arrival kinds while Status shows, each the engine-facing effect of its page
-  // path: the draft paint (usage.js paintStreamDraft) grows the fixture and
-  // restores the pin, the committed turn lands through appendMessage.
+  // path. The draft paint (usage.js paintStreamDraft) grows the fixture and
+  // restores the pin, and the committed turn lands through appendMessage.
   const draftBlock = new FakeElement('DIV');
   draftBlock.__baseHeight = 80;
   rig.stream.appendChild(draftBlock);

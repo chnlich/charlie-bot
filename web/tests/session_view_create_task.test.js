@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The two creation entry points (session-view.js): New Session and a row's
-// hover "+" both POST the task creation body (client request key, parent id,
-// manager profile, empty goal, the sidebar's backend choice). A child create
+// hover "+". Both POST the task creation body: client request key, parent id,
+// manager profile, empty goal, the sidebar's backend choice. A child create
 // opens its parent row before the list repaints; the welcome screen keeps its
 // full-page load. Harness follows the switch tests (session_context_stub).
 // ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Inline-delete backfill for the sidebar's grouped views: archive and
 // permanent-delete repaint the grouped list in place from the last-rendered
-// list minus the session, so the 5-row preview window backfills and the group
-// header count and Show-all toggle resync to the remaining total — with zero
+// list minus the session. So the 5-row preview window backfills, and the group
+// header count and Show-all toggle resync to the remaining total, with zero
 // list fetches. The archived tab and the search overlay keep node-only row
 // removal, and deleting the viewed session keeps its switch/empty behavior.
 // Harness follows test_archived_view.test.js (session_context_stub +
@@ -122,8 +122,8 @@ function anchorIdsInOrder(html) {
 }
 
 // A legacy parent P with two worker leaves, a task-node child C carrying its
-// own child G, plus an unrelated root R — every subtree shape the inline
-// delete must take with the clicked row.
+// own child G, plus an unrelated root R. That covers every subtree shape the
+// inline delete must take with the clicked row.
 function taskFamilyRows() {
   return [
     legacyRow('p1', 10),
@@ -278,9 +278,9 @@ test('deleting from the search overlay removes only the row node', async () => {
   await context.archiveSession('search-1');
   await settle();
 
-  // Node-only removal: the row stub left the DOM, the remaining search rows
-  // stay painted, and #session-list was never repainted (the stub stores the
-  // painted HTML verbatim, so byte identity proves no render touched it).
+  // Node-only removal: the row stub left the DOM, and the remaining search rows
+  // stay painted. #session-list was never repainted, and the stub stores the
+  // painted HTML verbatim, so byte identity proves no render touched it.
   assert.equal(deletedRow.removed, true);
   assert.equal(nav.innerHTML, searchHtml);
   assert.ok(nav.innerHTML.includes('search-2'));
@@ -378,8 +378,8 @@ test('archiving the viewed legacy parent switches to a row outside its subtree',
   const {context, nav, switches} = buildContext({sessionId: 'p1'});
   await paintGrouped(context, taskFamilyRows());
   // The switch pick reads the DOM after the repaint, so the row stubs must
-  // derive from the painted rows at call time (the harness default is the
-  // static list passed at build).
+  // derive from the painted rows at call time. The harness default is the
+  // static list passed at build.
   context.document.querySelectorAll = (selector) => (
     selector === 'a[id^="session-"]' ? rowStubs(anchorIdsInOrder(nav.innerHTML)) : []);
 

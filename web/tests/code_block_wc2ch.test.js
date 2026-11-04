@@ -89,8 +89,8 @@ function unwrapForBaseline(context) {
   // Global lookup at call time: codeBlockHtml and the flush re-read
   // wrapWideChars from the context, so an identity stub reconstructs the
   // unwrapped bytes for comparison. wrapWideCharsCached consults the stub
-  // only on a miss, so the wrap memo clears with the stub — a parse already
-  // served before the swap would otherwise ride its cached bytes and the
+  // only on a miss, so the wrap memo clears with the stub. A parse already
+  // served before the swap would otherwise ride its cached bytes, and the
   // comparison would pin parse determinism instead of the wrap.
   context.wrapWideChars = (html) => html;
   context.wrapWideCharsCache.clear();
@@ -279,7 +279,7 @@ test('tool output pre and raw backend block wrap through rendering.js', () => {
 // --- the embedded diagram fixture ---
 
 // The MoEMLP data-flow box diagram whose right edge drifts when a wide char
-// renders 5/3 columns wide, embedded verbatim from a chat transcript (the
+// renders 5/3 columns wide. It is embedded verbatim from a chat transcript (the
 // test never reads session directories). The author laid it out on the
 // terminal convention "wide char = 2 columns, everything else = 1".
 const DIAGRAM = `                              【输入张量 (Inputs)】
@@ -391,8 +391,8 @@ function failingLineWidths(text, isWide) {
 }
 
 // Wide-char count of a line recovered from the authored (W/F=2) and failing
-// (W/F=5/3) sums: authored = ascii + 2*wide, failing = ascii + (5/3)*wide,
-// so wide = (authored - failing) * 3.
+// (W/F=5/3) sums. The authored sum is ascii + 2*wide and the failing sum
+// ascii + (5/3)*wide, so wide = (authored - failing) * 3.
 function wideCountOf(authored, failing) {
   return Math.round((authored - failing) * 3);
 }
@@ -407,11 +407,11 @@ test('diagram fixture: per-line box-width sums (1ch/2ch) render exactly the auth
   const html = context.marked.parse('```\n' + DIAGRAM + '\n```');
   const pre = preHtml(html);
 
-  // The equality metric this test asserts: per-line box-width sums. The
-  // fixed render's vector must equal the authored layout's vector computed
-  // from the source under the same 1ch/2ch model — every line renders at
-  // exactly the column count its author typed, so every edge that is
-  // collinear in the source stays collinear in the browser.
+  // The equality metric this test asserts: per-line box-width sums. The fixed
+  // render's vector must equal the authored layout's vector computed from the
+  // source under the same 1ch/2ch model. Every line renders at exactly the
+  // column count its author typed, so every edge that is collinear in the
+  // source stays collinear in the browser.
   const fixed = lineBoxWidths(pre);
   const authored = authoredLineWidths(DIAGRAM, isWide);
   assert.equal(fixed.length, authored.length, 'line count preserved');
@@ -419,10 +419,10 @@ test('diagram fixture: per-line box-width sums (1ch/2ch) render exactly the auth
 
   // The alignment structure is preserved exactly: two lines render equal
   // widths exactly when the author laid them out equal. (The verbatim
-  // diagram carries the author's own +1/+2 hand-padding on 10 of its 64
-  // rows — the title row's extra column among them — so
-  // "every line equal to every line" is false for the source itself and
-  // would assert hand-drawing noise, not the renderer. What the fix
+  // diagram carries the author's own +1/+2 hand-padding on 10 of its 64 rows,
+  // the title row's extra column among them. So "every line equal to every
+  // line" is false for the source itself and would assert hand-drawing noise,
+  // not the renderer. What the fix
   // guarantees, and this test asserts, is render == authored per line.)
   for (let i = 0; i < fixed.length; i++) {
     for (let j = i + 1; j < fixed.length; j++) {
@@ -447,15 +447,15 @@ test('diagram fixture: per-line box-width sums (1ch/2ch) render exactly the auth
 
   // Verbose re-run: print the failing (browser) and fixed line-width
   // vectors. The 步骤-1 title row (index 7, 12 wide chars) shows the bug:
-  // 73.00 rendered columns vs 77 authored — the 12 x 0.333-column (~30.7px)
-  // shortfall, plus that row's own +1 author offset.
+  // 73.00 rendered columns vs 77 authored. That is the 12 x 0.333-column
+  // (~30.7px) shortfall, plus that row's own +1 author offset.
   const failing = failingLineWidths(DIAGRAM, isWide);
   if (process.env.WC2CH_VERBOSE) {
     console.log(vectorToString('fixed   (1ch/2ch boxes)   ', fixed));
     console.log(vectorToString('failing (wide char = 5/3ch)', failing));
   }
-  // The failing render under-widths each wide char by exactly 1/3 column;
-  // assert the per-line regain so the printed vectors stay tied to the
+  // The failing render under-widths each wide char by exactly 1/3 column. So
+  // assert the per-line regain, which keeps the printed vectors tied to the
   // metric: fixed - failing == wideCount/3 columns on every line.
   for (let i = 0; i < authored.length; i++) {
     const wide = wideCountOf(authored[i], failing[i]);
@@ -486,7 +486,7 @@ test('wrapWideCharsCached serves one wrap per distinct input and stays byte-iden
     const direct = context.wrapWideChars(s);
     const first = context.wrapWideCharsCached(s);
     assert.equal(first, direct, 'the cached wrap stays byte-identical');
-    // A fresh string build per call is the uncached shape; the memo returns
+    // A fresh string build per call is the uncached shape. The memo returns
     // one shared result, so strict identity pins that the second call served
     // the cache instead of re-wrapping.
     assert.ok(context.wrapWideCharsCached(s) === first, 'the repeat served the cached wrap');

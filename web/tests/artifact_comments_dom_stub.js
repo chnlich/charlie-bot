@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Element/class-list stub and shared rig helpers for the artifact-comments vm
 // tests (no jsdom): the superset of every DOM member
-// web/features/artifacts/static/artifact-comments.js touches, so a member the script reads but
+// web/features/artifacts/static/artifact-comments.js touches. A member the script reads but
 // the stub lacks throws inside the vm and fails the loading test.
 // ---------------------------------------------------------------------------
 
@@ -128,8 +128,8 @@ function makeElement() {
       }
       return null;
     },
-    // The comment layer measures layout at script load (placeColumn ->
-    // measureContentRight reads document.body.querySelectorAll('*')), so the
+    // The comment layer measures layout at script load: placeColumn ->
+    // measureContentRight reads document.body.querySelectorAll('*'). So the
     // stub must answer the '*' walk, not only class selectors.
     querySelectorAll(selector) {
       const all = [];

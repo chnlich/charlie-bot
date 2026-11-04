@@ -17,8 +17,8 @@ function makeDocument(elements) {
     getElementById(id) {
       if (elements.has(id)) return elements.get(id);
       // Full renders write everything as one flat `innerHTML` string, and the
-      // failure notice is just another node in that string -- so a lookup by
-      // id also has to find it there, the same way a real DOM query would.
+      // failure notice is just another node in that string. So a lookup by id
+      // also has to find it there, the same way a real DOM query would.
       const container = elements.get('messages');
       if (container && String(container.innerHTML).includes('id="' + id + '"')) {
         return {};

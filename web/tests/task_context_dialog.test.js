@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Task & context dialog data assembly (modals.js): opening the dialog for a
-// session fetches its detail and its effective-prompt preview, renders the
-// task record's three fields with visible empty states, lists one row per
-// assembled block with its sources, delivery and measured length, and
-// degrades to a note when the session is not a task node yet or the preview
-// is refused. Harness follows sidebar_rename_prefill.test.js: namespace.js
+// session fetches its detail and its effective-prompt preview. It renders the
+// task record's three fields with visible empty states, and lists one row per
+// assembled block with its sources, delivery and measured length. It degrades
+// to a note when the session is not a task node yet or the preview is refused.
+// Harness follows sidebar_rename_prefill.test.js: namespace.js
 // then modals.js in a vm context over the three dialog elements.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');

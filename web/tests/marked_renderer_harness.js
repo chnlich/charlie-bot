@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Marked harness shared by the chat markdown vm tests and the stream
-// collectors: loads the page's real marked build and renderer, and owns the
-// CDN URL both fetch and the retrying fetch they share — import them instead
+// collectors. It loads the page's real marked build and renderer and owns the
+// CDN URL both fetch, plus the retrying fetch they share — import them instead
 // of restating them.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
@@ -15,9 +15,9 @@ const { buildRendererContext } = require('./renderer_vm_context');
 // tests stable while tracking whatever marked ships.
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
 
-// A CDN request fails now and then for reasons outside the repo (a dropped TLS
-// handshake, a 5xx from an edge node), and one failure fails the whole test
-// process. A network error or a 5xx status therefore gets two more attempts;
+// A CDN request fails now and then for reasons outside the repo: a dropped TLS
+// handshake, a 5xx from an edge node. One failure fails the whole test process.
+// A network error or a 5xx status therefore gets two more attempts;
 // any other status is final, and so is the last failed attempt.
 const FETCH_ATTEMPTS = 3;
 const FETCH_RETRY_DELAY_MS = 500;
@@ -70,7 +70,7 @@ function loadMarkedSrc() {
 }
 
 // Load the REAL markdown-renderer.js against the REAL marked in a shared vm
-// context, mirroring the browser page order: marked.min.js defines the global
+// context, mirroring the browser page order. marked.min.js defines the global
 // marked first, then markdown-renderer.js registers its renderer + tokenizer
 // via marked.use. The renderer-context base stubs the non-marked globals
 // (console, hljs, document): markdown-renderer.js touches hljs and document,

@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // The chat column's pending-triggers tray (chat/triggers-tray.js): collapsed
 // and expanded render, the four watch-target labels, pure-delay vs watch
-// condition text, the (count, next)-driven refetch, the two-step cancel with
-// its 3 s revert, the visible cancel failure, hidden at zero pending, and the
-// bell's open-and-expand + title.
+// condition text. The cases also cover the (count, next)-driven refetch and the
+// two-step cancel with its 3 s revert. They cover the visible cancel failure,
+// hidden at zero pending, and the bell's open-and-expand + title.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -127,7 +127,7 @@ test('collapsed tray with one trigger shows no +N more', async () => {
 
 // Below 640 px (Tailwind's sm:) the collapsed row is two lines. The row is a
 // wrapping flex row and the message is a full-basis, last-ordered item, so it
-// always starts line 2: line 1 holds the bell, label, time and +N, and the
+// always starts line 2. Line 1 holds the bell, label, time and +N, and the
 // message gets the row's whole content width to truncate in.
 test('below sm the collapsed row wraps the message onto its own second line', async () => {
   const {context, tray} = buildTrayContext();
@@ -150,7 +150,7 @@ test('below sm the collapsed row wraps the message onto its own second line', as
   assert.ok(msgStart > -1, html);
   assert.ok(html.slice(msgStart).includes('title="DeepSeek 恢复或帖子新回复"'), 'the message keeps its title');
   // Line 1 carries the bell, the label and the time ahead of the message in
-  // document order; +N and the chevron follow the message in the markup but
+  // document order. +N and the chevron follow the message in the markup but
   // carry no order, so the order-modulated line breaking keeps them on line 1.
   for (const marker of [
     '<svg class="w-4 h-4 text-amber-400 flex-shrink-0"',
@@ -175,9 +175,9 @@ test('below sm the collapsed row wraps the message onto its own second line', as
   assert.match(css, /\.order-last\s*{\s*order: 9999;\s*}/);
 });
 
-// From 640 px up the row is exactly the single line it has always been: no
-// wrap, the message flex-1 and back in document order, and the watch target,
-// relative time and separators visible.
+// From 640 px up the row is exactly the single line it has always been. There
+// is no wrap, the message is flex-1 and back in document order, and the watch
+// target, relative time and separators are visible.
 test('at sm and wider the collapsed row stays one line', async () => {
   const {context, tray} = buildTrayContext();
   context.setTriggers([

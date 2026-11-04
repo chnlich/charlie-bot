@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // One home for the vm scaffold both artifact-comments suites load the real
 // scripts into. Every option exists only where the two suites genuinely
-// diverge; a member the scripts read but the harness lacks throws inside the
+// diverge. A member the scripts read but the harness lacks throws inside the
 // vm and fails the loading test (same contract as artifact_comments_dom_stub).
 // ---------------------------------------------------------------------------
 
@@ -67,9 +67,9 @@ function loadArtifactCommentsContext(opts = {}) {
     window,
     document,
     console: opts.console || console,
-    // The comment-order sort reads both direction bits; the comments suite's
+    // The comment-order sort reads both direction bits. The comments suite's
     // old context carried only FOLLOWING, so a PRECEDING mask bit read as
-    // undefined and fell through — nodePreceding stays off there to preserve
+    // undefined and fell through. nodePreceding stays off there to preserve
     // that exact fall-through.
     Node: opts.nodePreceding
         ? {DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_PRECEDING: 2}

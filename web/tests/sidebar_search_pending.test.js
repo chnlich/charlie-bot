@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Sidebar search state (filters.js handleSidebarSearch): the list stops
-// showing the previous query's rows as soon as the text changes, and a
-// response for a superseded query never repaints the list. Harness:
+// showing the previous query's rows as soon as the text changes. A response for
+// a superseded query never repaints the list. Harness:
 // session_context_stub's sidebar context, whose inline timers fire the
 // debounce inside the call, so each search's fetch starts synchronously and
 // the test controls the response order.

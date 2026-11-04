@@ -1,7 +1,7 @@
 'use strict';
 // Worker summary card (chat/worker-summary.js): loads the module in a node vm
 // against the Chat surface it resolves at runtime (rendering.js exports and
-// shared.js globals) and asserts the card's states off its painted HTML. The
+// shared.js globals). It asserts the card's states off its painted HTML. The
 // fold rule and the duration words are rendering.js's own; the rest of the
 // surface is stubbed.
 const fs = require('node:fs');

@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Chat HTML artifacts render as compact link cards. No srcdoc iframe — and no
-// artifact fetch — happens while messages render; the iframe exists only while
+// artifact fetch — happens while messages render. The iframe exists only while
 // a card is expanded, and both the fetch cache and the number of simultaneously
 // expanded frames are bounded.
 // ---------------------------------------------------------------------------

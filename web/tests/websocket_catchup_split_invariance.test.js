@@ -2,7 +2,7 @@
 //
 // Once the cursor a client reports is the snapshot its first paint was built
 // from, every frame the server replays is one the client does not already have.
-// So there is no "catchup phase" to render differently: delivering a frame
+// So there is no "catchup phase" to render differently. Delivering a frame
 // sequence in one connection must leave the same screen as delivering the same
 // sequence split across a reconnect at ANY point.
 //

@@ -1,8 +1,8 @@
 'use strict';
 // Shared plumbing for the stream-render collectors: the CDN fetch, the
 // live-corpus scan, and the streamed-draft replay scaffolding the M33 and M54
-// metrics share (one cadence, one replay loop, one timed fleet, one parity
-// check, so their numbers stay comparable). Read-only over
+// metrics share. One cadence, one replay loop, one timed fleet and one parity
+// check keep their numbers comparable. Read-only over
 // ~/.charliebot/sessions; the collectors keep their own metric definitions
 // (corpus filter, harness options, reporting).
 const fs = require('node:fs');
@@ -12,7 +12,7 @@ const { MAX_STRING_LENGTH } = require('node:buffer').constants;
 const { fetchUrl } = require('./marked_renderer_harness');
 const { buildStreamHarness } = require('./stream_render_harness');
 
-// The highlight.js build the chat page serves (web/templates/index.html); the
+// The highlight.js build the chat page serves (web/templates/index.html). The
 // collectors' numbers stay comparable only while they highlight through the
 // browser's build, so bump it with the template.
 const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
@@ -37,9 +37,9 @@ function liveChatFiles() {
 // past Node's max string length, and a whole-file readFileSync throws
 // ERR_STRING_TOO_LONG on the file holding it. Lines ride byte buffers to the
 // newline and only complete lines decode, so a chunk boundary never splits a
-// UTF-8 character. A line above MAX_STRING_LENGTH bytes is dropped unparsed:
-// at or under the cap the char count (bounded by the byte count) always
-// parses, and no JSON event line that size holds a body the scans read.
+// UTF-8 character. A line above MAX_STRING_LENGTH bytes is dropped unparsed.
+// At or under the cap the char count (bounded by the byte count) always parses,
+// and no JSON event line that size holds a body the scans read.
 const CHUNK_BYTES = 1 << 20;
 
 function* chatFileLines(p) {
@@ -129,8 +129,8 @@ function worstChatFile() {
 }
 
 // The worst live chat file's message page: the pageMessages largest bodies its
-// events carry, as { file, fileSize, page }; throws when the live tree holds no
-// chat file or the worst file carries no body. bodyTexts(event) returns the
+// events carry, as { file, fileSize, page }. It throws when the live tree holds
+// no chat file or the worst file carries no body. bodyTexts(event) returns the
 // bodies one event contributes (possibly none), so each collector pins the
 // event shapes its metric walks.
 function worstPageCorpus(bodyTexts, pageMessages) {
@@ -163,8 +163,8 @@ const TIMED_REPLAYS = 5;
 // browser's trailing paint. The harness's timers drain against the virtual
 // clock, so wall time covers only render work. options.leadEmptyPaint opens
 // with one empty paint, which consumes the harness's immediate first paint
-// (usage.js paints a stream's first call outright), so delta one paints from
-// the coalesced flush instead — M54's call sequence; M33 has no leading paint.
+// (usage.js paints a stream's first call outright). So delta one paints from
+// the coalesced flush instead, M54's call sequence. M33 has no leading paint.
 function replayDraft(markedSrc, text, { harnessOptions, leadEmptyPaint = false } = {}) {
   const h = buildStreamHarness(markedSrc, harnessOptions);
   h.flushIdle(); // the page's idle warm (hljs grammar pre-compile) fires before any streamed turn
@@ -179,7 +179,7 @@ function replayDraft(markedSrc, text, { harnessOptions, leadEmptyPaint = false }
 }
 
 // One untimed cold pass (the first streamed turn after a page load), then
-// TIMED_REPLAYS timed replays; the reported fleet is the sorted paint walls
+// TIMED_REPLAYS timed replays. The reported fleet is the sorted paint walls
 // plus the last replay's paint count and final frame.
 function timedReplays(markedSrc, text, options = {}) {
   replayDraft(markedSrc, text, options);
@@ -196,8 +196,8 @@ function timedReplays(markedSrc, text, options = {}) {
 }
 
 // Final-frame parity: the last painted frame must equal a direct full-draft
-// render through the same harness context — the same real-hljs options
-// included, so a highlight cache hit's bytes are pinned to a cold render's.
+// render through the same harness context, with the same real-hljs options. So
+// a highlight cache hit's bytes are pinned to a cold render's.
 function finalFrameParity(markedSrc, text, finalHtml, { harnessOptions } = {}) {
   const probe = buildStreamHarness(markedSrc, harnessOptions);
   const reference = probe.context.marked.parse(probe.context.fixNestedFences(text));

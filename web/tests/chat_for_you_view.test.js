@@ -196,8 +196,8 @@ function rowsOf(root) {
 }
 
 // The fixture the cases read: a first turn with a web reply mid-steps, a notice
-// after it, a second turn with a status block, an error row, a plain system line
-// and a child report behind the last separator.
+// after it, a second turn with a status block. After that come an error row, a
+// plain system line and a child report behind the last separator.
 function fixture() {
   return [
     eMsg('user', 'u1', 'first question'),
@@ -407,7 +407,7 @@ test('a For-you bubble group is the Everything separator group', () => {
 });
 
 // The Everything separator markup for the shapes the run-end row must leave unchanged: a Run's
-// end keeps its exact markup; a round without an event index and a round without thinking
+// end keeps its exact markup. A round without an event index and a round without thinking
 // seconds lose the label with the text.
 test('run_end separator HTML is unchanged; ordinary shapes drop only the label', () => {
   const rig = forYouRig([]);
@@ -860,7 +860,7 @@ test('a live turn appended after the view switches lands last in both views', ()
 
 // A turn whose user message arrives after the turn's first assistant message
 // and before a later web reply. The shared span rule carries that input into
-// the next turn, but the server sent it above the reply; For you reads the
+// the next turn, but the server sent it above the reply. For you reads the
 // store's server order, so the reply never rises above it.
 function midTurnMessages() {
   return [

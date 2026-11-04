@@ -1,6 +1,6 @@
 'use strict';
 // Stream-draft harness: loads the checkout's usage.js (+ markdown-renderer.js)
-// in a node vm against a stub DOM, a virtual clock, and a manual timer queue, so
+// in a node vm against a stub DOM, a virtual clock, and a manual timer queue. So
 // render scheduling replays deterministically. markedSource selects the marked
 // build (collector: the page's CDN build; tests: a fake). stats().frames records
 // every painted frame's HTML.
@@ -11,7 +11,7 @@ const vm = require('node:vm');
 const { hljsStub } = require('./hljs_stub');
 
 // Fake marked for behavior tests: parse marks its input so frames stay
-// deterministic; the Renderer/use surface is what markdown-renderer.js touches
+// deterministic. The Renderer/use surface is what markdown-renderer.js touches
 // at load, and the lexer/parser pair is what parseStreamDraft's recorder path
 // drives.
 const FAKE_MARKED_SRC =
@@ -19,11 +19,11 @@ const FAKE_MARKED_SRC =
   'lexer: (s) => [{ type: "paragraph", raw: s, text: s }], ' +
   'parser: (tokens) => tokens.map((t) => `<p>${t.text}</p>`).join("") };';
 
-// Line-cutting fake marked: paragraph tokens carry the line body only and each
-// newline rides its own space token, so streamSafeCut's sequential indexOf walk
-// locates every raw and freezes cuts at line ends — the incremental reuse path
-// engages (FAKE_MARKED_SRC's single paragraph token never cuts, and streaming
-// paints drive lexer/parser, never parse).
+// Line-cutting fake marked: paragraph tokens carry the line body only, and each
+// newline rides its own space token. So streamSafeCut's sequential indexOf walk
+// locates every raw and freezes cuts at line ends, and the incremental reuse
+// path engages. FAKE_MARKED_SRC's single paragraph token never cuts, and
+// streaming paints drive lexer/parser, never parse.
 const CUTTING_MARKED_SRC =
   'globalThis.marked = { Renderer: function() { return {}; }, use() {}, ' +
   'parse: (s) => s.split("\\n").filter(Boolean).map((l) => `<p>${l}</p>`).join(""), ' +
@@ -78,8 +78,8 @@ function buildStreamHarness(markedSource, options = {}) {
     },
     clearTimeout(id) { timers.delete(id); },
     // Idle callbacks queue outside the timer map: replayDraft flushes them
-    // once after load (the page's idle pre-warm) so they never land inside a
-    // timed paint, and tests that never flush simply never run them.
+    // once after load (the page's idle pre-warm), so they never land inside a
+    // timed paint. Tests that never flush simply never run them.
     requestIdleCallback(fn) {
       idleQueue.push(fn);
       return nextIdleId++;

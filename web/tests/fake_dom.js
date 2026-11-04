@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Minimal fake DOM shared by the node --test render tests. `innerHTML` on any
 // element is the concatenation of its own literal string content plus its
-// children's `innerHTML` -- this mirrors real DOM semantics closely enough for
+// children's `innerHTML`. This mirrors real DOM semantics closely enough for
 // both `renderMessagesIntoContainer` (which replaces content wholesale via
 // `.innerHTML =`) and `_appendRenderedMessage` (which appends discrete child
 // wrappers), without needing an HTML parser. The classList and text-escape

@@ -17,7 +17,7 @@ const PLAN_PANEL_JS = readPackageStatic('features', 'artifacts', 'plan-panel.js'
 // Minimal DOM shim used both as the `DOMParser` injected into the plan-panel
 // vm context (so `_renderActionBar` can parse fetched plan HTML) and directly
 // in the template contract test. It implements the small subset of the DOM
-// surface that `parseOpenForks` and the action-bar path rely on:
+// surface that `parseOpenForks` and the action-bar path rely on. That subset is
 // querySelector/querySelectorAll with `tag.class` selectors, cloneNode(deep),
 // child.remove(), and a live textContent computed from child nodes.
 // ---------------------------------------------------------------------------
@@ -1055,9 +1055,9 @@ function makePlanDocument(elements) {
 }
 
 // Loads the panel with a recording viewer installed as #plan-viewer. Every
-// switch/blank test needs the same three pieces — the element stubs, the
-// recorded src writes, and the live context whose SESSION_ID it mutates —
-// and each needs them captured before the panel's constructor reads the DOM.
+// switch/blank test needs the same three pieces: the element stubs, the
+// recorded src writes, and the live context whose SESSION_ID it mutates. Each
+// needs them captured before the panel's constructor reads the DOM.
 function loadPanelWithViewer({fetch, sessionId = 'A', elements = makePanelElements()}) {
   const {viewer, writes} = makeRecordingViewer();
   elements['plan-viewer'] = viewer;
@@ -1188,8 +1188,8 @@ test('onActiveSessionChanged renders the empty state and clears the iframe when 
 // ---------------------------------------------------------------------------
 // Session-switch residue: a session switch must leave no visible trace of the
 // previous session's plans in the panel (empty state + cleared selectors +
-// cleared tab dot), with the next tab-open retrying until the new session
-// loads. P1–P4 pin the new behavior; P5 guards the same-session fast path.
+// cleared tab dot). The next tab-open retries until the new session loads.
+// P1–P4 pin the new behavior; P5 guards the same-session fast path.
 // ---------------------------------------------------------------------------
 
 test('P1: hook refresh fails on switch, then onTabShown shows empty state before re-fetch and new plans after', async () => {

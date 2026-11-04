@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // vm-context loader for web/static/js/sidebar/groups.js, shared by the node
-// --test harnesses that drive groups.js standalone: one base context carrying
-// the globals renderSessionItem reaches for, then one load sequence --
-// createContext, sidebar/namespace.js, sidebar/groups.js -- so the load order
-// every suite depends on lives in one place. The sandbox `escapeHtmlAttr`
+// --test harnesses that drive groups.js standalone. It holds one base context
+// carrying the globals renderSessionItem reaches for, then one load sequence:
+// createContext, sidebar/namespace.js, sidebar/groups.js. The load order every
+// suite depends on lives in one place. The sandbox `escapeHtmlAttr`
 // global wraps `escapeHtml`, not escapeHtmlText: that is the wrapper
 // escape_html_stub.js documents as reproducing production escapeHtmlAttr, and
 // groups.js interpolates its output into title/data attributes.

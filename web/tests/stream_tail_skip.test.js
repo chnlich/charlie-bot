@@ -3,7 +3,7 @@ const test = require('node:test');
 const { loadRendererContext, MARKED_URL, paint } = require('./marked_renderer_harness');
 
 // hljs stand-in whose output visibly marks the path taken: HL[AUTO]/HL[LANG]
-// prefix the input, so a skipped block (escaped-plain) and a highlighted block
+// prefix the input. So a skipped block (escaped-plain) and a highlighted block
 // are distinguishable in the emitted HTML, and the counters pin how often each
 // entry point ran.
 function countingHljs() {
@@ -79,12 +79,13 @@ test('the last code token skips by identity whatever its shape: indented, upgrad
   const context = await loadRendererContext(hljs);
   // An indented fence inside a list item: marked strips the list indent
   // before the fence rule sees it, so no line-level model can predict the
-  // token text — identity does not have to.
+  // token text. Identity does not have to.
   paint(context, '- item\n\n   ```py\n   x = 1\n   y = 2');
   assert.equal(calls.lang, 0);
   // A delimiter upgrade inside the still-open outer fence: the outer pair
-  // closes (its completed block highlights once), the inner pair's delimiters
-  // rewrite to five backticks, and the still-growing inner block skips.
+  // closes, and its completed block highlights once. The inner pair's
+  // delimiters rewrite to five backticks, and the still-growing inner block
+  // skips.
   const upgraded = paint(context, '````\n```js\n```` x\n````\n```\nz');
   assert.equal(calls.lang, 0);
   assert.equal(calls.auto, 1, 'the closed outer block did not highlight exactly once');
@@ -96,9 +97,9 @@ test('a longer bare fence inside a growing block is content, not its closer', as
   const { calls, hljs } = countingHljs();
   const context = await loadRendererContext(hljs);
   // The outer ```` fence stays open; the inner ``` line is its content. The
-  // raw's last line is a bare fence, but shorter than the opener — the skip
-  // must still fire (this shape misreads as complete and only loses
-  // coverage, but the common one-line-content case is worth pinning).
+  // raw's last line is a bare fence, but shorter than the opener. The skip must
+  // still fire: this shape misreads as complete and only loses coverage, but the
+  // common one-line-content case is worth pinning.
   const html = paint(context, '````markdown\n```js\nx');
   assert.equal(calls.auto, 0);
   assert.match(html, /<code class="hljs">```js\nx<\/code>/);

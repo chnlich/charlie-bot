@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
 // The Threads sidebar filter (the chat_threads package's threads-filter.js,
 // filters.js and groups.js): the pill registers between Workspace and Later
-// and restores from ?filter=threads; its view
-// fetches /api/sessions/chat-threads, renders through the grouped renderer
-// (children nested under their parent), shows "No chat threads" when empty,
-// and hides the group header's New-session-in-group button across the in-place
-// repaints (the Settings gear stays). Harness follows
+// and restores from ?filter=threads. Its view fetches /api/sessions/chat-threads,
+// and renders through the grouped renderer, with children nested under their
+// parent. It shows "No chat threads" when empty, and hides the group header's
+// New-session-in-group button across the in-place repaints (the Settings gear
+// stays). Harness follows
 // sidebar_group_create_button.test.js; the full sidebar module set loads
 // through session_context_stub.js because the pill strip lives in filters.js.
 // ---------------------------------------------------------------------------

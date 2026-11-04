@@ -27,8 +27,8 @@ function loadRenderer() {
 // Parse attribute boundaries of a single opening tag. Returns the list of
 // attribute names (lower-cased) in source order. Because escaped values use
 // &quot;/&#39; (no raw quote characters), a name="value" scan correctly groups
-// each value, so an attacker payload buried inside a value is NOT counted as a
-// standalone attribute.
+// each value. An attacker payload buried inside a value is therefore NOT
+// counted as a standalone attribute.
 function parseAttrNames(openTag) {
   const names = [];
   const re = /\s([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*"([^"]*)"/g;

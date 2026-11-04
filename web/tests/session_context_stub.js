@@ -2,9 +2,8 @@
 // globals, storage and element stubs, and the no-op chat globals those
 // harnesses share. Each harness layers its own fetch/timer/document-lookup
 // variants onto the returned context, then wraps it in
-// createChatSidebarContext(context) — fork mutations must land before that
-// call, because the loaded chat/sidebar modules bind or shadow globals at
-// load time.
+// createChatSidebarContext(context). Fork mutations must land before that call,
+// because the loaded chat/sidebar modules bind or shadow globals at load time.
 const vm = require('node:vm');
 
 const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
@@ -124,7 +123,7 @@ function baseSessionContext(overrides = {}) {
 }
 
 // page-timers before the chat and sidebar modules, matching the script order
-// in web/templates/index.html; the chat and sidebar lists are that page's
+// in web/templates/index.html. The chat and sidebar lists are that page's
 // /static/js/chat/ and /static/js/sidebar/ script tags in document order.
 function createChatSidebarContext(context) {
   vm.createContext(context);
@@ -142,16 +141,16 @@ function standInForUsageJs(context) {
 }
 
 // The cron script: a harness whose rows, menus or Workspace badge show the
-// cron parts runs it after createChatSidebarContext, as the page runs a
-// package's script after the core modules.
+// cron parts runs it after createChatSidebarContext. The page runs a package's
+// script after the core modules the same way.
 function loadCronPackage(context) {
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
 }
 
 // One sidebar row as the harnesses mount it: querySelector answers only
-// '.session-name' (the selector the row rendering resolves); sidebar callers
-// resolving other selectors against a row (archived.js's group move)
-// null-guard the miss.
+// '.session-name' (the selector the row rendering resolves). Sidebar callers
+// resolving other selectors against a row (archived.js's group move) null-guard
+// the miss.
 function makeSidebarRow(sessionId, name) {
   const nameEl = createElement({textContent: name});
   nameEl.getBoundingClientRect = () => ({top: 0, left: 0, right: 0, bottom: 20, width: 200, height: 20});
@@ -162,10 +161,10 @@ function makeSidebarRow(sessionId, name) {
 }
 
 // One session-metadata fixture as the sidebar wire format carries it. Only the
-// fields every sidebar harness shares live here: a harness whose fixture must
+// fields every sidebar harness shares live here. A harness whose fixture must
 // leave a field undefined (usage_poll reads no status) or default it
-// differently (delete_backfill's Work group) passes that field in overrides —
-// it is never added to this base.
+// differently (delete_backfill's Work group) passes that field in overrides.
+// It is never added to this base.
 function makeSessionMeta(id, overrides = {}) {
   return {
     id,
@@ -203,9 +202,9 @@ function bootstrapPayload(sessionId, oldestMessageOrdinal, hasMore) {
 }
 
 // The document lookups the switch harnesses share: static ids answer from
-// `elements`, and the nodes the loaded modules create at runtime under
-// `messages` (placeholder rows, rendered bubbles) answer from its children —
-// they never enter the static map. Call before createChatSidebarContext: the
+// `elements`. The nodes the loaded modules create at runtime under `messages`
+// (placeholder rows, rendered bubbles) answer from its children. They never
+// enter the static map. Call before createChatSidebarContext: the
 // loaded modules bind the lookups at load time. `messages` is null when the
 // harness mounts no chat container (usage-only harnesses).
 function installSessionDocumentLookups(context, elements, messages, rows) {
@@ -232,13 +231,13 @@ function stubPageTimers(context) {
 
 // The switch-flow harness skeleton the sidebar switch suites share: a chat
 // container, the five static chrome ids, one row per session, the document
-// lookups, and the stubbed page timers. scrollHeight is per-suite geometry:
-// the switch tail's auto-continue fills only while the painted content is
-// short (scrollHeight <= clientHeight + 80) and the pagination trigger fires
-// only within 80px of the top, so each suite picks the height that parks its
+// lookups, and the stubbed page timers. scrollHeight is per-suite geometry.
+// The switch tail's auto-continue fills only while the painted content is short
+// (scrollHeight <= clientHeight + 80), and the pagination trigger fires only
+// within 80px of the top. So each suite picks the height that parks its
 // scenario. Every fork (fields, fetch, contextTweaks) lands before
-// createChatSidebarContext, whose modules bind or shadow globals at load
-// time; fetch receives the finished harness record so its closures reach the
+// createChatSidebarContext, whose modules bind or shadow globals at load time.
+// fetch receives the finished harness record, so its closures reach the
 // recorded fields.
 function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweaks}) {
   const messages = createElement({id: 'messages'});
@@ -268,9 +267,9 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
 }
 
 // The inline-fire twin: every timer callback runs inside the call that
-// schedules it, so a flow's own timer-driven work (a refresh scheduled during
-// a paint) is observed before the assertions run and a leaked fetch cannot
-// hide behind a pending timer. Call before createChatSidebarContext.
+// schedules it. So a flow's own timer-driven work (a refresh scheduled during a
+// paint) is observed before the assertions run, and a leaked fetch cannot hide
+// behind a pending timer. Call before createChatSidebarContext.
 function inlinePageTimers(context) {
   context.setInterval = () => 0;
   context.setTimeout = (fn) => { fn(); return 0; };
@@ -280,8 +279,9 @@ function inlinePageTimers(context) {
 
 // Map keys are the element ids web/static/js/sidebar/filters.js reaches:
 // getElementById('filter-' + name) over the registered filter names plus
-// getElementById('cron-add-btn'), and the 'filter-pill' class filterPillClass
-// stamps. An id or class rename on either side breaks the lookup.
+// getElementById('cron-add-btn'). They also carry the 'filter-pill' class
+// filterPillClass stamps. An id or class rename on either side breaks the
+// lookup.
 function buildSidebarFilterElements() {
   return new Map([
     ['filter-all', createElement({className: 'filter-pill'})],
@@ -294,7 +294,7 @@ function buildSidebarFilterElements() {
 }
 
 // The five indicator element kinds web/static/js/sidebar paints per row, one
-// hidden element each as `<kind>-<id>`; an id or kind rename on either side
+// hidden element each as `<kind>-<id>`. An id or kind rename on either side
 // breaks the shown() lookup below.
 const SIDEBAR_ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread'];
 

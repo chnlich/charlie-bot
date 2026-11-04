@@ -4,12 +4,13 @@
 // Every session switch rebuilds the turn engine, so the same page's message
 // bodies re-run the parse (marked + fence fix) on every re-entry and every
 // repeat render. This collector loads the checkout's markdown-renderer.js with
-// the page's real marked + highlight.js builds, resolves the worst on-disk
-// page corpus (the 40 largest message bodies of the live chat file carrying
-// the most bytes; live state read-only), and times full page passes: one cold
-// pass, as at the first render after a page load, then five timed repeats —
-// the session re-entry shape, identical bodies the memo serves without a
-// re-parse. CHECKOUT picks the code under test; the pre-fix form (no
+// the page's real marked + highlight.js builds. It resolves the worst on-disk
+// page corpus: the 40 largest message bodies of the live chat file carrying the
+// most bytes, with live state read-only. It then times full page passes: one
+// cold pass, as at the first render after a page load, then five timed repeats.
+// Those repeats are the session re-entry shape, identical bodies the memo
+// serves without a re-parse. CHECKOUT picks the code under test; the pre-fix
+// form (no
 // renderProseMarkdown) re-parses every repeat, the post-fix form serves them
 // from the memo.
 const crypto = require('node:crypto');
@@ -29,7 +30,7 @@ function readJs(name) {
 }
 
 // The bodies one event contributes to the page corpus: assistant text blocks
-// plus the string bodies of user/worker_summary/plan events — the page a
+// plus the string bodies of user/worker_summary/plan events. That is the page a
 // re-entry of the heaviest session re-renders.
 function pageBodyTexts(ev) {
   if (ev.type === 'user' || ev.type === 'worker_summary' || ev.type === 'plan') {
@@ -63,7 +64,7 @@ async function loadContext(hljsSource) {
   // The parse the checkout's message body path runs: the memo helper when the
   // checkout has it, the pre-fix raw expression otherwise. The memoized parse
   // defers the code highlight, so a page pass is followed by the scheduled
-  // flush that carries the highlight work and settles the memo entries; the
+  // flush that carries the highlight work and settles the memo entries. The
   // 8 ms timebox reschedules, so the driver drains the timer queue to
   // completion.
   const probe = await loadContext(hljsSource);

@@ -18,11 +18,11 @@ const {
 // ---------------------------------------------------------------------------
 // Turn-input placement: every input a session receives shows in the turn that
 // handled it, outside the folded steps. A stimulus that arrives after a span's
-// first assistant message was queued for a later round: the shared rule
-// (shared.js splitTurnSpan) carries it out of the span and it opens the next
-// one. These tests pin that placement through both consumers — the turn
-// engine over message entries and the legacy DOM path over rendered elements —
-// with expectations computed here from the message lists alone.
+// first assistant message was queued for a later round. The shared rule
+// (shared.js splitTurnSpan) carries it out of the span, and it opens the next
+// one. These tests pin that placement through both consumers: the turn engine
+// over message entries and the legacy DOM path over rendered elements.
+// Expectations are computed here from the message lists alone.
 // ---------------------------------------------------------------------------
 
 // --- fixtures ---------------------------------------------------------------
@@ -92,7 +92,7 @@ function sequenceC() {
 }
 
 // A still_thinking round end (a queued input kept the round's busy interval
-// alive) renders its separator like any other: the queued input then opens
+// alive) renders its separator like any other. The queued input then opens
 // the turn that answers it, and nothing follows the final separator.
 function sequenceStillThinking() {
   return [
@@ -164,13 +164,13 @@ const SUITE_SEQUENCES = [
 ];
 
 // --- independent expectations -----------------------------------------------
-// The turn layout recomputed from the message list alone, mirroring the rule
-// the suites pin: own inputs sit before the span's first assistant message,
-// later stimuli carry to the next span, the head keeps the user-over-stimulus
-// priority over the inputs, and the fold holds the work from the first
-// assistant message to the conclusion — never a carried stimulus, in every
-// branch (in a span with no own inputs it still starts after body[0], minus
-// the carried stimuli).
+// The turn layout is recomputed from the message list alone, mirroring the
+// rule the suites pin. Own inputs sit before the span's first assistant
+// message, and later stimuli carry to the next span. The head keeps the
+// user-over-stimulus priority over the inputs. The fold holds the work from the
+// first assistant message to the conclusion, never a carried stimulus, in
+// every branch. In a span with no own inputs it still starts after body[0],
+// minus the carried stimuli.
 function expectedTurns(msgs) {
   const spans = [];
   let span = [];
@@ -238,7 +238,7 @@ function ids(messages) {
 
 // --- engine readers -----------------------------------------------------------
 // The engine object lives in the harness's vm context, so its arrays carry
-// that realm's Array prototype; spread them into test-realm arrays or
+// that realm's Array prototype. Spread them into test-realm arrays, or
 // deepStrictEqual rejects them on prototype identity alone.
 function engineTurns(engine) {
   return [...engine.segments].filter((seg) => seg.kind === 'turn').map((seg) => ({
@@ -424,7 +424,7 @@ test('(d) feeding sequence (a) message by message yields the one-shot mount segm
 
 // --- still_thinking round end -------------------------------------------------
 // The history projection emits a separator for every round end, still_thinking
-// included: a queued mid-round input then opens the turn that answers it
+// included. A queued mid-round input then opens the turn that answers it
 // instead of falling below the final separator.
 test('a still_thinking round end renders its separator, so the queued input opens turn 2', () => {
   const msgs = sequenceStillThinking();
@@ -496,11 +496,11 @@ test('(g) carries cascade across settled segments when a page boundary precedes 
   // Two adjacent rounds each receive one mid-round input, and the page
   // boundary sits before both. The boundary additionally cuts the third
   // round's span between its first assistant message and its own mid-round
-  // input, so the mounted page had mis-counted that input as the round's own
-  // (the plan's one-turn-early window). Prepending re-derives the third
-  // settled segment — its first assistant now arrives from the page, so its
-  // mid-round input becomes a carry — and that carry re-derives the fourth
-  // settled segment in turn.
+  // input. So the mounted page had mis-counted that input as the round's own
+  // (the plan's one-turn-early window). Prepending re-derives the third settled
+  // segment: its first assistant now arrives from the page, so its mid-round
+  // input becomes a carry. That carry re-derives the fourth settled segment in
+  // turn.
   const msgs = sequenceG();
   // The mounted page starts at turn 3's mid-round input — after the span's
   // first assistant message. Everything earlier rides the prepended page.
@@ -526,10 +526,10 @@ test('(g) carries cascade across settled segments when a page boundary precedes 
 
 // --- (h) a no-input round that receives a stimulus mid-round -------------------
 // The production shape behind the carried-fold defect: a round with no chat
-// input (cron, resume) that receives a stimulus mid-round — most often a
+// input (cron, resume) receives a stimulus mid-round, most often a
 // worker_summary. The stimulus is queued for the next round, so the closed
-// round's fold must hold only its own steps and its row must count only
-// them; with the carry still in the fold, opening the closed turn pointed
+// round's fold must hold only its own steps, and its row must count only them.
+// With the carry still in the fold, opening the closed turn pointed
 // installTurnFold's insertion reference at a node the next turn owns and
 // threw ("reference child not found").
 test('(h) a no-input round folds only its own steps, on both paths', () => {
@@ -586,9 +586,9 @@ test('(h) a no-input round folds only its own steps, on both paths', () => {
 });
 
 // --- (i) the same shape for every stimulus role --------------------------------
-// Any stimulus role can arrive mid-round in a no-input round (a worker
+// Any stimulus role can arrive mid-round in a no-input round: a worker
 // summary, a scheduled trigger, a child report, a user message during a cron
-// round); the placement must not depend on the role.
+// round. The placement must not depend on the role.
 test('(i) every stimulus role arriving mid-round in a no-input round carries out of the fold', () => {
   for (const role of ['worker_summary', 'scheduled_trigger', 'child_report', 'user']) {
     const msgs = sequenceNoInput(role, `mid-${role}`);

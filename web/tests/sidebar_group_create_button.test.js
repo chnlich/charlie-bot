@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // The group header's actions (groups.js): a named group's header renders a
-// New-session-in-group button ahead of a Settings gear -- the gear clicks
-// through to openGroupHeaderMenu, which reads the group name off the gear's
-// data attribute and hands openRowMenu the New scheduled task / Rename group /
-// danger Delete group items; the "(No group)" bucket renders neither button,
-// and expandSessionGroup writes the target expanded into the
+// New-session-in-group button ahead of a Settings gear. The gear clicks through
+// to openGroupHeaderMenu, which reads the group name off the gear's data
+// attribute and hands openRowMenu the New scheduled task / Rename group /
+// danger Delete group items. The "(No group)" bucket renders neither button.
+// expandSessionGroup writes the target expanded into the
 // session-group-collapsed localStorage state before the create's repaint.
 // Harness follows sidebar_rename_prefill.test.js via
 // sidebar_groups_context_stub.js (namespace.js + groups.js only); the gear's
@@ -89,7 +89,7 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
     'the gear sits after the create button');
 
   // A click stops at the header and opens the menu from the gear's own group
-  // name: openGroupHeaderMenu hands openRowMenu the anchor and the items, with
+  // name. openGroupHeaderMenu hands openRowMenu the anchor and the items, with
   // no module-level state in between.
   const stopped = [];
   let captured = null;

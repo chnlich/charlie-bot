@@ -120,10 +120,10 @@ test('an idle open lands at the top of a last reply taller than the viewport', (
 test('an idle open of a fitting reply lands at the bottom and follows the next turn', () => {
   // Eight finished turns: the last reply (70px) fits the 300px viewport while
   // the folded history around it does not, so the anchor restore clamps to
-  // the maximum scroll. The open does not pin there — the engine records
+  // the maximum scroll. The open does not pin there. The engine records
   // "follow the next turn" when the mount restore leaves the view at the
-  // bottom, so late layout changes cannot drag the view down, and the next
-  // append re-arms the pin when it lands.
+  // bottom, so late layout changes cannot drag the view down. The next append
+  // re-arms the pin when it lands.
   const messages = [];
   for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
   const rig = openRig({messages});
@@ -146,10 +146,10 @@ test('an idle open of a fitting reply lands at the bottom and follows the next t
 
 test('a short reply whose tail placeholder shrinks follows the next turn', () => {
   // Eight finished turns, then one trailing system message after the last
-  // separator: the engine groups it into a pending flat segment that opens
-  // as a placeholder at its estimate (64 + 14 × 21 = 358px for 1000 chars),
-  // far taller than the 54px it renders at. The mount restore leaves the
-  // view above the bottom and sets no record; the placeholder resolving
+  // separator. The engine groups it into a pending flat segment that opens as
+  // a placeholder at its estimate, 64 + 14 × 21 = 358px for 1000 chars. That
+  // is far taller than the 54px it renders at. The mount restore leaves the
+  // view above the bottom and sets no record. Then the placeholder resolving
   // shrinks the content, the restore clamps the view to the bottom, and the
   // engine sets the record there.
   const messages = [];
@@ -171,10 +171,10 @@ test('a short reply whose tail placeholder shrinks follows the next turn', () =>
 });
 
 test('a tall reply keeps its top and sets no record when the tail placeholder shrinks', () => {
-  // The same trailing placeholder under a reply taller than the viewport:
-  // the shrink lands below the anchored reply, the restore holds the reply
-  // top at the viewport top, and the view never reaches the bottom, so the
-  // engine sets no record.
+  // The same trailing placeholder under a reply taller than the viewport: the
+  // shrink lands below the anchored reply, and the restore holds the reply top
+  // at the viewport top. The view never reaches the bottom, so the engine sets
+  // no record.
   const messages = [];
   for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i, i === 7 ? {fakeHeight: 900} : {}));
   messages.push(eMsg('system', 'tail-1', 'x'.repeat(1000), {fakeHeight: 30}));
@@ -187,7 +187,7 @@ test('a tall reply keeps its top and sets no record when the tail placeholder sh
 
 test('an idle open of a fitting reply keeps the reply top when the view shrinks', () => {
   // Size the viewport to the content below the reply top, measured by a probe
-  // open: the reply top opens exactly at the viewport top with the view
+  // open. The reply top opens exactly at the viewport top with the view
   // exactly at the bottom — the shape a late usage strip or trigger tray
   // then shrinks. A bottom-pinned view would follow the shrink and push the
   // reply top off the first screen; the deferred follow holds the position.

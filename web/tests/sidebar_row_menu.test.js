@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // The sidebar's shared settings popover (sidebar/row-menu.js): one .row-menu
-// at a time on document.body, the item/separator/danger markup and roles,
-// close-then-onSelect on choose, the close paths (Escape, outside pointerdown,
-// second open, anchor toggle, session-list scroll, window resize), and the
-// placement -- under the anchor's right edge, clamped inside the viewport,
-// flipped above near the viewport bottom. Harness mirrors
+// at a time on document.body, the item/separator/danger markup and roles.
+// Choosing runs close-then-onSelect, and the close paths are Escape, outside
+// pointerdown, second open, anchor toggle, session-list scroll and window
+// resize. The placement is under the anchor's right edge, clamped inside the
+// viewport, and flipped above near the viewport bottom. Harness mirrors
 // sidebar_group_create_button.test.js: namespace.js + row-menu.js in one vm
 // context over a minimal document/window stub.
 // ---------------------------------------------------------------------------

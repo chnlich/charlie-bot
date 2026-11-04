@@ -1,7 +1,7 @@
 // Rename-prefill mechanism tests: the rename input must prefill the session's
-// current name read live from the DOM at open time, and no rename handler
-// string may carry session state (the class of bug where a second rename
-// prefills the stale render-time name). The groups.js vm harness is shared:
+// current name, read live from the DOM at open time. No rename handler string
+// may carry session state, the class of bug where a second rename prefills the
+// stale render-time name. The groups.js vm harness is shared:
 // web/tests/sidebar_groups_context_stub.js.
 const assert = require('node:assert/strict');
 const test = require('node:test');

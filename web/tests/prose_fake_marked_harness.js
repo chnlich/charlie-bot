@@ -1,7 +1,7 @@
 'use strict';
-// Harness for the prose-renderer memo suites: a fake marked whose parse embeds
-// the body text, plus the loader that runs the real markdown-renderer.js against
-// it in a vm context. The fake's Renderer/use surface is what
+// Harness for the prose-renderer memo suites. It holds a fake marked whose parse
+// embeds the body text, plus the loader that runs the real markdown-renderer.js
+// against it in a vm context. The fake's Renderer/use surface is what
 // markdown-renderer.js touches at load.
 const vm = require('node:vm');
 const { readStatic } = require('./read_static');

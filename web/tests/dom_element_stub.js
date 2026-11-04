@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // DOM-element stub for the node --test vm harnesses (no jsdom): the superset
-// of every DOM member the loaded chat/sidebar bundle touches, so a member the
+// of every DOM member the loaded chat/sidebar bundle touches. A member the
 // script reads but the stub lacks throws inside the vm and fails the loading
 // test. addEventListener records handlers on `_listeners`; tests that
 // dispatch nothing pay nothing for the record.

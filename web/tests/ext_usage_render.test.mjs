@@ -532,10 +532,11 @@ test('renderExtUsage renders error rows greyed with the error text', () => {
 
   const row = _rowByKey(strip, 'claude:invite-1');
   assert.ok(row);
-  assert.equal(row.classList.contains('opacity-60'), true);
-  // The muted row keeps its words readable: the note inherits slate-300, which
-  // clears 4.5:1 at opacity-60 where the old slate-600 sat at 1.5:1.
+  assert.equal(row.classList.contains('opacity-60'), false, 'the provider pill keeps full contrast');
+  // The muted words keep their readability: the note inherits slate-300, which
+  // clears 4.5:1 at opacity-60, while a dimmed tinted pill would not.
   assert.ok(row.classList.contains('text-slate-300'), 'status words stay above 4.5:1');
+  assert.equal(_field(row, 'error').classList.contains('opacity-60'), true, 'the words stay muted');
   assert.equal(_field(row, 'error').textContent, 'credentials not found');
   const errPill = row.children.find((c) => c.classList.contains('provider-pill'));
   assert.ok(errPill, 'error row carries a provider pill');
@@ -637,7 +638,8 @@ test('renderExtUsage renders a not-yet-read account as loading, never as no-cap'
 
   const row = _rowByKey(strip, 'codex:personal');
   assert.ok(row, 'pending row rendered');
-  assert.equal(row.classList.contains('opacity-60'), true);
+  assert.equal(row.classList.contains('opacity-60'), false, 'the provider pill keeps full contrast');
+  assert.equal(_field(row, 'pending').classList.contains('opacity-60'), true, 'the words stay muted');
   assert.equal(_field(row, 'pending').textContent, 'loading');
   // The dangerous wrong answer: an empty windows list on the quota path renders
   // "plan / no cap", which would claim an uncapped plan for an unread account.

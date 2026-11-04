@@ -1,16 +1,16 @@
 // ---------------------------------------------------------------------------
 // A chat URL is a maximal printable-ASCII run [\x21-\x7E]+; any glued-on CJK
 // character, full-width mark, curly quote, ellipsis or emoji is prose. These
-// tests assert the mechanism, not the incident: over a glue corpus (the
-// full-width punctuation family, a glued ideograph, curly quote U+201D, CJK
-// ellipsis U+2026, an astral emoji, and the screenshot sentence as one worked
-// example) (a) every rendered href is plain printable ASCII with the cut-off
-// tail following the anchor as text, (b) the pathname the markdown render
-// produces equals the pathname the file-links.js scanner extracts from the same
-// raw text, and (c) the ASCII control battery tokenizes byte-identically to
-// stock marked. See chat/file-links.js FILE_SERVER_LINK_SOURCE for the scanner
-// side of the same boundary, and chat_file_link_prefixes.test.js for probe
-// cleanliness against it.
+// tests assert the mechanism, not the incident. The corpus holds the full-width
+// punctuation family, a glued ideograph, curly quote U+201D, CJK ellipsis
+// U+2026, an astral emoji, and the screenshot sentence as one worked example.
+// Over it, every rendered href is plain printable ASCII, with the cut-off tail
+// following the anchor as text. The pathname the markdown render produces
+// equals the pathname the file-links.js scanner extracts from the same raw
+// text. The ASCII control battery tokenizes byte-identically to stock marked.
+// See chat/file-links.js FILE_SERVER_LINK_SOURCE for the scanner side of the
+// same boundary, and chat_file_link_prefixes.test.js for probe cleanliness
+// against it.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -50,11 +50,12 @@ function messageWith(tail) {
   return '产物见 ' + SCHEME_URL + tail + '之后还有别的句子。';
 }
 
-// Token trees for comparison with stock: drop the `escaped` bookkeeping field
-// (stock inlineText sets it, the del override's lone-`~` text token omits it)
-// and merge adjacent text-token runs (the same del override splits a lone `~`
-// off into its own text token where stock swallows it into one run; the merged
-// tree renders identically and carries the tokens this fix is about).
+// Token trees for comparison with stock: drop the `escaped` bookkeeping field,
+// since stock inlineText sets it and the del override's lone-`~` text token
+// omits it. Then merge adjacent text-token runs, because the same del override
+// splits a lone `~` off into its own text token where stock swallows it into one
+// run. The merged tree renders identically and carries the tokens this fix is
+// about.
 function normalizeToken(token) {
   const clone = {};
   for (const key of Object.keys(token)) {

@@ -15,7 +15,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flush = async () => { await tick(); await tick(); };
 
 // Core announces each switch phase as a page event, and the diag package's
-// listener posts it: the harness document calls each listener of an event's
+// listener posts it. The harness document calls each listener of an event's
 // type in registration order, as the page's document does.
 function loadSwitchTelemetry(context) {
   const listeners = new Map();
@@ -33,8 +33,8 @@ function loadSwitchTelemetry(context) {
 // vm harness for switchSession: bootstrap fetches resolve through manual
 // promises (pendingSwitches[i].resolve()), telemetry posts are recorded and
 // answered immediately, and every other endpoint gets a benign empty JSON.
-// The composer paths ride the real config.js, file-upload.js and chat/input.js
-// (the chat module list loads input.js in page order), so a chat POST, a
+// The composer paths ride the real config.js, file-upload.js and chat/input.js,
+// since the chat module list loads input.js in page order. So a chat POST, a
 // cancel, an upload, a rename and a session create are recorded like the
 // telemetry posts are.
 function buildSwitchHarness() {
@@ -161,8 +161,8 @@ function buildSwitchHarness() {
 
   createChatSidebarContext(context);
   // config.js and file-upload.js ride the page ahead of the module list's
-  // runtime calls: the real saveDraftNow and showToast replace the base
-  // stubs, and the upload gate answers the send path.
+  // runtime calls. The real saveDraftNow and showToast replace the base stubs,
+  // and the upload gate answers the send path.
   vm.runInContext(readStatic('config.js'), context, {filename: 'config.js'});
   vm.runInContext(readStatic('file-upload.js'), context, {filename: 'file-upload.js'});
   loadSwitchTelemetry(context);

@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Archived view mechanism assertions: the view is one project-grouped tree
-// (the Workspace tree format) fed by keyset-paginated fetches — pages merge
-// into it, a delivered firing nests under its scheduled context node whatever
-// page each arrived on, a context ancestor renders dimmed and takes none of
-// the archived row's actions, the status poll id set excludes archived rows,
-// and in-list operations touch only the target row and the strip counts. A
+// (the Workspace tree format) fed by keyset-paginated fetches. Pages merge into
+// it, and a delivered firing nests under its scheduled context node whatever
+// page each arrived on. A context ancestor renders dimmed and takes none of the
+// archived row's actions. The status poll id set excludes archived rows, and
+// in-list operations touch only the target row and the strip counts. A
 // task-tree broadcast refreshes the loaded range in place and repaints only
 // when the rows changed. The render cap counts archived rows only. Harness follows
 // test_sidebar_delete_backfill.test.js (session_context_stub +

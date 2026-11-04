@@ -1,11 +1,10 @@
 // ---------------------------------------------------------------------------
 // vm-context loader for web/static/js/sidebar/status.js, shared by the node
-// --test harnesses that drive status.js standalone: one base context
-// (SESSION_ID 'session-a', silent console, an ok-empty-json fetch), the
+// --test harnesses that drive status.js standalone. It holds one base context
+// (SESSION_ID 'session-a', silent console, an ok-empty-json fetch), and the
 // harness's own globals spread over that base (document, fetch, backend
-// fixtures), then one load sequence -- createContext, sidebar/namespace.js,
-// sidebar/status.js -- so the load order every suite depends on lives in one
-// place.
+// fixtures). Then comes one load sequence: createContext, sidebar/namespace.js,
+// sidebar/status.js. The load order every suite depends on lives in one place.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 

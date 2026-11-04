@@ -1,13 +1,13 @@
 // ---------------------------------------------------------------------------
-// The sidebar list operations' server-answer handling (session-actions.js):
-// a failed archive (POST /api/sessions/{id}/archive) or unarchive
-// (POST /api/sessions/{id}/unarchive) surfaces the server's detail to the
-// user through the page toast — the 409 blockers shape (message + blocker
-// list), a plain string detail, and the status line when the refusal carries
-// no body. A successful archive removes the row; a successful unarchive
-// drops every id the restore names (a task node's response lists the whole
-// restored chain) or just the clicked row (a legacy session's response is
-// the session metadata), and stays quiet.
+// The sidebar list operations' server-answer handling (session-actions.js). A
+// failed archive (POST /api/sessions/{id}/archive) or unarchive
+// (POST /api/sessions/{id}/unarchive) surfaces the server's detail to the user
+// through the page toast. The detail takes three shapes: the 409 blockers
+// shape (message + blocker list), a plain string detail, and the status line
+// when the refusal carries no body. A successful archive removes the row. A
+// successful unarchive drops the ids the restore names (a task node's response
+// lists the whole restored chain) or just the clicked row, and stays quiet. A
+// legacy session's response is the session metadata.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -108,8 +108,8 @@ test('a successful archive removes the row and shows no toast', async () => {
 
 // ---------------------------------------------------------------------------
 // The unarchive entry: the restored-ids answer drops the whole restored chain
-// from the archived list, the legacy metadata answer drops only the clicked
-// row, and a refusal rides the same toast the archive refusal rides.
+// from the archived list, and the legacy metadata answer drops only the clicked
+// row. A refusal rides the same toast the archive refusal rides.
 // ---------------------------------------------------------------------------
 
 test('a task-node unarchive drops every restored id from the archived list', async () => {

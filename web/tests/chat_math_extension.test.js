@@ -4,15 +4,15 @@ const test = require('node:test');
 const { loadRenderer } = require('./marked_renderer_harness');
 
 // The chat math extension (web/static/js/markdown-renderer.js) passes the four
-// KaTeX delimiter classes through marked as whole tokens so the formula bytes
-// survive to the DOM text node, where renderChatMath's auto-render walk does
-// the actual rendering. The cases pin the bracket classes and the
+// KaTeX delimiter classes through marked as whole tokens. The formula bytes
+// then survive to the DOM text node, where renderChatMath's auto-render walk
+// does the actual rendering. The cases pin the bracket classes and the
 // dollar/bracket skip guards. The chat parser and the wrap pre-render driver
 // (web/features/artifacts/prerender_math.js) share web/static/js/math-scanner.js,
 // so these cases pin the scanner's behavior for both.
 
 // The harness loads the page's real marked build from the CDN (the same URL the
-// index page loads) with markdown-renderer.js registered on it, so these parses
+// index page loads) with markdown-renderer.js registered on it. So these parses
 // exercise the served marked plus the repo's renderer and math extension.
 async function parse() {
   const marked = await loadRenderer();

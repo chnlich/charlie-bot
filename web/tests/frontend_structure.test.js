@@ -7,10 +7,10 @@
 //     backends.<x>    web/backends/<x>/static/** and web/backends/<x>/templates/<x>/page_*.html
 //
 // The chat page is web/templates/index.html plus every package's page part templates. The page
-// loads its files in layers, and the load order is the layer order: the inline <script> bodies of
-// a template are its lowest node (bootstrap), each script its <script src="/static/..."> tags load
-// is one node, and its inline handler attributes (onclick="..." and the like) are its highest node
-// (markup). Package parts load after core, in the server's package registry order
+// loads its files in layers, and the load order is the layer order. The inline <script> bodies of
+// a template are its lowest node (bootstrap), and each script its <script src="/static/..."> tags
+// load is one node. Its inline handler attributes (onclick="..." and the like) are its highest
+// node (markup). Package parts load after core, in the server's package registry order
 // (rust/crates/app/packages/src/lib.rs, the PACKAGES table).
 //
 // Directions: core uses no name a package defines. A package uses names of core and of itself
@@ -54,9 +54,9 @@
 //     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
 //     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)
 //
-// A package that adds an item to a core menu needs no registration entry: it appends its own
-// element to the menu's container (the voice package adds the composer ⋯ menu's Voice backend
-// entry to #overflow-menu), so the core markup names nothing the package defines.
+// A package that adds an item to a core menu needs no registration entry. It appends its own
+// element to the menu's container, so the core markup names nothing the package defines. The
+// voice package, for one, adds the composer ⋯ menu's Voice backend entry to #overflow-menu.
 //
 // Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
 // for it. The core page events:
@@ -89,8 +89,9 @@ const ROOT = path.join(WEB, '..');
 const GRAPH_SCRIPT = path.join(__dirname, 'frontend_structure_graph.js');
 const PAGE_NAMES = ['chat'];
 
-// The sets the workspace structure test reads too (rust/crates/app/structure/tests/structure.rs):
-// the features that may use features.chat_threads and the backends that may use backends.claude_code.
+// The sets the workspace structure test reads too (rust/crates/app/structure/tests/structure.rs).
+// These are the features that may use features.chat_threads and the backends that may use
+// backends.claude_code.
 const CHAT_CHANNELS = new Set(['slack', 'discord']);
 const BACKEND_VARIANTS = new Set(['anthropic_compatible', 'openai_compatible']);
 
@@ -125,7 +126,7 @@ function allowedGroups(group) {
 
 let pagesCache = null;
 
-// The dependency graph of the checked pages, computed once: sucrase resolves from web/node_modules,
+// The dependency graph of the checked pages, computed once. sucrase resolves from web/node_modules,
 // so a missing install runs the same idempotent npm step
 // web/tests/tailwind_class_coverage.test.js runs. The guard keeps the install off the concurrent
 // node --test runs, whose suites then share the finished tree.

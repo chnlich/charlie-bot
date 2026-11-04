@@ -762,9 +762,9 @@ test('turn engine: DOM stays bounded and spacer arithmetic holds while paging th
   // history length never enters the bound (plan 4.1③).
   // Browser-side absolute bound (outline, 1440x900 viewport, real Chrome
   // 2026-08-08, worktree instance). After paging all 1,055 messages of the
-  // heavy session, domNodeCount was 4,020 at the top and 4,011 at the bottom,
-  // versus 3,427 for the transient first-landing window. Calibrated
-  // document-level cap for outline at this viewport: 4,400.
+  // heavy session, domNodeCount was 4,020 at the top and 4,011 at the bottom.
+  // The transient first-landing window held 3,427. Calibrated document-level
+  // cap for outline at this viewport: 4,400.
   const DOM_NODE_CAP = 400;
 
   const debug0 = assertEngineInvariants(context, root, stream, 'after mount');

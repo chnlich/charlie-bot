@@ -627,8 +627,9 @@ test('resolveSessionId still extracts the session from a plain cbsession fragmen
 // ---------------------------------------------------------------------------
 // Framed live-target routing: when embedded in the plan panel, the tray must
 // POST to window.parent.planPanel.currentSessionId() (the live active session)
-// whenever it returns a truthy value, and fall back to the artifact-URL-derived
-// session otherwise. The displayed label must always agree with the POST target.
+// whenever it returns a truthy value. Otherwise it falls back to the
+// artifact-URL-derived session. The displayed label must always agree with the
+// POST target.
 // ---------------------------------------------------------------------------
 
 function pendingTrayParts(body) {
@@ -642,8 +643,8 @@ function pendingTrayParts(body) {
   };
 }
 
-// The label the tray shows and the session it POSTs to are the section rule
-// above; keep the two checks and the send together so a test cannot drift one
+// The label the tray shows and the session it POSTs to follow the section rule
+// above. Keep the two checks and the send together, so a test cannot drift one
 // without the other.
 async function expectTrayPostsTo(body, calls, sessionId, sessionName, postMessage) {
   const {header, sendBtn} = pendingTrayParts(body);
@@ -867,12 +868,13 @@ test('stackCards places an uncontested card exactly at its anchor', () => {
 // ---------------------------------------------------------------------------
 // fitColumn / chooseWidth: the margin column's two new pure functions, exported
 // as window.__cbcFitColumn / window.__cbcChooseWidth alongside __cbcStackCards.
-// Properties are asserted over seeded randomised sets, never pixel literals:
-// adjacent pairs stay at least gap apart, the last card lies wholly inside the
-// band, the cap only ever raises a card, the chosen width fits with a gap on
-// both sides and lands in [240,300], and it never narrows as the window widens.
-// fitColumn's input contract is the document-space stack in sorted anchor
-// order, with bands large enough for the anchored regime (band >= total).
+// Properties are asserted over seeded randomised sets, never pixel literals.
+// Adjacent pairs stay at least gap apart, and the last card lies wholly inside
+// the band. The cap only ever raises a card, and the chosen width fits with a
+// gap on both sides and lands in [240,300]. The width never narrows as the
+// window widens. fitColumn's input contract is the document-space stack in
+// sorted anchor order, with bands large enough for the anchored regime (band >=
+// total).
 // ---------------------------------------------------------------------------
 
 function loadFitColumnAndChooseWidth() {
@@ -1110,7 +1112,7 @@ test('gutter mode never writes the artifact\'s own layout', async () => {
 
 test('gutter mode aligns the dock to the column and restores its prior inline values on exit', async () => {
   // The mechanism that replaces the removed inline-right reserve: the bar is
-  // never moved, it only aligns its left edge and width to the column, and on
+  // never moved. It only aligns its left edge and width to the column, and on
   // exit every inline value returns to what was there before entry.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
@@ -1125,9 +1127,10 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   addBlockComment(body, listeners, block, 'cmt');
   await flushPromises(3);
 
-  // Every expectation derives from the fake layout's own numbers: the bar's
-  // left edge is the content's right edge plus the gap, its width is the width
-  // chooseWidth picks for this layout, its right is auto, and the tray fills it.
+  // Every expectation derives from the fake layout's own numbers. The bar's
+  // left edge is the content's right edge plus the gap, and its width is the
+  // width chooseWidth picks for this layout. Its right is auto, and the tray
+  // fills it.
   const contentRight = block.getBoundingClientRect().right;
   const gap = window.__cbcGutterGap;
   const columnWidth = window.__cbcChooseWidth(documentElement.clientWidth, contentRight, gap, 240, 300);
@@ -1162,7 +1165,7 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
 
 test('gutter mode never relocates the action bar as window width changes', async () => {
   // The reserved-column and card-column migration is gone: the bar stays a
-  // direct child of body at every width, its inline left tracks the column's
+  // direct child of body at every width. Its inline left tracks the column's
   // left edge while the column exists, and no width change ever writes the
   // artifact.
   const block = makeBlock('anchored section');
@@ -1223,8 +1226,8 @@ function loadWithDrafts(drafts, children) {
 }
 
 // A 640px-wide article column at the default 1024px viewport keeps the one-band
-// reserve clean (640 <= 1024 - 316) but not the two-band one (640 > 1024 - 624),
-// so measureContent() puts the dock inside the card column in these tests.
+// reserve clean (640 <= 1024 - 316), but not the two-band one (640 > 1024 - 624).
+// So measureContent() puts the dock inside the card column in these tests.
 function rectAt(top) {
   return () => ({left: 0, top, right: 640, bottom: top + 40, width: 640, height: 40});
 }
@@ -1429,7 +1432,7 @@ test('card click does not break the x button', () => {
 // Review-layer invisibility: every node the layer injects into document.body is
 // a recognised layer node (carries the __cbc-ui marker), so it can never be
 // misidentified as an artifact block. The marker is placed by the single
-// injectRoot entry point; the check here asserts the property over ALL injected
+// injectRoot entry point. The check here asserts the property over ALL injected
 // children rather than naming the five container classes, so a sixth injected
 // container that forgets the marker is caught too.
 // ---------------------------------------------------------------------------

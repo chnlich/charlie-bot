@@ -1,8 +1,9 @@
 'use strict';
 // M33 collector — assistant-stream draft render replay. Wall-clocks one full-turn
 // replay through the checkout's usage.js/markdown-renderer.js and the page-pinned
-// marked build: the largest on-disk assistant draft growing in 200-byte deltas at a
-// 40 ms virtual cadence. CHECKOUT picks the code under test; live state read-only.
+// marked build. The draft is the largest on-disk assistant draft, growing in
+// 200-byte deltas at a 40 ms virtual cadence. CHECKOUT picks the code under test;
+// live state read-only.
 const crypto = require('node:crypto');
 
 const {

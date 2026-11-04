@@ -1,10 +1,10 @@
 'use strict';
 // M54 collector — stream-draft paint work with the page's real highlight.js
 // build. The M33 collector stubs hljs, so the standing replay metric never sees
-// highlightAuto's cost; this one loads the highlight.js build index.html pins
-// (11.9.0 common, cdnjs) into the same harness and replays the largest on-disk
-// assistant draft that contains a bare code fence — the corpus shape whose
-// paint cost highlightAuto dominates. CHECKOUT picks the code under test;
+// highlightAuto's cost. This one loads the highlight.js build index.html pins
+// (11.9.0 common, cdnjs) into the same harness. It replays the largest on-disk
+// assistant draft that contains a bare code fence, the corpus shape whose paint
+// cost highlightAuto dominates. CHECKOUT picks the code under test;
 // live state read-only.
 const crypto = require('node:crypto');
 
@@ -24,7 +24,7 @@ const BARE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/m;
 
 (async () => {
   // The corpus is the largest assistant text block that contains a bare
-  // (info-less) code fence — the blocks whose render runs highlightAuto; the
+  // (info-less) code fence, the blocks whose render runs highlightAuto. The
   // fail-loud throw keeps an empty live store from silently benchmarking ''.
   const text = largestAssistantDraft((t) => BARE_FENCE_RE.test(t));
   if (!text) throw new Error('no on-disk assistant draft with a bare code fence');

@@ -1,13 +1,14 @@
 'use strict';
 // M81 collector — chat math-walk (KaTeX auto-render) delimiter gate. The walk
 // scans every prose text node for the four delimiters on every message
-// re-render and every coalesced streamed paint even when the message carries
-// no math — the walk M33's replay and M60's repeat-page metric stub away. This
+// re-render and every coalesced streamed paint, even when the message carries
+// no math. The walk M33's replay and M60's repeat-page metric stub away. This
 // collector wall-clocks the walk through the checkout's real renderer code and
-// the page's CDN-pinned katex build over a jsdom DOM, over the worst
-// message page's assistant text blocks (a subset of M60's page corpus, which
-// adds user/worker_summary/plan bodies) and the largest math-free streamed
-// draft, live corpora read-only; CHECKOUT picks the code under test. jsdom
+// the page's CDN-pinned katex build over a jsdom DOM. The corpus is the worst
+// message page's assistant text blocks, a subset of M60's page corpus, which
+// adds user/worker_summary/plan bodies. It also holds the largest math-free
+// streamed draft, with live corpora read-only. CHECKOUT picks the code under
+// test. jsdom
 // stays off the repo's dependency tree: one-time scratch install, resolved
 // through JSDOM_HOME (default /tmp/node_modules) with a loud preflight failure.
 const crypto = require('node:crypto');
@@ -26,8 +27,8 @@ const { buildStreamHarness } = require('./stream_render_harness');
 const { MARKED_URL } = require('./marked_renderer_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..', '..');
-// The katex build the checkout's chat page serves (web/templates/index.html):
-// the walk under test is that page's walk, so the build reads from the same
+// The katex build the checkout's chat page serves (web/templates/index.html).
+// The walk under test is that page's walk, so the build reads from the same
 // page instead of a second pin here. No match is a loud preflight failure.
 const INDEX_HTML = fs.readFileSync(path.join(CHECKOUT, 'web', 'templates', 'index.html'), 'utf8');
 const katexScript = /<script defer src="(https:\/\/cdn\.jsdelivr\.net\/npm\/katex@[^"]+\/dist\/katex\.min\.js)"><\/script>/.exec(INDEX_HTML);
@@ -72,9 +73,9 @@ try {
   // (querySelectorAll('.prose-msg') -> renderChatMath). The checkout's page
   // load order: math-scanner.js defines the mathSpan global the renderer's
   // math tokenizer reads. Both ride the jsdom vm context with script
-  // semantics: w.eval would be an indirect eval, and math-scanner.js's
-  // 'use strict' confines a strict eval's function declarations to the eval
-  // instead of the window global the renderer reads.
+  // semantics: w.eval would be an indirect eval. math-scanner.js's 'use
+  // strict' confines a strict eval's function declarations to the eval instead
+  // of the window global the renderer reads.
   w.platform = {};
   const domContext = dom.getInternalVMContext();
   vm.runInContext(fs.readFileSync(path.join(CHECKOUT, 'web/static/js/math-scanner.js'), 'utf8'), domContext,

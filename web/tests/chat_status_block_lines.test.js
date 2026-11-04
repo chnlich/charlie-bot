@@ -1,14 +1,14 @@
 // ---------------------------------------------------------------------------
 // Status block paragraphs: the master's **Goal** / **Now** / **Waiting on
 // you** opener written on single-newline lines must render as one <p> with a
-// <br> between consecutive lines, while every other paragraph — the list
-// form, the blank-line form, ordinary prose — keeps marked's default bytes.
-// These tests run the page's real renderer and marked build (see
-// marked_renderer_harness.js) and pin the mechanism: detection on the three
-// labels with the first line required to be **Goal**, the fallback for
-// paragraphs the rule must not touch (including one whose inline tokens do
-// not split cleanly on the line boundaries), and the streaming paint
-// agreeing with the completed-message parse.
+// <br> between consecutive lines. Every other paragraph — the list form, the
+// blank-line form, ordinary prose — keeps marked's default bytes. These tests
+// run the page's real renderer and marked build (see
+// marked_renderer_harness.js) and pin the mechanism. Detection reads the three
+// labels and requires the first line to be **Goal**. The fallback covers the
+// paragraphs the rule must not touch, including one whose inline tokens do not
+// split cleanly on the line boundaries. The streaming paint must agree with
+// the completed-message parse.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');

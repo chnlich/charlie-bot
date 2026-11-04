@@ -3,9 +3,9 @@
 // vm render tests. The real function escapes through
 // `document.createElement('div')`, so it cannot run without a DOM, and its
 // textContent -> innerHTML round-trip escapes only `& < >` — `escapeHtmlText`
-// mirrors that one-for-one. Use it for sandbox `escapeHtml` globals:
-// production interpolates the output into single-quoted JS inside onclick
-// attributes (the cron badge's openCronEditor, sidebar/groups.js startRename), so a
+// mirrors that one-for-one. Use it for sandbox `escapeHtml` globals. Production
+// interpolates the output into single-quoted JS inside onclick attributes (the
+// cron badge's openCronEditor, sidebar/groups.js startRename), so a
 // quote-escaping fake hides a break the browser would hit.
 // `escapeHtml` keeps the `"` and `'` escapes for constructing expected values
 // in attribute assertions (`href="..."` regexes) and, wrapped as

@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // Sidebar task-tree nesting (groups.js): a child task node renders under its
-// parent row, collapsed by default behind an in-memory expand state; the
+// parent row, collapsed by default behind an in-memory expand state. The
 // five-row preview cap counts root rows only, and the registered limit
-// exemptions (cron.js's bound roots) show outside it; a worker leaf carries the leaf
-// icon and the archive action alone. The Scheduled tab nests the same way:
+// exemptions (cron.js's bound roots) show outside it. A worker leaf carries the
+// leaf icon and the archive action alone. The Scheduled tab nests the same way:
 // its cron rows group by project at root level with the worker leaves
 // collapsed under them. Harness: session_context_stub's
 // buildSidebarIndicatorContext.
@@ -16,8 +16,8 @@ const { buildSidebarIndicatorContext: buildCoreSidebarContext, loadCronPackage, 
   require('./session_context_stub');
 
 // A bound node's schedule lines, clock badge and schedule menu items come from
-// the cron script, so each harness here runs it after the core modules, as
-// the page does.
+// the cron script. So each harness here runs it after the core modules, as the
+// page does.
 function buildSidebarIndicatorContext(ids) {
   const built = buildCoreSidebarContext(ids);
   loadCronPackage(built.context);
@@ -760,8 +760,8 @@ test('a legacy session row keeps its actions but shows no Task & context button'
 
 // ---------------------------------------------------------------------------
 // A bound node in the Workspace tree: the same tree the All tab builds, with
-// the bound row form — schedule lines, clock badge, Settings gear — and
-// its firing leaves nested collapsed under it.
+// the bound row form — schedule lines, clock badge, Settings gear. Its firing
+// leaves nest collapsed under it.
 // ---------------------------------------------------------------------------
 
 test('a bound node nests its firing leaves under it, collapsed, and keeps the bound row form', () => {

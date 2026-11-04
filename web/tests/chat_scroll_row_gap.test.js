@@ -13,13 +13,13 @@ const {
 } = require('./turn_engine_harness');
 
 // ---------------------------------------------------------------------------
-// Row-gap height model: with the container's 12px row gap emulated, a
+// Row-gap height model: the container's 12px row gap is emulated. A
 // wheel-driven window migration must leave the content where the scroll put
-// it (the spacer trades height with the migrated rows at their layout
-// extent), and jumpToBottom must project the pinned bottom at once. Both
-// tests fail on the pre-fix engine: there the model counts no margin (the
-// migration steals 12px per migrated row) and the jump writes the scroll
-// position without reprojecting the window.
+// it, since the spacer trades height with the migrated rows at their layout
+// extent. jumpToBottom must project the pinned bottom at once. Both tests fail
+// on the pre-fix engine: there the model counts no margin, so the migration
+// steals 12px per migrated row. The jump writes the scroll position without
+// reprojecting the window.
 // ---------------------------------------------------------------------------
 
 // Viewport-relative Y of one element in the fake layout (container top = 0).

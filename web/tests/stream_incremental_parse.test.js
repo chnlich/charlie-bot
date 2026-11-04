@@ -95,9 +95,9 @@ test('a reference definition arriving in the tail re-parses whole from then on',
 });
 
 test('a reference definition with an escaped bracket in its label resets too', async () => {
-  // marked's def tokenizer accepts an escaped `]` inside the label — a class
-  // the guard's label rule must match, or the frozen prefix renders the use
-  // literally after the full parse resolves it.
+  // marked's def tokenizer accepts an escaped `]` inside the label. That is a
+  // class the guard's label rule must match, or the frozen prefix renders the
+  // use literally after the full parse resolves it.
   const context = await loadRendererContext({
     getLanguage: () => null,
     highlightAuto: (code) => ({ value: code }),
@@ -151,9 +151,9 @@ test('the frozen prefix actually advances: the incremental path re-lexes a shrin
     highlightAuto: (code) => ({ value: code }),
     highlight: (code) => ({ value: code }),
   });
-  // Drive a draft whose blocks close one after another; after the paints the
-  // state's cut must sit far from 0 — otherwise every paint re-lexed whole
-  // and this suite would pass vacuously.
+  // Drive a draft whose blocks close one after another. After the paints the
+  // state's cut must sit far from 0, because otherwise every paint re-lexed
+  // whole and this suite would pass vacuously.
   const text = Array.from({ length: 12 }, (_, i) => `Paragraph ${i} with prose.\n`).join('\n');
   for (let pos = 40; pos <= text.length; pos += 40) {
     paint(context, text.slice(0, pos));

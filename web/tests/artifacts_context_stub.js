@@ -1,14 +1,15 @@
 // ---------------------------------------------------------------------------
 // vm-context loader for the artifacts package's artifact-cards.js, shared by
-// the node --test vm harnesses: one stub context (escapeHtml/hljs/localStorage/
-// window/console/URL), the window.SESSIONS_ROOT the cards' relative-path
-// resolution reads, and chat/namespace.js, core chat/file-links.js and the
-// cards loaded into one vm. The cards register their message post-processor
-// with chat/rendering.js, which this loader stubs.
-// opts.document/opts.planPanel inject the cards' optional globals;
+// the node --test vm harnesses. It carries one stub context
+// (escapeHtml/hljs/localStorage/ window/console/URL) and the
+// window.SESSIONS_ROOT the cards' relative-path resolution reads. It also loads
+// chat/namespace.js, core chat/file-links.js and the cards into one vm. The
+// cards register their message post-processor with chat/rendering.js, which this
+// loader stubs.
+// opts.document/opts.planPanel inject the cards' optional globals.
 // opts.sessionId overrides the 'test-session' default for suites whose staged
-// paths name another session id; opts.window merges extra members into the
-// window stub (a recording addEventListener, an innerHeight); opts.withScroll
+// paths name another session id. opts.window merges extra members into the
+// window stub (a recording addEventListener, an innerHeight). opts.withScroll
 // also loads chat/scroll.js, for suites exercising the scroll seam
 // (restoreBottomPin) that the cards' follow decisions route through.
 // ---------------------------------------------------------------------------

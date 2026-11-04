@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
 // Fake DOM and vm harness shared by the chat artifacts tests
 // (chat_file_link_prefixes.test.js, chat_url_ascii_boundary.test.js,
-// chat_artifact_cards.test.js): nodes with real parent/child links, because
-// the marking splits a text node and hangs a sibling off an element, plus
-// loadArtifactsScript, which loads the real chat/namespace.js, core
-// chat/file-links.js and the artifacts package's artifact-cards.js in a vm
-// against stubs for every other global the modules touch. fetch is recorded,
-// so tests read the probe requests the render would have made.
+// chat_artifact_cards.test.js). Its nodes have real parent/child links, because
+// the marking splits a text node and hangs a sibling off an element. It also
+// holds loadArtifactsScript, which loads the real chat/namespace.js, core
+// chat/file-links.js and the artifacts package's artifact-cards.js in a vm.
+// Every other global the modules touch is stubbed. fetch is recorded, so tests
+// read the probe requests the render would have made.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const vm = require('node:vm');

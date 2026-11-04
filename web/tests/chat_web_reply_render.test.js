@@ -5,9 +5,9 @@ const {loadChatRendering} = require('./chat_rendering_context_stub');
 
 // ---------------------------------------------------------------------------
 // The two message roles the web reply channel adds to the chat: a web_reply is
-// the agent's message to the user (an agent-side bubble holding its markdown),
-// and a web_reply_notice is a one-line centered notice of plain text. The error
-// row a failed turn writes (a system message whose text starts with "Error: ")
+// the agent's message to the user (an agent-side bubble holding its markdown).
+// A web_reply_notice is a one-line centered notice of plain text. The error row
+// a failed turn writes (a system message whose text starts with "Error: ")
 // closes the file.
 // ---------------------------------------------------------------------------
 

@@ -1,8 +1,8 @@
 'use strict';
 // M106 collector — switch-during-stream repaint. Times the synchronous paint a
 // session switch performs on a mid-stream pending draft: hideStreaming (the
-// teardown path) then showStreaming past the coalesce window, the draft grown
-// by one delta as it is between two switches. The largest on-disk assistant
+// teardown path) then showStreaming past the coalesce window. The draft is grown
+// by one delta, as it is between two switches. The largest on-disk assistant
 // draft is the corpus; CHECKOUT picks the code under test; live state read-only.
 const crypto = require('node:crypto');
 

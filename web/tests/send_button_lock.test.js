@@ -6,8 +6,9 @@
 // master run leaves it sendable; each optimistic send's server echo is skipped
 // by request id. Driven through the real chat,
 // sidebar, websocket, file-upload and voice-input modules on the
-// session_context_stub harness, in the style of chat_attachments_render.test.js
-// (send button as an attribute-map fake) and voice_input_run.test.js (fake XHR).
+// session_context_stub harness. It follows the style of
+// chat_attachments_render.test.js (send button as an attribute-map fake) and
+// voice_input_run.test.js (fake XHR).
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -31,7 +32,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flush = async () => { await tick(); await tick(); };
 
 // The send button as chat_attachments_render.test.js fakes it: an attribute map
-// plus a real classList, so the lock's disabled write and greyed classes are
+// plus a real classList. So the lock's disabled write and greyed classes are
 // observable exactly as the production code makes them.
 class SendButton {
   constructor() {
@@ -117,8 +118,8 @@ function buildLockHarness() {
   stubPageTimers(context);
   createChatSidebarContext(context);
   // Page-order tail: the gate/lock file lands before voice-input.js, whose
-  // transcription windows report into it; every cross-file read here happens
-  // at call time, so the load order only mirrors the page's dependency.
+  // transcription windows report into it. Every cross-file read here happens at
+  // call time, so the load order only mirrors the page's dependency.
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});

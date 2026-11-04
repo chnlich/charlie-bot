@@ -1,9 +1,10 @@
 // ---------------------------------------------------------------------------
 // Shared harness for the chat turn-layout suites: the fake DOM the vm loader
-// runs the chat bundle in (FakeElement with deterministic layout), the chat
-// context loader, the DOM-path mount rig, and the turn-engine drive train
-// (queueable timers, engine mount, invariant readers). The suites keep their
-// own expectations; everything here only builds inputs and reads the DOM back.
+// runs the chat bundle in (FakeElement with deterministic layout). It also
+// holds the chat context loader and the DOM-path mount rig, plus the
+// turn-engine drive train: queueable timers, engine mount and invariant
+// readers. The suites keep their own expectations; everything here only builds
+// inputs and reads the DOM back.
 // ---------------------------------------------------------------------------
 
 const assert = require('node:assert/strict');
@@ -21,7 +22,7 @@ const FAKE_LEAF_HEIGHT = 24;
 
 // Row-gap emulation, opt-in per suite (enableRowGapEmulation): the chat
 // container's `space-y-3` rule gives every non-first, non-hidden child a
-// 12px margin-top, and the turn spacers are the one exception
+// 12px margin-top. The turn spacers are the one exception
 // (styles.css: #messages > .turn-spacer { margin-top: 0 }). Off by default;
 // with it off every margin reads 0 and the layout is exactly the old
 // margin-free one.
@@ -67,7 +68,7 @@ function fakeElementMatches(el, selector) {
 
 // Absolute top within the layout tree: the sum of every preceding sibling's
 // height, walked up to the root. With row-gap emulation on, each #messages
-// child's own margin-top adds to the walk — a sibling's margin-top collapses
+// child's own margin-top adds to the walk. A sibling's margin-top collapses
 // with the previous row's zero margin-bottom, so the gap above a row is its
 // own margin.
 function fakeElementTop(el) {
@@ -122,7 +123,7 @@ class FakeText {
 }
 
 // Child bookkeeping runs over `_nodes`, which holds elements and text nodes
-// alike: the fold row reads a bubble's text back off the rendered nodes, and
+// alike. The fold row reads a bubble's text back off the rendered nodes, and
 // that read only means anything if element boundaries are real here too.
 class FakeElement {
   constructor(tagName = 'DIV', {id = '', className = ''} = {}) {
@@ -241,12 +242,11 @@ class FakeElement {
   }
 
   // Deterministic layout stand-in for the turn engine: inline pixel heights
-  // win (spacers, placeholders), `.hidden` collapses, otherwise the height is
-  // the element's own base plus the sum of its children, with a default leaf
-  // height for text-bearing leaves. A hidden element (or one inside one) has
-  // no box: like the browser over display:none, its rect reads (0, 0) — a
-  // rect scan must not mistake that for a position at the viewport's top
-  // edge.
+  // win (spacers, placeholders), and `.hidden` collapses. Otherwise the height
+  // is the element's own base plus the sum of its children, with a default leaf
+  // height for text-bearing leaves. A hidden element (or one inside one) has no
+  // box: like the browser over display:none, its rect reads (0, 0). A rect scan
+  // must not mistake that for a position at the viewport's top edge.
   getBoundingClientRect() {
     for (let node = this; node; node = node.parentElement) {
       if ((node.classList && node.classList.contains('hidden'))
@@ -492,9 +492,9 @@ function wrappers(root) {
 // store; HTML build/postprocess runs in scroll-gated idle slices; folded
 // turn bodies and out-of-window turns are never in the DOM. These tests drive
 // the engine through its public surface (mount, scroll events, pagination
-// ingest, override/toggle globals) on the same fake DOM as the legacy suites,
-// extended with deterministic layout (fakeElementHeight) and queueable timers
-// so every scheduling step is explicit.
+// ingest, override/toggle globals) on the same fake DOM as the legacy suites.
+// That DOM is extended with deterministic layout (fakeElementHeight) and
+// queueable timers, so every scheduling step is explicit.
 // ---------------------------------------------------------------------------
 
 // --- engine fixtures --------------------------------------------------------
@@ -575,8 +575,8 @@ function installEngineTimers(context, timers) {
 }
 
 // Like a real scroller, the position never leaves the laid-out range: writes
-// clamp, and a read clamps again so content shrinking under the viewport
-// (fold collapses, pagination sentinel removal) behaves like the browser's.
+// clamp, and a read clamps again. So content shrinking under the viewport (fold
+// collapses, pagination sentinel removal) behaves like the browser's.
 function installScrollTopClamp(root) {
   let scrollTop = root.scrollTop;
   Object.defineProperty(root, 'scrollTop', {

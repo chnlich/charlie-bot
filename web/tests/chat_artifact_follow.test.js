@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
-// Late artifact layout — a plan card inserted after the render, an HTML
-// artifact frame growing to its document height — follows the turn engine's
-// pin intent when an engine hosts #messages, never the 150px geometry band:
-// a fitting reply opens at the bottom unpinned, and a late card or frame
+// Late artifact layout follows the turn engine's pin intent when an engine
+// hosts #messages, never the 150px geometry band. A plan card inserted after
+// the render, or an HTML artifact frame growing to its document height, is late
+// layout. A fitting reply opens at the bottom unpinned, and a late card or frame
 // landing there must not yank the view down. The stub has no real engine, so
-// the cases install a minimal fake as Chat.activeTurnEngineFor's answer that
-// exposes pinnedIntent and records jumpToBottom calls; the real
+// the cases install a minimal fake as Chat.activeTurnEngineFor's answer. That
+// fake exposes pinnedIntent and records jumpToBottom calls; the real
 // restoreBottomPin (chat/scroll.js) routes the jump through it.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
@@ -80,8 +80,8 @@ function loadWithEngine(container, pinnedIntent, frame) {
   });
   const engine = installFakeEngine(context, container, pinnedIntent);
   // The geometry helper the no-engine branch reads (chat/shared.js is not
-  // loaded here): only reached without an engine, but its absence would turn
-  // a base-file run of these cases into a ReferenceError instead of the
+  // loaded here). It is only reached without an engine, but its absence would
+  // turn a base-file run of these cases into a ReferenceError instead of the
   // behavioral failure they pin.
   context.shouldAutoScroll = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 150;
   return { context, engine, messageHandlers };

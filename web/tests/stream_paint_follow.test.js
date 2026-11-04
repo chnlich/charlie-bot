@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The stream paint's follow decision: with a turn engine hosting #messages,
-// paintStreamDraft reads the engine's shouldFollow() — the pin intent OR the
-// follow the open deferred to the next turn — and the paint's restore routes
+// paintStreamDraft reads the engine's shouldFollow(). That is the pin intent OR
+// the follow the open deferred to the next turn, and the paint's restore routes
 // through the engine's jumpToBottom. The harness loads the real usage.js,
 // renderer and scroll seam; the engine is a minimal fake that
 // Chat.activeTurnEngineFor returns, exposing the method and recording jumpToBottom

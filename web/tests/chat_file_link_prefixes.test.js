@@ -191,8 +191,8 @@ test('a network error adds no marking', async () => {
 
 // ---------------------------------------------------------------------------
 // Glued-CJK boundary: a file link immediately followed by CJK prose scans to
-// the same printable-ASCII boundary the markdown renderer cuts bare URLs at —
-// the probe asks for the real path, and no mistaken missing marker lands in
+// the same printable-ASCII boundary the markdown renderer cuts bare URLs at.
+// The probe asks for the real path, and no mistaken missing marker lands in
 // the middle of the sentence. See chat_url_ascii_boundary.test.js for the
 // renderer side of the same boundary.
 // ---------------------------------------------------------------------------
@@ -302,8 +302,8 @@ test('one HEAD per unique path across every carrier an occurrence used', async (
 // ---------------------------------------------------------------------------
 // Unrecognized-prefix artifact links: the second recognition channel. A
 // same-host link the known prefix does not resolve still enters the probe when
-// its path carries an /artifacts/ segment — a mis-composed prefix keeps that
-// tail — and a 404 marks it like any other missing file. Unshemed local anchors
+// its path carries an /artifacts/ segment, because a mis-composed prefix keeps
+// that tail. A 404 marks it like any other missing file. Unshemed local anchors
 // are also probed at their literal same-origin URL. Other hosts and ports are
 // left as written and unprobed.
 // ---------------------------------------------------------------------------

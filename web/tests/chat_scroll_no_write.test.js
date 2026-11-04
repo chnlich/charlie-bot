@@ -6,9 +6,9 @@ const { readStatic } = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real
-// browser: `classList.add`/`remove`/`toggle` count as a write on every call,
-// not only when the resulting string differs, because Chromium still queues
-// a mutation record for a redundant add/toggle. This is what makes a removed
+// browser. `classList.add`/`remove`/`toggle` count as a write on every call,
+// not only when the resulting string differs. Chromium still queues a mutation
+// record for a redundant add/toggle. This is what makes a removed
 // write-guard show up as a nonzero count below. getAttribute/setAttribute on
 // 'class'/'title' are counted the same way: SVG nodes take class updates
 // through the attribute because SVGElement.className is a read-only

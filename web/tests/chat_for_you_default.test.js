@@ -14,11 +14,11 @@ const {baseSessionContext, createChatSidebarContext} = require('./session_contex
 const {readStatic} = require('./read_static');
 
 // ---------------------------------------------------------------------------
-// The session page's view at open: a web session, root or child, opens in For you;
-// a thread session and a worker session open in Everything; a manual switch holds
-// for its session until the page reloads. These cases drive the real
-// renderSessionView through the sidebar context, the way a first load and a
-// session switch land.
+// The session page's view at open: a web session, root or child, opens in For
+// you. A thread session and a worker session open in Everything, and a manual
+// switch holds for its session until the page reloads. These cases drive the
+// real renderSessionView through the sidebar context, the way a first load and
+// a session switch land.
 // ---------------------------------------------------------------------------
 
 const SLACK_ORIGIN = {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'};

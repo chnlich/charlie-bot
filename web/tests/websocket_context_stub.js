@@ -1,14 +1,14 @@
 // ---------------------------------------------------------------------------
 // vm-context loader for web/static/js/websocket.js, shared by the node
-// --test websocket harnesses: one base context (the page-load state globals,
-// silent console, a fresh FakeWebSocket class per build, the no-key
-// wsUrlWithToken page-load order, and a no-op for every hook websocket.js
-// calls into the chat/sidebar modules), the harness's own globals spread
-// over that base (SESSION_ID, document, setTimeout, the recorders), then
-// one load sequence — createContext, websocket.js, websocket-handlers.js — so
-// the load order both suites depend on lives in one place. A harness with a
-// context of its own (the sidebar indicator harness loading the real
-// status.js) takes the same load sequence through loadWebsocketModules.
+// --test websocket harnesses. It holds one base context: the page-load state
+// globals, silent console, a fresh FakeWebSocket class per build, and the
+// no-key wsUrlWithToken page-load order. Every hook websocket.js calls into the
+// chat/sidebar modules is a no-op. The harness's own globals spread over that
+// base (SESSION_ID, document, setTimeout, the recorders). Then comes one load
+// sequence: createContext, websocket.js, websocket-handlers.js. The load order
+// both suites depend on lives in one place. A harness with a context of its own
+// (the sidebar indicator harness loading the real status.js) takes the same load
+// sequence through loadWebsocketModules.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 

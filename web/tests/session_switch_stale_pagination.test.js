@@ -25,7 +25,7 @@ function aPage(hasMore) {
 }
 
 // B's own page: strictly decreasing cursor so the no-progress guard stays
-// quiet; has_more bottoms out below 100, which ends every fill chain of the
+// quiet. has_more bottoms out below 100, which ends every fill chain of the
 // harness (its container never grows) and keeps a never-awaited re-entry from
 // flooding it.
 function bPage(before) {
@@ -278,7 +278,7 @@ test('ownership probe: gate holds while B is in flight, releases on B own comple
 
   // B's own completion releases the hold (credential-equal finally). Each
   // landed page grows the container, so B's first page overflows it and moves
-  // the viewport out of the trigger zone: the fill chain stops there with
+  // the viewport out of the trigger zone. The fill chain stops there with
   // has_more still true.
   const renderPage = h.context.renderMessagesToDetachedContainer;
   h.context.renderMessagesToDetachedContainer = (pageMessages, sessionId) => {

@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // Child report card fold (renderMessage's child_report branch): a report past
-// three lines, past a weight of 360 (a wide code point counts 2), or with
-// result refs folds behind a button. The full text stays in the markup, and
-// the button flips data-folded on the card. Fixtures are synthetic text.
+// three lines folds behind a button. A report past a weight of 360 (a wide code
+// point counts 2) folds too, and so does one with result refs. The full text
+// stays in the markup, and the button flips data-folded on the card. Fixtures
+// are synthetic text.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -36,8 +37,8 @@ const THREE_LINES_360 = ['a'.repeat(119), 'b'.repeat(120), 'c'.repeat(119)].join
 const HAN = '中';
 
 // A folded report as a turn: the card's report body is its .whitespace-pre-wrap
-// node, the element the turn fold row reads its first line from, and a
-// separator closes the turn.
+// node, the element the turn fold row reads its first line from. A separator
+// closes the turn.
 function foldedReportTurn(content) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   const card = new FakeElement('DIV', {className: 'flex justify-start'});

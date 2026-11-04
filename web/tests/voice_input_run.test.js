@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // voice-input.js record-then-upload tests. Each recording is one run object
-// owned through the module-level slot; these tests drive toggleVoice() against
-// fake mic/XHR/worklet/WebSocket doubles and assert the click-cadence, upload,
-// stop-state, guard, backend-menu, and preview-relay contracts from the inside.
+// owned through the module-level slot. These tests drive toggleVoice() against
+// fake mic/XHR/worklet/WebSocket doubles, and assert the click-cadence, upload,
+// stop-state, guard, backend-menu and preview-relay contracts from the inside.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');

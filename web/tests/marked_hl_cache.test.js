@@ -3,8 +3,8 @@ const test = require('node:test');
 const { loadRenderer } = require('./marked_renderer_harness');
 
 // Counting hljs double: every call is recorded, and the emitted value carries a
-// call counter so a memo hit (same bytes, no new call) is distinguishable from
-// a re-run (new bytes) even when the language grammar is trivial.
+// call counter. So a memo hit (same bytes, no new call) is distinguishable from
+// a re-run (new bytes), even when the language grammar is trivial.
 function countingHljs() {
   const calls = { highlightAuto: 0, highlight: 0 };
   let n = 0;

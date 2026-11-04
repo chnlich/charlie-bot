@@ -14,7 +14,7 @@ function readStatic(...parts) {
 }
 
 // A package's source: web/<kind>/<name>/templates/<name>/<parts> for a script or style a page part includes in the
-// document, else web/<kind>/<name>/static/<parts> for a file the server serves at /static/<kind>/<name>/.
+// document. Else web/<kind>/<name>/static/<parts> for a file the server serves at /static/<kind>/<name>/.
 function readPackageStatic(kind, name, ...parts) {
   const packageRoot = path.join(__dirname, '..', kind, name);
   const included = path.join(packageRoot, 'templates', name, ...parts);

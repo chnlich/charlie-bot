@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// Coverage boundary: this test only asserts that Tailwind utility classes
-// produced by the render paths the fixture below actually exercises --
-// renderMessage() (user/assistant/tool-activity/system/delegate/worker/plan/
-// clone/trigger/separator) and the plan compact-card builder -- are present
-// in the committed web/static/css/tailwind.css. It says nothing about class
+// Coverage boundary: this test only asserts that Tailwind utility classes from
+// the render paths the fixture below exercises are present in the committed
+// web/static/css/tailwind.css. Those paths are renderMessage()
+// (user/assistant/tool-activity/system/delegate/worker/plan/ clone/trigger/
+// separator) and the plan compact-card builder. It says nothing about class
 // usage in code paths (or templates) the fixture does not touch.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');

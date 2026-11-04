@@ -16,7 +16,7 @@ use charliebot_core::str_methods;
 use charliebot_core::timefmt::{self, utc_now_iso};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -510,7 +510,8 @@ fn warn_unknown_limit_shape(account: &str, slot: &str, reason: &str) {
       account,
       slot,
       reason,
-      "ext_usage_unknown_limit_shape"
+      "{}",
+      UNKNOWN_LIMIT_SHAPE_EVENT
     );
   }
 }

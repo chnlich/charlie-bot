@@ -311,11 +311,7 @@ impl Worker {
               let ended = error.downcast_ref::<QuotaExhaustedError>().is_some();
               let message = format!("{error:#}");
               *failure.lock().expect("resume failure mutex is not poisoned") = Some(error);
-              Err(if ended {
-                std::io::Error::other(follow::EventEndedRun)
-              } else {
-                std::io::Error::other(message)
-              })
+              Err(if ended { std::io::Error::other(follow::EventEndedRun) } else { std::io::Error::other(message) })
             }
           }
         }

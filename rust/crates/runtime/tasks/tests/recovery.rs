@@ -1147,7 +1147,10 @@ async fn assert_ending(
     assert_eq!(reports.len(), 1, "{reports:?}");
     assert_eq!(reports[0]["outcome"], "failed");
     let summary = reports[0]["summary"].as_str().unwrap_or_default();
-    assert!(summary.contains("429") && summary.contains("rate limit exceeded"), "the report carries the API error: {summary:?}");
+    assert!(
+      summary.contains("429") && summary.contains("rate limit exceeded"),
+      "the report carries the API error: {summary:?}"
+    );
   }
   Ok(())
 }
@@ -1268,10 +1271,7 @@ async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Resu
   ending_run(&stack, &worker_id, run_id, Vec::new()).await?;
   stack.launch(&worker_id, run_id, DEAD_PID, DEAD_PID_START).await?;
   stage_raw_429(&stack.store().run_dir(&worker_id, run_id), Duration::from_secs(3600))?;
-  stack
-    .dispatch
-    .admit_input(&worker_id, event_types::USER, "follow up after the restart", "user", json!({}))
-    .await?;
+  stack.dispatch.admit_input(&worker_id, event_types::USER, "follow up after the restart", "user", json!({})).await?;
   seed_pending_report(&stack, &worker_id, &manager_id).await?;
 
   let log = LogCapture::default();
@@ -1281,10 +1281,8 @@ async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Resu
   }
   assert!(!log.text().contains("task_recovery_node_failed"), "{}", log.text());
   settle_until(|| Ok(stack.dispatch.pending_inputs(&worker_id)?.is_empty())).await?;
-  settle_until(|| {
-    Ok(stack.run_records(&worker_id)?.iter().any(|run| run.id != run_id && run.kind == RunKind::Work))
-  })
-  .await?;
+  settle_until(|| Ok(stack.run_records(&worker_id)?.iter().any(|run| run.id != run_id && run.kind == RunKind::Work)))
+    .await?;
   let report = stack
     .child_reports(&manager_id)?
     .into_iter()
@@ -1316,8 +1314,7 @@ async fn a_manager_resume_error_lands_the_turn_failure() -> anyhow::Result<()> {
   let run = stack.store().read_run_sync(&manager.id, "run-turn")?.context("the turn is recorded")?;
   assert_eq!(run.exit_code, Some(-1), "{run:?}");
   let notice = events.iter().any(|event| {
-    event["type"] == event_types::ERROR
-      && event["content"].as_str().is_some_and(|text| text.starts_with("Turn failed"))
+    event["type"] == event_types::ERROR && event["content"].as_str().is_some_and(|text| text.starts_with("Turn failed"))
   });
   assert!(notice, "the manager session shows the turn failure: {events:?}");
   Ok(())

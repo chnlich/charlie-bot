@@ -134,11 +134,21 @@ pub(crate) fn read_file_lines_split(
   let Some(map) = open_log_map(path)? else {
     return Ok(Vec::new());
   };
-  Ok(split_lines_of(&map, &line, &BOOT_SPLIT))
+  Ok(split_lines_of_sized(&map, &line, &BOOT_SPLIT))
+}
+
+/// Every line of `bytes`, split across threads at the boot walk's sizes. A caller that already holds a log's mapping
+/// (a scan that resumes from a checkpoint) parses the bytes past its offset this way, with the same line rule and the
+/// same order a whole-file read gives.
+pub(crate) fn split_lines_of(
+  bytes: &[u8],
+  line: &(impl Fn(&[u8], &ParseKeys) -> Option<CompactValue> + Sync),
+) -> Vec<CompactValue> {
+  split_lines_of_sized(bytes, line, &BOOT_SPLIT)
 }
 
 /// [`lines_of`] with the lines of `bytes` split across threads at `sizes`.
-fn split_lines_of(
+fn split_lines_of_sized(
   bytes: &[u8],
   line: &(impl Fn(&[u8], &ParseKeys) -> Option<CompactValue> + Sync),
   sizes: &SplitSizes,
@@ -373,7 +383,7 @@ mod tests {
     text.push_str("{\"id\": \"last\"}");
     let sizes = SplitSizes { min_bytes: 1 << 20, chunk_bytes: 128 << 10, max_threads: 8 };
     assert!(text.len() >= sizes.min_bytes && text.len() >= sizes.chunk_bytes * sizes.max_threads, "the text splits");
-    let split = split_lines_of(text.as_bytes(), &parse_file_line, &sizes);
+    let split = split_lines_of_sized(text.as_bytes(), &parse_file_line, &sizes);
     assert_eq!(split.len(), 4_002, "every object line, the blob and the final line");
     assert_eq!(split, lines_of(text.as_bytes(), &parse_file_line));
   }

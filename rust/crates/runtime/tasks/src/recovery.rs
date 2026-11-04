@@ -508,12 +508,22 @@ pub async fn reconcile_task_tree(
   // files itself and fails the node on an error that persists.
   let candidate_ids: HashSet<&str> = candidates.iter().map(|candidate| candidate.session_id.as_str()).collect();
   let mut recipients = BTreeSet::new();
+  let mut fact_scan_bytes = 0u64;
+  let mut fact_scan_checkpoint_bytes = 0u64;
   for (candidate, scan) in candidates.iter().zip(scans) {
     let sealed = scan.map(|scan| match scan? {
       Some(scan) => {
+        fact_scan_bytes += scan.read_bytes();
+        fact_scan_checkpoint_bytes += scan.checkpoint_bytes();
         let others = scan.report_recipients().filter(|recipient| !candidate_ids.contains(recipient));
         recipients.extend(others.map(str::to_string));
-        features.store.seal_scanned_facts(&candidate.session_id, scan)
+        let sealed = features.store.seal_scanned_facts(&candidate.session_id, &scan)?;
+        // The checkpoint is the scan's own facts at the identity it validated: the next boot folds the appended bytes
+        // onto them instead of re-reading the log. A start without a checkpoint measures its write.
+        if sealed {
+          features.store.write_fact_checkpoint(&candidate.session_id, &scan)?;
+        }
+        Ok::<bool, charliebot_store::StoreError>(sealed)
       }
       None => Ok(false),
     });
@@ -538,8 +548,17 @@ pub async fn reconcile_task_tree(
     return Ok(counters);
   };
   for (recipient, scan) in recipients.iter().zip(recipient_scans) {
-    let sealed =
-      scan.and_then(|scan| scan.map_or(Ok(false), |scan| features.store.seal_scanned_facts(recipient, scan)));
+    let sealed = scan.and_then(|scan| {
+      scan.map_or(Ok(false), |scan| {
+        fact_scan_bytes += scan.read_bytes();
+        fact_scan_checkpoint_bytes += scan.checkpoint_bytes();
+        let sealed = features.store.seal_scanned_facts(recipient, &scan)?;
+        if sealed {
+          features.store.write_fact_checkpoint(recipient, &scan)?;
+        }
+        Ok(sealed)
+      })
+    });
     if let Err(error) = sealed {
       tracing::warn!(target: "charliebot_tasks", session_id = %recipient, error = %error, "task_recovery_recipient_scan_failed");
     }
@@ -600,6 +619,8 @@ pub async fn reconcile_task_tree(
     node_pass_file_reads,
     node_pass_run_record_reads,
     recipient_fact_scans,
+    fact_scan_bytes,
+    fact_scan_checkpoint_bytes,
     node_pass_step_ms = %node_pass_step_ms,
     node_pass_step_file_reads = %node_pass_step_file_reads,
     node_pass_step_file_read_bytes = %node_pass_step_file_read_bytes,

@@ -3675,3 +3675,65 @@ async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyh
   assert_eq!(stack.store().run_backend(&worker.id).as_deref(), Some(BACKEND_ID));
   Ok(())
 }
+
+/// The bytes of one counter on the captured `task_tree_recovery_phases` line.
+fn phase_count(log: &LogCapture, key: &str) -> u64 {
+  let text = log.text();
+  let pattern = format!("{key}=");
+  let start = text.find(&pattern).unwrap_or_else(|| panic!("no {key} on the phase line: {text}"));
+  text[start + pattern.len()..].split(|character: char| !character.is_ascii_digit()).next().unwrap().parse().unwrap()
+}
+
+/// One boot on `home`, with its counters and the log of the boot's own thread.
+async fn boot_on(home: Arc<tempfile::TempDir>) -> anyhow::Result<(Stack, PassCounters, LogCapture)> {
+  let stack =
+    Stack::start_on_home(Arc::clone(&home), vec![script_option(BACKEND_ID, "exit 0")], vec![BACKEND_ID.to_string()])
+      .await?;
+  let log = LogCapture::default();
+  let counters = {
+    let _capture = log.install();
+    stack.boot().await?
+  };
+  Ok((stack, counters, log))
+}
+
+/// A boot after a clean boot reads only the bytes appended past each session's fact checkpoint, and lands the same
+/// recovery; a torn or missing checkpoint falls back to the whole-log scan and lands that recovery too.
+#[tokio::test]
+async fn a_boot_reads_only_the_bytes_past_a_matching_fact_checkpoint() -> anyhow::Result<()> {
+  let home = Arc::new(tempfile::tempdir()?);
+  let (first, _counters, _log) = boot_on(Arc::clone(&home)).await?;
+  let manager = first.node("manager", None, TaskProfile::Manager, None).await?;
+  let checkpoint = first.store().fact_checkpoint_path(&manager.id);
+  let (_, _, _) = boot_on(Arc::clone(&home)).await?;
+  assert!(checkpoint.is_file(), "the boot wrote {}'s fact checkpoint", manager.id);
+
+  first.store().append_chat_event(&manager.id, json!({"id": "note", "type": "command_lifecycle"})).await?;
+  let appended_log = std::fs::metadata(first.store().chat_events_path(&manager.id))?.len();
+  let (_, matching, matching_log) = boot_on(Arc::clone(&home)).await?;
+  assert!(phase_count(&matching_log, "fact_scan_checkpoint_bytes") > 0, "the boot read a checkpoint");
+  assert!(
+    phase_count(&matching_log, "fact_scan_bytes") < appended_log,
+    "the boot folded only the appended bytes, not the whole log"
+  );
+  assert!(!matching_log.text().contains("task_recovery_node_failed"), "{}", matching_log.text());
+
+  std::fs::write(&checkpoint, b"{\"version\": 1, \"archived\": 0")?;
+  let (_, torn, torn_log) = boot_on(Arc::clone(&home)).await?;
+  assert_eq!(phase_count(&torn_log, "fact_scan_checkpoint_bytes"), 0, "a torn checkpoint is not read");
+  assert!(phase_count(&torn_log, "fact_scan_bytes") >= appended_log, "a torn checkpoint scans the log whole");
+
+  std::fs::remove_file(&checkpoint)?;
+  let (_, missing, missing_log) = boot_on(Arc::clone(&home)).await?;
+  assert_eq!(phase_count(&missing_log, "fact_scan_checkpoint_bytes"), 0, "no checkpoint is read");
+  assert!(phase_count(&missing_log, "fact_scan_bytes") >= appended_log, "no checkpoint scans the log whole");
+
+  for (label, counters) in [("torn", &torn), ("missing", &missing)] {
+    assert_eq!(
+      (counters.nodes, counters.full, counters.skipped, &counters.keep_reasons),
+      (matching.nodes, matching.full, matching.skipped, &matching.keep_reasons),
+      "the {label}-checkpoint recovery summary equals the matching checkpoint's"
+    );
+  }
+  Ok(())
+}

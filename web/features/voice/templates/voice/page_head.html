@@ -1,4 +1,4 @@
-  <link rel="stylesheet" href="/static/features/voice/voice.css?v={{ static_asset_version|urlencode }}">
+  <style>{% include 'voice/voice.css' %}</style>
   <script>
     const VOICE_BACKENDS = [
       {% for backend in voice_backends() %}

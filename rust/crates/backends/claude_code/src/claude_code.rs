@@ -90,7 +90,7 @@ fn headless_command(run_kind: RunKind, enable_subagents: bool) -> Vec<String> {
 }
 
 /// The `--disallowed-tools` value the headless command carries, for the setup check (`setup_check::setup_step`);
-/// the work run's list with subagents enabled, which disallows the most tools. The errors name the flag and
+/// the work run's list with the subagent switch on, which leaves `Agent` allowed. The errors name the flag and
 /// `BASE_COMMAND` in their text.
 pub fn base_disallowed_tools() -> Result<String, String> {
   let command = headless_command(RunKind::Work, true);

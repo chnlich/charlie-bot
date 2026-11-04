@@ -137,25 +137,18 @@ fn tier_group(tier: Option<&str>) -> u8 {
   }
 }
 
-/// The rank of a T0 item's rule in the table: the rank of the rule's consequence test. An
-/// `out-of-scope:<id>` rule takes the chao-name test's rank. A rule the table carries no rank of sorts after
-/// every ranked rule.
-fn rule_rank(rule: Option<&str>, table: &approval_policy::ApprovalPolicyTable) -> i64 {
-  let Some(rule) = rule else { return i64::MAX };
-  if rule.starts_with("out-of-scope:") {
-    return table.consequence_tests.iter().find(|test| test.id == "chao-name").map_or(i64::MAX, |test| test.rank);
-  }
-  table.consequence_tests.iter().find(|test| test.id == rule).map_or(i64::MAX, |test| test.rank)
-}
-
 /// The queue: every open item once, T0 ranked, then review, then the rest, arrival order within one rank. Each T0
-/// row carries its rule's rank; a rule the table carries no rank of reads as null.
+/// row carries its rule's rank; a rule the table carries no rank of reads as null, and sorts after every ranked rule.
 fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTable, now: Timestamp) -> Vec<Value> {
   let mut keyed: Vec<(u8, i64, charliebot_store::metadata::UtcDateTime, Value)> = rows
     .iter()
     .map(|row| {
       let group = tier_group(row.tier.as_deref());
-      let rank = if group == 0 { rule_rank(row.rule.as_deref(), table) } else { 0 };
+      let rank = if group == 0 {
+        row.rule.as_deref().and_then(|rule| approval_policy::rule_rank(rule, table)).unwrap_or(i64::MAX)
+      } else {
+        0
+      };
       (group, rank, row.since, row_json(row, now))
     })
     .collect();

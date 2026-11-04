@@ -8,8 +8,8 @@
 /// at about the walk's fixed per-session cost, so more threads gained nothing.
 pub const WORKERS: usize = 16;
 
-/// The batch size below which a walk runs on the calling thread: starting a thread costs more than a handful of small
-/// reads, so only a batch a production home produces takes the parallel path.
+/// The batch size below which a walk runs on the calling thread. Starting a thread costs more than a handful of small
+/// reads, so only a production-sized batch takes the parallel path.
 pub const MIN_ITEMS: usize = 64;
 
 /// `job` applied to each item, in the items' order.

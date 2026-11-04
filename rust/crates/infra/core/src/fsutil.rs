@@ -121,8 +121,8 @@ pub fn page_bytes() -> u64 {
 /// The size up to which [`read_or_map_file`] reads a file instead of mapping it.
 ///
 /// A mapping costs an `mmap`, a fault per page touched and a `munmap`, and the two calls take the process's mapping lock
-/// for writing. The boot walk opens thousands of small logs from sixteen threads, so they queue on that lock; one read
-/// of a file this small copies less than the mapping costs.
+/// for writing. The boot walk opens thousands of small logs from sixteen threads, so they queue on that lock. One
+/// read of a file this small copies less than the mapping costs.
 const READ_WHOLE_MAX_BYTES: u64 = 64 * 1024;
 
 /// A file's bytes: read into memory up to [`READ_WHOLE_MAX_BYTES`], mapped read-only above it.

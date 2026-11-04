@@ -1,9 +1,10 @@
 //! The approval digest (`$CHARLIEBOT_HOME/state/digest_entries.jsonl`, plan 4 v2 task W3): one append-only record per
-//! T1 use of a standing policy and per T2 decision the agent tree makes, next to the other host-level state records.
+//! T1 use of a standing policy and per T2 decision the agent tree makes. It sits next to the other host-level
+//! state records.
 //!
-//! `charliebot digest add` writes through [`add`], which reads the approval policy table through the W2 loader and
-//! refuses an unknown policy, an expired policy, and a use over the policy's `cap_per_pt_day` in the current Pacific
-//! day. The approval day view reads a day's entries with [`read_entries`].
+//! `charliebot digest add` writes through [`add`], which reads the approval policy table through the W2 loader.
+//! It refuses an unknown policy, an expired policy, and a use over the policy's `cap_per_pt_day` in the current
+//! Pacific day. The approval day view reads a day's entries with [`read_entries`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,10 +101,10 @@ pub struct DigestCall<'a> {
   pub now: &'a str,
 }
 
-/// Record one digest entry (`add`). The step names its policy: a standing policy id checks the table's
-/// scope gates — the policy must exist, must not have expired, and must have cap room in the Pacific day `now` falls
-/// in — and requires the caller's `scope_check`; `t2` records a decision without either. Every refusal names the
-/// reason and tells the caller to ask for the step as a T0 Waiting on you item instead.
+/// Record one digest entry (`add`). The step names its policy. A standing policy id checks the table's scope
+/// gates. The policy must exist, must not have expired, and must have cap room in the Pacific day `now` falls in.
+/// That id also requires the caller's `scope_check`; `t2` records a decision without either. Every refusal names
+/// the reason and tells the caller to ask for the step as a T0 Waiting on you item instead.
 pub fn add(home: &Path, call: DigestCall<'_>) -> Result<DigestEntry, DigestError> {
   let loaded = approval_policy::load(home).map_err(|error| DigestError(error.to_string()))?;
   let DigestCall { session, policy, step, undo, scope_check, link, now } = call;
@@ -116,8 +117,8 @@ pub fn add(home: &Path, call: DigestCall<'_>) -> Result<DigestEntry, DigestError
       .ok_or_else(|| unknown_policy(policy, &loaded.table))?;
     let today = pacific::day_of_stamp(now).map_err(|error| DigestError(error.to_string()))?;
     let today_text = pacific::date_text(today);
-    // ISO dates compare as text the way they compare as dates, so a use on a day after `expires` is a use of an
-    // expired policy; the expires day itself still admits uses.
+    // ISO dates compare as text the way they compare as dates, so a use after `expires` uses an expired policy;
+    // the expiry day itself still admits uses.
     if today_text.as_str() > standing.expires.as_str() {
       return Err(DigestError(format!(
         "standing policy {policy:?} expired on {}; ask for the step as a T0 Waiting on you item",

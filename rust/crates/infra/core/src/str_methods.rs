@@ -1,5 +1,5 @@
-//! String methods on Unicode text: `isalnum`, `isdigit`, the decimal value of a decimal
-//! digit, `isspace`, `strip()`, `split()` with its single-space collapse, the first-n and from-n slices,
+//! This module provides string methods on Unicode text. They are `isalnum`, `isdigit`, the decimal value of a
+//! decimal digit, `isspace`, `strip()`, `split()` with its single-space collapse, the first-n and from-n slices,
 //! and the code point count.
 
 use std::sync::LazyLock;

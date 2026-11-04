@@ -1,8 +1,8 @@
 //! Path resolution: `expanduser` and the non-strict `realpath`.
 //!
 //! The home resolution, the fence's containment check and the static-file containment check all
-//! compare paths these two functions produce, so they follow POSIX path resolution step for step rather
-//! than `std::fs::canonicalize`, which fails on a missing tail.
+//! compare paths these two functions produce. Those checks therefore follow POSIX path resolution step
+//! for step, not `std::fs::canonicalize`, which fails on a missing tail.
 
 use std::collections::HashMap;
 use std::ffi::OsString;

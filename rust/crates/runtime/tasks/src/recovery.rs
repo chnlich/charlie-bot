@@ -517,13 +517,7 @@ pub async fn reconcile_task_tree(
         fact_scan_checkpoint_bytes += scan.checkpoint_bytes();
         let others = scan.report_recipients().filter(|recipient| !candidate_ids.contains(recipient));
         recipients.extend(others.map(str::to_string));
-        let sealed = features.store.seal_scanned_facts(&candidate.session_id, &scan)?;
-        // The checkpoint is the scan's own facts at the identity it validated: the next boot folds the appended bytes
-        // onto them instead of re-reading the log. It is written even when the seal is refused, because a later read
-        // of this node's facts (a pass's replay of a parent's report) then answers from the checkpoint instead of
-        // loading the log whole. A start without a checkpoint measures its write.
-        features.store.write_fact_checkpoint(&candidate.session_id, &scan)?;
-        Ok::<bool, charliebot_store::StoreError>(sealed)
+        Ok::<bool, charliebot_store::StoreError>(features.store.seal_scanned_facts(&candidate.session_id, &scan)?)
       }
       None => Ok(false),
     });
@@ -552,9 +546,7 @@ pub async fn reconcile_task_tree(
       scan.map_or(Ok(false), |scan| {
         fact_scan_bytes += scan.read_bytes();
         fact_scan_checkpoint_bytes += scan.checkpoint_bytes();
-        let sealed = features.store.seal_scanned_facts(recipient, &scan)?;
-        features.store.write_fact_checkpoint(recipient, &scan)?;
-        Ok(sealed)
+        features.store.seal_scanned_facts(recipient, &scan)
       })
     });
     if let Err(error) = sealed {

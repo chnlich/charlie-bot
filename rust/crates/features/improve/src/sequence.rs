@@ -24,7 +24,7 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
 use charliebot_tasks::completion::RUN_REF_PREFIX;
@@ -110,10 +110,14 @@ pub async fn create_improve_child(
     profile: TaskProfile::Worker,
     task: Some(TaskSpec {
       goal: goal.to_string(),
+      acceptance: Vec::new(),
+      context_refs: Vec::new(),
       repo_path: repo_path.map(str::to_string),
       base_branch: base_branch.map(str::to_string),
       task_type: None,
-      ..TaskSpec::default()
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
     }),
     name: Some(format!("Improve loop {loop_id}")),
     backend: backend.map(str::to_string),
@@ -198,9 +202,23 @@ async fn register_iteration_run(
     return Ok(existing);
   }
   let record = RunRecord {
+    id: run_id.clone(),
+    session_id: spec.child_id.to_string(),
     kind: RunKind::Iteration,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
     backend: Some(pin.backend.to_string()),
     model: pin.model.map(str::to_string),
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
     repo_path: Some(pin.repo_path.to_string()),
     base_branch: Some(pin.base_branch.to_string()),
     branch_name: Some(pin.work_branch.to_string()),
@@ -210,44 +228,15 @@ async fn register_iteration_run(
       owner_ref: loop_owner_ref(cfg, spec.session_id, spec.loop_id),
       position: iteration,
     }),
-    ..empty_run_record(run_id.clone(), spec.child_id)
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
   };
   {
     let guard = tree.control_lock().await;
     tree.register_run_locked(&guard, spec.child_id, record, None).await?;
   }
   tree.get_run(spec.child_id, &run_id).await?.context("the registered iteration run reads back")
-}
-
-/// A run record with every field empty, for the fields a caller sets.
-fn empty_run_record(id: String, session_id: &str) -> RunRecord {
-  RunRecord {
-    id,
-    session_id: session_id.to_string(),
-    kind: RunKind::default(),
-    input_event_ids: Vec::new(),
-    task_spec_hash: None,
-    task_spec_ref: None,
-    prompt_snapshot_ref: None,
-    retry_of_run_id: None,
-    review_of_run_id: None,
-    backend: None,
-    model: None,
-    native_session_id: None,
-    pid: None,
-    pid_start: None,
-    started_at: None,
-    ended_at: None,
-    exit_code: None,
-    repo_path: None,
-    base_branch: None,
-    branch_name: None,
-    worktree_path: None,
-    sequence_ref: None,
-    raw_log_ref: None,
-    events_ref: None,
-    result_ref: None,
-  }
 }
 
 /// The failed iteration's quota blocker and summary, from its own events log.

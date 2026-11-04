@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use charliebot_claude_code::ClaudeHost;
 use charliebot_claude_code::claude_accounts::{self, ClaudeAccountState};
+use charliebot_claude_code::test_support::fake_program_bin;
 use charliebot_claude_code::usage_logs::ClaudeLogs;
 use charliebot_claude_code::usage_quota::{ClaudeQuotaAccount, QuotaAccounts, QuotaHttp};
 use charliebot_compat::http_client::{self, Settings};
@@ -357,16 +358,4 @@ fn quota_accounts_returns_the_config_derivation_error() {
 
   drop(restore);
   assert!(error.to_string().contains("reading the working directory"));
-}
-
-/// The fake-program helper that cargo builds beside this test binary. `CARGO_BIN_EXE_*` names only this package's
-/// binaries, and the helper belongs to `charliebot-agents`.
-fn fake_program_bin() -> std::path::PathBuf {
-  let exe = std::env::current_exe().expect("the test binary path");
-  exe
-    .ancestors()
-    .skip(1)
-    .map(|directory| directory.join("fake_program"))
-    .find(|candidate| candidate.is_file())
-    .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
 }

@@ -533,6 +533,7 @@ dependencies = [
  "anyhow",
  "backon",
  "charliebot-agents",
+ "charliebot-claude-code",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

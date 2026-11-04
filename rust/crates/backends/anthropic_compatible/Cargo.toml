@@ -16,5 +16,6 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 
 [dev-dependencies]
+charliebot-claude-code = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tokio.workspace = true

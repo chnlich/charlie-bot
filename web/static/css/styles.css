@@ -293,6 +293,10 @@ body.resizing { cursor: col-resize; user-select: none; }
    nth-last-of-type keeps non-button trailing spans (the archived tree's
    active tag) out of the count. */
 .session-row { position: relative; }
+/* The rename field (sidebar/modals.js) is fixed over the row being edited. On a
+   phone that row sits in the fixed drawer (z-index 100), so the field takes the
+   row menu's z-index to paint above the drawer instead of behind it. */
+#rename-input { z-index: 150; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Each out-of-flow button stretches over the row's full height (top to
    bottom of the row box), and its own flex keeps the icon slot vertically

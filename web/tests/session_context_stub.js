@@ -154,6 +154,7 @@ function loadCronPackage(context) {
 // null-guard the miss.
 function makeSidebarRow(sessionId, name) {
   const nameEl = createElement({textContent: name});
+  nameEl.getBoundingClientRect = () => ({top: 0, left: 0, right: 0, bottom: 20, width: 200, height: 20});
   return createElement({
     id: 'session-' + sessionId,
     querySelector: (sel) => (sel === '.session-name' ? nameEl : null),

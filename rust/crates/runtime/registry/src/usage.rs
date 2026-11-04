@@ -47,6 +47,45 @@ pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   }
 }
 
+/// Whether one stored panel window is expired at `now` (`usage_sources.panel_window_expired`): its reset passed while
+/// the reading's sample time predates it, or the sample is older than the window is long.
+pub fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTime) -> bool {
+  let resets_at = window.get(PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok());
+  if resets_at.is_some_and(|reset| reset <= now && sampled < reset) {
+    return true;
+  }
+  window.get(PANEL_WINDOW_MINUTES).and_then(Value::as_i64).is_some_and(|minutes| {
+    let elapsed = now.into_inner() - sampled.into_inner();
+    minutes < 0 || elapsed > std::time::Duration::from_secs(minutes as u64 * 60)
+  })
+}
+
+/// The entry as one emit shows it at `now` (`usage_sources.mark_expired_windows`): a copy whose expired windows carry
+/// `expired: true`. An entry without a sample time, or without a window list, comes back as it is.
+pub fn mark_expired_windows(
+  entry: &Map<String, Value>,
+  sampled: Option<UtcDateTime>,
+  now: UtcDateTime,
+) -> Map<String, Value> {
+  let (Some(windows), Some(sampled)) = (entry.get(PANEL_WINDOWS).and_then(Value::as_array), sampled) else {
+    return entry.clone();
+  };
+  let annotated = windows
+    .iter()
+    .map(|window| match window.as_object() {
+      Some(object) if panel_window_expired(window, sampled, now) => {
+        let mut marked = object.clone();
+        marked.insert(PANEL_EXPIRED.to_string(), Value::Bool(true));
+        Value::Object(marked)
+      }
+      _ => window.clone(),
+    })
+    .collect();
+  let mut marked = entry.clone();
+  marked.insert(PANEL_WINDOWS.to_string(), Value::Array(annotated));
+  marked
+}
+
 /// One place usage is logged. `name` is the ledger's source value and the usage page's card title. A config backend
 /// id must start with one of `id_prefixes`. `run_logs_only` means CharlieBot's own run logs are the only home, and
 /// such a source has no implementation.

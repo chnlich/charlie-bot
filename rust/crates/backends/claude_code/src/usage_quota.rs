@@ -23,8 +23,8 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL,
-  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization,
+  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -795,32 +795,6 @@ fn warn_limit_shape(quota: &QuotaState, account: &str, slot: LimitSlot<'_>, reas
   }
 }
 
-/// `usage_sources.mark_expired_windows`: a copy of the entry whose expired windows carry `expired: true`. An entry with
-/// no sample time, or no window list, comes back as it is.
-fn mark_expired_windows(
-  entry: &Map<String, Value>,
-  sampled: Option<UtcDateTime>,
-  now: UtcDateTime,
-) -> Map<String, Value> {
-  let (Some(windows), Some(sampled)) = (entry.get(PANEL_WINDOWS).and_then(Value::as_array), sampled) else {
-    return entry.clone();
-  };
-  let annotated = windows
-    .iter()
-    .map(|window| match window.as_object() {
-      Some(object) if claude_accounts::panel_window_expired(window, sampled, now) => {
-        let mut marked = object.clone();
-        marked.insert(PANEL_EXPIRED.to_string(), Value::Bool(true));
-        Value::Object(marked)
-      }
-      _ => window.clone(),
-    })
-    .collect();
-  let mut marked = entry.clone();
-  marked.insert(PANEL_WINDOWS.to_string(), Value::Array(annotated));
-  marked
-}
-
 /// The next backoff: the ladder's first delay above `previous`, so 60 seconds first, doubling, capped at 30 minutes.
 fn next_backoff_seconds(previous: f64) -> f64 {
   if previous >= BACKOFF_CAP_SECONDS {
@@ -843,6 +817,8 @@ fn now_seconds() -> f64 {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_registry::usage::PANEL_EXPIRED;
+
   use super::*;
   use crate::test_support;
 

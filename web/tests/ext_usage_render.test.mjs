@@ -175,7 +175,7 @@ function loadExtUsageScript(options = {}) {
   // strip's refresh timers register through it.
   vm.runInContext(pageTimersSource, context, { filename: pageTimersPath });
   // Bridge the lexical module binding (a top-level binding is not a property
-  // of the vm context object) so tests can read the one in-memory collapsed
+  // of the vm context object). This lets tests read the one in-memory collapsed
   // boolean rather than inferring it from DOM state.
   vm.runInContext(
     scriptSource + '\nglobalThis._peekExtUsageCollapsed = () => _extUsageCollapsed;',
@@ -430,8 +430,8 @@ test('renderExtUsage expires a codex window only on the server annotation', () =
 });
 
 // The expiry judgement for claude is the server's: one frozen reading renders
-// live or expired exactly when the emitted window carries `expired: true` —
-// fetched_at age alone (or the browser's own clock math) never expires it.
+// live or expired exactly when the emitted window carries `expired: true`.
+// Neither fetched_at age alone nor the browser's own clock math expires it.
 test('renderExtUsage expires a claude window only on the server annotation', () => {
   const { context, strip } = loadExtUsageScript();
 
@@ -556,8 +556,8 @@ test('renderExtUsage renders a provider pill on every account row', () => {
     },
   });
 
-  // The old strip-level group-label spans and \u2502 separators are still gone:
-  // apart from the collapse summary row (data-field="summary"), which leads
+  // The old strip-level group-label spans and \u2502 separators are still gone.
+  // Apart from the collapse summary row (data-field="summary"), which leads
   // the strip, every strip child is an account row carrying a data-key.
   assert.ok(strip.children.length > 0, 'strip rendered rows');
   assert.equal(strip.children[0].getAttribute('data-field'), 'summary',
@@ -766,7 +766,7 @@ test('scoped and plan-wide weekly bars share the threshold colour function', () 
 });
 
 // The existing selector-coverage test above only proves *some* emitted field
-// matches the 7d- rule; it does not use a scoped fixture, so it cannot tell
+// matches the 7d- rule. It does not use a scoped fixture, so it cannot tell
 // whether the scoped bucket's own field is one of the fields that rule sweeps
 // up. Assert that directly, so the narrow-screen coupling covers the scoped
 // bar too, not just the plan-wide one it happens to share a row with.
@@ -801,7 +801,7 @@ test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () =>
 // Quota-strip collapse. The storage key literal is deliberately duplicated
 // here — the key name is the persistence contract and a silent rename must
 // fail these tests. In the fake DOM there is no CSS engine, so "visibility"
-// is asserted as the class contract the two collapse rules implement; the
+// is asserted as the class contract the two collapse rules implement. The
 // rules' presence in usage.css is pinned separately.
 // ---------------------------------------------------------------------------
 const COLLAPSE_STORAGE_KEY = 'ext_usage_strip_collapsed_v1';
@@ -839,8 +839,8 @@ function _assertCollapseConsistent(harness, expect, label) {
     assert.equal(child.getAttribute('data-key') !== null, !isSummary,
         label + ': child ' + i + ' carries data-key iff it is a detail row');
     // No CSS engine here, so restate the two pinned rules as a mapping from
-    // (strip classes, row kind) to visibility and check it agrees with the
-    // visibility the in-memory boolean demands.
+    // (strip classes, row kind) to visibility. Check that the mapping agrees
+    // with the visibility the in-memory boolean demands.
     const stripHidden = strip.classList.contains('hidden');
     const visiblePerRules = !stripHidden && (strip.classList.contains('collapsed') ? isSummary : !isSummary);
     const visiblePerBoolean = !stripHidden && (expect.collapsed ? isSummary : !isSummary);
@@ -1069,7 +1069,7 @@ test('repeated renders are structurally identical and click handlers never accum
 
   // Time-derived labels (countdowns, clock windows, as-of ages) legitimately
   // drift between two renders — the 60s repaint exists for them — so the
-  // structural signature normalizes them out; everything else must be stable.
+  // structural signature normalizes them out. Everything else must be stable.
   const stableText = (text) => String(text)
       .replace(/^resets in .+$/, '<countdown>')
       .replace(/^as of .+ ago$/, '<age>')

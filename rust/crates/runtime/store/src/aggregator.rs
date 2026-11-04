@@ -2,18 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use charliebot_core::event_types::{self, EventFields, is_truthy};
-use charliebot_core::str_methods::take_chars;
 use charliebot_core::text_repr::value_str;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::hooks::EventRenderer;
 use crate::message_events;
+use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
 
-/// Maximum string length sent for one tool preview field.
-pub const TOOL_PREVIEW_CHARS: usize = 500;
+pub use crate::tool_rows::TOOL_PREVIEW_CHARS;
 
-const TOOL_INPUT_DEAD_FIELD_CHARS: usize = 60;
 const BUILTIN_EVENT_TYPES: &[&str] = &[
   event_types::MASTER_DONE,
   event_types::ASSISTANT_ERROR,
@@ -49,6 +47,9 @@ pub fn builtin_event_types() -> &'static [&'static str] {
 }
 
 /// Convert raw chat events into committed message and in-progress stream frames.
+///
+/// A `message_update` frame carries a committed message again, with the same id. A subagent event that arrives
+/// after the commit changes that message's rows, so its consumers replace the message rather than append it.
 pub struct MessageAggregator {
   event_index_offset: usize,
   processed: usize,
@@ -57,7 +58,7 @@ pub struct MessageAggregator {
   last_assistant_timestamp: Option<Value>,
   last_event_index: usize,
   last_event_id: Option<String>,
-  tools_buf: Vec<Value>,
+  tool_rows: ToolRows,
   emit_stream_deltas: bool,
   event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
 }
@@ -82,7 +83,7 @@ impl MessageAggregator {
       last_assistant_timestamp: None,
       last_event_index: 0,
       last_event_id: None,
-      tools_buf: Vec::new(),
+      tool_rows: ToolRows::default(),
       emit_stream_deltas,
       event_renderers,
     }
@@ -115,7 +116,7 @@ impl MessageAggregator {
       last_assistant_timestamp: self.last_assistant_timestamp.clone(),
       last_event_index: self.last_event_index,
       last_event_id: self.last_event_id.clone(),
-      tools_buf: self.tools_buf.clone(),
+      tool_rows: self.tool_rows.clone(),
       emit_stream_deltas: self.emit_stream_deltas,
       event_renderers: self.event_renderers.clone(),
     }
@@ -128,7 +129,7 @@ impl MessageAggregator {
 
   /// Return a copy of the current draft, or no value when the draft is empty.
   pub fn pending_draft_message(&self) -> Option<Value> {
-    if self.assistant_buf.is_empty() && self.tools_buf.is_empty() && self.thinking_buf.is_empty() {
+    if self.assistant_buf.is_empty() && self.tool_rows.is_draft_empty() && self.thinking_buf.is_empty() {
       return None;
     }
     let mut message = json!({
@@ -138,8 +139,8 @@ impl MessageAggregator {
       "id": self.last_event_id.clone().unwrap_or_else(|| format!("legacy:{}", self.last_event_index)),
       "timestamp": self.last_assistant_timestamp.clone().unwrap_or(Value::Null),
     });
-    if !self.tools_buf.is_empty() {
-      message["tools"] = Value::Array(self.tools_buf.clone());
+    if let Some(tools) = self.tool_rows.draft_json() {
+      message["tools"] = tools;
     }
     if !self.thinking_buf.is_empty() {
       message["thinking"] = json!(self.thinking_buf.as_str());
@@ -175,15 +176,26 @@ impl MessageAggregator {
   }
 
   fn feed_user<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
+    if let Some(parent) = parent_tool_use_id(event)? {
+      return self.feed_subagent_user(event, parent);
+    }
     if event.field("message").is_some() && event.field("content").is_none() {
       let content = event.field("message").and_then(|message| message.field("content"));
+      let mut deltas = Vec::new();
       for block in message_blocks(content, "user message content", false)? {
-        if block.field("type").and_then(EventFields::as_str_field) == Some("tool_result") && !self.tools_buf.is_empty()
-        {
-          self.attach_tool_output(extract_tool_result_text(block)?, block.field("is_error").is_some_and(is_truthy));
+        if block.field("type").and_then(EventFields::as_str_field) != Some("tool_result") {
+          continue;
         }
+        let tool_use_id = block.field(event_types::TOOL_USE_ID).and_then(EventFields::as_str_field);
+        if !self.result_has_target(tool_use_id) {
+          continue;
+        }
+        let output = extract_tool_result_text(block)?;
+        let is_error = block.field("is_error").is_some_and(is_truthy);
+        deltas.extend(self.attach_result(tool_use_id, output, is_error));
       }
-      return Ok(self.stream_delta());
+      deltas.extend(self.stream_delta());
+      return Ok(deltas);
     }
 
     let mut deltas = self.flush_to_message_delta();
@@ -205,6 +217,9 @@ impl MessageAggregator {
   }
 
   fn feed_assistant<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
+    if let Some(parent) = parent_tool_use_id(event)? {
+      return self.feed_subagent_assistant(event, parent);
+    }
     self.last_event_index = index;
     if self.assistant_buf.is_empty() {
       self.last_assistant_timestamp = event.field("timestamp").map(EventFields::to_owned_value);
@@ -257,10 +272,7 @@ impl MessageAggregator {
       if block.field("type").and_then(EventFields::as_str_field) == Some("tool_use")
         && block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode")
       {
-        self.buffer_tool(
-          block.field("name").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-          block.field("input").map(EventFields::to_owned_value).unwrap_or_else(|| json!({})),
-        );
+        self.tool_rows.push(tool_call_row(*block));
       }
     }
     let thinking = extract_message_field(&blocks, "thinking")?;
@@ -273,7 +285,7 @@ impl MessageAggregator {
       self.last_assistant_timestamp = event.field("timestamp").map(EventFields::to_owned_value);
     }
     self.assistant_buf.push_str(&text);
-    if !self.assistant_buf.is_empty() || !self.tools_buf.is_empty() || !self.thinking_buf.is_empty() {
+    if !self.assistant_buf.is_empty() || !self.tool_rows.is_draft_empty() || !self.thinking_buf.is_empty() {
       self.last_event_id = Some(event_id.to_string());
     }
     deltas.extend(self.stream_delta());
@@ -281,10 +293,11 @@ impl MessageAggregator {
   }
 
   fn feed_tool_use<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
-    self.buffer_tool(
+    self.tool_rows.push(ToolRow::new(
+      event.field(event_types::TOOL_USE_ID).and_then(EventFields::as_str_field).map(str::to_string),
       event.field("name").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event.field("input").map(EventFields::to_owned_value).unwrap_or_else(|| json!({})),
-    );
+    ));
     self.last_event_index = index;
     self.last_event_id = Some(event_id.to_string());
     if self.last_assistant_timestamp.is_none() {
@@ -294,15 +307,16 @@ impl MessageAggregator {
   }
 
   fn feed_tool_result<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
-    if self.tools_buf.is_empty() {
+    let tool_use_id = event.field(event_types::TOOL_USE_ID).and_then(EventFields::as_str_field);
+    if !self.result_has_target(tool_use_id) {
       return Ok(Vec::new());
     }
-    self.attach_tool_output(
-      event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      event.field("is_error").is_some_and(is_truthy),
-    );
+    let output = event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!(""));
+    let is_error = event.field("is_error").is_some_and(is_truthy);
+    let mut deltas = self.attach_result(tool_use_id, output, is_error);
     self.last_event_index = index;
-    Ok(self.stream_delta())
+    deltas.extend(self.stream_delta());
+    Ok(deltas)
   }
 
   fn feed_thinking<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
@@ -312,7 +326,7 @@ impl MessageAggregator {
     if self.last_assistant_timestamp.is_none() {
       self.last_assistant_timestamp = event.field("timestamp").map(EventFields::to_owned_value);
     }
-    if !self.assistant_buf.is_empty() || !self.tools_buf.is_empty() || !self.thinking_buf.is_empty() {
+    if !self.assistant_buf.is_empty() || !self.tool_rows.is_draft_empty() || !self.thinking_buf.is_empty() {
       self.last_event_id = Some(event_id.to_string());
     }
     Ok(self.stream_delta())
@@ -327,6 +341,11 @@ impl MessageAggregator {
   ) -> StoreResult<Vec<Value>> {
     let Some(event_type) = event_type else { return Ok(Vec::new()) };
     if event_type == event_types::SYSTEM {
+      if let Some(subtype) = event.field("subtype").and_then(EventFields::as_str_field)
+        && matches!(subtype, event_types::TASK_STARTED | event_types::TASK_PROGRESS | event_types::TASK_NOTIFICATION)
+      {
+        return self.feed_subagent_event(event, subtype);
+      }
       let Some(mut message) = render_system(event) else { return Ok(Vec::new()) };
       let mut deltas = self.flush_to_message_delta();
       add_message_metadata(&mut message, event, index, event_id)?;
@@ -336,7 +355,13 @@ impl MessageAggregator {
     if !builtin_event_types().contains(&event_type) && !self.event_renderers.contains_key(event_type) {
       return Ok(Vec::new());
     }
-    let mut deltas = self.flush_to_message_delta();
+    // A run that ends leaves no subagent running: its cards show stopped, committed drafts included.
+    let ends_run = matches!(event_type, event_types::MASTER_DONE | event_types::RUN_END | event_types::RUN_ERROR);
+    let mut deltas = if ends_run { self.tool_rows.end_run() } else { Vec::new() };
+    deltas.extend(self.flush_to_message_delta());
+    if ends_run {
+      self.tool_rows.forget_committed();
+    }
     let rendered = if builtin_event_types().contains(&event_type) {
       render_builtin(event_type, event)?
     } else {
@@ -350,41 +375,138 @@ impl MessageAggregator {
 
   fn flush_to_message_delta(&mut self) -> Vec<Value> {
     let Some(message) = self.pending_draft_message() else { return Vec::new() };
+    self.tool_rows.commit_draft(&message);
     self.assistant_buf.clear();
     self.thinking_buf.clear();
     self.last_assistant_timestamp = None;
     self.last_event_id = None;
-    self.tools_buf.clear();
     vec![json!({"type": "message", "message": message})]
   }
 
-  fn buffer_tool(&mut self, name: Value, input: Value) {
-    self.tools_buf.push(tool_preview(json!({
-      "name": name,
-      "input": input,
-      "output": "",
-      "is_error": false,
-    })));
+  /// Whether a tool result has a row to attach to: the row that its tool_use id names, when that row has a
+  /// subagent, or else the newest plain row of the open draft, as results have always attached.
+  fn result_has_target(&self, tool_use_id: Option<&str>) -> bool {
+    tool_use_id.is_some_and(|id| self.tool_rows.holds_subagent(id)) || self.tool_rows.has_plain_row()
   }
 
-  fn attach_tool_output(&mut self, output: Value, is_error: bool) {
-    let last = self.tools_buf.last().expect("tool output has a buffered tool");
-    let mut row = last.as_object().expect("tool rows are objects").clone();
-    row.insert("output".to_string(), output);
-    row.insert("is_error".to_string(), json!(is_error));
-    *self.tools_buf.last_mut().expect("tool output has a buffered tool") = tool_preview(Value::Object(row));
+  /// Attach a result that `result_has_target` accepted. Returns the update frames of a committed draft it changed.
+  fn attach_result(&mut self, tool_use_id: Option<&str>, output: Value, is_error: bool) -> Vec<Value> {
+    match tool_use_id {
+      Some(id) if self.tool_rows.holds_subagent(id) => {
+        self.tool_rows.update_row(id, |row| row.attach_output(output, is_error))
+      }
+      _ => {
+        self.tool_rows.attach_plain(output, is_error);
+        Vec::new()
+      }
+    }
+  }
+
+  /// A subagent's own assistant event. Its tool calls become rows under the subagent. Its text and thinking stay
+  /// out of the draft, which belongs to the turn.
+  fn feed_subagent_assistant<E: EventFields>(&mut self, event: &E, parent: &str) -> StoreResult<Vec<Value>> {
+    let content = event.field("message").and_then(|message| message.field("content"));
+    let rows: Vec<ToolRow> = message_blocks(content, "assistant message content", true)?
+      .into_iter()
+      .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
+      .map(tool_call_row)
+      .collect();
+    let mut deltas = self.tool_rows.update_subagent(parent, |subagent| subagent.add_tools(rows));
+    deltas.extend(self.stream_delta());
+    Ok(deltas)
+  }
+
+  /// A subagent's own user event. It carries the subagent's prompt, when `task_started` gave none, and the
+  /// results of the subagent's tools, which attach to their rows by id.
+  fn feed_subagent_user<E: EventFields>(&mut self, event: &E, parent: &str) -> StoreResult<Vec<Value>> {
+    let content = event.field("message").and_then(|message| message.field("content"));
+    let blocks = message_blocks(content, "user message content", false)?;
+    let prompt = match content.and_then(EventFields::as_str_field) {
+      Some(text) => text.to_string(),
+      None => extract_message_field(&blocks, "text")?,
+    };
+    let mut deltas = Vec::new();
+    if !prompt.is_empty() {
+      deltas.extend(self.tool_rows.update_row(parent, |row| {
+        if let Some(subagent) = row.subagent_mut() {
+          subagent.set_prompt_if_missing(&prompt);
+        }
+      }));
+    }
+    for block in blocks {
+      if block.field("type").and_then(EventFields::as_str_field) != Some("tool_result") {
+        continue;
+      }
+      let tool_use_id = required_str(block, event_types::TOOL_USE_ID)?;
+      let output = extract_tool_result_text(block)?;
+      let is_error = block.field("is_error").is_some_and(is_truthy);
+      deltas.extend(self.tool_rows.update_row(tool_use_id, |row| row.attach_output(output, is_error)));
+    }
+    deltas.extend(self.stream_delta());
+    Ok(deltas)
+  }
+
+  /// A `task_started`, `task_progress` or `task_notification`: the row that the subagent hangs under takes the
+  /// subagent's fields. The event names that row by its tool_use id.
+  fn feed_subagent_event<E: EventFields>(&mut self, event: &E, subtype: &str) -> StoreResult<Vec<Value>> {
+    let tool_use_id = required_str(event, "tool_use_id")?;
+    let usage = subagent_usage(event);
+    let mut deltas = match subtype {
+      event_types::TASK_STARTED => {
+        let kind = string_default(event, "subagent_type", "");
+        let description = string_default(event, "description", "");
+        let prompt = string_default(event, "prompt", "");
+        self.tool_rows.update_subagent(tool_use_id, |subagent| subagent.start(&kind, &description, &prompt))
+      }
+      event_types::TASK_PROGRESS => {
+        let description = event.field("description").and_then(EventFields::as_str_field);
+        self.tool_rows.update_subagent(tool_use_id, |subagent| subagent.progress(description, usage))
+      }
+      event_types::TASK_NOTIFICATION => {
+        let status = SubagentStatus::from_notification(&string_default(event, "status", ""))?;
+        self.tool_rows.update_subagent(tool_use_id, |subagent| subagent.finish(status, usage))
+      }
+      other => return Err(StoreError::new(format!("{other} is not a subagent event"))),
+    };
+    deltas.extend(self.stream_delta());
+    Ok(deltas)
   }
 
   fn stream_delta(&self) -> Vec<Value> {
     if !self.emit_stream_deltas {
       return Vec::new();
     }
-    let Some(mut message) = self.pending_draft_message() else { return Vec::new() };
-    if let Some(tools) = message.get("tools").and_then(Value::as_array).cloned() {
-      message["tools"] = Value::Array(tools.into_iter().map(tool_preview).collect());
-    }
+    let Some(message) = self.pending_draft_message() else { return Vec::new() };
     vec![json!({"type": "stream", "message": message})]
   }
+}
+
+/// The tool row of one tool_use block of an assistant message.
+fn tool_call_row<E: EventFields>(block: &E) -> ToolRow {
+  ToolRow::new(
+    block.field("id").and_then(EventFields::as_str_field).map(str::to_string),
+    block.field("name").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+    block.field("input").map(EventFields::to_owned_value).unwrap_or_else(|| json!({})),
+  )
+}
+
+/// The tool_use id that a subagent event names as its parent. An event without one belongs to the turn.
+fn parent_tool_use_id<E: EventFields>(event: &E) -> StoreResult<Option<&str>> {
+  match event.field("parent_tool_use_id").filter(|value| is_truthy(*value)) {
+    None => Ok(None),
+    Some(value) => {
+      value.as_str_field().map(Some).ok_or_else(|| StoreError::new("parent_tool_use_id must be a string"))
+    }
+  }
+}
+
+fn required_str<'a, E: EventFields>(event: &'a E, key: &str) -> StoreResult<&'a str> {
+  event.field(key).and_then(EventFields::as_str_field).ok_or_else(|| StoreError::new(format!("{key} must be a string")))
+}
+
+fn subagent_usage<E: EventFields>(event: &E) -> Usage {
+  let count = |key: &str| event.field("usage").and_then(|usage| usage.field(key)).and_then(EventFields::as_u64_field);
+  Usage { tool_uses: count("tool_uses"), duration_ms: count("duration_ms"), total_tokens: count("total_tokens") }
 }
 
 fn render_system<E: EventFields>(event: &E) -> Option<Value> {
@@ -750,46 +872,6 @@ fn extract_message_field<E: EventFields>(blocks: &[&E], field: &str) -> StoreRes
   Ok(text)
 }
 
-fn tool_preview(tool: Value) -> Value {
-  let mut tool = tool.as_object().expect("tool rows are objects").clone();
-  let output_trims =
-    tool.get("output").and_then(Value::as_str).is_some_and(|value| value.chars().count() > TOOL_PREVIEW_CHARS);
-  let read_fields = tool
-    .get("input")
-    .and_then(Value::as_object)
-    .map(|input| input_read_fields(tool.get("name"), input))
-    .unwrap_or_default();
-  let input_trims = tool.get("input").and_then(Value::as_object).is_some_and(|input| {
-    input.iter().any(|(key, value)| {
-      value.as_str().is_some_and(|text| {
-        text.chars().count() > if read_fields.contains(key) { TOOL_PREVIEW_CHARS } else { TOOL_INPUT_DEAD_FIELD_CHARS }
-      })
-    })
-  });
-  if !output_trims && !input_trims {
-    return Value::Object(tool);
-  }
-  if output_trims {
-    let output = tool["output"].as_str().expect("trimmed output is a string");
-    tool.insert("output".to_string(), json!(take_chars(output, TOOL_PREVIEW_CHARS)));
-    tool.insert("output_truncated".to_string(), json!(true));
-  }
-  if input_trims {
-    let mut input = tool["input"].as_object().expect("trimmed input is an object").clone();
-    for (key, value) in &mut input {
-      if let Some(text) = value.as_str() {
-        let limit = if read_fields.contains(key) { TOOL_PREVIEW_CHARS } else { TOOL_INPUT_DEAD_FIELD_CHARS };
-        if text.chars().count() > limit {
-          *value = json!(take_chars(text, limit));
-        }
-      }
-    }
-    tool.insert("input".to_string(), Value::Object(input));
-    tool.insert("input_truncated".to_string(), json!(true));
-  }
-  Value::Object(tool)
-}
-
 /// Count the tool rows opened by these run events.
 pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
   events
@@ -917,16 +999,6 @@ fn run_assistant_tool_uses<E: EventFields>(event: &E) -> Vec<&E> {
     .flatten()
     .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
     .collect()
-}
-
-fn input_read_fields(name: Option<&Value>, input: &Map<String, Value>) -> Vec<String> {
-  match name.and_then(Value::as_str) {
-    Some("Bash" | "bash") => vec!["command".to_string()],
-    Some("Read" | "Edit" | "Write") => vec!["file_path".to_string()],
-    Some("Glob") => vec!["pattern".to_string()],
-    Some("Grep") => vec!["pattern".to_string(), "path".to_string()],
-    _ => input.keys().next().cloned().into_iter().collect(),
-  }
 }
 
 fn add_message_metadata<E: EventFields>(
@@ -1167,6 +1239,164 @@ mod tests {
       }
       assert_parity_frames(actual, case["frames"].as_array().unwrap(), name);
     }
+  }
+
+  const PARALLEL_STREAM: &str = include_str!("../tests/fixtures/subagents/s_parallel_guard.stream.ndjson");
+  const NESTED_STREAM: &str = include_str!("../tests/fixtures/subagents/s_nest.stream.ndjson");
+
+  /// The chat events of a recorded probe stream. Each line wraps one event in its `e` field.
+  fn probe_events(stream: &str) -> Vec<Value> {
+    stream.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()["e"].clone()).collect()
+  }
+
+  /// Every frame of the events, through a fresh aggregator and its final flush.
+  fn frames_of(events: &[Value]) -> Vec<Value> {
+    let mut aggregator = MessageAggregator::new(0, false);
+    let mut frames = Vec::new();
+    for event in events {
+      frames.extend(aggregator.feed(event).unwrap());
+    }
+    frames.extend(aggregator.flush_pending());
+    frames
+  }
+
+  /// The tool rows of the last message frame that carries rows.
+  fn last_tool_rows(frames: &[Value]) -> Vec<Value> {
+    frames.iter().rev().find_map(|frame| frame["message"]["tools"].as_array().cloned()).expect("a message has rows")
+  }
+
+  #[test]
+  fn parallel_subagents_hang_under_their_own_agent_rows() {
+    let frames = frames_of(&probe_events(PARALLEL_STREAM));
+    let rows = last_tool_rows(&frames);
+    let ids: Vec<&str> = rows.iter().map(|row| row["id"].as_str().unwrap()).collect();
+    assert_eq!(
+      ids,
+      [
+        "toolu_014YYWsBgdnNRsNLC1kwfYEV",
+        "toolu_01M7U7UjEQbEV71KVLgZdpbZ",
+        "toolu_01XSr4kdnYmP7P9FX4e9XsQx",
+        "toolu_017ugFTQWLEdpGHSEUxgLekf",
+      ],
+      "the parent's rows are its four Agent calls, and the subagent events add none"
+    );
+    for row in &rows {
+      assert_eq!(row["name"], "Agent");
+      assert_eq!(row["subagent"]["type"], "general-purpose");
+      assert_eq!(row["subagent"]["status"], "completed");
+      assert_eq!(row["subagent"]["tool_uses"], 1);
+      assert_eq!(row["subagent"]["tools"].as_array().unwrap().len(), 1, "a subagent keeps its own rows");
+      assert!(row["output"].as_str().unwrap().contains("[Subagent hand-back]"), "the Agent row shows its report");
+    }
+    // task_progress rewrites the description that task_started gave.
+    assert_eq!(rows[0]["subagent"]["description"], "Running Sleep then echo A");
+    assert_eq!(rows[0]["subagent"]["tools"][0]["output"], "A");
+    assert_eq!(rows[1]["subagent"]["tools"][0]["output"], "B");
+    assert_eq!(rows[2]["subagent"]["tools"][0]["output"], "C");
+    let guarded = &rows[3]["subagent"]["tools"][0];
+    assert_eq!(guarded["is_error"], true);
+    assert!(guarded["output"].as_str().unwrap().contains("hook error"), "the wait guard's refusal lands in D's row");
+    assert_eq!(frames.last().unwrap()["message"]["role"], "assistant");
+  }
+
+  #[test]
+  fn nested_subagents_hang_under_the_agent_row_inside_their_parent() {
+    let frames = frames_of(&probe_events(NESTED_STREAM));
+    let rows = last_tool_rows(&frames);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], "toolu_01YQMbeeCE4eqbdDJ1yozKY5");
+    assert_eq!(rows[0]["subagent"]["description"], "Nested reply test");
+    let inner_rows = rows[0]["subagent"]["tools"].as_array().unwrap();
+    assert_eq!(inner_rows.len(), 1, "the inner Agent call is the outer subagent's only row");
+    let inner = &inner_rows[0];
+    assert_eq!(inner["name"], "Agent");
+    assert_eq!(inner["id"], "toolu_01MZ54DuCghEG3jG5jJrfcta");
+    assert_eq!(inner["subagent"]["description"], "Nested reply test");
+    assert_eq!(inner["subagent"]["status"], "completed");
+    assert_eq!(inner["subagent"]["tool_uses"], 0);
+    assert!(inner["output"].as_str().unwrap().contains("[Subagent hand-back]"));
+    assert!(!rows[0]["output"].as_str().unwrap().is_empty(), "the outer Agent row shows its report");
+    assert_eq!(frames.last().unwrap()["message"]["content"], "NESTED-OK");
+  }
+
+  #[test]
+  fn a_run_that_ends_before_task_notification_marks_its_subagents_stopped() {
+    let mut events = probe_events(PARALLEL_STREAM);
+    let first_notification = events.iter().position(|event| event["subtype"] == "task_notification").unwrap();
+    events.truncate(first_notification);
+    events.push(json!({"type": "master_done", "id": "md", "timestamp": "2026-11-03T00:00:00Z"}));
+    let frames = frames_of(&events);
+    let rows = last_tool_rows(&frames);
+    assert_eq!(rows.len(), 4);
+    for row in &rows {
+      assert_eq!(row["subagent"]["status"], "stopped");
+    }
+  }
+
+  #[test]
+  fn a_late_subagent_event_updates_the_committed_draft_by_its_message_id() {
+    let events = vec![
+      json!({"type": "assistant", "id": "a1", "timestamp": "2026-11-03T02:00:00Z", "message": {"content": [
+        {"type": "text", "text": "Starting"},
+        {"type": "tool_use", "id": "toolu_late", "name": "Agent",
+          "input": {"description": "Check", "prompt": "look", "subagent_type": "general-purpose"}},
+      ]}}),
+      // A user message while the subagent runs commits the draft that holds the Agent row.
+      json!({"type": "user", "id": "u2", "content": "one more thing", "timestamp": "2026-11-03T02:00:01Z"}),
+      json!({"type": "system", "subtype": "task_started", "tool_use_id": "toolu_late", "description": "Check",
+        "subagent_type": "general-purpose", "prompt": "look"}),
+      json!({"type": "assistant", "parent_tool_use_id": "toolu_late", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": {"command": "ls"}},
+      ]}}),
+      json!({"type": "system", "subtype": "task_progress", "tool_use_id": "toolu_late", "description": "Checking",
+        "usage": {"tool_uses": 1, "duration_ms": 900, "total_tokens": 500}}),
+      json!({"type": "user", "parent_tool_use_id": "toolu_late", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_b", "content": "x"},
+      ]}}),
+      json!({"type": "system", "subtype": "task_notification", "tool_use_id": "toolu_late", "status": "completed",
+        "usage": {"tool_uses": 1, "duration_ms": 1200, "total_tokens": 600}}),
+      json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_late", "content": "report"},
+      ]}}),
+    ];
+    let frames = frames_of(&events);
+    assert_eq!(frames[0]["message"]["id"], "a1");
+    assert!(frames[0]["message"]["tools"][0].get("subagent").is_none(), "the commit predates the subagent");
+    let updates: Vec<&Value> = frames.iter().filter(|frame| frame["type"] == "message_update").collect();
+    assert_eq!(updates.len(), 6, "one update per subagent event after the commit");
+    assert!(updates.iter().all(|update| update["message"]["id"] == "a1"), "every update names the committed message");
+    let row = |update: &Value| update["message"]["tools"][0].clone();
+    assert_eq!(row(updates[0])["subagent"]["status"], "running");
+    assert_eq!(row(updates[0])["id"], "toolu_late");
+    assert_eq!(row(updates[1])["subagent"]["tools"][0]["name"], "Bash");
+    assert_eq!(row(updates[2])["subagent"]["tool_uses"], 1);
+    assert_eq!(row(updates[3])["subagent"]["tools"][0]["output"], "x");
+    assert_eq!(row(updates[4])["subagent"]["status"], "completed");
+    assert_eq!(row(updates[4])["subagent"]["duration_ms"], 1200);
+    assert_eq!(row(updates[5])["output"], "report");
+  }
+
+  #[test]
+  fn a_run_end_stops_a_subagent_of_a_committed_draft_before_the_separator() {
+    let events = vec![
+      json!({"type": "assistant", "id": "a1", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_late", "name": "Agent", "input": {"prompt": "look"}},
+      ]}}),
+      json!({"type": "user", "id": "u2", "content": "one more thing"}),
+      json!({"type": "system", "subtype": "task_started", "tool_use_id": "toolu_late", "description": "Check",
+        "subagent_type": "general-purpose", "prompt": "look"}),
+      json!({"type": "master_done", "id": "md"}),
+    ];
+    let frames = frames_of(&events);
+    let stopped = frames
+      .iter()
+      .position(|frame| {
+        frame["type"] == "message_update" && frame["message"]["tools"][0]["subagent"]["status"] == "stopped"
+      })
+      .expect("the run end updates the committed draft");
+    let separator = frames.iter().rposition(|frame| frame["type"] == "message").unwrap();
+    assert!(stopped < separator, "the update comes before the run's separator");
+    assert_eq!(frames.iter().filter(|frame| frame["type"] == "message_update").count(), 2);
   }
 
   #[test]

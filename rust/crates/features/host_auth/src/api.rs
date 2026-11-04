@@ -123,7 +123,7 @@ async fn browser_logins_page(State(features): State<Arc<FeatureContext>>, reques
       Err(error) => return responses::internal_error("OSError", error.to_string()),
     }
   }
-  let context = match login_page::context(logins, &readbacks) {
+  let mut context = match login_page::context(logins, &readbacks) {
     Ok(context) => context,
     Err(error) => return responses::internal_error("Exception", error.to_string()),
   };
@@ -131,6 +131,13 @@ async fn browser_logins_page(State(features): State<Arc<FeatureContext>>, reques
     Ok(templating) => templating,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let asset_version = match templating.static_asset_version() {
+    Ok(version) => version,
+    Err(error) => return responses::internal_error("OSError", error.to_string()),
+  };
+  if let Some(object) = context.as_object_mut() {
+    object.insert("static_asset_version".to_string(), Value::String(asset_version));
+  }
   match templating.render_page(&features, LOGIN_TEMPLATE, &context, &request) {
     Ok(response) => response,
     Err(error) => responses::internal_error(error.kind(), error.to_string()),

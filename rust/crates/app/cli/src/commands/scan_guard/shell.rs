@@ -1,5 +1,5 @@
-//! The shell text the scan-guard rules read. Heredoc bodies are removed and `bash -c` strings are unwrapped; quoted
-//! text keeps the meaning of its bare form; and each relative path word resolves to the absolute path it names, against
+//! The shell text the scan-guard rules read. Heredoc bodies are removed and `bash -c` strings are unwrapped. Quoted
+//! text keeps the meaning of its bare form. Each relative path word resolves to the absolute path it names, against
 //! the hook's cwd and the latest `cd` before it.
 
 use std::sync::OnceLock;
@@ -13,7 +13,7 @@ const QUOTED_SEPARATOR: char = '\u{1}';
 type CdSpan = (usize, usize, Option<String>);
 
 /// The command with heredoc bodies removed, `bash -c` strings unwrapped, and quoted spans reduced. A single-quoted
-/// string becomes its text when it is one argument, and is dropped when it holds a space or a separator, because that
+/// string becomes its text when it is one argument. It is dropped when it holds a space or a separator, because that
 /// is script or prose rather than shell. A double-quoted string keeps its text with its separators neutralized, unless
 /// it spans lines or holds a command substitution or backtick.
 pub fn shell_text(command: &str) -> String {

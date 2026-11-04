@@ -10,11 +10,7 @@ use serde_json::Value;
 
 /// The event field names the drafts package owns.
 pub const DRAFT_ID: &str = "draft_id";
-pub const PLATFORM: &str = "platform";
-pub const TARGET: &str = "target";
 pub const TARGET_LABEL: &str = "target_label";
-pub const BODY: &str = "body";
-pub const REPLACES: &str = "replaces";
 pub const SHA256: &str = "sha256";
 pub const CREATED_AT: &str = "created_at";
 pub const SENDER: &str = "sender";
@@ -22,6 +18,14 @@ pub const URL: &str = "url";
 pub const SENT_AT: &str = "sent_at";
 pub const ERROR: &str = "error";
 pub const OUTCOME: &str = "outcome";
+
+/// The registration payload's field names. `charliebot_cli_common::draft` owns them because it builds the payload, and
+/// the register route reads the same payload into the draft events.
+pub const SESSION_ID: &str = charliebot_cli_common::draft::SESSION_ID;
+pub const PLATFORM: &str = charliebot_cli_common::draft::PLATFORM;
+pub const TARGET: &str = charliebot_cli_common::draft::TARGET;
+pub const BODY: &str = charliebot_cli_common::draft::BODY;
+pub const REPLACES: &str = charliebot_cli_common::draft::REPLACES;
 
 /// One registered draft, in the form the send path hands to its platform.
 #[derive(Debug, Clone, PartialEq)]

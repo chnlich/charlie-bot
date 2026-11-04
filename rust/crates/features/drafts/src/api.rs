@@ -49,11 +49,11 @@ fn send_path_claims(path: &str) -> bool {
 }
 
 const REGISTER_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
-  Field::required("platform", FieldType::String),
-  Field::required("target", FieldType::Dictionary),
-  Field::required("body", FieldType::String),
-  Field::optional("replaces", FieldType::NullableString),
+  Field::required(log::SESSION_ID, FieldType::String),
+  Field::required(log::PLATFORM, FieldType::String),
+  Field::required(log::TARGET, FieldType::Dictionary),
+  Field::required(log::BODY, FieldType::String),
+  Field::optional(log::REPLACES, FieldType::NullableString),
 ];
 const REGISTER_BODY: BodyModel = BodyModel::required(REGISTER_FIELDS).forbid_extra();
 
@@ -71,14 +71,14 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
     Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let session_id = text_field(&fields, "session_id");
-  let platform_name = text_field(&fields, "platform");
-  let text = text_field(&fields, "body");
-  let replaces = match fields.get("replaces") {
+  let session_id = text_field(&fields, log::SESSION_ID);
+  let platform_name = text_field(&fields, log::PLATFORM);
+  let text = text_field(&fields, log::BODY);
+  let replaces = match fields.get(log::REPLACES) {
     Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
     _ => None,
   };
-  let requested_target = fields.get("target").cloned().expect("a validated target is an object");
+  let requested_target = fields.get(log::TARGET).cloned().expect("a validated target is an object");
   match features.store.get_session(&session_id).await {
     Ok(Some(_)) => {}
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Session not found"})),

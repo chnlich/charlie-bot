@@ -198,7 +198,7 @@ impl Store {
       return Ok(None);
     }
     let prefix: Vec<SharedChatEvent> =
-      ndjson::split_lines_of(&raw[events_offset..], &scan_line).into_iter().map(Arc::new).collect();
+      ndjson::split_lines_of(&raw[events_offset..], &checkpoint_line).into_iter().map(Arc::new).collect();
     if prefix.len() != checkpoint.archived + checkpoint.covered {
       return Ok(None);
     }
@@ -333,7 +333,7 @@ impl Store {
       return Ok(None);
     }
     let prefix: Vec<SharedChatEvent> =
-      ndjson::split_lines_of(&raw[events_offset..], &scan_line).into_iter().map(Arc::new).collect();
+      ndjson::split_lines_of(&raw[events_offset..], &checkpoint_line).into_iter().map(Arc::new).collect();
     if prefix.len() != checkpoint.archived + checkpoint.covered {
       return Ok(None);
     }
@@ -465,14 +465,35 @@ impl LineHead {
   }
 
   fn stand_in(self, keys: &ParseKeys) -> CompactValue {
-    let mut entries = Vec::with_capacity(2);
-    if let Some(id) = self.id {
-      entries.push(ObjectEntry { key: keys.key("id"), value: CompactValue::Str(id) });
+    stand_in_object(keys, self.id.as_deref(), self.event_type.as_deref().unwrap_or_default())
+  }
+}
+
+/// One event's stand-in: its string `id` when it has one, then its `type`. A chat-content line keeps nothing else.
+fn stand_in_object(keys: &ParseKeys, id: Option<&str>, event_type: &str) -> CompactValue {
+  let mut entries = Vec::with_capacity(2);
+  if let Some(id) = id {
+    entries.push(ObjectEntry { key: keys.key("id"), value: CompactValue::Str(id.into()) });
+  }
+  entries.push(ObjectEntry { key: keys.key("type"), value: CompactValue::Str(event_type.into()) });
+  CompactValue::Object(entries.into_boxed_slice())
+}
+
+/// One checkpoint line as the scan kept it: a stand-in line ([`crate::fact_checkpoint::STAND_IN_TAG`] with the id, a
+/// tab and the type, or [`crate::fact_checkpoint::TYPE_ONLY_TAG`] with the type), or a compact JSON event line, which
+/// the scan's own line rule parses.
+pub(crate) fn checkpoint_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
+  match raw.first().copied() {
+    Some(crate::fact_checkpoint::STAND_IN_TAG) => {
+      let body = std::str::from_utf8(&raw[1..]).ok()?;
+      let (id, event_type) = body.split_once('\t')?;
+      Some(stand_in_object(keys, Some(id), event_type))
     }
-    if let Some(event_type) = self.event_type {
-      entries.push(ObjectEntry { key: keys.key("type"), value: CompactValue::Str(event_type) });
+    Some(crate::fact_checkpoint::TYPE_ONLY_TAG) => {
+      let event_type = std::str::from_utf8(&raw[1..]).ok()?;
+      Some(stand_in_object(keys, None, event_type))
     }
-    CompactValue::Object(entries.into_boxed_slice())
+    _ => scan_line(raw, keys),
   }
 }
 

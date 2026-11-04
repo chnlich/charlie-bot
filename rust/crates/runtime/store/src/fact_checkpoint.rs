@@ -157,15 +157,61 @@ fn window_sha(bytes: &[u8], end: usize) -> String {
   crate::control_events::sha256_bytes_hex(&bytes[start..end])
 }
 
-/// The event lines the checkpoint file holds: one compact JSON object per kept event, in fold order.
+/// The event lines the checkpoint file holds, in fold order. A chat-content stand-in is one [`STAND_IN_TAG`] line,
+/// which the resume builds without a JSON parse; any other event keeps its compact JSON line.
 pub(crate) fn encode_events<'a>(events: impl IntoIterator<Item = &'a SharedChatEvent>) -> String {
   let mut text = String::new();
   for event in events {
-    let value = event.to_value();
-    text.push_str(&text_repr::json_dumps(&value, &CHECKPOINT_JSON));
+    let mut line = String::new();
+    if !encode_stand_in(event, &mut line) {
+      line.push_str(&text_repr::json_dumps(&event.to_value(), &CHECKPOINT_JSON));
+    }
+    text.push_str(&line);
     text.push('\n');
   }
   text
+}
+
+/// The first byte of a stand-in line: [`STAND_IN_TAG`] when it carries the event id, [`TYPE_ONLY_TAG`] when not.
+pub(crate) const STAND_IN_TAG: u8 = b'S';
+/// The first byte of a stand-in line whose event has no string id.
+pub(crate) const TYPE_ONLY_TAG: u8 = b'T';
+
+/// Write the stand-in line for an event that is one: an object holding exactly its string `id` and `type`, in that
+/// order, whose text holds no separator or line break. Returns whether the event was written.
+fn encode_stand_in(event: &SharedChatEvent, line: &mut String) -> bool {
+  let crate::compact::CompactValue::Object(entries) = event.as_ref() else {
+    return false;
+  };
+  let (id, event_type) = match entries.as_ref() {
+    [id, event_type] if id.key.as_str() == "id" && event_type.key.as_str() == "type" => {
+      let (Some(id), Some(event_type)) = (id.value.as_str(), event_type.value.as_str()) else {
+        return false;
+      };
+      (Some(id), event_type)
+    }
+    [event_type] if event_type.key.as_str() == "type" => {
+      let Some(event_type) = event_type.value.as_str() else {
+        return false;
+      };
+      (None, event_type)
+    }
+    _ => return false,
+  };
+  let plain = |text: &str| !text.bytes().any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'));
+  if !plain(event_type) || id.is_some_and(|id| !plain(id)) {
+    return false;
+  }
+  match id {
+    Some(id) => {
+      line.push(STAND_IN_TAG as char);
+      line.push_str(id);
+      line.push('\t');
+    }
+    None => line.push(TYPE_ONLY_TAG as char),
+  }
+  line.push_str(event_type);
+  true
 }
 
 /// Write the checkpoint's text to `path`. The file is startup-only: a torn or stale copy fails validation and the next

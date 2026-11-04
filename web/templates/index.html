@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
-  <link rel="stylesheet" href="/static/css/styles.css?v={{ static_asset_version|urlencode }}">
+  <style>{% include 'css/styles.css' %}</style>
   {% for part in page_parts('head') %}{% include part %}{% endfor %}
   <!-- Loaded after styles.css so Tailwind's `.hidden` utility (display:none) wins the
        cascade over styles.css's unconditional `display:flex` modal-overlay rules --
@@ -21,7 +21,7 @@
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
-    // The same value the ?v= script URLs below carry: the session WebSocket handshake sends it as
+    // The asset version this document carries: the session WebSocket handshake sends it as
     // asset_version, and a stale value gets the 4409 close that reloads the page (websocket.js).
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
     // The name the header and tab title show at page load; the displayed-session module starts from it.
@@ -334,42 +334,42 @@
   </div>
 
   <!-- ==================== JAVASCRIPT ==================== -->
-  <script src="/static/js/platform.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/math-scanner.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/markdown-renderer.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/config.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/page-timers.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/namespace.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/namespace.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/shared.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/displayed-session.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/tabs.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/ratings.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/attachments.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/file-links.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/scroll.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/rendering.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/turn-engine.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/for-you.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/worker-summary.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/triggers-tray.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/status-panel.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/row-menu.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/status.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/groups.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/archived.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/filters.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/session-actions.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/session-menus.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/input.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/websocket-handlers.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
+  <script>{% include 'js/platform.js' %}</script>
+  <script>{% include 'js/math-scanner.js' %}</script>
+  <script>{% include 'js/markdown-renderer.js' %}</script>
+  <script>{% include 'js/config.js' %}</script>
+  <script>{% include 'js/utils.js' %}</script>
+  <script>{% include 'js/page-timers.js' %}</script>
+  <script>{% include 'js/chat/namespace.js' %}</script>
+  <script>{% include 'js/sidebar/namespace.js' %}</script>
+  <script>{% include 'js/chat/shared.js' %}</script>
+  <script>{% include 'js/chat/displayed-session.js' %}</script>
+  <script>{% include 'js/websocket.js' %}</script>
+  <script>{% include 'js/tabs.js' %}</script>
+  <script>{% include 'js/chat/ratings.js' %}</script>
+  <script>{% include 'js/chat/attachments.js' %}</script>
+  <script>{% include 'js/chat/file-links.js' %}</script>
+  <script>{% include 'js/chat/scroll.js' %}</script>
+  <script>{% include 'js/chat/rendering.js' %}</script>
+  <script>{% include 'js/chat/turn-engine.js' %}</script>
+  <script>{% include 'js/chat/for-you.js' %}</script>
+  <script>{% include 'js/chat/worker-summary.js' %}</script>
+  <script>{% include 'js/chat/triggers-tray.js' %}</script>
+  <script>{% include 'js/chat/status-panel.js' %}</script>
+  <script>{% include 'js/usage.js' %}</script>
+  <script>{% include 'js/file-upload.js' %}</script>
+  <script>{% include 'js/sidebar/row-menu.js' %}</script>
+  <script>{% include 'js/sidebar/status.js' %}</script>
+  <script>{% include 'js/sidebar/groups.js' %}</script>
+  <script>{% include 'js/sidebar/archived.js' %}</script>
+  <script>{% include 'js/sidebar/filters.js' %}</script>
+  <script>{% include 'js/sidebar/session-view.js' %}</script>
+  <script>{% include 'js/sidebar/modals.js' %}</script>
+  <script>{% include 'js/sidebar/session-actions.js' %}</script>
+  <script>{% include 'js/sidebar/session-menus.js' %}</script>
+  <script>{% include 'js/chat/input.js' %}</script>
+  <script>{% include 'js/websocket-handlers.js' %}</script>
+  <script>{% include 'js/app.js' %}</script>
   {% for part in page_parts('scripts') %}{% include part %}{% endfor %}
 
   <div id="text-modal-overlay" class="diff-modal-overlay" style="display:none" onclick="closeTextModal()">

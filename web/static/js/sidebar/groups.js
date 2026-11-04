@@ -548,6 +548,13 @@ function renderTreeChevron(sessionId, childCount) {
          fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHEVRON_SVG_PATH}</svg>`;
 }
 
+// The lead marker on a tree row with no child tasks: the chevron's 12px slot,
+// inert. No button, no pointer cursor and no click handler, so a tap here
+// reaches the row's own link like any other part of the row.
+function renderTreeLeadSlot() {
+  return '<span class="w-3 h-3 flex-shrink-0" aria-hidden="true"></span>';
+}
+
 // The count includes direct children whose profile is not 'worker'; worker
 // leaves stay nested but do not add to it. All and Threads hold every
 // unarchived child, so the count reflects active non-worker child sessions.
@@ -673,21 +680,26 @@ function renderSessionItem(s, filter, options = {}) {
       ...sessionRowBadges.map(render => render(s)),
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
-  // in one column. A logical row draws the chevron even with no children:
-  // same markup and toggle behavior, with nothing to reveal below it. A
-  // worker row draws the worker glyph instead, never a chevron. A flat row
-  // (search results, the Archived tab) draws neither. The indicators follow
-  // the lead marker.
+  // in one column. A row with child tasks draws the chevron that expands
+  // them; a row without any draws an inert slot of the same size, so the
+  // row's leading edge still opens the session instead of hitting an
+  // expander with nothing to show. A worker row draws the worker glyph
+  // instead, never a chevron. A flat row (the search results) draws neither;
+  // the Archived tab paints through this tree, so its rows lead with the same
+  // marker. The indicators follow the lead marker.
   // The count beside the chevron uses direct children whose profile is not
   // 'worker'; worker leaves still nest, and the chevron title still counts
   // every child task. Only the all and threads paints draw the count.
   const showChildCount = 'treeChildCount' in options
       && options.treeNonWorkerChildCount > 0
       && (filter === 'all' || filter === 'threads');
+  const treeRow = 'treeChildCount' in options;
   const lead = [
       isWorker
           ? (isArchivedRow ? renderWorkerDeliveredIcon() : renderWorkerLeafIcon())
-          : ('treeChildCount' in options ? renderTreeChevron(s.id, options.treeChildCount) : ''),
+          : (treeRow
+              ? (options.treeChildCount > 0 ? renderTreeChevron(s.id, options.treeChildCount) : renderTreeLeadSlot())
+              : ''),
       showChildCount ? renderTreeChildCount(s.id, options.treeNonWorkerChildCount) : '',
       indicators,
   ].join('\n    ');

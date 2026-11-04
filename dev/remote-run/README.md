@@ -67,8 +67,9 @@ caches, and `remote-exec.pl`.
 1. The connectivity check: `ssh <host> true`, limited to 60 seconds. See "Exit codes".
 2. Preflights: the build host has node, npm, cargo, uv, rsync, git, flock, nice, perl, and
    rustc; a project with `pyproject.toml` has a matching CPython patch release on the build host.
-3. The sweep: remote trees whose recorded local root is gone are removed; a remote tree whose
-   recorded root is a different directory refuses the run, so two local trees never share one
+3. The sweep: remote trees whose recorded local root is gone are removed, the tree the run syncs
+   into included, so a stale tree under the current name never blocks the sync; a remote tree whose
+   recorded root is a different live directory refuses the run, so two local trees never share one
    remote tree.
 4. The upload: rsync with the tree's `.gitignore` as filters, excluding `.git`, `.venv`,
    `__pycache__`, and `rust/target`. A remote path the local tree ignores is protected from the

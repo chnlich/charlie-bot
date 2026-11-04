@@ -33,13 +33,15 @@ fn refuse_sh() -> PathBuf {
 const CONFIG: &str = "server:\n  public_url: https://charlie.example.test:18498\nremote_run:\n  host: build-host\n";
 
 /// The fake ssh answers the runner's remote queries and plays the cases the connectivity check
-/// must tell apart. Its behavior comes from the environment, one case per variable.
+/// must tell apart. Its behavior comes from the environment, one case per variable. With
+/// `FAKE_BUILD_HOME` set, the sweep and marker commands run against a local stand-in for the build
+/// host's `$HOME`, so the sweep state carries from one remote command to the next; the preflight
+/// and the git-commit command return success without state.
 const FAKE_SSH: &str = r##"
 log="${FAKE_SSH_LOG:?}"
 printf '%s\n' "$*" >>"$log"
 last="${*: -1}"
 case "$last" in
-  *tree-owners*) printf '__NO_LOCAL_ROOT_RECORD__' ;;
   *" exec "*) exit "${FAKE_REMOTE_STATUS:-0}" ;;
   true)
     if [[ -n "${FAKE_LINK:-}" ]]; then
@@ -48,6 +50,14 @@ case "$last" in
     fi
     [[ -n "${FAKE_CHECK_FAIL:-}" ]] && exit 7
     [[ -n "${FAKE_CHECK_HANG:-}" ]] && exec sleep 30
+    ;;
+  *update-ref*|*'missing build host tool'*) exit 0 ;;
+  *)
+    if [[ -n "${FAKE_BUILD_HOME:-}" ]]; then
+      HOME="$FAKE_BUILD_HOME" eval "$last"
+    elif [[ "$last" == *tree-owners* ]]; then
+      printf '__NO_LOCAL_ROOT_RECORD__'
+    fi
     ;;
 esac
 exit 0
@@ -200,6 +210,73 @@ fn a_passing_check_leaves_a_remote_255_unchanged() {
   let log = ssh_log(&sandbox);
   assert!(log.contains("remote-exec.pl"), "the remote command never ran: {log}");
   assert!(log.lines().any(|line| line.contains(HOST) && line.ends_with(" true")), "the check named no host: {log}");
+}
+
+/// The build-host base the fake ssh evaluates the sweep and marker commands against: the tree
+/// directory and the owner-record directory the runner reads and removes.
+fn install_fake_build_home(sandbox: &Sandbox) -> PathBuf {
+  let base = sandbox.root().join("build-home/scripts/remote-run");
+  std::fs::create_dir_all(base.join("trees")).expect("the tree directory");
+  std::fs::create_dir_all(base.join("tree-owners")).expect("the owner records");
+  base
+}
+
+/// Runs the runner from `project` with the fake ssh evaluating its state commands against the
+/// stand-in build home.
+fn run_with_fake_build_home(sandbox: &Sandbox, project: &Path) -> harness::Run {
+  let mut env = run_env(sandbox, CONFIG);
+  env.insert("FAKE_BUILD_HOME".to_string(), sandbox.root().join("build-home").display().to_string());
+  run_runner(&env, project, &["echo", "remote"])
+}
+
+/// The 08:15Z install case: the build host holds a tree named like the sync root, recorded to a
+/// local directory an earlier run's temp directory removed. The run sweeps the tree, then syncs.
+#[test]
+fn a_same_name_tree_whose_recorded_directory_is_gone_is_removed_and_the_run_succeeds() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::fs::create_dir_all(base.join("trees/project")).expect("the stale tree");
+  std::fs::write(base.join("trees/project/leftover.txt"), "stale\n").expect("the stale tree file");
+  let gone_owner = sandbox.root().join("gone-owner/src");
+  std::fs::write(base.join("tree-owners/project"), gone_owner.display().to_string()).expect("the stale owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stderr.contains("sweep: removed build host tree project because its recorded local directory is gone"),
+    "{}",
+    run.describe()
+  );
+  assert!(!base.join("trees/project").exists(), "the stale tree survived the sweep: {}", run.describe());
+  let record = fs::read_to_string(base.join("tree-owners/project")).expect("the new owner record");
+  assert_eq!(record, project.display().to_string(), "the run did not record the current owner");
+}
+
+/// Two live local directories must never share one build-host tree: the same-name refusal holds
+/// while the recorded owner directory exists.
+#[test]
+fn a_same_name_tree_whose_recorded_directory_exists_keeps_the_refusal() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::fs::create_dir_all(base.join("trees/project")).expect("the remote tree");
+  let live_owner = sandbox.dir("other-root");
+  std::fs::write(base.join("tree-owners/project"), live_owner.display().to_string()).expect("the live owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("belongs to local directory"), "{}", run.describe());
+  assert!(!run.stderr.contains("sweep: removed"), "the live tree was swept: {}", run.describe());
+  assert!(base.join("trees/project").exists(), "the live tree was removed: {}", run.describe());
 }
 
 /// Runs the local work guard's refusal for `tool` with the environment `env`.

@@ -76,9 +76,10 @@ else
   exit "$status"
 fi
 
-# Remove remote trees whose local root is gone, and refuse a name whose recorded root is a
-# different directory: two local trees must never share one remote tree, or the delete would mix
-# their files.
+# Remove remote trees whose local root is gone, the tree this run syncs into included: a stale
+# record under the current name comes from an earlier run whose local directory is gone. Refuse a
+# name whose recorded root is a different live directory: two local trees must never share one
+# remote tree, or the delete would mix their files.
 while IFS= read -r remote_name; do
   [[ -n "$remote_name" ]] || continue
   if [[ ! "$remote_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
@@ -107,12 +108,12 @@ while IFS= read -r remote_name; do
       "$remote_name" "$recorded_root" >&2
     exit 2
   fi
-  if [[ "$remote_name" == "$tree_name" && "$recorded_root" != "$sync_root" ]]; then
-    printf 'sync: build host tree %s belongs to local directory %s, not %s\n' \
-      "$remote_name" "$recorded_root" "$sync_root" >&2
-    exit 2
-  fi
   if [[ -d "$recorded_root" ]]; then
+    if [[ "$remote_name" == "$tree_name" && "$recorded_root" != "$sync_root" ]]; then
+      printf 'sync: build host tree %s belongs to local directory %s, not %s\n' \
+        "$remote_name" "$recorded_root" "$sync_root" >&2
+      exit 2
+    fi
     continue
   fi
   remote_remove="rm -rf -- \"$base/trees/$remote_name\" && rm -f -- \"$base/tree-owners/$remote_name\""

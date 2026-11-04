@@ -81,7 +81,7 @@ impl ListingSource {
   }
 
   fn holds(
-    &self,
+    &mut self,
     rows: &[Arc<SessionMetadata>],
     shared: Option<&Arc<Vec<Arc<SessionMetadata>>>>,
     derived: &Arc<DerivedSidebarMap>,
@@ -89,10 +89,19 @@ impl ListingSource {
   ) -> bool {
     // The listing route hands out the memoized corpus itself, so one pointer comparison proves the same rows in the
     // same order instead of walking all of them. A route that filters the corpus into its own list passes no shared
-    // allocation and keeps the row-by-row comparison.
+    // allocation and keeps the row-by-row comparison. A rebuilt corpus that holds equal rows in a new allocation
+    // still matches, and the source takes that allocation so the next request pays one comparison.
     let rows_hold = match (self.shared.as_ref(), shared) {
-      (Some(before), Some(now)) => Arc::ptr_eq(before, now),
-      _ => self.rows.len() == rows.len() && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now)),
+      (Some(before), Some(now)) if Arc::ptr_eq(before, now) => true,
+      _ => {
+        let equal = self.rows.len() == rows.len()
+          && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now));
+        if equal {
+          self.shared = shared.cloned();
+          self.rows = rows.to_vec();
+        }
+        equal
+      }
     };
     rows_hold && Arc::ptr_eq(&self.derived, derived) && self.sequence_fields == *sequence_fields
   }
@@ -395,13 +404,22 @@ impl PageTextSource {
     }
   }
 
-  fn holds(&self, page: &PageRows) -> bool {
+  fn holds(&mut self, page: &PageRows) -> bool {
     // The corpus arrives as one shared allocation: `active_page_rows` hands out the memoized list until an input
     // that shapes it moves, so the same pointer is the same rows and the same order. Comparing the rows one by one
-    // walked all of them on every request.
-    Arc::ptr_eq(&self.rows, &page.rows)
-      && Arc::ptr_eq(&self.derived, &page.derived)
-      && self.sequence_fields == page.sequence_fields
+    // walked all of them on every request. A rebuilt corpus that holds equal rows in a new allocation still matches,
+    // and the source takes that allocation so the next request pays one comparison.
+    let rows_hold = if Arc::ptr_eq(&self.rows, &page.rows) {
+      true
+    } else {
+      let equal =
+        self.rows.len() == page.rows.len() && self.rows.iter().zip(page.rows.iter()).all(|(a, b)| Arc::ptr_eq(a, b));
+      if equal {
+        self.rows = Arc::clone(&page.rows);
+      }
+      equal
+    };
+    rows_hold && Arc::ptr_eq(&self.derived, &page.derived) && self.sequence_fields == page.sequence_fields
   }
 }
 
@@ -444,8 +462,8 @@ pub fn active_page_json_text(
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the text
   // reads still holds, so the text it returns is the text a rebuild would render.
   {
-    let state = memo.state.lock().expect("the page row memo mutex is not poisoned");
-    if let Some(whole) = &state.whole
+    let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
+    if let Some(whole) = &mut state.whole
       && whole.clear_unread.as_deref() == clear_unread
       && whole.source.holds(page)
     {
@@ -565,7 +583,7 @@ pub fn sessions_list_response(
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the body
   // reads still holds, so the body it returns is the body a rebuild would render.
   let source_holds =
-    state.whole_body.as_ref().is_some_and(|whole| whole.source.holds(rows, shared, derived, sequence_fields));
+    state.whole_body.as_mut().is_some_and(|whole| whole.source.holds(rows, shared, derived, sequence_fields));
   if !source_holds {
     let inputs = match row_inputs(store, rows, derived, sequence_fields, projection) {
       Ok(inputs) => inputs,
@@ -587,13 +605,12 @@ pub fn sessions_list_response(
         Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
       };
       let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&Value::Array(values)));
-      state.whole_body =
-        Some(WholeListingBody {
-          source: ListingSource::of(rows, shared, derived, sequence_fields),
-          inputs,
-          body,
-          gzip: None,
-        });
+      state.whole_body = Some(WholeListingBody {
+        source: ListingSource::of(rows, shared, derived, sequence_fields),
+        inputs,
+        body,
+        gzip: None,
+      });
     }
   }
   let whole = state.whole_body.as_ref().expect("the body is rendered when the inputs changed");

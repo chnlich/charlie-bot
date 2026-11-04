@@ -101,23 +101,6 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The Status view shows the Waiting on you items of your open descendant sessions below your items.
 - The Status view shows the **Now** of each open child session in a folded block below your items.
 
-## Remaining
-
-Remaining lists the milestones between the session and its Goal, so the user reads the distance to the Goal without asking.
-
-- When the user asks you to start Remaining, directly or through another session, keep it.
-  Without such a request, the status holds Goal, Now and Waiting on you.
-  The field then stays on the lines that the user chose.
-- Write each milestone of the Goal sentence as one item, and mark each completed milestone `done`.
-  The panel then counts the milestones that remain.
-- In each open item, write its state and what it waits on: a job, worker, child session or user.
-  The user then reads what each open milestone waits on.
-- Date an open item only from a basis: a user deadline, a scheduled run or a dated prerequisite.
-- When an open item has no such basis, write in the item that it has no date.
-  The user then reads each date as a fact.
-- In the turn that completes a milestone or changes the list, set `remaining` again.
-  The panel shows the time of that set, so the user sees how current the list is.
-
 ## Delivery
 
 - Write the web reply text to a file.
@@ -128,8 +111,7 @@ Remaining lists the milestones between the session and its Goal, so the user rea
   The For-you view then shows each answer once.
 - Write the changed session status fields to a JSON file.
   Each field that the file leaves out keeps its stored value.
-- The JSON object takes any of the keys `goal`, `now`, `waiting` and `remaining`.
-- `remaining` is a list of objects with the keys `text` and `done`. An empty list removes Remaining.
+- The JSON object takes any of the keys `goal`, `now` and `waiting`.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`.
 - When the file holds `waiting`, run `charliebot web status show` right before you write the file, and write the
   whole list from it: each item that stays, and each new or changed item. Each set replaces the whole list.

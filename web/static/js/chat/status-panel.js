@@ -147,62 +147,6 @@
     return row;
   }
 
-  // The milestones between the session and its Goal: how many remain and when
-  // the list was last set. Then the open items in written order, and the done
-  // items in one fold. The text is agent-written, so it goes in through
-  // textContent like the Goal.
-  function remainingRow(status) {
-    const row = statusRow('remaining');
-    row.appendChild(labelSpan('Remaining'));
-    const value = document.createElement('div');
-    value.className = 'min-w-0 break-words text-slate-200 space-y-1';
-    const open = status.remaining.filter((item) => !item.done).length;
-    const count = textSpan('', open + ' of ' + status.remaining.length + ' left');
-    count.dataset.remainingCount = String(open);
-    value.appendChild(count);
-    const updated = textSpan('ml-2 whitespace-nowrap text-slate-500',
-      'updated ' + relativeTime(status.remaining_updated_at));
-    updated.dataset.statusUpdated = status.remaining_updated_at;
-    value.appendChild(updated);
-    for (const item of status.remaining) {
-      if (item.done) continue;
-      const line = document.createElement('div');
-      line.className = 'break-words';
-      line.dataset.remainingItem = 'open';
-      line.appendChild(textSpan('mr-2 text-slate-400', '○'));
-      line.appendChild(textSpan('', item.text));
-      value.appendChild(line);
-    }
-    const done = status.remaining.filter((item) => item.done);
-    if (done.length) {
-      const body = document.createElement('div');
-      body.className = 'hidden space-y-1';
-      body.dataset.remainingDone = 'true';
-      for (const item of done) {
-        const line = document.createElement('div');
-        line.className = 'break-words';
-        line.dataset.remainingItem = 'done';
-        line.appendChild(textSpan('mr-2 text-slate-400', '✓'));
-        line.appendChild(textSpan('', item.text));
-        body.appendChild(line);
-      }
-      const toggle = foldToggle(
-        'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors',
-        false,
-        done.length + ' done',
-        () => {
-          const nextOpen = body.classList.contains('hidden');
-          body.classList.toggle('hidden', !nextOpen);
-          setFoldOpen(toggle, nextOpen);
-        });
-      toggle.dataset.remainingDoneToggle = 'true';
-      value.appendChild(toggle);
-      value.appendChild(body);
-    }
-    row.appendChild(value);
-    return row;
-  }
-
   function nowRow(status) {
     const row = statusRow('now');
     row.appendChild(labelSpan('Now'));
@@ -371,7 +315,6 @@
       el.appendChild(none);
     } else {
       el.appendChild(goalRow(panelStatus.goal));
-      if (panelStatus.remaining && panelStatus.remaining.length) el.appendChild(remainingRow(panelStatus));
       el.appendChild(nowRow(panelStatus));
       const waiting = statusRow('waiting');
       waiting.appendChild(labelSpan('Waiting on you'));

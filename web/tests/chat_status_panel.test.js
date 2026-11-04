@@ -53,15 +53,6 @@ const OLDER = {
   updated_at: '2026-10-16T19:00:00Z',
 };
 
-const WITH_REMAINING = {
-  ...STATUS,
-  remaining: [
-    {text: 'Move the server to Rust', done: true},
-    {text: 'Delete the Python server', done: false},
-  ],
-  remaining_updated_at: '2026-10-16T20:30:00Z',
-};
-
 const CHILD_ID = 'child-aaaaaaaa-1111';
 const OTHER_CHILD_ID = 'child-bbbbbbbb-2222';
 
@@ -220,10 +211,6 @@ function viewWaitingItems(panel) {
   return viewRow(panel, 'waiting').querySelectorAll('[data-waiting-item]');
 }
 
-function viewRemainingItems(panel) {
-  return viewRow(panel, 'remaining').querySelectorAll('[data-remaining-item]');
-}
-
 function viewChildItems(panel) {
   return panel.querySelectorAll('[data-child-item]');
 }
@@ -267,71 +254,15 @@ test('the Status view panel scrolls by itself with no height cap', async () => {
   assert.equal(/max-h-/.test(rig.panel.className), false, 'no height cap cuts the waiting items off');
 });
 
-test('the Status view shows Goal, Remaining, Now, Waiting on you, children and child Now rows in order', async () => {
+test('the Status view shows Goal, Now, Waiting on you, children and child Now rows in order', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(2, 1);
   rig.page.children = NOW_CHILDREN;
-  await openSession(rig, {web_status: WITH_REMAINING});
+  await openSession(rig, {web_status: STATUS});
   selectStatus(rig);
   assert.equal(rig.panel.classList.contains('hidden'), false);
-  assert.deepEqual(viewKinds(rig.panel), ['goal', 'remaining', 'now', 'waiting', 'children', 'children-now']);
-  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, WITH_REMAINING.goal);
-});
-
-test('the Status view lists open Remaining items first and folds the done ones closed by default', async () => {
-  const rig = panelRig();
-  const remaining = [
-    {text: 'open one', done: false},
-    {text: 'done one', done: true},
-    {text: 'open two', done: false},
-    {text: 'done two', done: true},
-  ];
-  await openSession(rig, {web_status: {...STATUS, remaining,
-    remaining_updated_at: WITH_REMAINING.remaining_updated_at}});
-  selectStatus(rig);
-  const row = viewRow(rig.panel, 'remaining');
-  const value = row.children[1];
-  assert.equal(value.children[0].textContent, '2 of 4 left');
-  assert.equal(value.children[1].dataset.statusUpdated, WITH_REMAINING.remaining_updated_at);
-
-  const openItems = viewRemainingItems(rig.panel).filter((el) => el.dataset.remainingItem === 'open');
-  assert.deepEqual(openItems.map((el) => el.children[1].textContent), ['open one', 'open two'],
-      'the open items read in written order, the done ones folded');
-  const toggle = value.querySelector('[data-remaining-done-toggle]');
-  assert.equal(toggle.getAttribute('aria-expanded'), 'false', 'the done fold starts closed');
-  assert.equal(toggle.children[1].textContent, '2 done');
-  const doneBody = value.querySelector('[data-remaining-done]');
-  assert.equal(doneBody.classList.contains('hidden'), true);
-
-  toggle.onclick();
-  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-  assert.equal(doneBody.classList.contains('hidden'), false);
-  const doneItems = viewRemainingItems(rig.panel).filter((el) => el.dataset.remainingItem === 'done');
-  assert.deepEqual(doneItems.map((el) => el.children[1].textContent), ['done one', 'done two'],
-      'opened, the fold lists the done items in written order');
-});
-
-test('a Remaining list of all done items shows the zero count and the fold, and no open line', async () => {
-  const rig = panelRig();
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    remaining: [{text: 'only done', done: true}],
-    remaining_updated_at: '2026-10-16T20:30:00Z',
-  }});
-  selectStatus(rig);
-  const row = viewRow(rig.panel, 'remaining');
-  assert.equal(row.children[1].children[0].textContent, '0 of 1 left');
-  assert.equal(viewRemainingItems(rig.panel).filter((el) => el.dataset.remainingItem === 'open').length, 0);
-  assert.equal(row.querySelectorAll('[data-remaining-done-toggle]').length, 1);
-});
-
-test('a status without Remaining draws no Remaining row in the Status view', async () => {
-  for (const status of [STATUS, {...STATUS, remaining: []}]) {
-    const rig = panelRig();
-    await openSession(rig, {web_status: status});
-    selectStatus(rig);
-    assert.equal(viewRow(rig.panel, 'remaining'), undefined);
-  }
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting', 'children', 'children-now']);
+  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, STATUS.goal);
 });
 
 test('the Now row carries the full text and its update time', async () => {

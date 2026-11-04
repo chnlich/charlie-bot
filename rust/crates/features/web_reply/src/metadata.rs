@@ -1,15 +1,8 @@
-//! The web reply package's item models: the Waiting on you item that the status
-//! and the plan links read, and the Remaining milestone that the status lists.
+//! The web reply package's item model: the Waiting on you item that the status
+//! and the plan links read.
 
 use charliebot_store::metadata::UtcDateTime;
 use serde::{Deserialize, Serialize};
-
-/// One Remaining item: a milestone between the session and its Goal, and whether the session completed it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RemainingItem {
-  pub(crate) text: String,
-  pub(crate) done: bool,
-}
 
 /// One Waiting on you item: a decision or an action, its context, and the link to the place where the user answers it.
 /// An absent context stays absent in stored legacy items. `since` and `since_exact` are

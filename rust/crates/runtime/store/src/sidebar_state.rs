@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use lru::LruCache;
 use serde_json::{Map, Value};
@@ -76,10 +76,21 @@ impl Default for State {
   }
 }
 
-static STATE: OnceLock<Mutex<State>> = OnceLock::new();
-
+#[cfg(not(test))]
 fn state() -> &'static Mutex<State> {
+  static STATE: std::sync::OnceLock<Mutex<State>> = std::sync::OnceLock::new();
   STATE.get_or_init(|| Mutex::new(State::default()))
+}
+
+/// Under test, each test thread owns one state, so a test's marks, generation and poll count never reach another
+/// test. libtest runs each test on a thread of its own (`run_test_inner` in `library/test/src/lib.rs`), and no test
+/// takes a lock, so a panic in one test cannot poison another. The leaked box is one small allocation per test thread.
+#[cfg(test)]
+fn state() -> &'static Mutex<State> {
+  thread_local! {
+    static THREAD_STATE: &'static Mutex<State> = Box::leak(Box::new(Mutex::new(State::default())));
+  }
+  THREAD_STATE.with(|state| *state)
 }
 
 /// Flag one session for a fresh sidebar probe.
@@ -159,22 +170,13 @@ pub fn register_poll(force: bool) -> bool {
   force || state.poll_count.is_multiple_of(FORCE_FULL_EVERY)
 }
 
-/// Clear sidebar process memory for tests.
-pub fn reset_for_tests() {
-  *state().lock().expect("sidebar state mutex is not poisoned") = State::default();
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::metadata::TaskProfile;
 
-  static TEST_LOCK: Mutex<()> = Mutex::new(());
-
   #[test]
   fn dirty_marks_bump_generation_and_poll_reprobe_is_bounded() {
-    let _guard = TEST_LOCK.lock().expect("sidebar state test mutex is not poisoned");
-    reset_for_tests();
     let initial = derived_generation();
     mark_sidebar_dirty("session-a");
     assert!(is_dirty("session-a"));
@@ -189,8 +191,6 @@ mod tests {
 
   #[test]
   fn snapshot_updates_and_derived_memo_have_caps() {
-    let _guard = TEST_LOCK.lock().expect("sidebar state test mutex is not poisoned");
-    reset_for_tests();
     let mut entry = Map::new();
     entry.insert(TASK_TREE_ACTIVITY.to_string(), serde_json::json!([true, "running"]));
     store_snapshot_entry("session-a", entry);
@@ -206,8 +206,6 @@ mod tests {
 
   #[test]
   fn a_key_matches_a_row_by_pointer_and_not_by_content() {
-    let _guard = TEST_LOCK.lock().expect("sidebar state test mutex is not poisoned");
-    reset_for_tests();
     let row = Arc::new(SessionMetadata::new("session-a", "Session A", TaskProfile::Manager));
     let key = DerivedMapKey { rows: vec![Arc::clone(&row)], flags: vec![true], generation: 3 };
     store_derived_map(key.clone(), Arc::new(HashMap::new()));

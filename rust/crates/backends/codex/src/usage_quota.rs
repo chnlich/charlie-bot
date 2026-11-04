@@ -15,8 +15,8 @@ use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::timefmt::{self, utc_now_iso};
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization,
+  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES,
+  PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -92,8 +92,9 @@ impl QuotaAccount for CodexQuotaAccount {
   fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> Map<String, Value> {
     let sampled = text_of(entry, "token_count_observed_at")
       .and_then(parse_iso_utc)
-      .or_else(|| text_of(entry, PANEL_FETCHED_AT).and_then(parse_iso_utc));
-    mark_expired_windows(entry, sampled, now.into_inner())
+      .or_else(|| text_of(entry, PANEL_FETCHED_AT).and_then(parse_iso_utc))
+      .map(UtcDateTime::from);
+    mark_expired_windows(entry, sampled, now)
   }
 }
 
@@ -358,50 +359,6 @@ pub fn parse_iso_utc(value: &str) -> Option<OffsetDateTime> {
     })
     .ok()
     .map(|parsed| parsed.to_offset(UtcOffset::UTC))
-}
-
-/// Whether one stored window's reading is expired at `now`: its reset has passed while the sample predates it, or the
-/// sample is older than the window is long. A missing sample time reads as live.
-fn panel_window_expired(window: &Map<String, Value>, sampled: Option<OffsetDateTime>, now: OffsetDateTime) -> bool {
-  let Some(sampled) = sampled else {
-    return false;
-  };
-  let resets_at = text_of(window, PANEL_RESETS_AT).and_then(parse_iso_utc);
-  if let Some(resets_at) = resets_at
-    && resets_at <= now
-    && sampled < resets_at
-  {
-    return true;
-  }
-  match window.get(PANEL_WINDOW_MINUTES) {
-    Some(Value::Number(number)) if number.is_i64() => now - sampled > Duration::minutes(number.as_i64().unwrap_or(0)),
-    _ => false,
-  }
-}
-
-/// The entry with each expired window marked `expired: true`. An entry without a window list comes back unchanged.
-pub fn mark_expired_windows(
-  entry: &Map<String, Value>,
-  sampled: Option<OffsetDateTime>,
-  now: OffsetDateTime,
-) -> Map<String, Value> {
-  let Some(windows) = entry.get(PANEL_WINDOWS).and_then(Value::as_array) else {
-    return entry.clone();
-  };
-  let annotated = windows
-    .iter()
-    .map(|window| match window.as_object() {
-      Some(object) if panel_window_expired(object, sampled, now) => {
-        let mut marked = object.clone();
-        marked.insert(PANEL_EXPIRED.to_string(), Value::Bool(true));
-        Value::Object(marked)
-      }
-      _ => window.clone(),
-    })
-    .collect();
-  let mut marked = entry.clone();
-  marked.insert(PANEL_WINDOWS.to_string(), Value::Array(annotated));
-  marked
 }
 
 /// One rate-limit window per non-null slot, sorted by window length. A slot that lacks its window length is dropped.

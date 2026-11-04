@@ -275,20 +275,6 @@ fn model_family(model: Option<&str>) -> String {
   }
 }
 
-/// Whether one stored usage-panel window is expired at `now`, judged against the time its reading was `sampled`
-/// (`usage_sources.panel_window_expired`).
-pub fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTime) -> bool {
-  let resets_at =
-    window.get(usage::PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok());
-  if resets_at.is_some_and(|reset| reset <= now && sampled < reset) {
-    return true;
-  }
-  window
-    .get(usage::PANEL_WINDOW_MINUTES)
-    .and_then(Value::as_i64)
-    .is_some_and(|minutes| now.into_inner() - sampled.into_inner() > Duration::minutes(minutes))
-}
-
 fn panel_scope_matches(window: &Value, family: &str) -> bool {
   let scope = window.get(usage::PANEL_SCOPE_LABEL);
   if !scope.is_some_and(is_truthy) {
@@ -303,7 +289,7 @@ fn live_windows<'a>(reading: &'a PanelReading, model: Option<&str>, now: UtcDate
   reading
     .windows
     .iter()
-    .filter(|window| !panel_window_expired(window, reading.at, now) && panel_scope_matches(window, &family))
+    .filter(|window| !usage::panel_window_expired(window, reading.at, now) && panel_scope_matches(window, &family))
     .collect()
 }
 

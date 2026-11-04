@@ -31,4 +31,3 @@ uuid.workspace = true
 [dev-dependencies]
 charliebot-chat-threads = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
-tower.workspace = true

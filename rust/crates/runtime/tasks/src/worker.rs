@@ -303,11 +303,21 @@ impl Worker {
         let sink = Arc::clone(&follow_sink);
         let failure = Arc::clone(&follow_failure);
         async move {
-          handle_event(&sink, event, None::<&mut dyn LaunchWatch>, None).await.map(|_| ()).map_err(|error| {
-            let message = format!("{error:#}");
-            *failure.lock().expect("resume failure mutex is not poisoned") = Some(error);
-            std::io::Error::other(message)
-          })
+          match handle_event(&sink, event, None::<&mut dyn LaunchWatch>, None).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+              // A quota rejection is the run's ending, and its event is already in the events log: the follow
+              // checkpoints the line and hands the error to the end handling.
+              let ended = error.downcast_ref::<QuotaExhaustedError>().is_some();
+              let message = format!("{error:#}");
+              *failure.lock().expect("resume failure mutex is not poisoned") = Some(error);
+              Err(if ended {
+                std::io::Error::other(follow::EventEndedRun)
+              } else {
+                std::io::Error::other(message)
+              })
+            }
+          }
         }
       },
       move || alive(),

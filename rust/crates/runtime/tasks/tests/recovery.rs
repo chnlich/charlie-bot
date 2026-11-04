@@ -19,6 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::Context;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use charliebot_agents::backend_pool;
 use charliebot_agents::transport::identity;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
@@ -30,9 +31,11 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
+use charliebot_store::run_records::{
+  self, CURSOR_NAME, RAW_LOG_NAME, RUN_EVENTS_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef,
+};
 use charliebot_store::write_faults::{self, Hit};
-use charliebot_store::{CreateTask, PatchTask, TaskCaller};
+use charliebot_store::{CreateTask, PatchTask, TaskCaller, control_events};
 use charliebot_tasks::execution::is_out_of_space_error;
 use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
@@ -956,6 +959,367 @@ async fn a_drained_worker_run_lands_its_result_and_raw_end_time() -> anyhow::Res
     run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-drained")?,
     Some(RunOutcomeKind::Success)
   );
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A run whose process ended on an API error ends through every entry
+// ---------------------------------------------------------------------------
+
+/// The API error text of a backend's 429 result: the failure report must carry it.
+const RESULT_429: &str = "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded";
+/// A process identity no live process holds, for a run whose process ended before the boot.
+const DEAD_PID: u32 = 424_901;
+const DEAD_PID_START: &str = "1-424000";
+
+/// The entry that ends a worker run: its first launch, a re-attach follow, or a boot drain.
+#[derive(Clone, Copy, Debug)]
+enum RunEntry {
+  Launch,
+  Reattach,
+  Drain,
+}
+
+impl RunEntry {
+  fn name(self) -> &'static str {
+    match self {
+      RunEntry::Launch => "the first launch",
+      RunEntry::Reattach => "a re-attach follow",
+      RunEntry::Drain => "a boot drain",
+    }
+  }
+}
+
+/// A Claude Code `result` event that ends a run with a 429 rejection.
+fn result_429() -> Value {
+  json!({"type": event_types::RESULT, "is_error": true, "api_error_status": 429, "result": RESULT_429})
+}
+
+/// A process script that prints each event as one JSON line and exits with `code`.
+fn events_script(events: &[Value], code: i32) -> String {
+  let mut lines: Vec<String> =
+    events.iter().map(|event| format!("printf '%s\\n' '{}'", event.to_string().replace('\'', r"'\''"))).collect();
+  lines.push(format!("exit {code}"));
+  lines.join("\n")
+}
+
+/// The node an ending case runs on: a script-run worker under a manager, pool-chosen or named.
+async fn ending_worker(pool_chosen: bool, scripts: Vec<String>) -> anyhow::Result<(Stack, String, String)> {
+  let scripts = Scripts::new(scripts);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
+  if pool_chosen {
+    let guard = stack.store().control_lock().await;
+    let flag = Map::from_iter([("backend_from_pool".to_string(), json!(true))]);
+    stack.store().update_task_slot_fields_locked(&guard, &worker.id, backend_pool::METADATA_OWNER, flag).await?;
+  }
+  Ok((stack, manager.id, worker.id))
+}
+
+/// A queued work run on `node_id` that runs on the `fake` backend.
+async fn ending_run(stack: &Stack, node_id: &str, run_id: &str, input_ids: Vec<String>) -> anyhow::Result<RunRecord> {
+  let record = RunRecord {
+    backend: Some(BACKEND_ID.to_string()),
+    model: Some(format!("{BACKEND_ID}-model")),
+    input_event_ids: input_ids,
+    ..synthetic_run(node_id, run_id, RunKind::Work)
+  };
+  stack.register_with_task_spec(record, "synthetic script run").await
+}
+
+/// Stage a raw log that ends in the 429 result, with the cursor at the start of that line, as a run whose process died
+/// unseen leaves it. Returns the raw log's write time.
+fn stage_raw_429(run_dir: &Path, age: Duration) -> anyhow::Result<SystemTime> {
+  std::fs::create_dir_all(run_dir)?;
+  let prefix = format!(
+    "{}\n",
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+  );
+  let result = format!("{}\n", result_429());
+  let raw = run_dir.join(RAW_LOG_NAME);
+  std::fs::write(&raw, format!("{prefix}{result}"))?;
+  std::fs::write(run_dir.join(CURSOR_NAME), prefix.len().to_string())?;
+  let stamped = SystemTime::now() - age;
+  std::fs::OpenOptions::new().write(true).open(&raw)?.set_modified(stamped)?;
+  Ok(stamped)
+}
+
+/// Run one ending case through `entry`. Returns the stack with the manager and worker ids, the run id, and the raw
+/// log's staged write time for an entry that ends in the boot.
+async fn run_ending_entry(
+  entry: RunEntry,
+  pool_chosen: bool,
+) -> anyhow::Result<(Stack, String, String, String, Option<SystemTime>)> {
+  let run_id = "run-ending";
+  let follow_up = if pool_chosen { result_script("retry finished") } else { result_script("manager noted") };
+  let scripts = match entry {
+    RunEntry::Launch => vec![events_script(&[result_429()], 1), follow_up],
+    RunEntry::Reattach | RunEntry::Drain => vec![follow_up],
+  };
+  let (stack, manager_id, worker_id) = ending_worker(pool_chosen, scripts).await?;
+  let staged = match entry {
+    RunEntry::Launch => {
+      let admitted =
+        stack.dispatch.admit_input(&worker_id, event_types::USER, "run the script", "user", json!({})).await?;
+      let input_id = admitted["id"].as_str().context("the admitted input has an id")?.to_string();
+      ending_run(&stack, &worker_id, run_id, vec![input_id]).await?;
+      stack.adapter.launch(&worker_id, run_id)?;
+      stack.wait_terminal(&worker_id, run_id).await?;
+      None
+    }
+    RunEntry::Reattach => {
+      let guard = ProcessGroupGuard::new();
+      let mut child = Command::new("/bin/sh").args(["-c", "sleep 120"]).process_group(0).spawn()?;
+      let pid = child.id();
+      guard.track(pid);
+      let pin = identity::pin_process_identity(pid);
+      ending_run(&stack, &worker_id, run_id, Vec::new()).await?;
+      stack
+        .launch(&worker_id, run_id, pid, pin.pid_start.as_deref().context("the live process has an identity")?)
+        .await?;
+      stage_raw_429(&stack.store().run_dir(&worker_id, run_id), Duration::from_secs(30))?;
+      stack.adapter.resume_run(&worker_id, run_id, None).await?;
+      wait_for_child(&mut child)?;
+      // A live run ends now, not at its raw log's last write.
+      None
+    }
+    RunEntry::Drain => {
+      ending_run(&stack, &worker_id, run_id, Vec::new()).await?;
+      stack.launch(&worker_id, run_id, DEAD_PID, DEAD_PID_START).await?;
+      let staged = stage_raw_429(&stack.store().run_dir(&worker_id, run_id), Duration::from_secs(3600))?;
+      stack.node_pass(&worker_id).await?;
+      Some(staged)
+    }
+  };
+  Ok((stack, manager_id, worker_id, run_id.to_string(), staged))
+}
+
+/// Wait for the re-attached process to end, and fail when the end handling leaves it running.
+fn wait_for_child(child: &mut std::process::Child) -> anyhow::Result<()> {
+  let deadline = Instant::now() + Duration::from_secs(10);
+  loop {
+    if child.try_wait()?.is_some() {
+      return Ok(());
+    }
+    anyhow::ensure!(Instant::now() < deadline, "the end handling left the re-attached process running");
+    std::thread::sleep(Duration::from_millis(20));
+  }
+}
+
+/// One ending run's result: one failed end record, and the first launch's follow-up on both node kinds.
+async fn assert_ending(
+  stack: &Stack,
+  manager_id: &str,
+  worker_id: &str,
+  run_id: &str,
+  pool_chosen: bool,
+) -> anyhow::Result<()> {
+  let facts = stack.run_events(worker_id)?;
+  let events = stack.run_event_values(worker_id)?;
+  let ends = events
+    .iter()
+    .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"].as_str() == Some(run_id))
+    .count();
+  assert_eq!(ends, 1, "exactly one end record: {events:?}");
+  assert_eq!(run_records::terminal_outcome(&facts, run_id)?, Some(RunOutcomeKind::Failed));
+  let run = stack.store().read_run_sync(worker_id, run_id)?.context("the run is recorded")?;
+  assert_eq!(run.exit_code, Some(-1), "{run:?}");
+  if pool_chosen {
+    let switches = events.iter().filter(|event| event["type"] == event_types::QUOTA_FAILOVER).count();
+    assert_eq!(switches, 1, "the pool-chosen run fails over: {events:?}");
+    settle_until(|| {
+      Ok(stack.run_records(worker_id)?.iter().any(|candidate| candidate.retry_of_run_id.as_deref() == Some(run_id)))
+    })
+    .await?;
+    let retry = stack
+      .run_records(worker_id)?
+      .into_iter()
+      .find(|candidate| candidate.retry_of_run_id.as_deref() == Some(run_id))
+      .expect("the failover registers its retry");
+    assert_eq!(retry.backend.as_deref(), Some("fake2"), "the retry runs on the next pool member");
+    stack.wait_terminal(worker_id, &retry.id).await?;
+  } else {
+    settle_until(|| Ok(!stack.child_reports(manager_id)?.is_empty())).await?;
+    let reports = stack.child_reports(manager_id)?;
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert_eq!(reports[0]["outcome"], "failed");
+    let summary = reports[0]["summary"].as_str().unwrap_or_default();
+    assert!(summary.contains("429") && summary.contains("rate limit exceeded"), "the report carries the API error: {summary:?}");
+  }
+  Ok(())
+}
+
+/// The 429 result lines an ended run wrote to its events log.
+fn result_lines(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<usize> {
+  let path = stack.store().run_dir(session_id, run_id).join(RUN_EVENTS_NAME);
+  Ok(
+    std::fs::read_to_string(path)?
+      .lines()
+      .filter(|line| {
+        serde_json::from_str::<Value>(line)
+          .is_ok_and(|event| event["type"] == event_types::RESULT && event["result"] == RESULT_429)
+      })
+      .count(),
+  )
+}
+
+/// Leave the crash window's pending close report on a node: a close fact naming `manager_id`, then the reopen that
+/// lets the same boot drain the node's run.
+async fn seed_pending_report(stack: &Stack, session_id: &str, manager_id: &str) -> anyhow::Result<()> {
+  let close = control_events::build_control_event(
+    event_types::TASK_CLOSED,
+    "system",
+    session_id,
+    Some(&control_events::stable_close_event_id(session_id, "pending-report")),
+    None,
+    [
+      ("request_id".to_string(), json!("pending-report")),
+      ("outcome".to_string(), json!("cancelled")),
+      ("summary".to_string(), json!("a report the crash window owed")),
+      ("result_refs".to_string(), json!([])),
+      ("run_ids".to_string(), json!([])),
+      ("report_to".to_string(), json!(manager_id)),
+    ],
+  );
+  {
+    let guard = stack.store().control_lock().await;
+    stack.store().append_control_fact(&guard, session_id, close).await?;
+  }
+  stack
+    .completion
+    .restore_task(
+      session_id,
+      "reopen-pending-report",
+      "the restart reopens the node",
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await?;
+  Ok(())
+}
+
+/// A 429 result ends a worker run the same way through the first launch, a re-attach follow and a boot drain. Each
+/// entry has one failed end record, and the pool-chosen node fails over to a new work run.
+#[tokio::test]
+async fn a_worker_run_ends_the_same_way_through_every_entry_on_a_pool_node() -> anyhow::Result<()> {
+  for entry in [RunEntry::Launch, RunEntry::Reattach, RunEntry::Drain] {
+    let (stack, manager_id, worker_id, run_id, staged) = run_ending_entry(entry, true).await?;
+    assert_ending(&stack, &manager_id, &worker_id, &run_id, true)
+      .await
+      .with_context(|| format!("the pool-chosen node through {}", entry.name()))?;
+    if let Some(staged) = staged {
+      let run = stack.store().read_run_sync(&worker_id, &run_id)?.expect("the run is recorded");
+      let ended_at = run.ended_at.expect("the drain lands an end time").into_inner();
+      assert!(
+        (ended_at - time::OffsetDateTime::from(staged)).abs() < time::Duration::seconds(1),
+        "the drained run's end time is the raw log's last write"
+      );
+    }
+    assert_eq!(result_lines(&stack, &worker_id, &run_id)?, 1, "the result line is written once");
+  }
+  Ok(())
+}
+
+/// A named-backend node ends the same way through every entry: one failed end record and one parent report carrying
+/// the API error text.
+#[tokio::test]
+async fn a_worker_run_ends_the_same_way_through_every_entry_on_a_named_node() -> anyhow::Result<()> {
+  for entry in [RunEntry::Launch, RunEntry::Reattach, RunEntry::Drain] {
+    let (stack, manager_id, worker_id, run_id, _staged) = run_ending_entry(entry, false).await?;
+    assert_ending(&stack, &manager_id, &worker_id, &run_id, false)
+      .await
+      .with_context(|| format!("the named node through {}", entry.name()))?;
+    assert_eq!(result_lines(&stack, &worker_id, &run_id)?, 1, "the result line is written once");
+  }
+  Ok(())
+}
+
+/// The drain checkpoints the line it ended on, so a second node recovery appends no copy and starts no second drain.
+#[tokio::test]
+async fn a_second_node_recovery_keeps_one_result_line() -> anyhow::Result<()> {
+  let (stack, _manager_id, worker_id, run_id, _staged) = run_ending_entry(RunEntry::Drain, false).await?;
+  assert_eq!(result_lines(&stack, &worker_id, &run_id)?, 1);
+  let run_dir = stack.store().run_dir(&worker_id, &run_id);
+  let raw_len = std::fs::metadata(run_dir.join(RAW_LOG_NAME))?.len();
+  assert_eq!(
+    charliebot_agents::transport::cursor::read_raw_cursor(&run_dir.join(CURSOR_NAME)),
+    raw_len,
+    "the drained run's cursor reaches the raw log's end"
+  );
+
+  let log = LogCapture::default();
+  {
+    let _capture = log.install();
+    stack.node_pass(&worker_id).await?;
+  }
+  assert_eq!(result_lines(&stack, &worker_id, &run_id)?, 1, "the second pass appends no result line");
+  assert!(!log.text().contains("task_recovery_drain"), "the second pass drains nothing: {}", log.text());
+  Ok(())
+}
+
+/// The drain's end handling leaves the node's pending input and pending report for the same recovery pass, and the
+/// run's ending no longer aborts the node.
+#[tokio::test]
+async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Result<()> {
+  let (stack, manager_id, worker_id) = ending_worker(false, vec![result_script("noted"); 4]).await?;
+  let run_id = "run-drained";
+  ending_run(&stack, &worker_id, run_id, Vec::new()).await?;
+  stack.launch(&worker_id, run_id, DEAD_PID, DEAD_PID_START).await?;
+  stage_raw_429(&stack.store().run_dir(&worker_id, run_id), Duration::from_secs(3600))?;
+  stack
+    .dispatch
+    .admit_input(&worker_id, event_types::USER, "follow up after the restart", "user", json!({}))
+    .await?;
+  seed_pending_report(&stack, &worker_id, &manager_id).await?;
+
+  let log = LogCapture::default();
+  {
+    let _capture = log.install();
+    stack.node_pass(&worker_id).await?;
+  }
+  assert!(!log.text().contains("task_recovery_node_failed"), "{}", log.text());
+  settle_until(|| Ok(stack.dispatch.pending_inputs(&worker_id)?.is_empty())).await?;
+  settle_until(|| {
+    Ok(stack.run_records(&worker_id)?.iter().any(|run| run.id != run_id && run.kind == RunKind::Work))
+  })
+  .await?;
+  let report = stack
+    .child_reports(&manager_id)?
+    .into_iter()
+    .find(|report| report["outcome"] == "cancelled")
+    .context("the pending report reaches the manager")?;
+  assert_eq!(report["child_session_id"], worker_id.as_str());
+  assert_eq!(report["summary"], "a report the crash window owed");
+  Ok(())
+}
+
+/// A manager resume whose follow returns an error lands the first launch's failure: a failed end record and the
+/// "Turn failed" notice in the manager's own session.
+#[tokio::test]
+async fn a_manager_resume_error_lands_the_turn_failure() -> anyhow::Result<()> {
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  stack.queue_run(&manager.id, "run-turn", RunKind::ManagerTurn).await?;
+  stack.launch(&manager.id, "run-turn", DEAD_PID, DEAD_PID_START).await?;
+  let run_dir = stack.store().run_dir(&manager.id, "run-turn");
+  std::fs::create_dir_all(&run_dir)?;
+  // The resume fails before its follow: a capture context that does not parse.
+  std::fs::write(run_dir.join("final_stdout.context.json"), b"not a capture context")?;
+
+  stack.node_pass(&manager.id).await?;
+
+  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(&manager.id)?, "run-turn")?.is_some())).await?;
+  let events = stack.run_event_values(&manager.id)?;
+  assert_eq!(run_records::terminal_outcome(&stack.run_events(&manager.id)?, "run-turn")?, Some(RunOutcomeKind::Failed));
+  let run = stack.store().read_run_sync(&manager.id, "run-turn")?.context("the turn is recorded")?;
+  assert_eq!(run.exit_code, Some(-1), "{run:?}");
+  let notice = events.iter().any(|event| {
+    event["type"] == event_types::ERROR
+      && event["content"].as_str().is_some_and(|text| text.starts_with("Turn failed"))
+  });
+  assert!(notice, "the manager session shows the turn failure: {events:?}");
   Ok(())
 }
 

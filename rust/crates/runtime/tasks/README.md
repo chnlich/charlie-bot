@@ -166,6 +166,14 @@ consumers: a turn whose record is durable detaches, and an uncovered turn termin
 A manager turn that is alive enqueues a master resume through `MasterQueue::enqueue_master_resume`, and the follow is
 tracked and never awaited, so the boot pass does not wait on the queue. The resumed record carries no input ids.
 
+A re-attached or drained worker run ends through the end handling its first launch uses: `execute_worker_run` and
+`resume_worker_run` both call `TaskExecutionAdapter::end_worker_run`, which records the run's end and then takes the
+first-launch follow-up, either the pool failover or the parent report. A re-attached process still alive when its
+follow ends is terminated first. A manager resume whose follow returns an error lands the first launch's failure
+through `land_launch_failure`: the failed end record, the "Turn failed" notice and the node's pending inputs. The
+follow checkpoints a line whose event ended the run (an `is_error` result with a 429 or 5xx status), so a later boot
+does not append that line again.
+
 ### Follow-ups that return a named error
 
 The follow-ups that have no replay yet return an error that names the owner and the step. Startup logs each one as

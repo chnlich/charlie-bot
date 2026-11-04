@@ -1102,6 +1102,11 @@ async fn replay_followups_with_records(
         }
         continue;
       }
+      // A failed run whose failover registered its retry already took its follow-up: replaying it would report the
+      // parent alongside the retry.
+      if run_records.iter().any(|candidate| candidate.retry_of_run_id.as_deref() == Some(run.id.as_str())) {
+        continue;
+      }
       adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;
     } else if run.kind == RunKind::Review {
       counters.followups += 1;
@@ -1362,7 +1367,11 @@ fn track_manager_follow(
     match result {
       Ok(Ok(_)) => {}
       Ok(Err(error)) => {
-        tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %format!("{error:#}"), "manager_resume_follow_ended");
+        if error.downcast_ref::<master_run::TurnLetGo>().is_none()
+          && error.downcast_ref::<master_run::TurnCancelled>().is_none()
+        {
+          land_manager_resume_failure(&adapter, &session_id, &run_id, &error).await;
+        }
         if is_out_of_space_error(error.as_ref()) {
           adapter.start_run_end_landing_retry(&session_id, Some(&run_id));
         }
@@ -1375,6 +1384,30 @@ fn track_manager_follow(
       ),
     }
   });
+}
+
+/// Land a manager resume's error as its turn's end, the way a first launch lands the same failure: a failed end record,
+/// the "Turn failed" notice and the node's pending inputs. A run that already ended keeps its record.
+async fn land_manager_resume_failure(
+  adapter: &TaskExecutionAdapter,
+  session_id: &str,
+  run_id: &str,
+  error: &anyhow::Error,
+) {
+  let store = &adapter.features.store;
+  let landing = async {
+    if store.run_facts(session_id)?.terminal_outcome(run_id)?.is_some() {
+      return Ok(());
+    }
+    let Some(meta) = store.load_meta(session_id).await? else { return Ok(()) };
+    let Some(run) = store.read_run_sync(session_id, run_id)? else { return Ok(()) };
+    adapter.land_launch_failure(&meta, &run, error, "RuntimeError").await;
+    Ok::<(), anyhow::Error>(())
+  }
+  .await;
+  if let Err(landing_error) = landing {
+    tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %landing_error, "manager_resume_failure_landing_failed");
+  }
 }
 
 /// Land a terminal run's end metadata from its raw log (`repair_end_metadata`). The terminal fact is authoritative; the

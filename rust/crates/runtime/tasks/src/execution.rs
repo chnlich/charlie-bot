@@ -826,47 +826,75 @@ impl TaskExecutionAdapter {
       })
     }));
     let process_result = worker.run().await;
+    if process_result.is_err() {
+      worker.terminate().await?;
+    }
+    self.end_worker_run(meta, run, option, process_result, None).await
+  }
 
+  /// The one end-of-run handling of a worker run: it classifies the process result, records the run's end, and runs
+  /// the first-launch follow-up. A first launch, a re-attach follow and a boot drain all end here.
+  async fn end_worker_run(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    option: &BackendOption,
+    process_result: anyhow::Result<i32>,
+    ended_at: Option<UtcDateTime>,
+  ) -> anyhow::Result<()> {
     let (exit_code, error_text) = match process_result {
       Ok(exit_code) => (exit_code, String::new()),
       Err(error) => {
-        worker.terminate().await?;
-        if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
-          tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, quota_exhausted = refusal.quota_exhausted, "task_run_launch_refused");
-          if refusal.quota_exhausted {
-            self
-              .quota_failures
-              .lock()
-              .expect("worker quota failure map is not poisoned")
-              .insert((session_id.to_string(), run_id.to_string()), refusal.resets_at);
-          }
-          self.record_launch_error_event(session_id, run_id, &refusal.message, Some(refusal.quota_exhausted)).await?;
-        } else if let Some(quota) = error.downcast_ref::<worker::QuotaExhaustedError>() {
-          tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %quota, "task_run_quota_exhausted");
-          let resets_at = quota
-            .resets_at
-            .map(|value| value.format(&time::format_description::well_known::Rfc3339))
-            .transpose()?
-            .map(|value| UtcDateTime::parse(&value))
-            .transpose()?;
-          self
-            .quota_failures
-            .lock()
-            .expect("worker quota failure map is not poisoned")
-            .insert((session_id.to_string(), run_id.to_string()), resets_at);
-        } else {
-          tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_failed");
-        }
+        self.record_worker_error(meta, run, &error).await?;
         (-1, error.to_string())
       }
     };
-    let durable = self.finalize_worker_run(meta, run, option, exit_code, &error_text, None).await?;
+    let durable = self.finalize_worker_run(meta, run, option, exit_code, &error_text, ended_at).await?;
     let fresh = self
       .features
       .store
-      .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
+      .read_run_sync(&meta.id, &run.id)?
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(&run.id, &meta.id)))?;
     self.after_worker_run(meta, &fresh, &durable).await
+  }
+
+  /// Record the error that ended a worker run: a refused launch keeps its own event, a spent quota enters the failure
+  /// map that decides the failover, and every other error is logged.
+  async fn record_worker_error(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    error: &anyhow::Error,
+  ) -> anyhow::Result<()> {
+    let session_id = meta.id.as_str();
+    let run_id = run.id.as_str();
+    if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
+      tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, quota_exhausted = refusal.quota_exhausted, "task_run_launch_refused");
+      if refusal.quota_exhausted {
+        self
+          .quota_failures
+          .lock()
+          .expect("worker quota failure map is not poisoned")
+          .insert((session_id.to_string(), run_id.to_string()), refusal.resets_at);
+      }
+      self.record_launch_error_event(session_id, run_id, &refusal.message, Some(refusal.quota_exhausted)).await?;
+    } else if let Some(quota) = error.downcast_ref::<worker::QuotaExhaustedError>() {
+      tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %quota, "task_run_quota_exhausted");
+      let resets_at = quota
+        .resets_at
+        .map(|value| value.format(&time::format_description::well_known::Rfc3339))
+        .transpose()?
+        .map(|value| UtcDateTime::parse(&value))
+        .transpose()?;
+      self
+        .quota_failures
+        .lock()
+        .expect("worker quota failure map is not poisoned")
+        .insert((session_id.to_string(), run_id.to_string()), resets_at);
+    } else {
+      tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_failed");
+    }
+    Ok(())
   }
 
   fn inherit_worker_continuation(&self, meta: &SessionMetadata, run: &mut RunRecord) -> StoreResult<()> {
@@ -2124,23 +2152,15 @@ impl TaskExecutionAdapter {
         Ok(())
       })
     }));
-    let (exit_code, error_text) = match worker.resume(is_alive, None).await {
-      Ok(code) => (code, String::new()),
-      Err(error) => {
-        if error.downcast_ref::<charliebot_agents::transport::final_stdout::GuardError>().is_none() {
-          return Err(error);
-        }
-        tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_resume_failed");
-        (-1, error.to_string())
-      }
-    };
-    let durable = self.finalize_worker_run(meta, run, option, exit_code, &error_text, ended_at).await?;
-    let fresh = self
-      .features
-      .store
-      .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
-    self.after_worker_run(meta, &fresh, &durable).await
+    let process_result = worker.resume(Arc::clone(&is_alive), None).await;
+    if process_result.is_err()
+      && let Some(pid) = run.pid
+      && is_alive()
+    {
+      // A re-attached process can outlive the error that ended its run; the end handling must not leave it running.
+      charliebot_agents::transport::kill::kill_group_escalating(pid, || is_alive()).await;
+    }
+    self.end_worker_run(meta, run, option, process_result, ended_at).await
   }
 
   /// The session callbacks of a manager turn, with the task-tree activity read the queue consults.
@@ -2357,7 +2377,7 @@ impl TaskExecutionAdapter {
     Ok(())
   }
 
-  async fn land_launch_failure(
+  pub(crate) async fn land_launch_failure(
     &self,
     meta: &SessionMetadata,
     initial_run: &RunRecord,

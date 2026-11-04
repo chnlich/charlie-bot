@@ -31,6 +31,27 @@ thread_local! {
 /// Async callback invoked once when the raw log exceeds its silence threshold.
 pub type SilenceCallback = Box<dyn FnMut() -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send>;
 
+/// An event-handler error that ended the run after its event was persisted. The follow checkpoints past that line and
+/// returns the error, so a later boot does not replay it.
+#[derive(Debug)]
+pub struct EventEndedRun;
+
+impl std::fmt::Display for EventEndedRun {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str("the event ended the run")
+  }
+}
+
+impl std::error::Error for EventEndedRun {}
+
+/// Whether a handler error reports that the event it read ended the run.
+fn event_ended_run(error: &io::Error) -> bool {
+  error.get_ref().is_some_and(|cause| {
+    let cause: &(dyn std::error::Error + 'static) = cause;
+    cause.downcast_ref::<EventEndedRun>().is_some()
+  })
+}
+
 /// Counters returned after a follow loop drains or reaches its post-result timeout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FollowSummary {
@@ -134,7 +155,16 @@ where
                 // A delivered input starts a same-process second turn: its result re-arms the post-result clock.
                 let is_input_delivered =
                   translated.get("type").and_then(Value::as_str) == Some(charliebot_core::event_types::INPUT_DELIVERED);
-                handle_event(translated).await?;
+                if let Err(error) = handle_event(translated).await {
+                  // A run that ended on this event keeps its line in the checkpointed prefix: the event is durable,
+                  // and a replay would append it a second time.
+                  if event_ended_run(&error)
+                    && let Some(writer) = cursor_writer.as_mut()
+                  {
+                    writer.write(line_end + 1)?;
+                  }
+                  return Err(error.into());
+                }
                 if is_input_delivered {
                   saw_result = false;
                 }
@@ -605,6 +635,55 @@ mod tests {
     .await
     .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+  }
+
+  #[tokio::test]
+  async fn a_run_ending_event_checkpoints_past_its_line() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let cursor = root.path().join("agent.raw.cursor");
+    fs::write(&raw, b"{\"type\":\"result\"}\n").unwrap();
+    let error = tail_follow_events(
+      &raw,
+      |event| Ok(vec![event]),
+      |_| async { Err(io::Error::other(EventEndedRun)) },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("the event ended the run"), "{error}");
+    assert_eq!(read_raw_cursor(&cursor), fs::metadata(&raw).unwrap().len());
+  }
+
+  #[tokio::test]
+  async fn a_write_failure_leaves_the_cursor_short_of_its_line() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let cursor = root.path().join("agent.raw.cursor");
+    fs::write(&raw, b"{\"type\":\"result\"}\n").unwrap();
+    tail_follow_events(
+      &raw,
+      |event| Ok(vec![event]),
+      |_| async { Err(io::Error::other("events log write failed")) },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(read_raw_cursor(&cursor), 0);
   }
 
   #[tokio::test]

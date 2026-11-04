@@ -150,6 +150,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
   - Start each CLI run in its own process session so it survives a server restart.
   - On the next boot, reattach live runs and drain dead runs.
   - Set a drained run's `ended_at` to its raw log's last write.
+  - A reattached or drained run ends the way its first launch would end: for worker runs, its end record, then the same pool failover or parent report.
   - Exclude backends registered with `restart_reattach=False` and improve-loop controllers from restart reattachment.
 - For CLC run end conditions, resuming an errored session, context reset, landing a CLC change, or running its reviewer, read the charlie-code `README.md`.
 - **Long-running remote command**:

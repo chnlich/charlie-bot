@@ -41,8 +41,8 @@ Purpose: a guessed transcript answers words the user never said.
 
 ## Slack specifics
 
-When Slack hosts the file, fetch it through `url_private_download` with the app bearer.
-Purpose: the command reads a local file, so the clip must be on disk first.
+When Slack hosts the clip, download it with `charliebot slack download <url_private_download> --output <path>`.
+Purpose: the transcription step reads a local file, so the clip must be on disk first.
 
 Use the online transcription result.
 Purpose: Slack's `files.info` transcript can take minutes.

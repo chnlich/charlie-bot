@@ -43,6 +43,26 @@ pub const USER_READ_METHODS: [&str; 6] = [
   "search.messages",
 ];
 
+/// The host that serves a Slack message file's `url_private` and `url_private_download`.
+pub const FILE_HOST: &str = "files.slack.com";
+
+/// Admit one `charliebot slack download` URL. A Slack-hosted file is a read, so either token may GET a
+/// URL on [`FILE_HOST`]; every other URL is refused before any network call.
+pub fn admit_download(kind: TokenKind, url: &str) -> Result<(), CliExit> {
+  let Ok(parsed) = reqwest::Url::parse(url) else {
+    return Err(CliExit::usage("URL must be an absolute http or https URL"));
+  };
+  if parsed.scheme() == "https" && parsed.host_str() == Some(FILE_HOST) {
+    return Ok(());
+  }
+  Err(match kind {
+    TokenKind::User => CliExit::error(format!(
+      "{url} is not a Slack file URL: the user token may only download from https://{FILE_HOST}. For a message in the user's own name use `charliebot slack draft`; for a bot post use `--token bot`."
+    )),
+    TokenKind::Bot => CliExit::error(format!("{url} is not a Slack file URL: download only from https://{FILE_HOST}.")),
+  })
+}
+
 /// Admit one `slack request` call. The user token may only address one read method at a Slack Web API
 /// method URL; the bot token keeps every method. The refusal returns before any network call.
 pub fn admit(kind: TokenKind, url: &str) -> Result<(), CliExit> {

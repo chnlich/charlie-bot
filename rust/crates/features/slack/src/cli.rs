@@ -1,15 +1,17 @@
 //! The `slack` verbs: reply on a session's own Slack thread, acknowledge read thread
-//! messages, send one authenticated Slack Web API request, and register a draft of a message in the operator's name.
+//! messages, send one authenticated Slack Web API request, download a message file, and register a draft of a
+//! message in the operator's name.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `ack`
 //! advances the session's read watermark and prints the readback; every read message's id must be passed. `request`
-//! reads the token inside this process, sends one request and prints the response body. The user token is read-only in
-//! this CLI: it admits only the read methods in `token::USER_READ_METHODS`, and the bot token keeps every method.
+//! reads the token inside this process, sends one request and prints the response body. `download` reads one Slack
+//! file's bytes into a named path. The user token is read-only in this CLI: it admits only the read methods in
+//! `token::USER_READ_METHODS` and a GET of a file on Slack's file host, and the bot token keeps every method.
 //! `draft` registers a channel post, thread reply, DM, or group DM whose card the operator approves; the server sends
 //! the card's body from the operator's own account.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
@@ -22,6 +24,7 @@ use charliebot_core::{config, home, paths};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 
+use crate::download;
 use crate::draft_target;
 use crate::token::{self, TokenKind};
 
@@ -40,6 +43,8 @@ enum SlackCommand {
   Ack(AckArgs),
   /// Send one authenticated Slack Web API request
   Request(RequestCommand),
+  /// Download a Slack-hosted file, such as a message's `url_private`, to a local path
+  Download(DownloadCommand),
   /// Register a message in the operator's name for approval on a session card
   Draft(DraftArgs),
 }
@@ -58,6 +63,18 @@ struct ReplyArgs {
 struct RequestCommand {
   #[command(flatten)]
   request: RequestArgs,
+  /// Which Slack token to authenticate with: the user token by default, the bot token with `bot`.
+  #[arg(long, value_name = "KIND", default_value = "user", value_parser = ["user", "bot"])]
+  token: String,
+}
+
+#[derive(Args)]
+struct DownloadCommand {
+  /// The file URL from a message's `files[]`: its `url_private` or `url_private_download`
+  url: String,
+  /// Path to write the file's bytes to; the path is written only when the response is the file
+  #[arg(long, value_name = "PATH")]
+  output: PathBuf,
   /// Which Slack token to authenticate with: the user token by default, the bot token with `bot`.
   #[arg(long, value_name = "KIND", default_value = "user", value_parser = ["user", "bot"])]
   token: String,
@@ -106,6 +123,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     SlackCommand::Reply(args) => reply(&args),
     SlackCommand::Ack(args) => ack(&args),
     SlackCommand::Request(args) => run_request(&args),
+    SlackCommand::Download(args) => run_download(&args),
     SlackCommand::Draft(args) => draft(&args),
   }
 }
@@ -159,6 +177,25 @@ fn execute_request(args: &RequestArgs, kind: TokenKind, token: &str) -> Result<V
     return Err(request::http_failure(response.status, &response.body, &[token]));
   }
   Ok(request::redact_bytes(&response.body, &[token]))
+}
+
+fn run_download(args: &DownloadCommand) -> Result<(), CliExit> {
+  let kind = token_kind(&args.token);
+  let home_dir = home::charliebot_home_dir().map_err(|_| credential_failure(kind, None))?;
+  run_download_at(&home_dir, args)
+}
+
+fn run_download_at(home_dir: &Path, args: &DownloadCommand) -> Result<(), CliExit> {
+  let kind = token_kind(&args.token);
+  let path = home_dir.join(config::CREDENTIALS_FILENAME);
+  let token = token::token(home_dir, kind).map_err(|_| credential_failure(kind, Some(&path)))?;
+  if token.trim().is_empty() {
+    return Err(credential_failure(kind, Some(&path)));
+  }
+  token::admit_download(kind, &args.url)?;
+  let bytes = download::download(&args.url, &args.output, kind, &token)?;
+  print!("{}", json_out::render(&json!({"path": paths::display(&args.output), "bytes": bytes}), None));
+  Ok(())
 }
 
 fn token_kind(name: &str) -> TokenKind {
@@ -243,15 +280,21 @@ mod tests {
 
   /// One accepted connection answering a scripted status and body.
   fn stub(status: u16, body: &[u8]) -> (String, std::sync::mpsc::Receiver<Vec<u8>>) {
+    stub_with_type(status, "application/json", body)
+  }
+
+  /// One accepted connection answering a scripted status, content type and body.
+  fn stub_with_type(status: u16, content_type: &str, body: &[u8]) -> (String, std::sync::mpsc::Receiver<Vec<u8>>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let url = format!("http://{}/api", listener.local_addr().unwrap());
     let body = body.to_vec();
+    let content_type = content_type.to_string();
     let (sender, receiver) = std::sync::mpsc::channel();
     thread::spawn(move || {
       let (mut stream, _) = listener.accept().unwrap();
       sender.send(read_request(&mut stream)).unwrap();
       let response = format!(
-        "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} Status\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
       );
       let _ = stream.write_all(response.as_bytes());
@@ -424,6 +467,143 @@ mod tests {
   fn usage_errors_exit_two_without_a_token() {
     let error = execute_request(&arguments("relative/path", "user").request, TokenKind::User, USER_TOKEN).unwrap_err();
     assert_eq!(error.code, 2);
+    assert_no_token(&error_text(&error));
+  }
+
+  fn download_args(url: &str, output: &Path, kind: &str) -> DownloadCommand {
+    DownloadCommand { url: url.to_string(), output: output.to_path_buf(), token: kind.to_string() }
+  }
+
+  fn output_path() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file.png");
+    (dir, path)
+  }
+
+  #[test]
+  fn a_download_admits_the_slack_file_host_for_both_tokens() {
+    let url = format!("https://{}/files-pri/T0B9ZNJRCLA-F0CBAJF074H/image.png", token::FILE_HOST);
+
+    for kind in [TokenKind::User, TokenKind::Bot] {
+      token::admit_download(kind, &url).unwrap();
+    }
+    // A Web API method URL stays admitted only by `slack request`, not by the download verb.
+    let api = token::admit_download(TokenKind::User, "https://slack.com/api/conversations.history").unwrap_err();
+    assert_eq!(api.code, 1);
+    assert!(error_text(&api).contains("not a Slack file URL"), "{}", error_text(&api));
+    assert_no_token(&error_text(&api));
+    let plain = token::admit_download(TokenKind::User, "http://files.slack.com/files-pri/T-F/image.png");
+    assert_eq!(plain.unwrap_err().code, 1, "a file URL over http is not admitted");
+  }
+
+  #[test]
+  fn a_user_token_download_writes_the_file_bytes_and_sends_the_token() {
+    let home = credentials_home(TABLE);
+    let (_dir, path) = output_path();
+    let png = b"\x89PNG\r\n\x1a\nsynthetic-image-bytes";
+    let (url, receiver) = stub_with_type(200, "image/png", png);
+    let file_url = format!("{url}/files-pri/T0B9ZNJRCLA-F0CBAJF074H/image.png");
+    let user_token = token::token(home.path(), TokenKind::User).unwrap();
+
+    let bytes = download::download(&file_url, &path, TokenKind::User, &user_token).unwrap();
+    let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
+
+    assert_eq!(bytes, png.len());
+    assert_eq!(std::fs::read(&path).unwrap(), png);
+    assert!(request.starts_with("GET /api/files-pri/T0B9ZNJRCLA-F0CBAJF074H/image.png HTTP/1.1"), "{request}");
+    assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
+    assert_no_token(&String::from_utf8_lossy(&std::fs::read(&path).unwrap()));
+  }
+
+  #[test]
+  fn a_sign_in_page_exits_one_and_leaves_no_file() {
+    let (_dir, path) = output_path();
+    let (url, receiver) = stub_with_type(200, "text/html; charset=utf-8", b"<!DOCTYPE html><html>Sign in</html>");
+
+    let error =
+      download::download(&format!("{url}/files-pri/T-F/image.png"), &path, TokenKind::User, USER_TOKEN).unwrap_err();
+    let _ = receiver.recv_timeout(TIMEOUT);
+
+    assert_eq!(error.code, 1);
+    assert!(error_text(&error).contains("sign-in page"), "{}", error_text(&error));
+    assert!(error_text(&error).contains("files:read"), "{}", error_text(&error));
+    assert_no_token(&error_text(&error));
+    assert!(!path.exists(), "a non-file answer leaves no output file");
+  }
+
+  #[test]
+  fn a_sign_in_redirect_exits_one_and_leaves_no_file() {
+    let (_dir, path) = output_path();
+    let (url, receiver) = stub_with_type(302, "text/html; charset=utf-8", b"<a href=\"signin\">Found</a>.");
+
+    let error =
+      download::download(&format!("{url}/files-pri/T-F/image.png"), &path, TokenKind::User, USER_TOKEN).unwrap_err();
+    let _ = receiver.recv_timeout(TIMEOUT);
+
+    assert_eq!(error.code, 1);
+    assert!(error_text(&error).contains("redirected"), "{}", error_text(&error));
+    assert!(error_text(&error).contains("files:read"), "{}", error_text(&error));
+    assert!(!path.exists());
+  }
+
+  #[test]
+  fn a_slack_api_error_exits_one_and_leaves_no_file() {
+    let (_dir, path) = output_path();
+    let (url, receiver) = stub_with_type(200, "application/json", br#"{"ok":false,"error":"file_not_found"}"#);
+
+    let error =
+      download::download(&format!("{url}/files-pri/T-F/image.png"), &path, TokenKind::Bot, BOT_TOKEN).unwrap_err();
+    let _ = receiver.recv_timeout(TIMEOUT);
+
+    assert_eq!(error.code, 1);
+    assert!(error_text(&error).contains("file_not_found"), "{}", error_text(&error));
+    assert!(error_text(&error).contains("slack.bot_token"), "{}", error_text(&error));
+    assert_no_token(&error_text(&error));
+    assert!(!path.exists());
+  }
+
+  #[test]
+  fn a_download_off_the_slack_file_host_is_refused_before_any_network_call() {
+    let home = credentials_home(TABLE);
+    let (_dir, path) = output_path();
+    let (url, receiver) = stub_with_type(200, "image/png", b"not reached");
+
+    let error = run_download_at(home.path(), &download_args(&format!("{url}/files-pri/T-F/image.png"), &path, "user"))
+      .unwrap_err();
+    let text = error_text(&error);
+
+    assert_eq!(error.code, 1);
+    assert!(text.contains("not a Slack file URL"), "{text}");
+    assert_no_token(&text);
+    assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err(), "the refusal happens before the network");
+    assert!(!path.exists());
+  }
+
+  #[test]
+  fn slack_request_still_refuses_a_file_url_for_the_user_token() {
+    let home = credentials_home(TABLE);
+    let (url, receiver) = stub(200, br#"{"ok":true}"#);
+    let command = arguments(&format!("{url}/files-pri/T-F/image.png"), "user");
+
+    let error = run_request_at(home.path(), &command).unwrap_err();
+
+    assert_eq!(error.code, 1);
+    assert!(error_text(&error).contains("not a Slack Web API method URL"), "{}", error_text(&error));
+    assert_no_token(&error_text(&error));
+    assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
+  }
+
+  #[test]
+  fn a_download_without_a_token_is_a_credential_failure() {
+    let home = credentials_home("slack:\n  user_token: synthetic-user-token\n");
+    let (_dir, path) = output_path();
+
+    let error =
+      run_download_at(home.path(), &download_args("https://files.slack.com/files-pri/T-F/image.png", &path, "bot"))
+        .unwrap_err();
+
+    assert_eq!(error.code, 3);
+    assert!(error_text(&error).contains("credentials.slack.bot_token"));
     assert_no_token(&error_text(&error));
   }
 

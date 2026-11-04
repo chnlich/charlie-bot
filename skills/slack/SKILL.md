@@ -12,12 +12,15 @@ Read messages, search conversations, and look up users in the configured Slack w
 
 - Token location: `$CHARLIEBOT_HOME/credentials.yaml` under `slack.user_token` and `slack.bot_token`
 - Token type: User OAuth Token (`xoxp-`)
-- Available scopes: `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `mpim:history`, `search:read`, `users:read`
+- Available scopes on `slack.user_token`, as the Web API reads them back: `identify`, `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `mpim:history`, `search:read`, `users:read`, `files:read`
 - Requests: send every Slack Web API call through `charliebot slack request`. The command reads the token from `credentials.yaml` inside its own process, so no token appears in a command, an output or a run record.
+- Files: download a message file through `charliebot slack download`.
 
 - CharlieBot runtime calls use app credentials.
 - `charliebot slack request` admits only read methods with `slack.user_token`.
+- `charliebot slack download` admits a GET of a file on Slack's file host, for either token kind.
 - Post with `slack.bot_token`.
+- `slack.bot_token` carries `files:write` and not `files:read`.
 - A message in Chao's name goes through `charliebot slack draft`.
 - Grant missing runtime scopes to the app.
 - Follow the standing approval rules for outbound messages.
@@ -36,7 +39,7 @@ The command adds the bearer header itself and prints the 2xx response body. It u
 | Exit code | Meaning |
 |---|---|
 | 0 | A 2xx response whose `ok` is not `false`. |
-| 1 | Another status, `"ok": false`, or a network failure. |
+| 1 | Another status, `"ok": false`, a network failure, or a download answer that is not the file. |
 | 2 | Invalid arguments. |
 | 3 | `credentials.yaml` is unreadable or the chosen `slack` key is missing. |
 
@@ -92,6 +95,16 @@ GET https://slack.com/api/search.messages?query=QUERY
 ```
 
 Supports Slack search modifiers: `from:username`, `in:#channel`, `before:2026-01-01`, `after:2026-01-01`, `has:link`, etc.
+
+### Download a File
+
+A message's `files[]` entry carries the file URL in `url_private` or `url_private_download`. Pass that URL and the output path:
+
+```bash
+charliebot slack download '<url_private>' --output <path>
+```
+
+The command admits only Slack's file host. It uses `slack.user_token` by default, which carries `files:read`; `slack.bot_token` needs that scope before it can download. When the token lacks `files:read`, or cannot see the file, Slack answers with a sign-in page or a redirect: the command exits 1, writes no file, and names the missing scope.
 
 ## Important Workarounds
 

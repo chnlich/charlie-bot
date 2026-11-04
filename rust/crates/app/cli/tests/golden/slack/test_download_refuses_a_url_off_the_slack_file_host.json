@@ -1,0 +1,18 @@
+{
+  "files": {
+    "home/credentials.yaml": "slack:\n  user_token: synthetic-user-token\n  bot_token: synthetic-bot-token\n"
+  },
+  "argv": [
+    "slack",
+    "download",
+    "https://example.invalid/files-pri/T0B9ZNJRCLA-F0CBAJF074H/image.png",
+    "--output",
+    "{root}/image.png"
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"https://example.invalid/files-pri/T0B9ZNJRCLA-F0CBAJF074H/image.png is not a Slack file URL: the user token may only download from https://files.slack.com. For a message in the user's own name use `charliebot slack draft`; for a bot post use `--token bot`.\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

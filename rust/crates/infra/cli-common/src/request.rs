@@ -119,6 +119,8 @@ impl Request {
 pub struct Response {
   pub status: u16,
   pub body: Vec<u8>,
+  /// The `Content-Type` header, when the server sent one.
+  pub content_type: Option<String>,
 }
 
 /// Send one prepared request.
@@ -145,8 +147,10 @@ pub fn send(request: &Request, redactions: &[&str]) -> Result<Response, CliExit>
     }
     let response = pending.send().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
     let status = response.status().as_u16();
+    let content_type =
+      response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
     let body = response.bytes().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
-    Ok(Response { status, body: body.to_vec() })
+    Ok(Response { status, body: body.to_vec(), content_type })
   })
 }
 

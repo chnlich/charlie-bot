@@ -3,6 +3,7 @@
 mod api;
 pub mod cli;
 mod config;
+mod download;
 mod draft;
 mod draft_target;
 mod event_types;

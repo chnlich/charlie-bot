@@ -13,7 +13,9 @@
 #       return the lab home to its generated state: boot marker, file times and worktrees
 #   startup-lab.sh time <build> <hot|cold> [label]
 #       reset, then one start of bin-<build>/charliebot-server on a copy of the lab home, with a warmed or an evicted
-#       page cache; prints the summary
+#       page cache; prints the summary. LAB_START=release (the default) starts a live process for each unended run, so
+#       the start reattaches each one as a release restart does. LAB_START=crash leaves every unended run dead, so the
+#       start drains each one (the crash-interrupted variant).
 #   startup-lab.sh summary <server log>
 #       the start's segments, walk counts and phase line, with checks that the start is valid
 #   startup-lab.sh fidelity <server log>
@@ -38,12 +40,13 @@
 # home's pages, and execs the server (rust/crates/app/mock-home/src/bin/startup_lab_launcher.rs). The serve command
 # saves the ready server's /proc counters to the run's proc.txt.
 #
-# The fidelity reference is the production start of 11-01 12:04 PT, full=593, state_open=296, file_after_marker=100,
-# worktree_exists=144, sequence_ref=34, run_unended=19, and the one of 11-03 09:38 PT, node_pass_file_reads=247 and
-# 909,949,484 bytes of logged whole-log reads (chat_events_file_read) before the phase line. The warm start of release
-# 5a41936047 (2026-11-04 00:05:45Z) makes 7 whole-log reads of 215,163,491 bytes in recover_pending_reports and 3 of
-# 76,614,206 bytes in run_facts, and its fact scans take longer than its skip checks. A base start passes when each
-# count or byte total lies within half to twice its reference, and the fact scans take longer than the skip checks.
+# The fidelity reference is the warm production start of release 6784c2b303 (2026-11-04 04:45:20Z,
+# server_20261103_204520.log): full=792, state_open=321, file_after_marker=232, worktree_exists=183, sequence_ref=36,
+# run_unended=20; resumed=10 with its unended runs live; one failing node; 91 node-pass file reads of 159,659 bytes in
+# replay_followups; no whole-log read and no recover_pending_reports or run_facts read before the phase line; 122 fact
+# scans of 1 MB or more, 2,100,943,828 bytes; and fact_scans_ms 1,377 > node_passes_ms 815 > skip_checks_ms 597. A start
+# passes when each count or byte total lies within half to twice its reference, the zero references hold exactly, and
+# the three phases keep that rank order.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -65,6 +68,8 @@ readonly HOT_READ_BYTES_MAX=200000000
 # unchanged this many seconds.
 readonly RUN_END_WAIT_SECONDS=180
 readonly SETTLE_SECONDS=8
+# The start that `time` makes: release reattaches the unended runs as live processes, crash leaves them dead.
+LAB_START=${LAB_START:-release}
 
 fail() {
   printf 'startup-lab.sh: %s\n' "$1" >&2
@@ -78,6 +83,9 @@ readonly LAB
 readonly HOME_DIR="$LAB/home"
 readonly CHECK_SEED="$LAB/check-home"
 readonly LIVE_RUNS="$LAB/check-home.live-runs"
+# The task-tree home's runs with no ended_at, one `<session> <run>` per line, written by generate. A release start
+# attaches a live process to each.
+readonly UNENDED_RUNS="$LAB/unended-runs.txt"
 readonly TOOLS="$LAB/tools"
 readonly MOCK_HOME="$TOOLS/mock-home"
 
@@ -115,6 +123,8 @@ cmd_generate() {
   require_tools
   [[ ! -e $HOME_DIR ]] || fail "the lab home exists; remove $HOME_DIR to generate it again"
   "$MOCK_HOME" generate "$HOME_DIR" --shape task-tree --sessions "$SESSIONS" --seed "$SEED"
+  "$MOCK_HOME" unended-runs "$HOME_DIR" >"$UNENDED_RUNS"
+  printf 'wrote %s unended runs to %s\n' "$(wc -l <"$UNENDED_RUNS")" "$UNENDED_RUNS"
 }
 
 cmd_reset() {
@@ -210,6 +220,20 @@ step_value() {
   return 0
 }
 
+# The count of log lines that hold the pattern, 0 when none does.
+count_lines() {
+  local pattern=$1 log=$2
+  grep -cE "$pattern" "$log" || true
+}
+
+# The sum of the bytes= fields of the log lines that hold the pattern.
+sum_bytes() {
+  local pattern=$1 log=$2
+  grep -E "$pattern" "$log" | awk '{
+    if (match($0, /[[:space:]]bytes=[0-9]+/)) sum += substr($0, RSTART + 7, RLENGTH - 7) } END { print sum + 0 }'
+}
+
+# Checks one start against the fidelity reference of the production start in the header. Returns 1 when a check fails.
 cmd_fidelity() {
   local log=$1 failed=0
   [[ -f $log ]] || fail "no server log at $log"
@@ -221,33 +245,49 @@ cmd_fidelity() {
   phases_at=$(grep -m1 -nE '[[:space:]]task_tree_recovery_phases[[:space:]]' "$log" | cut -d: -f1)
   logged=$(head -n "$phases_at" "$log" | awk '/[[:space:]]chat_events_file_read[[:space:]]/ {
     if (match($0, /[[:space:]]bytes=[0-9]+/)) sum += substr($0, RSTART + 7, RLENGTH - 7) } END { print sum + 0 }')
-  check full "$full" 297 1186 || failed=1
+  # The reference start's full passes: 792.
+  check full "$full" 396 1584 || failed=1
   local reason reference value
-  for reason in state_open:296 file_after_marker:100 worktree_exists:144 sequence_ref:34 run_unended:19; do
+  for reason in state_open:321 file_after_marker:232 worktree_exists:183 sequence_ref:36 run_unended:20; do
     reference=${reason#*:}
     reason=${reason%%:*}
     value=$(grep -oE "\"$reason\": [0-9]+" <<<"$done_line" | grep -oE '[0-9]+$' || printf '0')
     check "$reason" "$value" "$(( (reference + 1) / 2 ))" "$(( reference * 2 ))" || failed=1
   done
-  check node_pass_file_reads "$reads" 124 494 || failed=1
-  check logged_whole_log_read_bytes "$logged" 454974742 1819898968 || failed=1
-  # The warm production start's recover_pending_reports and run_facts: 7 reads of 215,163,491 bytes and 3 reads of
-  # 76,614,206 bytes. The bounds are half to twice each reference.
-  check recover_pending_reports_reads "$(step_value "$log" node_pass_step_file_reads recover_pending_reports)" 4 14 \
+  check node_pass_file_reads "$reads" 46 182 || failed=1
+  check logged_whole_log_read_bytes "$logged" 0 0 || failed=1
+  # The reference start's walk reads no file in recover_pending_reports or run_facts.
+  check recover_pending_reports_reads "$(step_value "$log" node_pass_step_file_reads recover_pending_reports)" 0 0 \
     || failed=1
-  check recover_pending_reports_bytes "$(step_value "$log" node_pass_step_file_read_bytes recover_pending_reports)" \
-    107581745 430326982 || failed=1
-  check run_facts_reads "$(step_value "$log" node_pass_step_file_reads run_facts)" 2 6 || failed=1
-  check run_facts_bytes "$(step_value "$log" node_pass_step_file_read_bytes run_facts)" 38307103 153228412 || failed=1
-  # The fact scans take longer than the skip checks, as in the warm production start (1,003 ms and 559 ms).
-  local fact_scans skip_checks
+  check recover_pending_reports_bytes \
+    "$(step_value "$log" node_pass_step_file_read_bytes recover_pending_reports)" 0 0 || failed=1
+  check run_facts_reads "$(step_value "$log" node_pass_step_file_reads run_facts)" 0 0 || failed=1
+  check run_facts_bytes "$(step_value "$log" node_pass_step_file_read_bytes run_facts)" 0 0 || failed=1
+  # The fact scans of logs of 1 MB or more: 122 scans, 2,100,943,828 bytes in the reference start.
+  local fact_scan_bytes
+  fact_scan_bytes=$(sum_bytes '[[:space:]]chat_events_fact_scan[[:space:]]' "$log")
+  check fact_scan_bytes "$fact_scan_bytes" 1050471914 4201887656 || failed=1
+  # The release start reattaches its unended runs: the reference resumed 10 and drained 1, with no stop request.
+  local resumed stop_requests
+  resumed=$(log_field "$log" task_tree_recovery_done resumed)
+  check resumed "${resumed:-0}" 5 20 || failed=1
+  stop_requests=$(step_value "$log" node_pass_step_ms request_stop)
+  check request_stop_steps "${stop_requests:-0}" 0 0 || failed=1
+  # The reference's one failing node, the imported chat, fails at every boot.
+  check node_failures "$(count_lines '[[:space:]]task_recovery_node_failed[[:space:]]' "$log")" 1 2 || failed=1
+  # The phases keep the reference's rank order: fact_scans_ms 1,377, node_passes_ms 815, skip_checks_ms 597.
+  local fact_scans node_passes skip_checks
   fact_scans=$(log_field "$log" task_tree_recovery_phases fact_scans_ms)
+  node_passes=$(log_field "$log" task_tree_recovery_phases node_passes_ms)
   skip_checks=$(log_field "$log" task_tree_recovery_phases skip_checks_ms)
-  [[ -n $fact_scans && -n $skip_checks ]] || fail "$log lacks fact_scans_ms or skip_checks_ms"
-  if (( fact_scans > skip_checks )); then
-    printf 'PASS fact_scans_ms=%s > skip_checks_ms=%s\n' "$fact_scans" "$skip_checks"
+  [[ -n $fact_scans && -n $node_passes && -n $skip_checks ]] \
+    || fail "$log lacks fact_scans_ms, node_passes_ms or skip_checks_ms"
+  if (( fact_scans > node_passes && node_passes > skip_checks )); then
+    printf 'PASS rank fact_scans_ms=%s > node_passes_ms=%s > skip_checks_ms=%s\n' \
+      "$fact_scans" "$node_passes" "$skip_checks"
   else
-    printf 'FAIL fact_scans_ms=%s <= skip_checks_ms=%s\n' "$fact_scans" "$skip_checks"
+    printf 'FAIL rank fact_scans_ms=%s, node_passes_ms=%s, skip_checks_ms=%s\n' \
+      "$fact_scans" "$node_passes" "$skip_checks"
     failed=1
   fi
   return "$failed"
@@ -307,15 +347,23 @@ cmd_time() {
   local build=$1 cache=$2 label=${3:-} commit
   commit=$(build_commit "$build")
   [[ $cache == hot || $cache == cold ]] || fail "the cache is hot or cold: $cache"
+  [[ $LAB_START == release || $LAB_START == crash ]] || fail "LAB_START is release or crash: $LAB_START"
   local stamp run
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  run="$LAB/runs/$stamp-$build-$cache${label:+-$label}"
+  run="$LAB/runs/$stamp-$build-$cache-$LAB_START${label:+-$label}"
   prepare_start "$build" "$HOME_DIR" "$run"
-  printf 'start %s: %s at %s, %s cache, load %s, evidence %s\n' "$stamp" "$build" "$commit" "$cache" \
-    "$(cut -d' ' -f1 /proc/loadavg)" "$run"
+  if [[ $LAB_START == release ]]; then
+    [[ -s $UNENDED_RUNS ]] || fail "the unended-run list is missing or empty; run generate: $UNENDED_RUNS"
+    start_home_live_runs "$run"
+  fi
+  printf 'start %s: %s at %s, %s cache, %s start, load %s, evidence %s\n' "$stamp" "$build" "$commit" "$cache" \
+    "$LAB_START" "$(cut -d' ' -f1 /proc/loadavg)" "$run"
   local status=0
   serve "$build" "$cache" "$HOME_DIR" "$run" "$commit" "startup-lab-$stamp" "$SELF" serve-snapshot "$run" "$commit" \
     || status=$?
+  if [[ $LAB_START == release ]]; then
+    stop_live_runs "$run"
+  fi
   tail -n 5 "$run/trial.out"
   (( status == 0 )) || fail "trial.sh exited $status; see $run/trial.out"
   local log verdict=0 read_bytes
@@ -341,22 +389,43 @@ cmd_verify_seed() {
   "$MOCK_HOME" recovery-seed "$CHECK_SEED" "$LIVE_RUNS"
 }
 
+# Starts a sleep in a session of its own, so a signal to its process group reaches only the sleep, and sets LIVE_PID to
+# its pid once /proc shows it running as sleep. $1 names the run in the failure message.
+start_sleep() {
+  local label=$1 attempt
+  setsid sleep 1800 </dev/null >/dev/null 2>&1 &
+  LIVE_PID=$!
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    [[ $(cat "/proc/$LIVE_PID/comm" 2>/dev/null) == sleep ]] && break
+    sleep 0.05
+  done
+  [[ $(cat "/proc/$LIVE_PID/comm" 2>/dev/null) == sleep ]] \
+    || fail "the live process for $label is not the started sleep"
+}
+
 # Starts one process per live run and writes its identity into the check seed's run record, so the walk finds the run
-# alive. setsid gives each sleep a session of its own, so a signal to the run's process group reaches only the sleep.
+# alive.
 start_live_runs() {
-  local run=$1 session_id run_id label pid
+  local run=$1 session_id run_id label
   : >"$run/live-pids.txt"
   while read -r session_id run_id label; do
-    setsid sleep 1800 </dev/null >/dev/null 2>&1 &
-    pid=$!
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      [[ $(cat "/proc/$pid/comm" 2>/dev/null) == sleep ]] && break
-      sleep 0.05
-    done
-    [[ $(cat "/proc/$pid/comm" 2>/dev/null) == sleep ]] || fail "the live process for $label is not the started sleep"
-    "$MOCK_HOME" recovery-attach "$CHECK_SEED" "$session_id" "$run_id" "$pid"
-    printf '%s %s %s %s\n' "$pid" "$session_id" "$run_id" "$label" >>"$run/live-pids.txt"
+    start_sleep "$label"
+    "$MOCK_HOME" recovery-attach "$CHECK_SEED" "$session_id" "$run_id" "$LIVE_PID"
+    printf '%s %s %s %s\n' "$LIVE_PID" "$session_id" "$run_id" "$label" >>"$run/live-pids.txt"
   done <"$LIVE_RUNS"
+}
+
+# Gives each unended run of the lab home a live process, so the start's walk finds the run alive and reattaches it, as a
+# release restart finds the runs its previous server left running. Each run's identity goes into the home's run record,
+# which the next reset restores.
+start_home_live_runs() {
+  local run=$1 session_id run_id
+  : >"$run/live-pids.txt"
+  while read -r session_id run_id; do
+    start_sleep "$session_id/$run_id"
+    "$MOCK_HOME" recovery-attach "$HOME_DIR" "$session_id" "$run_id" "$LIVE_PID"
+    printf '%s %s %s\n' "$LIVE_PID" "$session_id" "$run_id" >>"$run/live-pids.txt"
+  done <"$UNENDED_RUNS"
 }
 
 stop_live_runs() {

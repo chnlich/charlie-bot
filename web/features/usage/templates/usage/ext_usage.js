@@ -275,20 +275,21 @@ function _buildCreditsGroup(row, credits) {
 // and failed. Both must short-circuit the quota path, where an empty windows list
 // renders as "plan · no cap" — an uncapped-plan claim about an unknown quota.
 //
-// The row stays muted at opacity-60, but its words must stay readable. On the
+// The row's words stay muted at opacity-60, but they must stay readable. On the
 // strip's slate-800 background the note at slate-300 renders 4.7:1 and the
 // account name at slate-200 renders 5.4:1. Both sit above the 4.5:1 a 12px line
 // needs.
-// The former colours disappeared under the same opacity: slate-600 for the
-// note at 1.5:1, slate-500 for the name at 2.0:1.
+// The provider pill keeps full opacity. Its tinted background drops a dimmed
+// Claude pill to 3.4:1 and a dimmed Codex pill to 3.7:1, while the same pill
+// reads 6.4:1 and 6.5:1 at full opacity.
 function _buildStatusRow(key, providerData, field, text) {
-  const row = _el('div', 'flex items-center gap-1.5 text-slate-300 opacity-60');
+  const row = _el('div', 'flex items-center gap-1.5 text-slate-300');
   row.setAttribute('data-key', key);
   row.appendChild(_providerPill(providerData));
-  const label = _el('span', 'text-slate-200 font-medium');
+  const label = _el('span', 'text-slate-200 font-medium opacity-60');
   label.textContent = providerData.account || key;
   row.appendChild(label);
-  const note = _el('span', 'italic');
+  const note = _el('span', 'italic opacity-60');
   note.setAttribute('data-field', field);
   note.textContent = text;
   row.appendChild(note);

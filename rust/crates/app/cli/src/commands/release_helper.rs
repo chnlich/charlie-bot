@@ -1185,7 +1185,7 @@ fn replay_frames(url: &str) -> Result<Option<Vec<Value>>, String> {
         Message::Frame(_) => continue,
       };
       let frame: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-      if frame.get("type").and_then(Value::as_str) == Some("catchup_complete") {
+      if frame.get("type").and_then(Value::as_str) == Some(api::CATCHUP_COMPLETE_FRAME) {
         break;
       }
       frames.push(frame);

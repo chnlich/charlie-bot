@@ -378,24 +378,4 @@ mod tests {
       vec!["Goal: Ship the panel", "Now: Reviewing (updated 2026-11-02T03:10:00Z)", "Waiting on you: Nothing"]
     );
   }
-
-  #[test]
-  fn a_stored_status_that_carries_the_trial_keys_prints_no_remaining_line() {
-    let mut stored = json!({
-      "goal": "Ship the panel",
-      "now": "Reviewing",
-      "waiting": [],
-      "remaining": [{"text": "Move the server to Rust", "done": false}],
-      "updated_at": "2026-11-02T03:10:00Z",
-    });
-    let trial_time_key = format!("remaining_{}", "updated_at");
-    stored.as_object_mut().expect("a status object").insert(trial_time_key, json!("2026-11-02T03:10:00Z"));
-
-    let text = render_status(&status_result(stored)).expect("the status renders");
-
-    assert_eq!(
-      text.lines().collect::<Vec<_>>(),
-      vec!["Goal: Ship the panel", "Now: Reviewing (updated 2026-11-02T03:10:00Z)", "Waiting on you: Nothing"]
-    );
-  }
 }

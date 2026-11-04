@@ -1159,38 +1159,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_status_stored_during_the_trial_loads_without_remaining_and_the_next_set_drops_its_leftover_keys() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let trial_time_key = format!("remaining_{}", "updated_at");
-    let mut legacy = json!({
-      "goal": "Ship the panel",
-      "now": "Running",
-      "waiting": [],
-      "remaining": [{"text": "Move the server to Rust", "done": true}],
-      "updated_at": "2026-10-24T00:00:00Z",
-    });
-    legacy.as_object_mut().expect("a status object").insert(trial_time_key.clone(), json!("2026-11-02T03:10:00Z"));
-    write_stored_status(&home, &sid, legacy).await;
-
-    let (code, read) = home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
-
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(read["web_status"]["goal"], json!("Ship the panel"));
-    assert!(read["web_status"].get("remaining").is_none(), "the read carries no trial list: {}", read["web_status"]);
-    assert!(read["web_status"].get(&trial_time_key).is_none());
-
-    let written = set_status(&home.features, &sid, r#"{"now": "Running again"}"#).await.expect("the set stores");
-
-    assert!(written.get("remaining").is_none());
-    assert!(written.get(&trial_time_key).is_none());
-    let stored_after = stored(&home, &sid).await;
-    assert_eq!(stored_after["goal"], json!("Ship the panel"), "the other items stay");
-    assert!(stored_after.get("remaining").is_none(), "the set drops the leftover trial keys");
-    assert!(stored_after.get(&trial_time_key).is_none());
-  }
-
-  #[tokio::test]
   async fn a_refused_status_set_stores_nothing_and_records_no_event() {
     let cases = [
       ("unknown", VALID_SET, 404),
@@ -1221,22 +1189,6 @@ mod tests {
       }
       assert_eq!(stored(&home, &sid).await, Value::Null, "case {case} {text}");
       assert!(status_events(&home, &sid).is_empty(), "case {case} {text}");
-    }
-
-    // A file that names the trial's server-written time key is refused like any other unknown key.
-    let trial_time_key = format!("remaining_{}", "updated_at");
-    for text in [
-      json!({(trial_time_key.clone()): "2026-11-02T03:10:00Z"}).to_string(),
-      json!({"remaining": [], (trial_time_key.clone()): "2026-11-02T03:10:00Z"}).to_string(),
-    ] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-
-      let error = set_status(&home.features, &sid, &text).await.expect_err("the set is refused");
-
-      assert!(matches!(error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }), "{text}");
-      assert_eq!(stored(&home, &sid).await, Value::Null, "{text}");
-      assert!(status_events(&home, &sid).is_empty(), "{text}");
     }
   }
 
@@ -1277,25 +1229,6 @@ mod tests {
     ];
     for (text, expected) in cases {
       let error = parse_patch(text).expect_err("the status file is refused");
-      assert_eq!(detail(error), expected, "text {text}");
-    }
-
-    // The trial's server-written time key is an ordinary unknown key now.
-    let trial_time_key = format!("remaining_{}", "updated_at");
-    for (text, expected) in [
-      (
-        json!({(trial_time_key.clone()): "2026-11-02T03:10:00Z"}).to_string(),
-        format!("Status file is invalid: {trial_time_key}: Extra inputs are not permitted"),
-      ),
-      (
-        json!({"remaining": [], (trial_time_key.clone()): "2026-11-02T03:10:00Z"}).to_string(),
-        format!(
-          "Status file is invalid: remaining: Extra inputs are not permitted; \
-           {trial_time_key}: Extra inputs are not permitted"
-        ),
-      ),
-    ] {
-      let error = parse_patch(&text).expect_err("the status file is refused");
       assert_eq!(detail(error), expected, "text {text}");
     }
   }

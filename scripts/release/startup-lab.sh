@@ -13,8 +13,8 @@
 #       return the lab home to its generated state: boot marker, file times and worktrees
 #   startup-lab.sh time <build> <hot|cold> [label]
 #       reset, then one start of bin-<build>/charliebot-server on a copy of the lab home, with a warmed or an evicted
-#       page cache; prints the summary. LAB_START=release (the default) starts a live process for each unended run, so
-#       the start reattaches each one as a release restart does. LAB_START=crash leaves every unended run dead, so the
+#       page cache; prints the summary. LAB_START=release (the default) starts a live process for each live run, so
+#       the start reattaches each one as a release restart does. LAB_START=crash leaves every live run dead, so the
 #       start drains each one (the crash-interrupted variant).
 #   startup-lab.sh summary <server log>
 #       the start's segments, walk counts and phase line, with checks that the start is valid
@@ -42,7 +42,7 @@
 #
 # The fidelity reference is the warm production start of release 6784c2b303 (2026-11-04 04:45:20Z,
 # server_20261103_204520.log): full=792, state_open=321, file_after_marker=232, worktree_exists=183, sequence_ref=36,
-# run_unended=20; resumed=10 with its unended runs live; one failing node; 91 node-pass file reads of 159,659 bytes in
+# run_unended=20; resumed=10 with its live runs live; one failing node; 91 node-pass file reads of 159,659 bytes in
 # replay_followups; no whole-log read and no recover_pending_reports or run_facts read before the phase line; 122 fact
 # scans of 1 MB or more, 2,100,943,828 bytes; and fact_scans_ms 1,377 > node_passes_ms 815 > skip_checks_ms 597. A start
 # passes when each count or byte total lies within half to twice its reference, the zero references hold exactly, and
@@ -68,7 +68,7 @@ readonly HOT_READ_BYTES_MAX=200000000
 # unchanged this many seconds.
 readonly RUN_END_WAIT_SECONDS=180
 readonly SETTLE_SECONDS=8
-# The start that `time` makes: release reattaches the unended runs as live processes, crash leaves them dead.
+# The start that `time` makes: release reattaches the live runs as live processes, crash leaves them dead.
 LAB_START=${LAB_START:-release}
 
 fail() {
@@ -83,9 +83,9 @@ readonly LAB
 readonly HOME_DIR="$LAB/home"
 readonly CHECK_SEED="$LAB/check-home"
 readonly LIVE_RUNS="$LAB/check-home.live-runs"
-# The task-tree home's runs with no ended_at, one `<session> <run>` per line, written by generate. A release start
-# attaches a live process to each.
-readonly UNENDED_RUNS="$LAB/unended-runs.txt"
+# The lab home's live runs, one `<session> <run>` per line, written by generate. A release start attaches a live
+# process to each.
+readonly HOME_LIVE_RUNS="$HOME_DIR/live-runs.txt"
 readonly TOOLS="$LAB/tools"
 readonly MOCK_HOME="$TOOLS/mock-home"
 
@@ -123,8 +123,7 @@ cmd_generate() {
   require_tools
   [[ ! -e $HOME_DIR ]] || fail "the lab home exists; remove $HOME_DIR to generate it again"
   "$MOCK_HOME" generate "$HOME_DIR" --shape task-tree --sessions "$SESSIONS" --seed "$SEED"
-  "$MOCK_HOME" unended-runs "$HOME_DIR" >"$UNENDED_RUNS"
-  printf 'wrote %s unended runs to %s\n' "$(wc -l <"$UNENDED_RUNS")" "$UNENDED_RUNS"
+  printf 'generated %s with %s live runs\n' "$HOME_DIR" "$(wc -l <"$HOME_LIVE_RUNS")"
 }
 
 cmd_reset() {
@@ -267,7 +266,7 @@ cmd_fidelity() {
   local fact_scan_bytes
   fact_scan_bytes=$(sum_bytes '[[:space:]]chat_events_fact_scan[[:space:]]' "$log")
   check fact_scan_bytes "$fact_scan_bytes" 1050471914 4201887656 || failed=1
-  # The release start reattaches its unended runs: the reference resumed 10 and drained 1, with no stop request.
+  # The release start reattaches its live runs: the reference resumed 10 and drained 1, with no stop request.
   local resumed stop_requests
   resumed=$(log_field "$log" task_tree_recovery_done resumed)
   check resumed "${resumed:-0}" 5 20 || failed=1
@@ -353,7 +352,7 @@ cmd_time() {
   run="$LAB/runs/$stamp-$build-$cache-$LAB_START${label:+-$label}"
   prepare_start "$build" "$HOME_DIR" "$run"
   if [[ $LAB_START == release ]]; then
-    [[ -s $UNENDED_RUNS ]] || fail "the unended-run list is missing or empty; run generate: $UNENDED_RUNS"
+    [[ -s $HOME_LIVE_RUNS ]] || fail "the live-run list is missing or empty; run generate: $HOME_LIVE_RUNS"
     start_home_live_runs "$run"
   fi
   printf 'start %s: %s at %s, %s cache, %s start, load %s, evidence %s\n' "$stamp" "$build" "$commit" "$cache" \
@@ -415,9 +414,8 @@ start_live_runs() {
   done <"$LIVE_RUNS"
 }
 
-# Gives each unended run of the lab home a live process, so the start's walk finds the run alive and reattaches it, as a
-# release restart finds the runs its previous server left running. Each run's identity goes into the home's run record,
-# which the next reset restores.
+# Gives each live run of the lab home a live process, so the start's walk finds the run alive and reattaches it, as a
+# release restart finds the runs its previous server left running. Each run's identity goes into the home's run record.
 start_home_live_runs() {
   local run=$1 session_id run_id
   : >"$run/live-pids.txt"
@@ -425,7 +423,7 @@ start_home_live_runs() {
     start_sleep "$session_id/$run_id"
     "$MOCK_HOME" recovery-attach "$HOME_DIR" "$session_id" "$run_id" "$LIVE_PID"
     printf '%s %s %s\n' "$LIVE_PID" "$session_id" "$run_id" >>"$run/live-pids.txt"
-  done <"$UNENDED_RUNS"
+  done <"$HOME_LIVE_RUNS"
 }
 
 stop_live_runs() {

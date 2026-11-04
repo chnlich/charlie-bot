@@ -14,6 +14,11 @@
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* Placeholder hints sit on white, where preflight's #9ca3af draws 2.54:1 and 12-14 px text
+       needs 4.5:1. #64748b draws 4.76:1; the selector keeps preflight's element specificity so
+       this rule wins the cascade, and it reaches the form fields and the comment boxes
+       diff_comments.js builds. */
+    input::placeholder, textarea::placeholder { color: #64748b; }
   </style>
 </head>
 <body class="bg-white text-slate-900 min-h-screen">
@@ -37,7 +42,7 @@
       <div class="flex flex-col gap-1 max-sm:basis-full">
         <label for="repo-input" class="text-xs text-slate-600">Repo</label>
         <input id="repo-input" list="repo-list" type="text" placeholder="/path/to/repo"
-               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-80 max-sm:w-full" />
+               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 w-80 max-sm:w-full" />
         <datalist id="repo-list"></datalist>
       </div>
       <!-- On a phone Base and Head share one row, Head keeping its 12 rem width; on desktop the wrapper is not a box. -->
@@ -45,12 +50,12 @@
         <div class="flex flex-col gap-1 max-sm:flex-1 max-sm:min-w-0">
           <label for="base-input" class="text-xs text-slate-600">Base</label>
           <input id="base-input" list="branches-list" type="text" placeholder="main"
-                 class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48 max-sm:w-full" />
+                 class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 w-48 max-sm:w-full" />
         </div>
         <div class="flex flex-col gap-1 max-sm:shrink-0">
           <label for="head-input" class="text-xs text-slate-600">Head</label>
           <input id="head-input" list="branches-list" type="text" placeholder="HEAD"
-                 class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48" />
+                 class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 w-48" />
           <datalist id="branches-list"></datalist>
         </div>
       </div>

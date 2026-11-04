@@ -171,8 +171,8 @@ A re-attached or drained worker run ends through the end handling its first laun
 first-launch follow-up, either the pool failover or the parent report. A re-attached process still alive when its
 follow ends is terminated first. A manager resume whose follow returns an error lands the first launch's failure
 through `land_launch_failure`: the failed end record, the "Turn failed" notice and the node's pending inputs. The
-follow checkpoints a line whose event ended the run (an `is_error` result with a 429 or 5xx status), so a later boot
-does not append that line again.
+follow checkpoints a line whose event ended the run as a quota or temporary-unavailable rejection (such as an `is_error`
+result with a 429 or 5xx status), so a later boot does not append that line again.
 
 ### Follow-ups that return a named error
 

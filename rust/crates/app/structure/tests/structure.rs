@@ -1000,6 +1000,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_triggers::triggers::WATCH_TARGETS_FIELD`.",
   },
   OwnerRow { name: "modelUsage", owner: "infra/core", hint: "Use `charliebot_core::event_types::MODEL_USAGE`." },
+  OwnerRow {
+    name: "active_backend",
+    owner: "runtime/session-api",
+    hint: "Use `charliebot_session_api::detail::ACTIVE_BACKEND_FIELD`.",
+  },
+  OwnerRow {
+    name: "active_backend_type",
+    owner: "runtime/session-api",
+    hint: "Use `charliebot_session_api::detail::ACTIVE_BACKEND_TYPE_FIELD`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

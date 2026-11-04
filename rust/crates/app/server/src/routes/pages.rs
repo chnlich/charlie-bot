@@ -261,9 +261,9 @@ fn chat_page(
       .collect::<Vec<_>>(),
     "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,
-    "active_backend": active_backend,
+    (detail::ACTIVE_BACKEND_FIELD): active_backend,
     "active_backend_label": active_option.map_or(active_backend, |option| option.label.as_str()),
-    "active_backend_type": active_option.map_or("", |option| option.backend_type.as_str()),
+    (detail::ACTIVE_BACKEND_TYPE_FIELD): active_option.map_or("", |option| option.backend_type.as_str()),
     "load_errors": load_errors,
   });
   render_page_blocking(

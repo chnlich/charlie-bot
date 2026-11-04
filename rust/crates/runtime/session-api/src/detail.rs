@@ -831,6 +831,11 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
   }))
 }
 
+/// The payload key holding the backend id the session page shows.
+pub const ACTIVE_BACKEND_FIELD: &str = "active_backend";
+/// The payload key holding that backend's configured type, empty when no configured option matches it.
+pub const ACTIVE_BACKEND_TYPE_FIELD: &str = "active_backend_type";
+
 fn active_backend_payload(
   store: &Store,
   meta: &SessionMetadata,
@@ -869,9 +874,9 @@ fn active_backend_payload(
     Vec::new()
   };
   let mut payload = Map::new();
-  payload.insert("active_backend".to_string(), Value::String(active_backend.clone()));
+  payload.insert(ACTIVE_BACKEND_FIELD.to_string(), Value::String(active_backend.clone()));
   payload.insert(
-    "active_backend_type".to_string(),
+    ACTIVE_BACKEND_TYPE_FIELD.to_string(),
     Value::String(active_option.map_or_else(String::new, |option| option.backend_type.clone())),
   );
   payload.insert("switchable_backends".to_string(), Value::Array(switchable));

@@ -16,11 +16,11 @@ pub fn draft_registered_message(event: &Value) -> Value {
   json!({
     "role": "draft",
     "draft_id": field(event, DRAFT_ID),
-    "platform": field(event, PLATFORM),
-    "target": field(event, TARGET),
+    (PLATFORM): field(event, PLATFORM),
+    (TARGET): field(event, TARGET),
     "target_label": field(event, TARGET_LABEL),
-    "body": field(event, BODY),
-    "replaces": field(event, REPLACES),
+    (BODY): field(event, BODY),
+    (REPLACES): field(event, REPLACES),
     "sha256": field(event, SHA256),
     "created_at": field(event, CREATED_AT),
   })

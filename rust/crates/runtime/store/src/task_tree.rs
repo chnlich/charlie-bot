@@ -740,32 +740,47 @@ impl Store {
   /// [`Store::node_state`] and the version of the memo entry that answered it.
   ///
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
-  /// the archived extent are the ones it covers. The read parses no history. Any other cold read loads the history.
+  /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds
+  /// the log's fact checkpoint and the bytes past it when one covers the log, which memoizes the same facts and runs
+  /// under the log's identity; any other cold read loads the history.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
       LiveHistory::Cold(identity) => {
         let archived = self.read_archive_offset(session_id)?;
-        let version = {
-          let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
-          identity
-            .and_then(|identity| {
-              states
-                .get(session_id)
-                .filter(|entry| entry.key == NodeStateKey::File(identity) && entry.archived == archived)
-            })
-            .map(|entry| entry.version)
+        let Some(identity) = identity else {
+          let (generation, list_identity, live) = self.live_events_with_generation(session_id)?;
+          return self.node_state_of(session_id, generation, list_identity, &live);
         };
-        if let Some(version) = version {
+        if let Some(version) = self.sealed_state_version(session_id, identity, archived) {
           let Some(facts) = self.node_facts_until(session_id, &mut || false)? else {
             unreachable!("the no-stop facts lookup completes")
           };
           return Ok((version, self.node_state_view(session_id, facts)?));
         }
-        self.live_events_with_generation(session_id)?
+        // The checkpoint answers the fold the whole log answers, and memoizes it under the log's identity, so the
+        // state and run facts below need no history read. A checkpoint that is absent, torn or stale folds nothing,
+        // and the whole-log load below answers.
+        if let Some(facts) = self.checkpoint_facts_until(session_id, identity, archived, &mut || false)? {
+          let version = self
+            .sealed_state_version(session_id, identity, archived)
+            .expect("the checkpoint fold memoizes its state under the log identity");
+          return Ok((version, self.node_state_view(session_id, facts)?));
+        }
+        let (generation, list_identity, live) = self.live_events_with_generation(session_id)?;
+        return self.node_state_of(session_id, generation, list_identity, &live);
       }
     };
     self.node_state_of(session_id, generation, list_identity, &live)
+  }
+
+  /// The version of the memoized state that covers `identity` at `archived`, when one does.
+  fn sealed_state_version(&self, session_id: &str, identity: FileIdentity, archived: usize) -> Option<u64> {
+    let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
+    states
+      .get(session_id)
+      .filter(|entry| entry.key == NodeStateKey::File(identity) && entry.archived == archived)
+      .map(|entry| entry.version)
   }
 
   /// [`Store::node_state_versioned`] for a caller that holds the live events and their cache generation.

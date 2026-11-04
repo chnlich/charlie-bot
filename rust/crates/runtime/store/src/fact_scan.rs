@@ -11,6 +11,9 @@
 //! [`Store::seal_scanned_facts`] memoizes those facts under the log's file identity, as a recovery eviction seals a
 //! fold, so a node pass reads them without loading the log. A reader that needs the chat content loads the log, as any
 //! cold read does. The node and run facts and the newest `prompt_changed` fact of each scope answer from the seal.
+//!
+//! A session with archived events scans its archive files first, with the same line rule, and folds them ahead of the
+//! live log. The seal then also keys on the session's `archive_offset`, the count of archived events it folded.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -25,7 +28,7 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::WHOLE_LOG_LOGGED_BYTES;
 use crate::ndjson;
 use crate::run_facts::RunFacts;
-use crate::task_tree::{PromptScope, fold_live_history, newest_prompt_change};
+use crate::task_tree::{PromptScope, fold_scanned_history, newest_prompt_change};
 use crate::task_tree_state::{
   CachedNodeFacts, CachedNodeState, CachedRunFactsAt, LivePromptChanges, NodeFacts, NodeFactsKey, NodeStateKey,
   SealedPromptChanges,
@@ -48,6 +51,8 @@ const CHAT_CONTENT_TYPES: [&str; 9] = [
 /// A live log's facts, scanned outside the session lock for a later [`Store::seal_scanned_facts`].
 pub struct ScannedLiveFacts {
   identity: FileIdentity,
+  /// The archived events the scan folded before the live log, the session's `archive_offset`.
+  archived: usize,
   covered: usize,
   facts: NodeFacts,
   runs: RunFacts,
@@ -83,12 +88,14 @@ impl ScannedLiveFacts {
 }
 
 impl Store {
-  /// Scan and fold a session's live log outside its session lock. `None` when the session holds archived events, has
-  /// no live log, or the log changed during the scan; the node's reads then load the log themselves.
+  /// Scan and fold a session's whole history outside its session lock: its archived events, then its live log. `None`
+  /// when the archive does not hold `archive_offset` events, the session has no live log, or the log or the archive
+  /// offset changed during the scan; the node's reads then load the log themselves.
   pub fn scan_live_facts(&self, session_id: &str) -> StoreResult<Option<ScannedLiveFacts>> {
-    if self.read_archive_offset(session_id)? != 0 {
+    let archived = self.read_archive_offset(session_id)?;
+    let Some(archive) = self.scan_archive_events(session_id, archived)? else {
       return Ok(None);
-    }
+    };
     let path = self.chat_events_path(session_id);
     let Some(identity) = FileIdentity::read(&path)? else {
       return Ok(None);
@@ -97,35 +104,53 @@ impl Store {
     let events: Vec<SharedChatEvent> =
       ndjson::read_file_lines_split(&path, scan_line)?.into_iter().map(Arc::new).collect();
     log_large_scan(&path, identity.size(), started);
-    if FileIdentity::read(&path)? != Some(identity) {
+    if FileIdentity::read(&path)? != Some(identity) || self.read_archive_offset(session_id)? != archived {
       return Ok(None);
     }
-    let (facts, runs) = fold_live_history(&events)?;
+    let (facts, runs) = fold_scanned_history(&archive, &events, archived)?;
     let prompt_changes = LivePromptChanges::of(&events);
-    Ok(Some(ScannedLiveFacts { identity, covered: events.len(), facts, runs, prompt_changes }))
+    Ok(Some(ScannedLiveFacts { identity, archived, covered: events.len(), facts, runs, prompt_changes }))
+  }
+
+  /// The first `archived` events of the session's archive files, scanned as [`Store::scan_live_facts`] scans a live
+  /// log. `None` when the files hold fewer events than `archived`, which the node's read then meets itself.
+  fn scan_archive_events(&self, session_id: &str, archived: usize) -> StoreResult<Option<Vec<SharedChatEvent>>> {
+    let mut events: Vec<SharedChatEvent> = Vec::with_capacity(archived);
+    for path in self.archive_paths(session_id)?.iter() {
+      if events.len() >= archived {
+        break;
+      }
+      let scanned = ndjson::read_file_lines_split(path, scan_line)?;
+      events.extend(scanned.into_iter().map(Arc::new));
+    }
+    if events.len() < archived {
+      return Ok(None);
+    }
+    events.truncate(archived);
+    Ok(Some(events))
   }
 
   /// Memoize a [`Store::scan_live_facts`] result under its log identity, as a recovery eviction seals a fold. The seal
-  /// happens only while the event cache is cold, the log keeps the scanned identity and the session still holds no
-  /// archived events, checked under the session lock that every append holds. Returns whether the scan was sealed.
+  /// happens only while the event cache is cold, the log keeps the scanned identity and the archive keeps the scanned
+  /// `archive_offset`, checked under the session lock that every append holds. Returns whether the scan was sealed.
   pub fn seal_scanned_facts(&self, session_id: &str, scanned: ScannedLiveFacts) -> StoreResult<bool> {
     let cache_entry = self.events_cache_entry(session_id);
     let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     if cache.is_some()
       || FileIdentity::read(&self.chat_events_path(session_id))? != Some(scanned.identity)
-      || self.read_archive_offset(session_id)? != 0
+      || self.read_archive_offset(session_id)? != scanned.archived
     {
       return Ok(false);
     }
-    let ScannedLiveFacts { identity, covered, facts, runs, prompt_changes } = scanned;
+    let ScannedLiveFacts { identity, archived, covered, facts, runs, prompt_changes } = scanned;
     self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
-    self.history_work.folded_events.fetch_add(covered as u64, Ordering::Relaxed);
+    self.history_work.folded_events.fetch_add((archived + covered) as u64, Ordering::Relaxed);
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(
       session_id.to_string(),
       CachedNodeFacts {
         key: NodeFactsKey::File(identity),
         list_identity: Arc::new(()),
-        archived: 0,
+        archived,
         covered,
         facts: Arc::new(facts),
       },
@@ -135,7 +160,7 @@ impl Store {
       .node_state_cache
       .lock()
       .expect("node state cache mutex is not poisoned")
-      .insert(session_id.to_string(), CachedNodeState { key: NodeStateKey::File(identity), archived: 0, version });
+      .insert(session_id.to_string(), CachedNodeState { key: NodeStateKey::File(identity), archived, version });
     self
       .run_facts_by_session
       .lock()
@@ -422,6 +447,7 @@ mod tests {
   use serde_json::json;
 
   use super::*;
+  use crate::metadata::{SessionMetadata, TaskProfile};
   use crate::store::test_support::{make_test_store, open_test_store};
 
   /// A scan taken outside the session lock seals only while the log keeps the identity it scanned and the cache is cold.
@@ -500,6 +526,58 @@ mod tests {
     for scope in [PromptScope::Subtree, PromptScope::Node] {
       assert_eq!(newest(&scanned, scope), newest(&cold, scope));
     }
+    assert_eq!(scanned.history_work().file_reads, 0, "the sealed facts answer without reading the log");
+  }
+
+  /// A session with archived events seals too: its scan folds the archive before the live log, as a cold read does, and
+  /// the sealed facts answer what that cold read folds without reading the log.
+  #[tokio::test]
+  async fn a_sealed_scan_of_an_archived_session_folds_its_archive_first() {
+    let (home, writer) = make_test_store();
+    let session = "archived";
+    let path = writer.chat_events_path(session);
+    let archive_dir = path.parent().unwrap().join("archives");
+    std::fs::create_dir_all(&archive_dir).unwrap();
+    std::fs::write(
+      archive_dir.join("chat_events.2026-W44.jsonl"),
+      concat!(
+        "{\"id\": \"created\", \"type\": \"task_created\", \"actor\": \"user\"}\n",
+        "{\"id\": \"ask\", \"type\": \"user\", \"content\": \"do the work\"}\n",
+        "{\"id\": \"said\", \"type\": \"assistant\", \"run_id\": \"run-1\", \"content\": \"x\"}\n",
+      ),
+    )
+    .unwrap();
+    std::fs::write(
+      &path,
+      concat!(
+        "{\"id\": \"finish-1\", \"type\": \"run_finished\", \"run_id\": \"run-1\", \"outcome\": \"success\", ",
+        "\"input_event_ids\": [\"ask\"]}\n",
+        "{\"id\": \"close-1\", \"type\": \"task_closed\", \"request_id\": \"close-1\", \"outcome\": \"completed\"}\n",
+      ),
+    )
+    .unwrap();
+    let mut meta = SessionMetadata::new(session, "seed", TaskProfile::Manager);
+    meta.archive_offset = 3;
+    std::fs::write(writer.metadata_path(session), meta.to_json_string(&writer.slots, true)).unwrap();
+
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks));
+    let (scanned, cold) = (open().unwrap(), open().unwrap());
+    let scan = scanned.scan_live_facts(session).unwrap().expect("nothing writes during the scan");
+    assert!(scanned.seal_scanned_facts(session, scan).unwrap());
+
+    let (sealed, folded) = (scanned.node_facts(session).unwrap(), cold.node_facts(session).unwrap());
+    let (sealed, folded) = (sealed.task().unwrap(), folded.task().unwrap());
+    assert_eq!(sealed.task_state, folded.task_state);
+    assert_eq!(sealed.run_outcomes, folded.run_outcomes);
+    assert_eq!(sealed.confirmed_input_ids, folded.confirmed_input_ids);
+    assert_eq!(sealed.covered, folded.covered);
+    let sorted_ids = |facts: &crate::TaskFacts| {
+      let mut ids = facts.events_by_id.iter().map(|(id, _)| id.to_string()).collect::<Vec<_>>();
+      ids.sort();
+      ids
+    };
+    assert_eq!(sorted_ids(sealed), sorted_ids(folded));
+    assert_eq!(scanned.run_facts(session).unwrap(), cold.run_facts(session).unwrap());
     assert_eq!(scanned.history_work().file_reads, 0, "the sealed facts answer without reading the log");
   }
 

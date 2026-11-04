@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use charliebot_mock_home::check::{CheckOutcome, check};
 use charliebot_mock_home::generate::generate;
 use charliebot_mock_home::recovery_check::{digest, seed};
-use charliebot_mock_home::task_tree::reset;
+use charliebot_mock_home::task_tree::{append_growth, reset};
 use charliebot_mock_home::{DATA_VERSION, DEFAULT_SEED, PRODUCTION_SESSIONS, Shape};
 use clap::{Parser, Subcommand};
 
@@ -44,7 +44,14 @@ enum Action {
     base_url: String,
   },
   /// Return the task-tree home in OUTPUT to its generated state: the boot marker, the file times and the worktrees.
-  Reset { output: PathBuf },
+  Reset {
+    output: PathBuf,
+    /// Accept a log longer than its generated size, which `append-growth` leaves.
+    #[arg(long)]
+    allow_growth: bool,
+  },
+  /// Append BYTES of chat-content events to the full-pass logs of 1 MB or more, in proportion to their size.
+  AppendGrowth { output: PathBuf, bytes: u64 },
   /// Print the data version. The home lives in `~/improve/mock-home/<version>/`.
   Version,
   /// Add the recovery check's sessions to SESSIONS, a copy of a task-tree home, and list their live runs in LIVE_RUNS.
@@ -101,7 +108,8 @@ fn main() -> ExitCode {
       generate(&output, sessions, seed, shape).map(|()| ExitCode::SUCCESS)
     }
     Action::Check { output, base_url } => check(&output, &base_url).map(check_exit_code),
-    Action::Reset { output } => reset(&output).map(|()| ExitCode::SUCCESS),
+    Action::Reset { output, allow_growth } => reset(&output, allow_growth).map(|()| ExitCode::SUCCESS),
+    Action::AppendGrowth { output, bytes } => append_growth(&output, bytes).map(|()| ExitCode::SUCCESS),
     Action::Version => {
       println!("{DATA_VERSION}");
       Ok(ExitCode::SUCCESS)

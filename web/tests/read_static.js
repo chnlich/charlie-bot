@@ -13,9 +13,12 @@ function readStatic(...parts) {
   return fs.readFileSync(path.join(__dirname, '..', 'static', 'js', ...parts), 'utf8');
 }
 
-// A package's page-part source: web/<kind>/<name>/static/<parts>, served at /static/<kind>/<name>/.
+// A package's source: web/<kind>/<name>/templates/<name>/<parts> for a script or style a page part includes in the
+// document, else web/<kind>/<name>/static/<parts> for a file the server serves at /static/<kind>/<name>/.
 function readPackageStatic(kind, name, ...parts) {
-  return fs.readFileSync(path.join(__dirname, '..', kind, name, 'static', ...parts), 'utf8');
+  const packageRoot = path.join(__dirname, '..', kind, name);
+  const included = path.join(packageRoot, 'templates', name, ...parts);
+  return fs.readFileSync(fs.existsSync(included) ? included : path.join(packageRoot, 'static', ...parts), 'utf8');
 }
 
 // Script paths index.html loads, in document order, with the /static/js/ prefix

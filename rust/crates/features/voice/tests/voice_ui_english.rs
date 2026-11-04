@@ -26,11 +26,16 @@ fn is_cjk(character: char) -> bool {
 }
 
 /// Every file under `dir`, in no order yet.
+///
+/// A tree that holds no file has no directory in a checkout, so a missing directory names no file. Any other read
+/// failure is an error.
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-  let mut entries: Vec<PathBuf> = fs::read_dir(dir)
-    .unwrap_or_else(|error| panic!("read_dir {}: {error}", dir.display()))
-    .map(|entry| entry.expect("dir entry").path())
-    .collect();
+  let entries = match fs::read_dir(dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+    Err(error) => panic!("read_dir {}: {error}", dir.display()),
+  };
+  let mut entries: Vec<PathBuf> = entries.map(|entry| entry.expect("dir entry").path()).collect();
   entries.sort();
   for path in entries {
     if path.is_dir() {

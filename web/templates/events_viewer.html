@@ -52,6 +52,13 @@
       .events-topbar .events-download { margin-left: auto; }
       .events-topbar .events-back-sep { display: none; }
     }
+
+    /* Pointer targets: the Expand all label keeps a 24 px row around its 16 px box, and Clear is the
+       page's bordered secondary button at 26 px tall, so both clear the 24 px minimum. The two sit
+       12 px apart, where undersized targets would still not. The type filter already stands 26 px
+       tall, so the bar keeps its height. */
+    .events-expand { min-height: 24px; }
+    #expand-all { width: 16px; height: 16px; }
   </style>
 </head>
 <body class="dark bg-slate-900 text-slate-100 min-h-screen">
@@ -92,12 +99,12 @@
              type="text"
              placeholder="e.g. user, assistant, result …"
              class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 text-slate-300 placeholder-slate-400 w-48">
-      <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+      <label class="events-expand flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
         <input id="expand-all" type="checkbox" class="accent-blue-500">
         Expand all
       </label>
       <button onclick="clearFilter()"
-              class="text-xs text-slate-400 hover:text-slate-300 transition-colors">Clear</button>
+              class="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">Clear</button>
     </div>
   </div>
 

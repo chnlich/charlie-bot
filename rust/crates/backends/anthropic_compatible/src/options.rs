@@ -10,20 +10,10 @@ use serde_yaml::{Mapping, Value};
 
 const HEADERS: &str = "headers";
 const HOST_AUTH_ALIAS: &str = "host_auth_alias";
-const FIELDS: [&str; 8] = [
-  API_BASE_KEY,
-  CONTEXT_WINDOW_KEY,
-  CREDENTIAL_KEY,
-  EFFORT_KEY,
-  CLI_BINARY_KEY,
-  HEADERS,
-  EXTRA_BODY_KEY,
-  HOST_AUTH_ALIAS,
-];
 
 /// The `cc-anthropic-compatible` option's type-specific fields in [`CcAnthropicCompatibleOption`]'s declaration
 /// order, each with the value the option holds when an entry omits it. `charliebot config get backends` renders
-/// them.
+/// them, and [`CcAnthropicCompatibleOption::from_fields`] accepts each of these names and no other.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Required),
   OptionField::field(CONTEXT_WINDOW_KEY, OptionFieldDefault::Required),
@@ -61,7 +51,7 @@ impl CcAnthropicCompatibleOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(name) if FIELDS.contains(&name) => {}
+        Some(name) if SCHEMA.iter().any(|field| field.name == name) => {}
         Some(name) => return Err(format!("unknown cc-anthropic-compatible option field {name:?}")),
         None => return Err(format!("cc-anthropic-compatible option key must be a string: {key:?}")),
       }

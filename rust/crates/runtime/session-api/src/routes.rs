@@ -107,14 +107,7 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
-    Ok(listing::sessions_list_response(
-      &request,
-      &features.store,
-      page.rows(),
-      page.derived(),
-      page.sequence_fields(),
-      &ACTIVE_MEMOS,
-    ))
+    Ok(listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS))
   })
   .await;
   response.unwrap_or_else(store_error)

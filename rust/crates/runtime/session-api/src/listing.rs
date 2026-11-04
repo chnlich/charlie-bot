@@ -58,6 +58,8 @@ struct WholeListingBody {
 /// fields compare by value. Every other input a row reads from the store (busy state, run backend) moves through a
 /// sidebar dirty mark, which also rebuilds the derived map.
 struct ListingSource {
+  /// The corpus when the caller handed out the listing memo's own allocation, compared by pointer.
+  shared: Option<Arc<Vec<Arc<SessionMetadata>>>>,
   rows: Vec<Arc<SessionMetadata>>,
   derived: Arc<DerivedSidebarMap>,
   sequence_fields: HashMap<String, Map<String, Value>>,
@@ -66,22 +68,33 @@ struct ListingSource {
 impl ListingSource {
   fn of(
     rows: &[Arc<SessionMetadata>],
+    shared: Option<&Arc<Vec<Arc<SessionMetadata>>>>,
     derived: &Arc<DerivedSidebarMap>,
     sequence_fields: &HashMap<String, Map<String, Value>>,
   ) -> Self {
-    Self { rows: rows.to_vec(), derived: Arc::clone(derived), sequence_fields: sequence_fields.clone() }
+    Self {
+      shared: shared.cloned(),
+      rows: rows.to_vec(),
+      derived: Arc::clone(derived),
+      sequence_fields: sequence_fields.clone(),
+    }
   }
 
   fn holds(
     &self,
     rows: &[Arc<SessionMetadata>],
+    shared: Option<&Arc<Vec<Arc<SessionMetadata>>>>,
     derived: &Arc<DerivedSidebarMap>,
     sequence_fields: &HashMap<String, Map<String, Value>>,
   ) -> bool {
-    Arc::ptr_eq(&self.derived, derived)
-      && self.rows.len() == rows.len()
-      && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now))
-      && self.sequence_fields == *sequence_fields
+    // The listing route hands out the memoized corpus itself, so one pointer comparison proves the same rows in the
+    // same order instead of walking all of them. A route that filters the corpus into its own list passes no shared
+    // allocation and keeps the row-by-row comparison.
+    let rows_hold = match (self.shared.as_ref(), shared) {
+      (Some(before), Some(now)) => Arc::ptr_eq(before, now),
+      _ => self.rows.len() == rows.len() && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now)),
+    };
+    rows_hold && Arc::ptr_eq(&self.derived, derived) && self.sequence_fields == *sequence_fields
   }
 }
 
@@ -383,9 +396,11 @@ impl PageTextSource {
   }
 
   fn holds(&self, page: &PageRows) -> bool {
-    Arc::ptr_eq(&self.derived, &page.derived)
-      && self.rows.len() == page.rows.len()
-      && self.rows.iter().zip(page.rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now))
+    // The corpus arrives as one shared allocation: `active_page_rows` hands out the memoized list until an input
+    // that shapes it moves, so the same pointer is the same rows and the same order. Comparing the rows one by one
+    // walked all of them on every request.
+    Arc::ptr_eq(&self.rows, &page.rows)
+      && Arc::ptr_eq(&self.derived, &page.derived)
       && self.sequence_fields == page.sequence_fields
   }
 }
@@ -508,11 +523,28 @@ fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreR
   Ok(charliebot_compat::jinja::tojson_text(&value))
 }
 
+/// Render a page's sidebar rows with their controller fields and route-local body and gzip memos.
+///
+/// The page hands out the corpus as the listing memo's own allocation, so its row and overlay identities are the
+/// memo's, and a repeat request proves the corpus unchanged with one pointer comparison.
+pub fn sessions_list_page_response(
+  request: &Request<Body>,
+  store: &Store,
+  page: &PageRows,
+  memos: &SessionsListMemos,
+) -> Response {
+  sessions_list_response(request, store, page.rows(), Some(&page.rows), page.derived(), page.sequence_fields(), memos)
+}
+
 /// Render sidebar rows with their controller fields and route-local body and gzip memos.
+///
+/// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one; a route that filters
+/// the corpus into a list of its own passes `None` and the source compares row by row.
 pub fn sessions_list_response(
   request: &Request<Body>,
   store: &Store,
   rows: &[Arc<SessionMetadata>],
+  shared: Option<&Arc<Vec<Arc<SessionMetadata>>>>,
   derived: &Arc<DerivedSidebarMap>,
   sequence_fields: &HashMap<String, Map<String, Value>>,
   memos: &SessionsListMemos,
@@ -532,7 +564,8 @@ pub fn sessions_list_response(
   let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the body
   // reads still holds, so the body it returns is the body a rebuild would render.
-  let source_holds = state.whole_body.as_ref().is_some_and(|whole| whole.source.holds(rows, derived, sequence_fields));
+  let source_holds =
+    state.whole_body.as_ref().is_some_and(|whole| whole.source.holds(rows, shared, derived, sequence_fields));
   if !source_holds {
     let inputs = match row_inputs(store, rows, derived, sequence_fields, projection) {
       Ok(inputs) => inputs,
@@ -543,7 +576,7 @@ pub fn sessions_list_response(
     let unchanged = state.whole_body.as_ref().is_some_and(|whole| whole.inputs == inputs);
     if unchanged {
       let whole = state.whole_body.as_mut().expect("the body is rendered when the inputs are unchanged");
-      whole.source = ListingSource::of(rows, derived, sequence_fields);
+      whole.source = ListingSource::of(rows, shared, derived, sequence_fields);
     } else {
       #[cfg(test)]
       {
@@ -555,7 +588,12 @@ pub fn sessions_list_response(
       };
       let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&Value::Array(values)));
       state.whole_body =
-        Some(WholeListingBody { source: ListingSource::of(rows, derived, sequence_fields), inputs, body, gzip: None });
+        Some(WholeListingBody {
+          source: ListingSource::of(rows, shared, derived, sequence_fields),
+          inputs,
+          body,
+          gzip: None,
+        });
     }
   }
   let whole = state.whole_body.as_ref().expect("the body is rendered when the inputs changed");
@@ -728,7 +766,7 @@ mod tests {
     memos: &SessionsListMemos,
   ) -> Value {
     let request = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
-    let response = sessions_list_response(&request, &features.store, rows, derived, sequence_fields, memos);
+    let response = sessions_list_response(&request, &features.store, rows, None, derived, sequence_fields, memos);
     serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
   }
 

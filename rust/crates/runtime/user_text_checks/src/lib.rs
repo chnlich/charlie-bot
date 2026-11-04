@@ -461,7 +461,7 @@ fn line_blocks(text: &str) -> Vec<(usize, &str)> {
 }
 
 fn line_for_span<'a>(text: &'a str, span: &Range<usize>) -> &'a str {
-  let start = text[..span.start].rfind('\n').map_or(0, |index| index + 1);
+  let start = text[..span.start].rfind('\n').map_or(0, |index| index + '\n'.len_utf8());
   let end = text[span.end..].find('\n').map_or(text.len(), |index| span.end + index);
   &text[start..end]
 }
@@ -510,7 +510,12 @@ fn is_url_or_path(text: &str, span: &Range<usize>, links: &[MarkdownLink]) -> bo
   {
     return true;
   }
-  let start = text[..span.start].rfind(char::is_whitespace).map_or(0, |index| index + 1);
+  // The matched whitespace can be multi-byte, such as U+3000, so the token starts after all of its bytes.
+  let start = text[..span.start]
+    .char_indices()
+    .rev()
+    .find(|(_, character)| character.is_whitespace())
+    .map_or(0, |(index, character)| index + character.len_utf8());
   let end = text[span.end..].find(char::is_whitespace).map_or(text.len(), |index| span.end + index);
   let token = &text[start..end];
   let uri = token.trim_start_matches(['(', '[', '{', '<']);

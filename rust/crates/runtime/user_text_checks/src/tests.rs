@@ -129,6 +129,24 @@ fn session_ids_in_pre_and_exact_page_code_follow_the_exemptions() {
 }
 
 #[test]
+fn session_ids_beside_non_ascii_whitespace_get_the_ascii_verdicts() {
+  let (home, _) = loaded_checks("");
+  let id = Uuid::new_v4().to_string();
+  add_session(&home, &id);
+  let checks = UserTextChecks::new(&UserTextChecksConfig::default(), home.path()).unwrap();
+  let short = &id[..8];
+  for separator in [" ", "\u{3000}"] {
+    let before = format!("<b>Goal</b>{separator}{short}");
+    let after = format!("<p>{short}{separator}x</p>");
+    let scheme_token = format!("Goal{separator}(file:{short})");
+
+    assert_eq!(count_named(&checks.check_page(&before).unwrap(), SESSION_LINKED), 1, "{before}");
+    assert_eq!(count_named(&checks.check_page(&after).unwrap(), SESSION_LINKED), 1, "{after}");
+    assert_eq!(count_named(&violations(&checks, &home, &scheme_token), SESSION_LINKED), 0, "{scheme_token}");
+  }
+}
+
+#[test]
 fn ambiguous_short_prefix_is_not_a_session_id() {
   let (home, _) = loaded_checks("");
   let first = Uuid::from_u128(0xdeadbeef000000000000000000000001).to_string();

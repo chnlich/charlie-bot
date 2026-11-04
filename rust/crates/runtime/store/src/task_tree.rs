@@ -2655,13 +2655,20 @@ pub(crate) fn newest_prompt_change(events: &[SharedChatEvent], scope: PromptScop
     .cloned()
 }
 
-/// The node and run facts of a session with no archived events, folded from its whole live list as the first fold of
-/// [`Store::node_facts_of`] folds them.
-pub(crate) fn fold_live_history(live: &[SharedChatEvent]) -> StoreResult<(NodeFacts, RunFacts)> {
+/// The node and run facts of a session's whole history, folded as [`Store::node_facts_of`] folds them: the archived
+/// events from position 0, then the live list from position `archived`.
+pub(crate) fn fold_scanned_history(
+  archive: &[SharedChatEvent],
+  live: &[SharedChatEvent],
+  archived: usize,
+) -> StoreResult<(NodeFacts, RunFacts)> {
   let mut facts = NodeFacts::default();
   let mut runs = RunFacts::default();
+  if !archive.is_empty() {
+    fold_node_facts_from(&mut facts, archive, 0, &mut || false, Some(&mut runs))?;
+  }
   if !live.is_empty() {
-    fold_node_facts_from(&mut facts, live, 0, &mut || false, Some(&mut runs))?;
+    fold_node_facts_from(&mut facts, live, archived, &mut || false, Some(&mut runs))?;
   }
   Ok((facts, runs))
 }

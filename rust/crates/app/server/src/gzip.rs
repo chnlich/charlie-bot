@@ -5,8 +5,13 @@
 //! `Content-Encoding` or its type is excluded: the gzip responder excludes the media types of
 //! [`SKIP_MEDIA_PREFIXES`], the identity responder only `text/event-stream`. Otherwise the first body
 //! message decides: shorter than [`MINIMUM_SIZE`] and complete passes untouched; complete and longer
-//! gains `Vary: Accept-Encoding` and, under gzip, a level-1 deflate with a new `Content-Length`; a
-//! message with more to follow gains `Vary` and, under gzip, streams deflated without `Content-Length`.
+//! gains `Vary: Accept-Encoding` and, under gzip, a deflate with a new `Content-Length`; a message with
+//! more to follow gains `Vary` and, under gzip, streams deflated without `Content-Length`.
+//!
+//! A complete body that carries an ETag has one version named by that ETag, so the memo keeps its
+//! deflated bytes and serves them to every repeat request. A body the memo can hold deflates once per
+//! version at the smaller level-6 form ([`charliebot_compat::compression::gzip_memoized_body`]); a body
+//! too long for the memo's cap, and a deflate that runs per response, keep the level-1 form.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -190,7 +195,7 @@ fn new_encoder() -> GzEncoder<Vec<u8>> {
   GzEncoder::new(Vec::new(), Compression::new(COMPRESS_LEVEL))
 }
 
-/// The whole body deflated at once (the single-message case).
+/// The whole body deflated at once for a response the memo does not keep: the level-1 form, paid per response.
 pub fn gzip_whole(data: &[u8]) -> Vec<u8> {
   charliebot_compat::compression::gzip_level_one(data)
 }
@@ -200,6 +205,11 @@ const MEMO_ENTRIES: usize = 64;
 
 /// The largest compressed body the memo holds; a larger one is compressed and sent without being kept.
 const MEMO_MAX_BODY_BYTES: usize = 256 * 1024;
+
+/// The longest body whose level-6 deflate the memo still holds: [`MEMO_MAX_BODY_BYTES`] less a margin for the gzip
+/// header, trailer and worst-case stored-block overhead. A body at this length compresses to at most the cap, so a
+/// level-6 deflate of it is kept, and a longer body keeps the per-response level-1 deflate of the cap's own case.
+const MEMO_MAX_INPUT_BYTES: usize = MEMO_MAX_BODY_BYTES - 512;
 
 /// One memo key: the request's path and query, and the ETag of the response it answered.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -245,6 +255,10 @@ static BODY_MEMO: LazyLock<Mutex<BodyMemo>> = LazyLock::new(|| Mutex::new(BodyMe
 
 /// The deflated body the gzip responder sends for one complete response: the bytes memoized for this request's
 /// resource and ETag, or a fresh deflate that the memo keeps for the next request.
+///
+/// A body the memo can hold deflates once per version at level 6, and every repeat request reads the smaller bytes.
+/// A longer body, which the memo's cap would reject, keeps the level-1 deflate it pays once per response; a response
+/// with no ETag to key on takes the same per-response form.
 fn compressed_body(uri: &Uri, parts: &http::response::Parts, body: &[u8]) -> Bytes {
   let key = body_key(uri, parts);
   if let Some(key) = &key
@@ -252,7 +266,10 @@ fn compressed_body(uri: &Uri, parts: &http::response::Parts, body: &[u8]) -> Byt
   {
     return cached;
   }
-  let compressed = Bytes::from(gzip_whole(body));
+  let compressed = Bytes::from(match key {
+    Some(_) if body.len() <= MEMO_MAX_INPUT_BYTES => charliebot_compat::compression::gzip_memoized_body(body),
+    _ => gzip_whole(body),
+  });
   if let Some(key) = key {
     BODY_MEMO.lock().expect("the gzip body memo mutex is not poisoned").store(key, compressed.clone());
   }
@@ -391,6 +408,16 @@ mod tests {
 
     let (_, other) = run_at("/static/b.js", Some("\"v1\""), Responder::Gzip, "text/plain", Body::from(changed)).await;
     assert_eq!(inflated(&other), "b".repeat(MINIMUM_SIZE * 2), "another path is another resource");
+  }
+
+  #[tokio::test]
+  async fn a_body_past_the_memo_input_bound_keeps_its_level_one_deflate() {
+    // A body this long may deflate past the memo's cap, and a deflate the memo rejects is paid again on every
+    // response. It keeps the level-1 form rather than taking the level-6 form a kept version's repeats pay once.
+    let body = "a".repeat(MEMO_MAX_INPUT_BYTES + 1);
+    let (_, compressed) =
+      run_at("/static/past-the-cap.js", Some("\"v1\""), Responder::Gzip, "text/plain", Body::from(body.clone())).await;
+    assert_eq!(compressed, charliebot_compat::compression::gzip_level_one(body.as_bytes()));
   }
 
   /// Drive one response whose body arrives in several messages and whose length it declares.

@@ -1744,11 +1744,6 @@ impl Registry {
     self.draft_platforms.get(name).cloned()
   }
 
-  /// The registered platform names in registration order.
-  pub fn draft_platform_names(&self) -> impl Iterator<Item = &'static str> {
-    self.draft_platforms.pairs().map(|(name, _)| name)
-  }
-
   /// Whether a registered controller owns `meta`.
   pub fn sequence_owns_session(&self, meta: &SessionMetadata) -> bool {
     self.sequence_controllers().any(|controller| controller.owns_session(meta))

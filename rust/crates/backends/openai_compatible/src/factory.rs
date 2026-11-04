@@ -32,6 +32,7 @@ impl BackendFactory for OpenAiCompatibleFactory {
       &proxy_base_url,
       &auth_token,
       &model,
+      charliebot_claude_code::claude_config::enable_subagents(cfg),
       config_dir,
       cfg.server.port,
       launch,

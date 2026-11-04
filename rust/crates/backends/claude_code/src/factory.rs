@@ -7,7 +7,7 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 
 use super::ClaudeCodeBackend;
-use super::options;
+use super::{claude_config, options};
 
 pub struct ClaudeCodeFactory;
 
@@ -20,8 +20,9 @@ impl BackendFactory for ClaudeCodeFactory {
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let launch = launch_with_kwargs(launch)?;
     let cgroup_config = SessionCgroupConfig::from_config(cfg);
+    let enable_subagents = claude_config::enable_subagents(cfg);
     let backend = match option {
-      None => ClaudeCodeBackend::from_launch(None, None, None, false, None, launch, cgroup_config)?,
+      None => ClaudeCodeBackend::from_launch(None, None, None, false, enable_subagents, None, launch, cgroup_config)?,
       Some(option) => {
         let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
         let effort = options::optional_text(&option.type_fields, options::EFFORT_KEY).map_err(anyhow::Error::msg)?;
@@ -29,7 +30,16 @@ impl BackendFactory for ClaudeCodeFactory {
           options::optional_text(&option.type_fields, options::CLI_BINARY_KEY).map_err(anyhow::Error::msg)?;
         let fast_mode = options::fast_mode(&option.type_fields).map_err(anyhow::Error::msg)?;
         let config_dir = launch_config_dir(&launch)?;
-        ClaudeCodeBackend::from_launch(Some(model), effort, cli_binary, fast_mode, config_dir, launch, cgroup_config)?
+        ClaudeCodeBackend::from_launch(
+          Some(model),
+          effort,
+          cli_binary,
+          fast_mode,
+          enable_subagents,
+          config_dir,
+          launch,
+          cgroup_config,
+        )?
       }
     };
     Ok(Box::new(backend))

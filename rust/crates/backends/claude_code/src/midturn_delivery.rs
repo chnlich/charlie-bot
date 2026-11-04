@@ -140,6 +140,7 @@ mod tests {
       None,
       Some(stub.display().to_string()),
       false,
+      false,
       None,
       LaunchArgs { log_dir: Some(root.path().join("run")), ..midturn_launch_kwargs(run_id) },
       disabled_cgroup(),

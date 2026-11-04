@@ -39,6 +39,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
       model,
       Some(fields.context_window),
       fields.effort,
+      charliebot_claude_code::claude_config::enable_subagents(cfg),
       config_dir,
       cfg.server.port,
       launch,

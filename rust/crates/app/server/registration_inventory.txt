@@ -90,6 +90,7 @@ config section	features.discord	discord
 config section	features.host_auth	host_auth
 config section	features.voice	voice
 config section	backends.claude_code	accounts
+config section	backends.claude_code	claude_code
 legacy config key	features.artifacts	publish_dir
 legacy config key	features.artifacts	public_base_url
 legacy config key	features.code_server	code_server_bin

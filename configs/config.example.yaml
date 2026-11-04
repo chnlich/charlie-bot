@@ -116,6 +116,12 @@ accounts:
     relay_tokens: 100000
     expired_cache_tokens: 50000
 
+# Claude Code: the backend package's own switches.
+claude_code:
+  # Claude Code's own subagents (the Agent tool): true removes Agent from the disallowed tools of manager
+  # turns, work runs and improve iterations. false keeps Agent disallowed on every run kind.
+  enable_subagents: false
+
 # Voice: online transcription backend selection.
 voice:
   # Transcription backend used before a choice is made in the page's dropdown,

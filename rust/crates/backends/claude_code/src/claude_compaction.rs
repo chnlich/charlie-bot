@@ -33,10 +33,8 @@ const COMPACT_PROMPT: &[u8] = b"/compact\n";
 const BOUNDARY_MARKER: &str = "\"compact_boundary\"";
 const COST_STATE_MARKER: &str = "\"cost-state\"";
 const USAGE_COUNTERS: [&str; 4] = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"];
-const EXTRA_COMPACTION_TOOLS: &str = concat!(
-  "Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,TodoWrite,Skill,ToolSearch,",
-  "KillShell,BashOutput,AskUserQuestion,ExitPlanMode,Task"
-);
+const EXTRA_COMPACTION_TOOLS: &str =
+  "Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,Skill,ToolSearch,KillShell,Agent";
 
 pub use charliebot_registry::backend::{CompactionOutcome, CompactionRun};
 
@@ -552,7 +550,14 @@ mod tests {
   fn compaction_command_disables_skills_and_installs_the_compaction_context_hook() {
     let command = compaction_command("claude-session", "charlie-session");
     let disallowed_index = command.iter().position(|value| *value == DISALLOWED_TOOLS_FLAG).unwrap();
-    assert_eq!(command[disallowed_index + 1], format!("{HEADLESS_DISALLOWED_TOOLS},{EXTRA_COMPACTION_TOOLS}"));
+    assert_eq!(
+      command[disallowed_index + 1],
+      concat!(
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,",
+        "ShareOnboardingGuide,RemoteTrigger,Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,",
+        "Skill,ToolSearch,KillShell,Agent"
+      )
+    );
     assert!(command[disallowed_index + 1].split(',').any(|tool| tool == "Skill"));
     assert_eq!(command.iter().filter(|value| **value == "--settings").count(), 1);
     let settings = command[command.iter().position(|value| value == "--settings").unwrap() + 1].clone();

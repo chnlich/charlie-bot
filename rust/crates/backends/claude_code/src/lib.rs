@@ -84,6 +84,12 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     parse: claude_config::parse_accounts,
     dump: claude_config::dump_accounts,
   })?;
+  registry.config_section(charliebot_core::config::ConfigSection {
+    key: "claude_code",
+    legacy_keys: &[],
+    parse: claude_config::parse_claude_code,
+    dump: claude_config::dump_claude_code,
+  })?;
   registry.metadata_slot_with_validator(
     charliebot_core::metadata_slot::MetadataSlot {
       owner: "claude_code",

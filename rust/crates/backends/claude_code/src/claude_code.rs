@@ -29,8 +29,8 @@ use super::login_dirs;
 use super::midturn_delivery::MidturnTranslate;
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
-  "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,",
-  "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide"
+  "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,",
+  "ShareOnboardingGuide,RemoteTrigger"
 );
 pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
 pub const MCP_CONFIG_FLAG: &str = "--mcp-config";
@@ -41,14 +41,28 @@ pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
+const AGENT_TOOL: &str = "Agent";
 const ONE_SHOT_DISALLOWED_TOOLS: &str = "Bash,Read,Write,Edit,Glob,Grep,Agent";
 
-fn headless_disallowed_tools(run_kind: RunKind) -> String {
-  let kind_tools = match run_kind {
-    RunKind::Review => "Skill",
-    RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration | RunKind::ScheduledStep => "ReportFindings",
-  };
-  format!("{HEADLESS_DISALLOWED_TOOLS},{kind_tools}")
+/// The run kinds that receive Claude Code's `Agent` tool when subagents are enabled: the manager turn, work runs
+/// (implement, quick-edit, script-run, verify, cold read and unstepped cron tasks) and improve iterations. Review,
+/// scheduled steps, one-shot runs and compaction never receive it.
+fn receives_agent_tool(run_kind: RunKind) -> bool {
+  matches!(run_kind, RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration)
+}
+
+/// The `--disallowed-tools` value of one headless run kind. `Agent` is disallowed unless `enable_subagents` is set
+/// and the run kind receives it.
+fn headless_disallowed_tools(run_kind: RunKind, enable_subagents: bool) -> String {
+  let mut tools = vec![HEADLESS_DISALLOWED_TOOLS];
+  match run_kind {
+    RunKind::Review => tools.push("Skill"),
+    RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration | RunKind::ScheduledStep => tools.push("ReportFindings"),
+  }
+  if !(enable_subagents && receives_agent_tool(run_kind)) {
+    tools.push(AGENT_TOOL);
+  }
+  tools.join(",")
 }
 
 /// Append `tool` to the command's `--disallowed-tools` value.
@@ -62,7 +76,7 @@ fn disallow_tool(command: &mut [String], tool: &str) {
   value.push_str(tool);
 }
 
-fn headless_command(run_kind: RunKind) -> Vec<String> {
+fn headless_command(run_kind: RunKind, enable_subagents: bool) -> Vec<String> {
   vec![
     "claude".to_string(),
     "-p".to_string(),
@@ -71,14 +85,15 @@ fn headless_command(run_kind: RunKind) -> Vec<String> {
     "--verbose".to_string(),
     SKIP_PERMISSIONS_FLAG.to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
-    headless_disallowed_tools(run_kind),
+    headless_disallowed_tools(run_kind, enable_subagents),
   ]
 }
 
-/// The `--disallowed-tools` value the headless command carries, for the setup check
-/// (`setup_check::setup_step`); the errors name the flag and `BASE_COMMAND` in their text.
+/// The `--disallowed-tools` value the headless command carries, for the setup check (`setup_check::setup_step`);
+/// the work run's list with subagents enabled, which disallows the most tools. The errors name the flag and
+/// `BASE_COMMAND` in their text.
 pub fn base_disallowed_tools() -> Result<String, String> {
-  let command = headless_command(RunKind::Work);
+  let command = headless_command(RunKind::Work, true);
   let index = command
     .iter()
     .position(|value| value == DISALLOWED_TOOLS_FLAG)
@@ -200,6 +215,7 @@ pub struct ClaudeCodeBackend {
   effort: Option<String>,
   cli_binary: Option<String>,
   fast_mode: bool,
+  enable_subagents: bool,
   use_pre_tool_use_guards: bool,
   run_kind: RunKind,
   claude_session_id: Option<String>,
@@ -213,11 +229,13 @@ pub struct ClaudeCodeBackend {
 }
 
 impl ClaudeCodeBackend {
+  #[allow(clippy::too_many_arguments)]
   pub(crate) fn from_launch(
     model: Option<String>,
     effort: Option<String>,
     cli_binary: Option<String>,
     fast_mode: bool,
+    enable_subagents: bool,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
     cgroup_config: SessionCgroupConfig,
@@ -256,6 +274,7 @@ impl ClaudeCodeBackend {
       effort: effort.filter(|value| !value.is_empty()),
       cli_binary: cli_binary.filter(|value| !value.is_empty()),
       fast_mode,
+      enable_subagents,
       use_pre_tool_use_guards,
       run_kind,
       claude_session_id,
@@ -271,7 +290,7 @@ impl ClaudeCodeBackend {
 
   /// Build the Claude command used by the raw-log runner.
   pub fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
-    let mut command = headless_command(self.run_kind);
+    let mut command = headless_command(self.run_kind, self.enable_subagents);
     command[0] = self.cli_binary.clone().unwrap_or_else(|| "claude".to_string());
     if let Some(session_id) = &self.claude_session_id {
       command.extend(["--session-id".to_string(), session_id.clone()]);
@@ -561,8 +580,8 @@ pub struct AnthropicEndpointBackend {
 impl AnthropicEndpointBackend {
   /// The backend for `model` at `base_url`, authenticated with `auth_token`. `server_port` is the port of the
   /// CharlieBot server that serves the web search MCP tool. `effort` is the `--effort` level the command carries when
-  /// it is set. `launch` carries the per-launch arguments of [`ClaudeCodeBackend`], such as the session id and the
-  /// instructions file.
+  /// it is set, and `enable_subagents` is the `claude_code.enable_subagents` switch. `launch` carries the per-launch
+  /// arguments of [`ClaudeCodeBackend`], such as the session id and the instructions file.
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     base_url: String,
@@ -570,12 +589,22 @@ impl AnthropicEndpointBackend {
     model: String,
     context_window: Option<u64>,
     effort: Option<String>,
+    enable_subagents: bool,
     claude_config_dir: Option<String>,
     server_port: u16,
     launch: LaunchArgs,
     cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
-    let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_config)?;
+    let backend = ClaudeCodeBackend::from_launch(
+      None,
+      effort,
+      None,
+      false,
+      enable_subagents,
+      claude_config_dir,
+      launch,
+      cgroup_config,
+    )?;
     Ok(Self {
       backend,
       base_url,
@@ -796,6 +825,7 @@ mod tests {
       Some("high".to_string()),
       Some("/synthetic/claude".to_string()),
       true,
+      false,
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
       SessionCgroupConfig::disabled(),
@@ -825,6 +855,7 @@ mod tests {
       None,
       None,
       None,
+      false,
       false,
       None,
       LaunchArgs {
@@ -897,6 +928,7 @@ mod tests {
       None,
       None,
       false,
+      false,
       None,
       LaunchArgs {
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
@@ -917,6 +949,7 @@ mod tests {
       "synthetic/model-1".to_string(),
       Some(409_600),
       None,
+      false,
       None,
       8123,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
@@ -961,6 +994,7 @@ mod tests {
       None,
       None,
       false,
+      false,
       None,
       LaunchArgs::default(),
       SessionCgroupConfig::disabled(),
@@ -996,6 +1030,7 @@ mod tests {
       Some("claude-haiku-5-5".to_string()),
       None,
       None,
+      false,
       false,
       None,
       LaunchArgs::default(),
@@ -1082,6 +1117,7 @@ mod tests {
       "synthetic/model-1".to_string(),
       None,
       None,
+      false,
       None,
       8123,
       LaunchArgs::default(),
@@ -1192,11 +1228,12 @@ mod tests {
   /// The two commands of `cc-claude`: the built-in web search stays available, and the endpoint backend's extra
   /// tool changes neither command.
   #[test]
-  fn claude_code_commands_stay_byte_identical_to_the_base() {
+  fn claude_code_commands_carry_the_headless_and_one_shot_tool_lists() {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
       None,
+      false,
       false,
       None,
       LaunchArgs::default(),
@@ -1213,8 +1250,8 @@ mod tests {
         "--verbose",
         "--dangerously-skip-permissions",
         "--disallowed-tools",
-        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,\
-         TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,\
+         ShareOnboardingGuide,RemoteTrigger,ReportFindings,Agent",
         "--settings",
         concat!(
           r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
@@ -1239,6 +1276,32 @@ mod tests {
     );
   }
 
+  /// The switch's rule name by name: one-shot, compaction, review and scheduled-step lists always disallow `Agent`;
+  /// the manager turn, work runs and improve iterations disallow it only with the switch off.
+  #[test]
+  fn only_the_manager_work_and_iteration_lists_lose_agent_with_the_switch_on() {
+    let one_shot = one_shot_argv(&[], "system");
+    assert!(disallowed_tools_value(&one_shot).split(',').any(|tool| tool == AGENT_TOOL), "the one-shot list");
+    let compaction = crate::claude_compaction::compaction_command("cc-session", "charlie-session");
+    assert!(disallowed_tools_value(&compaction).split(',').any(|tool| tool == AGENT_TOOL), "the compaction list");
+
+    let run_kinds = [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration, RunKind::ScheduledStep];
+    for enable_subagents in [false, true] {
+      for run_kind in run_kinds {
+        let command = headless_command(run_kind, enable_subagents);
+        let tools = disallowed_tools_value(&command);
+        assert!(tools.split(',').any(|tool| tool == "RemoteTrigger"), "{run_kind:?}: {tools}");
+        let switch_opens =
+          enable_subagents && matches!(run_kind, RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration);
+        assert_eq!(
+          tools.split(',').any(|tool| tool == AGENT_TOOL),
+          !switch_opens,
+          "{run_kind:?} with enable_subagents {enable_subagents}: {tools}"
+        );
+      }
+    }
+  }
+
   #[test]
   fn endpoint_backend_disallows_the_built_in_web_search_in_both_commands() {
     let backend = AnthropicEndpointBackend::new(
@@ -1247,6 +1310,7 @@ mod tests {
       "synthetic/model-1".to_string(),
       None,
       None,
+      false,
       None,
       8123,
       LaunchArgs::default(),
@@ -1256,7 +1320,7 @@ mod tests {
     let session = backend.build_command("prompt").unwrap();
     assert_eq!(
       disallowed_tools_value(&session),
-      format!("{},{}", headless_disallowed_tools(RunKind::Work), BUILT_IN_WEB_SEARCH_TOOL)
+      format!("{},{}", headless_disallowed_tools(RunKind::Work, false), BUILT_IN_WEB_SEARCH_TOOL)
     );
     let one_shot = backend.one_shot_command("system");
     assert_eq!(
@@ -1273,6 +1337,7 @@ mod tests {
       "synthetic/model-1".to_string(),
       None,
       None,
+      false,
       None,
       18498,
       LaunchArgs::default(),

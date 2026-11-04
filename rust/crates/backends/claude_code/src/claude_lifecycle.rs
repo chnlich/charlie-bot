@@ -798,6 +798,7 @@ mod tests {
         None,
         None,
         false,
+        false,
         None,
         LaunchArgs {
           backend_kwargs: launch.backend_kwargs.clone(),

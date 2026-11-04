@@ -1,4 +1,4 @@
-//! Typed configuration for Claude account pools and Sonnet compaction thresholds.
+//! Typed configuration for Claude account pools, Sonnet compaction thresholds and the backend's switches.
 
 use std::collections::BTreeMap;
 
@@ -67,6 +67,45 @@ pub struct AccountsConfig {
   pub claude_pools: BTreeMap<String, Vec<String>>,
   #[serde(default)]
   pub claude_compaction: ClaudeCompactionConfig,
+}
+
+/// `claude_code:` section: the switch that gives manager turns, work runs and improve iterations Claude Code's own
+/// subagents (the `Agent` tool).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeCodeConfig {
+  /// true removes `Agent` from the disallowed tools of manager turns, work runs and improve iterations. false keeps
+  /// `Agent` disallowed on every run kind.
+  #[serde(default)]
+  pub enable_subagents: bool,
+}
+
+pub fn parse_claude_code(value: &Value) -> Result<charliebot_core::config::SectionValue, String> {
+  let parsed: ClaudeCodeConfig = serde_yaml::from_value(value.clone()).map_err(|error| error.to_string())?;
+  Ok(std::sync::Arc::new(parsed))
+}
+
+/// Render the section as its model dumps it (`charliebot config get claude_code`).
+pub fn dump_claude_code(value: &charliebot_core::config::SectionValue) -> Result<serde_json::Value, String> {
+  let settings = value.downcast_ref::<ClaudeCodeConfig>().ok_or("the claude_code section holds an unexpected value")?;
+  serde_json::to_value(settings).map_err(|error| error.to_string())
+}
+
+/// Whether the configured run kinds receive Claude Code's `Agent` tool.
+///
+/// A config built directly rather than loaded through the registry, as the golden tests' configs are, carries no
+/// package sections; the settings there are the section's defaults. A loaded config always holds the section,
+/// because the loader parses it from an empty mapping when `config.yaml` omits the key.
+pub fn enable_subagents(cfg: &CharlieBotConfig) -> bool {
+  match cfg.section_value("claude_code") {
+    Some(value) => {
+      value
+        .downcast_ref::<ClaudeCodeConfig>()
+        .expect("the claude_code section holds the Claude Code settings")
+        .enable_subagents
+    }
+    None => ClaudeCodeConfig::default().enable_subagents,
+  }
 }
 
 pub fn parse_accounts(value: &Value) -> Result<charliebot_core::config::SectionValue, String> {
@@ -157,6 +196,22 @@ mod tests {
     assert_eq!(accounts.claude_compaction.relay_tokens, 100_000);
     assert_eq!(accounts.claude_compaction.expired_cache_tokens, 50_000);
     assert_eq!(accounts.claude_compaction.idle_tokens, 100_000);
+  }
+
+  #[test]
+  fn the_subagent_switch_defaults_to_off_and_refuses_a_value_that_is_not_a_bool() {
+    let mut registry = Registry::new();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("config.yaml"), "server:\n  port: 18499\n").unwrap();
+    assert!(!enable_subagents(&registry.load_config(home.path()).unwrap()), "an omitted section is off");
+
+    std::fs::write(home.path().join("config.yaml"), "claude_code:\n  enable_subagents: true\n").unwrap();
+    assert!(enable_subagents(&registry.load_config(home.path()).unwrap()));
+
+    std::fs::write(home.path().join("config.yaml"), "claude_code:\n  enable_subagents: sometimes\n").unwrap();
+    let error = registry.load_config(home.path()).unwrap_err().to_string();
+    assert!(error.contains("invalid config key claude_code"), "{error}");
   }
 
   #[test]

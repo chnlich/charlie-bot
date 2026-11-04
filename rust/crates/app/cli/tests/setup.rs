@@ -6,7 +6,8 @@ use std::path::Path;
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 
-const OK_LINE: &str = "OK: backend disallows Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList";
+const OK_LINE: &str =
+  "OK: backend disallows Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,RemoteTrigger";
 const CRON_BANNER: &str = "==> Seeding default cron tasks";
 const CLAUDE_BANNER: &str = "==> Checking Claude Code backend tools";
 

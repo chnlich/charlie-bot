@@ -3,8 +3,10 @@
 
 use std::collections::BTreeSet;
 
-/// The tools the check requires in the command's `--disallowed-tools` value.
-const REQUIRED: [&str; 5] = ["Monitor", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList"];
+/// The tools the check requires in the command's `--disallowed-tools` value: the wake-up tools plus the three
+/// entry points that start work outside CharlieBot (Workflow, SendMessage and RemoteTrigger).
+const REQUIRED: [&str; 8] =
+  ["Monitor", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Workflow", "SendMessage", "RemoteTrigger"];
 
 /// Smoke-check the Claude Code backend command for headless-unsafe tools. Prints the banner and the
 /// `OK:` line; the error names the missing tools, sorted and comma-separated.

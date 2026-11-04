@@ -1315,7 +1315,15 @@ async fn a_manager_resume_error_lands_the_turn_failure() -> anyhow::Result<()> {
 
   stack.node_pass(&manager.id).await?;
 
-  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(&manager.id)?, "run-turn")?.is_some())).await?;
+  // The landing writes the end record and then the notice; waiting on the notice waits for both.
+  settle_until(|| {
+    let events = stack.run_event_values(&manager.id)?;
+    Ok(events.iter().any(|event| {
+      event["type"] == event_types::ERROR
+        && event["content"].as_str().is_some_and(|text| text.starts_with("Turn failed"))
+    }))
+  })
+  .await?;
   let events = stack.run_event_values(&manager.id)?;
   assert_eq!(run_records::terminal_outcome(&stack.run_events(&manager.id)?, "run-turn")?, Some(RunOutcomeKind::Failed));
   let run = stack.store().read_run_sync(&manager.id, "run-turn")?.context("the turn is recorded")?;

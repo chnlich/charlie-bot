@@ -1,5 +1,5 @@
-//! `web/features/feishu`: registers the long-connection service, internal routes, config section, session fields and
-//! turn contribution for the Feishu thread entrypoint, and the `charliebot feishu` verbs.
+//! The Feishu package registers the long-connection service, internal routes, config section, session fields and turn
+//! contribution for the Feishu thread entrypoint, and the `charliebot feishu` verbs.
 
 mod adapter;
 mod api;
@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 use service::FeishuService;
 use turn_contribution::FeishuTurnContribution;
 
-/// `register`: the service, the routes and the package's other registrations, in server order.
+/// Register the service, the routes and the package's other registrations, in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.service(Arc::new(FeishuService::default()))?;
   registry.router(api::routes, api::matches)?;

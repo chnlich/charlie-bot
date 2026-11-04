@@ -23,25 +23,26 @@ use crate::adapter::{self, Bot};
 use crate::client::BASE_URL;
 use crate::commands;
 
-/// `FeishuReadRequest.limit`'s default: 50, bounded to 1..=100.
+/// The read request's default window size: 50, bounded to 1..=100.
 const DEFAULT_READ_LIMIT: u64 = 50;
 
 /// The download kinds the Open API resource endpoint takes.
 const DOWNLOAD_KINDS: &[&str] = &["image", "file"];
 
-/// `FeishuReplyRequest`: the calling session's id and the reply text.
+/// The reply request's fields: the calling session's id and the reply text.
 const REPLY_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
 const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
-/// `FeishuReadRequest`: the calling session's id and the window size.
+/// The read request's fields: the calling session's id and the window size.
 const READ_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::optional("limit", FieldType::Integer).ge(Bound::Int(1)).le(Bound::Int(100)),
 ];
 const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 
-/// `FeishuDownloadRequest`: the calling session's id, the message and resource keys, the kind, and the output path.
+/// The download request's fields: the calling session's id, the message and resource keys, the kind, and the output
+/// path.
 const DOWNLOAD_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required("message_id", FieldType::String),
@@ -51,7 +52,7 @@ const DOWNLOAD_FIELDS: &[Field] = &[
 ];
 const DOWNLOAD_BODY: BodyModel = BodyModel::required(DOWNLOAD_FIELDS).forbid_extra();
 
-/// `FeishuCheckRequest`: no fields.
+/// The check request's body: no fields.
 const CHECK_BODY: BodyModel = BodyModel::required(&[]).forbid_extra();
 
 const REPLY_PATH: &str = "/api/internal/feishu/reply";
@@ -79,7 +80,7 @@ pub fn matches(path: &str) -> bool {
   matches!(path, REPLY_PATH | READ_PATH | DOWNLOAD_PATH | CHECK_PATH)
 }
 
-/// `POST /api/internal/feishu/reply`: checks the thread is fresh, then posts the text to it.
+/// The reply route (`POST /api/internal/feishu/reply`): checks the thread is fresh, then posts the text to it.
 async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -122,7 +123,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
   answer(result)
 }
 
-/// `POST /api/internal/feishu/read`: the session's own thread, with the unread messages marked read.
+/// The read route (`POST /api/internal/feishu/read`): the session's own thread, with the unread messages marked read.
 async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -138,7 +139,8 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   answer(commands::read_thread(&bot, &session_id, limit).await)
 }
 
-/// `POST /api/internal/feishu/download`: writes one image or file of the session's thread into the session directory.
+/// The download route (`POST /api/internal/feishu/download`): writes one image or file of the session's thread into
+/// the session directory.
 async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -162,7 +164,7 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
   )
 }
 
-/// `POST /api/internal/feishu/check`: the app's setup.
+/// The check route (`POST /api/internal/feishu/check`): the app's setup.
 async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {

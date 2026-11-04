@@ -4,11 +4,13 @@
 //! `startup.require::<Templating>()` and renders a page with `render_page`, as Starlette's `TemplateResponse` does.
 //!
 //! A render reads each template source's `(mtime, size)` and keeps the last compiled minijinja environment while
-//! that list and the template globals still compare equal. A repeat render then skips compiling the page and its
-//! partials. The served template and static trees carry an inotify watch ([`TreeWatch`]). The read of that list and
-//! the static files' digests happen only after an event reported a change. A render that drained no event reuses the
-//! list, the digest and the page text it last rendered. A repeat render of an unchanged page is then one comparison
-//! of its inputs. A template, a page part or a template directory that changes on disk moves the list. The next
+//! that list and the template globals still hold their version. A repeat render then skips compiling the page and its
+//! partials. The globals themselves are built once per config and credentials version, because a global calls into
+//! those values and some of the calls are not free: the code-server global resolves its binary on the process PATH.
+//! The served template and static trees carry an inotify watch ([`TreeWatch`]). The read of that list and the static
+//! files' digests happen only after an event reported a change. A render that drained no event reuses the list, the
+//! digest and the page text it last rendered. A repeat render of an unchanged page is then one comparison of its
+//! inputs. A template, a page part or a template directory that changes on disk moves the list. The next
 //! render then compiles a fresh environment, so an edit takes effect without a restart, as Jinja2's auto-reload
 //! does. The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
@@ -30,6 +32,8 @@ use axum::response::Response;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
 use charliebot_compat::headers::header_text;
 use charliebot_compat::{jinja, responses};
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::credentials::Credentials;
 use charliebot_core::{git, text_repr, timefmt};
 use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
@@ -64,6 +68,8 @@ pub struct Templating {
   render_cache: Mutex<Option<RenderCache>>,
   /// The page text one render built and the inputs it built from.
   render_memo: Mutex<Option<RenderMemo>>,
+  /// The template globals the last render built, with the config and credentials versions it built them from.
+  globals: Mutex<Option<GlobalsCache>>,
   /// The compressed forms of the last eight page bodies deflated, the oldest first.
   page_gzips: Mutex<Vec<PageGzip>>,
   /// The watch whose revision says whether the template and static trees moved.
@@ -88,25 +94,39 @@ struct SourceCache {
 /// One compiled template environment and the inputs it was compiled from.
 ///
 /// A render compiles the page and every partial it includes into a fresh environment, so a repeat render of an
-/// unchanged page repeats that compile. The environment is kept while the template sources and the globals compare
-/// equal, which serves a repeat render from the compiled templates. A moved source or global rebuilds it, so an edit
-/// on disk still takes effect at the next render.
+/// unchanged page repeats that compile. The environment is kept while the template sources and the globals hold their
+/// version, which serves a repeat render from the compiled templates. A moved source or a reloaded config or
+/// credentials file rebuilds it, so an edit on disk still takes effect at the next render.
 struct RenderCache {
   sources: Arc<Vec<SourceStat>>,
-  globals: Vec<TemplateGlobal>,
+  globals: Arc<Vec<TemplateGlobal>>,
   environment: Arc<Environment<'static>>,
+}
+
+/// The template globals the last render built, with the config and credentials versions they were built from.
+///
+/// A render asks the registry for every global and calls it. The calls are not free: the code-server global resolves
+/// its binary on the process PATH, and the voice globals build their values from the config and the credentials. A
+/// global therefore reads only the config, the credentials and process state that the server fixes before its first
+/// thread starts, such as PATH. Both hot-reloaded files hand out a new `Arc` when they reload, so holding those two
+/// `Arc`s identifies the versions the globals were built from, and an edit to either one moves the cache.
+struct GlobalsCache {
+  config: Arc<CharlieBotConfig>,
+  credentials: Arc<Credentials>,
+  globals: Arc<Vec<TemplateGlobal>>,
 }
 
 /// The text one render of one template with one context produced, and the watch revision it rendered at.
 ///
 /// A page request renders the template into its finished body and compares that body with the one it served last.
 /// The render is deterministic in the template sources, the globals and the context, so a repeat request whose
-/// inputs compare equal serves this text and skips the engine. A moved tree moves the revision, and a moved context
-/// or global compares unequal, so both render again.
+/// inputs still name the same values serves this text and skips the engine. A moved tree moves the revision, a
+/// reloaded config or credentials file replaces the globals, and a moved context compares unequal, so each renders
+/// again.
 struct RenderMemo {
   revision: u64,
   name: String,
-  globals: Vec<TemplateGlobal>,
+  globals: Arc<Vec<TemplateGlobal>>,
   context: serde_json::Value,
   html: String,
 }
@@ -144,6 +164,7 @@ impl Templating {
       sources: Mutex::new(None),
       render_cache: Mutex::new(None),
       render_memo: Mutex::new(None),
+      globals: Mutex::new(None),
       page_gzips: Mutex::new(Vec::new()),
       watch: TreeWatch::new(&trees),
     }
@@ -297,11 +318,7 @@ impl Templating {
     context: &serde_json::Value,
     request: &Parts,
   ) -> Result<String, RenderError> {
-    let globals = features
-      .registry
-      .template_globals()
-      .map(|(global_name, global)| global(features).map(|value| (global_name, value)).map_err(RenderError::Global))
-      .collect::<Result<Vec<_>, _>>()?;
+    let globals = self.template_globals(features)?;
     let mut context = context.clone();
     context
       .as_object_mut()
@@ -313,16 +330,43 @@ impl Templating {
       if let Some(entry) = memo.as_ref()
         && entry.revision == revision
         && entry.name == name
-        && entry.globals == globals
+        && Arc::ptr_eq(&entry.globals, &globals)
         && entry.context == context
       {
         return Ok(entry.html.clone());
       }
     }
-    let html = self.render(name, &context, globals.clone(), revision)?;
+    let html = self.render(name, &context, Arc::clone(&globals), revision)?;
     *self.render_memo.lock().expect("the render memo mutex is not poisoned") =
       Some(RenderMemo { revision, name: name.to_string(), globals, context, html: html.clone() });
     Ok(html)
+  }
+
+  /// The registry's template globals, from the cache while the config and credentials hold, else built and kept.
+  ///
+  /// The cache holds the two `Arc`s it built from, so a reload of either file replaces it: the hot-reloaded values
+  /// hand out a new `Arc` per version, and an `Arc` the cache holds is never freed under it.
+  fn template_globals(&self, features: &FeatureContext) -> Result<Arc<Vec<TemplateGlobal>>, RenderError> {
+    let config = features.config.get().map_err(|error| RenderError::Global(error.to_string()))?;
+    let credentials = features.credentials.get().map_err(|error| RenderError::Global(error.to_string()))?;
+    {
+      let memo = self.globals.lock().expect("the template globals mutex is not poisoned");
+      if let Some(entry) = memo.as_ref()
+        && Arc::ptr_eq(&entry.config, &config)
+        && Arc::ptr_eq(&entry.credentials, &credentials)
+      {
+        return Ok(Arc::clone(&entry.globals));
+      }
+    }
+    let globals = features
+      .registry
+      .template_globals()
+      .map(|(global_name, global)| global(features).map(|value| (global_name, value)).map_err(RenderError::Global))
+      .collect::<Result<Vec<_>, _>>()?;
+    let globals = Arc::new(globals);
+    *self.globals.lock().expect("the template globals mutex is not poisoned") =
+      Some(GlobalsCache { config, credentials, globals: Arc::clone(&globals) });
+    Ok(globals)
   }
 
   /// Render template `name` with `context` and the zero-argument `globals`, at watch revision `revision`.
@@ -330,7 +374,7 @@ impl Templating {
     &self,
     name: &str,
     context: &serde_json::Value,
-    globals: Vec<TemplateGlobal>,
+    globals: Arc<Vec<TemplateGlobal>>,
     revision: u64,
   ) -> Result<String, RenderError> {
     if !self.names_checked.load(Ordering::Acquire) {
@@ -340,11 +384,15 @@ impl Templating {
     let sources = self.template_sources(revision)?;
     let environment = {
       let mut cache = self.render_cache.lock().expect("the render cache mutex is not poisoned");
-      let reused =
-        cache.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.sources, &sources) && entry.globals == globals);
+      let reused = cache
+        .as_ref()
+        .is_some_and(|entry| Arc::ptr_eq(&entry.sources, &sources) && Arc::ptr_eq(&entry.globals, &globals));
       if !reused {
-        *cache =
-          Some(RenderCache { sources, globals: globals.clone(), environment: Arc::new(self.environment(globals)) });
+        *cache = Some(RenderCache {
+          sources,
+          globals: Arc::clone(&globals),
+          environment: Arc::new(self.environment(globals.as_ref().clone())),
+        });
       }
       Arc::clone(&cache.as_ref().expect("the render cache holds the environment it built").environment)
     };
@@ -722,6 +770,46 @@ mod tests {
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label one");
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} two, longer").unwrap();
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
+  }
+
+  /// A global that reads the config is built once while the config holds, and a config edit builds it again, so the
+  /// next render serves the edited value.
+  #[tokio::test]
+  async fn a_config_edit_rebuilds_the_template_globals() {
+    fn host_global(features: &FeatureContext) -> Result<Value, String> {
+      Ok(Value::from(features.config.get().map_err(|error| error.to_string())?.server.host.clone()))
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("host.html"), "host {{ host_label() }}").unwrap();
+    let mut registry = Registry::new();
+    registry
+      .register_package("features.notes", |registry| registry.template_global("host_label", host_global))
+      .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    fs::write(home.path().join("config.yaml"), "server:\n  host: one\n").unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/host").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    async fn render(templating: &Templating, features: &FeatureContext, parts: &Parts) -> String {
+      let response = templating.render_page(features, "host.html", &json!({}), parts).unwrap();
+      let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+      String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    assert_eq!(render(&templating, &features, &parts).await, "host one");
+    let first = templating.template_globals(&features).unwrap();
+    let repeated = templating.template_globals(&features).unwrap();
+    assert!(Arc::ptr_eq(&first, &repeated), "an unchanged config serves the globals the earlier render built");
+
+    fs::write(home.path().join("config.yaml"), "server:\n  host: elsewhere\n").unwrap();
+    assert_eq!(render(&templating, &features, &parts).await, "host elsewhere");
+    let edited = templating.template_globals(&features).unwrap();
+    assert!(!Arc::ptr_eq(&first, &edited), "a config edit builds the globals again");
   }
 
   /// A page body at or above the transport's minimum travels compressed when the client asked for gzip, and the

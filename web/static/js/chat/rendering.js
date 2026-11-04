@@ -836,9 +836,9 @@ function mdDiv(text) {
 }
 
 // The markdown bubbles' time line. The slate-300 tone reads at 6.97:1 on the slate-700
-// bubble and 9.85:1 on a slate-800 card, above the 4.5:1 floor for 10px text and quieter
-// than the message body. A card that keeps its own tone passes an override that clears
-// the same floor.
+// bubble and 9.85:1 on a slate-800 card. That clears the 4.5:1 floor for 10px text and
+// stays quieter than the message body. A card that keeps its own tone passes an override
+// that clears the same floor.
 const BUBBLE_TIME_CLASS = "text-slate-300";
 
 // Message roles a package renders. A registered role takes the whole message and returns its HTML; the core roles

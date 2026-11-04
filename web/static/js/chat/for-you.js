@@ -5,10 +5,10 @@
 // ---------------------------------------------------------------------------
 // The For-you view: the session page's reading layer for web and worker sessions.
 //
-// For you shows the user's messages, the agent's web replies (web_reply), the
-// web reply notices (web_reply_notice), draft cards waiting for the user's
-// click (draft) and error rows, and nothing else. It reads the store's server
-// order, never the segment order that Everything shows.
+// For you shows the user's messages, the agent's web replies (web_reply) and
+// the web reply notices (web_reply_notice). It also shows draft cards waiting
+// for the user's click (draft), error rows, and nothing else. It reads the
+// store's server order, never the segment order that Everything shows.
 // The shared span rule (shared.js splitTurnSpan) carries an input that arrives
 // after a turn's first assistant message into the next turn. The segment order
 // would put that input below the web replies that followed it. When none of
@@ -34,8 +34,8 @@ const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice', 'draft'];
 // empties the map, as the sidebar's expanded nodes reset.
 const manualViews = new Map();
 // The session this page shows, set by every open path (session-view.js
-// renderSessionView). The worker's For you holds only its summary card, so the
-// row filter and the empty row need to know it; the toggle's Status option
+// renderSessionView). The worker's For you holds only its summary card. The row
+// filter and the empty row need to know that, and the toggle's Status option
 // shows for a web session only.
 let currentSession = null;
 let summaryCardRenderer = null;
@@ -146,10 +146,10 @@ function renderToggle(view, statusShown) {
 // visibility of the list, the scroll-to-bottom button and the status panel
 // together. setChatView and the session-switch path (session-view.js) both go
 // through it, so the engine only ever receives a For you or Everything view.
-// Selecting the Status view calls no engine.setView: the list keeps its nodes,
-// and its zero height under display:none holds the engine's projection while
-// the panel shows; the return restores the reader's place on the engine's
-// hidden-container path.
+// Selecting the Status view calls no engine.setView, so the list keeps its
+// nodes. Its zero height under display:none holds the engine's projection while
+// the panel shows, and the return restores the reader's place through the
+// engine's hidden-container path.
 function applyChatView(sessionId, view, statusShown, engine) {
   const wasStatusShown = Boolean(manualViews.get(sessionId)?.status);
   manualViews.set(sessionId, {view, status: statusShown});
@@ -168,12 +168,12 @@ function applyChatView(sessionId, view, statusShown, engine) {
     if (engine.view !== view) engine.setView(view);
     else if (wasStatusShown) {
       // The hidden-container return projects on the engine's ResizeObserver,
-      // which delivers a frame or two after the unhide: a reader who returns
-      // with arrived content already in the list sits at the stale position
-      // over the grown list until it runs. This unhide is the size recovery,
-      // so it runs the same resize projection here, synchronously — a pinned
-      // reader is at the bottom in the return's first frame, and a history
-      // reader's anchor restores before the first paint.
+      // which delivers a frame or two after the unhide. Until it runs, a reader
+      // who returns with arrived content already in the list sits at the stale
+      // position over the grown list. This unhide is the size recovery, so it
+      // runs the same resize projection here, synchronously. A pinned reader is
+      // at the bottom in the return's first frame, and a history reader's
+      // anchor restores before the first paint.
       engine.handleResize();
     }
     if (scrollButton) scrollButton.classList.toggle('hidden', engine.pinnedIntent);

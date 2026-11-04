@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // Session status panel (the Status view)
 // ---------------------------------------------------------------------------
-// A web session's status shows in the Status view (#status-panel), a panel in
-// the Chat column that takes the message list's place while Status is selected
-// in the view toggle. The selection and the panel's visibility belong to
+// A web session's status shows in the Status view (#status-panel). That panel
+// takes the message list's place in the Chat column while Status is selected in
+// the view toggle. The selection and the panel's visibility belong to
 // chat/for-you.js's applyChatView; this file renders the panel's content and
 // the waiting count on the toggle option's badge. A thread session and a worker
 // session show neither the option nor the badge. A web session is one that
@@ -233,9 +233,9 @@
     return new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date());
   }
 
-  // The one login-sheet line (plan 4 v2 task W3): the panel's user-act items,
-  // own and descendant, collapse into it and link to the day's login sheet on
-  // the approval page. No items, no row.
+  // The one login-sheet line (plan 4 v2 task W3) carries the panel's user-act
+  // items, own and descendant. It links to the day's login sheet on the
+  // approval page. No items, no row.
   function loginSheetRow() {
     const items = userActItems();
     if (!items.length) return null;
@@ -350,8 +350,8 @@
     renderWaitingBadge();
   }
 
-  // The toggle option's waiting count: this session's own Waiting on you items
-  // only, less the ones the login-sheet line carries — a child session's
+  // The toggle option's waiting count holds this session's own Waiting on you
+  // items only, less the ones the login-sheet line carries. A child session's
   // waiting items show in the Status view's child rows. Hidden at 0 and when
   // the page shows no web session.
   function renderWaitingBadge() {

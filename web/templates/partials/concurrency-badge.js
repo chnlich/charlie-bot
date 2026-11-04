@@ -1,10 +1,10 @@
 // The concurrency badge: how many agents run right now, and the chart of that number over time.
 //
-// One template fragment (web/templates/partials/concurrency_badge.html) loads this file on every app page, so the
-// whole feature is one script. The server owns the counting (rust/crates/runtime/session-api/src/concurrency.rs):
-// this module only displays /api/concurrency/now and /api/concurrency/history. Listeners are delegated from the
-// document, because the page may replace its content — a session switch back to the welcome view replaces <main> —
-// without reloading this file.
+// One template fragment (web/templates/partials/concurrency_badge.html) includes this script in every app page's
+// document, so the whole feature is one script and the page makes no separate request for it. The server owns the
+// counting (rust/crates/runtime/session-api/src/concurrency.rs): this module only displays /api/concurrency/now and
+// /api/concurrency/history. Listeners are delegated from the document, because the page may replace its content — a
+// session switch back to the welcome view replaces <main> — without reloading this script.
 (function () {
   if (globalThis.ConcurrencyBadge) return;
 

@@ -1,6 +1,7 @@
 // JSON syntax highlighting for the events viewer. The value is walked, not matched: a regex over the JSON text
 // keeps one V8 backtrack record per character of a string, and in Chrome 153 a string over about 4.19M characters
-// throws RangeError. Loaded as a classic script before the viewer's inline script; both functions are globals.
+// throws RangeError. web/templates/events_viewer.html includes this script in the page's document, before the
+// viewer's inline script, so the page makes no separate request for it; both functions are globals.
 
 // Returns the highlighted HTML of obj, indented as JSON.stringify(obj, null, 2) indents it.
 function syntaxHighlight(obj) {

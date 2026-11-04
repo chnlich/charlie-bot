@@ -132,7 +132,7 @@
   <div id="error-msg" class="hidden text-center py-16 text-red-400 text-sm"></div>
   <div id="empty-msg" class="hidden text-center py-16 text-slate-500 text-sm">No events found.</div>
 
-  <script src="/static/js/json-highlight.js?v={{ static_asset_version|urlencode }}"></script>
+  <script>{% include 'partials/json-highlight.js' %}</script>
   <script>
     // -------------------------------------------------------------------------
     // Constants

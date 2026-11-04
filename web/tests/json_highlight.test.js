@@ -8,7 +8,7 @@ const vm = require('node:vm');
 function loadHighlighter() {
   const context = {};
   vm.createContext(context);
-  const file = path.join(__dirname, '..', 'static', 'js', 'json-highlight.js');
+  const file = path.join(__dirname, '..', 'templates', 'partials', 'json-highlight.js');
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, {filename: 'json-highlight.js'});
   return context;
 }

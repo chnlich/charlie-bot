@@ -111,7 +111,16 @@ registerWsMessageHandler('backend_switched', (ev) => {
   }
 }, {advancesCursor: false});
 
+// A subagent event that arrives after its draft committed sends that message again, under its id. The engine
+// replaces the message where it stands. An id the list does not hold throws, so the error reaches the console.
+// The frame carries the committed message's own event index, not a new one, so the cursor stays where it is.
+function _replaceCommittedMessage(msg) {
+  const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
+  if (!engine) throw new Error('message_update arrived with no message list to update');
+  engine.replaceMessage(msg);
+}
 registerWsMessageHandler('message', (ev) => _commitMessage(ev.message || {}), {advancesCursor: true});
+registerWsMessageHandler('message_update', (ev) => _replaceCommittedMessage(ev.message), {advancesCursor: false});
 registerWsMessageHandler('stream', (ev) => {
   const draft = ev.message || {};
   if (draft.content || draft.thinking) showStreaming(draft);

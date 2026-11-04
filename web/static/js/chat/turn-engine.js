@@ -1688,6 +1688,32 @@
       return closed;
     }
 
+    // ---- ingest: a committed message again -------------------------------------
+    // A message_update frame names a committed message by id, as the store's
+    // projection does: the last entry with that id takes the new message where
+    // it stands. Its segment is invalidated, so the projection rebuilds that
+    // segment's DOM and the message stays under its turn.
+    replaceMessage(msg) {
+      const entry = this.entries.findLast((candidate) => candidate.msg.id === msg.id);
+      if (!entry) throw new Error('message_update names no message in this list: ' + msg.id);
+      const seg = this.segments.find((candidate) => candidate.entries.includes(entry));
+      this.rekeyMessage(entry.msg, msg);
+      entry.msg = msg;
+      this.renderAtom(entry, true);
+      seg.cachedSig = null;
+      if (seg.kind === 'turn') {
+        this.measuredFolded.delete(seg.key);
+        this.measuredOpen.delete(seg.key + '|open-c');
+        this.measuredOpen.delete(seg.key + '|open-x');
+      } else {
+        this.measuredFlat.delete(seg);
+      }
+      this.offsetsDirty = true;
+      // For you lists no tool rows, so its projection has nothing to redraw; a switch back to Everything
+      // projects the replaced entry.
+      if (this.view === VIEW_EVERYTHING) this.reproject('replace');
+    }
+
     // ---- user-driven state -----------------------------------------------------
     // Manual fold-open jumps the pre-render queue: this single turn renders
     // synchronously, then the projection replaces it in place.

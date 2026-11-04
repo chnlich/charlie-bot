@@ -731,7 +731,7 @@ function renderSessionList(sessions, filter, options = {}) {
     const labels = {
       all: 'No sessions yet',
       threads: 'No chat threads',
-      starred: 'No starred sessions',
+      starred: 'No sessions saved for later',
       archived: 'No archived sessions',
       search: 'No matching sessions',
     };

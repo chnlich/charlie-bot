@@ -32,7 +32,8 @@ use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{
-  self, CURSOR_NAME, RAW_LOG_NAME, RUN_EVENTS_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef,
+  self, CURSOR_NAME, RAW_LOG_NAME, RUN_EVENTS_NAME, RetryRunFields, RunKind, RunOutcome, RunOutcomeKind, RunRecord,
+  SequenceRef,
 };
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller, control_events};
@@ -1970,6 +1971,70 @@ async fn recovery_archives_worker_after_deduplicating_its_existing_failure_repor
   stack.node_pass(&worker.id).await?;
   assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "a repeated pass does not append another report");
   assert_eq!(closes_of(&stack, &worker.id)?, 1, "a repeated pass does not archive twice");
+  Ok(())
+}
+
+/// A work-run retry record the way its registrar writes it: the original run's fields, no fresh backend choice.
+fn retry_fields() -> RetryRunFields {
+  RetryRunFields {
+    kind: RunKind::Work,
+    backend: None,
+    model: None,
+    repo_path: None,
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    review_of_run_id: None,
+    input_event_ids: Vec::new(),
+  }
+}
+
+/// A failed run whose retry an operator registered still reports its parent at replay: the operator's retry is not
+/// the failed run's follow-up, so the report is not lost.
+#[tokio::test]
+async fn recovery_replays_a_failed_run_whose_retry_an_operator_registered() -> anyhow::Result<()> {
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .create_retry_run_locked(&guard, &worker.id, "operator-retry", "run-failed", None, retry_fields())
+    .await?;
+  drop(guard);
+
+  stack.node_pass(&worker.id).await?;
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.len(), 1, "the operator's retry does not stand in for the failed run's report: {reports:?}");
+  assert_eq!(reports[0]["result_refs"], json!(["run:run-failed"]));
+  Ok(())
+}
+
+/// A failed run whose failover registered its retry takes no second follow-up at replay: the retry owns the
+/// follow-up, and the parent gets no report alongside it.
+#[tokio::test]
+async fn recovery_skips_the_replay_of_a_failed_run_whose_failover_registered_its_retry() -> anyhow::Result<()> {
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .create_retry_run_locked(&guard, &worker.id, "quota-failover:run-failed", "run-failed", None, retry_fields())
+    .await?;
+  drop(guard);
+
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(
+    child_reports(&stack, &manager.id)?.len(),
+    0,
+    "the failover's retry owns the follow-up; the replay adds no report"
+  );
   Ok(())
 }
 

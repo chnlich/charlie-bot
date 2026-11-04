@@ -1103,8 +1103,12 @@ async fn replay_followups_with_records(
         continue;
       }
       // A failed run whose failover registered its retry already took its follow-up: replaying it would report the
-      // parent alongside the retry.
-      if run_records.iter().any(|candidate| candidate.retry_of_run_id.as_deref() == Some(run.id.as_str())) {
+      // parent alongside the retry. An operator's retry is not the follow-up, and its record carries a caller-chosen
+      // id, so only the failover's own stable record skips the report.
+      let failover_retry_id = TaskExecutionAdapter::failover_retry_id(session_id, &run.id);
+      if run_records.iter().any(|candidate| {
+        candidate.retry_of_run_id.as_deref() == Some(run.id.as_str()) && candidate.id == failover_retry_id
+      }) {
         continue;
       }
       adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;

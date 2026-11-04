@@ -1947,6 +1947,12 @@ impl TaskExecutionAdapter {
       && self.pool_chose_backend(meta, run)
   }
 
+  /// The stable run id of the retry one run's quota failover registers (`_failover_retry_id`). The recovery replay
+  /// tells that retry from an operator's with it.
+  pub(crate) fn failover_retry_id(session_id: &str, run_id: &str) -> String {
+    control_events::stable_run_id(session_id, &format!("quota-failover:{run_id}"))
+  }
+
   async fn fail_over_quota(&self, meta: &SessionMetadata, run: &RunRecord) -> anyhow::Result<bool> {
     let cfg = self.features.config.get()?;
     let pool = backend_pool::backend_pool(&self.features)?;
@@ -1973,7 +1979,7 @@ impl TaskExecutionAdapter {
       &self.features.store,
       &cfg,
       &meta.id,
-      &format!("quota-failover:{}", run.id),
+      &Self::failover_retry_id(&meta.id, &run.id),
       &run.id,
       Some(&member.id),
       Some(run.input_event_ids.clone()),

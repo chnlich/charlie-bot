@@ -372,7 +372,7 @@ fn is_option_or_count(word: &str) -> bool {
 
 /// Whether one glob token spans every session and reaches run logs. The token must start at the session store, and
 /// the session directory just under it must be a wildcard. A literal session id, or a prefix long enough to name one
-/// session, is one session's lookup. Under `data/runs/` the run id must be a wildcard too, and the token reaches run
+/// session, is one session's lookup. Under `data/runs/` the run id must be a wildcard too. The token reaches run
 /// logs when it names the run directory itself or a run-log file, but not `metadata.json`. Elsewhere under the
 /// session wildcard, a name that is a run-log name counts.
 fn reaches_run_logs(token: &str) -> Result<bool, String> {

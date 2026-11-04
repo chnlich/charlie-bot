@@ -1,11 +1,12 @@
-//! The approval policy table (`$CHARLIEBOT_HOME/config.d/approval.d/policy.yaml`, plan 4 v2 task W2): the consequence
-//! tests that make a step T0, the standing policies that keep a step at T1, and the ask-tier refusal switch.
+//! The approval policy table lives at `$CHARLIEBOT_HOME/config.d/approval.d/policy.yaml` (plan 4 v2 task W2). It holds
+//! the consequence tests that make a step T0, the standing policies that keep a step at T1, and the ask-tier
+//! refusal switch.
 //!
 //! The table is required host configuration: an absent or invalid table is an error that names the path and the
 //! field, and nothing falls back to a default table. A read re-parses the file whenever it or the recorded baseline
 //! moved, so an edit takes effect on the next read with no server restart. A server-side read whose table content
 //! differs from the last recorded content appends one `policy_table_changed` record to
-//! `$CHARLIEBOT_HOME/state/policy_table_changes.jsonl`, next to the other host-level state records; the baseline
+//! `$CHARLIEBOT_HOME/state/policy_table_changes.jsonl`, next to the other host-level state records. The baseline
 //! content the first read records lives in `$CHARLIEBOT_HOME/state/policy_table_recorded.yaml`.
 
 use std::fs;
@@ -265,9 +266,9 @@ pub fn prompt_section(table: &ApprovalPolicyTable) -> String {
 
 /// The table one home last served, with the identities its two files held when it was read.
 ///
-/// A repeat read of an unchanged table would pay the file read, the YAML parse and two content hashes again, and the
-/// approval page reads the table on every request. The memo answers that read while both files hold the identity they
-/// had. The recorded baseline is part of the key, so a deleted or rewritten baseline runs the record step that
+/// A repeat read of an unchanged table would pay the file read, the YAML parse and two content hashes again. The
+/// approval page reads the table on every request, so the memo answers that read while both files hold the identity
+/// they had. The recorded baseline is part of the key, so a deleted or rewritten baseline runs the record step that
 /// restores or updates it.
 struct TableMemoEntry {
   home: PathBuf,
@@ -369,7 +370,7 @@ pub struct AskTier {
 }
 
 /// Parse the machine-readable tier line the ask cold read ends with (`parse_ask_tier`). The line is
-/// the answer's last non-blank line in [`TIER_LINE_FORM`]; the rule must be a consequence test id, a standing policy
+/// the answer's last non-blank line in [`TIER_LINE_FORM`]. The rule must be a consequence test id, a standing policy
 /// id, `out-of-scope:<policy id>` for a known policy id, or `none`.
 pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTier, PolicyError> {
   let missing = || {

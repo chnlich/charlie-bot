@@ -32,8 +32,8 @@ pub fn day_of(moment: Timestamp) -> Result<Date, PacificError> {
   Ok(moment.to_zoned(zone()?).date())
 }
 
-/// The Pacific calendar day a stored stamp holds (`day_of_stamp`). The stamps the server and the CLI write are
-/// UTC ISO forms with an offset or a `Z` suffix and an optional fraction; a stamp outside those forms names no day.
+/// The Pacific calendar day a stored stamp holds (`day_of_stamp`). The server and the CLI write stamps as UTC ISO
+/// forms with an offset or a `Z` suffix and an optional fraction. A stamp outside those forms names no day.
 pub fn day_of_stamp(text: &str) -> Result<Date, PacificError> {
   let moment: Timestamp =
     text.parse().map_err(|error| PacificError(format!("stored stamp {text:?} is not an instant: {error}")))?;

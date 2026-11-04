@@ -17,6 +17,10 @@ pub const STILL_THINKING: &str = "still_thinking";
 pub const THINKING_SECONDS: &str = "thinking_seconds";
 pub const INPUT_EVENT_ID: &str = "input_event_id";
 pub const INPUT_EVENT_IDS: &str = "input_event_ids";
+/// The task-input event's attachment list: the file records the operator attached to the message.
+pub const UPLOADED_FILES: &str = "uploaded_files";
+/// The task-input event's input kind, such as `voice`.
+pub const INPUT_MODE: &str = "input_mode";
 pub const TASK_DELEGATED: &str = "task_delegated";
 pub const DELEGATE_INVOCATION: &str = "delegate_invocation";
 pub const WORKER_SUMMARY: &str = "worker_summary";

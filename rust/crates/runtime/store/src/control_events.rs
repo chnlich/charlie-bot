@@ -22,10 +22,10 @@ pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   "source_session_id",
   "content",
   "request_id",
-  "uploaded_files",
+  event_types::UPLOADED_FILES,
   "from_session",
   "from_session_name",
-  "input_mode",
+  event_types::INPUT_MODE,
   "event_index",
 ];
 

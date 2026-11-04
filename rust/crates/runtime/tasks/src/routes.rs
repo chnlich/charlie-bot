@@ -129,8 +129,8 @@ const UPLOADED_FILE_BODY_FIELDS: &[Field] = &[
 const UPLOADED_FILE_BODY: BodyModel = BodyModel::required(UPLOADED_FILE_BODY_FIELDS);
 const SEND_MESSAGE_BODY_FIELDS: &[Field] = &[
   Field::required("content", FieldType::String),
-  Field::optional("uploaded_files", FieldType::ModelList { model: &UPLOADED_FILE_BODY }),
-  Field::optional("input_mode", FieldType::NullableString),
+  Field::optional(event_types::UPLOADED_FILES, FieldType::ModelList { model: &UPLOADED_FILE_BODY }),
+  Field::optional(event_types::INPUT_MODE, FieldType::NullableString),
   Field::required("request_id", FieldType::String).min_length(1),
 ];
 const SEND_MESSAGE_BODY: BodyModel = BodyModel::required(SEND_MESSAGE_BODY_FIELDS);
@@ -583,12 +583,12 @@ fn parse_send_message_request(body: &RequestBody) -> Result<SendMessageRequest, 
   let values = body.validate(&SEND_MESSAGE_BODY)?;
   let values = values.expect("a required request body validates to an object");
   let content = values["content"].as_str().expect("validated content is a string").to_string();
-  let uploaded_files = match values.get("uploaded_files") {
+  let uploaded_files = match values.get(event_types::UPLOADED_FILES) {
     None | Some(Value::Null) => Vec::new(),
     Some(Value::Array(items)) => items.iter().map(uploaded_file).collect(),
     _ => unreachable!("validated uploaded_files is a list"),
   };
-  let input_mode = values.get("input_mode").map(|value| value.as_str().map(str::to_string));
+  let input_mode = values.get(event_types::INPUT_MODE).map(|value| value.as_str().map(str::to_string));
   let request_id = values["request_id"].as_str().expect("validated request_id is a string").to_string();
   Ok(SendMessageRequest { content, uploaded_files, input_mode, request_id })
 }
@@ -659,10 +659,10 @@ async fn send_message(
     .collect::<Vec<_>>();
   let fields = json!({
     "request_id": request.request_id.clone(),
-    "uploaded_files": files,
+    (event_types::UPLOADED_FILES): files,
     "from_session": from_session,
     "from_session_name": from_session_name,
-    "input_mode": input_mode,
+    (event_types::INPUT_MODE): input_mode,
   });
   let dispatch = match dispatch::dispatcher(&features) {
     Ok(dispatch) => dispatch,

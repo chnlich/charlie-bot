@@ -201,6 +201,13 @@ pub fn files(seed: &Path, home: &Path, stamp: &Path, lab: &Path) -> Result<Strin
       Some(path) if path.exists() => Some(fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?),
       _ => None,
     };
+    // A fact checkpoint is line-oriented (a header line, then one line per kept event), so the JSON arms below cannot
+    // read it. One build writes it where the other writes nothing, so the digest names the file and its size.
+    if rel.ends_with(layout::FACT_CHECKPOINT_FILE_NAME) {
+      let kind = if seed_data.is_some() { "rewrite" } else { "new" };
+      blocks.push((format!("== {shown} {kind}"), vec![format!("{} bytes", data.len())]));
+      continue;
+    }
     let (header, lines) = match seed_data {
       None => (format!("== {shown} new"), body_lines(&rel, &data, &mut names)?),
       Some(seed_data) if data.starts_with(&seed_data) && !rel.ends_with(".json") => {

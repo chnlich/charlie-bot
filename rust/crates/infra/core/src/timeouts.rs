@@ -8,9 +8,10 @@ pub const ROUTER_JEV_REQUEST_TIMEOUT: u64 = 5;
 /// The pause before the backend router's single retry after an HTTP 429.
 pub const ROUTER_JEV_RATE_LIMIT_WAIT: u64 = 10;
 
-// The router's worst case is one attempt, the rate-limit wait and the retry (5 + 10 + 5). The caller
-// bounds the whole command at ROUTER_TIMEOUT_SECONDS, so the sum must stay below it.
+// The router's worst case is a first attempt whose HTTP 429 arrives at its full 5 s bound, the 10 s wait
+// before the single retry, and a retried attempt that uses its full 5 s. The caller bounds the whole
+// command at ROUTER_TIMEOUT_SECONDS, so the sum must stay below it.
 const _: () = assert!(
   2 * ROUTER_JEV_REQUEST_TIMEOUT + ROUTER_JEV_RATE_LIMIT_WAIT < ROUTER_TIMEOUT_SECONDS,
-  "the backend router's attempt + wait + attempt must stay inside ROUTER_TIMEOUT_SECONDS"
+  "the backend router's 429 + wait + retry must stay inside ROUTER_TIMEOUT_SECONDS"
 );

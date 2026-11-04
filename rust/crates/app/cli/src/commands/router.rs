@@ -15,11 +15,13 @@
 //! on every call, so an edit takes effect at the next choice.
 //!
 //! The caller bounds one routing call at [`timeouts::ROUTER_TIMEOUT_SECONDS`], which is why one attempt is bounded at 5 s
-//! and the single retry after an HTTP 429 waits 10 s: two attempts plus the wait fit inside that budget.
+//! and the call has one retry: a timed-out attempt takes it at once, and an HTTP 429 takes it after a 10 s wait. Two
+//! attempts plus that wait fit inside the budget. A second timeout or HTTP 429 fails the call, and the answer's reason
+//! says when a timeout retry was needed.
 //!
 //! The answer is the only thing printed on stdout. Every failure — a broken rules file, a missing Jev key, malformed
-//! stdin, a Jev error, a second HTTP 429 — writes `router: <message>` on stderr and exits 1; the command never prints a
-//! fallback answer.
+//! stdin, a Jev error, a second timeout, a second HTTP 429 — writes `router: <message>` on stderr and exits 1; the
+//! command never prints a fallback answer.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -61,9 +63,9 @@ const RUN_ON_SESSION: &str = "session";
 /// The name of the one question each choice asks Jev.
 const CHOICE_QUESTION: &str = "kind";
 
-/// The two Jev bounds the caller's [`timeouts::ROUTER_TIMEOUT_SECONDS`] budget shapes: one attempt
-/// and the pause before the single 429 retry. Tests inject smaller values so no test sleeps the
-/// real 10 s wait or waits out the real 5 s attempt.
+/// The two Jev bounds that the caller's [`timeouts::ROUTER_TIMEOUT_SECONDS`] budget shapes: one attempt and the pause
+/// before the single retry after an HTTP 429. A timeout takes its retry at once. Tests inject smaller values so no test
+/// sleeps the real 10 s wait or waits out the real 5 s attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Limits {
   pub request_timeout: Duration,
@@ -409,8 +411,8 @@ fn answer(
   let Some(classes) = rules.roles.get(&request.role) else {
     return Ok(Answer { routed: false, backends: Vec::new(), reason: format!("{} not routed", request.role) });
   };
-  let (chosen, probability) = if let [only] = classes.as_slice() {
-    (only.as_str(), 1.0)
+  let (chosen, probability, retried_timeout) = if let [only] = classes.as_slice() {
+    (only.as_str(), 1.0, false)
   } else {
     choose_class(home, rules, classes, &request.state, limits, sleep)?
   };
@@ -426,11 +428,16 @@ fn answer(
     },
     RunOn::Backends(ids) => ids.iter().filter(|id| request.candidate_ids.contains(id)).cloned().collect(),
   };
-  Ok(Answer { routed: true, backends, reason: format!("{chosen} p={}", text_repr::format_f(probability, 2)) })
+  let mut reason = format!("{chosen} p={}", text_repr::format_f(probability, 2));
+  if retried_timeout {
+    reason.push_str("; retried after a timeout");
+  }
+  Ok(Answer { routed: true, backends, reason })
 }
 
-/// Ask Jev once (one 429 retry) which of one role's classes fits `state`, and the probability Jev gave that class.
-/// Probabilities that tie at the top go to the class the role lists first; otherwise the choice is Jev's `choice`.
+/// Ask Jev, with at most one retry after a timeout or an HTTP 429, which of one role's classes fits `state`, and the
+/// probability Jev gave that class. Probabilities that tie at the top go to the class the role lists first; otherwise
+/// the choice is Jev's `choice`. The flag reports whether the retry absorbed a timeout.
 fn choose_class<'a>(
   home: &Path,
   rules: &RouterRules,
@@ -438,22 +445,23 @@ fn choose_class<'a>(
   state: &str,
   limits: &Limits,
   sleep: &mut dyn FnMut(Duration),
-) -> Result<(&'a str, f64), String> {
+) -> Result<(&'a str, f64, bool), String> {
   let loaded = credentials::load_credentials(home).map_err(|error| error.to_string())?;
   let api_key = loaded.require(&rules.credential, "api_key").map_err(|error| error.to_string())?;
-  let payload = post(&rules.url, &jev_body(rules, classes, state), &api_key, limits, sleep)?;
+  let reply = post(&rules.url, &jev_body(rules, classes, state), &api_key, limits, sleep)?;
+  let payload = &reply.payload;
   let probabilities =
-    classes.iter().map(|class| class_probability(&rules.url, &payload, class)).collect::<Result<Vec<f64>, String>>()?;
+    classes.iter().map(|class| class_probability(&rules.url, payload, class)).collect::<Result<Vec<f64>, String>>()?;
   let top = probabilities.iter().copied().fold(f64::NEG_INFINITY, f64::max);
   let tied: Vec<usize> = (0..classes.len()).filter(|&index| probabilities[index] == top).collect();
   if let [first, _, ..] = tied.as_slice() {
-    return Ok((classes[*first].as_str(), top));
+    return Ok((classes[*first].as_str(), top, reply.retried_timeout));
   }
-  let choice = choice_of(&rules.url, &payload)?;
+  let choice = choice_of(&rules.url, payload)?;
   let Some(index) = classes.iter().position(|class| class == choice) else {
     return Err(format!("{}: the answer's choice '{choice}' is not one of the role's classes", rules.url));
   };
-  Ok((classes[index].as_str(), probabilities[index]))
+  Ok((classes[index].as_str(), probabilities[index], reply.retried_timeout))
 }
 
 /// Jev's choice request: one question with the role's classes as its criteria.
@@ -473,14 +481,30 @@ fn jev_body(rules: &RouterRules, classes: &[String], state: &str) -> Value {
   })
 }
 
-/// POST one Jev request, waiting out a single HTTP 429; every other failure is an error message.
+/// One Jev reply and whether its call needed the one timeout retry.
+struct JevReply {
+  payload: Value,
+  retried_timeout: bool,
+}
+
+/// What one Jev attempt ended in. Only an HTTP 429 and a timeout are retryable; every other failure is final.
+enum Attempt {
+  Answered(Value),
+  RateLimited(String),
+  TimedOut(String),
+  Failed(String),
+}
+
+/// POST one Jev request. The call has one retry: a timed-out attempt takes it at once, and an HTTP 429 takes it after
+/// `rate_limit_wait`. A failure of the retry attempt — a timeout, an HTTP 429, or anything else — ends the call with an
+/// error that names the retry; a first attempt that fails another way ends it at once.
 fn post(
   url: &str,
   body: &Value,
   api_key: &str,
   limits: &Limits,
   sleep: &mut dyn FnMut(Duration),
-) -> Result<Value, String> {
+) -> Result<JevReply, String> {
   charliebot_cli_common::http::ensure_crypto_provider();
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -493,36 +517,81 @@ fn post(
       .timeout(limits.request_timeout)
       .build()
       .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
-    let mut response = client
-      .post(url)
-      .bearer_auth(api_key)
-      .json(body)
-      .send()
-      .await
-      .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
-    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-      sleep(limits.rate_limit_wait);
-      response = client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(body)
-        .send()
-        .await
-        .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
+    match one_attempt(&client, url, body, api_key).await {
+      Attempt::Answered(payload) => Ok(JevReply { payload, retried_timeout: false }),
+      Attempt::Failed(cause) => Err(format!("{url}: {cause}")),
+      Attempt::RateLimited(_) => {
+        sleep(limits.rate_limit_wait);
+        retried(&client, url, body, api_key, false).await
+      }
+      Attempt::TimedOut(_) => retried(&client, url, body, api_key, true).await,
     }
-    let status = response.status().as_u16();
-    let body_text =
-      response.text().await.map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
-    if status != 200 {
-      return Err(format!("{url}: HTTP {status}: {body_text}"));
-    }
-    let payload: Value =
-      serde_json::from_str(&body_text).map_err(|_| format!("{url}: the response body is not JSON: {body_text}"))?;
-    if !payload.is_object() {
-      return Err(format!("{url}: the response is not one JSON object: {body_text}"));
-    }
-    Ok(payload)
   })
+}
+
+/// Take the call's single retry and finish it. An answer records whether the retry absorbed a timeout; any failure of
+/// the retry attempt ends the call with an error that names the retry.
+async fn retried(
+  client: &reqwest::Client,
+  url: &str,
+  body: &Value,
+  api_key: &str,
+  absorbed_timeout: bool,
+) -> Result<JevReply, String> {
+  let cause = match one_attempt(client, url, body, api_key).await {
+    Attempt::Answered(payload) => return Ok(JevReply { payload, retried_timeout: absorbed_timeout }),
+    Attempt::Failed(cause) | Attempt::RateLimited(cause) | Attempt::TimedOut(cause) => cause,
+  };
+  Err(format!("{url}: the retry attempt failed: {cause}"))
+}
+
+/// One Jev request: send it, then read the body. A 429 and a timeout are reported apart from every other failure, so
+/// the caller can retry only those two.
+async fn one_attempt(client: &reqwest::Client, url: &str, body: &Value, api_key: &str) -> Attempt {
+  let response = match client.post(url).bearer_auth(api_key).json(body).send().await {
+    Ok(response) => response,
+    Err(error) => return failed_attempt(&error),
+  };
+  let status = response.status();
+  let body_text = match response.text().await {
+    Ok(body_text) => body_text,
+    Err(error) => return failed_attempt(&error),
+  };
+  if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+    return Attempt::RateLimited(format!("HTTP {}: {body_text}", status.as_u16()));
+  }
+  if status != reqwest::StatusCode::OK {
+    return Attempt::Failed(format!("HTTP {}: {body_text}", status.as_u16()));
+  }
+  match serde_json::from_str::<Value>(&body_text) {
+    Ok(payload) if payload.is_object() => Attempt::Answered(payload),
+    Ok(_) => Attempt::Failed(format!("the response is not one JSON object: {body_text}")),
+    Err(_) => Attempt::Failed(format!("the response body is not JSON: {body_text}")),
+  }
+}
+
+/// One failed attempt: a timeout when the reqwest error says so anywhere in its source chain, and another request
+/// failure otherwise.
+fn failed_attempt(error: &reqwest::Error) -> Attempt {
+  let cause = format!("request failed: {}", source_chain(error));
+  if timeout_in_chain(error) { Attempt::TimedOut(cause) } else { Attempt::Failed(cause) }
+}
+
+/// Whether a reqwest failure is the request timeout. The timeout fires while sending or while reading the body, and its
+/// marker may sit anywhere in the source chain.
+fn timeout_in_chain(error: &reqwest::Error) -> bool {
+  let mut current: &(dyn std::error::Error + 'static) = error;
+  loop {
+    if let Some(reqwest_error) = current.downcast_ref::<reqwest::Error>()
+      && reqwest_error.is_timeout()
+    {
+      return true;
+    }
+    match current.source() {
+      Some(source) => current = source,
+      None => return false,
+    }
+  }
 }
 
 /// Compact JSON: escaped non-ASCII, `", "` between items.
@@ -585,6 +654,11 @@ mod tests {
     Limits { request_timeout: Duration::from_secs(2), rate_limit_wait: Duration::from_millis(20) }
   }
 
+  /// A reply delay past the injected request timeout, so the attempt that asks for it times out.
+  fn past_the_timeout() -> Duration {
+    test_limits().request_timeout + Duration::from_secs(1)
+  }
+
   /// Each test runs behind this ceiling so a hang fails the test instead of the suite.
   fn with_timeout<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -607,14 +681,17 @@ mod tests {
     requests: Arc<Mutex<Vec<Value>>>,
     authorizations: Arc<Mutex<Vec<String>>>,
     replies: Arc<Mutex<VecDeque<(u16, Value)>>>,
+    delays: Arc<Mutex<VecDeque<Duration>>>,
     stop: Arc<AtomicBool>,
     listener: TcpListener,
   }
 
+  #[derive(Clone)]
   struct Shared {
     requests: Arc<Mutex<Vec<Value>>>,
     authorizations: Arc<Mutex<Vec<String>>>,
     replies: Arc<Mutex<VecDeque<(u16, Value)>>>,
+    delays: Arc<Mutex<VecDeque<Duration>>>,
   }
 
   impl FakeJev {
@@ -625,14 +702,11 @@ mod tests {
         requests: Arc::new(Mutex::new(Vec::new())),
         authorizations: Arc::new(Mutex::new(Vec::new())),
         replies: Arc::new(Mutex::new(replies.into())),
+        delays: Arc::new(Mutex::new(VecDeque::new())),
       };
       let accept = listener.try_clone().unwrap();
       let stop = Arc::new(AtomicBool::new(false));
-      let thread_shared = Shared {
-        requests: shared.requests.clone(),
-        authorizations: shared.authorizations.clone(),
-        replies: shared.replies.clone(),
-      };
+      let thread_shared = shared.clone();
       let thread_stop = stop.clone();
       std::thread::spawn(move || {
         for stream in accept.incoming() {
@@ -640,7 +714,9 @@ mod tests {
             break;
           }
           let Ok(stream) = stream else { break };
-          serve(stream, &thread_shared);
+          // One thread per connection, so a delayed reply does not hold back the retried attempt.
+          let shared = thread_shared.clone();
+          std::thread::spawn(move || serve(stream, &shared));
         }
       });
       FakeJev {
@@ -649,6 +725,7 @@ mod tests {
         requests: shared.requests,
         authorizations: shared.authorizations,
         replies: shared.replies,
+        delays: shared.delays,
         stop,
         listener,
       }
@@ -665,6 +742,11 @@ mod tests {
     /// The scripted replies not yet served: a test that expects a failure consumes none.
     fn unserved(&self) -> usize {
       self.replies.lock().unwrap().len()
+    }
+
+    /// Make the next scripted reply arrive after `delay`, so the attempt that asks for it hits the request timeout.
+    fn delay_next(&self, delay: Duration) {
+      self.delays.lock().unwrap().push_back(delay);
     }
   }
 
@@ -723,6 +805,8 @@ mod tests {
       .unwrap_or_default();
     shared.authorizations.lock().unwrap().push(authorization);
     let (status, reply) = shared.replies.lock().unwrap().pop_front().expect("the test scripted one reply per request");
+    let delay = shared.delays.lock().unwrap().pop_front().unwrap_or_default();
+    std::thread::sleep(delay);
     let reply_body = serde_json::to_vec(&reply).unwrap();
     let response = format!(
       "HTTP/1.1 {status} Answer\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1131,6 +1215,67 @@ mod tests {
 
       assert!(error.contains("429"), "{error}");
       assert!(error.contains("still limited"), "{error}");
+      assert_eq!(jev.unserved(), 0);
+    });
+  }
+
+  #[test]
+  fn a_timed_out_attempt_is_retried_once_and_the_answer_records_it() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
+      jev.delay_next(past_the_timeout());
+      let answer =
+        run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81), jev_reply("context", 0.19, 0.81)]).unwrap();
+
+      assert_eq!(
+        answer,
+        json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.81; retried after a timeout" })
+      );
+      assert_eq!(jev.requests().len(), 2, "the timeout takes the call's one retry");
+      assert_eq!(jev.unserved(), 0);
+    });
+  }
+
+  #[test]
+  fn two_timeouts_exit_non_zero_naming_the_timeout_and_the_retry() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      jev.delay_next(past_the_timeout());
+      jev.delay_next(past_the_timeout());
+      let error =
+        run(&home, &payload, &jev, vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)]).unwrap_err();
+
+      assert!(error.contains("timed out"), "{error}");
+      assert!(error.contains("retry"), "{error}");
+      assert_eq!(jev.requests().len(), 2, "the router makes no third attempt");
+    });
+  }
+
+  #[test]
+  fn a_timeout_followed_by_a_rate_limit_exits_non_zero_without_a_third_request() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+
+      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+      jev.delay_next(past_the_timeout());
+      let error =
+        run(&home, &payload, &jev, vec![jev_reply("routine", 0.9, 0.1), (429, json!({ "error": "still limited" }))])
+          .unwrap_err();
+
+      assert!(error.contains("429"), "{error}");
+      assert!(error.contains("still limited"), "{error}");
+      assert!(error.contains("retry"), "{error}");
+      assert_eq!(jev.requests().len(), 2, "the 429 after a timeout takes no second retry");
       assert_eq!(jev.unserved(), 0);
     });
   }

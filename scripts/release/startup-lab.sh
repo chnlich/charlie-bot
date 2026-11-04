@@ -8,7 +8,7 @@
 #   startup-lab.sh install-tools <release dir>
 #       copy mock-home and startup-lab-launcher from a release build into tools/; every later subcommand runs these
 #   startup-lab.sh generate
-#       write the lab home, home/ (8,100 task-tree sessions, seed 1)
+#       write the lab home, home/ (8,855 task-tree sessions and an imported chat: 8,856 nodes, seed 1)
 #   startup-lab.sh reset
 #       return the lab home to its generated state: boot marker, file times and worktrees
 #   startup-lab.sh time <build> <hot|cold> [label]
@@ -53,7 +53,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 readonly SELF="$SCRIPT_DIR/startup-lab.sh"
 readonly TRIAL="$SCRIPT_DIR/trial.sh"
-readonly SESSIONS=8100
+readonly SESSIONS=8855
 readonly SEED=1
 # The lab's own port range. trial.sh's default range is shared with other sessions' trials, which can take a lab start's
 # port or answer its readiness poll; a lab start picks from this range, and its readiness needs its own server's log.

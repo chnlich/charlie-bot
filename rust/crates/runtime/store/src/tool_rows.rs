@@ -336,11 +336,7 @@ fn find<'a>(rows: &'a [ToolRow], id: &str) -> Option<&'a ToolRow> {
   None
 }
 
-fn find_committed_or_draft<'a>(
-  draft: &'a [ToolRow],
-  committed: &'a [CommittedDraft],
-  id: &str,
-) -> Option<&'a ToolRow> {
+fn find_committed_or_draft<'a>(draft: &'a [ToolRow], committed: &'a [CommittedDraft], id: &str) -> Option<&'a ToolRow> {
   find(draft, id).or_else(|| committed.iter().find_map(|draft| find(&draft.rows, id)))
 }
 

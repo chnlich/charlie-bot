@@ -449,7 +449,7 @@ impl MessageAggregator {
   /// A `task_started`, `task_progress` or `task_notification`: the row that the subagent hangs under takes the
   /// subagent's fields. The event names that row by its tool_use id.
   fn feed_subagent_event<E: EventFields>(&mut self, event: &E, subtype: &str) -> StoreResult<Vec<Value>> {
-    let tool_use_id = required_str(event, "tool_use_id")?;
+    let tool_use_id = required_str(event, event_types::TOOL_USE_ID)?;
     let usage = subagent_usage(event);
     let mut deltas = match subtype {
       event_types::TASK_STARTED => {
@@ -494,9 +494,7 @@ fn tool_call_row<E: EventFields>(block: &E) -> ToolRow {
 fn parent_tool_use_id<E: EventFields>(event: &E) -> StoreResult<Option<&str>> {
   match event.field("parent_tool_use_id").filter(|value| is_truthy(*value)) {
     None => Ok(None),
-    Some(value) => {
-      value.as_str_field().map(Some).ok_or_else(|| StoreError::new("parent_tool_use_id must be a string"))
-    }
+    Some(value) => value.as_str_field().map(Some).ok_or_else(|| StoreError::new("parent_tool_use_id must be a string")),
   }
 }
 

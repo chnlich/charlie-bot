@@ -163,17 +163,20 @@ impl MessageProjection {
       let prefix = self.region_events[..closed].to_vec();
       self.region_events.drain(..closed);
       let base = self.event_count - self.region_events.len() - closed - self.offset;
-      let (messages, separators) = fold_messages(&mut self.aggregator, &prefix, base)?;
+      let (messages, separators, updates) = fold_messages(&mut self.aggregator, &prefix, base)?;
       let committed_len = self.committed_final.len();
       self.separators_final.extend(separators.into_iter().map(|pos| committed_len + pos));
       self.committed_final.extend(messages.into_iter().map(Arc::new));
+      apply_updates(&mut self.committed_final, updates)?;
     }
 
     let mut view_aggregator = self.aggregator.clone_state();
     let region_base = self.event_count - self.region_events.len() - self.offset;
-    let (region_messages, region_separators) = fold_messages(&mut view_aggregator, &self.region_events, region_base)?;
+    let (region_messages, region_separators, region_updates) =
+      fold_messages(&mut view_aggregator, &self.region_events, region_base)?;
     self.committed = self.committed_final.clone();
     self.committed.extend(region_messages.into_iter().map(Arc::new));
+    apply_updates(&mut self.committed, region_updates)?;
     self.separator_ordinals = self.separators_final.clone();
     self.separator_ordinals.extend(region_separators.into_iter().map(|pos| self.committed_final.len() + pos));
     self.pending_draft = view_aggregator.pending_draft_message();
@@ -199,15 +202,9 @@ pub fn events_to_messages<T: AsRef<ChatEvent>>(
   let mut aggregator = MessageAggregator::with_renderers(event_index_offset, false, event_renderers);
   let refs = events.iter().map(|event| event.as_ref()).collect::<Vec<&ChatEvent>>();
   let indexed = message_events::stable_history_projection(&refs)?;
-  let mut messages: Vec<Value> = aggregator
-    .feed_indexed(&indexed)?
-    .into_iter()
-    .filter_map(|delta| {
-      (delta.get("type").and_then(Value::as_str) == Some("message")).then(|| delta["message"].clone())
-    })
-    .collect();
-  messages.extend(aggregator.flush_pending().into_iter().map(|delta| delta["message"].clone()));
-  Ok(messages)
+  let mut deltas = aggregator.feed_indexed(&indexed)?;
+  deltas.extend(aggregator.flush_pending());
+  messages_of(deltas)
 }
 
 /// Convert events into committed messages and an optional pending draft.
@@ -219,21 +216,49 @@ pub fn events_to_view<T: AsRef<ChatEvent>>(
   let mut aggregator = MessageAggregator::with_renderers(event_index_offset, false, event_renderers);
   let refs = events.iter().map(|event| event.as_ref()).collect::<Vec<&ChatEvent>>();
   let indexed = message_events::stable_history_projection(&refs)?;
-  let messages = aggregator
-    .feed_indexed(&indexed)?
-    .into_iter()
-    .filter_map(|delta| {
-      (delta.get("type").and_then(Value::as_str) == Some("message")).then(|| delta["message"].clone())
-    })
-    .collect();
+  let messages = messages_of(aggregator.feed_indexed(&indexed)?)?;
   Ok((messages, aggregator.pending_draft_message()))
 }
 
+/// The committed messages of a frame list. A `message` frame appends its message. A `message_update` frame
+/// replaces the message with the same id, where it stands.
+fn messages_of(deltas: Vec<Value>) -> StoreResult<Vec<Value>> {
+  let mut messages: Vec<Value> = Vec::new();
+  for delta in deltas {
+    match delta.get("type").and_then(Value::as_str) {
+      Some("message") => messages.push(delta["message"].clone()),
+      Some("message_update") => {
+        let update = delta["message"].clone();
+        let position = messages
+          .iter()
+          .rposition(|message| message.get("id") == update.get("id"))
+          .ok_or_else(|| StoreError::new("message_update names no committed message"))?;
+        messages[position] = update;
+      }
+      _ => {}
+    }
+  }
+  Ok(messages)
+}
+
+/// Replace each committed message that a `message_update` names, by its id, where it stands.
+fn apply_updates(messages: &mut [Arc<Value>], updates: Vec<Value>) -> StoreResult<()> {
+  for update in updates {
+    let position = messages
+      .iter()
+      .rposition(|message| message.get("id") == update.get("id"))
+      .ok_or_else(|| StoreError::new("message_update names no committed message"))?;
+    messages[position] = Arc::new(update);
+  }
+  Ok(())
+}
+
+/// The committed messages, their separator positions, and the `message_update` frames of one fold.
 fn fold_messages(
   aggregator: &mut MessageAggregator,
   events: &[SharedChatEvent],
   base: usize,
-) -> StoreResult<(Vec<Value>, Vec<usize>)> {
+) -> StoreResult<(Vec<Value>, Vec<usize>, Vec<Value>)> {
   let refs = events.iter().map(|event| event.as_ref()).collect::<Vec<&ChatEvent>>();
   let indexed = message_events::stable_history_projection(&refs)?
     .into_iter()
@@ -241,17 +266,25 @@ fn fold_messages(
     .collect::<Vec<_>>();
   let mut messages = Vec::new();
   let mut separators = Vec::new();
+  let mut updates = Vec::new();
   for delta in aggregator.feed_indexed(&indexed)? {
-    if delta.get("type").and_then(Value::as_str) != Some("message") {
-      continue;
+    match delta.get("type").and_then(Value::as_str) {
+      Some("message") => {
+        let message =
+          delta.get("message").ok_or_else(|| StoreError::new("message delta is missing its message"))?.clone();
+        if message.get("role").and_then(Value::as_str) == Some("separator") {
+          separators.push(messages.len());
+        }
+        messages.push(message);
+      }
+      Some("message_update") => {
+        let update = delta.get("message").ok_or_else(|| StoreError::new("message_update is missing its message"))?;
+        updates.push(update.clone());
+      }
+      _ => {}
     }
-    let message = delta.get("message").ok_or_else(|| StoreError::new("message delta is missing its message"))?.clone();
-    if message.get("role").and_then(Value::as_str) == Some("separator") {
-      separators.push(messages.len());
-    }
-    messages.push(message);
   }
-  Ok((messages, separators))
+  Ok((messages, separators, updates))
 }
 
 #[cfg(test)]

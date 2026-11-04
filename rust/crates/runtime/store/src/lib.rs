@@ -35,6 +35,7 @@ mod task_reparent;
 mod task_tree;
 mod task_tree_state;
 mod thinking;
+mod tool_rows;
 pub mod trigger_files;
 pub mod v1_sessions;
 #[cfg(any(test, feature = "write-faults"))]

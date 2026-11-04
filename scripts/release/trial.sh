@@ -58,8 +58,9 @@ readonly EVIDENCE_PARENT="${CHARLIEBOT_RELEASE_RUN_DIR:-$LOG_ROOT/trial-manual-$
 readonly CGROUP_ROOT="${CHARLIEBOT_TRIAL_CGROUP_ROOT:-/sys/fs/cgroup}"
 readonly USER_SERVICE_CGROUP="$CGROUP_ROOT/user.slice/user-$(id -u).slice/user@$(id -u).service"
 readonly CGROUP_BASE="$USER_SERVICE_CGROUP/charliebot.slice/charliebot-agents.slice"
-readonly PORT_MIN=18650
-readonly PORT_MAX=18669
+# The port range a trial picks from. A caller that runs trials beside another trial names its own range.
+readonly PORT_MIN=${TRIAL_PORT_MIN:-18650}
+readonly PORT_MAX=${TRIAL_PORT_MAX:-18669}
 # The trial server's git calls run at production-repository speed. A wrapper first on that server's PATH only (see
 # SLOW_GIT_BIN) waits this long before every git invocation. The release 8fe3e5bee of 2026-10-27 shipped a build whose
 # git write timeout (worktree add) and per-attempt remote timeout (ls-remote, fetch) were 0.3 s in place of 60 s and 120 s, so
@@ -1007,7 +1008,8 @@ start_server() {
   for _ in $(seq 1 "$ready_polls"); do
     local status
     status=$(http_get /api/auth/status "$AUTH_STATUS_FILE")
-    [[ $status == 200 ]] && return 0
+    # The poll names this server's port, which another server may hold: this server is ready when its own log says so.
+    [[ $status == 200 ]] && grep -qE '[[:space:]]server_ready[[:space:]]' "$SERVER_LOG" && return 0
     [[ -n $(process_state "$SERVER_PID") && $(process_state "$SERVER_PID") != *Z* ]] || return 1
     sleep 0.25
   done

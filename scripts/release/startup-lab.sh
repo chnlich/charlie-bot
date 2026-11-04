@@ -52,6 +52,10 @@ readonly SELF="$SCRIPT_DIR/startup-lab.sh"
 readonly TRIAL="$SCRIPT_DIR/trial.sh"
 readonly SESSIONS=8100
 readonly SEED=1
+# The lab's own port range. trial.sh's default range is shared with other sessions' trials, which can take a lab start's
+# port or answer its readiness poll; a lab start picks from this range, and its readiness needs its own server's log.
+readonly LAB_PORT_MIN=18700
+readonly LAB_PORT_MAX=18799
 # The scope caps the trial's memory, page cache included. trial.sh copies the 6 GiB seed inside it, so the cap must
 # hold the copy and the server or the cgroup reclaims the copy and a hot start reads from disk.
 readonly SCOPE_MEMORY_MAX=32G
@@ -229,7 +233,8 @@ cmd_fidelity() {
   check logged_whole_log_read_bytes "$logged" 454974742 1819898968 || failed=1
   # The warm production start's recover_pending_reports and run_facts: 7 reads of 215,163,491 bytes and 3 reads of
   # 76,614,206 bytes. The bounds are half to twice each reference.
-  check recover_pending_reports_reads "$(step_value "$log" node_pass_step_file_reads recover_pending_reports)" 4 14 || failed=1
+  check recover_pending_reports_reads "$(step_value "$log" node_pass_step_file_reads recover_pending_reports)" 4 14 \
+    || failed=1
   check recover_pending_reports_bytes "$(step_value "$log" node_pass_step_file_read_bytes recover_pending_reports)" \
     107581745 430326982 || failed=1
   check run_facts_reads "$(step_value "$log" node_pass_step_file_reads run_facts)" 2 6 || failed=1
@@ -291,6 +296,7 @@ serve() {
   shift 6
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   STARTUP_LAB_SERVER="$LAB/bin-$build/charliebot-server" STARTUP_LAB_CACHE="$cache" \
+    TRIAL_PORT_MIN="$LAB_PORT_MIN" TRIAL_PORT_MAX="$LAB_PORT_MAX" \
     CHARLIEBOT_HOME="$LAB/live-home" CHARLIEBOT_RELEASE_RUN_DIR="$run" \
     systemd-run --user --scope --quiet -p MemoryMax="$SCOPE_MEMORY_MAX" --unit="$unit" \
     "$TRIAL" --serve --tree-root "$LAB/trials" --seed-home "$seed" --in-caller-scope \

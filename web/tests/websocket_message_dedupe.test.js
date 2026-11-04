@@ -2,11 +2,12 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {createElement} = require('./dom_element_stub');
+const {createElement, createEscapingElement} = require('./dom_element_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {readStatic} = require('./read_static');
 
-function buildPage(initialMessages = [], sessionId = 'session-a') {
+// renderMessages loads the real chat/rendering.js, so each engine node holds the markup renderMessage builds.
+function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessages = false} = {}) {
   const messages = createElement({id: 'messages'});
   messages.clientHeight = 0;
   messages.scrollHeight = 0;
@@ -59,7 +60,27 @@ function buildPage(initialMessages = [], sessionId = 'session-a') {
   vm.runInContext(readStatic('websocket.js'), context, {filename: 'websocket.js'});
   vm.runInContext(readStatic('chat/namespace.js'), context, {filename: 'chat/namespace.js'});
   vm.runInContext(readStatic('chat/shared.js'), context, {filename: 'chat/shared.js'});
-  context.Chat.buildTurnEngineMessageNode = () => createElement();
+  if (renderMessages) {
+    // escapeHtml round-trips text through an element's innerHTML, so the rendered markup needs the escaping stub.
+    context.document.createElement = (tag) => createEscapingElement(tag);
+    // The stand-ins chat_rendering_context_stub.js uses for markdown and the file-link pass. They bind before
+    // rendering.js loads, as its module-scope consts read them then.
+    Object.assign(context, {
+      marked: {parse: (value) => String(value || '')},
+      fixNestedFences: (value) => String(value || ''),
+      renderProseMarkdown: (value) => String(value || ''),
+      renderChatMath: () => {},
+      scheduleCodeHighlightFlush: () => {},
+      wrapWideChars: (html) => html,
+      renderUserMessageBubble: () => '',
+    });
+    context.Chat.renderRoundRatingButtons = () => '';
+    context.Chat.markFileLinks = () => {};
+    vm.runInContext(readStatic('chat/rendering.js'), context, {filename: 'chat/rendering.js'});
+    context.Chat.buildTurnEngineMessageNode = (msg, sid) => ({innerHTML: context.renderMessage(msg, sid)});
+  } else {
+    context.Chat.buildTurnEngineMessageNode = () => createElement();
+  }
   vm.runInContext(readStatic('chat/turn-engine.js'), context, {filename: 'chat/turn-engine.js'});
   vm.runInContext(readStatic('websocket-handlers.js'), context, {filename: 'websocket-handlers.js'});
   const engine = context.Chat.TurnEngine.mountIfAvailable(messages, initialMessages, sessionId);
@@ -76,6 +97,40 @@ function connect(context) {
 
 function deliver(socket, message) {
   socket.emitMessage({type: 'message', message});
+}
+
+function deliverUpdate(socket, message) {
+  socket.emitMessage({type: 'message_update', message});
+}
+
+// A committed assistant message whose Agent row started one subagent, as the store sends it.
+function committedDraft(subagent) {
+  return {
+    role: 'assistant',
+    id: 'draft-1',
+    content: 'Two reads are running.',
+    tools: [{
+      id: 'toolu_1',
+      name: 'Agent',
+      input: {description: 'Read the log'},
+      output: 'Report: the log is clean.',
+      is_error: false,
+      subagent,
+    }],
+  };
+}
+
+function subagentOf(status, toolUses) {
+  return {
+    type: 'general-purpose',
+    description: 'Read the log',
+    prompt: 'Read the log',
+    status,
+    tool_uses: toolUses,
+    duration_ms: 1200,
+    total_tokens: 900,
+    tools: [],
+  };
 }
 
 function screenMultiset(messages) {
@@ -189,4 +244,34 @@ test('a page without a mounted turn engine keeps the legacy draw path', () => {
   deliver(page.socket, {role: 'assistant', id: 'same', content: 'same text'});
 
   assert.equal(page.renderedMessages.length, 2);
+});
+
+test('a message_update replaces the committed message where it stands and its card shows the new state', () => {
+  const page = buildPage([], 'session-a', {renderMessages: true});
+  deliver(page.socket, committedDraft(subagentOf('running', 1)));
+  const [entry] = page.engine.entries;
+  assert.match(entry.node.innerHTML, />running</);
+
+  deliverUpdate(page.socket, committedDraft(subagentOf('completed', 3)));
+
+  assert.equal(page.engine.entries.length, 1);
+  assert.equal(page.engine.entries[0], entry, 'the entry keeps its place in the list');
+  const html = entry.node.innerHTML;
+  assert.match(html, />completed</);
+  assert.doesNotMatch(html, />running</);
+  assert.match(html, />3 tool/, 'the card counts the subagent\'s own tool uses');
+  assert.match(html, />1 tool/, 'the parent counts only its own rows');
+  assert.ok(html.indexOf('>completed<') < html.indexOf('Report: the log is clean.'),
+      'the card sits under the Agent row, above that row\'s output');
+});
+
+test('a message_update for a message the list does not hold throws and leaves the list as it was', () => {
+  const page = buildPage([], 'session-a', {renderMessages: true});
+  deliver(page.socket, committedDraft(subagentOf('running', 1)));
+  const before = page.engine.entries.map((entry) => entry.msg);
+
+  assert.throws(
+      () => deliverUpdate(page.socket, {...committedDraft(subagentOf('completed', 3)), id: 'draft-unknown'}),
+      /message_update names no message in this list: draft-unknown/);
+  assert.deepEqual(page.engine.entries.map((entry) => entry.msg), before);
 });

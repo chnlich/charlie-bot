@@ -684,8 +684,9 @@ function renderSessionItem(s, filter, options = {}) {
   // them; a row without any draws an inert slot of the same size, so the
   // row's leading edge still opens the session instead of hitting an
   // expander with nothing to show. A worker row draws the worker glyph
-  // instead, never a chevron. A flat row (search results, the Archived tab)
-  // draws neither. The indicators follow the lead marker.
+  // instead, never a chevron. A flat row (the search results) draws neither;
+  // the Archived tab paints through this tree, so its rows lead with the same
+  // marker. The indicators follow the lead marker.
   // The count beside the chevron uses direct children whose profile is not
   // 'worker'; worker leaves still nest, and the chevron title still counts
   // every child task. Only the all and threads paints draw the count.

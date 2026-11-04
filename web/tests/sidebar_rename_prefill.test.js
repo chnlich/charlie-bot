@@ -47,7 +47,7 @@ function makeDom({rowWidth = 220, rowName = 'demo session', headerName = 'demo s
     focus() {},
     select() {},
   };
-  const nameSpan = {textContent: rowName};
+  const nameSpan = {textContent: rowName, getBoundingClientRect: () => ({top: 100, left: 50, width: rowWidth, height: 20})};
   const rowEl = withRow ? {
     getBoundingClientRect: () => fakeRect(rowWidth),
     querySelector: (sel) => (sel === '.session-name' ? nameSpan : null),
@@ -95,6 +95,11 @@ test('prefill reads the live row text: a renamed session prefills its new name',
   const dom = makeDom({rowName: 'demo session'});
   clickRename(dom);
   assert.equal(dom.input.value, 'demo session');
+  // The field sits on the name line and takes its height, so the row's time-and-backend line stays visible.
+  assert.equal(dom.input.style.top, '100px');
+  assert.equal(dom.input.style.height, '20px');
+  assert.equal(dom.input.style.paddingTop, '0px');
+  assert.equal(dom.input.style.paddingBottom, '0px');
   // updateSidebarSessionName (status.js) and the session_renamed websocket
   // handler both funnel into this one textContent write.
   dom.nameSpan.textContent = 'renamed by first pass';

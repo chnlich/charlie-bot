@@ -16,10 +16,16 @@ function startRename(e, id) {
   if (!anchor || !valueEl) return;
   renameSessionId = id;
   const rect = anchor.getBoundingClientRect();
+  const valueRect = valueEl.getBoundingClientRect();
   const input = document.getElementById('rename-input');
-  input.style.top = rect.top + 'px';
+  // The field takes the name line's own height, so the row's second line — the time and the backend — stays
+  // below it and readable while the name is edited.
+  input.style.top = valueRect.top + 'px';
   input.style.left = rect.left + 'px';
   input.style.width = rect.width + 'px';
+  input.style.height = valueRect.height + 'px';
+  input.style.paddingTop = '0px';
+  input.style.paddingBottom = '0px';
   input.value = valueEl.textContent;
   input.classList.remove('hidden');
   input.focus();

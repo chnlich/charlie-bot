@@ -2071,7 +2071,7 @@ mod tests {
       scheduler.register_fire_work(&task, &node, firing, "synthetic", None, &cfg).await.unwrap();
     assert_eq!(scheduler.round_in_flight(&task, &cfg).unwrap(), Some(leaf.id.clone()));
 
-    // Step 0 passed with exit 0 and step 1 is not registered yet: the chain awaits its next step, so the round is
+    // Step 0 passed with exit 0 and step 1 is not registered yet: the chain awaits its next step. The round is
     // still in flight in the gap between the two steps.
     let guard = features.store.control_lock().await;
     let passed = RunOutcome { exit_code: Some(0), ..RunOutcome::new(RunOutcomeKind::Success) };

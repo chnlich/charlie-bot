@@ -539,12 +539,12 @@ async fn fail(
 mod tests {
   use std::fs;
   use std::os::unix::fs::symlink;
-  use std::path::PathBuf;
   use std::sync::{Arc, Mutex};
 
   use charliebot_registry::Registry;
 
   use super::*;
+  use crate::test_support::fake_program_bin;
 
   #[test]
   fn compaction_command_disables_skills_and_installs_the_compaction_context_hook() {
@@ -617,18 +617,6 @@ mod tests {
       vec![json!({"record_argv": root.join("arguments.txt")}), json!({"record_stdin": root.join("prompt.txt")})];
     steps.extend(mode);
     fs::write(bin.join("probe.json"), json!({"claude": steps}).to_string()).unwrap();
-  }
-
-  /// The fake-program helper that cargo builds beside this test binary. Unit tests cannot name it with
-  /// `CARGO_BIN_EXE_*`, so the path comes from the target directory.
-  fn fake_program_bin() -> PathBuf {
-    let exe = std::env::current_exe().expect("the test binary path");
-    exe
-      .ancestors()
-      .skip(1)
-      .map(|directory| directory.join("fake_program"))
-      .find(|candidate| candidate.is_file())
-      .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
   }
 
   fn emit_sink() -> (EmitFn, Arc<Mutex<Vec<Value>>>) {

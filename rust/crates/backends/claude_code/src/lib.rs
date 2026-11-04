@@ -15,6 +15,8 @@ pub mod master_cc_relay;
 pub mod midturn_delivery;
 pub mod options;
 pub mod setup_check;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod turn_contribution;
 pub mod usage_logs;
 pub mod usage_quota;
@@ -129,51 +131,6 @@ fn validate_claude_session_fields(values: &mut Map<String, Value>) -> Option<Str
     .get("claude_account")
     .is_some_and(|value| !value.is_null() && !value.is_string())
     .then(|| "claude_account must be a string or null".to_string())
-}
-
-/// Helpers for the unit tests of the Claude usage source: a synthetic host, and a config loaded through the registry.
-#[cfg(test)]
-pub(crate) mod test_support {
-  use std::fs;
-  use std::path::{Path, PathBuf};
-
-  use charliebot_compat::http_client::{self, Settings};
-  use charliebot_core::config::CharlieBotConfig;
-
-  use super::*;
-
-  pub fn synthetic_host() -> ClaudeHost {
-    ClaudeHost { home: PathBuf::from("/synthetic/home"), claude_config_dir: PathBuf::from("/synthetic/home/.claude") }
-  }
-
-  /// An HTTP client that reaches no host: the unit tests never send a request through it.
-  pub fn quota_http() -> QuotaHttp {
-    let client = http_client::client(&Settings::default()).expect("the default client builds");
-    QuotaHttp::with_endpoints(client, usage_quota::USAGE_URL, usage_quota::TOKEN_REFRESH_URL)
-  }
-
-  pub fn register_synthetic(registry: &mut Registry) -> Result<(), RegistryError> {
-    register_with_host(registry, synthetic_host(), quota_http())
-  }
-
-  /// Loads `home/config.yaml` through the registry, with the `accounts.claude` pool and the worktree directory.
-  pub fn load_config(home: &Path, accounts: &[(&str, &Path)], worktree_dir: &Path) -> CharlieBotConfig {
-    let rows = if accounts.is_empty() {
-      "  claude: []\n".to_string()
-    } else {
-      let mut rows = String::from("  claude:\n");
-      for (label, dir) in accounts {
-        rows.push_str(&format!("    - label: {label}\n      config_dir: '{}'\n", dir.display()));
-      }
-      rows
-    };
-    let text = format!("paths:\n  worktree_dir: '{}'\naccounts:\n{rows}", worktree_dir.display());
-    fs::create_dir_all(home).expect("the synthetic home exists");
-    fs::write(home.join("config.yaml"), text).expect("the synthetic config is written");
-    let mut registry = Registry::new();
-    registry.register_package(PACKAGE, register_synthetic).expect("the Claude package registers");
-    registry.load_config(home).expect("the synthetic config loads")
-  }
 }
 
 #[cfg(test)]

@@ -37,10 +37,10 @@ struct SessionsListMemoState {
 
 /// One rendered listing body, its corpus, its inputs, and the gzip form a request asked for.
 ///
-/// The gzip form lives beside the body it compressed: a request that matches the inputs serves both without hashing or
-/// comparing the body, which the memo would otherwise do to find the compressed bytes it already holds. Both are
-/// `Bytes` handles, so a served response shares the stored buffer through a refcount bump; a full listing's compressed
-/// form is hundreds of kilobytes, and copying it per request cost more than the rest of the response.
+/// The gzip form lives beside the body it compressed. A request that matches the inputs serves both without hashing
+/// or comparing the body, which the memo would otherwise do to find the compressed bytes it already holds. Both are
+/// `Bytes` handles, so a served response shares the stored buffer through a refcount bump. A full listing's
+/// compressed form is hundreds of kilobytes, and copying it per request cost more than the rest of the response.
 struct WholeListingBody {
   source: ListingSource,
   inputs: Vec<RowInputs>,
@@ -50,9 +50,9 @@ struct WholeListingBody {
 
 /// The corpus one listing body rendered from, compared before the per-row inputs are rebuilt.
 ///
-/// The rows compare by pointer: the store hands out one shared, immutable row while its content holds, so another
+/// The rows compare by pointer. The store hands out one shared, immutable row while its content holds, so another
 /// pointer means other content while the same pointer means an equal row. The derived overlays compare by pointer
-/// too: their builder keeps one map until a sidebar input moves, and every move bumps the generation that keys the
+/// too. Their builder keeps one map until a sidebar input moves, and every move bumps the generation that keys the
 /// map, so the same map means the same overlays. The controllers build a fresh field map per request, so their
 /// fields compare by value. Every other input a row reads from the store (busy state, run backend) moves through a
 /// sidebar dirty mark, which also rebuilds the derived map.
@@ -98,12 +98,12 @@ pub(crate) struct RowInputs {
 impl PartialEq for RowInputs {
   /// Equal when every input still names the same value.
   ///
-  /// The metadata compares by identity: the store hands out one shared, immutable row for as long as its content
+  /// The metadata compares by identity. The store hands out one shared, immutable row for as long as its content
   /// holds, so another pointer means other content while the same pointer means an equal row. Reading it by content
   /// instead compares every field of every row's metadata on each request of a listing or a page.
   ///
-  /// The derived overlay compares by content, because a rebuilt overlay hands out new maps for rows whose derived
-  /// state did not move, and the memo should then still serve the row it rendered before.
+  /// The derived overlay compares by content. A rebuilt overlay hands out new maps for rows whose derived state did
+  /// not move, so the memo still serves the row it rendered before.
   fn eq(&self, other: &Self) -> bool {
     Arc::ptr_eq(&self.meta, &other.meta)
       && self.derived == other.derived
@@ -242,10 +242,10 @@ impl PageRows {
 /// Building the corpus walks every active session: the store filters the corpus, the sidebar resolves each row's
 /// overlay, and the page drops the rows that an owned subtree holds. A repeat page request reads the same corpus, so
 /// the memo answers it from the identities that would move if any of it changed. The listing generation names the
-/// metadata corpus (the store numbers every rebuild, so the same number is the same rows in the same order), the
-/// derived archive ids and the subtree roots name the two filters, the sidebar generation names the overlays, and the
-/// repository identities name the store and registry the corpus came from. Both are held weakly: a dropped store's
-/// corpus never answers another store's request.
+/// metadata corpus: the store numbers every rebuild, so the same number is the same rows in the same order. The
+/// derived archive ids and the subtree roots name the two filters, and the sidebar generation names the overlays.
+/// The repository identities name the store and registry the corpus came from. Both are held weakly: a dropped
+/// store's corpus never answers another store's request.
 static PAGE_CORPUS_MEMO: LazyLock<Mutex<Option<PageCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
 
 /// One memo entry. The memo holds it by value; only the store and registry it names are weak.
@@ -360,9 +360,9 @@ struct WholePageText {
 
 /// The corpus one page text rendered from, compared before the per-row inputs are rebuilt.
 ///
-/// The rows compare by pointer: the store hands out one shared, immutable row while its content holds, so another
+/// The rows compare by pointer. The store hands out one shared, immutable row while its content holds, so another
 /// pointer means other content while the same pointer means an equal row. The derived overlays compare by pointer
-/// too: their builder keeps one map until a sidebar input moves, and every move bumps the generation that keys the
+/// too. Their builder keeps one map until a sidebar input moves, and every move bumps the generation that keys the
 /// map, so the same map means the same overlays. The controllers build a fresh field map per request, so their
 /// fields compare by value. Every other input a row reads from the store (busy state, run backend) moves through a
 /// sidebar dirty mark, which also rebuilds the derived map.
@@ -417,8 +417,8 @@ impl PageRowsMemo {
 
 /// Render the chat page's sidebar rows as the Jinja `tojson` text of their array.
 ///
-/// `clear_unread` names the active session: its row renders with `has_unread` false and is left out of the memo, so a
-/// later request that names another active session does not serve the marked row.
+/// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
+/// a later request that names another active session does not serve the marked row.
 pub fn active_page_json_text(
   store: &Store,
   page: &PageRows,
@@ -786,7 +786,7 @@ mod tests {
 
   /// A repeat page request serves the corpus the previous one built, and a session created after it joins the next
   /// page. The gate every sidebar-moving fixture holds (`test_support`) keeps the other tests of this binary out of
-  /// the window the pointer assertions read, and the test build never spawns the self-heal sweep.
+  /// the window the pointer assertions read. The test build never spawns the self-heal sweep.
   #[tokio::test]
   async fn a_repeat_page_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
@@ -820,7 +820,7 @@ mod tests {
 
   /// A repeat listing read serves the corpus the previous one built, and a session created after it joins the next
   /// listing. The gate every sidebar-moving fixture holds (`test_support`) keeps the other tests of this binary out
-  /// of the window the pointer assertions read, and the test build never spawns the self-heal sweep.
+  /// of the window the pointer assertions read. The test build never spawns the self-heal sweep.
   #[tokio::test]
   async fn a_repeat_listing_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
@@ -890,7 +890,7 @@ mod tests {
   }
 
   /// A run backend that lands after the page text was memoized still reaches the row, though the corpus pointers do
-  /// not move: the backend change bumps the derived generation, which rebuilds the overlay map the memo compares.
+  /// not move. The backend change bumps the derived generation, which rebuilds the overlay map the memo compares.
   #[tokio::test]
   async fn a_changed_run_backend_renders_into_the_page_text() {
     let (_home, features) = crate::test_support::feature_context();

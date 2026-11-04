@@ -1,6 +1,6 @@
 {% include 'partials/prologue.html' %}
   <title>Events — {{ session.name }} — CharlieBot@{{ hostname }}</title>
-  <link rel="stylesheet" href="/static/css/tailwind.css?v={{ static_asset_version|urlencode }}">
+  <style>{% include 'css/tailwind.css' %}</style>
   <style>
     /* Scrollbar: standard properties keep the scroller on the compositor thread */
     * { scrollbar-width: thin; scrollbar-color: #475569 transparent; }

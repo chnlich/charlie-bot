@@ -855,7 +855,6 @@ dependencies = [
  "charliebot-store",
  "charliebot-tasks",
  "futures-util",
- "http 1.5.0",
  "serde_json",
  "tempfile",
  "tokio",

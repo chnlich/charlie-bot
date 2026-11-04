@@ -39,6 +39,9 @@ pub const SCHEDULE_FIELDS: [&str; 6] =
   [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
 /// The session-metadata field holding the instant the session's native Claude Code conversation started.
 pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
+/// The session-metadata field holding the backend that ran the session's native conversation. The turn's finish
+/// extras and the store's declared-field list carry the same name, so it is spelled once, here.
+pub const NATIVE_BACKEND: &str = "native_backend";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
@@ -687,7 +690,7 @@ impl SessionMetadata {
     push(&mut declared, "subtree_prompt_ref", &self.subtree_prompt_ref);
     push(&mut declared, "node_prompt_ref", &self.node_prompt_ref);
     push(&mut declared, "native_prompt_hash", &self.native_prompt_hash);
-    push(&mut declared, "native_backend", &self.native_backend);
+    push(&mut declared, NATIVE_BACKEND, &self.native_backend);
     push(&mut declared, "native_model", &self.native_model);
     push(&mut declared, ROUND_RATINGS, &self.round_ratings);
     push(&mut declared, "group", &self.group);

@@ -10,7 +10,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, EmitFn, IdleArmContext, IdleStartGate, SessionContextStateFn};
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, UtcDateTime};
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -448,7 +448,7 @@ impl MasterQueue {
     } else {
       master_run::run_cc(tracking, item).await?
     };
-    let ran_backend = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
+    let ran_backend = result.finish_extras.get(NATIVE_BACKEND).and_then(Value::as_str).map(str::to_string);
     arm_idle_after_round(self, item, session_id, ran_backend.clone()).await;
     if result.let_go {
       return Err(master_run::TurnLetGo.into());

@@ -13,8 +13,9 @@ Your branch prefix is `improve/perf/`.
 ## Topics
 
 Measure each GET route that the pages call, on the mock home described below.
-Take the slowest route by median latency as the topic, or take startup, memory or CPU.
+Take the slowest route by median latency as the topic, or take startup, memory or CPU, or take the page whose cold load takes the longest under the slow-network profile.
 The slowest route is the one a user waits on, so cutting it is the change a user feels.
+The slow-network load is the wait a user on a slow link feels, where the page's bytes and fetch count set most of the time.
 The mock home has the production number of sessions, so the numbers show the load that a user meets.
 
 ## Mock home
@@ -50,6 +51,19 @@ Both sides then see the same host load, so the change is the only difference.
 
 Measure latency this way: send 5 warm-up requests, then 50 requests, and keep the median of the 50.
 The warm-up keeps first-request cost out of the sample, and the median keeps one slow request out.
+
+Measure slow-network page loading this way: send every load of this measure through a local relay that forwards to the trial server and holds the round's fixed network profile, a 100 ms round-trip time and 1 MiB per second of bandwidth.
+The relay waits one round-trip time before it forwards a connection's first request, and it limits each direction of a connection to the profile's bandwidth.
+The relay's host tools are socat and pv; when the host lacks one of them, name the defect instead of fitting another tool in.
+
+A load fetches the page's document and then the static files the served document references, in document order, accepting gzip as the latency measure does.
+A cold load opens one connection per fetch, and a warm load fetches the whole page on one connection.
+Cold is what a first visit pays per fetch, and warm is what a kept-alive connection saves.
+The load's time runs from the document request's start to the last byte of the last fetch, so it is the wait until the page is usable in this model.
+The load's bytes are the fetches' response bodies, summed at the client, so they count what crossed the link.
+
+The pages are the chat page with the mock home's largest session id open, the events viewer of that session, and the home page.
+Send 5 warm-up loads per page, then 10 cold and 10 warm loads, and keep the median of each 10.
 
 Measure startup this way: after the trial exits, read the first line of `server-1.log` in its evidence directory, and the first `http_request` line with `"status":200`; subtract the first timestamp from the second.
 The first line is the server's own first log line, written just after the process starts, so the difference is the run's startup time rather than a wall clock the measuring shell reads.

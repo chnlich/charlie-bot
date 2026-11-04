@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use charliebot_cli_common::draft::REGISTER_PATH;
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::event_types;
@@ -21,7 +21,7 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftSendFailure, DraftSent};
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::UtcDateTime;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::lock;
 use crate::log::{self, Sendability};
@@ -67,12 +67,9 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
     Ok(caller) => caller,
     Err(response) => return response,
   };
-  let model = match body.validate(&REGISTER_BODY) {
-    Ok(model) => model,
+  let fields = match body.declared_fields(&REGISTER_BODY) {
+    Ok(fields) => fields,
     Err(response) => return *response,
-  };
-  let Some(Value::Object(fields)) = model else {
-    unreachable!("a required register body validates to its declared fields")
   };
   let session_id = text_field(&fields, "session_id");
   let platform_name = text_field(&fields, "platform");
@@ -247,13 +244,6 @@ fn platform(features: &FeatureContext, name: &str) -> Result<Arc<dyn DraftPlatfo
 
 fn actor(caller: &CallerIdentity) -> &'static str {
   if caller.is_operator() { "user" } else { "agent" }
-}
-
-fn text_field(fields: &Map<String, Value>, name: &str) -> String {
-  match fields.get(name) {
-    Some(Value::String(text)) => text.clone(),
-    _ => unreachable!("a validated {name} is a string"),
-  }
 }
 
 fn internal(detail: String) -> Response {

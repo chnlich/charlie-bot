@@ -11,13 +11,13 @@ use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Source};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller;
 use http::StatusCode;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::reply::{self, WebReplyError};
 use crate::status;
@@ -203,9 +203,7 @@ struct ReplyRequest {
 impl ReplyRequest {
   /// Validates the body against `REPLY_BODY`, which forbids the keys the model does not declare.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let Some(Value::Object(mut fields)) = body.validate(&REPLY_BODY)? else {
-      unreachable!("a required model validates a body to its fields")
-    };
+    let mut fields = body.declared_fields(&REPLY_BODY)?;
     let keep_language = match fields.remove("keep_language") {
       Some(Value::String(reason)) => Some(reason),
       Some(Value::Null) | None => None,
@@ -223,8 +221,8 @@ impl ReplyRequest {
       Some(_) => unreachable!("a validated answers is a list of strings or absent"),
     };
     Ok(Self {
-      session_id: text_field(&mut fields, "session_id"),
-      text: text_field(&mut fields, "text"),
+      session_id: text_field(&fields, "session_id"),
+      text: text_field(&fields, "text"),
       keep_language,
       answers,
     })
@@ -240,10 +238,8 @@ struct SessionText {
 impl SessionText {
   /// Validates the body against `SESSION_TEXT_BODY`, which forbids the keys the model does not declare.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let Some(Value::Object(mut fields)) = body.validate(&SESSION_TEXT_BODY)? else {
-      unreachable!("a required model validates a body to its fields")
-    };
-    Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text") })
+    let fields = body.declared_fields(&SESSION_TEXT_BODY)?;
+    Ok(Self { session_id: text_field(&fields, "session_id"), text: text_field(&fields, "text") })
   }
 }
 
@@ -255,10 +251,8 @@ struct SessionId {
 impl SessionId {
   /// Validates the body against `SESSION_ID_BODY`, which forbids the keys the model does not declare.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let Some(Value::Object(mut fields)) = body.validate(&SESSION_ID_BODY)? else {
-      unreachable!("a required model validates a body to its fields")
-    };
-    Ok(Self { session_id: text_field(&mut fields, "session_id") })
+    let fields = body.declared_fields(&SESSION_ID_BODY)?;
+    Ok(Self { session_id: text_field(&fields, "session_id") })
   }
 }
 
@@ -273,22 +267,12 @@ struct AskCheck {
 impl AskCheck {
   /// Validates the body against `ASK_CHECK_BODY`, which requires an object for `item` and forbids extra keys.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let Some(Value::Object(mut fields)) = body.validate(&ASK_CHECK_BODY)? else {
-      unreachable!("a required model validates a body to its fields")
-    };
-    let session_id = text_field(&mut fields, "session_id");
+    let mut fields = body.declared_fields(&ASK_CHECK_BODY)?;
+    let session_id = text_field(&fields, "session_id");
     let item = fields.remove("item").expect("a validated dictionary is present");
-    let backend = text_field(&mut fields, "backend");
-    let answer = text_field(&mut fields, "answer");
+    let backend = text_field(&fields, "backend");
+    let answer = text_field(&fields, "answer");
     Ok(Self { session_id, item, backend, answer })
-  }
-}
-
-/// A string field of a validated model.
-fn text_field(fields: &mut Map<String, Value>, name: &str) -> String {
-  match fields.remove(name) {
-    Some(Value::String(text)) => text,
-    _ => unreachable!("a validated {name} is a string"),
   }
 }
 

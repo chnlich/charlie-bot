@@ -341,6 +341,22 @@ impl RequestBody {
   pub fn validate(&self, model: &BodyModel) -> Result<Option<Value>, Box<Response>> {
     self.check(model).map_err(|errors| Box::new(validation::response(&errors)))
   }
+
+  /// Validate this body against a required model: its declared fields, or the 422 response.
+  pub fn declared_fields(&self, model: &BodyModel) -> Result<Map<String, Value>, Box<Response>> {
+    match self.validate(model)? {
+      Some(Value::Object(fields)) => Ok(fields),
+      _ => unreachable!("a required model validates a body to its declared fields"),
+    }
+  }
+}
+
+/// A string field of a validated body.
+pub fn text_field(fields: &Map<String, Value>, name: &str) -> String {
+  match fields.get(name).and_then(Value::as_str) {
+    Some(text) => text.to_string(),
+    None => unreachable!("a validated {name} is a string"),
+  }
 }
 
 fn validate_object(

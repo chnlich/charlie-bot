@@ -39,7 +39,7 @@ const {
 // Turn outline fold — invariants I0-I6.
 //
 // Every expected value below is computed from the test's own input spec, never
-// from the implementation: `expectedTurns()` re-derives the turn boundaries
+// from the implementation. `expectedTurns()` re-derives the turn boundaries
 // from the item list, and the row fields come from the item that the generator
 // placed at the head / conclusion. The only thing read out of the DOM is what
 // the derive produced.
@@ -79,12 +79,12 @@ function lastMatch(items, predicate) {
 }
 
 // The span cut and the head/conclusion/fold picks, recomputed from the item
-// list alone under the shared turn-input rule: a span's own inputs are the
-// stimuli before its first assistant message, later stimuli are carried to
-// the next span (they open it, ahead of its own items), the head keeps the
-// user-over-stimulus priority over those inputs, and the fold holds the work
-// from the first assistant message to the conclusion — or, in a span with no
-// inputs at all, this shape: head = body[0], fold after it.
+// list alone under the shared turn-input rule. A span's own inputs are the
+// stimuli before its first assistant message. Later stimuli are carried to the
+// next span, where they open it ahead of its own items. The head keeps the
+// user-over-stimulus priority over those inputs. The fold holds the work from
+// the first assistant message to the conclusion. In a span with no inputs at
+// all, the shape is head = body[0] and the fold after it.
 function expectedTurns(items) {
   const spans = [];
   let span = [];
@@ -196,7 +196,7 @@ function rowField(row, className) {
 
 // --- invariants -------------------------------------------------------------
 // I0 — wrapper completeness. `nodes` maps every input item to the element the
-// test created for it, so filtering a wrapper's descendants by that set drops
+// test created for it. Filtering a wrapper's descendants by that set drops
 // everything the derive added (row, fold bar, fold content) and leaves exactly
 // the span the wrapper claims to hold.
 function assertWrapperCompleteness(root, turns, nodes, label) {
@@ -345,7 +345,7 @@ function generateCases() {
   });
   cases.push({
     // Two stimuli in one span (a worker summary lands while the master is
-    // answering the user's ask): the user prompt wins the head over the later
+    // answering the user's ask). The user prompt wins the head over the later
     // worker_summary, so the tag is "You" and the title is the user text.
     name: 'user prompt wins over worker_summary in one span',
     items: [
@@ -756,13 +756,13 @@ test('turn engine: DOM stays bounded and spacer arithmetic holds while paging th
   settle(timers);
 
   // DOM node cap, calibrated 2026-08-08 in this fake layout by running this
-  // exact scenario with CALIBRATE_DOM_CAP=1: 144 nodes after mount, max 296
-  // across the full 48-turn history page-through (the ±2-screen margins size
-  // the window at folded-row heights). Cap set at 400 — history length never
-  // enters the bound (plan 4.1③).
+  // exact scenario with CALIBRATE_DOM_CAP=1. That run saw 144 nodes after
+  // mount, and max 296 across the full 48-turn history page-through (the
+  // ±2-screen margins size the window at folded-row heights). Cap set at 400 —
+  // history length never enters the bound (plan 4.1③).
   // Browser-side absolute bound (outline, 1440x900 viewport, real Chrome
-  // 2026-08-08, worktree instance): domNodeCount after paging all 1,055
-  // messages of the heavy session was 4,020 at the top, 4,011 at the bottom,
+  // 2026-08-08, worktree instance). After paging all 1,055 messages of the
+  // heavy session, domNodeCount was 4,020 at the top and 4,011 at the bottom,
   // versus 3,427 for the transient first-landing window. Calibrated
   // document-level cap for outline at this viewport: 4,400.
   const DOM_NODE_CAP = 400;
@@ -1211,12 +1211,12 @@ test('turn engine: resize never pulls a reading user, keeps a pinned user', () =
 // ---------------------------------------------------------------------------
 // loadOlderIfNeeded pagination chain — the archived-session scroll-up stall.
 //
-// The pager runs against the real turn engine: the mounted tail is a span
-// with no separator, so every fetched page merges into that leading pending
-// segment and the engine's anchor shift stays 0 — the exact stall shape from
-// the debug report (viewport parked at the top, no scroll event possible).
-// The pager's own auto-continue (trigger zone) and 1px lift are what keep
-// history loading.
+// The pager runs against the real turn engine. The mounted tail is a span with
+// no separator, so every fetched page merges into that leading pending segment
+// and the engine's anchor shift stays 0. That is the exact stall shape from the
+// debug report (viewport parked at the top, no scroll event possible). The
+// pager's own auto-continue (trigger zone) and 1px lift are what keep history
+// loading.
 // ---------------------------------------------------------------------------
 
 // Tail page with no trailing separator: one pending flat segment that every
@@ -1267,9 +1267,9 @@ function mergePageFetch() {
   };
 }
 
-// `session` overrides fields of the default session (profile and origin pick the
-// view the page opens in), `messages` is the tail page, and `clampScrollTop`
-// gives the container a real scroller's range: the position never leaves it.
+// `session` overrides fields of the default session, so profile and origin pick
+// the view the page opens in. `messages` is the tail page. `clampScrollTop`
+// gives the container a real scroller's range, so the position never leaves it.
 // `fetchCalls` holds the older-page requests only.
 function mountPagerCase(fetchPage, {
   clientHeight = 100, baseHeight = 2000, session = {}, messages = PAGER_TAIL, clampScrollTop = false,
@@ -1279,9 +1279,10 @@ function mountPagerCase(fetchPage, {
   // A hidden list (display: none) reports no scrollHeight either.
   if (clientHeight === 0) root.scrollHeight = 0;
   if (clampScrollTop) installScrollTopClamp(root);
-  // Stand-in for the history around the engine's window: keeps the container's
-  // scrollHeight far above the pin threshold even at the moment reproject has
-  // stripped the window DOM (a real archive is thousands of px tall).
+  // Stand-in for the history around the engine's window. It keeps the
+  // container's scrollHeight far above the pin threshold, even at the moment
+  // reproject has stripped the window DOM (a real archive is thousands of px
+  // tall).
   root.__baseHeight = baseHeight;
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
@@ -1321,8 +1322,8 @@ function mountPagerCase(fetchPage, {
     has_more: true,
   });
   // The engine pins the viewport to the bottom at mount, so the render-time
-  // auto-fill call sees scrollTop > 80 and stays out of the way; drop the
-  // viewport to the top the way the user's scroll-up gesture would.
+  // auto-fill call sees scrollTop > 80 and stays out of the way. This case
+  // drops the viewport to the top, the way the user's scroll-up gesture would.
   root.scrollTop = 0;
   return {context, root, fetchCalls, timers};
 }
@@ -1343,9 +1344,9 @@ test('pager chains next-cursor fetches while parked in the trigger zone and stop
 });
 
 test('a shift-0 landing with has_more lifts a viewport parked at scrollTop 0 to 1px', async () => {
-  // The second fetch fails so the chain stops at the failure guard: a
-  // has_more:false page would legitimately drag the position back down via
-  // the sentinel-removal correction, hiding the lift under test.
+  // The second fetch fails so the chain stops at the failure guard. A
+  // has_more:false page would otherwise drag the position back down via the
+  // sentinel-removal correction, hiding the lift under test.
   const {context, root, fetchCalls} = mountPagerCase(async (url) => {
     if (cursorOf(url) !== 100) return {ok: false, status: 500};
     return {
@@ -1381,11 +1382,11 @@ test('a user-gesture call re-arms the trigger-zone chain, and the viewport fill 
   assert.deepEqual(parked.fetchCalls.map(cursorOf), Array.from({length: 62}, (_, i) => 100 - i));
 
   // Viewport fill: an unscrollable container with empty pages stays
-  // unscrollable (empty pages never rebuild the window, so the scrollHeight
-  // stays put), so the engine's own projection at the open starts the chain.
-  // The clamp holds scrollTop at 0 the way a real scroller does for a list
-  // that does not scroll. No count bounds the chain: it runs to the history's
-  // first event, and a gesture then finds nothing left to load.
+  // unscrollable, because empty pages never rebuild the window and the
+  // scrollHeight stays put. So the engine's own projection at the open starts
+  // the chain. The clamp holds scrollTop at 0 the way a real scroller does for
+  // a list that does not scroll. No count bounds the chain: it runs to the
+  // history's first event, and a gesture then finds nothing left to load.
   const unscrollable = mountPagerCase(async (url) => ({
     ok: true,
     async json() {
@@ -1402,7 +1403,7 @@ test('a user-gesture call re-arms the trigger-zone chain, and the viewport fill 
 
 // ---------------------------------------------------------------------------
 // The viewport fill: a visible list shorter than its viewport plus 80px has no
-// scroll event to wait for, so older pages keep loading until the list can
+// scroll event to wait for. So older pages keep loading until the list can
 // scroll or the history ends. For you needs it most: a page seldom adds a row,
 // so the list stays short across many pages in a row.
 // ---------------------------------------------------------------------------

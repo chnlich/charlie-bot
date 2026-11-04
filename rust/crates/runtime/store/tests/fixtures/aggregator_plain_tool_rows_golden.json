@@ -1,0 +1,443 @@
+{
+  "base_commit": "6784c2b3036646c3a90ddfea094dc1f8934d9f48",
+  "request": [
+    {
+      "type": "user",
+      "id": "u1",
+      "content": "List the files",
+      "timestamp": "2026-11-03T01:00:00Z"
+    },
+    {
+      "type": "assistant",
+      "id": "a1",
+      "timestamp": "2026-11-03T01:00:01Z",
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Checking."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_2",
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "id": "r1",
+      "timestamp": "2026-11-03T01:00:02Z",
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": "total 0"
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_2",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "id": "a2",
+      "timestamp": "2026-11-03T01:00:03Z",
+      "message": {
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_3",
+            "name": "Grep",
+            "input": {
+              "pattern": "x",
+              "path": "/tmp"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "id": "r2",
+      "timestamp": "2026-11-03T01:00:04Z",
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_3",
+            "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "tu4",
+      "name": "Bash",
+      "input": {
+        "command": "false"
+      },
+      "timestamp": "2026-11-03T01:00:05Z"
+    },
+    {
+      "type": "tool_result",
+      "id": "tr5",
+      "content": "exit 1",
+      "is_error": true,
+      "timestamp": "2026-11-03T01:00:06Z"
+    },
+    {
+      "type": "assistant",
+      "id": "a3",
+      "timestamp": "2026-11-03T01:00:07Z",
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Done."
+          }
+        ]
+      }
+    },
+    {
+      "type": "master_done",
+      "id": "md1",
+      "timestamp": "2026-11-03T01:00:08Z"
+    }
+  ],
+  "expected": [
+    {
+      "type": "message",
+      "message": {
+        "role": "user",
+        "content": "List the files",
+        "uploaded_files": [],
+        "input_mode": null,
+        "event_index": 0,
+        "id": "u1",
+        "timestamp": "2026-11-03T01:00:00Z"
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 1,
+        "id": "a1",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 1,
+        "id": "a1",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "hello",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 3,
+        "id": "a2",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "hello",
+            "is_error": false
+          },
+          {
+            "name": "Grep",
+            "input": {
+              "pattern": "x",
+              "path": "/tmp"
+            },
+            "output": "",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 3,
+        "id": "a2",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "hello",
+            "is_error": false
+          },
+          {
+            "name": "Grep",
+            "input": {
+              "pattern": "x",
+              "path": "/tmp"
+            },
+            "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "is_error": false,
+            "output_truncated": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 5,
+        "id": "tu4",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "hello",
+            "is_error": false
+          },
+          {
+            "name": "Grep",
+            "input": {
+              "pattern": "x",
+              "path": "/tmp"
+            },
+            "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "is_error": false,
+            "output_truncated": true
+          },
+          {
+            "name": "Bash",
+            "input": {
+              "command": "false"
+            },
+            "output": "",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 6,
+        "id": "tu4",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "hello",
+            "is_error": false
+          },
+          {
+            "name": "Grep",
+            "input": {
+              "pattern": "x",
+              "path": "/tmp"
+            },
+            "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "is_error": false,
+            "output_truncated": true
+          },
+          {
+            "name": "Bash",
+            "input": {
+              "command": "false"
+            },
+            "output": "exit 1",
+            "is_error": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "assistant",
+        "content": "Checking.",
+        "event_index": 7,
+        "id": "tu4",
+        "timestamp": "2026-11-03T01:00:01Z",
+        "tools": [
+          {
+            "name": "Bash",
+            "input": {
+              "command": "ls -la"
+            },
+            "output": "",
+            "is_error": false
+          },
+          {
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "output": "hello",
+            "is_error": false
+          },
+          {
+            "name": "Grep",
+            "input": {
+              "pattern": "x",
+              "path": "/tmp"
+            },
+            "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "is_error": false,
+            "output_truncated": true
+          },
+          {
+            "name": "Bash",
+            "input": {
+              "command": "false"
+            },
+            "output": "exit 1",
+            "is_error": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "Done.",
+        "event_index": 7,
+        "id": "a3",
+        "timestamp": "2026-11-03T01:00:07Z"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "assistant",
+        "content": "Done.",
+        "event_index": 7,
+        "id": "a3",
+        "timestamp": "2026-11-03T01:00:07Z"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "separator",
+        "thinking_seconds": null,
+        "timestamp": "2026-11-03T01:00:08Z",
+        "event_index": 8,
+        "id": "md1"
+      }
+    }
+  ]
+}

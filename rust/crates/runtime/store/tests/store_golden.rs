@@ -48,6 +48,7 @@ const RUN_RETRY_OPS: &[&str] = &["retry", "retry_spec", "retry_manager_turn"];
 const RETRY_TASK_SPEC: &str = "synthetic retry task spec";
 const GOLDEN_STORE_FIXTURE: &str = include_str!("fixtures/store_ops_golden.json");
 const GOLDEN_MESSAGE_FIXTURE: &str = include_str!("fixtures/message_aggregator_golden.json");
+const GOLDEN_PLAIN_TOOL_ROWS_FIXTURE: &str = include_str!("fixtures/aggregator_plain_tool_rows_golden.json");
 const OPS: &[&str] = &[
   "persist_cc_session_id",
   "persist_native_backend",
@@ -2565,6 +2566,24 @@ fn message_aggregator_accepts_every_recorded_shape() {
     rust_frames.extend(aggregator.feed(event).unwrap());
   }
   assert_eq!(Value::Array(rust_frames), run_golden_message_aggregator(&events));
+}
+
+/// Plain tool rows keep the frames that main produced before subagent cards existed.
+///
+/// The request has an assistant message with parallel tool calls, a user message whose two results
+/// attach to the last row, a long output that is trimmed, and top-level tool_use and tool_result events.
+/// The expected frames were generated on 6784c2b303, before the aggregator learned about subagents.
+#[test]
+fn message_aggregator_keeps_plain_tool_row_frames() {
+  let fixture: Value = serde_json::from_str(GOLDEN_PLAIN_TOOL_ROWS_FIXTURE).unwrap();
+  assert_eq!(fixture["base_commit"], "6784c2b3036646c3a90ddfea094dc1f8934d9f48");
+  let mut aggregator = charliebot_store::aggregator::MessageAggregator::new(0, true);
+  let mut frames = Vec::new();
+  for event in fixture["request"].as_array().unwrap() {
+    frames.extend(aggregator.feed(event).unwrap());
+  }
+  frames.extend(aggregator.flush_pending());
+  assert_eq!(Value::Array(frames), fixture["expected"]);
 }
 
 /// A running copy of the system sleep binary named `name`, whose `/proc/<pid>/exe` file name is `name`.

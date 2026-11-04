@@ -58,7 +58,7 @@ pub fn compose_input_prompt(
       _ => content.to_string(),
     };
     let event_uploads = event
-      .get("uploaded_files")
+      .get(event_types::UPLOADED_FILES)
       .and_then(CompactValue::as_array)
       .map(|files| files.iter().map(CompactValue::to_value).collect::<Vec<_>>())
       .unwrap_or_default();

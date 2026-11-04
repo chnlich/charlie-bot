@@ -26,11 +26,11 @@ const INPUT_EVENT_TYPES: [&str; 4] =
 const ADMIT_FIELDS: [&str; 8] = [
   "input_id",
   "request_id",
-  "uploaded_files",
+  event_types::UPLOADED_FILES,
   "timestamp",
   "from_session",
   "from_session_name",
-  "input_mode",
+  event_types::INPUT_MODE,
   "fields",
 ];
 
@@ -87,7 +87,9 @@ impl Dispatcher {
       return Err(StoreError::invalid(format!("{event_type} is not a task input type")));
     }
     let fields_object = fields.as_object().ok_or_else(|| StoreError::invalid("task input fields must be an object"))?;
-    if fields_object.get("input_mode").is_some_and(|value| !value.is_null()) && event_type != event_types::USER {
+    if fields_object.get(event_types::INPUT_MODE).is_some_and(|value| !value.is_null())
+      && event_type != event_types::USER
+    {
       return Err(StoreError::invalid(format!("input_mode applies to a user message, not to {event_type}")));
     }
     if event_type == event_types::USER && actor != "user" {
@@ -150,7 +152,7 @@ impl Dispatcher {
         payload.push(("request_id".to_string(), Value::String(request_id.to_string())));
       }
       if let Some(uploaded_files) = fields.uploaded_files.as_ref().filter(|files| !files.is_empty()) {
-        payload.push(("uploaded_files".to_string(), Value::Array(uploaded_files.clone())));
+        payload.push((event_types::UPLOADED_FILES.to_string(), Value::Array(uploaded_files.clone())));
       }
       if let Some(from_session) = fields.from_session.as_deref() {
         payload.push(("from_session".to_string(), Value::String(from_session.to_string())));
@@ -159,7 +161,7 @@ impl Dispatcher {
         payload.push(("from_session_name".to_string(), Value::String(from_session_name.to_string())));
       }
       if let Some(input_mode) = fields.input_mode.as_deref() {
-        payload.push(("input_mode".to_string(), Value::String(input_mode.to_string())));
+        payload.push((event_types::INPUT_MODE.to_string(), Value::String(input_mode.to_string())));
       }
       payload.extend(fields.extra_fields.clone());
       let mut event = charliebot_store::control_events::build_control_event(
@@ -1016,7 +1018,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
       Some(_) => Err(StoreError::invalid(format!("task input field {name} must be a string or null"))),
     }
   };
-  let uploaded_files = match object.get("uploaded_files") {
+  let uploaded_files = match object.get(event_types::UPLOADED_FILES) {
     None | Some(Value::Null) => None,
     Some(Value::Array(files)) => Some(files.clone()),
     Some(_) => return Err(StoreError::invalid("task input field uploaded_files must be a list or null")),
@@ -1033,7 +1035,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
     timestamp: optional_string("timestamp")?,
     from_session: optional_string("from_session")?,
     from_session_name: optional_string("from_session_name")?,
-    input_mode: optional_string("input_mode")?,
+    input_mode: optional_string(event_types::INPUT_MODE)?,
     extra_fields,
   })
 }

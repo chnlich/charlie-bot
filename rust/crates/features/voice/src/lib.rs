@@ -18,6 +18,7 @@ pub use file::transcribe_file;
 
 use std::sync::Arc;
 
+use charliebot_core::event_types;
 use charliebot_registry::turn::TurnContribution;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::SessionMetadata;
@@ -44,7 +45,8 @@ impl TurnContribution for VoiceTurnContribution {
   }
 
   fn input_preamble(&self, _meta: &SessionMetadata, input_event: &Value) -> Option<String> {
-    (input_event.get("input_mode").and_then(Value::as_str) == Some(VOICE_INPUT_MODE)).then(|| VOICE_NOTE.to_string())
+    (input_event.get(event_types::INPUT_MODE).and_then(Value::as_str) == Some(VOICE_INPUT_MODE))
+      .then(|| VOICE_NOTE.to_string())
   }
 }
 

@@ -203,8 +203,11 @@ impl MessageAggregator {
     let mut message = json!({
       "role": "user",
       "content": normalized.content,
-      "uploaded_files": normalized.uploaded_files,
-      "input_mode": event.field("input_mode").map(EventFields::to_owned_value).unwrap_or(Value::Null),
+      (event_types::UPLOADED_FILES): normalized.uploaded_files,
+      (event_types::INPUT_MODE): event
+        .field(event_types::INPUT_MODE)
+        .map(EventFields::to_owned_value)
+        .unwrap_or(Value::Null),
       "event_index": index,
       "id": event_id,
       "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),

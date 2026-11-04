@@ -19,7 +19,7 @@ pub struct NormalizedUserMessage {
 
 /// Normalize a persisted user event for the chat renderer.
 pub fn normalize_user_message_event<E: EventFields>(event: &E) -> StoreResult<NormalizedUserMessage> {
-  let files = serialize_uploaded_files(event.field("uploaded_files"))?;
+  let files = serialize_uploaded_files(event.field(event_types::UPLOADED_FILES))?;
   if !files.is_empty() {
     let content = event.field("content").map_or_else(|| json!(""), E::to_owned_value);
     return Ok(NormalizedUserMessage { content, uploaded_files: files });

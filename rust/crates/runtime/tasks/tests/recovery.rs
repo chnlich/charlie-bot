@@ -1263,16 +1263,20 @@ async fn a_second_node_recovery_keeps_one_result_line() -> anyhow::Result<()> {
 }
 
 /// The drain's end handling leaves the node's pending input and pending report for the same recovery pass, and the
-/// run's ending no longer aborts the node.
+/// run's ending no longer aborts the node. The node is pool-chosen: a named node's failed run would archive it, and an
+/// archived task keeps its pending input as history.
 #[tokio::test]
 async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Result<()> {
-  let (stack, manager_id, worker_id) = ending_worker(false, vec![result_script("noted"); 4]).await?;
+  let (stack, manager_id, worker_id) = ending_worker(true, vec![result_script("noted"); 4]).await?;
   let run_id = "run-drained";
   ending_run(&stack, &worker_id, run_id, Vec::new()).await?;
   stack.launch(&worker_id, run_id, DEAD_PID, DEAD_PID_START).await?;
   stage_raw_429(&stack.store().run_dir(&worker_id, run_id), Duration::from_secs(3600))?;
-  stack.dispatch.admit_input(&worker_id, event_types::USER, "follow up after the restart", "user", json!({})).await?;
+  // The close and reopen of the crash window come first: an input admitted before them is no longer pending.
   seed_pending_report(&stack, &worker_id, &manager_id).await?;
+  let admitted =
+    stack.dispatch.admit_input(&worker_id, event_types::USER, "follow up after the restart", "user", json!({})).await?;
+  let input_id = admitted["id"].as_str().context("the admitted input has an id")?.to_string();
 
   let log = LogCapture::default();
   {
@@ -1281,8 +1285,9 @@ async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Resu
   }
   assert!(!log.text().contains("task_recovery_node_failed"), "{}", log.text());
   settle_until(|| Ok(stack.dispatch.pending_inputs(&worker_id)?.is_empty())).await?;
-  settle_until(|| Ok(stack.run_records(&worker_id)?.iter().any(|run| run.id != run_id && run.kind == RunKind::Work)))
-    .await?;
+  let claimed =
+    stack.run_records(&worker_id)?.into_iter().any(|candidate| candidate.input_event_ids.contains(&input_id));
+  assert!(claimed, "a run claims the pending input: {:?}", stack.run_records(&worker_id)?);
   let report = stack
     .child_reports(&manager_id)?
     .into_iter()
@@ -1298,6 +1303,7 @@ async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Resu
 #[tokio::test]
 async fn a_manager_resume_error_lands_the_turn_failure() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
+  stack.write_access_key()?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   stack.queue_run(&manager.id, "run-turn", RunKind::ManagerTurn).await?;
   stack.launch(&manager.id, "run-turn", DEAD_PID, DEAD_PID_START).await?;

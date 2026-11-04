@@ -56,9 +56,17 @@ fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
   home.join(BOOT_RECOVERY_MARKER_PATH)
 }
 
-/// The last clean pass's start time, or None when the marker is absent or unreadable. None makes the pass check every
-/// node in full. Other read errors, such as a permission error, propagate.
-fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<UtcDateTime>> {
+/// The boot marker: the start of the last pass that wrote it, and the nodes whose pass failed in that pass. Every node
+/// outside `failed_sessions` was clean at or after `pass_started_at`, so the next boot skips it on the marker's word.
+/// A failed node keeps its full pass at every boot until one of its passes succeeds.
+struct BootMarker {
+  pass_started_at: UtcDateTime,
+  failed_sessions: BTreeSet<String>,
+}
+
+/// The last clean pass's marker, or None when the marker is absent or unreadable. None makes the pass check every node
+/// in full. Other read errors, such as a permission error, propagate.
+fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<BootMarker>> {
   let path = boot_recovery_marker_path(home);
   let raw = match std::fs::read(&path) {
     Ok(raw) => raw,
@@ -66,7 +74,7 @@ fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<Ut
     Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
   };
   match parse_boot_recovery_marker(&raw) {
-    Ok(pass_started_at) => Ok(Some(pass_started_at)),
+    Ok(marker) => Ok(Some(marker)),
     Err(error_type) => {
       tracing::error!(target: "charliebot_tasks", size = raw.len(), error_type, "boot_recovery_marker_unreadable");
       Ok(None)
@@ -74,27 +82,50 @@ fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<Ut
   }
 }
 
-/// The pass start that a marker's bytes hold. On failure, the exception name that the boot logs as `error_type`.
-/// The boot logs only that name, so the parser's own message is not kept.
-fn parse_boot_recovery_marker(raw: &[u8]) -> Result<UtcDateTime, &'static str> {
+/// The marker that a file's bytes hold. On failure, the exception name that the boot logs as `error_type`. The boot logs
+/// only that name, so the parser's own message is not kept. A marker with no `failed_sessions` key is a clean pass's
+/// marker, so the key's absence reads as no failed node.
+fn parse_boot_recovery_marker(raw: &[u8]) -> Result<BootMarker, &'static str> {
   let text = std::str::from_utf8(raw).map_err(|_| "UnicodeDecodeError")?;
   let payload: Value = serde_json::from_str(text).map_err(|_| "JSONDecodeError")?;
   let Value::Object(fields) = payload else {
     return Err("TypeError");
   };
-  match fields.get("pass_started_at") {
-    None => Err("KeyError"),
-    Some(Value::String(pass_started_at)) => UtcDateTime::parse(pass_started_at).map_err(|_| "ValueError"),
-    Some(_) => Err("TypeError"),
-  }
+  let pass_started_at = match fields.get("pass_started_at") {
+    None => return Err("KeyError"),
+    Some(Value::String(pass_started_at)) => UtcDateTime::parse(pass_started_at).map_err(|_| "ValueError")?,
+    Some(_) => return Err("TypeError"),
+  };
+  let failed_sessions = match fields.get("failed_sessions") {
+    None => BTreeSet::new(),
+    Some(Value::Array(items)) => items
+      .iter()
+      .map(|item| match item {
+        Value::String(session_id) => Ok(session_id.clone()),
+        _ => Err("TypeError"),
+      })
+      .collect::<Result<BTreeSet<String>, &'static str>>()?,
+    Some(_) => return Err("TypeError"),
+  };
+  Ok(BootMarker { pass_started_at, failed_sessions })
 }
 
-fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTime) -> anyhow::Result<()> {
+/// Writes the marker. `failed_sessions` is written only when it names a node, so a clean pass writes the marker it always
+/// has.
+fn write_boot_recovery_marker(
+  home: &std::path::Path,
+  pass_started_at: UtcDateTime,
+  failed_sessions: &BTreeSet<String>,
+) -> anyhow::Result<()> {
   let path = boot_recovery_marker_path(home);
   let parent = path.parent().context("boot-recovery marker has no parent directory")?;
   std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-  let payload = serde_json::json!({"pass_started_at": pass_started_at.to_isoformat_text()});
-  let text = charliebot_core::text_repr::json_dumps(&payload, &charliebot_core::text_repr::DEFAULT_JSON);
+  let mut payload = serde_json::Map::new();
+  payload.insert("pass_started_at".to_string(), Value::String(pass_started_at.to_isoformat_text()));
+  if !failed_sessions.is_empty() {
+    payload.insert("failed_sessions".to_string(), serde_json::json!(failed_sessions));
+  }
+  let text = charliebot_core::text_repr::json_dumps(&Value::Object(payload), &charliebot_core::text_repr::DEFAULT_JSON);
   charliebot_core::fsutil::atomic_write_text_synced(&path, &text)
     .with_context(|| format!("writing {}", path.display()))?;
   Ok(())
@@ -375,7 +406,8 @@ pub async fn reconcile_task_tree(
   }
   let started_at = UtcDateTime::now();
   let marker = read_boot_recovery_marker(&cfg.charliebot_home)?;
-  let mut failed_node = false;
+  let marker_text = marker.as_ref().map(|marker| marker.pass_started_at.to_isoformat_text());
+  let mut failed_sessions = BTreeSet::new();
 
   let tree = sequence_tree(features, adapter)?;
   for controller in features.registry.sequence_controllers() {
@@ -398,7 +430,7 @@ pub async fn reconcile_task_tree(
   // applied in the walk's order: the first failing session in that order fails the walk.
   let check_features = Arc::clone(features);
   let (_, entries) = blocking_batch(session_dirs, None, &stop, move |session_dir| {
-    examine_session_dir(&check_features, session_dir, marker)
+    examine_session_dir(&check_features, session_dir, marker.as_ref())
   })
   .await?;
   let Some(entries) = entries else {
@@ -539,7 +571,7 @@ pub async fn reconcile_task_tree(
     step_totals.add(&pass_timer.steps);
     if let Err(error) = result {
       tracing::error!(target: "charliebot_tasks", session_id = %session_id, error = %format!("{error:#}"), "task_recovery_node_failed");
-      failed_node = true;
+      failed_sessions.insert(session_id.clone());
       // An out-of-space pass enters the end-landing retry: it re-runs the pass until a round survives.
       if is_out_of_space_error(error.as_ref()) {
         adapter.start_run_end_landing_retry(&session_id, None);
@@ -550,8 +582,10 @@ pub async fn reconcile_task_tree(
   let node_pass_file_reads = features.store.history_work().file_reads - file_reads_before_passes;
   let node_pass_run_record_reads = features.store.run_record_read_count() - run_record_reads_before_passes;
   let (node_pass_step_ms, node_pass_step_file_reads, node_pass_step_file_read_bytes) = step_totals.texts();
-  if !failed_node && !stop.is_cancelled() {
-    write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
+  // The marker advances for every node that the pass completed. A failed node stays in `failed_sessions`, so the next
+  // boot runs its full pass again while the other nodes keep the marker's skip.
+  if !stop.is_cancelled() {
+    write_boot_recovery_marker(&cfg.charliebot_home, started_at, &failed_sessions)?;
   }
   let marker_ms = phase_ms();
   tracing::info!(
@@ -571,7 +605,7 @@ pub async fn reconcile_task_tree(
     node_pass_step_file_read_bytes = %node_pass_step_file_read_bytes,
     "task_tree_recovery_phases"
   );
-  counters.marker = marker.map(UtcDateTime::to_isoformat_text);
+  counters.marker = marker_text;
   Ok(counters)
 }
 
@@ -579,7 +613,7 @@ pub async fn reconcile_task_tree(
 fn examine_session_dir(
   features: &FeatureContext,
   session_dir: &std::path::Path,
-  marker: Option<UtcDateTime>,
+  marker: Option<&BootMarker>,
 ) -> anyhow::Result<WalkEntry> {
   if !session_dir.is_dir() || !session_dir.join(run_records::METADATA_NAME).is_file() {
     return Ok(WalkEntry::Absent);
@@ -595,7 +629,9 @@ fn examine_session_dir(
   };
   let reason = match marker {
     None => None,
-    Some(marker) => match boot_skip_check(features, &session_id, session_dir, &meta, marker)? {
+    // A node whose last pass failed takes its full pass, whatever the marker says about its files.
+    Some(marker) if marker.failed_sessions.contains(&session_id) => Some("failed_pass"),
+    Some(marker) => match boot_skip_check(features, &session_id, session_dir, &meta, marker.pass_started_at)? {
       SkipCheck::Keep(reason) => Some(reason),
       SkipCheck::Skip { newest_backend } => return Ok(WalkEntry::Skipped { session_id, newest_backend }),
     },
@@ -2216,7 +2252,7 @@ mod tests {
     let pass_started_at = UtcDateTime::parse("2026-10-21T03:00:00.123456+00:00").expect("the synthetic time parses");
     charliebot_core::fsutil::clear_synced_write_steps();
 
-    write_boot_recovery_marker(home.path(), pass_started_at).expect("the marker writes");
+    write_boot_recovery_marker(home.path(), pass_started_at, &BTreeSet::new()).expect("the marker writes");
 
     let steps = charliebot_core::fsutil::synced_write_steps();
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");

@@ -31,10 +31,10 @@ function timersOf(context) {
 // Reading-position regression: any upward read of history owns the viewport.
 // The anchor is one message's identity plus its offset from the container's
 // visible top; every update restores it. These cases reproduce the reported
-// jumps on the pre-fix engine: pagination snapping to the new bottom, the
-// segment-top anchor drifting the message, appends and stream growth yanking
-// a reader paused inside the 150px band, the transcript reset repaint, and
-// the hidden container's lost scroll position.
+// jumps on the pre-fix engine. They cover pagination snapping to the new
+// bottom, the segment-top anchor drifting the message, and appends and stream
+// growth yanking a reader paused inside the 150px band. They also cover the
+// transcript reset repaint and the hidden container's lost scroll position.
 // ---------------------------------------------------------------------------
 
 // Viewport-relative Y of a message node in the fake layout (container top = 0).
@@ -90,8 +90,8 @@ function readingRig(prefix, turns, anchorTurn = Math.floor(turns / 2)) {
 }
 
 test('a clamp echo after a shrink does not read as an upward wheel', () => {
-  // The reported mount-time unpin: the engine pins to the bottom, an update
-  // shrinks the content under the pinned position, and the browser reports
+  // The reported mount-time unpin: the engine pins to the bottom and an update
+  // shrinks the content under the pinned position. The browser then reports
   // the clamped position as a scroll event. That event moves up while the
   // container shrinks — it is the clamp, not the user's wheel.
   const state = mountEngine(ePage('shrink_', 4), {clientHeight: 300, clampScrollTop: true});
@@ -140,8 +140,8 @@ test('pagination prepend keeps the reading message at its viewport offset', () =
 
 test('a page merging into the leading turn keeps the reading position once rendered', () => {
   // The mounted tail never closes, so the page's trailing span merges into
-  // the leading segment — the reader's message leaves the DOM inside the
-  // placeholder period and must come back at the same viewport offset.
+  // the leading segment. The reader's message leaves the DOM inside the
+  // placeholder period. It must come back at the same viewport offset.
   const tail = [eMsg('assistant', 'tail-a', 'the read answer'), eMsg('user', 'tail-u', 'next ask')];
   const state = mountEngine([...ePage('mg_', 6), ...tail], {clientHeight: 300, clampScrollTop: true});
   openAllTurns(state.engine);
@@ -214,9 +214,9 @@ test('restoreBottomPin routes the jump through the engine when one is mounted', 
 });
 
 // The transcript reset runs inside session-view.js, so these cases drive the
-// real poll path through the sidebar context: renderSessionView mounts the
-// engine, the worker-transcript mode points the poll at this session, and a
-// stubbed fetch answers with a reset.
+// real poll path through the sidebar context. The rig's renderSessionView
+// mounts the engine, and the worker-transcript mode points the poll at this
+// session. A stubbed fetch answers with a reset.
 function transcriptRig(prefix, turns) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   root.clientHeight = 300;
@@ -261,9 +261,9 @@ function transcriptRig(prefix, turns) {
   return {context, root, engine};
 }
 
-// pollTranscript is module-private; the page drives it through the
-// 'transcript-poll' interval, so the rig captures the interval fn at
-// registration and the test fires it the way the 2s cadence would.
+// pollTranscript is module-private, so the page drives it through the
+// 'transcript-poll' interval. The rig captures the interval fn at
+// registration, and the test fires it the way the 2s cadence would.
 async function resetTranscript(context, prefix, turns, revision) {
   const messages = ePage(prefix, turns);
   context.fetch = async () => ({
@@ -306,7 +306,7 @@ test('a transcript reset repaint keeps the reading position and a live engine', 
   assert.ok(remounted && remounted.alive, 'a fresh engine owns the view after the reset');
   assert.notEqual(remounted, engine, 'the stale engine was replaced, not reused');
   // The remount's fresh registry folds the turns the reader had opened back
-  // to one row per turn: the reading message hides and its fold row carries
+  // to one row per turn. The reading message hides, and its fold row carries
   // the place at the reading offset.
   assertSameAnchor(remounted.readingAnchor, {kind: 'message', id: anchorId, offset: before},
       'the reset kept the reading identity');
@@ -320,9 +320,9 @@ test('a transcript reset repaint keeps the reading position and a live engine', 
   assert.ok(Math.abs(rowY() - before) <= 0.5, 'the fold row took the reading offset');
   assertEngineInvariants(context, root, root.children[root.children.length - 1], 'after reset');
 
-  // The remounted engine still ingests: the append joins the live tail (out
-  // of the reading window, so it materializes when the reader returns there)
-  // and the reading position does not move.
+  // The remounted engine still ingests: the append joins the live tail, out
+  // of the reading window, and materializes when the reader returns there.
+  // The reading position does not move.
   const entriesBefore = engineDebug(context, root).entries;
   remounted.appendMessage(eMsg('assistant', 'tx-after-reset', 'live again'), false);
   settle(timersOf(context));
@@ -398,10 +398,10 @@ test('reading folded history in outline mode anchors the turn row', () => {
 });
 
 // The reading place across a collapse and reopen is the reading content's
-// identity, not whatever node the previous collapse left at the top edge:
-// the message holds its viewport offset whenever it is rendered, its fold row
+// identity, not whatever node the previous collapse left at the top edge. The
+// message holds its viewport offset whenever it is rendered. Its fold row
 // takes the offset while the turn hides it, and the message returns to the
-// offset when the turn reopens — with no user scroll in between.
+// offset when the turn reopens. No user scroll moves in between.
 function foldRowRig(prefix) {
   const rig = readingRig(prefix, 10, 5);
   const wrapKey = `${prefix}t5_h0|${prefix}t5_c0|${prefix}t5_p0`;
@@ -491,8 +491,8 @@ test('a user scroll between a collapse and a reopen re-decides the reading place
       'a pinned reader stays at the bottom through the collapse');
   // The reader wheels on: the scroll capture reads the fold row they park
   // on. The wheel journey materializes the rows on the way, and the park
-  // target is the row's laid-out box (a wheel moves real pixels; the height
-  // model's folded-row estimates are not where the rows live).
+  // target is the row's laid-out box. A wheel moves real pixels, while the
+  // height model's folded-row estimates are not where the rows live.
   const parkedKey = 'us_t4_h0|us_t4_c0|us_t4_p0';
   scrollTo(state.timers, state.root, 300);
   settle(state.timers);
@@ -545,11 +545,11 @@ test('folding the read turn parks its row at the reading offset and reopening re
 });
 
 // ---------------------------------------------------------------------------
-// The status strip sits above the list in the page column: selecting the
+// The status strip sits above the list in the page column. Selecting the
 // Status view hides it and moves the list's top edge by the strip's height
 // plus its margin. The reading anchor must be a node that moves with the
-// content — a hidden row (a collapsed steps band's messages) has no box, its
-// rect reads (0, 0), and anchoring it makes every strip move come back as a
+// content. A hidden row (a collapsed steps band's messages) has no box, and
+// its rect reads (0, 0). Anchoring it makes every strip move come back as a
 // scroll correction of exactly the strip's height.
 // ---------------------------------------------------------------------------
 
@@ -592,7 +592,7 @@ function stripRig(prefix, turns) {
 
 // A mid-history reader whose top edge cuts an open turn between its head and
 // its conclusion, with the turn's hidden step rows between them in tree
-// order — the exact scan state the collapsed steps band creates.
+// order. This is the exact scan state the collapsed steps band creates.
 function stripReadingRig(prefix, turns, anchorTurn = Math.floor(turns / 2)) {
   const rig = stripRig(prefix, turns);
   openAllTurns(rig.engine);
@@ -663,7 +663,7 @@ test('a bottom-pinned reader stays pinned through a strip round trip', () => {
 // ---------------------------------------------------------------------------
 // The Status view hides the list, so the list has no height while the panel
 // shows. The engine projects nothing and writes no scroll position until the
-// list returns, and the return projects from the reader's own place: the
+// list returns. The return then projects from the reader's own place: the
 // anchor of a history reader, the bottom of a pinned one.
 // ---------------------------------------------------------------------------
 
@@ -718,8 +718,8 @@ test('a history reader keeps the message and its offset through a Status-view ro
 });
 
 // A near-bottom reader for the clamp case: mounted pinned, then one upward
-// wheel to 10px above the bottom, the only way a reader sits that close to the
-// bottom with the pin intent off.
+// wheel to 10px above the bottom. That is the only way a reader sits that
+// close to the bottom with the pin intent off.
 function nearBottomRig(prefix) {
   const state = mountEngine(ePage(prefix, 8), {clientHeight: SHOWN_HEIGHT, clampScrollTop: true});
   openAllTurns(state.engine);

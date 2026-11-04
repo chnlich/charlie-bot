@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use charliebot_mock_home::check::{CheckOutcome, check};
 use charliebot_mock_home::generate::generate;
 use charliebot_mock_home::recovery_check::{digest, seed};
-use charliebot_mock_home::task_tree::{self, reset};
+use charliebot_mock_home::task_tree::reset;
 use charliebot_mock_home::{DATA_VERSION, DEFAULT_SEED, PRODUCTION_SESSIONS, Shape};
 use clap::{Parser, Subcommand};
 
@@ -45,8 +45,6 @@ enum Action {
   },
   /// Return the task-tree home in OUTPUT to its generated state: the boot marker, the file times and the worktrees.
   Reset { output: PathBuf },
-  /// Print each run of the task-tree home HOME that has no ended_at, as `<session> <run>`.
-  UnendedRuns { home: PathBuf },
   /// Print the data version. The home lives in `~/improve/mock-home/<version>/`.
   Version,
   /// Add the recovery check's sessions to SESSIONS, a copy of a task-tree home, and list their live runs in LIVE_RUNS.
@@ -104,12 +102,6 @@ fn main() -> ExitCode {
     }
     Action::Check { output, base_url } => check(&output, &base_url).map(check_exit_code),
     Action::Reset { output } => reset(&output).map(|()| ExitCode::SUCCESS),
-    Action::UnendedRuns { home } => task_tree::unended_runs(&home).map(|runs| {
-      for (session_id, run_id) in runs {
-        println!("{session_id} {run_id}");
-      }
-      ExitCode::SUCCESS
-    }),
     Action::Version => {
       println!("{DATA_VERSION}");
       Ok(ExitCode::SUCCESS)

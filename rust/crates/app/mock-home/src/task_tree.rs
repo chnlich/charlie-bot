@@ -22,7 +22,8 @@
 //! and primes the child's and the parent's aggregators before it finds the task closed (`replay_followups`).
 //!
 //! No state in the home makes a lab server start an agent or signal a process. An open task's manager confirms
-//! every input, a child's report among them, and an unended run sits in a closed task. Every run's pid is at or above
+//! every input, a child's report among them, a repaired run sits in a closed task, and a live run sits in an open one
+//! (`HomePlan::plant_live_runs`). Every run's pid is at or above
 //! Linux's PID_MAX_LIMIT, a parent is a root, a sequence run names an unconfigured cron task, and a pending trigger
 //! fires on 2030-01-01. No worker is a cold read, whose replay can start a run. The boot marker and every file time are
 //! fixed around `marker_time()`, so `reset` restores them from the seed's plan.
@@ -146,6 +147,12 @@ const BEFORE_MARKER_MARGIN_SECONDS: i64 = 60;
 /// An open task's files were last written within this window before the marker, or after the marker.
 const OPEN_TASK_LOOKBACK_SECONDS: u64 = 7 * 86_400;
 
+/// The open tasks whose last run has a live process at a release start. Production's release start resumed 10 runs.
+const LIVE_RUN_SESSIONS: usize = 10;
+
+/// The file that lists each live run as `<session> <run>`, which a release start gives a live process.
+const LIVE_RUNS_NAME: &str = "live-runs.txt";
+
 /// The keep reasons of the walk, in its check order (`boot_skip_reason`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KeepReason {
@@ -177,8 +184,19 @@ impl KeepReason {
 enum RunEnd {
   /// A successful `run_finished` fact, and an `ended_at` on the record.
   Finished,
-  /// Launched, with no end fact and no `ended_at`: its process was running when the server stopped.
-  Unended,
+  /// A successful `run_finished` fact with no `ended_at` on the record: the end metadata write did not land, and the
+  /// boot repairs it, as it does for the unended runs of production's closed tasks.
+  Repaired,
+  /// Launched, with no end fact and no `ended_at`: its process was running when the server stopped. A release start
+  /// reattaches a live process to each one, which `live-runs.txt` lists.
+  Live,
+}
+
+impl RunEnd {
+  /// Whether the run's log holds its `run_finished` fact.
+  fn has_finish_fact(self) -> bool {
+    self != RunEnd::Live
+  }
 }
 
 /// Where a work run's worktree is.
@@ -322,22 +340,46 @@ impl HomePlan {
     Self::type_workers(&mut sessions, &mut rng);
     Self::plan_closes(&mut sessions, &mut rng);
     Self::plan_archives(&mut sessions, sizes);
+    Self::plant_live_runs(&mut sessions);
     let reports = Self::reports(&sessions);
     Self { sessions, reports }
+  }
+
+  /// Whether each session is the parent of another session.
+  fn has_child(sessions: &[SessionPlan]) -> Vec<bool> {
+    let mut has_child = vec![false; sessions.len()];
+    for session in sessions {
+      if let Some(parent) = session.parent {
+        has_child[parent] = true;
+      }
+    }
+    has_child
   }
 
   /// Archives every parent whose planned log is within `ARCHIVE_MIN_BYTES` and `ARCHIVE_MAX_BYTES`. A child's pass
   /// reads its archived parent's live log whole on a build whose fact scan refuses archived sessions, as the reference
   /// start's node passes did, and a parent that is itself a full pass reads its own live log in its pass.
   fn plan_archives(sessions: &mut [SessionPlan], sizes: &[u64]) {
-    let mut has_child = vec![false; sessions.len()];
-    for session in sessions.iter() {
-      if let Some(parent) = session.parent {
-        has_child[parent] = true;
-      }
-    }
+    let has_child = Self::has_child(sessions);
     for (index, (session, size)) in sessions.iter_mut().zip(sizes).enumerate() {
       session.archived = has_child[index] && (ARCHIVE_MIN_BYTES..=ARCHIVE_MAX_BYTES).contains(size);
+    }
+  }
+
+  /// Makes the last run of each of the first `LIVE_RUN_SESSIONS` open tasks with runs a live run: a release start finds
+  /// its process alive and reattaches it, as production's release start resumed its runs of open tasks. A parent is
+  /// skipped, so each of its reports keeps a span whose run holds a finish fact.
+  fn plant_live_runs(sessions: &mut [SessionPlan]) {
+    let has_child = Self::has_child(sessions);
+    let live = sessions
+      .iter_mut()
+      .enumerate()
+      .filter(|(index, session)| {
+        session.reason == Some(KeepReason::StateOpen) && !session.runs.is_empty() && !has_child[*index]
+      })
+      .take(LIVE_RUN_SESSIONS);
+    for (_, session) in live {
+      session.runs.last_mut().expect("a session with runs has a last run").end = RunEnd::Live;
     }
   }
 
@@ -531,8 +573,8 @@ impl HomePlan {
     }
   }
 
-  /// The runs of one session, in start order. A sequence-ref session holds cron steps; an unended session's last run has
-  /// no end; a worktree session's last work run keeps its worktree.
+  /// The runs of one session, in start order. A sequence-ref session holds cron steps; an unended session's last run is
+  /// repaired, with its finish fact and no `ended_at`; a worktree session's last work run keeps its worktree.
   fn runs(
     reason: Option<KeepReason>,
     profile: TaskProfile,
@@ -557,7 +599,7 @@ impl HomePlan {
           (_, TaskProfile::Worker) => RunKind::Work,
         };
         let last = index + 1 == count;
-        let end = if reason == Some(KeepReason::RunUnended) && last { RunEnd::Unended } else { RunEnd::Finished };
+        let end = if reason == Some(KeepReason::RunUnended) && last { RunEnd::Repaired } else { RunEnd::Finished };
         let worktree = match kind {
           RunKind::Work if reason == Some(KeepReason::WorktreeExists) && last => Worktree::Present,
           RunKind::Work => Worktree::Removed,
@@ -646,9 +688,9 @@ fn write_task_log(
   ))?;
   let spans = session.runs.len().max(1);
   // Each child report lands in a span whose run finished, so that run's finish confirms it as an input.
-  let finished_spans: Vec<usize> =
-    (0..session.runs.len()).filter(|span| session.runs[*span].end == RunEnd::Finished).collect();
-  let report_span = |report: usize| finished_spans[report * finished_spans.len() / reports.len()];
+  let finish_spans: Vec<usize> =
+    (0..session.runs.len()).filter(|span| session.runs[*span].end.has_finish_fact()).collect();
+  let report_span = |report: usize| finish_spans[report * finish_spans.len() / reports.len()];
   let mut run_inputs = Vec::with_capacity(session.runs.len());
   for span in 0..spans {
     let limit = target as i64 * (span as i64 + 1) / spans as i64;
@@ -678,7 +720,7 @@ fn write_task_log(
       log.push(&last)?;
     }
     if let Some(run) = session.runs.get(span) {
-      if run.end == RunEnd::Finished {
+      if run.end.has_finish_fact() {
         let event_id = plan_id(rng);
         let finished_at = UtcDateTime::parse(&log.next_stamp()).expect("an event stamp parses");
         log.push(&control_events::build_control_event(
@@ -915,6 +957,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
   }
   write_imported_chat(staging)?;
   write_marker_seed(staging)?;
+  write_live_runs(staging, &plan)?;
   let manifest = Manifest {
     seed,
     session_count: sessions,
@@ -959,36 +1002,17 @@ fn write_imported_chat(staging: &Path) -> Result<()> {
   fs::write(&path, format!("{line}\n")).with_context(|| format!("cannot write {}", path.display()))
 }
 
-/// The runs of the task-tree home `home` whose record has no `ended_at`, as `(session, run)` pairs in the manifest's
-/// session order and each session's run-name order. The lab attaches a live process to each of them.
-pub fn unended_runs(home: &Path) -> Result<Vec<(String, String)>> {
-  let manifest = Manifest::read(home)?;
-  if manifest.shape != Shape::TaskTree {
-    bail!("{} holds a {:?} home; only a task-tree home has runs to list", home.display(), manifest.shape);
-  }
-  let mut runs = Vec::new();
-  for listed in &manifest.sessions {
-    let runs_dir = layout::runs_dir(&home.join(&listed.id));
-    if !runs_dir.is_dir() {
-      continue;
-    }
-    let mut names = fs::read_dir(&runs_dir)
-      .with_context(|| format!("cannot list {}", runs_dir.display()))?
-      .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
-      .collect::<std::io::Result<Vec<String>>>()
-      .with_context(|| format!("cannot list {}", runs_dir.display()))?;
-    names.sort();
-    for name in names {
-      let path = runs_dir.join(&name).join(run_records::METADATA_NAME);
-      let record: Value =
-        serde_json::from_str(&fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?)
-          .with_context(|| format!("{} is not JSON", path.display()))?;
-      if record["ended_at"].is_null() {
-        runs.push((listed.id.clone(), name));
-      }
-    }
-  }
-  Ok(runs)
+/// Writes `live-runs.txt` into `staging`: one `<session> <run>` line for each live run of `plan`.
+fn write_live_runs(staging: &Path, plan: &HomePlan) -> Result<()> {
+  let text: String = plan
+    .sessions
+    .iter()
+    .flat_map(|session| {
+      session.runs.iter().filter(|run| run.end == RunEnd::Live).map(move |run| format!("{} {}\n", session.id, run.id))
+    })
+    .collect();
+  let path = staging.join(LIVE_RUNS_NAME);
+  fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// Returns the task-tree home `home` to its generated state: the marker, every session's file times, and the worktrees

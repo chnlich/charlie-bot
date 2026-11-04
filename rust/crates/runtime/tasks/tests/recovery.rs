@@ -957,6 +957,36 @@ async fn a_drained_worker_run_lands_its_result_and_raw_end_time() -> anyhow::Res
   Ok(())
 }
 
+/// A drained run whose log ends in a stored rate-limit result lands that result as its failure. The node pass succeeds,
+/// so the boot does not replay the same result as a fault at every later boot.
+#[tokio::test]
+async fn a_drained_worker_run_with_a_stored_rate_limit_result_lands_it_as_failed() -> anyhow::Result<()> {
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let stack = Stack::start("exit 0").await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
+  stack.queue_run(&worker.id, "run-limited", RunKind::Work).await?;
+  stack.launch(&worker.id, "run-limited", 424_902, "1-424002").await?;
+  let run_dir = stack.store().run_dir(&worker.id, "run-limited");
+  std::fs::create_dir_all(&run_dir)?;
+  std::fs::write(
+    run_dir.join(RAW_LOG_NAME),
+    "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"api_error_status\":429,\
+     \"result\":\"API Error: Request rejected (429) \u{b7} No deployments available\"}\n",
+  )?;
+
+  stack.node_pass(&worker.id).await?;
+  assert!(!log.text().contains("task_recovery_node_failed"), "the stored result is the run's outcome, not a fault");
+  let run = stack.store().read_run_sync(&worker.id, "run-limited")?.expect("the drained run is recorded");
+  assert!(run.ended_at.is_some(), "the drain lands an end time");
+  assert_eq!(
+    run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-limited")?,
+    Some(RunOutcomeKind::Failed)
+  );
+  stack.node_pass(&worker.id).await?;
+  Ok(())
+}
+
 const REPO: &str = "/synthetic/repo";
 /// A successful work run with real repo, branch and worktree provenance.
 async fn finished_work_run(

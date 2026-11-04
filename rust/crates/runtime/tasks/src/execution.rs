@@ -2135,10 +2135,14 @@ impl TaskExecutionAdapter {
         Ok(())
       })
     }));
+    // A drained run's process has ended, so the quota or rate-limit result its log replays is the run's final outcome.
+    // Failing the boot pass on it would repeat at every boot, since the run never lands an outcome.
+    let drained = !is_alive();
     let (exit_code, error_text) = match worker.resume(is_alive, None).await {
       Ok(code) => (code, String::new()),
       Err(error) => {
-        if error.downcast_ref::<charliebot_agents::transport::final_stdout::GuardError>().is_none() {
+        let stored_outcome = drained && error.downcast_ref::<crate::worker::QuotaExhaustedError>().is_some();
+        if !stored_outcome && error.downcast_ref::<charliebot_agents::transport::final_stdout::GuardError>().is_none() {
           return Err(error);
         }
         tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_resume_failed");

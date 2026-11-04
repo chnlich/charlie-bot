@@ -240,12 +240,17 @@ A lead keeps only coordination state and small material in its context: each lat
   A skill file alone can exceed 16,000 characters.
   A count would then hand every later read to a worker.
 - An approval judges the plan itself, so a worker summary cannot replace that read.
-- When you need large material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
-  The worker's report then replaces the material in your context.
+- When you need large material as a lead, hand the read to a subagent (the `Agent` tool) or to a repo-less worker with `--task-type script-run`.
+  Its report then replaces the material in your context.
+- A subagent runs inside your turn, and the turn waits for its report.
+  A worker runs in its own session, and its report wakes you in a later turn.
+- Give a subagent each read whose report answers the user's current question.
+  Give a worker each read that the user does not wait on.
+- When your tools lack `Agent`, a script-run worker takes every large read.
 - A read handed to a worker is one of the `## Requester Words` kinds of work in `charliebot delegate --help`: carry that section, and the CLI checks each quote.
 - Large material is a read that does not fit the turn's remaining total.
 - When a capped read cuts off a part that you need, treat that part as large material.
-  That part then reaches you in the worker's report.
+  That part then reaches you in the report of the subagent or worker that reads it.
 - Large material includes these examples:
   - a long log;
   - a full diff;

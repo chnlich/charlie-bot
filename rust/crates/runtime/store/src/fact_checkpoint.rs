@@ -32,7 +32,9 @@ use crate::compact::CompactValue;
 use crate::control_events::sha256_bytes_hex;
 use crate::event_types::{ChatEvent, FileIdentity, SharedChatEvent};
 use crate::run_facts::RunFacts;
-use crate::task_tree_state::{EventIdIndex, LivePromptChanges, NodeFacts, PrefixIndex, TaskFacts, event_id_hash};
+use crate::task_tree_state::{
+  EventIdIndex, LineDecoder, LivePromptChanges, NodeFacts, PrefixIndex, TaskFacts, event_id_hash,
+};
 use crate::{StoreError, StoreResult};
 
 /// The format version of the checkpoint file. A file of another version is not read.
@@ -105,7 +107,7 @@ impl FactCheckpoint {
 
   /// The checkpoint a file's bytes hold, with the byte offset where its facts line begins, or `None` when the bytes
   /// are not a checkpoint of this version or do not hold the sections their header names.
-  pub(crate) fn parse(bytes: &Arc<FileBytes>) -> Option<ParsedCheckpoint> {
+  pub(crate) fn parse(bytes: &Arc<FileBytes>, decode: LineDecoder) -> Option<ParsedCheckpoint> {
     let header_end = bytes.iter().position(|byte| *byte == b'\n')?;
     let value: Value = serde_json::from_slice(&bytes[..header_end]).ok()?;
     let object = value.as_object()?;
@@ -156,6 +158,7 @@ impl FactCheckpoint {
       lines_end,
       table_start,
       events: checkpoint.index_events,
+      decode,
     });
     Some(ParsedCheckpoint { checkpoint, facts: NodeFacts { task: Ok(facts) }, runs, prompt_changes })
   }

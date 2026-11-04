@@ -199,7 +199,7 @@ impl Store {
         return Ok(None);
       }
     };
-    let Some(parsed) = FactCheckpoint::parse(&bytes) else {
+    let Some(parsed) = FactCheckpoint::parse(&bytes, checkpoint_line) else {
       return Ok(None);
     };
     let started = Instant::now();
@@ -323,7 +323,7 @@ impl Store {
         return Ok(None);
       }
     };
-    let Some(parsed) = FactCheckpoint::parse(&bytes) else {
+    let Some(parsed) = FactCheckpoint::parse(&bytes, checkpoint_line) else {
       return Ok(None);
     };
     let marks = self.archive_marks(session_id)?;

@@ -65,6 +65,10 @@ pub(crate) struct EventIdBucket {
   collisions: Option<Vec<usize>>,
 }
 
+/// One checkpoint line decoded to the value the fold keeps. The checkpoint writer owns the line format, so it hands
+/// its decoder to the readers instead of either reader depending on the other.
+pub(crate) type LineDecoder = fn(&[u8], &crate::compact::ParseKeys) -> Option<CompactValue>;
+
 /// One checkpoint's event lines and the sorted `(id hash, line offset)` table that points into them.
 #[derive(Debug)]
 pub(crate) struct PrefixIndex {
@@ -75,6 +79,8 @@ pub(crate) struct PrefixIndex {
   /// The table: `events` entries of a little-endian `u64` hash and `u32` line offset, sorted by hash then offset.
   pub(crate) table_start: usize,
   pub(crate) events: usize,
+  /// The checkpoint line format's decoder, supplied by the scan that read the file.
+  pub(crate) decode: LineDecoder,
 }
 
 impl PrefixIndex {
@@ -119,7 +125,7 @@ impl PrefixIndex {
       if value != hash {
         return None;
       }
-      let event = crate::fact_scan::checkpoint_line(self.line_at(entry), &crate::compact::ParseKeys::default())?;
+      let event = (self.decode)(self.line_at(entry), &crate::compact::ParseKeys::default())?;
       if event.get("id").and_then(CompactValue::as_str) == Some(id) {
         return Some(Arc::new(event));
       }
@@ -236,10 +242,7 @@ struct IndexSeed;
 
 impl IndexSeed {
   fn parse(prefix: &PrefixIndex) -> Vec<SharedChatEvent> {
-    let lines = crate::ndjson::split_lines_of(
-      &prefix.bytes[prefix.lines_start..prefix.lines_end],
-      &crate::fact_scan::checkpoint_line,
-    );
+    let lines = crate::ndjson::split_lines_of(&prefix.bytes[prefix.lines_start..prefix.lines_end], &prefix.decode);
     let mut seen = HashSet::with_capacity(lines.len());
     let mut events = Vec::with_capacity(prefix.events);
     for event in lines {

@@ -2256,3 +2256,34 @@ async fn a_read_after_an_operator_close_leaves_the_task_archived() {
 
   assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "archived");
 }
+
+/// A closed task's automatic completion refuses from the facts it already folded, before the blocker check. That check
+/// builds the home-wide task index on its first use, which a boot replay of a closed task's run must not pay.
+#[tokio::test]
+async fn automatic_completion_of_a_closed_task_refuses_without_building_the_task_index() {
+  let h = CompletionHarness::new();
+  let task = h
+    .create_with_task(
+      "closed-auto",
+      None,
+      TaskProfile::Worker,
+      "Closed worker",
+      TaskSpec { task_type: Some(TaskType::QuickEdit), ..TaskSpec::default() },
+    )
+    .await;
+  h.register_record(new_run(&task.id, "work-run")).await;
+  // The finish closes the worker task through the automatic path, as a boot replay then finds it closed.
+  h.finish(&task.id, "work-run", RunOutcomeKind::Success).await;
+  assert_eq!(h.base.store.task_state(&task.id).unwrap(), "completed");
+  let builds_before = h.base.store.task_tree_index_build_count();
+  let result =
+    h.completion.evaluate_automatic_completion(&task.id, "work-run", None, None, Some("second-close"), None).await;
+  assert!(
+    matches!(result, Err(StoreError::Conflict(blockers)) if blockers == [format!("task {} is no longer open", task.id)])
+  );
+  assert_eq!(
+    h.base.store.task_tree_index_build_count(),
+    builds_before,
+    "the refusal answers from the folded facts without the blocker check's index build"
+  );
+}

@@ -1200,12 +1200,18 @@ mod tests {
     // The state, its run facts and its task facts as one comparable value. Each read runs on a fresh store, so its
     // event cache is cold and the whole-log load it may make is counted.
     //
-    // The checkpoint keeps each chat-content line as its id and type, so the facts' event index names the events
-    // without their content; every decision field, the task state and the run facts must match the whole-log fold.
+    // The checkpoint keeps each chat-content line as its id and type, so the facts' event index compares by each
+    // event's id and type; every decision field, the task state and the run facts must match the whole-log fold.
     let state_value = |store: &Store| {
       let state = store.node_state("synthetic").unwrap();
       let mut task = task_value(&store.facts_of("synthetic").unwrap());
-      task.as_object_mut().expect("the task value is an object").remove("events");
+      let id_and_type: Vec<serde_json::Value> = task["events"]
+        .as_array()
+        .expect("the event index is an array")
+        .iter()
+        .map(|event| json!([event["id"], event["type"]]))
+        .collect();
+      task["events"] = json!(id_and_type);
       json!({"state": state.task_state().unwrap(), "runs": runs_value(&state.runs), "task": task})
     };
     let cold_value = |store: &Store| {

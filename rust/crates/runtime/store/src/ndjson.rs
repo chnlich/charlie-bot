@@ -61,6 +61,19 @@ thread_local! {
   static LINE_PARSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// The lines this thread's parsers attempted since the last [`reset_line_parses`]: a test proves that a read parses
+/// only the bytes it must.
+#[cfg(test)]
+pub(crate) fn line_parses() -> u64 {
+  LINE_PARSES.with(std::cell::Cell::get)
+}
+
+/// Zero the line-parse count of this thread.
+#[cfg(test)]
+pub(crate) fn reset_line_parses() {
+  LINE_PARSES.with(|count| count.set(0));
+}
+
 /// Parse every physical line into the compact event form, including a final line without `\n`.
 ///
 /// The file maps once and memchr supplies the line boundaries (an mmap plus zero-copy line slices); no

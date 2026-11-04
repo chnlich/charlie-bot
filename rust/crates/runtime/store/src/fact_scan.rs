@@ -27,7 +27,7 @@ use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use crate::compact::{CompactValue, KeySource, ObjectEntry, ParseKeys};
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::WHOLE_LOG_LOGGED_BYTES;
-use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint};
+use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint, ParsedCheckpoint};
 use crate::ndjson;
 use crate::run_facts::RunFacts;
 use crate::task_tree::{PromptScope, fold_appended_history, fold_scanned_history, newest_prompt_change};
@@ -63,6 +63,8 @@ pub struct ScannedLiveFacts {
   read_bytes: u64,
   /// The bytes the scan read from the fact checkpoint, 0 on a full scan.
   checkpoint_bytes: u64,
+  /// The live-log offset the checkpoint covered. A tail of an eighth of it or more is cheaper rescanned whole.
+  resume_offset: u64,
 }
 
 impl LivePromptChanges {
@@ -74,13 +76,6 @@ impl LivePromptChanges {
   }
 
   /// The newest prompt change of each scope across a checkpoint's kept lines and the appended tail.
-  fn of_combined(prefix: &[SharedChatEvent], tail: &[SharedChatEvent]) -> Self {
-    let mut changes = Self::of(prefix);
-    changes.subtree = newest_prompt_change(tail, PromptScope::Subtree).or(changes.subtree);
-    changes.node = newest_prompt_change(tail, PromptScope::Node).or(changes.node);
-    changes
-  }
-
   pub(crate) fn newest(&self, scope: PromptScope) -> Option<SharedChatEvent> {
     match scope {
       PromptScope::Subtree => self.subtree.clone(),
@@ -128,10 +123,11 @@ impl Store {
   /// when the archive does not hold `archive_offset` events, the session has no live log, or the log or the archive
   /// offset changed during the scan; the node's reads then load the log themselves.
   ///
-  /// A checkpoint that still covers the log's prefix answers the scan from the kept lines it holds and the bytes past
-  /// its offset, so the scan parses the checkpoint's fraction of the log and folds the same events a full fold folds.
-  /// A checkpoint that does not cover this log leaves the full scan to run, as a missing one does. Either way the scan
-  /// leaves a checkpoint behind for the next boot (unless its tail was too small to justify a rewrite).
+  /// A checkpoint that still covers the log's prefix answers the scan from the facts it holds and the bytes past its
+  /// offset, so the scan reads the folded state and the appended tail instead of the history the state covers. A
+  /// checkpoint that does not cover this log leaves the full scan to run, as a missing one does; a tail of an eighth of
+  /// the covered offset or more also takes the full scan, which rewrites the checkpoint, so a steady state of small
+  /// appends keeps one checkpoint read per boot and the next full fold amortizes the write.
   pub fn scan_live_facts(&self, session_id: &str) -> StoreResult<Option<ScannedLiveFacts>> {
     let archived = self.read_archive_offset(session_id)?;
     let path = self.chat_events_path(session_id);
@@ -140,7 +136,10 @@ impl Store {
     };
     let archive_marks = self.archive_marks(session_id)?;
     if let Some(scanned) = self.scan_from_checkpoint(session_id, &path, identity, archived, archive_marks.clone())? {
-      return Ok(Some(scanned));
+      let appended = scanned.read_bytes;
+      if appended == 0 || appended.saturating_mul(8) < scanned.resume_offset.max(1 << 20) {
+        return Ok(Some(scanned));
+      }
     }
     let Some(archive) = self.scan_archive_events(session_id, archived)? else {
       return Ok(None);
@@ -156,7 +155,17 @@ impl Store {
     let (facts, runs) = fold_scanned_history(&archive, &events, archived)?;
     let prompt_changes = LivePromptChanges::of(&events);
     let kept: Vec<&SharedChatEvent> = archive.iter().chain(events.iter()).collect();
-    self.leave_checkpoint(session_id, FactCheckpoint::new(archived, events.len(), archive_marks, file), kept);
+    let checkpoint = crate::fact_checkpoint::CheckpointFile::new(crate::fact_checkpoint::CheckpointFold {
+      archived,
+      covered: events.len(),
+      archive_marks: &archive_marks,
+      file,
+      facts: &facts,
+      runs: &runs,
+      prompt_changes: &prompt_changes,
+      kept: &kept,
+    });
+    self.leave_checkpoint(session_id, checkpoint);
     Ok(Some(ScannedLiveFacts {
       identity,
       archived,
@@ -166,10 +175,11 @@ impl Store {
       prompt_changes,
       read_bytes: file.len() as u64,
       checkpoint_bytes: 0,
+      resume_offset: file.len() as u64,
     }))
   }
 
-  /// The scan of a log whose checkpoint still covers its prefix: the checkpoint's kept lines and the bytes past its
+  /// The scan of a log whose checkpoint still covers its prefix: the checkpoint's folded facts and the bytes past its
   /// offset, folded as the full scan folds them. `None` when no checkpoint is there or it does not cover this log.
   fn scan_from_checkpoint(
     &self,
@@ -180,45 +190,35 @@ impl Store {
     archive_marks: Vec<ArchiveMark>,
   ) -> StoreResult<Option<ScannedLiveFacts>> {
     let checkpoint_path = self.fact_checkpoint_path(session_id);
-    let raw = match std::fs::read(&checkpoint_path) {
-      Ok(raw) => raw,
+    let bytes = match fsutil::read_or_map_file(&checkpoint_path) {
+      Ok(Some(bytes)) => Arc::new(bytes),
+      Ok(None) => return Ok(None),
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
       Err(error) => {
         tracing::warn!(target: "charliebot_store", path = %checkpoint_path.display(), error = %error, "fact_checkpoint_unreadable");
         return Ok(None);
       }
     };
-    let Some((checkpoint, events_offset)) = FactCheckpoint::parse(&raw) else {
+    let Some(parsed) = FactCheckpoint::parse(&bytes) else {
       return Ok(None);
     };
     let started = Instant::now();
     let mapped = read_log(path)?;
     let file: &[u8] = mapped.as_deref().unwrap_or(&[]);
-    if file.len() as u64 != identity.size() || !checkpoint.covers(file, archived, &archive_marks) {
+    if file.len() as u64 != identity.size() || !parsed.checkpoint.covers(file, archived, &archive_marks) {
       return Ok(None);
     }
-    let prefix: Vec<SharedChatEvent> =
-      ndjson::split_lines_of(&raw[events_offset..], &checkpoint_line).into_iter().map(Arc::new).collect();
-    if prefix.len() != checkpoint.archived + checkpoint.covered {
-      return Ok(None);
-    }
-    let offset = checkpoint.offset as usize;
+    let offset = parsed.checkpoint.offset as usize;
     let tail: Vec<SharedChatEvent> =
       ndjson::split_lines_of(&file[offset..], &scan_line).into_iter().map(Arc::new).collect();
-    let checkpoint_bytes = raw.len() as u64;
+    let checkpoint_bytes = bytes.len() as u64;
     log_large_scan(path, identity.size(), (file.len() - offset) as u64, checkpoint_bytes, started);
     if FileIdentity::read(path)? != Some(identity) || self.read_archive_offset(session_id)? != archived {
       return Ok(None);
     }
-    let (covered, facts, runs) = fold_checkpoint_and_tail(&prefix, &tail, &checkpoint, archived)?;
-    let prompt_changes = LivePromptChanges::of_combined(&prefix, &tail);
-    // Rewrite the checkpoint only once the appended tail is a sizeable share of it, so a steady state of small appends
-    // keeps one checkpoint read per boot and the next full fold amortizes the write.
-    let appended = identity.size().saturating_sub(checkpoint.offset);
-    if appended > 0 && appended.saturating_mul(8) >= checkpoint.offset.max(1 << 20) {
-      let kept: Vec<&SharedChatEvent> = prefix.iter().chain(tail.iter()).collect();
-      self.leave_checkpoint(session_id, FactCheckpoint::new(archived, covered, archive_marks, file), kept);
-    }
+    let covered = parsed.checkpoint.covered + tail.len();
+    let resume_offset = parsed.checkpoint.offset;
+    let (facts, runs, prompt_changes) = fold_checkpoint_and_tail(parsed, &tail, archived)?;
     Ok(Some(ScannedLiveFacts {
       identity,
       archived,
@@ -226,17 +226,18 @@ impl Store {
       facts: Arc::new(facts),
       runs: Arc::new(runs),
       prompt_changes,
-      read_bytes: appended,
+      read_bytes: (file.len() - offset) as u64,
       checkpoint_bytes,
+      resume_offset,
     }))
   }
 
-  /// Write the checkpoint these kept events make, logging a failure rather than failing the scan: the file only makes
-  /// the next boot faster, and its absence costs that boot a full scan and nothing else.
-  fn leave_checkpoint(&self, session_id: &str, checkpoint: FactCheckpoint, kept: Vec<&SharedChatEvent>) {
-    let text = checkpoint.to_bytes(&crate::fact_checkpoint::encode_events(kept));
+  /// Write the checkpoint a scan left, logging a failure rather than failing the scan: the file only makes the next
+  /// boot faster, and its absence costs that boot a full scan and nothing else.
+  fn leave_checkpoint(&self, session_id: &str, checkpoint: Option<crate::fact_checkpoint::CheckpointFile>) {
+    let Some(checkpoint) = checkpoint else { return };
     let path = self.fact_checkpoint_path(session_id);
-    if let Err(error) = crate::fact_checkpoint::write(&path, &text) {
+    if let Err(error) = checkpoint.write(&path) {
       tracing::warn!(target: "charliebot_store", session_id, path = %path.display(), error = %error, "fact_checkpoint_write_failed");
     }
   }
@@ -313,15 +314,16 @@ impl Store {
   ) -> StoreResult<Option<Arc<NodeFacts>>> {
     let path = self.chat_events_path(session_id);
     let checkpoint_path = self.fact_checkpoint_path(session_id);
-    let raw = match std::fs::read(&checkpoint_path) {
-      Ok(raw) => raw,
+    let bytes = match fsutil::read_or_map_file(&checkpoint_path) {
+      Ok(Some(bytes)) => Arc::new(bytes),
+      Ok(None) => return Ok(None),
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
       Err(error) => {
         tracing::warn!(target: "charliebot_store", path = %checkpoint_path.display(), error = %error, "fact_checkpoint_unreadable");
         return Ok(None);
       }
     };
-    let Some((checkpoint, events_offset)) = FactCheckpoint::parse(&raw) else {
+    let Some(parsed) = FactCheckpoint::parse(&bytes) else {
       return Ok(None);
     };
     let marks = self.archive_marks(session_id)?;
@@ -329,22 +331,17 @@ impl Store {
       return Ok(None);
     };
     let file: &[u8] = &mapped;
-    if file.len() as u64 != identity.size() || !checkpoint.covers(file, archived, &marks) || should_stop() {
+    if file.len() as u64 != identity.size() || !parsed.checkpoint.covers(file, archived, &marks) || should_stop() {
       return Ok(None);
     }
-    let prefix: Vec<SharedChatEvent> =
-      ndjson::split_lines_of(&raw[events_offset..], &checkpoint_line).into_iter().map(Arc::new).collect();
-    if prefix.len() != checkpoint.archived + checkpoint.covered {
-      return Ok(None);
-    }
-    let offset = checkpoint.offset as usize;
+    let offset = parsed.checkpoint.offset as usize;
     let tail: Vec<SharedChatEvent> =
       ndjson::split_lines_of(&file[offset..], &scan_line).into_iter().map(Arc::new).collect();
     if should_stop() || FileIdentity::read(&path)? != Some(identity) {
       return Ok(None);
     }
-    let (covered, facts, runs) = fold_checkpoint_and_tail(&prefix, &tail, &checkpoint, archived)?;
-    let prompt_changes = LivePromptChanges::of_combined(&prefix, &tail);
+    let covered = parsed.checkpoint.covered + tail.len();
+    let (facts, runs, prompt_changes) = fold_checkpoint_and_tail(parsed, &tail, archived)?;
     let facts = Arc::new(facts);
     let runs = Arc::new(runs);
     self.insert_facts(FoldedNodeFacts {
@@ -396,21 +393,25 @@ fn read_log(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
   }
 }
 
-/// Fold a checkpoint's kept lines and the appended tail exactly as a full scan folds the whole history: the archived
-/// events at their positions, the live prefix at the archive offset, and the tail past it. Returns the live event
-/// count the fold covers and the facts.
+/// Fold a checkpoint's facts and the appended tail exactly as a full scan folds the whole history: the covered prefix
+/// the checkpoint's facts already fold, then the tail past its offset. Returns the facts, the run facts and the newest
+/// prompt fact of each scope.
 fn fold_checkpoint_and_tail(
-  prefix: &[SharedChatEvent],
+  parsed: ParsedCheckpoint,
   tail: &[SharedChatEvent],
-  checkpoint: &FactCheckpoint,
   archived: usize,
-) -> StoreResult<(usize, NodeFacts, RunFacts)> {
-  let mut facts = NodeFacts::default();
-  let mut runs = RunFacts::default();
-  fold_appended_history(&mut facts, &mut runs, &prefix[..checkpoint.archived], 0)?;
-  fold_appended_history(&mut facts, &mut runs, &prefix[checkpoint.archived..], archived)?;
+) -> StoreResult<(NodeFacts, RunFacts, LivePromptChanges)> {
+  let ParsedCheckpoint { checkpoint, mut facts, mut runs, prompt_changes } = parsed;
+  let mut changes = prompt_changes;
+  changes.subtree = newest_prompt_change(tail, PromptScope::Subtree).or(changes.subtree);
+  changes.node = newest_prompt_change(tail, PromptScope::Node).or(changes.node);
   fold_appended_history(&mut facts, &mut runs, tail, archived + checkpoint.covered)?;
-  Ok((checkpoint.covered + tail.len(), facts, runs))
+  #[cfg(test)]
+  {
+    // The test-only visit count a whole-history fold accumulates; a checkpoint starts from the count its prefix covers.
+    runs.observed_events = archived + checkpoint.covered + tail.len();
+  }
+  Ok((facts, runs, changes))
 }
 
 /// Logs a fact scan of a log of [`WHOLE_LOG_LOGGED_BYTES`] or more with its file and wall time, so a slow boot names
@@ -1042,6 +1043,44 @@ mod tests {
       let scan = store.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
       assert_eq!(scan.read_bytes(), total, "the reference scan reads the whole log");
       scan
+    };
+    assert_eq!(scanned_value(&resumed), scanned_value(&full_scan));
+  }
+
+  /// A matching checkpoint's read parses the appended tail's lines only, not the covered history's; the event index
+  /// still answers a membership test from its table, so an appended line that repeats a covered id folds as the whole
+  /// log folds it.
+  #[tokio::test]
+  async fn a_matching_checkpoint_parses_only_the_appended_tail() {
+    let (home, writer) = make_test_store();
+    let first_leg = append_first_leg(&writer).await;
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    let first = open();
+    let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
+    assert!(first.seal_scanned_facts("synthetic", &scan).unwrap());
+    append_second_leg(&writer).await;
+    // A line whose id the covered prefix already holds contributes no type-specific fact, as a whole-log fold finds.
+    writer
+      .append_chat_event(
+        "synthetic",
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-repeat", "outcome": "failed"}),
+      )
+      .await
+      .unwrap();
+    let total = std::fs::metadata(writer.chat_events_path("synthetic")).unwrap().len();
+
+    crate::ndjson::reset_line_parses();
+    let resumed = open().scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
+    assert_eq!(resumed.read_bytes(), total - first_leg, "the scan reads only the appended bytes");
+    // Six appended lines, plus the one covered line that the repeated id's table entry points at. The covered history's
+    // other lines stay unparsed.
+    assert_eq!(crate::ndjson::line_parses(), 7, "the read parses its appended lines and one table-hit covered line");
+    assert!(!resumed.facts.task().unwrap().run_outcomes.contains_key("run-repeat"), "the repeated id folds once");
+
+    let full_scan = {
+      std::fs::remove_file(writer.fact_checkpoint_path("synthetic")).unwrap();
+      let store = open();
+      store.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan")
     };
     assert_eq!(scanned_value(&resumed), scanned_value(&full_scan));
   }

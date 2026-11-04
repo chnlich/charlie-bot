@@ -131,6 +131,12 @@ pub enum FileBytes {
   Mapped(Mmap),
 }
 
+impl std::fmt::Debug for FileBytes {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.debug_struct("FileBytes").field("len", &self.len()).finish_non_exhaustive()
+  }
+}
+
 impl std::ops::Deref for FileBytes {
   type Target = [u8];
 

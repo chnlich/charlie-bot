@@ -1,10 +1,11 @@
 //! Task facts and cache records shared by Store and task-tree logic.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Index;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
+
+use charliebot_core::fsutil::FileBytes;
 
 use crate::compact::CompactValue;
 use crate::event_types::{ChatEvent, FileIdentity, SharedChatEvent};
@@ -42,10 +43,20 @@ pub struct TaskFacts {
 }
 
 /// Insertion-ordered references to events, indexed by a content hash so the index does not duplicate each event id.
+///
+/// A checkpoint answers most of an index without parsing it: [`EventIdIndex::from_prefix`] keeps the checkpoint's event
+/// lines and the hash table that points into them, so a membership test costs a binary search and one line's parse. The
+/// whole prefix is parsed only when a reader needs a reference to each event ([`EventIdIndex::values`],
+/// [`EventIdIndex::iter`], [`EventIdIndex::get`] and the `Index` form), so a boot that folds a checkpoint plus a small
+/// appended tail never pays for the covered history.
 #[derive(Clone, Debug, Default)]
 pub struct EventIdIndex {
   pub(crate) by_hash: HashMap<u64, EventIdBucket>,
   ordered: Vec<SharedChatEvent>,
+  /// The checkpoint's covered events, unparsed until a reader asks for them by reference.
+  prefix: Option<Arc<PrefixIndex>>,
+  /// The prefix's events, parsed on the first reference-based read.
+  materialized: OnceLock<Vec<SharedChatEvent>>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,13 +65,85 @@ pub(crate) struct EventIdBucket {
   collisions: Option<Vec<usize>>,
 }
 
+/// One checkpoint's event lines and the sorted `(id hash, line offset)` table that points into them.
+#[derive(Debug)]
+pub(crate) struct PrefixIndex {
+  pub(crate) bytes: Arc<FileBytes>,
+  /// The event lines, one per kept event in insertion order.
+  pub(crate) lines_start: usize,
+  pub(crate) lines_end: usize,
+  /// The table: `events` entries of a little-endian `u64` hash and `u32` line offset, sorted by hash then offset.
+  pub(crate) table_start: usize,
+  pub(crate) events: usize,
+}
+
+impl PrefixIndex {
+  /// The line a table entry at `entry` points at.
+  fn line_at(&self, entry: usize) -> &[u8] {
+    let at = self.table_start + entry * ENTRY_BYTES;
+    let offset =
+      u32::from_le_bytes(self.bytes[at + 8..at + 12].try_into().expect("a table entry holds four offset bytes"));
+    let start = self.lines_start + offset as usize;
+    let end = self.bytes[start..].iter().position(|byte| *byte == b'\n').map_or(self.lines_end, |at| start + at);
+    &self.bytes[start..end]
+  }
+
+  /// The table entry at `at`, or `None` past the last one.
+  fn entry(&self, at: usize) -> Option<(u64, usize)> {
+    if at >= self.events {
+      return None;
+    }
+    let offset = self.table_start + at * ENTRY_BYTES;
+    let hash = u64::from_le_bytes(self.bytes[offset..offset + 8].try_into().expect("a table entry holds a hash"));
+    Some((hash, at))
+  }
+
+  /// The first table entry whose hash is at least `hash`.
+  fn lower_bound(&self, hash: u64) -> usize {
+    let (mut low, mut high) = (0, self.events);
+    while low < high {
+      let middle = (low + high) / 2;
+      match self.entry(middle) {
+        Some((value, _)) if value < hash => low = middle + 1,
+        _ => high = middle,
+      }
+    }
+    low
+  }
+
+  /// The event whose id is `id`, found through the table without parsing the other lines.
+  fn find(&self, id: &str) -> Option<SharedChatEvent> {
+    let hash = event_id_hash(id);
+    let mut at = self.lower_bound(hash);
+    while let Some((value, entry)) = self.entry(at) {
+      if value != hash {
+        return None;
+      }
+      let event = crate::fact_scan::checkpoint_line(self.line_at(entry), &crate::compact::ParseKeys::default())?;
+      if event.get("id").and_then(CompactValue::as_str) == Some(id) {
+        return Some(Arc::new(event));
+      }
+      at += 1;
+    }
+    None
+  }
+}
+
+/// One table entry's byte length.
+const ENTRY_BYTES: usize = 12;
+
 impl EventIdIndex {
   pub fn len(&self) -> usize {
-    self.ordered.len()
+    self.prefix.as_ref().map_or(0, |prefix| prefix.events) + self.ordered.len()
   }
 
   pub fn is_empty(&self) -> bool {
-    self.ordered.is_empty()
+    self.len() == 0
+  }
+
+  /// The index a checkpoint's covered events make, unparsed until a reference-based read asks for them.
+  pub(crate) fn from_prefix(index: PrefixIndex) -> Self {
+    Self { prefix: Some(Arc::new(index)), ..Self::default() }
   }
 
   pub fn get(&self, id: &str) -> Option<&SharedChatEvent> {
@@ -68,24 +151,44 @@ impl EventIdIndex {
   }
 
   pub(crate) fn get_hashed(&self, id: &str, hash_id: impl FnOnce(&str) -> u64) -> Option<&SharedChatEvent> {
-    let bucket = self.by_hash.get(&hash_id(id))?;
-    let first = &self.ordered[bucket.first];
-    if event_id(first) == id {
-      return Some(first);
+    if let Some(bucket) = self.by_hash.get(&hash_id(id)) {
+      let first = &self.ordered[bucket.first];
+      if event_id(first) == id {
+        return Some(first);
+      }
+      if let Some(collisions) = bucket.collisions.as_ref()
+        && let Some(found) = collisions.iter().map(|index| &self.ordered[*index]).find(|event| event_id(event) == id)
+      {
+        return Some(found);
+      }
     }
-    bucket.collisions.as_ref()?.iter().map(|index| &self.ordered[*index]).find(|event| event_id(event) == id)
+    self.prefix_events().iter().find(|event| event_id(event) == id)
   }
 
+  /// Whether an event with this id is in the index. A checkpoint's prefix answers from its table, without parsing.
   pub fn contains_key(&self, id: &str) -> bool {
+    if let Some(prefix) = self.prefix.as_ref()
+      && prefix.find(id).is_some()
+    {
+      return true;
+    }
     self.get(id).is_some()
   }
 
   pub fn iter(&self) -> impl Iterator<Item = (&str, &SharedChatEvent)> {
-    self.ordered.iter().map(|event| (event_id(event), event))
+    self.values().map(|event| (event_id(event), event))
   }
 
   pub fn values(&self) -> impl Iterator<Item = &SharedChatEvent> {
-    self.ordered.iter()
+    self.prefix_events().iter().chain(self.ordered.iter())
+  }
+
+  /// The checkpoint's covered events in insertion order, parsed on the first reference-based read.
+  fn prefix_events(&self) -> &[SharedChatEvent] {
+    self.materialized.get_or_init(|| match self.prefix.as_ref() {
+      Some(prefix) => IndexSeed::parse(prefix),
+      None => Vec::new(),
+    })
   }
 
   pub(crate) fn insert(&mut self, event: SharedChatEvent) -> bool {
@@ -94,6 +197,12 @@ impl EventIdIndex {
 
   pub(crate) fn insert_hashed(&mut self, event: SharedChatEvent, hash_id: impl FnOnce(&str) -> u64) -> bool {
     let id = event_id(&event);
+    // The checkpoint's covered events came first, so an id they hold is a repeat.
+    if let Some(prefix) = self.prefix.as_ref()
+      && prefix.find(id).is_some()
+    {
+      return false;
+    }
     let hash = hash_id(id);
     let index = self.ordered.len();
     match self.by_hash.get_mut(&hash) {
@@ -121,6 +230,28 @@ impl EventIdIndex {
   }
 }
 
+/// A prefix's events parsed into the index form, once: each kept line with a string id, first occurrence of an id only,
+/// exactly as the whole-log fold inserts them.
+struct IndexSeed;
+
+impl IndexSeed {
+  fn parse(prefix: &PrefixIndex) -> Vec<SharedChatEvent> {
+    let lines = crate::ndjson::split_lines_of(
+      &prefix.bytes[prefix.lines_start..prefix.lines_end],
+      &crate::fact_scan::checkpoint_line,
+    );
+    let mut seen = HashSet::with_capacity(lines.len());
+    let mut events = Vec::with_capacity(prefix.events);
+    for event in lines {
+      let Some(id) = event.get("id").and_then(CompactValue::as_str) else { continue };
+      if seen.insert(id.to_string()) {
+        events.push(Arc::new(event));
+      }
+    }
+    events
+  }
+}
+
 impl Index<&str> for EventIdIndex {
   type Output = ChatEvent;
 
@@ -133,10 +264,18 @@ fn event_id(event: &ChatEvent) -> &str {
   event.get("id").and_then(CompactValue::as_str).expect("event id index only stores events with string ids")
 }
 
-fn event_id_hash(id: &str) -> u64 {
-  let mut hash = DefaultHasher::new();
-  id.hash(&mut hash);
-  hash.finish()
+/// A stable 64-bit FNV-1a hash of an event id.
+///
+/// The checkpoint's sorted table stores these values, so the function must not change between builds: a table written
+/// by one build is read by the next, and a hash that moved would make every lookup miss. That is why the index does
+/// not use `DefaultHasher`, whose algorithm Rust does not promise to keep.
+pub(crate) fn event_id_hash(id: &str) -> u64 {
+  let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+  for byte in id.bytes() {
+    hash ^= u64::from(byte);
+    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+  }
+  hash
 }
 
 /// A node's task facts, folded from the history covered by the store memo.

@@ -157,11 +157,13 @@ where
                   translated.get("type").and_then(Value::as_str) == Some(charliebot_core::event_types::INPUT_DELIVERED);
                 if let Err(error) = handle_event(translated).await {
                   // A run that ended on this event keeps its line in the checkpointed prefix: the event is durable,
-                  // and a replay would append it a second time.
+                  // and a replay would append it a second time. The event's error is the run's ending, so a failed
+                  // checkpoint is logged rather than returned in its place.
                   if event_ended_run(&error)
                     && let Some(writer) = cursor_writer.as_mut()
+                    && let Err(checkpoint_error) = writer.write(line_end + 1)
                   {
-                    writer.write(line_end + 1)?;
+                    tracing::error!(target: "charliebot_agents", error = %checkpoint_error, "raw_cursor_checkpoint_failed");
                   }
                   return Err(error.into());
                 }
@@ -684,6 +686,32 @@ mod tests {
     .await
     .unwrap_err();
     assert_eq!(read_raw_cursor(&cursor), 0);
+  }
+
+  #[tokio::test]
+  async fn a_run_ending_event_returns_its_error_when_its_checkpoint_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let cursor = root.path().join("agent.raw.cursor");
+    fs::write(&raw, b"{\"type\":\"result\"}\n").unwrap();
+    // A directory at the cursor path makes the checkpoint write fail.
+    fs::create_dir(&cursor).unwrap();
+    let error = tail_follow_events(
+      &raw,
+      |event| Ok(vec![event]),
+      |_| async { Err(io::Error::other(EventEndedRun)) },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("the event ended the run"), "{error}");
   }
 
   #[tokio::test]

@@ -939,7 +939,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
       let run_dir = layout::runs_dir(&session_dir).join(&run.id);
       fs::create_dir_all(&run_dir).with_context(|| format!("cannot create {}", run_dir.display()))?;
       let record = run_records::run_record_text(&run_record(&id, run, inputs, &worktrees));
-      let path = run_dir.join(run_records::METADATA_NAME);
+      let path = run_dir.join(run_records::RUN_METADATA_NAME);
       fs::write(&path, record).with_context(|| format!("cannot write {}", path.display()))?;
       if run.worktree == Worktree::Present {
         let path = staging.join(WORKTREES_DIR).join(&run.id);

@@ -39,9 +39,7 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 pub use crate::layout::{DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RUNS_DIR_NAME, THREADS_DIR_NAME};
 pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;
-pub const METADATA_NAME: &str = METADATA_FILE_NAME;
 pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
-pub const EVENTS_LOG_NAME: &str = "events.jsonl";
 pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
 pub const CURSOR_NAME: &str = "agent.raw.cursor";
 pub const RUN_EVENTS_NAME: &str = "events.jsonl";

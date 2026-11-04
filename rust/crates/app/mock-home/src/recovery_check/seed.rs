@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED};
 use charliebot_store::layout;
 use charliebot_store::metadata::{HAS_UNREAD, KEEP_WORKTREE_FIELD};
-use charliebot_store::run_records::{METADATA_NAME, RAW_LOG_NAME};
+use charliebot_store::run_records::{RAW_LOG_NAME, RUN_METADATA_NAME};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -274,7 +274,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
           started_at: stamp(index, 2),
           ended_at: Some(stamp(index, 3)),
         });
-        write_json(&runs_dir.join(&first_run).join(METADATA_NAME), &record)?;
+        write_json(&runs_dir.join(&first_run).join(RUN_METADATA_NAME), &record)?;
         write_lines(&runs_dir.join(&first_run).join(RAW_LOG_NAME), &raw_log(&format!("{label}/turn-1"), true))?;
         (uid(&format!("{label}/turn-2")), "manager_turn")
       }
@@ -317,7 +317,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
       started_at: stamp(index, 5),
       ended_at: None,
     });
-    write_json(&runs_dir.join(&run_id).join(METADATA_NAME), &record)?;
+    write_json(&runs_dir.join(&run_id).join(RUN_METADATA_NAME), &record)?;
     write_lines(&runs_dir.join(&run_id).join(RAW_LOG_NAME), &raw_log(label, case.finished))?;
     write_lines(&layout::chat_events_path(&session_dir), &events)?;
     if case.state == RunState::Live {
@@ -348,7 +348,7 @@ fn live_runs(text: &str) -> Result<Vec<LiveRun<'_>>> {
 }
 
 fn record_path(sessions: &Path, session_id: &str, run_id: &str) -> std::path::PathBuf {
-  layout::runs_dir(&sessions.join(session_id)).join(run_id).join(METADATA_NAME)
+  layout::runs_dir(&sessions.join(session_id)).join(run_id).join(RUN_METADATA_NAME)
 }
 
 /// Writes the process `pid` into the live run's record in `sessions`: its pid, its start time from `/proc` and a fresh

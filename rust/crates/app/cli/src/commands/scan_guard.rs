@@ -1,12 +1,15 @@
-//! The `PreToolUse` hook for unbounded scans in Bash commands, for Claude Code and codex. A refused scan is one of six
-//! shell-level forms: one process per session directory; a search from `/`, `/home` or the home directory that neither
-//! limits depth nor prunes the session store; a recursive search of the session store or a parent of it whose file-name
-//! filter reaches run logs; a find that walks the store or a parent of it with no depth limit, alone or with a command
-//! on each file; or one process that reads the run logs of every session through a glob. An argument's quoting does not
-//! change its meaning, so a quoted store path counts as its bare form. Script code inside quotes or heredoc bodies is
-//! not shell, and a relative path resolves against the hook's cwd and the latest `cd`. Two bounded lookups stay
-//! allowed: a loop whose body only tests one session's top-level `metadata.json` with shell builtins, and a glob under
-//! one session id prefix of at least eight hex characters.
+//! The `PreToolUse` hook for unbounded scans in Bash commands, for Claude Code and codex.
+//! A refused scan is one of six shell-level forms. One is one process per session directory.
+//! Another is a search from `/`, `/home` or the home directory that neither limits depth nor
+//! prunes the session store. A third is a recursive search of the session store or a parent of
+//! it whose file-name filter reaches run logs. A fourth is a find that walks the store or a
+//! parent of it with no depth limit. A fifth is that same find with a command on each file.
+//! The last is one process that reads the run logs of every session through a glob.
+//! An argument's quoting does not change its meaning, so a quoted store path counts as its
+//! bare form. Script code inside quotes or heredoc bodies is not shell, and a relative path
+//! resolves against the hook's cwd and the latest `cd`. Two bounded lookups stay allowed. One
+//! is a loop whose body only tests one session's top-level `metadata.json` with shell builtins.
+//! The other is a glob under one session id prefix of at least eight hex characters.
 
 mod shell;
 
@@ -79,9 +82,9 @@ const LOOP_BUILTINS: &[&str] =
 /// The characters that end one command in a loop body, so that each command's first word is found.
 const LOOP_COMMAND_END: &[char] = &[';', '&', '|', '(', ')', '{', '}', '`', '\n'];
 
-/// Text in a loop's item list that reads file contents, reaches below a session directory, or walks the store
-/// recursively: a content reader, a session glob with a path under it, or `ls -R`. A list with any of them reads more
-/// than each session's entry.
+/// Some text in a loop's item list reads more than each session's entry: it reads file contents, reaches below a
+/// session directory, or walks the store recursively. The text is a content reader, a session glob with a path under
+/// it, or `ls -R`.
 const LIST_READS_BELOW: &str = concat!(
   r"\b(?:grep|egrep|fgrep|rg|ag|ack|cat|head|tail|jq|python3?|node|xargs|find|du)\b",
   r#"|\*/[^\s|;&)'"`]"#,
@@ -368,7 +371,7 @@ fn is_option_or_count(word: &str) -> bool {
 }
 
 /// Whether one glob token spans every session and reaches run logs. The token must start at the session store, and
-/// the session directory just under it must be a wildcard: a literal session id, or a prefix long enough to name one
+/// the session directory just under it must be a wildcard. A literal session id, or a prefix long enough to name one
 /// session, is one session's lookup. Under `data/runs/` the run id must be a wildcard too, and the token reaches run
 /// logs when it names the run directory itself or a run-log file, but not `metadata.json`. Elsewhere under the
 /// session wildcard, a name that is a run-log name counts.
@@ -468,8 +471,8 @@ fn enumeration_token(store: &str) -> String {
 }
 
 /// Whether every per-session form the command holds is a bounded metadata loop. A loop of the form
-/// `ls */ | ... | while read id; do [ -f "$id/metadata.json" ] ...; done` lists the store's top level in one process
-/// and only tests one top-level file per session with shell builtins, so its work does not grow with the store's file
+/// `ls */ | ... | while read id; do [ -f "$id/metadata.json" ] ...; done` lists the store's top level in one process.
+/// It only tests one top-level file per session with shell builtins, so its work does not grow with the store's file
 /// contents. The same body on a `for ... in */` list stays refused: that form is also the one-process-per-session
 /// shape. A list that reads contents or reaches below a session directory, and a body that runs any command outside
 /// the builtins, keep the refusal. Any other per-session form left after the bounded loops are masked keeps it too.
@@ -504,8 +507,8 @@ fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
   Ok(!per_file_process_pattern()?.is_match(&masked).map_err(parse_error)?)
 }
 
-/// (a) One process per session directory at the shell level: a `for` loop over an enumeration, an enumeration piped to
-/// `while read`, `xargs -n1` after a store path, or `find <store> -exec`.
+/// (a) One process per session directory at the shell level. The forms are a `for` loop over an enumeration, an
+/// enumeration piped to `while read`, `xargs -n1` after a store path, and `find <store> -exec`.
 fn per_file_process_pattern() -> Result<&'static Regex, String> {
   static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
   PATTERN
@@ -544,8 +547,8 @@ fn metadata_loop_pattern() -> Result<&'static Regex, String> {
     .map_err(Clone::clone)
 }
 
-/// Whether a loop body runs only shell builtins and reads no file inside the shell: a `<` redirection, `read < file`
-/// or `$(< file)`, would read a session's contents with no process to show it.
+/// Whether a loop body runs only shell builtins and reads no file inside the shell. A `<` redirection,
+/// `read < file` or `$(< file)` would read a session's contents with no process to show it.
 fn loop_body_is_builtin(body: &str) -> bool {
   !body.contains('<')
     && body.split(LOOP_COMMAND_END).all(|command| {

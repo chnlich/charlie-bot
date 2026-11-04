@@ -3,8 +3,8 @@
 //!
 //! One entry is one `## ` heading and the body under it, up to the next heading. The search runs through `rg`, and the
 //! ranking maps each matching line back to the entry that holds it. The top three entries become the judge's candidate
-//! list, each carried in full, so a cause an entry states deep in its body reaches the judge prompt; three keeps the
-//! judge input inside one short call.
+//! list, each carried in full, so a cause an entry states deep in its body reaches the judge prompt. The limit of three
+//! keeps the judge input inside one short call.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

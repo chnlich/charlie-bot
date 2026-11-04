@@ -1,4 +1,4 @@
-//! The Feishu long-connection listener: it connects to the endpoint Feishu names, pings at the interval Feishu sets,
+//! The Feishu long-connection listener connects to the endpoint Feishu names and pings at the interval Feishu sets. It
 //! acknowledges each event before it handles the event, and hands the parsed event to the shared core through the
 //! adapter. A dropped connection reconnects with backoff, and every connection runs the thread follow backfill.
 //!

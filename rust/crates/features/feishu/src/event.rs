@@ -1,8 +1,8 @@
 //! The `im.message.receive_v1` event: its parsing, and the drop rules that decide whether it is a summon, a thread
 //! follow or traffic to drop. A summon is a group message that mentions the bot from a user on the allow-list. A follow
-//! is a message from such a user inside a thread of a group. Every other event is dropped before the shared core runs:
-//! bot and app messages, senders outside the allow-list, one-to-one chats, and group messages that neither mention the
-//! bot nor sit in a thread.
+//! is a message from such a user inside a thread of a group. Every other event is dropped before the shared core runs.
+//! Those drops are bot and app messages, senders outside the allow-list, one-to-one chats, and group messages that
+//! neither mention the bot nor sit in a thread.
 
 use std::collections::BTreeMap;
 
@@ -110,7 +110,7 @@ pub fn classify(event: &Value, bot_open_id: &str, allowed_users: &BTreeMap<Strin
 
 impl Message {
   /// The root message id that names the session's thread: the thread's root when the message is in a thread, else the
-  /// message itself, so a summon finds its session before the thread exists.
+  /// message itself. A summon finds its session through this id before the thread exists.
   pub fn thread_root(&self) -> anyhow::Result<&str> {
     if self.thread_id.is_none() {
       return Ok(&self.message_id);

@@ -208,6 +208,15 @@ test('uploadFile marks successful uploads as sendable', async () => {
   assert.equal(sendButton.hasAttribute('disabled'), false);
 });
 
+test('a file status outside the known three throws instead of rendering a success mark', () => {
+  const {context} = loadFileUploadScript(async () => ({ok: true, async json() { return {}; }}));
+  const unknown = {status: 'quarantined', id: 1};
+
+  assert.throws(() => context.renderFileChipIcon(unknown), /Unknown file status/);
+  assert.throws(() => context.renderFileChipRemoveButton(unknown), /Unknown file status/);
+  assert.throws(() => context.renderFileChipStatusLabel(unknown), /Unknown file status/);
+});
+
 
 
 

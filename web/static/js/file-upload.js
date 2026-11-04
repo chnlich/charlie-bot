@@ -60,14 +60,45 @@ function clearSentUploadedFiles(ids) {
   renderFileChips();
 }
 
+// One chip's icon. A status outside the three known ones is a programming error, so the last arm
+// throws instead of painting a success mark.
 function renderFileChipIcon(file) {
-  if (file.status === 'uploading') {
-    return '<span class="file-chip-icon file-chip-icon--spinner" aria-hidden="true"></span>';
+  switch (file.status) {
+    case 'uploading':
+      return '<span class="file-chip-icon file-chip-icon--spinner" aria-hidden="true"></span>';
+    case 'failed':
+      return '<span class="file-chip-icon" aria-hidden="true">&#x26A0;</span>';
+    case 'uploaded':
+      return '<span class="file-chip-icon" aria-hidden="true">&#x2713;</span>';
+    default:
+      throw new Error('Unknown file status: ' + file.status);
   }
-  if (file.status === 'failed') {
-    return '<span class="file-chip-icon" aria-hidden="true">&#x26A0;</span>';
+}
+
+// One chip's remove button: an in-flight upload has none, and a failed or uploaded file can be removed.
+function renderFileChipRemoveButton(file) {
+  switch (file.status) {
+    case 'uploading':
+      return '';
+    case 'failed':
+    case 'uploaded':
+      return `<button onclick="removeFile(${file.id})" title="Remove">&#x2715;</button>`;
+    default:
+      throw new Error('Unknown file status: ' + file.status);
   }
-  return '<span class="file-chip-icon" aria-hidden="true">&#x2713;</span>';
+}
+
+// One chip's state label: only a failed upload carries one.
+function renderFileChipStatusLabel(file) {
+  switch (file.status) {
+    case 'uploading':
+    case 'uploaded':
+      return '';
+    case 'failed':
+      return '<span class="file-chip-state">Failed</span>';
+    default:
+      throw new Error('Unknown file status: ' + file.status);
+  }
 }
 
 async function handleFiles(input) {
@@ -158,10 +189,8 @@ function renderFileChips() {
   container.classList.remove('hidden');
   container.innerHTML = uploadedFiles.map((file) => {
     const title = escapeHtml(file.error || file.path || file.filename);
-    const removeButton = file.status === 'uploading'
-      ? ''
-      : `<button onclick="removeFile(${file.id})" title="Remove">&#x2715;</button>`;
-    const statusLabel = file.status === 'failed' ? '<span class="file-chip-state">Failed</span>' : '';
+    const removeButton = renderFileChipRemoveButton(file);
+    const statusLabel = renderFileChipStatusLabel(file);
     return `<span class="file-chip file-chip--${file.status}" title="${title}">`
       + renderFileChipIcon(file)
       + `<span class="file-chip-name">${escapeHtml(file.filename)}</span>`

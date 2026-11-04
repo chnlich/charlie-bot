@@ -17,8 +17,8 @@
     --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#9d7ff0; --series-5:#c9962e;
   }
   [hidden] { display:none !important }
-  /* The window label rides beside the section title while both fit on one row, and takes its own row on a phone
-     width, so neither the title nor the date range breaks mid-phrase. */
+  /* The window label rides beside the section title while both fit on one row. On a phone width it takes its own
+     row, so neither the title nor the date range breaks mid-phrase. */
   h2 { flex-wrap:wrap }
   h2 .win { white-space:nowrap }
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
@@ -34,9 +34,9 @@
   .heroCard .lab { font-size:12px; color:var(--mut); margin:0 0 2px }
   .heroCard .val { font-size:34px; line-height:1.1; font-weight:640; letter-spacing:-1px; font-variant-numeric:tabular-nums }
   .heroCard .val.model { font-size:16px; line-height:1.35; letter-spacing:0; padding-top:9px; overflow-wrap:anywhere }
-  /* Every secondary figure on this page reads in the body muted tone: --mut2 renders 3.70:1 on the
-     white card and 3.38:1 on the page background, under the 4.5:1 floor for text this small; --mut
-     renders 5.77:1 and 5.28:1. */
+  /* Every secondary figure on this page reads in the body muted tone. --mut2 falls under the 4.5:1 floor for text
+     this small: it renders 3.70:1 on the white card and 3.38:1 on the page background. --mut renders 5.77:1 and
+     5.28:1, so it carries those figures. */
   .heroCard .foot { font-size:12px; color:var(--mut); margin:4px 0 0 }
   .heroCard .split { font-size:11.5px; line-height:1.5 }
   .card { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:16px 18px 12px }
@@ -240,11 +240,10 @@
 <script>
 const DATA = {{ payload|safe }};
 const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)'];
-// Legend order is the server's source display order (slot 1..n); each payload row's segments carry their own slot
-// numbers, so the colour of a source is its slot's entry in SERIES. The legend key only exists on the server build
-// this page ships with: the template reloads from disk while the serving process runs the build it started with, so
-// the key stays absent until that process restarts, and an absent key renders an empty legend instead of failing the
-// report.
+// Legend order is the server's source display order (slot 1..n). Each payload row's segments carry their own slot
+// numbers, so a source's colour is its slot's entry in SERIES. The legend key only exists on the server build this
+// page ships with. The template reloads from disk while the serving process runs the build it started with, so the
+// key stays absent until that process restarts. An absent key renders an empty legend instead of failing the report.
 const LEG = {{ (ctx.usage_sources or []) | tojson }}.map((name, i) => [i + 1, name]);
 const colour = slot => SERIES[slot - 1];
 const sourceName = slot => LEG[slot - 1][1];
@@ -318,8 +317,8 @@ const modelCell = (r, button) => {
     cell.append(sw);
   }
   cell.append(el('span', null, r.model));
-  // Counted fallback records are the part of the row that could still grow if a pruned CLI
-  // log resurfaces, so the output behind them is only a lower bound — say so on the row.
+  // Counted fallback records are the part of the row that could still grow if a pruned CLI log resurfaces. The output
+  // behind them is only a lower bound, so the row says so.
   if (r.fallback_output > 0) {
     const mark = el('span', 'lb', '≥' + fmt(r.fallback_output) + ' out, lower bound');
     mark.title = fmt(r.fallback_output) + ' output tokens come from captures whose CLI logs are pruned';
@@ -360,8 +359,8 @@ function bars(container, rows) {
     row.tabIndex = 0;
     const nm = el('div','nm'); nm.append(el('span', null, r.model));
     const track = el('div','track');
-    // The bar stacks one segment per source, left to right in the server's source order, each
-    // in its legend colour; a bar too small to see keeps a sliver on its widest segment.
+    // The bar stacks one segment per source, left to right in the server's source order. Each segment is in its
+    // legend colour, and a bar too small to see keeps a sliver on its widest segment.
     const widths = r.segments.map(s => scale(s.output));
     const shown = widths.reduce((a, b) => a + b, 0);
     if (shown > 0 && shown < 0.25) widths[widths.indexOf(Math.max(...widths))] += 0.25 - shown;

@@ -162,12 +162,12 @@ async fn today_s_view_refreshes_when_the_tab_becomes_visible_and_a_past_day_does
   for date in [None, Some(today)] {
     let (status, body) = render_at(&home, date, now).await;
     assert_eq!(status, 200, "{body}");
-    assert!(body.contains("visibilitychange"), "{body}");
-    assert!(body.contains("document.visibilityState === 'visible'"), "{body}");
+    // The badge fragment's inlined script also listens for the visibility event, so the reload is the string only
+    // today's view carries.
     assert!(body.contains("location.reload()"), "{body}");
   }
 
   let (status, body) = render_at(&home, Some(past), now).await;
   assert_eq!(status, 200, "{body}");
-  assert!(!body.contains("visibilitychange"), "{body}");
+  assert!(!body.contains("location.reload()"), "{body}");
 }

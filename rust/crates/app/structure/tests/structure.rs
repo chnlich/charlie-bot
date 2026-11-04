@@ -1010,6 +1010,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/session-api",
     hint: "Use `charliebot_session_api::detail::ACTIVE_BACKEND_TYPE_FIELD`.",
   },
+  OwnerRow {
+    name: "catchup_complete",
+    owner: "runtime/session-api",
+    hint: "Use `charliebot_session_api::api::CATCHUP_COMPLETE_FRAME`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

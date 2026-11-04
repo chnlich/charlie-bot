@@ -15,6 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::time;
 
+use crate::api::CATCHUP_COMPLETE_FRAME;
 use crate::route_support::blocking_store;
 
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -105,7 +106,7 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
     Ok(Ok(catchup)) => {
       let sent = send_catchup_frames(&mut sender, &catchup.frames, &session_id).await;
-      match sender.send(Message::Text(json!({"type": "catchup_complete"}).to_string().into())).await {
+      match sender.send(Message::Text(json!({"type": CATCHUP_COMPLETE_FRAME}).to_string().into())).await {
         Ok(()) => tracing::debug!(session_id, cursor, total = catchup.total, sent, "session_ws_catchup_sent"),
         Err(error) => tracing::warn!(session_id, error = %error, "session_ws_catchup_failed"),
       }

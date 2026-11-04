@@ -220,8 +220,9 @@
       // content keep it.
       this.followNextTurn = false;
       // Set by a projection that found the list at zero height (a hidden Chat column). The first
-      // projection at a real height reads and clears it: a restore that lands at the bottom on that
-      // return does not arm the follow, so the next message leaves a history reader where they are.
+      // projection at a real height reads and clears it. A restore that lands at the bottom on
+      // that return does not arm the follow, so the next message leaves a history reader where
+      // they are.
       this.returnedFromHidden = false;
       // scrollTop at the last genuine (non-echo) scroll event; the direction
       // of each new genuine event is read against it.
@@ -1680,7 +1681,7 @@
         this.jumpToBottom();
       } else if (this.container.clientHeight > 0 && typeof showScrollToBottom === 'function') {
         // A non-follow append invites the reader down only when the reader can
-        // see the list: a hidden container (the Status view, a covered tab)
+        // see the list. A hidden container (the Status view, a covered tab)
         // holds no viewport to jump from, and the return applies the pin state.
         showScrollToBottom();
       }

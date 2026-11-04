@@ -81,9 +81,9 @@ function registerInputMode(mode, badgeHtml) {
 
 function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles, requestId, deliveryStatus) {
   const normalized = normalizeUserMessage(content, uploadedFiles);
-  // The time and delivery lines sit on blue-600, where slate-100 holds about 4.7:1 and stays
-  // quieter than the message text; the translucent slate of the darker assistant bubble would
-  // read at about 1.5:1 here.
+  // On blue-600, slate-100 holds about 4.7:1 for the time and delivery lines, quieter than
+  // the message text. The darker assistant bubble's translucent slate would read at about
+  // 1.5:1 here.
   const timeHtml = timestamp ? '<div class="text-[10px] text-slate-100 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
   const deliveryHtml = requestId && deliveryStatus
     ? '<div class="text-[10px] mt-1"><span id="message-delivery-' + escapeHtmlAttr(requestId)

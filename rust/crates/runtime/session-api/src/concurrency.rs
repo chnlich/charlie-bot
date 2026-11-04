@@ -1,10 +1,10 @@
 //! `GET /api/concurrency/now` and `GET /api/concurrency/history`: one owner for how many agents run at once.
 //!
 //! An agent runs when its session's own sidebar row paints the spinner: the busy table holds an entry for it, or it
-//! has its own started, unended run. Both inputs are readable per session, so the live count walks the same listing
-//! and activity path the sidebar does, over the rows the sidebar's Workspace and Threads tabs list. The busy table
-//! never reaches disk, so the history reads the run records instead: one run's `[started_at, ended_at or now)` is a
-//! span its session ran in, and a point's value is the most sessions open at once inside its bucket.
+//! has its own started, unended run. Both inputs are readable per session. The live count therefore walks the same
+//! listing and activity path the sidebar does, over the rows the sidebar's Workspace and Threads tabs list. The busy
+//! table never reaches disk, so the history reads the run records instead. One run's `[started_at, ended_at or now)`
+//! is a span its session ran in. A point's value is the most sessions open at once inside its bucket.
 
 use std::collections::HashMap;
 use std::fs;
@@ -76,10 +76,10 @@ impl LiveCount {
 
 /// The live count one request derived, with the inputs whose identities still name it.
 ///
-/// The corpus generation names the active metadata rows the listing returns, the derived archive set and the two
-/// subtree-root maps name the filters the listed rows pass, and the sidebar generation names every overlay and busy
-/// mark the count reads. The store and registry are held weakly: a dropped store's entry never answers another
-/// store's request.
+/// The corpus generation names the active metadata rows the listing returns. The derived archive set and the two
+/// subtree-root maps name the filters the listed rows pass. The sidebar generation names every overlay and busy mark
+/// the count reads. The store and registry are held weakly: a dropped store's entry never answers another store's
+/// request.
 struct LiveCountMemo {
   store: Weak<Store>,
   registry: Weak<Registry>,
@@ -95,15 +95,15 @@ struct LiveCountMemo {
 /// The live count the last request derived, kept while the inputs it read still hold.
 ///
 /// Deriving the count lists every active row, filters it through the subtree maps, resolves every row's overlay and
-/// walks the busy table. The badge polls this route every five seconds from every open page, so a repeat poll reads
-/// the identities that would move if any input changed and serves the count it already derived.
+/// walks the busy table. The badge polls this route every five seconds from every open page. A repeat poll therefore
+/// reads the identities that would move if any input changed. It then serves the count it already derived.
 static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<LiveCountMemo>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Count the sessions whose own row paints the spinner.
 ///
-/// The rows are the ones the sidebar lists: the active sessions no sequence owns, less the ones a sidebar view owns
-/// other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or when its
-/// own run is running; the split reads the session's profile.
+/// The rows are the ones the sidebar lists. They are the active sessions no sequence owns, less the ones a sidebar
+/// view owns other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or
+/// when its own run is running; the split reads the session's profile.
 ///
 /// A repeat poll serves the count the last request derived while the corpus, the two subtree-root maps, the derived
 /// archive set and the sidebar state still hold. A busy interval opening or closing, a probe storing a snapshot and a
@@ -133,8 +133,8 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
       TaskProfile::Worker => count.worker += 1,
     }
   }
-  // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so a
-  // derivation that moved one stores nothing: its overlays were read under the older generation, and the next poll
+  // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation. A derivation
+  // that moved one therefore stores nothing: its overlays were read under the older generation. The next poll
   // rebuilds them under the newer one and stores them.
   if charliebot_store::sidebar_state::derived_generation() == sidebar_generation {
     *LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned") = Some(LiveCountMemo {
@@ -179,8 +179,8 @@ fn memoized_live_count(
   Ok(Some(entry.count))
 }
 
-/// Whether one active row appears in a sidebar tab: the Workspace tab lists the rows outside every owned subtree, and
-/// a view's tab (the Threads tab for chat threads) lists that view's rows and their descendants.
+/// Whether one active row appears in a sidebar tab. The Workspace tab lists the rows outside every owned subtree. A
+/// view's tab (the Threads tab for chat threads) lists that view's rows and their descendants.
 fn listed_in_a_tab(roots: &SharedSubtreeRoots, session_id: &str) -> bool {
   roots.views.values().any(|members| members.contains_key(session_id)) || !roots.sequence.contains_key(session_id)
 }
@@ -234,8 +234,8 @@ const HISTORY_BODY_HEADROOM: usize = 192;
 
 /// Write `at` as `UtcDateTime::to_str` writes it, from `length`: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`.
 ///
-/// Every instant the route carries holds a four-digit year: the store parses a timestamp as RFC 3339, whose year is
-/// four digits, and a point is the clock less a lookback.
+/// Every instant the route carries holds a four-digit year. The store parses a timestamp as RFC 3339, whose year is
+/// four digits. A point is the clock less a lookback.
 fn write_stamp(text: &mut [u8], length: &mut usize, at: OffsetDateTime) {
   let at = if at.offset() == UtcOffset::UTC { at } else { at.to_offset(UtcOffset::UTC) };
   let year = at.year() as u32;
@@ -307,7 +307,7 @@ impl History {
   /// Write the response body in the field order and text clients parse.
   ///
   /// The generic serializer's per-entry dispatch and its per-field calls are the route's largest cost on a
-  /// 2,016-point series, so the fixed field names and the digits go straight into one buffer.
+  /// 2,016-point series. The fixed field names and the digits therefore go straight into one buffer.
   fn into_body(self) -> Vec<u8> {
     let mut body = Vec::with_capacity(HISTORY_BODY_HEADROOM + self.points.len() * INSTANT_BYTES);
     body.extend_from_slice(b"{\"range\":\"");
@@ -346,7 +346,7 @@ impl History {
 
 /// Append one chart point or peak as `{"t":"<stamp>","running":N,"manager":N,"worker":N}`.
 ///
-/// The four fields go into one stack buffer first: appending each constant to the body separately costs a capacity
+/// The four fields go into one stack buffer first. Appending each constant to the body separately costs a capacity
 /// check and a small copy per field, and a point carries four.
 fn push_instant(body: &mut Vec<u8>, at: OffsetDateTime, running: u32, manager: u32, worker: u32) {
   let mut instant = [0u8; INSTANT_BYTES];
@@ -524,9 +524,9 @@ struct Bucket {
 
 /// Sweep the spans once and record each bucket's maximum and the instant it first held.
 ///
-/// Events at one instant apply ends before starts. A session counts once
-/// however many of its runs are open, so the sweep counts sessions with any open run and sessions with an open
-/// manager turn, and a point's workers are the difference.
+/// Events at one instant apply ends before starts. A session counts once however many of its runs are open. The
+/// sweep counts sessions with any open run and sessions with an open manager turn. A point's workers are the
+/// difference.
 fn bucket_peaks(spans: &[Span], from: OffsetDateTime, to: OffsetDateTime, bucket_seconds: i64) -> Vec<Bucket> {
   let step = Duration::seconds(bucket_seconds);
   let span_nanos = (to - from).whole_nanoseconds();

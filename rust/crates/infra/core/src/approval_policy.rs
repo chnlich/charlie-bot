@@ -30,9 +30,16 @@ pub const TABLE_RELATIVE_PATH: &str = "config.d/approval.d/policy.yaml";
 /// The title the manager prompts and the ask probe carry the table under (`SECTION_TITLE`).
 pub const SECTION_TITLE: &str = "Approval policy table";
 
+/// The id of the consequence test whose rank an `out-of-scope:<policy id>` rule takes (see [`rule_rank`]).
+const CHAO_NAME_TEST_ID: &str = "chao-name";
+
+/// The prefix a tier line's rule carries when it names a standing policy applied outside its scope
+/// (`out-of-scope:<policy id>`).
+const OUT_OF_SCOPE_PREFIX: &str = "out-of-scope:";
+
 /// The ids a consequence test row may carry, each exactly once (`CONSEQUENCE_TEST_IDS`).
 pub const CONSEQUENCE_TEST_IDS: [&str; 6] =
-  ["irreversible", "chao-name", "money", "authority", "reading", "rule-named"];
+  ["irreversible", CHAO_NAME_TEST_ID, "money", "authority", "reading", "rule-named"];
 
 /// The ask tier a consequence test gives a step: the manager asks first (`t0`).
 pub const TIER_T0: &str = "t0";
@@ -382,8 +389,8 @@ pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTi
   }
   let rule = match rule {
     "none" => None,
-    rule if rule.starts_with("out-of-scope:") => {
-      require_policy(table, &rule["out-of-scope:".len()..])?;
+    rule if rule.starts_with(OUT_OF_SCOPE_PREFIX) => {
+      require_policy(table, &rule[OUT_OF_SCOPE_PREFIX.len()..])?;
       Some(rule.to_string())
     }
     rule if CONSEQUENCE_TEST_IDS.contains(&rule) => Some(rule.to_string()),
@@ -393,6 +400,13 @@ pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTi
     }
   };
   Ok(AskTier { tier: tier.to_string(), rule })
+}
+
+/// The rank of a tier line's rule in `table`: the rule's own consequence test rank, or the rank of the
+/// `chao-name` test for an `out-of-scope:<policy id>` rule. `None` when the table ranks neither.
+pub fn rule_rank(rule: &str, table: &ApprovalPolicyTable) -> Option<i64> {
+  let test_id = if rule.starts_with(OUT_OF_SCOPE_PREFIX) { CHAO_NAME_TEST_ID } else { rule };
+  table.consequence_tests.iter().find(|test| test.id == test_id).map(|test| test.rank)
 }
 
 /// The standing policy `id`, or an error naming it and the known ids.
@@ -692,6 +706,14 @@ enable_ask_tier_refusal: false
 
       assert_eq!(parsed, AskTier { tier: tier.to_string(), rule: expected }, "{tier} {rule}");
     }
+  }
+
+  #[test]
+  fn a_rule_ranks_by_its_test_and_an_out_of_scope_rule_by_the_chao_name_test() {
+    let table = table_with_refusal(false);
+    assert_eq!(rule_rank("irreversible", &table), Some(1));
+    assert_eq!(rule_rank("out-of-scope:shared-repo-landing", &table), Some(2));
+    assert_eq!(rule_rank("no-such-rule", &table), None);
   }
 
   #[test]

@@ -10,6 +10,7 @@
 mod collect;
 mod judge;
 mod lessons;
+mod ripgrep;
 mod scan;
 mod signature;
 mod window;

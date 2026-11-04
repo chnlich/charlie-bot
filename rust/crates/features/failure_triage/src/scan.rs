@@ -117,15 +117,7 @@ impl ScanRow {
 
 /// Preflight: the scan's mechanisms must be present before it reads anything. Each failure names what is missing.
 pub fn preflight(cfg: &CharlieBotConfig, log_dir: &Path) -> Result<()> {
-  match std::process::Command::new("rg")
-    .arg("--version")
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null())
-    .status()
-  {
-    Ok(status) if status.success() => {}
-    _ => bail!("rg is not available: install ripgrep so failure triage can rank LESSONS entries"),
-  }
+  crate::ripgrep::ensure_available()?;
   if cfg.backends.pool.is_empty() {
     bail!("backends.pool is empty: failure triage needs a light backend to judge signatures with");
   }

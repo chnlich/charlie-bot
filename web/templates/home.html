@@ -36,6 +36,9 @@
   .badge-down { color:var(--down-fg); background:var(--down-bg); border-color:var(--down-bd) }
   .foot { color:var(--mut); font-size:12.5px; margin-top:26px; max-width:82ch; line-height:1.6 }
   ul.foot { margin-top:6px; padding-left:1.4em }
+  /* The intro names a second block for the services this host runs. An empty set says so, rather
+     than leaving the reader to wonder whether the block failed to render. */
+  .none { color:var(--mut); font-size:13px; margin:0 }
   @media (max-width:760px) { body { padding:18px 14px 30px } }
 </style>
 </head>
@@ -58,8 +61,8 @@
     {% endfor %}
   </div>
 
-  {% if services %}
   <h2><span class="n">2</span>Served by this host</h2>
+  {% if services %}
   <div class="cards">
     {% for s in services %}
     <a class="card svc-card" href="{{ s.url }}">
@@ -72,6 +75,8 @@
     </a>
     {% endfor %}
   </div>
+  {% else %}
+  <p class="none">No services are configured on this host.</p>
   {% endif %}
 
   <p class="foot">The viewers below are <b>not</b> listed above because each needs an input first.

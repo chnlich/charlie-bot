@@ -11,11 +11,11 @@ use std::future::Future;
 
 use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::channel_verb::post_reply;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
-use charliebot_cli_common::reply::post_reply;
 use charliebot_cli_common::resolve;
 use charliebot_cli_common::response::field;
 use charliebot_compat::file_urls;

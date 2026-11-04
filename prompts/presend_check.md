@@ -20,9 +20,10 @@ under one of these kinds:
 
 Give each flag the quoted passage and one sentence of reason that names the earlier message, the
 task field or the child's report it rests on. When the child needs no part of the message, flag every
-passage. Content that asks the child to do something, or that its task record says it needs, is not
-flagged: the task record is where the child's task starts, and an assignment the message itself adds
-is part of the child's task even when the record does not name it yet.
+passage. A request to the child is not flagged while the requirement is new to the child: the task
+record is where the child's task starts, and an assignment the message itself adds is part of the
+child's task even when the record does not name it yet. When the child already holds the requirement
+in its task record or in an earlier message, the passage is a repeat.
 
 Answer with a JSON array and nothing else:
 [{"kind": "<kind>", "quote": "<passage>", "reason": "<one sentence>"}]

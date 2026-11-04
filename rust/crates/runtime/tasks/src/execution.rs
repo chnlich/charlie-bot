@@ -143,6 +143,15 @@ struct RunContinuation {
   native_id: Option<String>,
 }
 
+/// Whether the let-go has begun, with every launch aborted (`let_go_launches`). Integration tests release a held launch
+/// only after this, so the release never precedes the abort.
+#[cfg(feature = "test-hooks")]
+impl TaskExecutionAdapter {
+  pub fn launches_let_go_for_test(&self) -> bool {
+    self.launches.lock().expect("task execution launch state is not poisoned").let_go
+  }
+}
+
 impl TaskExecutionAdapter {
   /// Build the adapter that dispatches manager turns on `queue`.
   pub fn new(features: Arc<FeatureContext>, queue: Arc<MasterQueue>, dispatch: Arc<Dispatcher>) -> Self {
@@ -460,14 +469,16 @@ impl TaskExecutionAdapter {
   /// that has no process and re-attaches one that has (`recovery::reconcile_node`). A launch that finished before the
   /// cancel keeps its own result. The first panicked launch task is returned after every task has ended.
   pub(crate) async fn let_go_launches(&self) -> anyhow::Result<()> {
+    // The flag and the aborts share one lock, so a reader that sees the flag sees every launch already aborted.
     let tasks = {
       let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
       state.let_go = true;
-      std::mem::take(&mut state.tasks)
+      let tasks = std::mem::take(&mut state.tasks);
+      for task in tasks.values() {
+        task.abort();
+      }
+      tasks
     };
-    for task in tasks.values() {
-      task.abort();
-    }
     let mut failure = None;
     for (key, task) in tasks {
       match task.await {

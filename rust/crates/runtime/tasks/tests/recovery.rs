@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -37,7 +37,7 @@ use charliebot_store::run_records::{
 };
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller, control_events};
-use charliebot_tasks::execution::is_out_of_space_error;
+use charliebot_tasks::execution::{TaskExecutionAdapter, is_out_of_space_error};
 use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
@@ -111,7 +111,10 @@ async fn captured_run(
   stack
     .launch(&node.id, run_id, pin.pid, pin.pid_start.as_deref().context("capture supervisor has an identity")?)
     .await?;
-  settle_until(|| Ok(directory.join("started").exists())).await.context("capture command starts")?;
+  // The shell creates `started` before it writes its pid, so the file exists before its contents do.
+  settle_until(|| Ok(std::fs::read_to_string(directory.join("started")).is_ok_and(|pid| pid.parse::<u32>().is_ok())))
+    .await
+    .context("capture command starts")?;
   Ok(child)
 }
 
@@ -649,20 +652,15 @@ fn server_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
   Ok(tokio::runtime::Builder::new_multi_thread().enable_all().build()?)
 }
 
-/// Release `hold` once the runtime's blocking pool refuses work, which `Runtime::drop` starts after the let-go returns,
-/// or after `limit`, whichever comes first. A launch that is still in its poll at the refusal sees each blocking-pool
-/// call fail with `background task failed`.
-fn release_at_teardown(hold: &'static Hold, runtime: tokio::runtime::Handle, limit: Duration) -> JoinHandle<()> {
+/// Release `hold` once the let-go has aborted the launches (`launches_let_go_for_test`). The let-go waits for a held
+/// launch to end, so the release cannot wait for the let-go to finish. A release by clock could come before the abort
+/// under load, and a launch released first runs on to its spawn, which loses the cut.
+fn release_after_let_go(hold: &'static Hold, adapter: TaskExecutionAdapter) -> JoinHandle<()> {
   std::thread::spawn(move || {
-    let deadline = Instant::now() + limit;
-    while Instant::now() < deadline {
-      let (sender, receiver) = mpsc::channel();
-      drop(runtime.spawn_blocking(move || sender.send(())));
-      // A refused closure is dropped unrun, which closes the channel.
-      if receiver.recv().is_err() {
-        break;
-      }
-      std::thread::sleep(Duration::from_millis(5));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !adapter.launches_let_go_for_test() {
+      assert!(Instant::now() < deadline, "the let-go did not begin within thirty seconds");
+      std::thread::sleep(Duration::from_millis(1));
     }
     hold.release();
   })
@@ -697,9 +695,9 @@ async fn dispatched_worker(backend_type: &str, script: &str, after_let_go: bool)
 }
 
 /// Stop the server the way SIGINT does after its services stop: the let-go step, then the runtime's drop. The hold is
-/// released at the drop, or after a bound when the let-go waits on the held launch.
+/// released once the let-go has aborted the launches, which the let-go's own wait on a held launch needs.
 fn stop_server(runtime: tokio::runtime::Runtime, stack: &Stack, hold: &'static Hold) -> anyhow::Result<()> {
-  let releaser = release_at_teardown(hold, runtime.handle().clone(), Duration::from_millis(300));
+  let releaser = release_after_let_go(hold, stack.adapter.clone());
   runtime.block_on(recovery::let_go_step(Arc::clone(&stack.features)))?;
   drop(runtime);
   releaser.join().expect("the hold releaser does not panic");

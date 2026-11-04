@@ -969,8 +969,9 @@ http_post() {
 }
 
 # copy_seed_sessions copies each session directory of SEED_HOME into the trial home. A copy, not a link: the server
-# appends to the event logs it serves, and the seed must stay as generated for the next run. A seed's boot marker goes
-# where the task-tree walk reads it, so the walk compares the copied file times with the seed's marker.
+# appends to the event logs it serves, and the seed must stay as generated for the next run. A seed's boot marker and
+# skip proof go where the task-tree walk reads them, so the walk compares the copied file times with the seed's marker
+# and serves the seed proof's rows while those times still hold.
 copy_seed_sessions() {
   local entry
   mkdir -m 700 -p "$SESSIONS_DIR" || return 1
@@ -981,6 +982,10 @@ copy_seed_sessions() {
   if [[ -f $SEED_HOME/boot_recovery.json ]]; then
     mkdir -m 700 -p "$TRIAL_CB_HOME/state" || return 1
     cp -a -- "$SEED_HOME/boot_recovery.json" "$TRIAL_CB_HOME/state/boot_recovery.json" || return 1
+  fi
+  if [[ -f $SEED_HOME/boot_skip_proof.json ]]; then
+    mkdir -m 700 -p "$TRIAL_CB_HOME/state" || return 1
+    cp -a -- "$SEED_HOME/boot_skip_proof.json" "$TRIAL_CB_HOME/state/boot_skip_proof.json" || return 1
   fi
 }
 

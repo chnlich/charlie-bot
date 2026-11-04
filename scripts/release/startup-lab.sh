@@ -428,13 +428,13 @@ cmd_prime() {
     copied=$(( copied + 1 ))
   done
   (( copied > 0 )) || fail "the prime start wrote no fact checkpoint; see $run"
-  # The startup-only state files the boot writes beside its checkpoints: the skip proof's rows are valid only while each
-  # node keeps the file identities they name, which a reset restores, so copying it models the previous boot's write.
+  # The startup-only state file the boot writes: the skip proof's rows are valid only while each node keeps the file
+  # identities they name, which a reset restores, so copying it models the previous boot's write. The seed root holds
+  # it beside the boot marker, and trial.sh copies it into the trial home's state directory.
   for startup_file in "$run"/startup/*; do
     [[ -e $startup_file ]] || continue
-    mkdir -p "$HOME_DIR/state"
-    cp "$startup_file" "$HOME_DIR/state/$(basename "$startup_file")"
-    printf 'copied %s into %s\n' "$(basename "$startup_file")" "$HOME_DIR/state"
+    cp "$startup_file" "$HOME_DIR/$(basename "$startup_file")"
+    printf 'copied %s into %s\n' "$(basename "$startup_file")" "$HOME_DIR"
   done
   printf 'copied %s fact checkpoints into %s\n' "$copied" "$HOME_DIR"
 }

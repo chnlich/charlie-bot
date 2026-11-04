@@ -12,7 +12,9 @@
 //! render then compiles a fresh environment, so an edit takes effect without a restart, as Jinja2's auto-reload
 //! does. The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
-//! `templates/`, in registration order.
+//! `templates/`, in registration order, then `web/static` and each package's `static/`. The static trees come
+//! last, so a template name always resolves to a template, and a page includes the core script or style the static
+//! route would otherwise serve.
 
 use std::collections::HashMap;
 use std::fs;

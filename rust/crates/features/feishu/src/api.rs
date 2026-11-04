@@ -10,14 +10,14 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::thread_entry::{ThreadDetail, ThreadReplyError};
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller;
 use http::StatusCode;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::adapter::{self, Bot};
 use crate::client::BASE_URL;
@@ -86,7 +86,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let fields = match declared_fields(&body, &REPLY_BODY) {
+  let fields = match body.declared_fields(&REPLY_BODY) {
     Ok(fields) => fields,
     Err(response) => return *response,
   };
@@ -129,7 +129,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let fields = match declared_fields(&body, &READ_BODY) {
+  let fields = match body.declared_fields(&READ_BODY) {
     Ok(fields) => fields,
     Err(response) => return *response,
   };
@@ -145,7 +145,7 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let fields = match declared_fields(&body, &DOWNLOAD_BODY) {
+  let fields = match body.declared_fields(&DOWNLOAD_BODY) {
     Ok(fields) => fields,
     Err(response) => return *response,
   };
@@ -169,26 +169,10 @@ async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response 
     Ok(body) => body,
     Err(response) => return *response,
   };
-  if let Err(response) = declared_fields(&body, &CHECK_BODY) {
+  if let Err(response) = body.declared_fields(&CHECK_BODY) {
     return *response;
   }
   answer(commands::check_setup(&bot).await)
-}
-
-/// The declared fields of a body that validates against a required model.
-fn declared_fields(body: &RequestBody, model: &BodyModel) -> Result<Map<String, Value>, Box<Response>> {
-  match body.validate(model)? {
-    Some(Value::Object(fields)) => Ok(fields),
-    _ => unreachable!("a required model validates a body to its declared fields"),
-  }
-}
-
-/// A string field of a validated body.
-fn text_field(fields: &Map<String, Value>, name: &str) -> String {
-  match fields.get(name).and_then(Value::as_str) {
-    Some(text) => text.to_string(),
-    None => unreachable!("a validated {name} is a string"),
-  }
 }
 
 /// A handler's answer: the readback with 200, a refusal with its status and detail, or the unhandled failure's 500.

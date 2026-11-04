@@ -213,18 +213,22 @@ mod tests {
 
   #[test]
   fn only_a_manager_run_of_a_web_session_gets_the_rules() {
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
     let (_dir, repo) = checkout("rules");
     let web = manager(json!({}));
     let worker = SessionMetadata::new("synthetic-worker", "Worker", TaskProfile::Worker);
     let slack_thread = manager(json!({"slack_origin": {"channel_id": "synthetic-channel"}}));
     let discord_thread = manager(json!({"discord_origin": {"thread_id": "synthetic-thread"}}));
-    let null_origin = manager(json!({"slack_origin": null, "discord_origin": null}));
+    let feishu_thread = manager(json!({"feishu_origin": {"tenant_key": "T", "chat_id": "oc_1", "root_id": "om_1"}}));
+    let null_origin = manager(json!({"slack_origin": null, "discord_origin": null, "feishu_origin": null}));
 
     let contribution = WebReplyTurnContribution;
     for kind in ["work", "review"] {
       assert!(contribution.instruction_segments(&web, kind, &config(), &repo).unwrap().is_empty());
     }
-    for meta in [&worker, &slack_thread, &discord_thread] {
+    for meta in [&worker, &slack_thread, &discord_thread, &feishu_thread] {
       assert!(contribution.instruction_segments(meta, "manager_turn", &config(), &repo).unwrap().is_empty());
     }
     assert_eq!(contribution.instruction_segments(&null_origin, "manager_turn", &config(), &repo).unwrap().len(), 1);
@@ -242,6 +246,7 @@ mod tests {
 
   #[test]
   fn only_plain_manager_sessions_claim_the_turn_end_unread_mark() {
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
     let contribution = WebReplyTurnContribution;
     let manager = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
     let worker = SessionMetadata::new("synthetic-worker", "Worker", TaskProfile::Worker);

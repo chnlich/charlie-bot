@@ -41,6 +41,7 @@ const FAKECHAT: ThreadPlatform = ThreadPlatform {
   scope_doc: SCOPE,
   follow_trigger_prefix: "fakechat-thread-follow",
   id_key: IdOrdering::Snowflake,
+  recheck_after_failed_post: false,
   origin_field: "fakechat_origin",
   watermark_field: "fakechat_watermark_id",
   id_label: "id",

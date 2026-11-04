@@ -956,10 +956,26 @@ async fn input_admitted_during_an_active_run_dispatches_after_its_finish_for_eve
     ("slack", event_types::AGENT_MESSAGE, "agent"),
     ("discord", event_types::USER, "user"),
     ("discord", event_types::AGENT_MESSAGE, "agent"),
+    ("feishu", event_types::USER, "user"),
+    ("feishu", event_types::AGENT_MESSAGE, "agent"),
   ] {
     let harness = Harness::new();
     let manager = harness.create_task("manager", None, TaskProfile::Manager, "Manager").await;
     match session_kind {
+      "feishu" => {
+        harness
+          .store
+          .update_slot_fields(
+            &manager.id,
+            "feishu",
+            Map::from_iter([(
+              "feishu_origin".to_string(),
+              json!({"tenant_key":"T","chat_id":"oc_1","root_id":"om_1"}),
+            )]),
+          )
+          .await
+          .unwrap();
+      }
       "slack" => {
         harness
           .store

@@ -779,9 +779,13 @@ mod tests {
 
   #[tokio::test]
   async fn thread_turn_keeps_plain_text_stdin_and_queues_later_messages() {
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
     for (field, origin) in [
       ("slack_origin", json!({"team_id": "T", "channel_id": "C", "thread_ts": "1.0"})),
       ("discord_origin", json!({"guild_id": "G", "parent_channel_id": "C", "thread_id": "1"})),
+      ("feishu_origin", json!({"tenant_key": "T", "chat_id": "oc_1", "root_id": "om_1"})),
     ] {
       let root = tempfile::tempdir().unwrap();
       let cfg = unpooled_config(&root.path().join("home"));

@@ -563,7 +563,7 @@ test('the toggle offers Status for a web session only, and its badge follows the
   assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a web session shows the Status option');
   assert.equal(rig.badge.classList.contains('hidden'), false, 'the option\'s badge carries the count');
 
-  await openSession(rig, {id: 'session-b', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}});
+  await openSession(rig, {id: 'session-b', thread_session: true, slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}});
   assert.equal(statusOption(rig).classList.contains('hidden'), true,
       'a Slack thread session shows no Status option');
   assert.equal(rig.badge.classList.contains('hidden'), true, 'and no badge');
@@ -584,7 +584,7 @@ test('a child web session shows the Status option, and a discord thread session 
   const rig = panelRig();
   await openSession(rig, {id: 'child-a', task_parent_id: 'parent-1', web_status: STATUS});
   assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a child web session shows the Status option');
-  await openSession(rig, {id: 'thread-d', discord_origin: {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'}});
+  await openSession(rig, {id: 'thread-d', thread_session: true, discord_origin: {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'}});
   assert.equal(statusOption(rig).classList.contains('hidden'), true,
       'a Discord thread session shows no Status option');
 });

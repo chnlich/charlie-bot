@@ -41,6 +41,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     },
     validate_session_fields,
   )?;
+  registry.thread_origin_field("discord_origin")?;
   registry.turn_contribution("discord", Arc::new(DiscordTurnContribution))
 }
 

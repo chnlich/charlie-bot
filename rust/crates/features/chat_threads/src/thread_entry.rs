@@ -5,7 +5,8 @@
 //! Public API:
 //! - `ThreadPlatform`: the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
 //!   derive the marker keys from `name`.
-//! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes.
+//! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes,
+//!   and millisecond-then-id order for Feishu's `<create_time ms>-<message id>` composites.
 //! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
 //!   platform face of the entries.
 //! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
@@ -127,6 +128,9 @@ pub struct ThreadPlatform {
   pub follow_trigger_prefix: &'static str,
   /// The ordering of the platform's message ids.
   pub id_key: IdOrdering,
+  /// Whether a failed post is looked up again before the retry. True where a failed write can land without a key the
+  /// platform enforces (Slack); false where the post carries one (Discord's nonce, Feishu's reply uuid).
+  pub recheck_after_failed_post: bool,
   /// The thread origin field in the platform's metadata slot.
   pub origin_field: &'static str,
   /// The newest consumed message id field in the platform's metadata slot.
@@ -165,6 +169,8 @@ pub enum IdOrdering {
   Text,
   /// Discord's snowflakes, ordered as unsigned integers.
   Snowflake,
+  /// Feishu's `<create_time ms>-<message id>` composites, ordered by the milliseconds and then the message id.
+  TimeThenId,
 }
 
 /// One message id's ordering key. Keys of one `IdOrdering` share a variant, so they compare by their value.
@@ -172,16 +178,25 @@ pub enum IdOrdering {
 pub enum IdKey<'a> {
   Text(&'a str),
   Snowflake(u64),
+  TimeThenId(u64, &'a str),
 }
 
 impl IdOrdering {
-  /// The ordering key of `id`. A snowflake that is not an unsigned integer panics.
+  /// The ordering key of `id`. A snowflake that is not an unsigned integer, or a composite without its
+  /// `<milliseconds>-` prefix, panics.
   pub fn key(self, id: &str) -> IdKey<'_> {
     match self {
       IdOrdering::Text => IdKey::Text(id),
       IdOrdering::Snowflake => IdKey::Snowflake(
         id.parse().unwrap_or_else(|error| panic!("a Discord message id is an unsigned integer, got {id:?}: {error}")),
       ),
+      IdOrdering::TimeThenId => {
+        let (millis, message_id) = id
+          .split_once('-')
+          .and_then(|(millis, message_id)| Some((millis.parse::<u64>().ok()?, message_id)))
+          .unwrap_or_else(|| panic!("a Feishu message id is <milliseconds>-<message id>, got {id:?}"));
+        IdKey::TimeThenId(millis, message_id)
+      }
     }
   }
 }
@@ -589,7 +604,7 @@ pub async fn post_with_retry(
     match adapter.post(address, text, post_key).await {
       Ok(()) => return Ok(true),
       Err(error) => {
-        if platform.name == "slack"
+        if platform.recheck_after_failed_post
           && adapter.find_own_post_by_key(address, post_key, text, created_after, None).await?
         {
           return Ok(true);

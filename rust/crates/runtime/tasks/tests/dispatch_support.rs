@@ -326,13 +326,14 @@ impl Harness {
     // The origin slots a thread session carries; the tests that name a session kind set them through the store.
     registry
       .register_package("dispatch_support_origins", |registry| {
-        for (owner, field) in [("slack", "slack_origin"), ("discord", "discord_origin")] {
+        for (owner, field) in [("slack", "slack_origin"), ("discord", "discord_origin"), ("feishu", "feishu_origin")] {
           registry.metadata_slot(charliebot_core::metadata_slot::MetadataSlot {
             owner,
             on: charliebot_core::metadata_slot::MetadataFile::Session,
             after: None,
             fields: vec![charliebot_core::metadata_slot::SlotField { name: field, default: serde_json::Value::Null }],
           })?;
+          registry.thread_origin_field(field)?;
         }
         Ok(())
       })

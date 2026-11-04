@@ -41,6 +41,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     },
     validate_session_fields,
   )?;
+  registry.thread_origin_field("slack_origin")?;
   registry.turn_contribution("slack", Arc::new(SlackTurnContribution))
 }
 

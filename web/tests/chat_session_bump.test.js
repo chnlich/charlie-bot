@@ -1409,7 +1409,7 @@ test('a user-gesture call re-arms the trigger-zone chain, and the viewport fill 
 
 // A web session opens in For you; a thread session opens in Everything.
 const WEB_SESSION = {profile: 'manager'};
-const THREAD_SESSION = {profile: 'manager', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}};
+const THREAD_SESSION = {profile: 'manager', thread_session: true, slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}};
 
 // The tail the For you cases open on: two rows, so the reader's place has a row to hold on to.
 const FOR_YOU_TAIL = [eMsg('user', 'tail-u', 'the question'), eMsg('web_reply', 'tail-r', 'the answer')];

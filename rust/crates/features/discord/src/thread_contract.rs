@@ -22,6 +22,7 @@ pub const DISCORD: ThreadPlatform = ThreadPlatform {
   scope_doc: "discord_reply_scope.md",
   follow_trigger_prefix: FOLLOW_TRIGGER_PREFIX,
   id_key: IdOrdering::Snowflake,
+  recheck_after_failed_post: false,
   origin_field: "discord_origin",
   watermark_field: "discord_watermark_id",
   id_label: "id",

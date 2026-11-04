@@ -301,6 +301,9 @@ mod tests {
 
   #[tokio::test]
   async fn midturn_offer_writes_only_web_user_messages_and_stops_at_result() {
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::features_with_packages(
       &home.path().join("home"),
@@ -363,6 +366,14 @@ mod tests {
       .insert("discord_origin".to_string(), json!({"guild_id":"G","parent_channel_id":"C","thread_id":"1"}));
     assert_eq!(
       offer(&features, &discord_meta, &run, &[user_event_ref(message_id)]).await.unwrap(),
+      Vec::<String>::new()
+    );
+    let mut feishu_meta = SessionMetadata::new("feishu-thread", "Feishu", TaskProfile::Manager);
+    feishu_meta
+      .extra
+      .insert("feishu_origin".to_string(), json!({"tenant_key":"T","chat_id":"oc_synthetic","root_id":"om_synthetic"}));
+    assert_eq!(
+      offer(&features, &feishu_meta, &run, &[user_event_ref(message_id)]).await.unwrap(),
       Vec::<String>::new()
     );
     let worker_run = test_fixtures::run_record(&meta.id, run_id, RunKind::Work);

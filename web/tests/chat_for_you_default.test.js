@@ -23,6 +23,7 @@ const {readStatic} = require('./read_static');
 
 const SLACK_ORIGIN = {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'};
 const DISCORD_ORIGIN = {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'};
+const FEISHU_ORIGIN = {tenant_key: 'T1', chat_id: 'oc_1', root_id: 'om_1'};
 
 function under(el, ancestor) {
   for (let node = el; node; node = node.parentNode) {
@@ -154,12 +155,17 @@ test('a child web session opens in For you', () => {
 
 test('a Slack thread session opens in Everything', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {slack_origin: SLACK_ORIGIN}), 'everything');
+  assert.equal(openedView(rig, {thread_session: true, slack_origin: SLACK_ORIGIN}), 'everything');
 });
 
 test('a Discord thread session opens in Everything', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {discord_origin: DISCORD_ORIGIN}), 'everything');
+  assert.equal(openedView(rig, {thread_session: true, discord_origin: DISCORD_ORIGIN}), 'everything');
+});
+
+test('a Feishu thread session opens in Everything', () => {
+  const rig = pageRig();
+  assert.equal(openedView(rig, {thread_session: true, feishu_origin: FEISHU_ORIGIN}), 'everything');
 });
 
 test('a worker session opens in For you, root or child', () => {
@@ -176,7 +182,7 @@ test('the view toggle offers Status for a web session only', () => {
   assert.deepEqual(rig.toggles.map((btn) => btn.dataset.chatViewOption), ['foryou', 'everything', 'status']);
   assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a web session shows the Status option');
 
-  openedView(rig, {slack_origin: SLACK_ORIGIN});
+  openedView(rig, {thread_session: true, slack_origin: SLACK_ORIGIN});
   assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a Slack thread session hides the Status option');
   openedView(rig, {id: 'session-w', profile: 'worker'});
   assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a worker session hides the Status option');

@@ -7,6 +7,7 @@ use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
+use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_FIELDS, SessionMetadata,
   SessionStatus, TaskProfile, WORK_STATE,
@@ -569,12 +570,18 @@ pub fn sessions_list_response(
   json_bytes_response(compressed, true)
 }
 
-/// Render metadata as the response model does, excluding `task.goal`.
+/// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
+pub const THREAD_SESSION: &str = "thread_session";
+
+/// Render metadata as the response model does, excluding `task.goal`. The `thread_session` flag names a chat thread
+/// session, so the web client never reads the platform origin fields itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
-  if let Some(task) = value.get_mut("task").and_then(Value::as_object_mut) {
+  let object = value.as_object_mut().expect("session metadata serializes to an object");
+  if let Some(task) = object.get_mut("task").and_then(Value::as_object_mut) {
     task.remove("goal");
   }
+  object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
   Ok(value)
 }
 

@@ -102,10 +102,10 @@ function buildEmptyLine() {
   return btn;
 }
 
-// A web session: a manager session with no Slack or Discord origin. The Status view
-// reads the same test.
+// A web session: a manager session that no chat thread owns. The server sets
+// `thread_session` on every session it returns. The Status view reads the same test.
 function isWebSession(session) {
-  return session.profile === 'manager' && session.slack_origin == null && session.discord_origin == null;
+  return session.profile === 'manager' && !session.thread_session;
 }
 
 // A web session, root or child, or a worker session opens in For you; a thread

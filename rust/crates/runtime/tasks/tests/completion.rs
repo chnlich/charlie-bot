@@ -2197,6 +2197,7 @@ async fn a_child_report_before_the_view_keeps_the_session_open() {
 
 #[tokio::test]
 async fn parent_approved_and_thread_sessions_close_at_run_end_without_a_view() {
+  charliebot_registry::thread_origin::register_origin_field("slack_origin");
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let parent_approved = h

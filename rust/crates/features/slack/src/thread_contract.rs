@@ -15,6 +15,7 @@ pub const SLACK: ThreadPlatform = ThreadPlatform {
   scope_doc: "slack_reply_scope.md",
   follow_trigger_prefix: "slack-thread-follow",
   id_key: IdOrdering::Text,
+  recheck_after_failed_post: true,
   origin_field: "slack_origin",
   watermark_field: "slack_watermark_ts",
   id_label: "ts",

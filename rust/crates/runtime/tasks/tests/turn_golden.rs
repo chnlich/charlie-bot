@@ -427,6 +427,7 @@ fn config_with_features_from_config_and_agent_path(
 }
 
 fn session_meta(session_id: &str, session_kind: &str, mode: &str) -> SessionMetadata {
+  charliebot_registry::thread_origin::register_origin_field("slack_origin");
   let mut meta = SessionMetadata::new(session_id, "Session 1", TaskProfile::Manager);
   if mode == "unknown_pin" {
     meta.backend = "deleted-id".to_string();

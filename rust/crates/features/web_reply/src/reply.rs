@@ -1040,15 +1040,21 @@ mod tests {
 
   #[test]
   fn a_web_session_is_a_manager_that_no_slack_or_discord_thread_owns() {
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
     let origin = json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"});
     let mut slack = SessionMetadata::new("s", "s", TaskProfile::Manager);
     slack.extra.insert("slack_origin".to_string(), origin);
     let mut discord = SessionMetadata::new("s", "s", TaskProfile::Manager);
     discord.extra.insert("discord_origin".to_string(), json!({"guild_id": "G1"}));
+    let mut feishu = SessionMetadata::new("s", "s", TaskProfile::Manager);
+    feishu.extra.insert("feishu_origin".to_string(), json!({"tenant_key": "T1", "chat_id": "oc_1", "root_id": "om_1"}));
 
     assert!(is_web_session(&SessionMetadata::new("s", "s", TaskProfile::Manager)));
     assert!(!is_web_session(&slack));
     assert!(!is_web_session(&discord));
+    assert!(!is_web_session(&feishu));
     assert!(!is_web_session(&SessionMetadata::new("s", "s", TaskProfile::Worker)));
   }
 

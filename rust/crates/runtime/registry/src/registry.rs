@@ -407,6 +407,21 @@ impl Registry {
     self.metadata_slots.clone()
   }
 
+  /// Register the field that a chat platform's metadata slot holds as its thread origin. The field must name a field of
+  /// a metadata slot already registered, so a platform cannot name an origin it does not store.
+  pub fn thread_origin_field(&mut self, field: &'static str) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    let stored = self.metadata_slots.iter().any(|slot| slot.fields.iter().any(|slot_field| slot_field.name == field));
+    if !stored {
+      return Err(RegistryError {
+        package,
+        message: format!("thread origin field {field:?} is not a field of a registered metadata slot"),
+      });
+    }
+    crate::thread_origin::register_origin_field(field);
+    Ok(())
+  }
+
   /// Register a config section's parser and its legacy keys (`config_registry.register_config_section`).
   pub fn config_section(&mut self, section: ConfigSection) -> Result<(), RegistryError> {
     let package = self.owner()?;

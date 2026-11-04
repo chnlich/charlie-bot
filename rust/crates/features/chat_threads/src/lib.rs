@@ -1,6 +1,6 @@
-//! `web/features/chat_threads`: the Slack and Discord thread sessions. Their turn contribution names the thread brief,
-//! their sidebar subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The reply contract
-//! that the platform turn contributions share is in `thread_entry`.
+//! `web/features/chat_threads`: the chat thread sessions. Their turn contribution names the thread brief, their sidebar
+//! subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The reply contract that the
+//! platform turn contributions share is in `thread_entry`.
 
 mod api;
 pub mod backfill;
@@ -9,7 +9,6 @@ mod sidebar;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 pub mod thread_entry;
-mod thread_sessions;
 mod turn_contribution;
 
 use std::sync::Arc;
@@ -37,6 +36,7 @@ mod tests {
     assert_eq!(registry.routers().len(), 1);
     assert_eq!(registry.sidebar_contributions().count(), 1);
 
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
     let mut thread = SessionMetadata::new("synthetic", "Synthetic", TaskProfile::Manager);
     thread.set_extra("slack_origin", json!({"channel_id": "C0SYNTHETIC"}));
     assert_eq!(registry.workflow_rules_file(&thread).expect("one contribution names a file"), "thread_session.md");

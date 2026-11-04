@@ -87,11 +87,9 @@ fn state_of(run_id: &str) -> Option<Arc<DeliveryState>> {
   runs().lock().expect("mid-turn delivery registry is not poisoned").get(run_id).cloned()
 }
 
-/// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
+/// True for a manager session that no chat thread owns (`reply.is_web_session`).
 pub fn is_web_session(meta: &SessionMetadata) -> bool {
-  meta.profile == TaskProfile::Manager
-    && meta.extra.get("slack_origin").is_none_or(Value::is_null)
-    && meta.extra.get("discord_origin").is_none_or(Value::is_null)
+  meta.profile == TaskProfile::Manager && !crate::thread_origin::is_thread_session(meta)
 }
 
 /// Whether this is a web manager turn eligible for live user input.

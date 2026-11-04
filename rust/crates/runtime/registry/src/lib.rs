@@ -22,6 +22,7 @@ pub mod startup_timing;
 pub mod store_hooks;
 pub mod task_errors;
 pub mod templating;
+pub mod thread_origin;
 pub mod turn;
 pub mod usage;
 mod watch;

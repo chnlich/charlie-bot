@@ -8,9 +8,16 @@
 #   startup-lab.sh install-tools <release dir>
 #       copy mock-home and startup-lab-launcher from a release build into tools/; every later subcommand runs these
 #   startup-lab.sh generate
-#       write the lab home, home/ (8,855 task-tree sessions and an imported chat: 8,856 nodes, seed 1)
+#       write the lab home, home/ (8,929 task-tree sessions and an imported chat: 8,930 nodes, seed 1)
 #   startup-lab.sh reset
 #       return the lab home to its generated state: boot marker, file times and worktrees
+#   startup-lab.sh prime <build>
+#       one start of <build> on the lab home's copy, then copy the fact checkpoints its boot wrote back into home/, so a
+#       later timed start is a steady state: the boot before it wrote the checkpoints
+#   startup-lab.sh grow [bytes]
+#       append [bytes] (default: the 17,653,088 bytes production's scanned logs grew by between two boots) of chat
+#       content to the lab home's full-pass logs, in proportion to their size
+#       Both steps run with LAB_RESET_ALLOW_GROWTH=1, which lets the seed's logs stay longer than generated.
 #   startup-lab.sh time <build> <hot|cold> [label]
 #       reset, then one start of bin-<build>/charliebot-server on a copy of the lab home, with a warmed or an evicted
 #       page cache; prints the summary. LAB_START=release (the default) starts a live process for each live run, so
@@ -40,20 +47,21 @@
 # home's pages, and execs the server (rust/crates/app/mock-home/src/bin/startup_lab_launcher.rs). The serve command
 # saves the ready server's /proc counters to the run's proc.txt.
 #
-# The fidelity reference is the warm production start of release 6784c2b303 (2026-11-04 04:45:20Z,
-# server_20261103_204520.log): full=792, state_open=321, file_after_marker=232, worktree_exists=183, sequence_ref=36,
-# run_unended=20; resumed=10 with its live runs live; one failing node; 91 node-pass file reads of 159,659 bytes in
-# replay_followups; no whole-log read and no recover_pending_reports or run_facts read before the phase line; 122 fact
-# scans of 1 MB or more, 2,100,943,828 bytes; and fact_scans_ms 1,377 > node_passes_ms 815 > skip_checks_ms 597. A start
-# passes when each count or byte total lies within half to twice its reference, the zero references hold exactly, and
-# the three phases keep that rank order.
+# The fidelity reference is the warm production start of release 7672e488bb (2026-11-04 09:06:58Z,
+# server_20261104_010658.log): nodes=8,930, full=574, state_open=318, file_after_marker=4, worktree_exists=194,
+# sequence_ref=38, run_unended=20; resumed=12, drained=0; no failing node; 86 node-pass file reads of 34,906,094 bytes,
+# all in replay_followups; no recover_pending_reports or run_facts read; one logged whole-log read of 19,991,088 bytes in
+# the node passes; 122 fact scans of 1 MB or more, 2,119,620,437 bytes; fact_scans_ms 1,593 > skip_checks_ms 648 >
+# node_passes_ms 620. A start passes when each count or byte total lies within half to twice its reference, the zero
+# references hold exactly, and fact_scans_ms leads the other two phases. Run fidelity on the base build: the tip's fact
+# checkpoints and skip-check cut legitimately read and work less than the reference start, so its numbers differ.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 readonly SELF="$SCRIPT_DIR/startup-lab.sh"
 readonly TRIAL="$SCRIPT_DIR/trial.sh"
-readonly SESSIONS=8855
+readonly SESSIONS=8929
 readonly SEED=1
 # The lab's own port range. trial.sh's default range is shared with other sessions' trials, which can take a lab start's
 # port or answer its readiness poll; a lab start picks from this range, and its readiness needs its own server's log.
@@ -128,7 +136,18 @@ cmd_generate() {
 
 cmd_reset() {
   require_tools
-  "$MOCK_HOME" reset "$HOME_DIR"
+  if [[ ${LAB_RESET_ALLOW_GROWTH:-0} == 1 ]]; then
+    "$MOCK_HOME" reset "$HOME_DIR" --allow-growth
+  else
+    "$MOCK_HOME" reset "$HOME_DIR"
+  fi
+}
+
+cmd_grow() {
+  require_tools
+  # The bytes production's 122 scanned logs of 1 MB or more grew by between its 04:45Z and 08:11Z boots.
+  local bytes=${1:-17653088}
+  "$MOCK_HOME" append-growth "$HOME_DIR" "$bytes"
 }
 
 # The value of key=<digits> on the first log line holding event, or nothing when the line or the key is absent.
@@ -244,17 +263,18 @@ cmd_fidelity() {
   phases_at=$(grep -m1 -nE '[[:space:]]task_tree_recovery_phases[[:space:]]' "$log" | cut -d: -f1)
   logged=$(head -n "$phases_at" "$log" | awk '/[[:space:]]chat_events_file_read[[:space:]]/ {
     if (match($0, /[[:space:]]bytes=[0-9]+/)) sum += substr($0, RSTART + 7, RLENGTH - 7) } END { print sum + 0 }')
-  # The reference start's full passes: 792.
-  check full "$full" 396 1584 || failed=1
+  # The reference start's full passes: 574.
+  check full "$full" 287 1148 || failed=1
   local reason reference value
-  for reason in state_open:321 file_after_marker:232 worktree_exists:183 sequence_ref:36 run_unended:20; do
+  for reason in state_open:318 file_after_marker:4 worktree_exists:194 sequence_ref:38 run_unended:20; do
     reference=${reason#*:}
     reason=${reason%%:*}
     value=$(grep -oE "\"$reason\": [0-9]+" <<<"$done_line" | grep -oE '[0-9]+$' || printf '0')
     check "$reason" "$value" "$(( (reference + 1) / 2 ))" "$(( reference * 2 ))" || failed=1
   done
-  check node_pass_file_reads "$reads" 46 182 || failed=1
-  check logged_whole_log_read_bytes "$logged" 0 0 || failed=1
+  check node_pass_file_reads "$reads" 43 172 || failed=1
+  # The reference start's node passes logged one whole-log read of 19,991,088 bytes.
+  check logged_whole_log_read_bytes "$logged" 9995544 39982176 || failed=1
   # The reference start's walk reads no file in recover_pending_reports or run_facts.
   check recover_pending_reports_reads "$(step_value "$log" node_pass_step_file_reads recover_pending_reports)" 0 0 \
     || failed=1
@@ -262,27 +282,28 @@ cmd_fidelity() {
     "$(step_value "$log" node_pass_step_file_read_bytes recover_pending_reports)" 0 0 || failed=1
   check run_facts_reads "$(step_value "$log" node_pass_step_file_reads run_facts)" 0 0 || failed=1
   check run_facts_bytes "$(step_value "$log" node_pass_step_file_read_bytes run_facts)" 0 0 || failed=1
-  # The fact scans of logs of 1 MB or more: 122 scans, 2,100,943,828 bytes in the reference start.
+  # The fact scans of logs of 1 MB or more: 122 scans, 2,119,620,437 bytes in the reference start.
   local fact_scan_bytes
   fact_scan_bytes=$(sum_bytes '[[:space:]]chat_events_fact_scan[[:space:]]' "$log")
-  check fact_scan_bytes "$fact_scan_bytes" 1050471914 4201887656 || failed=1
-  # The release start reattaches its live runs: the reference resumed 10 and drained 1, with no stop request.
+  check fact_scan_bytes "$fact_scan_bytes" 1059810218 4239240874 || failed=1
+  # The release start reattaches its live runs: the reference resumed 12 and drained 0, with no stop request.
   local resumed stop_requests
   resumed=$(log_field "$log" task_tree_recovery_done resumed)
-  check resumed "${resumed:-0}" 5 20 || failed=1
+  check resumed "${resumed:-0}" 6 24 || failed=1
   stop_requests=$(step_value "$log" node_pass_step_ms request_stop)
   check request_stop_steps "${stop_requests:-0}" 0 0 || failed=1
-  # The reference's one failing node, the imported chat, fails at every boot.
-  check node_failures "$(count_lines '[[:space:]]task_recovery_node_failed[[:space:]]' "$log")" 1 2 || failed=1
-  # The phases keep the reference's rank order: fact_scans_ms 1,377, node_passes_ms 815, skip_checks_ms 597.
+  # The reference start has no failing node: main's drain fix landed before it. The lab's imported chat fails one.
+  check node_failures "$(count_lines '[[:space:]]task_recovery_node_failed[[:space:]]' "$log")" 0 2 || failed=1
+  # The reference's leading phase is the fact scan (1,593 ms); skip_checks (648) and node_passes (620) follow within
+  # noise of each other on a host four times faster, so only the lead is compared.
   local fact_scans node_passes skip_checks
   fact_scans=$(log_field "$log" task_tree_recovery_phases fact_scans_ms)
   node_passes=$(log_field "$log" task_tree_recovery_phases node_passes_ms)
   skip_checks=$(log_field "$log" task_tree_recovery_phases skip_checks_ms)
   [[ -n $fact_scans && -n $node_passes && -n $skip_checks ]] \
     || fail "$log lacks fact_scans_ms, node_passes_ms or skip_checks_ms"
-  if (( fact_scans > node_passes && node_passes > skip_checks )); then
-    printf 'PASS rank fact_scans_ms=%s > node_passes_ms=%s > skip_checks_ms=%s\n' \
+  if (( fact_scans > node_passes && fact_scans > skip_checks )); then
+    printf 'PASS rank fact_scans_ms=%s leads node_passes_ms=%s and skip_checks_ms=%s\n' \
       "$fact_scans" "$node_passes" "$skip_checks"
   else
     printf 'FAIL rank fact_scans_ms=%s, node_passes_ms=%s, skip_checks_ms=%s\n' \
@@ -381,6 +402,54 @@ cmd_time() {
   tr '\n' ' ' <"$run/proc.txt" | tee -a "$run/summary.txt"
   printf '\n' | tee -a "$run/summary.txt"
   return "$verdict"
+}
+
+# Runs one start of <build> on a copy of the lab home and writes the fact checkpoints its boot left into home/, so the
+# next timed start finds a checkpoint for every full-pass log. A checkpoint validates against its log's content (the
+# line boundary at its offset and two window digests), which the trial copy shares with the seed, so a copy written
+# here covers the seed's logs too.
+cmd_prime() {
+  local build=$1 commit stamp run status=0 checkpoint session copied=0
+  commit=$(build_commit "$build")
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  run="$LAB/runs/$stamp-$build-hot-prime"
+  prepare_start "$build" "$HOME_DIR" "$run"
+  start_home_live_runs "$run"
+  printf 'prime %s: %s at %s, load %s, evidence %s\n' "$stamp" "$build" "$commit" "$(cut -d' ' -f1 /proc/loadavg)" "$run"
+  serve "$build" hot "$HOME_DIR" "$run" "$commit" "startup-prime-$stamp" "$SELF" prime-snapshot "$run" "$commit" \
+    || status=$?
+  stop_live_runs "$run"
+  tail -n 3 "$run/trial.out"
+  (( status == 0 )) || fail "trial.sh exited $status; see $run/trial.out"
+  for checkpoint in "$run"/checkpoints/*.json; do
+    [[ -e $checkpoint ]] || continue
+    session=$(basename "$checkpoint" .json)
+    cp "$checkpoint" "$HOME_DIR/$session/data/fact_checkpoint.json"
+    copied=$(( copied + 1 ))
+  done
+  (( copied > 0 )) || fail "the prime start wrote no fact checkpoint; see $run"
+  printf 'copied %s fact checkpoints into %s\n' "$copied" "$HOME_DIR"
+}
+
+# The prime serve command: after server_ready, copy every session's fact checkpoint out of the trial home before the
+# trial cleans the tree up.
+cmd_prime_snapshot() {
+  local run=$1 commit=$2 tree log checkpoint session copied=0
+  tree="$LAB/trials/trial-${commit:0:12}"
+  log="$tree/server-1.log"
+  until grep -qE '[[:space:]]server_ready[[:space:]]' "$log"; do
+    kill -0 "$CHARLIEBOT_SERVE_PID" 2>/dev/null || fail 'the trial server exited before server_ready'
+    sleep 0.2
+  done
+  mkdir -p "$run/checkpoints"
+  while IFS= read -r checkpoint; do
+    session=$(basename "$(dirname "$(dirname "$checkpoint")")")
+    cp "$checkpoint" "$run/checkpoints/$session.json"
+    copied=$(( copied + 1 ))
+  done < <(find "$tree/home/.charliebot/sessions" -name fact_checkpoint.json)
+  printf 'primed %s fact checkpoints\n' "$copied"
+  [[ -e $run/live-pids.txt ]] && stop_live_runs "$run"
+  return 0
 }
 
 cmd_verify_seed() {
@@ -526,8 +595,8 @@ cmd_verify_compare() {
   return "$failed"
 }
 
-usage='install <build> <commit> <release dir> | install-tools <release dir> | generate | reset
-  | time <build> <hot|cold> [label] | summary <server log> | fidelity <server log>
+usage='install <build> <commit> <release dir> | install-tools <release dir> | generate | reset | grow [bytes]
+  | prime <build> | time <build> <hot|cold> [label] | summary <server log> | fidelity <server log>
   | verify-seed | verify-run <build> <label> | verify-compare <run dir> <run dir>'
 
 case ${1:-}:$# in
@@ -536,12 +605,16 @@ case ${1:-}:$# in
   generate:1) cmd_generate ;;
   reset:1) cmd_reset ;;
   time:3 | time:4) cmd_time "$2" "$3" "${4:-}" ;;
+  prime:2) cmd_prime "$2" ;;
+  grow:1) cmd_grow 17653088 ;;
+  grow:2) cmd_grow "$2" ;;
   summary:2) cmd_summary "$2" ;;
   fidelity:2) cmd_fidelity "$2" ;;
   verify-seed:1) cmd_verify_seed ;;
   verify-run:3) cmd_verify_run "$2" "$3" ;;
   verify-compare:3) cmd_verify_compare "$2" "$3" ;;
   serve-snapshot:3) cmd_serve_snapshot "$2" "$3" ;;
+  prime-snapshot:3) cmd_prime_snapshot "$2" "$3" ;;
   serve-digest:3) cmd_serve_digest "$2" "$3" ;;
   *) fail "usage: startup-lab.sh $usage" ;;
 esac

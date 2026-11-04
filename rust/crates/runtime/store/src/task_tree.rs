@@ -590,6 +590,13 @@ impl Store {
         {
           return Ok(Some(Arc::clone(&entry.facts)));
         }
+        // A boot checkpoint covers this log's prefix: it answers the same fold from the appended bytes, without the
+        // whole-log load. It validates against the log first, so a stale one falls through to the load.
+        if let Some(identity) = identity
+          && let Some(facts) = self.checkpoint_facts_until(session_id, identity, archived, should_stop)?
+        {
+          return Ok(Some(facts));
+        }
         let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
           return Ok(None);
         };
@@ -2742,6 +2749,22 @@ pub(crate) fn fold_scanned_history(
     fold_node_facts_from(&mut facts, live, archived, &mut || false, Some(&mut runs))?;
   }
   Ok((facts, runs))
+}
+
+/// Fold the events past a fact checkpoint onto the facts it holds. `offset` is the absolute history position of
+/// `events`' first line: the archived extent plus the live events the checkpoint covered. The fold continues the same
+/// accumulation a whole-history fold makes, so its facts equal a full scan's.
+pub(crate) fn fold_appended_history(
+  facts: &mut NodeFacts,
+  runs: &mut RunFacts,
+  events: &[SharedChatEvent],
+  offset: usize,
+) -> StoreResult<()> {
+  if events.is_empty() {
+    return Ok(());
+  }
+  fold_node_facts_from(facts, events, offset, &mut || false, Some(runs))?;
+  Ok(())
 }
 
 fn observe_run_facts(

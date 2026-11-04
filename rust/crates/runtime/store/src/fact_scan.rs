@@ -852,6 +852,69 @@ mod tests {
     assert_eq!(scanned.history_work().file_reads, 0, "the sealed facts answer without reading the log");
   }
 
+  /// A scanned line is kept exactly when a full read keeps it; a stand-in holds the full event's string id and type,
+  /// and every other kept line is the full event.
+  #[test]
+  fn scanned_lines_keep_what_a_full_read_keeps() {
+    let deep = format!("{{\"type\": \"assistant\", \"x\": {}{}}}", "[".repeat(200), "]".repeat(200));
+    let lines: Vec<&[u8]> = vec![
+      br#"{"id": "a", "type": "assistant", "content": [{"type": "text", "text": "hi"}]}"#,
+      br#"{"type": "user", "content": "a request", "id": "u"}"#,
+      br#"{"type": "user", "content": [{"type": "tool_result"}], "id": "t"}"#,
+      br#"{"type": "user", "content": "a", "content": [1]}"#,
+      br#"{"type": "user", "content": [1], "content": "b"}"#,
+      br#"{"content": "x", "type": "user", "type": "assistant"}"#,
+      br#"{"type": "assistant", "type": 7}"#,
+      br#"{"type": "assistant", "id": 5}"#,
+      br#"{"type": "assistant", "n": 1e400}"#,
+      br#"{"type": "assistant", "s": "bad \x escape"}"#,
+      b"{\"type\": \"assistant\", \"text\": \"torn \xff byte\"}",
+      deep.as_bytes(),
+      br#"{"type": "assistant"} trailing"#,
+      br#"{"type": "run_finished", "run_id": "r", "outcome": "success"}"#,
+      br#"[1, 2]"#,
+      br#""bare""#,
+      b"{broken",
+      b"   ",
+    ];
+    let keys = ParseKeys::default();
+    for line in lines {
+      let full = ndjson::parse_file_line(line, &keys);
+      let scanned = scan_line(line, &keys);
+      assert_eq!(scanned.is_some(), full.is_some(), "line {:?}", String::from_utf8_lossy(line));
+      let (Some(full), Some(scanned)) = (full, scanned) else { continue };
+      if scanned != full {
+        assert_eq!(scanned.get("id").and_then(CompactValue::as_str), full.get("id").and_then(CompactValue::as_str));
+        assert_eq!(scanned.get("type").and_then(CompactValue::as_str), full.get("type").and_then(CompactValue::as_str));
+        assert!(scanned.get("content").is_none(), "a stand-in keeps no content: {line:?}");
+      }
+    }
+  }
+
+  /// A checkpoint line decodes to the event the scan kept: a stand-in with an id, a type-only stand-in, a stand-in whose
+  /// id holds a tab (which keeps its JSON line) and a full event.
+  #[test]
+  fn checkpoint_lines_decode_to_the_events_the_scan_kept() {
+    let lines: Vec<&[u8]> = vec![
+      br#"{"id": "a", "type": "assistant", "content": [{"type": "text", "text": "hi"}]}"#,
+      br#"{"type": "user", "content": [1]}"#,
+      br#"{"id": "tab\tid", "type": "user", "content": [1]}"#,
+      br#"{"type": "run_finished", "run_id": "r", "outcome": "success"}"#,
+    ];
+    let keys = ParseKeys::default();
+    let kept: Vec<SharedChatEvent> = lines.iter().map(|line| Arc::new(scan_line(line, &keys).unwrap())).collect();
+    let text = crate::fact_checkpoint::encode_events(&kept);
+    let decoded: Vec<CompactValue> =
+      text.lines().map(|line| checkpoint_line(line.as_bytes(), &keys).unwrap()).collect();
+    assert_eq!(decoded.len(), kept.len(), "{text}");
+    for (decoded, kept) in decoded.iter().zip(&kept) {
+      assert_eq!(decoded, kept.as_ref());
+    }
+    let written: Vec<&str> = text.lines().collect();
+    assert!(written[0].starts_with('S') && written[1].starts_with('T'), "{text}");
+    assert!(written[2].starts_with('{') && written[3].starts_with('{'), "{text}");
+  }
+
   fn sorted_strings(values: &std::collections::HashSet<String>) -> Vec<String> {
     let mut list: Vec<String> = values.iter().cloned().collect();
     list.sort();

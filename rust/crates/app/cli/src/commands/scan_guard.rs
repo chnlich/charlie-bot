@@ -20,7 +20,7 @@ use charliebot_core::config::SESSIONS_DIR_NAME;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::layout::DATA_DIR_NAME;
-use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME};
+use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
 use fancy_regex::{Captures, Regex};
 use serde_json::{Value, json};
 use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
@@ -29,7 +29,7 @@ use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
 const RECURSIVE_GREP: &str = r"grep\b(?=[^|;&\n]*\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?=\s|$))";
 
 /// The file names a run directory holds that a glob can reach as run logs, and examples of them for name matching.
-const RUN_LOG_EXAMPLES: [&str; 4] = [RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw.ndjson.1", "agent.stderr.log"];
+const RUN_LOG_EXAMPLES: [&str; 4] = [RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw.ndjson.1", STDERR_LOG_NAME];
 
 /// The commands that read a file's text, for the glob rule: a glob given to one of them reads every file it names.
 const READERS: &[&str] = &[

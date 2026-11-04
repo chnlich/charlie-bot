@@ -18,7 +18,6 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{Env, LaunchArgs};
 use charliebot_store::metadata::UtcDateTime;
-use charliebot_tasks::autonamer;
 use regex::Regex;
 use serde::Deserialize;
 
@@ -187,21 +186,23 @@ impl<'a> JudgeBackends<'a> {
   }
 }
 
-/// The pool members one signature tries, in the process's shared rotation order. The same iterator serves the
-/// autonamer, so judge calls advance one rotation position and honour one cooldown table.
-fn light_backends<'a>(backends: &'a JudgeBackends<'_>) -> impl Iterator<Item = anyhow::Result<BackendOption>> + 'a {
-  autonamer::iter_light_backends(backends.cfg, Arc::clone(&backends.pool))
-}
-
 /// Judge one signature over the light backends of the pool: a call failure rotates to the next member, and a contract
 /// failure ends this signature at once. A timed-out member goes into the pool's shared cooldown for
 /// [`JUDGE_COOLDOWN`], so a hung member costs one signature instead of every signature.
+///
+/// The candidates come from the pool's own `select`, in the rotation order the autonamer advances: the pool holds the
+/// position and the cooldown table, so the judge keeps neither.
 pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -> Result<Judgement, JudgeError> {
   let system = system_prompt();
   let prompt = user_prompt(input);
   let mut last_error = None;
-  for option in light_backends(backends) {
-    let option = option.map_err(|error| JudgeError::Call(format!("{error:#}")))?;
+  let mut tried: Vec<String> = Vec::new();
+  while let Some(option) = backends
+    .pool
+    .select(backends.cfg, "light_oneshot", &tried)
+    .map_err(|error| JudgeError::Call(format!("{error:#}")))?
+  {
+    tried.push(option.id.clone());
     match attempt(backends, &option, &prompt, system, input).await {
       Ok(judgement) => return Ok(judgement),
       Err(JudgeError::Assertion(message)) => return Err(JudgeError::Assertion(message)),
@@ -508,7 +509,12 @@ mod tests {
       pool: Arc::clone(&pool),
       timeout: JUDGE_TIMEOUT,
     };
-    let offered: Vec<String> = light_backends(&backends).map(|option| option.unwrap().id).collect();
+    let mut tried = Vec::new();
+    let mut offered = Vec::new();
+    while let Some(option) = backends.pool.select(backends.cfg, "light_oneshot", &tried).unwrap() {
+      offered.push(option.id.clone());
+      tried.push(option.id);
+    }
     assert_eq!(offered, vec!["beta"]);
   }
 

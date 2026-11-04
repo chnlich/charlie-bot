@@ -35,6 +35,10 @@ pub const CLAUDE_READING_KIND: &str = "claude";
 /// classifies such a session under this kind and looks its limits up.
 pub const SNAPSHOT_READING_KIND: &str = "snapshot";
 
+/// The log event an external usage reader emits once per limit window it cannot classify. Every reader's alert
+/// matches this one name.
+pub const UNKNOWN_LIMIT_SHAPE_EVENT: &str = "ext_usage_unknown_limit_shape";
+
 /// The utilization a source reports for a window: a percentage, or `None` when the value is absent or not a number.
 pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   match value {

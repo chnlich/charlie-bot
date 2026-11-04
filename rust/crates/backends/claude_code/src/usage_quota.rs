@@ -24,7 +24,7 @@ use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_EXPIRED, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL,
-  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, as_utilization,
+  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -779,7 +779,8 @@ fn warn_limit_shape(quota: &QuotaState, account: &str, slot: LimitSlot<'_>, reas
         account = account,
         slot = slot,
         reason = reason,
-        "ext_usage_unknown_limit_shape"
+        "{}",
+        UNKNOWN_LIMIT_SHAPE_EVENT
       ),
       LimitSlot::Index(slot) => tracing::warn!(
         target: "charliebot_agents",
@@ -787,7 +788,8 @@ fn warn_limit_shape(quota: &QuotaState, account: &str, slot: LimitSlot<'_>, reas
         account = account,
         slot = slot,
         reason = reason,
-        "ext_usage_unknown_limit_shape"
+        "{}",
+        UNKNOWN_LIMIT_SHAPE_EVENT
       ),
     }
   }

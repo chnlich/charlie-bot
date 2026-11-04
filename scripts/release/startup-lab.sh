@@ -309,6 +309,11 @@ cmd_serve_snapshot() {
     sed 's/^/io_/; s/: / /' /proc/"$pid"/io
     grep -E '^(VmHWM|VmRSS|Threads|voluntary_ctxt_switches|nonvoluntary_ctxt_switches):' /proc/"$pid"/status | tr -d ':'
   } >"$run/proc.txt"
+  # A release start's live processes end after the readiness reading, so each resumed run's follow sees its process end
+  # and the trial's wait for the home's runs can finish. A crash start attaches no live process and has no list.
+  if [[ -e $run/live-pids.txt ]]; then
+    stop_live_runs "$run"
+  fi
 }
 
 # Prepares one trial start of <build> and prints its run directory: the launcher links, the reset, the seed read into

@@ -913,6 +913,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message: final_text });
     total += log.bytes;
   }
+  write_imported_chat(staging)?;
   write_marker_seed(staging)?;
   let manifest = Manifest {
     seed,
@@ -923,6 +924,71 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
   };
   session::write_json(&staging.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
+}
+
+/// The id of the imported chat that `write_home` adds after the planned sessions. It has no task, no run directory and
+/// no task boundary in its log, so its node pass fails at every boot (`has_no_task_node`), as an imported chat does in
+/// production. The manifest does not list it, so `reset` leaves it as generated.
+const IMPORTED_CHAT_ID: &str = "6f0c3b8e-2d9a-4e71-8b5c-1a7e9d4f0b26";
+
+fn write_imported_chat(staging: &Path) -> Result<()> {
+  let session_dir = staging.join(IMPORTED_CHAT_ID);
+  fs::create_dir_all(layout::data_dir(&session_dir))
+    .with_context(|| format!("cannot create {}", session_dir.display()))?;
+  let stamp = session::stamp(marker_time());
+  let metadata = NodeMetadata {
+    session: SessionMetadata {
+      id: IMPORTED_CHAT_ID.to_string(),
+      name: "Imported chat".to_string(),
+      status: "active",
+      profile: "manager",
+      backend: "mock-backend",
+      created_at: stamp.clone(),
+      updated_at: stamp,
+      schema_version: 2,
+      has_unread: false,
+      starred: false,
+    },
+    task_parent_id: None,
+    task: None,
+    archive_offset: 0,
+  };
+  session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
+  let path = layout::chat_events_path(&session_dir);
+  let line = json!({"id": "imported-1", "type": "user", "content": "hello from an imported chat"});
+  fs::write(&path, format!("{line}\n")).with_context(|| format!("cannot write {}", path.display()))
+}
+
+/// The runs of the task-tree home `home` whose record has no `ended_at`, as `(session, run)` pairs in the manifest's
+/// session order and each session's run-name order. The lab attaches a live process to each of them.
+pub fn unended_runs(home: &Path) -> Result<Vec<(String, String)>> {
+  let manifest = Manifest::read(home)?;
+  if manifest.shape != Shape::TaskTree {
+    bail!("{} holds a {:?} home; only a task-tree home has runs to list", home.display(), manifest.shape);
+  }
+  let mut runs = Vec::new();
+  for listed in &manifest.sessions {
+    let runs_dir = layout::runs_dir(&home.join(&listed.id));
+    if !runs_dir.is_dir() {
+      continue;
+    }
+    let mut names = fs::read_dir(&runs_dir)
+      .with_context(|| format!("cannot list {}", runs_dir.display()))?
+      .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+      .collect::<std::io::Result<Vec<String>>>()
+      .with_context(|| format!("cannot list {}", runs_dir.display()))?;
+    names.sort();
+    for name in names {
+      let path = runs_dir.join(&name).join(run_records::METADATA_NAME);
+      let record: Value =
+        serde_json::from_str(&fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?)
+          .with_context(|| format!("{} is not JSON", path.display()))?;
+      if record["ended_at"].is_null() {
+        runs.push((listed.id.clone(), name));
+      }
+    }
+  }
+  Ok(runs)
 }
 
 /// Returns the task-tree home `home` to its generated state: the marker, every session's file times, and the worktrees

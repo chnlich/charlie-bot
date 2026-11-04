@@ -40,8 +40,10 @@
 #
 # The fidelity reference is the production start of 11-01 12:04 PT, full=593, state_open=296, file_after_marker=100,
 # worktree_exists=144, sequence_ref=34, run_unended=19, and the one of 11-03 09:38 PT, node_pass_file_reads=247 and
-# 909,949,484 bytes of logged whole-log reads (chat_events_file_read) before the phase line. A base start passes when
-# each lies within half to twice its reference.
+# 909,949,484 bytes of logged whole-log reads (chat_events_file_read) before the phase line. The warm start of release
+# 5a41936047 (2026-11-04 00:05:45Z) makes 7 whole-log reads of 215,163,491 bytes in recover_pending_reports and 3 of
+# 76,614,206 bytes in run_facts, and its fact scans take longer than its skip checks. A base start passes when each
+# count or byte total lies within half to twice its reference, and the fact scans take longer than the skip checks.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -189,6 +191,21 @@ cmd_summary() {
   return "$failed"
 }
 
+# The value of one step's entry in a phase field, such as node_pass_step_file_reads='recover_pending_reports=7 ...', or
+# nothing when the phase line or the step is absent.
+step_value() {
+  local log=$1 field=$2 step=$3 line pattern='' pair
+  local -a list
+  line=$(grep -m1 -E '[[:space:]]task_tree_recovery_phases[[:space:]]' "$log") || return 0
+  pattern="$field='([^']*)'"
+  [[ $line =~ $pattern ]] || return 0
+  read -r -a list <<<"${BASH_REMATCH[1]}"
+  for pair in "${list[@]}"; do
+    [[ $pair == "$step="* ]] && printf '%s' "${pair#*=}"
+  done
+  return 0
+}
+
 cmd_fidelity() {
   local log=$1 failed=0
   [[ -f $log ]] || fail "no server log at $log"
@@ -210,6 +227,24 @@ cmd_fidelity() {
   done
   check node_pass_file_reads "$reads" 124 494 || failed=1
   check logged_whole_log_read_bytes "$logged" 454974742 1819898968 || failed=1
+  # The warm production start's recover_pending_reports and run_facts: 7 reads of 215,163,491 bytes and 3 reads of
+  # 76,614,206 bytes. The bounds are half to twice each reference.
+  check recover_pending_reports_reads "$(step_value "$log" node_pass_step_file_reads recover_pending_reports)" 4 14 || failed=1
+  check recover_pending_reports_bytes "$(step_value "$log" node_pass_step_file_read_bytes recover_pending_reports)" \
+    107581745 430326982 || failed=1
+  check run_facts_reads "$(step_value "$log" node_pass_step_file_reads run_facts)" 2 6 || failed=1
+  check run_facts_bytes "$(step_value "$log" node_pass_step_file_read_bytes run_facts)" 38307103 153228412 || failed=1
+  # The fact scans take longer than the skip checks, as in the warm production start (1,003 ms and 559 ms).
+  local fact_scans skip_checks
+  fact_scans=$(log_field "$log" task_tree_recovery_phases fact_scans_ms)
+  skip_checks=$(log_field "$log" task_tree_recovery_phases skip_checks_ms)
+  [[ -n $fact_scans && -n $skip_checks ]] || fail "$log lacks fact_scans_ms or skip_checks_ms"
+  if (( fact_scans > skip_checks )); then
+    printf 'PASS fact_scans_ms=%s > skip_checks_ms=%s\n' "$fact_scans" "$skip_checks"
+  else
+    printf 'FAIL fact_scans_ms=%s <= skip_checks_ms=%s\n' "$fact_scans" "$skip_checks"
+    failed=1
+  fi
   return "$failed"
 }
 

@@ -9,6 +9,11 @@
 //! nodes). That start made 593 full passes and skipped 7,410 sessions, and every count scales with the session
 //! count. Full passes use that start's odds per event-log size band.
 //!
+//! Some large full-pass logs take an archive: their first events move to `data/archives` and the metadata's
+//! `archive_offset` counts them. A build whose fact scan refuses archived sessions reads such a session's live log
+//! whole in its node passes, as production's archived sessions did, and the lab keeps that read pattern for it
+//! (`HomePlan::plan_archives`).
+//!
 //! The nodes form production's tree, so the node passes read other nodes' logs as production's do (`HomePlan::plant_tree`). A
 //! parent is a manager with one of the largest logs, and a child's parent is drawn in proportion to the parents' log
 //! bytes. A closed child's `task_closed` reports to its parent, and the parent's log holds that report. A pass then
@@ -118,6 +123,17 @@ const TRIGGER_FILES_PER_SESSION: f64 = 4800.0 / 8100.0;
 const PENDING_TRIGGERS_PER_SESSION: f64 = 25.0 / 8100.0;
 /// The share of sessions that hold the fired trigger files.
 const TRIGGER_HOLDER_SHARE: f64 = 0.2;
+/// A parent whose log is between these lengths takes an archive. The reference start's node passes read the live logs
+/// of ten archived sessions whole, from 1 MB to 84.7 MB each, most of them parents read by their children's passes. A
+/// longer parent would read more than that reference's largest log, so it keeps its log whole.
+const ARCHIVE_MIN_BYTES: u64 = 20_000_000;
+const ARCHIVE_MAX_BYTES: u64 = 100_000_000;
+/// The share of an archived log's bytes that its archive file holds. The two reference sessions that the start read
+/// whole held 12 % and 30 % in their archives.
+const ARCHIVE_FRACTION: f64 = 0.2;
+/// The archive file an archived session's first events go to. The store reads every `chat_events.*.jsonl` in
+/// `data/archives`, so the name only has to match that pattern.
+const ARCHIVE_FILE_NAME: &str = "chat_events.2026-W44.jsonl";
 /// The lowest pid a launched run carries: Linux's PID_MAX_LIMIT on 64-bit hosts, which no process id reaches.
 const STALE_PID_FLOOR: u32 = 1 << 22;
 
@@ -207,6 +223,8 @@ struct SessionPlan {
   close: Option<ClosePlan>,
   pending_triggers: usize,
   fired_triggers: usize,
+  /// Whether the log's first `ARCHIVE_FRACTION` of bytes sits in an archive file, and the metadata names its events.
+  archived: bool,
 }
 
 /// How a closed session closed: the request, who closed it and how, and the plan index of the parent it reported to.
@@ -303,8 +321,24 @@ impl HomePlan {
     Self::plant_tree(&mut sessions, sizes, &mut rng);
     Self::type_workers(&mut sessions, &mut rng);
     Self::plan_closes(&mut sessions, &mut rng);
+    Self::plan_archives(&mut sessions, sizes);
     let reports = Self::reports(&sessions);
     Self { sessions, reports }
+  }
+
+  /// Archives every parent whose planned log is within `ARCHIVE_MIN_BYTES` and `ARCHIVE_MAX_BYTES`. A child's pass
+  /// reads its archived parent's live log whole on a build whose fact scan refuses archived sessions, as the reference
+  /// start's node passes did, and a parent that is itself a full pass reads its own live log in its pass.
+  fn plan_archives(sessions: &mut [SessionPlan], sizes: &[u64]) {
+    let mut has_child = vec![false; sessions.len()];
+    for session in sessions.iter() {
+      if let Some(parent) = session.parent {
+        has_child[parent] = true;
+      }
+    }
+    for (index, (session, size)) in sessions.iter_mut().zip(sizes).enumerate() {
+      session.archived = has_child[index] && (ARCHIVE_MIN_BYTES..=ARCHIVE_MAX_BYTES).contains(size);
+    }
   }
 
   /// Gives the tree its parents and children. The parents are the managers with a task and a finished run whose logs are
@@ -493,6 +527,7 @@ impl HomePlan {
       close: None,
       pending_triggers: 0,
       fired_triggers: 0,
+      archived: false,
     }
   }
 
@@ -687,6 +722,23 @@ fn write_task_log(
   Ok(TaskLog { bytes, run_inputs })
 }
 
+/// Moves the whole lines that open a log's first `ARCHIVE_FRACTION` of `bytes` into the session's archive file, and
+/// returns the archived events and the bytes the live log keeps. The archive holds the log's first events, as a store
+/// archive does, and the live log keeps the rest.
+fn archive_prefix(session_dir: &Path, bytes: u64) -> Result<(usize, u64)> {
+  let log_path = layout::chat_events_path(session_dir);
+  let text = fs::read(&log_path).with_context(|| format!("cannot read {}", log_path.display()))?;
+  let target = (bytes as f64 * ARCHIVE_FRACTION) as usize;
+  let cut = text[target..].iter().position(|byte| *byte == b'\n').map_or(text.len(), |offset| target + offset + 1);
+  let archive_dir = layout::archives_dir(session_dir);
+  fs::create_dir_all(&archive_dir).with_context(|| format!("cannot create {}", archive_dir.display()))?;
+  let archive_path = archive_dir.join(ARCHIVE_FILE_NAME);
+  fs::write(&archive_path, &text[..cut]).with_context(|| format!("cannot write {}", archive_path.display()))?;
+  fs::write(&log_path, &text[cut..]).with_context(|| format!("cannot write {}", log_path.display()))?;
+  let archived = text[..cut].iter().filter(|byte| **byte == b'\n').count();
+  Ok((archived, (text.len() - cut) as u64))
+}
+
 /// One node's `metadata.json`: the default session fields, then the task-tree fields.
 #[derive(Serialize)]
 struct NodeMetadata {
@@ -694,6 +746,8 @@ struct NodeMetadata {
   session: SessionMetadata,
   task_parent_id: Option<String>,
   task: Option<TaskSpec>,
+  /// The count of events the archive files hold, as the store's `archive_offset`; zero for a session with no archive.
+  archive_offset: usize,
 }
 
 fn task_spec(profile: TaskProfile, task_type: Option<TaskType>, rng: &mut Rng) -> TaskSpec {
@@ -816,6 +870,8 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng));
     let log_path = layout::chat_events_path(&session_dir);
     let log = write_task_log(&log_path, &plan, index, *size, &mut rng, &text, &final_text)?;
+    let (archive_offset, live_bytes) =
+      if session.archived { archive_prefix(&session_dir, log.bytes)? } else { (0, log.bytes) };
     let metadata = NodeMetadata {
       session: SessionMetadata {
         id: id.clone(),
@@ -834,6 +890,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
       },
       task_parent_id: session.parent.map(|parent| plan.sessions[parent].id.clone()),
       task: session.has_task.then(|| task_spec(session.profile, session.task_type, &mut rng)),
+      archive_offset,
     };
     session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     for (run, inputs) in session.runs.iter().zip(log.run_inputs) {
@@ -853,7 +910,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
       trigger_files::write_trigger(&session_dir, &trigger(&id, session, status, &mut rng))?;
     }
     set_session_times(&session_dir, session.modified_at)?;
-    manifest_sessions.push(ManifestSession { id, event_log_bytes: log.bytes, last_message: final_text });
+    manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message: final_text });
     total += log.bytes;
   }
   write_marker_seed(staging)?;
@@ -969,5 +1026,13 @@ mod tests {
       assert!(plan.sessions[parent].runs.iter().any(|run| run.end == RunEnd::Finished), "a report's run finished");
     }
     assert!(plan.sessions.iter().all(|session| session.task_type != Some(TaskType::ColdRead)), "no cold read");
+
+    // An archive takes a large parent's log, and a plan of this size archives several of them.
+    let archived: Vec<usize> = (0..sessions).filter(|index| plan.sessions[*index].archived).collect();
+    assert!(archived.len() >= 5, "{} archived sessions", archived.len());
+    for index in archived {
+      let band = ARCHIVE_MIN_BYTES..=ARCHIVE_MAX_BYTES;
+      assert!(parents.contains(&index) && band.contains(&sizes[index]), "session {index}");
+    }
   }
 }

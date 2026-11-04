@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
@@ -37,6 +37,16 @@ use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, 
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
+
+/// Clears the background-refresh flag however its rebuild ends, so a failed build does not stop every later one.
+struct TreeIndexRefreshFlight<'a>(&'a AtomicBool);
+
+impl Drop for TreeIndexRefreshFlight<'_> {
+  fn drop(&mut self) {
+    self.0.store(false, Ordering::Release);
+  }
+}
+
 // The lifecycle facts that set a node's task state: the walk stops at the newest of these.
 const LIFECYCLE_STATE_TYPES: &[&str] =
   &[event_types::CLONE_START, event_types::TASK_CLOSED, event_types::TASK_REOPENED];
@@ -2110,11 +2120,25 @@ impl Store {
       return Ok(None);
     }
     let generation = self.task_tree_generation.load(Ordering::Acquire);
-    if let Some(cached) = self.task_tree_index.lock().expect("task tree index mutex is not poisoned").as_ref()
-      && cached.generation == generation
-      && cached.built_at.elapsed() < TREE_INDEX_TTL
+    let stale = {
+      let cached = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
+      match cached.as_ref() {
+        Some(cached) if cached.generation == generation => {
+          if cached.built_at.elapsed() < TREE_INDEX_TTL {
+            return Ok(Some(Arc::clone(&cached.index)));
+          }
+          Some(Arc::clone(&cached.index))
+        }
+        _ => None,
+      }
+    };
+    // The cached snapshot agrees with the generation, so only its age is in question: past the TTL an external edit
+    // may have landed. A store that holds its own handle rebuilds off the reading thread and serves the snapshot,
+    // because the walk over a production-sized home outlasts the page request that finds it stale.
+    if let Some(index) = stale
+      && self.refresh_tree_index_in_background()
     {
-      return Ok(Some(Arc::clone(&cached.index)));
+      return Ok(Some(index));
     }
     let Some(index) = build_tree_index_until(self, should_stop)? else {
       return Ok(None);
@@ -2129,6 +2153,53 @@ impl Store {
         Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::clone(&index) });
     }
     Ok(Some(index))
+  }
+
+  /// Let a read that finds the task-tree index past its TTL serve the cached snapshot while a background thread
+  /// rebuilds it.
+  ///
+  /// A rebuild walks every session of the home, so on the production-sized home it outlasts the request that
+  /// triggers it. The server installs this handle once, after it wraps the store in its `Arc`; a store without the
+  /// handle keeps rebuilding on the reading thread.
+  pub fn enable_tree_index_background_refresh(self: &Arc<Self>) {
+    let _ = self.tree_index_self.set(Arc::downgrade(self));
+  }
+
+  /// Start one background rebuild of a stale task-tree index, or report that one already runs or that the store has
+  /// no handle to rebuild itself through.
+  ///
+  /// False means the caller must build synchronously: the store has no handle, or its thread could not start. A
+  /// build that started is discarded when the tree generation moved while it ran, exactly as a synchronous build's
+  /// result is.
+  fn refresh_tree_index_in_background(&self) -> bool {
+    let Some(store) = self.tree_index_self.get().and_then(Weak::upgrade) else { return false };
+    if self.tree_index_refresh_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+      return true;
+    }
+    let generation = self.task_tree_generation.load(Ordering::Acquire);
+    let spawned = std::thread::Builder::new().name("task-tree-index-refresh".to_string()).spawn(move || {
+      let _flight = TreeIndexRefreshFlight(&store.tree_index_refresh_running);
+      let mut never_stop = || false;
+      let Ok(Some(index)) = build_tree_index_until(&store, &mut never_stop) else { return };
+      store.task_tree_index_builds.fetch_add(1, Ordering::Relaxed);
+      if store.task_tree_generation.load(Ordering::Acquire) != generation {
+        return;
+      }
+      *store.task_tree_index.lock().expect("task tree index mutex is not poisoned") =
+        Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::new(index) });
+    });
+    if spawned.is_err() {
+      self.tree_index_refresh_running.store(false, Ordering::Release);
+      return false;
+    }
+    true
+  }
+
+  #[cfg(test)]
+  pub(crate) fn expire_tree_index_for_test(&self) {
+    if let Some(cached) = self.task_tree_index.lock().expect("task tree index mutex is not poisoned").as_mut() {
+      cached.built_at = Instant::now() - TREE_INDEX_TTL - Duration::from_secs(1);
+    }
   }
 
   fn publish_task_node(&self, meta: &SessionMetadata, event: &Value) -> StoreResult<()> {
@@ -3329,6 +3400,33 @@ pub(crate) mod tests {
       "the archive ids belong to the shared index, so a reader shares rather than clones them"
     );
     assert_eq!(store.child_ids(&root.id).unwrap(), [child.id]);
+  }
+
+  #[tokio::test]
+  async fn a_stale_tree_index_serves_its_snapshot_while_a_background_thread_publishes_the_next() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "refresh-root", None, TaskProfile::Manager).await;
+    store.get_session(&root.id).await.unwrap().unwrap();
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    assert_eq!(store.task_tree_index_build_count(), 1);
+
+    store.enable_tree_index_background_refresh();
+    store.expire_tree_index_for_test();
+    let stale = store.tree_index().unwrap();
+    assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
+
+    let mut refreshed = Arc::clone(&first);
+    for _ in 0..200 {
+      refreshed = store.tree_index().unwrap();
+      if !Arc::ptr_eq(&refreshed, &first) {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!Arc::ptr_eq(&refreshed, &first), "the background build publishes the next index");
+    assert_eq!(store.task_tree_index_build_count(), 2, "the background build is the second one");
   }
 
   #[tokio::test]

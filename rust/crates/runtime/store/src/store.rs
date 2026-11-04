@@ -5,8 +5,8 @@ use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use charliebot_core::config::CharlieBotConfig;
@@ -424,6 +424,11 @@ pub struct Store {
   /// The identity the next task-tree index build takes, so a reader can tell two builds apart.
   pub(crate) next_tree_index_build_id: AtomicU64,
   pub(crate) task_tree_generation: AtomicU64,
+  /// The store's own handle, set once by [`Store::enable_tree_index_background_refresh`]. While it is set, a read
+  /// that finds the index past its TTL serves the cached snapshot and rebuilds it on a background thread.
+  pub(crate) tree_index_self: OnceLock<Weak<Store>>,
+  /// Whether a background index rebuild is in flight, so stale reads start one rebuild rather than one each.
+  pub(crate) tree_index_refresh_running: AtomicBool,
   /// The last tree page computed, kept while the index build, the run-record generation and every history it read
   /// still hold.
   pub(crate) tree_page_memo: StdMutex<Option<CachedTreePage>>,
@@ -519,6 +524,8 @@ impl Store {
       task_tree_index_builds: AtomicU64::new(0),
       next_tree_index_build_id: AtomicU64::new(0),
       task_tree_generation: AtomicU64::new(0),
+      tree_index_self: OnceLock::new(),
+      tree_index_refresh_running: AtomicBool::new(false),
       tree_page_memo: StdMutex::new(None),
       #[cfg(any(test, feature = "write-faults"))]
       write_faults: Arc::default(),

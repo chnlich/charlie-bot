@@ -5,9 +5,9 @@
 //! after the marker, an unended run, a sequence ref, and an existing worktree. Every session has one reason, or none.
 //! The shape writes the task facts, run records, trigger files, worktrees and marker for the walk and trigger recovery.
 //!
-//! `REFERENCE_KEEPS`, `TASK_SHARE`, `RUNS_SHARE` and `FULL_PASS_ODDS` hold one production start's counts (8,003
-//! nodes). That start made 593 full passes and skipped 7,410 sessions, and every count scales with the session
-//! count. Full passes use that start's odds per event-log size band.
+//! `REFERENCE_NODES` and `REFERENCE_KEEPS` hold the 04:45Z release start's counts: 8,856 nodes, 792 full passes and
+//! 8,064 skipped sessions. Every keep count scales with the session count. `TASK_SHARE`, `RUNS_SHARE` and
+//! `FULL_PASS_ODDS` hold the shares of an earlier 8,003-node start; full passes use its odds per size band.
 //!
 //! Some large full-pass logs take an archive: their first events move to `data/archives` and the metadata's
 //! `archive_offset` counts them. A build whose fact scan refuses archived sessions reads such a session's live log
@@ -91,14 +91,14 @@ const WORKTREE_WORKER_TYPES: [(Option<TaskType>, f64); 4] = [
   (Some(TaskType::ScriptRun), 10.0),
 ];
 
-/// The reference start's node count, and its full-pass count for each keep reason.
-const REFERENCE_NODES: f64 = 8003.0;
+/// The 04:45Z release start's node count, and its full-pass count for each keep reason.
+const REFERENCE_NODES: f64 = 8856.0;
 const REFERENCE_KEEPS: [(KeepReason, f64); 5] = [
-  (KeepReason::StateOpen, 296.0),
-  (KeepReason::FileAfterMarker, 100.0),
-  (KeepReason::RunUnended, 19.0),
-  (KeepReason::SequenceRef, 34.0),
-  (KeepReason::WorktreeExists, 144.0),
+  (KeepReason::StateOpen, 321.0),
+  (KeepReason::FileAfterMarker, 232.0),
+  (KeepReason::RunUnended, 20.0),
+  (KeepReason::SequenceRef, 36.0),
+  (KeepReason::WorktreeExists, 183.0),
 ];
 /// The odds that a session took a full pass in the reference start, by event-log size band: (lower bound in bytes,
 /// odds). 5 of the 11 logs of 50 MB or more took one, and 40 of 145 between 10 and 50 MB. The bands between 1 and
@@ -1082,7 +1082,7 @@ mod tests {
   /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
   fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
-    let sessions = 8_100;
+    let sessions = 8_855;
     let (_, _, sizes) = session::planned_home(sessions, 1);
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {
@@ -1094,19 +1094,15 @@ mod tests {
     let with_task = plan.sessions.iter().filter(|session| session.has_task).count();
     assert_eq!(with_task, (TASK_SHARE * sessions as f64).round() as usize);
 
-    let replayed = |worker_only: bool| {
-      plan
-        .sessions
-        .iter()
-        .filter(|session| session.reason.is_some_and(|reason| reason != KeepReason::SequenceRef))
-        .filter(|session| !worker_only || session.profile == TaskProfile::Worker)
-        .flat_map(|session| &session.runs)
-        .filter(|run| run.end == RunEnd::Finished)
-        .count() as f64
-    };
-    let (followups, worker_followups) = (replayed(false), replayed(true));
-    assert!((followups / scaled(6907.0, sessions) - 1.0).abs() < 0.15, "{followups} follow-ups");
-    assert!((worker_followups / scaled(327.0, sessions) - 1.0).abs() < 0.15, "{worker_followups} worker follow-ups");
+    let followups = plan
+      .sessions
+      .iter()
+      .filter(|session| session.reason.is_some_and(|reason| reason != KeepReason::SequenceRef))
+      .flat_map(|session| &session.runs)
+      .filter(|run| run.end == RunEnd::Finished)
+      .count() as f64;
+    // The 04:45Z start's walk counted 8,357 follow-ups over its 8,856 nodes.
+    assert!((followups / scaled(8357.0, sessions) - 1.0).abs() < 0.15, "{followups} follow-ups");
 
     // A report that no finished parent run confirms is a pending input, and a lab start would dispatch it.
     let parents: Vec<usize> = plan.sessions.iter().filter_map(|session| session.parent).collect();

@@ -3339,22 +3339,32 @@ async fn a_boot_marker_that_is_not_utf8_reads_as_absent() -> anyhow::Result<()> 
   assert_unreadable_boot_marker_reads_as_absent(b"\xff\xfe{}", "UnicodeDecodeError").await
 }
 
+/// The marker of one boot's failed node, read back from the file.
+fn marker_failed_sessions(stack: &Stack) -> anyhow::Result<Value> {
+  let marker: Value = serde_json::from_slice(&std::fs::read(boot_marker_path(stack))?)?;
+  Ok(marker.get("failed_sessions").cloned().unwrap_or(Value::Null))
+}
+
+/// A boot whose node pass fails writes a marker that names that node and advances for the rest. The next boot takes the
+/// failed node's full pass and skips the clean node on the marker's word. Once the node's pass succeeds, the marker a
+/// clean boot writes names no failed node.
 #[tokio::test]
-async fn failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries() -> anyhow::Result<()> {
+async fn a_failed_node_pass_is_retried_at_the_next_boot_while_the_marker_advances_for_the_rest() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
-  let _settled_worker = add_recovery_worker(
+  let clean_worker = add_recovery_worker(
     &stack,
-    "settled-worker",
-    "run-settled",
+    "clean-worker",
+    "run-clean",
     RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
   )
   .await?;
-  stack.boot().await?;
-  let marker_path = boot_marker_path(&stack);
-  let before = std::fs::read(&marker_path)?;
+  let first = stack.boot().await?;
+  let first_marker = std::fs::read(boot_marker_path(&stack))?;
+  assert!(first.marker.is_none(), "the first boot has no marker to read");
+  backdate_durable_files(&stack, &clean_worker.id, Duration::from_secs(60))?;
 
   let root_manager = stack.node("report-manager", None, TaskProfile::Manager, None).await?;
   let failed_worker = stack.node("report-worker", Some(&root_manager.id), TaskProfile::Worker, None).await?;
@@ -3368,13 +3378,23 @@ async fn failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries() 
     libc::ENOSPC,
   );
 
-  stack.boot().await?;
+  let failing = stack.boot().await?;
   assert!(fault.hits().contains(&Hit::Failed), "the out-of-space report failed during the boot pass");
-  assert_eq!(std::fs::read(&marker_path)?, before, "the failed pass leaves the previous marker unchanged");
+  assert!(log.text().contains("task_recovery_node_failed"), "the failed node pass is logged");
+  assert_eq!(
+    marker_failed_sessions(&stack)?,
+    json!([failed_worker.id]),
+    "the marker names the failed node and no other"
+  );
+  assert_ne!(std::fs::read(boot_marker_path(&stack))?, first_marker, "the marker advances past the first boot");
+  assert!(failing.skipped >= 1, "the clean worker is skipped on the marker's word: {failing:?}");
   settle_until(|| Ok(!stack.child_reports(&root_manager.id)?.is_empty())).await?;
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
-  assert_eq!(std::fs::read(&marker_path)?, before, "the end-landing retry does not advance the boot marker");
-  assert!(log.text().contains("task_recovery_node_failed"));
+
+  let retried = stack.boot().await?;
+  assert_eq!(retried.keep_reasons.get("failed_pass"), Some(&1), "the next boot retries the failed node: {retried:?}");
+  assert!(retried.skipped >= 1, "the clean worker stays skipped while the failed node is retried: {retried:?}");
+  assert_eq!(marker_failed_sessions(&stack)?, Value::Null, "a successful retry leaves no failed node in the marker");
   Ok(())
 }
 
@@ -3576,7 +3596,7 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
 }
 
 #[tokio::test]
-async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() -> anyhow::Result<()> {
+async fn an_imported_chat_log_fails_its_node_pass_and_the_marker_names_it() -> anyhow::Result<()> {
   // The boot pass's cheap rule-out of a session whose history holds no task boundary.
   let log = LogCapture::default();
   let _subscriber = log.install();
@@ -3603,7 +3623,7 @@ async fn an_imported_chat_log_fails_its_node_pass_and_holds_the_boot_marker() ->
     text.contains("has no creation or import boundary; it is not a task-tree node"),
     "the failure keeps the node-absence error: {text}"
   );
-  assert!(!boot_marker_path(&stack).exists(), "a failed node keeps the boot marker away: {text}");
+  assert_eq!(marker_failed_sessions(&stack)?, json!([session_id]), "the marker names the failed node: {text}");
   Ok(())
 }
 

@@ -10,7 +10,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 home="$test_root/home"
 scope_dir="$home/local-work-guard"
-session_ids=$(python3 -c 'import uuid; [print(uuid.uuid4()) for _ in range(3)]')
+session_ids=$(for _ in 1 2 3; do cat /proc/sys/kernel/random/uuid; done)
 mapfile -t session_ids <<< "$session_ids"
 root_id=${session_ids[0]}
 child_id=${session_ids[1]}

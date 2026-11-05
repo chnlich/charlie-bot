@@ -50,7 +50,7 @@ impl OpencodeLogs {
 
 impl UsageSourceImpl for OpencodeLogs {
   fn ops(&self) -> UsageOps {
-    UsageOps { logs: true, read: true, sweep: true, ..UsageOps::default() }
+    UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: false, sweep: true }
   }
 
   fn logs(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {

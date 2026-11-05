@@ -548,10 +548,14 @@ impl Drop for Harness {
 
 fn launch_with_instructions(content: Option<&str>, file: Option<PathBuf>, resume: Option<&str>) -> LaunchArgs {
   LaunchArgs {
+    extra_flags: Vec::new(),
+    buffer_limit: None,
     instructions_content: content.map(str::to_string),
     instructions_file: file,
     resume_session_id: resume.map(str::to_string),
-    ..LaunchArgs::default()
+    log_dir: None,
+    cgroup_session_id: None,
+    backend_kwargs: Map::new(),
   }
 }
 
@@ -673,11 +677,15 @@ fn process_rss_reads_the_process_own_resident_memory() {
 #[tokio::test]
 async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() {
   let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
     idle_exit: Duration::from_secs(3600),
     heavy_check: Duration::from_millis(10),
     heavy_rss_mb: 400.0,
     heavy_rss_override: Some(401.0),
-    ..ServerTimeouts::default()
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
   };
   let harness =
     Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
@@ -698,11 +706,15 @@ async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() 
 #[tokio::test]
 async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
   let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
     idle_exit: Duration::from_millis(80),
     heavy_check: Duration::from_millis(10),
     heavy_rss_mb: 400.0,
     heavy_rss_override: Some(400.0),
-    ..ServerTimeouts::default()
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
   };
   let harness =
     Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
@@ -730,10 +742,15 @@ async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
 #[tokio::test]
 async fn a_claimed_directory_keeps_the_server_running() {
   let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
     idle_exit: Duration::from_millis(50),
     heavy_check: Duration::from_millis(10),
     heavy_rss_mb: 0.0,
-    ..ServerTimeouts::default()
+    heavy_rss_override: None,
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
   };
   let harness = Harness::with_settings(held_script(&["held"]), None, timeouts, None);
   let directory = harness.root.path().join("work").display().to_string();
@@ -767,10 +784,15 @@ async fn a_claimed_directory_keeps_the_server_running() {
 #[tokio::test]
 async fn dropping_the_last_claim_rearms_the_idle_exit() {
   let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
     idle_exit: Duration::from_millis(100),
     heavy_check: Duration::from_millis(10),
     heavy_rss_mb: 1_000_000.0,
-    ..ServerTimeouts::default()
+    heavy_rss_override: None,
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
   };
   let harness = Harness::with_settings(json!({}), None, timeouts, None);
   let directory = harness.root.path().join("claimed").display().to_string();
@@ -793,10 +815,15 @@ async fn dropping_the_last_claim_rearms_the_idle_exit() {
 #[tokio::test]
 async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops() {
   let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
     idle_exit: Duration::from_secs(3600),
     heavy_check: Duration::from_millis(10),
     heavy_rss_mb: 0.0,
-    ..ServerTimeouts::default()
+    heavy_rss_override: None,
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
   };
   let harness = Harness::with_settings(
     json!({"prompts": {"first": {"events": [text_event("one")]}, "next": {"events": [text_event("two")]}}}),
@@ -1431,7 +1458,16 @@ async fn reused_run_directory_sends_only_the_new_prompt() {
     "second": {"events": [text_event("second answer")]}
   }}));
   let directory = harness.run_logs_directory().join("reused");
-  let launch = LaunchArgs { log_dir: Some(directory), ..LaunchArgs::default() };
+  let launch = LaunchArgs {
+    extra_flags: Vec::new(),
+    buffer_limit: None,
+    instructions_content: None,
+    instructions_file: None,
+    resume_session_id: None,
+    log_dir: Some(directory),
+    cgroup_session_id: None,
+    backend_kwargs: Map::new(),
+  };
   let (_, _, first) = harness.start_run("first", launch.clone(), None, vec![], Env::new());
   assert_eq!(first.await.unwrap().unwrap().exit_code, Some(0));
   let (_, events, second) = harness.start_run("second", launch, None, vec![], Env::new());
@@ -1737,10 +1773,15 @@ async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restar
 #[tokio::test]
 async fn idle_server_exits_after_the_idle_limit() {
   let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
     idle_exit: Duration::from_millis(80),
     heavy_check: Duration::from_millis(50),
     heavy_rss_mb: 1_000_000.0,
-    ..ServerTimeouts::default()
+    heavy_rss_override: None,
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
   };
   let harness =
     Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
@@ -1827,7 +1868,17 @@ async fn missing_join_script_fails_before_the_environment_is_set() {
 
 #[tokio::test]
 async fn silent_session_fails_after_the_progress_timeout() {
-  let timeouts = ServerTimeouts { progress: Duration::from_millis(50), ..ServerTimeouts::default() };
+  let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
+    idle_exit: opencode_limits::OPENCODE_SERVER_IDLE_EXIT_SECONDS,
+    heavy_check: opencode_limits::OPENCODE_SERVER_HEAVY_CHECK_SECONDS,
+    heavy_rss_mb: opencode_limits::OPENCODE_SERVER_HEAVY_RSS_MB,
+    heavy_rss_override: None,
+    interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
+    progress: Duration::from_millis(50),
+  };
   let harness = Harness::with_settings(held_script(&["quiet"]), None, timeouts, None);
   let (_, output, task) = harness.start_run("quiet", LaunchArgs::default(), None, vec![], Env::new());
   let outcome = tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap().unwrap();
@@ -1976,7 +2027,16 @@ async fn recovered_translator_keeps_the_original_model_after_settings_change() {
   let option = opencode_option("changed", "other/new-model", "{}");
   let cfg = config_with(harness.root.path(), vec![option.clone()]);
   let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
-  let launch = LaunchArgs { log_dir: Some(directory), ..LaunchArgs::default() };
+  let launch = LaunchArgs {
+    extra_flags: Vec::new(),
+    buffer_limit: None,
+    instructions_content: None,
+    instructions_file: None,
+    resume_session_id: None,
+    log_dir: Some(directory),
+    cgroup_session_id: None,
+    backend_kwargs: Map::new(),
+  };
   let backend = factory.build(Some(&option), &cfg, launch).unwrap();
   let mut translator = backend.translator();
   translator.translate(usage_event(10, 4)).unwrap();
@@ -2152,7 +2212,17 @@ async fn unclaimed_execution_is_interrupted() {
 
 #[tokio::test]
 async fn earlier_interrupt_wait_times_out_with_the_session_id() {
-  let timeouts = ServerTimeouts { interrupt_settle: Duration::from_millis(20), ..ServerTimeouts::default() };
+  let timeouts = ServerTimeouts {
+    start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
+    stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
+    stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
+    idle_exit: opencode_limits::OPENCODE_SERVER_IDLE_EXIT_SECONDS,
+    heavy_check: opencode_limits::OPENCODE_SERVER_HEAVY_CHECK_SECONDS,
+    heavy_rss_mb: opencode_limits::OPENCODE_SERVER_HEAVY_RSS_MB,
+    heavy_rss_override: None,
+    interrupt_settle: Duration::from_millis(20),
+    progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
+  };
   let harness = Harness::with_settings(json!({}), None, timeouts, None);
   harness.server.add_pending_test("ses_x");
   let error = harness.server.wait_interrupts_settled("ses_x").await.unwrap_err();

@@ -430,4 +430,48 @@ printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_messag
     let entries: Vec<&str> = child_path.trim_end().split(':').collect();
     assert_eq!(entries, [wrapper_dir.to_str().unwrap(), local_bin.to_str().unwrap(), "/usr/bin", "/bin"]);
   }
+
+  /// The hook-trust notices codex-cli 0.164.0 emits before `turn.started` are item-level errors, so they translate to
+  /// system events and the one-shot answers instead of failing on the notice text.
+  #[tokio::test]
+  async fn one_shot_answers_through_the_hook_trust_item_notices() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let wrapper_dir = root.path().join("wrapper");
+    let local_bin = root.path().join("local-bin");
+    fs::create_dir_all(&wrapper_dir).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    let gh = wrapper_dir.join("gh");
+    fs::write(&gh, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let codex = root.path().join("codex");
+    let notice =
+      "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.";
+    let script = format!(
+      r#"#!/bin/sh
+printf '%s\n' '{{"type":"item.completed","item":{{"id":"item_0","type":"error","message":"{notice}"}}}}'
+printf '%s\n' '{{"type":"item.completed","item":{{"id":"item_1","type":"error","message":"{notice}"}}}}'
+printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_message","text":"ok"}}}}'
+"#
+    );
+    fs::write(&codex, script).unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let base_env = Env::from([
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", wrapper_dir.display())),
+      (gh_wrapper::WRAPPER_PATH_VAR.to_string(), gh.display().to_string()),
+    ]);
+    let mut backend = CodexBackend::from_launch(
+      codex,
+      &local_bin,
+      "gpt-5.5",
+      &CodexOptions::default(),
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+
+    assert_eq!(backend.one_shot_text(&base_env, "prompt", "system", None).unwrap().await.unwrap(), "ok");
+  }
 }

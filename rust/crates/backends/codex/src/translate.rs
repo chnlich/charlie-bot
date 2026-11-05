@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use super::pricing;
 use super::text::{count_or_zero, empty_object, truthy};
 use charliebot_agents::event_builders::{
-  make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
+  make_error_event, make_result_event, make_system_message_event, make_text_event, make_tool_result_event,
+  make_tool_use_event,
 };
 
 /// The event type the translation emits for each file a `file_change` item adds or updates. The wire value is
@@ -368,6 +369,9 @@ fn todo_marker(todo: &Map<String, Value>) -> &'static str {
   }
 }
 
+/// An item-level error is a non-fatal notice the turn continues past, so it becomes a `system` event and stays out of
+/// the run's failure-cause selection, which reads only `error` events. A top-level `error` or `turn.failed` is a turn
+/// failure and keeps its `error` event.
 fn error_item(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<Value> {
   if text_of(item, "type") != Some(event_types::ERROR) {
     return Vec::new();
@@ -376,7 +380,7 @@ fn error_item(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<Valu
     Some(message) if truthy(message) => value_str(message),
     _ => format!("Codex item error with no message. Full event: {}", full_event(event)),
   };
-  vec![make_error_event(&message)]
+  vec![make_system_message_event(&message)]
 }
 
 /// The message of a `turn.failed` or top-level `error` event: the error's message, else the event's own, else the
@@ -465,6 +469,17 @@ mod tests {
     assert_eq!(top, [make_error_event("boom")]);
     let bare = translator.translate_event(&json!({"type": "error"})).unwrap();
     assert_eq!(bare[0]["message"], "Codex error with no message. Full event: {\"type\": \"error\"}");
+  }
+
+  /// The probe line of one real codex-cli 0.164.0 run under `--dangerously-bypass-hook-trust`: the notice precedes
+  /// `turn.started` and the turn continues.
+  #[test]
+  fn an_item_level_error_becomes_one_system_notice_and_no_error_event() {
+    let message =
+      "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.";
+    let event = json!({"type": "item.completed", "item": {"id": "item_0", "type": "error", "message": message}});
+    let mut translator = CodexTranslator::new("gpt-5.5");
+    assert_eq!(translator.translate_event(&event).unwrap(), [make_system_message_event(message)]);
   }
 
   #[test]

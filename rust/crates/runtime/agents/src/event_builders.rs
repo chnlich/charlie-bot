@@ -58,6 +58,11 @@ pub fn make_tool_result_event(tool_name: &str, content: &str) -> Value {
   json!({"type": event_types::TOOL_RESULT, "tool_name": tool_name, "content": content})
 }
 
+/// A system line that carries one notice text, such as a backend's non-fatal report.
+pub fn make_system_message_event(content: &str) -> Value {
+  json!({"type": event_types::SYSTEM, "content": content})
+}
+
 pub fn make_context_reading_event(
   model: &str,
   context_tokens: Option<i64>,

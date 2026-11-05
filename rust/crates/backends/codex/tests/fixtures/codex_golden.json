@@ -3441,15 +3441,13 @@
       ],
       [
         {
-          "type": "error",
-          "message": "item failed",
+          "type": "system",
           "content": "item failed"
         }
       ],
       [
         {
-          "type": "error",
-          "message": "Codex item error with no message. Full event: {\"type\": \"item.completed\", \"item\": {\"id\": \"err-2\", \"type\": \"error\"}}",
+          "type": "system",
           "content": "Codex item error with no message. Full event: {\"type\": \"item.completed\", \"item\": {\"id\": \"err-2\", \"type\": \"error\"}}"
         }
       ],

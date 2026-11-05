@@ -82,7 +82,8 @@ pub(crate) fn write_transcript(audio_path: &Path, text: &str) -> io::Result<()> 
   fs::write(audio_path.with_extension("txt"), text.as_bytes())
 }
 
-/// `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`: UTC to the millisecond, then `Z`.
+/// The recording stem's format: `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`, UTC to
+/// the millisecond, then `Z`.
 fn voice_stem_format() -> Vec<time::format_description::FormatItem<'static>> {
   time::macros::format_description!("[year]-[month]-[day]T[hour][minute][second].[subsecond digits:3]Z").to_vec()
 }

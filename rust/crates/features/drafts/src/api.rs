@@ -117,7 +117,7 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
   }
   responses::json(
     StatusCode::OK,
-    &json!({"draft_id": draft_id, "card": format!("/?session={session_id}#draft-{draft_id}")}),
+    &json!({(log::DRAFT_ID): draft_id, "card": format!("/?session={session_id}#draft-{draft_id}")}),
   )
 }
 
@@ -169,14 +169,17 @@ async fn send(
   };
   match platform.send(&draft.target, &draft.body).await {
     Ok(sent) => match record_sent(&features, &session_id, &draft, &sent).await {
-      Ok(()) => responses::json(StatusCode::OK, &json!({"sender": sent.sender, "url": sent.url})),
+      Ok(()) => responses::json(StatusCode::OK, &json!({(log::SENDER): sent.sender, (log::URL): sent.url})),
       Err(response) => *response,
     },
     Err(failure) => {
       if let Err(error) = record_failed(&features, &session_id, &draft_id, &failure).await {
         return internal(error.to_string());
       }
-      responses::json(StatusCode::BAD_GATEWAY, &json!({"detail": failure.detail, "outcome": failure.outcome.as_str()}))
+      responses::json(
+        StatusCode::BAD_GATEWAY,
+        &json!({"detail": failure.detail, (log::OUTCOME): failure.outcome.as_str()}),
+      )
     }
   }
 }

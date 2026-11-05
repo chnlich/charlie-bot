@@ -1,6 +1,6 @@
 //! Outbound WebSocket connections with the TLS roots and HTTPS proxy rules shared with `http_client`.
 //!
-//! The voice relay forwards the returned error text to the browser. Each failure maps to its display text:
+//! The voice relay can forward the returned error text to the browser. Each failure maps to its display text:
 //!
 //! | Failure | Display text |
 //! | --- | --- |
@@ -11,8 +11,8 @@
 //! | An incoming message exceeds `max_size` | `sent 1009 (message too big) frame with {size} bytes exceeds limit of {max_size} bytes; no close frame received` |
 //! | A keepalive ping receives no pong before `ping_timeout` | `sent 1011 (internal error) keepalive ping timeout; no close frame received` |
 //!
-//! Close-frame text includes its code and reason; normal and error closes share one base format. TLS, socket, proxy
-//! and protocol errors keep their Rust text; the handshake omits `User-Agent` and offers no `permessage-deflate`.
+//! Close-frame text includes its code and reason; normal and error closes share one base format. TLS, socket and
+//! other transport errors keep their Rust text; the handshake omits `User-Agent` and offers no `permessage-deflate`.
 
 use std::fmt;
 use std::future::pending;

@@ -177,8 +177,7 @@ pub struct Field {
   bounds: Bounds,
 }
 
-/// The bounds a `Field(...)` declares; `None` for each bound the field does not declare. A bound applies only when
-/// an optional field has a value.
+/// The bounds a `Field(...)` declares; `None` for each bound the field does not declare.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Bounds {
   gt: Option<validation::Bound>,

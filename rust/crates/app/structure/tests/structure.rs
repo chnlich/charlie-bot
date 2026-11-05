@@ -845,6 +845,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",
   },
   OwnerRow {
+    name: "CLAUDE.md",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::backend::CLAUDE_INSTRUCTIONS_FILE_NAME`.",
+  },
+  OwnerRow {
     name: "task.md",
     owner: "backends/charlie_code",
     hint: "Use the `TASK_FILE_NAME` of `backends/charlie_code/src/charlie_code_cli.rs`.",

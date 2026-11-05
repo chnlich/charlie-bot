@@ -30,6 +30,10 @@ pub const IMAGE_PNG: &str = "image/png";
 pub const IMAGE_VND_MICROSOFT_ICON: &str = "image/vnd.microsoft.icon";
 pub const IMAGE_WEBP: &str = "image/webp";
 
+/// The HTML media type: the table's `.html` and `.htm` rows, the auth gate's login-page check, and Slack's
+/// sign-in-page check.
+pub const TEXT_HTML: &str = "text/html";
+
 /// The strict extension -> type table, in insertion order.
 pub const TYPES_MAP: &[(&str, &str)] = &[
   (".js", "text/javascript"),
@@ -191,8 +195,8 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".stl", "model/stl"),
   (".css", "text/css"),
   (".csv", "text/csv"),
-  (".html", "text/html"),
-  (".htm", "text/html"),
+  (".html", TEXT_HTML),
+  (".htm", TEXT_HTML),
   (".md", "text/markdown"),
   (".markdown", "text/markdown"),
   (".n3", "text/n3"),

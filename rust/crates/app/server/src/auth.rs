@@ -14,6 +14,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use charliebot_compat::headers::header_text;
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses;
 use charliebot_core::run_token;
 use http::{HeaderMap, Method, StatusCode, header};
@@ -72,7 +73,7 @@ pub fn decide(
   if has_access_key(headers, key)? {
     return Ok(Decision::Pass);
   }
-  if method == Method::GET && header_text(headers, &header::ACCEPT).contains("text/html") {
+  if method == Method::GET && header_text(headers, &header::ACCEPT).contains(TEXT_HTML) {
     return Ok(Decision::LoginPage);
   }
   Ok(Decision::JsonUnauthorized)

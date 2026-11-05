@@ -9,6 +9,7 @@ use std::path::Path;
 
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::request::{self, Request};
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use serde_json::json;
 
 use crate::token::TokenKind;
@@ -46,7 +47,7 @@ fn file_body(response: &request::Response, kind: TokenKind, token: &str) -> Resu
 
 /// A `text/html` answer or a body that opens an HTML document: Slack's sign-in page standing in for the file.
 fn is_html(response: &request::Response) -> bool {
-  if response.content_type.as_deref().is_some_and(|value| value.to_ascii_lowercase().starts_with("text/html")) {
+  if response.content_type.as_deref().is_some_and(|value| value.to_ascii_lowercase().starts_with(TEXT_HTML)) {
     return true;
   }
   let head: Vec<u8> =

@@ -177,8 +177,10 @@ github:
 discord:
   allowed_users: {}
 
-# Feishu: the summon entrypoint's account map (Feishu open_id -> the person that
-# account belongs to). The app id and secret live in credentials.yaml under feishu.
+# Feishu: the owner map (Feishu open_id -> the person that account belongs to). A
+# group is admitted when one of these people is a member of it, and then every
+# human member of that group can summon the bot. The app id and secret live in
+# credentials.yaml under feishu.
 feishu:
   allowed_users: {}
 

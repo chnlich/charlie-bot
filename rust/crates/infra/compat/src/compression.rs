@@ -10,11 +10,42 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flate2::write::GzEncoder;
 
+use crate::mimetypes_table::{
+  APPLICATION_GZIP, APPLICATION_MSWORD, APPLICATION_PDF, APPLICATION_VND_MS_POWERPOINT, APPLICATION_X_7Z_COMPRESSED,
+  APPLICATION_ZIP, FONT_WOFF, IMAGE_GIF, IMAGE_HEIC, IMAGE_JPEG, IMAGE_PNG, IMAGE_VND_MICROSOFT_ICON, IMAGE_WEBP,
+};
+
 static LEVEL_ONE_BYTES_DEFLATED: AtomicU64 = AtomicU64::new(0);
 
 /// The smallest complete body worth deflating: `GZipMiddleware(minimum_size=1000)` of the transport, and the
 /// smallest body a page compresses itself.
 pub const MINIMUM_DEFLATE_BYTES: usize = 1000;
+
+/// `_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES`: content types already entropy-coded, matched by prefix. A content type the
+/// MIME table names is spelled there and read here.
+pub const SKIP_MEDIA_PREFIXES: &[&str] = &[
+  "text/event-stream",
+  IMAGE_GIF,
+  IMAGE_HEIC,
+  IMAGE_JPEG,
+  IMAGE_PNG,
+  IMAGE_WEBP,
+  "image/x-icon",
+  IMAGE_VND_MICROSOFT_ICON,
+  "video/",
+  "audio/",
+  APPLICATION_PDF,
+  APPLICATION_ZIP,
+  "application/x-zip-compressed",
+  APPLICATION_X_7Z_COMPRESSED,
+  APPLICATION_GZIP,
+  "application/x-gzip",
+  "application/vnd.openxmlformats-officedocument",
+  APPLICATION_VND_MS_POWERPOINT,
+  APPLICATION_MSWORD,
+  FONT_WOFF,
+  "application/font-woff",
+];
 
 /// The level-1 gzip form of *data*; deterministic for equal input, with the gzip header's mtime
 /// field zeroed.

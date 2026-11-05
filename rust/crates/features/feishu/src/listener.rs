@@ -1,6 +1,7 @@
-//! The Feishu long-connection listener connects to the endpoint Feishu names and pings at the interval Feishu sets. It
-//! acknowledges each event before it handles the event, and hands the parsed event to the shared core through the
-//! adapter. A dropped connection reconnects with backoff, and every connection runs the thread follow backfill.
+//! The Feishu long-connection listener reads the bot's identity once for a service start, then connects to the
+//! endpoint Feishu names and pings at the interval Feishu sets. It acknowledges each event before it handles the
+//! event, and hands the parsed event to the shared core through the adapter. A dropped connection reconnects with
+//! backoff, and every connection runs the thread follow backfill.
 //!
 //! The ack comes first because the core may read a whole thread before it answers, and Feishu re-pushes an event that
 //! is not acknowledged within three seconds.
@@ -18,7 +19,7 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 
 use crate::adapter::{self, Bot, FeishuThreadAdapter};
-use crate::client::{BASE_URL, FeishuClient};
+use crate::client::{BASE_URL, BOT_CAPABILITY_CODE, FeishuAPIError, FeishuClient};
 use crate::config::FeishuConfig;
 use crate::event::{self, Inbound};
 use crate::frame::{Frame, METHOD_DATA, Reassembler, TYPE_EVENT};
@@ -48,25 +49,52 @@ struct Connection {
   service_id: i32,
 }
 
-/// Run the long-connection listener until the process stops it (`run_listener`). The bot's open_id is read first, and
-/// retried with backoff while the app has no bot capability.
+/// Run the long-connection listener until the process stops it (`run_listener`). The bot's identity is read once for
+/// the service start; a missing bot capability stops the listener before it opens the long connection.
 async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(&features), BASE_URL);
   let client = bot.client()?;
   let _trigger_manager = features.startup.require::<Arc<TriggerManager>>()?;
   let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..ws_client::WEBSOCKETS_16_DEFAULTS };
-  let settings = ws_client::Settings::from_env();
-  let mut backoff = Duration::from_secs(1);
-  let bot_open_id = loop {
-    match client.bot_open_id().await {
-      Ok(open_id) => break open_id,
-      Err(error) => {
-        tracing::warn!(event = "feishu_listener_bot_unavailable", error = %error);
-        tokio::time::sleep(backoff).await;
-        backoff = next_backoff(backoff);
-      }
+  run_listener_loop(features, client, options, ws_client::Settings::from_env()).await
+}
+
+/// The bot identity read once per service start. Feishu answers 11205 while the app has no bot capability, which only
+/// the developer console fixes, so the listener logs one error and stops instead of retrying. Any other failure,
+/// a network error among them, fails the start, as Discord's preflight does.
+async fn preflight(client: &FeishuClient) -> anyhow::Result<Option<String>> {
+  match client.bot_open_id().await {
+    Ok(open_id) => Ok(Some(open_id)),
+    Err(error) if bot_capability_off(&error) => {
+      tracing::error!(
+        event = "feishu_listener_bot_capability_off",
+        cause = "the Feishu app has no bot capability, so the bot identity read failed",
+        error = %error,
+        fix = "enable the bot capability for the app in the Feishu developer console, publish a version, and restart the server"
+      );
+      Ok(None)
     }
+    Err(error) => Err(error),
+  }
+}
+
+/// Whether the error is Feishu's answer for an app without the bot capability (`BOT_CAPABILITY_CODE`).
+fn bot_capability_off(error: &anyhow::Error) -> bool {
+  error.downcast_ref::<FeishuAPIError>().is_some_and(|error| error.code == Some(BOT_CAPABILITY_CODE))
+}
+
+/// The reconnect loop the service start reaches once the bot identity is known. A connection that opens or drops
+/// retries with backoff from 1 s to 30 s; the identity itself is never read again.
+async fn run_listener_loop(
+  features: Arc<FeatureContext>,
+  client: FeishuClient,
+  options: Options,
+  settings: ws_client::Settings,
+) -> anyhow::Result<()> {
+  let Some(bot_open_id) = preflight(&client).await? else {
+    return Ok(());
   };
+  let mut backoff = Duration::from_secs(1);
   loop {
     let endpoint = match client.long_connection_endpoint().await {
       Ok(endpoint) => endpoint,
@@ -193,6 +221,10 @@ fn next_backoff(backoff: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_support::{Answer, Home, serve};
+  use charliebot_compat::http_client;
+  use charliebot_core::test_support::LogCapture;
+  use serde_json::json;
 
   #[test]
   fn the_service_id_comes_from_the_endpoint_query() {
@@ -205,5 +237,35 @@ mod tests {
   fn the_backoff_doubles_to_its_cap() {
     assert_eq!(next_backoff(Duration::from_secs(1)), Duration::from_secs(2));
     assert_eq!(next_backoff(Duration::from_secs(20)), MAX_BACKOFF);
+  }
+
+  // The listener takes its own app id: the tenant token cache is keyed by it, so no test reads another test's token.
+
+  #[tokio::test]
+  async fn a_no_bot_capability_answer_stops_the_listener_before_the_endpoint_call() {
+    let stub = serve(|_| Answer::json(json!({"code": BOT_CAPABILITY_CODE, "msg": "app do not have bot"}))).await;
+    let home = Home::new();
+    let http = http_client::client(&http_client::Settings::from_env()).expect("the HTTP client builds");
+    let client = FeishuClient::new(http, stub.base_url.clone(), "cli_listener_bot", "synthetic-secret");
+    let capture = LogCapture::default();
+    let _guard = capture.install();
+    let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..ws_client::WEBSOCKETS_16_DEFAULTS };
+    tokio::time::timeout(
+      Duration::from_secs(2),
+      run_listener_loop(Arc::clone(&home.features), client, options, ws_client::Settings::from_env()),
+    )
+    .await
+    .expect("the listener stops instead of retrying")
+    .expect("the stop is a plain return, not an error");
+    let text = capture.text();
+    assert_eq!(text.matches("feishu_listener_bot_capability_off").count(), 1, "one error event: {text}");
+    assert!(text.contains("developer console"), "the event names the console fix: {text}");
+    let requests = stub.requests.lock().expect("the request log is never poisoned");
+    assert!(requests.iter().any(|request| request.target == "/open-apis/bot/v3/info"));
+    assert!(
+      !requests.iter().any(|request| request.target.starts_with("/callback/ws/endpoint")),
+      "the long-connection endpoint is never requested: {:?}",
+      requests.iter().map(|request| &request.target).collect::<Vec<_>>()
+    );
   }
 }

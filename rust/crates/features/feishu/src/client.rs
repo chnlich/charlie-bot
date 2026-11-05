@@ -18,6 +18,9 @@ pub const BASE_URL: &str = "https://open.feishu.cn";
 const TENANT_TOKEN_PATH: &str = "/open-apis/auth/v3/tenant_access_token/internal";
 const ENDPOINT_PATH: &str = "/callback/ws/endpoint";
 const BOT_INFO_PATH: &str = "/open-apis/bot/v3/info";
+/// The code Feishu answers `BOT_INFO_PATH` with while the app has no bot capability, which only the developer console
+/// fixes.
+pub const BOT_CAPABILITY_CODE: i64 = 11205;
 const MESSAGES_PATH: &str = "/open-apis/im/v1/messages";
 /// A tenant token is replaced this long before Feishu says it expires.
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(30 * 60);
@@ -174,7 +177,8 @@ impl FeishuClient {
     Ok(Endpoint { url: url.to_string(), ping_interval: Duration::from_secs(ping_seconds) })
   }
 
-  /// The bot's open_id (`GET /open-apis/bot/v3/info`). Feishu answers 11205 while the app has no bot capability.
+  /// The bot's open_id (`GET /open-apis/bot/v3/info`). Feishu answers `BOT_CAPABILITY_CODE` while the app has no bot
+  /// capability.
   pub async fn bot_open_id(&self) -> anyhow::Result<String> {
     let info = self.call(Method::GET, BOT_INFO_PATH, &[], None).await?;
     let open_id = info["bot"]["open_id"].as_str().context("the bot info names no open_id")?;

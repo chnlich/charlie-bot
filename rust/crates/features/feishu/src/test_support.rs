@@ -1,9 +1,17 @@
 //! A loopback stand-in for the Feishu Open API. Each request except the tenant-token call is answered by the test's
-//! handler and recorded, so a test checks the calls the client made and the answers it read.
+//! handler and recorded, so a test checks the calls the client made and the answers it read. A [`Home`] is the
+//! store-backed feature context the listener tests run against.
 
 use std::sync::{Arc, Mutex};
 
+use charliebot_core::credentials::load_credentials;
+use charliebot_core::hot_reload::HotReload;
+use charliebot_registry::store_hooks::store_hooks;
+use charliebot_registry::{FeatureContext, RunningTurnInputs, StartupState};
+use charliebot_store::Store;
+use charliebot_triggers::triggers::TriggerManager;
 use serde_json::{Value, json};
+use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -44,6 +52,53 @@ pub struct Stub {
 impl Drop for Stub {
   fn drop(&mut self) {
     self.task.abort();
+  }
+}
+
+/// A store and trigger manager over a temporary synthetic home, with the Feishu package registered.
+pub struct Home {
+  _dir: TempDir,
+  pub features: Arc<FeatureContext>,
+}
+
+impl Home {
+  pub fn new() -> Self {
+    let dir = tempfile::tempdir().expect("the synthetic home exists");
+    std::fs::write(
+      dir.path().join("config.yaml"),
+      "feishu:\n  allowed_users:\n    ou_0000000000000000000000000000000000000001: tester\n",
+    )
+    .expect("the synthetic config writes");
+    std::fs::write(dir.path().join("credentials.yaml"), "feishu:\n  app_id: cli_synthetic\n  app_secret: s\n")
+      .expect("the synthetic credentials write");
+
+    let mut registry = charliebot_registry::Registry::new();
+    registry.register_package("features.feishu", crate::register).expect("the Feishu package registers");
+    let registry = Arc::new(registry);
+    let loaded = registry.load_config(dir.path()).expect("the synthetic Feishu config loads");
+    let config_reload = loaded.clone();
+    let config = Arc::new(HotReload::new(
+      loaded.config_file(),
+      "feishu_test_config_reload_failed",
+      Box::new(move || Ok(config_reload.clone())),
+    ));
+    let store = Arc::new(
+      Store::new(loaded, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("the store opens"),
+    );
+    let credential_home = dir.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      dir.path().join("credentials.yaml"),
+      "feishu_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let startup = StartupState::default();
+    startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("running inputs insert once");
+    let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
+    features
+      .startup
+      .insert(Arc::new(TriggerManager::new(Arc::clone(&features))))
+      .expect("trigger manager inserts once");
+    Self { _dir: dir, features }
   }
 }
 

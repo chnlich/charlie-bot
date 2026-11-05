@@ -1,5 +1,7 @@
-//! The write-only session-switch telemetry route. The web UI posts each session-switch phase to
-//! `POST /api/diag/switch-events`, and the route logs the point as one `diag_switch` line. No state is kept.
+//! The write-only client timing telemetry route. The web UI posts one client timing event per
+//! interaction — a session switch, a message send, a socket disconnect episode, a page load or one
+//! tab-minute of background traffic — to `POST /api/diag/client-events`, and the route logs the
+//! event as one `diag_client` line. No state is kept.
 
 mod api;
 
@@ -17,7 +19,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn register_mounts_the_switch_events_router() {
+  fn register_mounts_the_client_events_router() {
     let mut registry = Registry::new();
     registry.register_package("features.diag", register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);

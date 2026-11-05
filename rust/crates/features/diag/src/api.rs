@@ -1,7 +1,13 @@
-//! The diag route: `POST /api/diag/switch-events`, one validated telemetry point per
-//! call, logged as a single `diag_switch` line. No session or state is consulted; the route answers `{"ok": true}`.
+//! The diag route: `POST /api/diag/client-events`, one validated client timing event per call,
+//! logged as a single `diag_client` line carrying the event's `kind`, its fields and the browser's
+//! `forwarded_for`. No session or state is consulted; the route answers `{"ok": true}`.
+//!
+//! The five kinds and their fields follow plan section 4.1 of the poor-network line: `switch`
+//! carries the switch phases plus the bootstrap's Resource Timing, `send` one message send's
+//! click-to-response and click-to-echo waits, `socket` one disconnect episode from the disconnect
+//! through the reconnect and its catch-up, `page_load` the document's Navigation Timing, and
+//! `traffic` one tab's per-minute received bytes by endpoint.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::Router;
@@ -9,6 +15,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
+use charliebot_compat::forwarded::first_address;
 use charliebot_compat::request_body::{
   self, BodyModel, Field, FieldType, integer_field, optional_text_field_ref, text_field,
 };
@@ -17,15 +24,46 @@ use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-/// The point logs at most this many code points of `error`, truncated to the first `MAX_ERROR_CHARS`.
+/// The point logs at most this many code points of a switch's `error`, truncated to the first
+/// `MAX_ERROR_CHARS`.
 pub const MAX_ERROR_CHARS: usize = 300;
 
+/// The largest endpoint path one traffic row carries; the client folds the ids out of the path.
+const MAX_ENDPOINT_CHARS: usize = 200;
+
+/// The largest number of endpoint rows one traffic event carries; the client sends at most this
+/// many, the heaviest first.
+const MAX_TRAFFIC_ENDPOINTS: usize = 40;
+
+/// The largest length of `client_ts` and of the other timestamp strings the client sends.
+const MAX_TIMESTAMP_CHARS: usize = 64;
+
+const KINDS: &[&str] = &["switch", "send", "socket", "page_load", "traffic"];
+const SWITCH_KIND: &[&str] = &["switch"];
+const SEND_KIND: &[&str] = &["send"];
+const SOCKET_KIND: &[&str] = &["socket"];
+const PAGE_LOAD_KIND: &[&str] = &["page_load"];
+const TRAFFIC_KIND: &[&str] = &["traffic"];
+const SOCKET_CAUSES: &[&str] = &["switch", "network"];
+const PAGE_LOAD_CAUSES: &[&str] = &["open", "bootstrap_failure", "stale_asset"];
+const VISIBILITY_STATES: &[&str] = &["visible", "hidden", "prerender"];
 const PHASES: &[&str] = &["started", "completed", "superseded", "failed", "render_error"];
 
-/// The switch-event body's fields, in their declaration order; an unknown field is refused.
-const SWITCH_EVENT_FIELDS: &[Field] = &[
+/// The envelope every kind's body validates first: the `kind` selects the per-kind model, and
+/// `client_ts` is the one field the log line carries whatever the kind. Extra keys stay, because
+/// the per-kind model revalidates the whole body with `forbid_extra`.
+const ENVELOPE_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(KINDS)),
+  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+];
+const ENVELOPE_BODY: BodyModel = BodyModel::required(ENVELOPE_FIELDS);
+
+/// The switch body: the fields the switch telemetry reports today, plus the bootstrap's Resource
+/// Timing. A cache-hit switch or the `started` phase has no Resource Timing entry and sends nulls.
+const SWITCH_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(SWITCH_KIND)),
   Field::required("phase", FieldType::Literal(PHASES)),
   Field::required("from_session", FieldType::NullableString),
   Field::required("to_session", FieldType::String),
@@ -33,99 +71,149 @@ const SWITCH_EVENT_FIELDS: &[Field] = &[
   Field::required("winner_generation", FieldType::NullableInteger),
   Field::optional("elapsed_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("error", FieldType::NullableString),
-  Field::required("client_ts", FieldType::String),
+  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::optional("request_start", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("response_start", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("response_end", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("transfer_size", FieldType::NullableInteger).ge(Bound::Int(0)),
 ];
+const SWITCH_BODY: BodyModel = BodyModel::required(SWITCH_FIELDS).forbid_extra();
 
-const SWITCH_EVENT_BODY: BodyModel = BodyModel::required(SWITCH_EVENT_FIELDS).forbid_extra();
+/// The send body: one message send, from the click through the POST's response to the socket echo.
+/// A refused POST gets no echo and sends a null `click_to_echo_ms`.
+const SEND_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(SEND_KIND)),
+  Field::required("request_id", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::optional("click_to_response_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("click_to_echo_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("retries", FieldType::Integer).ge(Bound::Int(0)),
+  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+];
+const SEND_BODY: BodyModel = BodyModel::required(SEND_FIELDS).forbid_extra();
+
+/// The socket body: one disconnect episode, from the disconnect through the reconnect to the
+/// replay's `catchup_complete`. An episode the page leaves before its replay finished sends nulls
+/// for the reconnect and catch-up fields.
+const SOCKET_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(SOCKET_KIND)),
+  Field::required("disconnect_at", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required("cause", FieldType::Literal(SOCKET_CAUSES)),
+  Field::optional("close_code", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("reconnect_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
+  Field::optional("reconnect_count", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("catchup_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
+  Field::optional("catchup_bytes", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+];
+const SOCKET_BODY: BodyModel = BodyModel::required(SOCKET_FIELDS).forbid_extra();
+
+/// The page-load body: the document's Navigation Timing, once per page load, with the cause the
+/// navigating path announced.
+const PAGE_LOAD_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(PAGE_LOAD_KIND)),
+  Field::required("response_end_ms", FieldType::Integer).ge(Bound::Int(0)),
+  Field::required("dom_content_loaded_ms", FieldType::Integer).ge(Bound::Int(0)),
+  Field::optional("transfer_size", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("cause", FieldType::Literal(PAGE_LOAD_CAUSES)),
+  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+];
+const PAGE_LOAD_BODY: BodyModel = BodyModel::required(PAGE_LOAD_FIELDS).forbid_extra();
+
+/// One traffic row: one endpoint's received bytes and request count over the event's window.
+const TRAFFIC_ENDPOINT_FIELDS: &[Field] = &[
+  Field::required("endpoint", FieldType::String).max_length(MAX_ENDPOINT_CHARS),
+  Field::required("transfer_size", FieldType::Integer).ge(Bound::Int(0)),
+  Field::required("count", FieldType::Integer).ge(Bound::Int(1)),
+];
+const TRAFFIC_ENDPOINT_BODY: BodyModel = BodyModel::required(TRAFFIC_ENDPOINT_FIELDS).forbid_extra();
+
+/// The traffic body: one tab's received bytes over one window, grouped by endpoint. The client
+/// flushes a window every minute through the page timer registry, so a hidden tab's window covers
+/// the minutes it stayed hidden and `window_s` carries the seconds it observed.
+const TRAFFIC_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(TRAFFIC_KIND)),
+  Field::required("window_s", FieldType::Integer).ge(Bound::Int(1)),
+  Field::required("endpoints", FieldType::ModelList { model: &TRAFFIC_ENDPOINT_BODY })
+    .max_length(MAX_TRAFFIC_ENDPOINTS),
+  Field::required("visibility_state", FieldType::Literal(VISIBILITY_STATES)),
+  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+];
+const TRAFFIC_BODY: BodyModel = BodyModel::required(TRAFFIC_FIELDS).forbid_extra();
+
+/// The body model of each kind, selected by the envelope's validated `kind`.
+const KIND_BODIES: &[(&str, &BodyModel)] = &[
+  ("switch", &SWITCH_BODY),
+  ("send", &SEND_BODY),
+  ("socket", &SOCKET_BODY),
+  ("page_load", &PAGE_LOAD_BODY),
+  ("traffic", &TRAFFIC_BODY),
+];
 
 /// The routes, with the feature context as their state. The path has one method.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route("/api/diag/switch-events", post_only(post_switch_event)).with_state(Arc::clone(features))
+  Router::new().route("/api/diag/client-events", post_only(post_client_event)).with_state(Arc::clone(features))
 }
 
 /// Whether a path is one of the diag routes, whatever the method. The server's trailing-slash redirect asks this of
 /// the slash-toggled path.
 pub fn matches(path: &str) -> bool {
-  matches!(path, "/api/diag/switch-events")
+  matches!(path, "/api/diag/client-events")
 }
 
-/// `POST /api/diag/switch-events`: validate the point, log one `diag_switch` line, answer `{"ok": true}`.
-async fn post_switch_event(State(_features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+/// `POST /api/diag/client-events`: validate the event, log one `diag_client` line, answer `{"ok": true}`.
+async fn post_client_event(State(_features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let values = match body.validate(&SWITCH_EVENT_BODY) {
+  let envelope = match body.validate(&ENVELOPE_BODY) {
     Ok(Some(Value::Object(values))) => values,
     Ok(_) => unreachable!("a required model validates a body to its fields"),
     Err(response) => return *response,
   };
-  let event = SwitchEvent::from_values(&values);
-  log_switch_event(&event);
+  let kind = text_field(&envelope, "kind");
+  let model = KIND_BODIES
+    .iter()
+    .find(|(name, _)| *name == kind.as_str())
+    .map(|(_, model)| *model)
+    .expect("the envelope validated the kind");
+  // The envelope drops the keys it does not declare, so the kind model revalidates the body
+  // itself: only this pass's validated values reach the log line.
+  let values = match body.validate(model) {
+    Ok(Some(Value::Object(values))) => values,
+    Ok(_) => unreachable!("a required model validates a body to its fields"),
+    Err(response) => return *response,
+  };
+  log_client_event(&kind, &values, &first_address(&parts.headers));
   responses::json(StatusCode::OK, &json!({"ok": true}))
 }
 
-/// The validated `SwitchEventRequest`.
-pub struct SwitchEvent<'a> {
-  pub phase: String,
-  pub from_session: Option<String>,
-  pub to_session: String,
-  pub generation: i128,
-  pub winner_generation: Option<i128>,
-  pub elapsed_ms: Option<i128>,
-  pub error: Option<&'a str>,
-  pub client_ts: String,
-}
-
-impl<'a> SwitchEvent<'a> {
-  /// Reads the validated fields in model declaration order and borrows `error` from the validated value.
-  fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
-    Self {
-      phase: text_field(values, "phase"),
-      from_session: optional_text_field_ref(values, "from_session").map(str::to_string),
-      to_session: text_field(values, "to_session"),
-      generation: integer_field(values, "generation").expect("a required integer validates to a value"),
-      winner_generation: integer_field(values, "winner_generation"),
-      elapsed_ms: integer_field(values, "elapsed_ms"),
-      error: optional_text_field_ref(values, "error"),
-      client_ts: text_field(values, "client_ts"),
-    }
+/// The one `diag_client` line of the event's kind, its fields in declaration order and the
+/// browser's address last.
+fn log_client_event(kind: &str, values: &Map<String, Value>, forwarded_for: &str) {
+  match kind {
+    "switch" => log_switch(values, forwarded_for),
+    "send" => log_send(values, forwarded_for),
+    "socket" => log_socket(values, forwarded_for),
+    "page_load" => log_page_load(values, forwarded_for),
+    "traffic" => log_traffic(values, forwarded_for),
+    other => unreachable!("the envelope validated the kind: {other}"),
   }
 }
 
 /// `error` cut to its first `MAX_ERROR_CHARS` code points. The check borrows the validated string and inspects
 /// only the first character past the limit before allocating the retained prefix.
-pub fn cut_error<'a>(error: Option<&'a str>) -> Option<Cow<'a, str>> {
+pub fn cut_error<'a>(error: Option<&'a str>) -> Option<std::borrow::Cow<'a, str>> {
+  use std::borrow::Cow;
   error.map(|error| match error.char_indices().nth(MAX_ERROR_CHARS) {
     Some((end, _)) => Cow::Owned(error[..end].to_owned()),
     None => Cow::Borrowed(error),
   })
 }
 
-/// The `diag_switch` record: the validated fields in declaration order, with the cut error and an absent optional
-/// logged as null. `error` is the cut error, which must outlive the record.
-pub fn switch_record<'a>(event: &'a SwitchEvent<'_>, error: &'a str) -> Vec<(&'static str, LogValue<'a>)> {
-  vec![
-    ("phase", LogValue::Str(&event.phase)),
-    ("from_session", LogValue::of(event.from_session.as_deref())),
-    ("to_session", LogValue::Str(&event.to_session)),
-    ("generation", LogValue::Int(event.generation)),
-    ("winner_generation", LogValue::of_int(event.winner_generation)),
-    ("elapsed_ms", LogValue::of_int(event.elapsed_ms)),
-    (
-      "error",
-      match event.error {
-        Some(_) => LogValue::of(Some(error)),
-        None => LogValue::Null,
-      },
-    ),
-    ("client_ts", LogValue::Str(&event.client_ts)),
-  ]
-}
-
-/// One loggable value: a string or integer as itself, and a missing optional as `null`, which structlog's console
-/// renderer spells `None` for and the JSON line spells `null`.
+/// One loggable value: a string or integer as itself, and a missing optional as `null`, which the
+/// console renderer spells `None` for and the JSON line spells `null`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LogValue<'a> {
   Str(&'a str),
@@ -159,51 +247,109 @@ impl std::fmt::Display for LogValue<'_> {
   }
 }
 
-/// The one `diag_switch` line, its fields in declaration order.
-fn log_switch_event(event: &SwitchEvent<'_>) {
-  let error = cut_error(event.error);
-  let error = error.as_deref().unwrap_or("");
-  let record = switch_record(event, error);
-  let [phase, from_session, to_session, _, winner_generation, elapsed_ms, error, client_ts] = record[..] else {
-    unreachable!("the record carries its eight fields");
-  };
+fn log_switch(values: &Map<String, Value>, forwarded_for: &str) {
+  let error = cut_error(optional_text_field_ref(values, "error"));
   tracing::info!(
-    phase = %phase.1,
-    from_session = %from_session.1,
-    to_session = %to_session.1,
-    generation = %event.generation,
-    winner_generation = %winner_generation.1,
-    elapsed_ms = %elapsed_ms.1,
-    error = %error.1,
-    client_ts = %client_ts.1,
-    "diag_switch"
+    kind = "switch",
+    phase = %text_field(values, "phase"),
+    from_session = %LogValue::of(optional_text_field_ref(values, "from_session")),
+    to_session = %text_field(values, "to_session"),
+    generation = %integer_field(values, "generation").expect("a required integer validates to a value"),
+    winner_generation = %LogValue::of_int(integer_field(values, "winner_generation")),
+    elapsed_ms = %LogValue::of_int(integer_field(values, "elapsed_ms")),
+    error = %LogValue::of(error.as_deref()),
+    client_ts = %text_field(values, "client_ts"),
+    request_start = %LogValue::of_int(integer_field(values, "request_start")),
+    response_start = %LogValue::of_int(integer_field(values, "response_start")),
+    response_end = %LogValue::of_int(integer_field(values, "response_end")),
+    transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
+    forwarded_for = %forwarded_for,
+    "diag_client"
+  );
+}
+
+fn log_send(values: &Map<String, Value>, forwarded_for: &str) {
+  tracing::info!(
+    kind = "send",
+    request_id = %text_field(values, "request_id"),
+    click_to_response_ms = %LogValue::of_int(integer_field(values, "click_to_response_ms")),
+    click_to_echo_ms = %LogValue::of_int(integer_field(values, "click_to_echo_ms")),
+    retries = %integer_field(values, "retries").expect("a required integer validates to a value"),
+    client_ts = %text_field(values, "client_ts"),
+    forwarded_for = %forwarded_for,
+    "diag_client"
+  );
+}
+
+fn log_socket(values: &Map<String, Value>, forwarded_for: &str) {
+  tracing::info!(
+    kind = "socket",
+    disconnect_at = %text_field(values, "disconnect_at"),
+    cause = %text_field(values, "cause"),
+    close_code = %LogValue::of_int(integer_field(values, "close_code")),
+    reconnect_at = %LogValue::of(optional_text_field_ref(values, "reconnect_at")),
+    reconnect_count = %LogValue::of_int(integer_field(values, "reconnect_count")),
+    catchup_at = %LogValue::of(optional_text_field_ref(values, "catchup_at")),
+    catchup_bytes = %LogValue::of_int(integer_field(values, "catchup_bytes")),
+    client_ts = %text_field(values, "client_ts"),
+    forwarded_for = %forwarded_for,
+    "diag_client"
+  );
+}
+
+fn log_page_load(values: &Map<String, Value>, forwarded_for: &str) {
+  tracing::info!(
+    kind = "page_load",
+    response_end_ms = %integer_field(values, "response_end_ms")
+      .expect("a required integer validates to a value"),
+    dom_content_loaded_ms = %integer_field(values, "dom_content_loaded_ms")
+      .expect("a required integer validates to a value"),
+    transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
+    cause = %text_field(values, "cause"),
+    client_ts = %text_field(values, "client_ts"),
+    forwarded_for = %forwarded_for,
+    "diag_client"
+  );
+}
+
+fn log_traffic(values: &Map<String, Value>, forwarded_for: &str) {
+  tracing::info!(
+    kind = "traffic",
+    window_s = %integer_field(values, "window_s").expect("a required integer validates to a value"),
+    endpoints = %values.get("endpoints").expect("a required field validates to a value"),
+    visibility_state = %text_field(values, "visibility_state"),
+    client_ts = %text_field(values, "client_ts"),
+    forwarded_for = %forwarded_for,
+    "diag_client"
   );
 }
 
 #[cfg(test)]
 mod tests {
+  use std::fmt;
+  use std::sync::{Arc, Mutex};
+
   use charliebot_compat::request_body::RequestBody;
   use charliebot_compat::validation::{FieldError, Kind, Loc};
+  use charliebot_core::test_support::{EventSink, install_events};
   use serde_json::json;
+  use tracing::Event;
+  use tracing::field::{Field as TracingField, Visit};
 
   use super::*;
 
-  /// The base body of a valid `completed` point, every field set.
-  fn valid_body() -> Value {
-    json!({
-      "phase": "completed",
-      "from_session": "session-a",
-      "to_session": "session-b",
-      "generation": 3,
-      "winner_generation": 2,
-      "elapsed_ms": 1500,
-      "error": null,
-      "client_ts": "2026-02-13T10:00:00Z",
-    })
+  fn validate(body: Value, model: &BodyModel) -> Result<Value, Vec<FieldError>> {
+    RequestBody::Json(body).check(model).map(|value| value.expect("a required model validates an object"))
   }
 
-  fn check(body: Value) -> Result<Value, Vec<FieldError>> {
-    RequestBody::Json(body).check(&SWITCH_EVENT_BODY).map(|value| value.expect("a required model validates an object"))
+  /// The two passes the route runs: the envelope selects the kind, and the kind model validates
+  /// the body itself — the envelope's validated values drop the keys it does not declare, so the
+  /// kind model's errors and values come from the body, not the envelope's stripped object.
+  fn validate_event(body: Value) -> Result<Value, Vec<FieldError>> {
+    let envelope = validate(body.clone(), &ENVELOPE_BODY)?;
+    let kind = envelope["kind"].as_str().expect("the envelope validated the kind");
+    let model = KIND_BODIES.iter().find(|(name, _)| *name == kind).map(|(_, model)| *model).expect("the kind");
+    validate(body, model)
   }
 
   fn loc(error: &FieldError) -> Vec<String> {
@@ -217,111 +363,198 @@ mod tests {
       .collect()
   }
 
+  /// The base body of each kind, every field set.
+  fn base_body(kind: &str) -> Value {
+    match kind {
+      "switch" => json!({
+        "kind": "switch",
+        "phase": "completed",
+        "from_session": "session-a",
+        "to_session": "session-b",
+        "generation": 3,
+        "winner_generation": 2,
+        "elapsed_ms": 1500,
+        "error": null,
+        "client_ts": "2026-02-13T10:00:00Z",
+        "request_start": 100,
+        "response_start": 400,
+        "response_end": 1500,
+        "transfer_size": 26592,
+      }),
+      "send" => json!({
+        "kind": "send",
+        "request_id": "0f0e1d2c-3b4a-5968-7789-aabbccddeeff",
+        "click_to_response_ms": 300,
+        "click_to_echo_ms": 620,
+        "retries": 1,
+        "client_ts": "2026-02-13T10:00:00Z",
+      }),
+      "socket" => json!({
+        "kind": "socket",
+        "disconnect_at": "2026-02-13T09:59:00Z",
+        "cause": "network",
+        "close_code": 1006,
+        "reconnect_at": "2026-02-13T09:59:02Z",
+        "reconnect_count": 1,
+        "catchup_at": "2026-02-13T09:59:03Z",
+        "catchup_bytes": 80860,
+        "client_ts": "2026-02-13T09:59:03Z",
+      }),
+      "page_load" => json!({
+        "kind": "page_load",
+        "response_end_ms": 33000,
+        "dom_content_loaded_ms": 34500,
+        "transfer_size": 415115,
+        "cause": "bootstrap_failure",
+        "client_ts": "2026-02-13T10:00:00Z",
+      }),
+      "traffic" => json!({
+        "kind": "traffic",
+        "window_s": 60,
+        "endpoints": [
+          {"endpoint": "/api/sessions/{id}/", "transfer_size": 113004, "count": 1},
+          {"endpoint": "/api/concurrency/now", "transfer_size": 365, "count": 12},
+        ],
+        "visibility_state": "visible",
+        "client_ts": "2026-02-13T10:00:00Z",
+      }),
+      other => panic!("no fixture kind: {other}"),
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Validation: the envelope selects the kind, and each kind validates to its fields
+  // ---------------------------------------------------------------------------
+
   #[test]
-  fn a_complete_point_validates_to_its_fields() {
-    let values = check(valid_body()).expect("the body is valid");
-    let names: Vec<&str> = values.as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(
-      names,
-      ["phase", "from_session", "to_session", "generation", "winner_generation", "elapsed_ms", "error", "client_ts"]
-    );
-    assert_eq!(values["phase"], "completed");
-    assert_eq!(values["generation"], 3);
-    assert_eq!(values["elapsed_ms"], 1500);
+  fn the_envelope_selects_each_kind_and_the_kind_model_validates() {
+    for &kind in KINDS {
+      validate_event(base_body(kind)).unwrap_or_else(|errors| panic!("{kind} body is valid: {errors:?}"));
+    }
   }
 
   #[test]
-  fn unsigned_values_above_i64_max_are_preserved() {
-    let mut body = valid_body();
-    body["generation"] = json!(i64::MAX as u64 + 1);
-    body["winner_generation"] = json!(u64::MAX);
-    body["elapsed_ms"] = json!(i64::MAX as u64 + 1);
-    let values = RequestBody::Json(body)
-      .validate(&SWITCH_EVENT_BODY)
-      .expect("the body reader's integer range is valid")
-      .expect("the body is present");
-    let Value::Object(values) = values else { panic!("the body validates to its fields") };
-    let event = SwitchEvent::from_values(&values);
-
-    assert_eq!(event.generation, i64::MAX as i128 + 1);
-    assert_eq!(event.winner_generation, Some(u64::MAX as i128));
-    assert_eq!(event.elapsed_ms, Some(i64::MAX as i128 + 1));
-    let record = switch_record(&event, "");
-    assert_eq!(record[3].1, LogValue::Int(i64::MAX as i128 + 1));
-    assert_eq!(record[4].1, LogValue::Int(u64::MAX as i128));
-    assert_eq!(record[5].1, LogValue::Int(i64::MAX as i128 + 1));
-  }
-
-  #[test]
-  fn validated_error_is_borrowed_and_short_cuts_reuse_the_input() {
-    let mut body = valid_body();
-    body["error"] = json!("short diagnostic");
-    let values =
-      RequestBody::Json(body).validate(&SWITCH_EVENT_BODY).expect("the body is valid").expect("the body is present");
-    let Value::Object(values) = values else { panic!("the body validates to its fields") };
-    let event = SwitchEvent::from_values(&values);
-    let validated_error = values["error"].as_str().expect("the validated error is text");
-    assert_eq!(event.error.unwrap().as_ptr(), validated_error.as_ptr());
-
-    let short = cut_error(event.error).expect("the error is present");
-    assert!(matches!(short, Cow::Borrowed(_)));
-  }
-
-  #[test]
-  fn an_absent_elapsed_ms_validates_and_stays_absent() {
-    let mut body = valid_body();
-    body.as_object_mut().unwrap().remove("elapsed_ms");
-    let values = check(body).expect("the body is valid");
-    assert!(!values.as_object().unwrap().contains_key("elapsed_ms"));
-  }
-
-  #[test]
-  fn an_unknown_phase_is_a_literal_error() {
-    let mut body = valid_body();
-    body["phase"] = json!("cancelled");
-    let errors = check(body).expect_err("the phase is unknown");
-    assert_eq!(loc(&errors[0]), ["body", "phase"]);
+  fn an_unknown_kind_is_a_literal_error_at_the_kind() {
+    let mut body = base_body("switch");
+    body["kind"] = json!("cancelled");
+    let errors = validate(body, &ENVELOPE_BODY).expect_err("the kind is unknown");
+    assert_eq!(loc(&errors[0]), ["body", "kind"]);
     assert!(matches!(errors[0].kind, Kind::Literal(_)));
   }
 
   #[test]
-  fn a_negative_elapsed_ms_violates_its_ge_bound() {
-    let mut body = valid_body();
-    body["elapsed_ms"] = json!(-1);
-    let errors = check(body).expect_err("the elapsed time is negative");
-    assert_eq!(loc(&errors[0]), ["body", "elapsed_ms"]);
-    assert_eq!(errors[0].kind, Kind::GreaterThanEqual(Bound::Int(0)));
+  fn a_missing_client_ts_is_an_envelope_error_before_the_kind_model_runs() {
+    let mut body = base_body("switch");
+    body.as_object_mut().unwrap().remove("client_ts");
+    let errors = validate(body, &ENVELOPE_BODY).expect_err("client_ts is missing");
+    assert_eq!(loc(&errors[0]), ["body", "client_ts"]);
+    assert_eq!(errors[0].kind, Kind::Missing);
   }
 
   #[test]
-  fn an_extra_key_is_forbidden() {
-    let mut body = valid_body();
+  fn an_extra_key_is_forbidden_by_the_kind_model() {
+    let mut body = base_body("send");
     body["stale"] = json!(true);
-    let errors = check(body).expect_err("the key is undeclared");
+    let errors = validate_event(body).expect_err("the key is undeclared");
     assert_eq!(loc(&errors[0]), ["body", "stale"]);
     assert_eq!(errors[0].kind, Kind::ExtraForbidden);
   }
 
   #[test]
-  fn a_missing_field_a_wrong_type_and_an_extra_key_report_in_pydantics_order() {
-    let mut body = valid_body();
-    body.as_object_mut().unwrap().remove("to_session");
-    body["generation"] = json!("seven");
-    body["stale"] = json!(true);
-    let errors = check(body).expect_err("the body is invalid");
-    assert_eq!(loc(&errors[0]), ["body", "to_session"]);
-    assert_eq!(errors[0].kind, Kind::Missing);
-    assert_eq!(loc(&errors[1]), ["body", "generation"]);
-    assert_eq!(errors[1].kind, Kind::IntParsing);
-    assert_eq!(loc(&errors[2]), ["body", "stale"]);
-    assert_eq!(errors[2].kind, Kind::ExtraForbidden);
+  fn the_switch_fields_validate_in_declaration_order() {
+    let values = validate_event(base_body("switch")).expect("the switch body is valid");
+    let names: Vec<&str> = values.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(
+      names,
+      [
+        "kind",
+        "phase",
+        "from_session",
+        "to_session",
+        "generation",
+        "winner_generation",
+        "elapsed_ms",
+        "error",
+        "client_ts",
+        "request_start",
+        "response_start",
+        "response_end",
+        "transfer_size",
+      ]
+    );
+    assert_eq!(values["transfer_size"], 26592);
   }
 
   #[test]
-  fn a_null_body_is_a_missing_body() {
-    let errors = RequestBody::Json(Value::Null).check(&SWITCH_EVENT_BODY).expect_err("the body is null");
-    assert_eq!(loc(&errors[0]), ["body"]);
+  fn a_started_switch_without_resource_timing_and_null_fields_validates() {
+    let mut body = base_body("switch");
+    body["phase"] = json!("started");
+    body["winner_generation"] = json!(null);
+    body["elapsed_ms"] = json!(0);
+    for name in ["request_start", "response_start", "response_end", "transfer_size"] {
+      body[name] = json!(null);
+    }
+    let values = validate_event(body).expect("the started body is valid");
+    assert_eq!(values["request_start"], json!(null), "an explicit null optional stays null in the validated values");
+    assert_eq!(values["elapsed_ms"], 0);
+  }
+
+  #[test]
+  fn a_negative_elapsed_ms_violates_its_ge_bound() {
+    let mut body = base_body("switch");
+    body["elapsed_ms"] = json!(-1);
+    let errors = validate_event(body).expect_err("the elapsed time is negative");
+    assert_eq!(loc(&errors[0]), ["body", "elapsed_ms"]);
+    assert_eq!(errors[0].kind, Kind::GreaterThanEqual(Bound::Int(0)));
+  }
+
+  #[test]
+  fn an_unknown_socket_cause_and_an_unknown_page_load_cause_are_literal_errors() {
+    let mut socket = base_body("socket");
+    socket["cause"] = json!("deploy");
+    let errors = validate_event(socket).expect_err("the socket cause is unknown");
+    assert_eq!(loc(&errors[0]), ["body", "cause"]);
+    assert!(matches!(errors[0].kind, Kind::Literal(_)));
+
+    let mut page_load = base_body("page_load");
+    page_load["cause"] = json!("crash");
+    let errors = validate_event(page_load).expect_err("the page load cause is unknown");
+    assert_eq!(loc(&errors[0]), ["body", "cause"]);
+    assert!(matches!(errors[0].kind, Kind::Literal(_)));
+  }
+
+  #[test]
+  fn a_traffic_endpoint_row_validates_as_the_nested_model() {
+    let mut body = base_body("traffic");
+    body["endpoints"] = json!([{"endpoint": "/api/sessions/{id}/", "transfer_size": 113004}]);
+    let errors = validate_event(body).expect_err("the row misses count");
+    assert_eq!(loc(&errors[0]), ["body", "endpoints", "0", "count"]);
     assert_eq!(errors[0].kind, Kind::Missing);
+  }
+
+  #[test]
+  fn a_traffic_event_over_forty_endpoints_is_too_long() {
+    let mut body = base_body("traffic");
+    body["endpoints"] = json!(
+      (0..41)
+        .map(|index| json!({"endpoint": format!("/api/p{index}"), "transfer_size": 1, "count": 1}))
+        .collect::<Vec<_>>()
+    );
+    let errors = validate_event(body).expect_err("the endpoint list is over the limit");
+    assert_eq!(loc(&errors[0]), ["body", "endpoints"]);
+    assert!(matches!(errors[0].kind, Kind::ListTooLong { max_length: MAX_TRAFFIC_ENDPOINTS, .. }));
+  }
+
+  #[test]
+  fn unsigned_values_above_i64_max_are_preserved() {
+    let mut body = base_body("switch");
+    body["generation"] = json!(i64::MAX as u64 + 1);
+    body["winner_generation"] = json!(u64::MAX);
+    let values = validate_event(body).expect("the switch body is valid");
+    assert_eq!(values["generation"], json!(i64::MAX as u64 + 1));
+    assert_eq!(values["winner_generation"], json!(u64::MAX));
+    let error = cut_error(optional_text_field_ref(values.as_object().unwrap(), "error"));
+    assert!(error.is_none());
   }
 
   #[test]
@@ -329,44 +562,175 @@ mod tests {
     // 350 code points, the last 50 beyond the basic multilingual plane, so the cut counts characters, not bytes.
     let long = "é".to_string() + &"𐍈".repeat(174) + &"x".repeat(175);
     assert_eq!(long.chars().count(), 350);
-    let event = SwitchEvent {
-      phase: "failed".to_string(),
-      from_session: None,
-      to_session: "session-b".to_string(),
-      generation: 1,
-      winner_generation: None,
-      elapsed_ms: None,
-      error: Some(&long),
-      client_ts: "2026-02-13T10:00:00Z".to_string(),
-    };
     let cut = cut_error(Some(&long)).expect("the error is over the limit");
-    let record = switch_record(&event, &cut);
-    let (_, cut) = record.iter().find(|(name, _)| *name == "error").unwrap();
-    let LogValue::Str(cut) = cut else { panic!("the error field is a string") };
     assert_eq!(cut.chars().count(), MAX_ERROR_CHARS);
-    assert_eq!(*cut, long.chars().take(MAX_ERROR_CHARS).collect::<String>());
+    assert_eq!(cut, long.chars().take(MAX_ERROR_CHARS).collect::<String>());
+    let short = cut_error(Some("short diagnostic")).expect("the error is present");
+    assert!(matches!(short, std::borrow::Cow::Borrowed(_)));
+  }
+
+  // ---------------------------------------------------------------------------
+  // The diag_client log line: one line per kind, its fields and the forwarded address
+  // ---------------------------------------------------------------------------
+
+  /// The `(name, value)` pairs of one event, in the order the event records them.
+  type Recorded = Vec<(String, String)>;
+
+  #[derive(Default)]
+  struct Visitor(Recorded);
+
+  impl Visit for Visitor {
+    fn record_str(&mut self, field: &TracingField, value: &str) {
+      self.0.push((field.name().to_string(), value.to_string()));
+    }
+
+    fn record_i128(&mut self, field: &TracingField, value: i128) {
+      self.0.push((field.name().to_string(), value.to_string()));
+    }
+
+    fn record_u64(&mut self, field: &TracingField, value: u64) {
+      self.0.push((field.name().to_string(), value.to_string()));
+    }
+
+    fn record_debug(&mut self, field: &TracingField, value: &dyn fmt::Debug) {
+      self.0.push((field.name().to_string(), format!("{value:?}")));
+    }
+  }
+
+  struct Capture(Arc<Mutex<Vec<Recorded>>>);
+
+  impl EventSink for Capture {
+    fn event(&self, event: &Event<'_>) {
+      let mut visitor = Visitor::default();
+      event.record(&mut visitor);
+      self.0.lock().unwrap().push(visitor.0);
+    }
+  }
+
+  /// Logs `body` through the handler path and returns the recorded `diag_client` event.
+  fn logged_event(body: Value) -> Recorded {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let _capture = install_events(Arc::new(Capture(Arc::clone(&events))));
+    let values = validate_event(body).expect("the event body is valid");
+    let kind = values["kind"].as_str().expect("the kind validates to a string").to_string();
+    log_client_event(&kind, values.as_object().unwrap(), "100.84.122.38");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1, "one diag_client event per call");
+    events[0].clone()
+  }
+
+  fn field<'a>(event: &'a Recorded, name: &str) -> &'a str {
+    event
+      .iter()
+      .find_map(|(field, value)| (field == name).then_some(value.as_str()))
+      .unwrap_or_else(|| panic!("the diag_client event has no {name} field"))
   }
 
   #[test]
-  fn a_short_error_is_logged_whole_and_an_absent_one_logs_null() {
-    let event = SwitchEvent {
-      phase: "started".to_string(),
-      from_session: None,
-      to_session: "session-b".to_string(),
-      generation: 1,
-      winner_generation: None,
-      elapsed_ms: None,
-      error: None,
-      client_ts: "2026-02-13T10:00:00Z".to_string(),
-    };
-    let record = switch_record(&event, "");
-    let values: Vec<(&str, &LogValue)> = record.iter().map(|(name, value)| (*name, value)).collect();
-    assert_eq!(values[5], ("elapsed_ms", &LogValue::Null));
-    assert_eq!(values[6], ("error", &LogValue::Null));
-    let named: Vec<&str> = record.iter().map(|(name, _)| *name).collect();
+  fn a_switch_event_logs_one_diag_client_line_with_its_fields_and_the_forwarded_address() {
+    let event = logged_event(base_body("switch"));
+    assert_eq!(field(&event, "kind"), "switch");
+    assert_eq!(field(&event, "phase"), "completed");
+    assert_eq!(field(&event, "from_session"), "session-a");
+    assert_eq!(field(&event, "to_session"), "session-b");
+    assert_eq!(field(&event, "generation"), "3");
+    assert_eq!(field(&event, "winner_generation"), "2");
+    assert_eq!(field(&event, "elapsed_ms"), "1500");
+    assert_eq!(field(&event, "error"), "null");
+    assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
+    assert_eq!(field(&event, "request_start"), "100");
+    assert_eq!(field(&event, "response_start"), "400");
+    assert_eq!(field(&event, "response_end"), "1500");
+    assert_eq!(field(&event, "transfer_size"), "26592");
+    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+  }
+
+  #[test]
+  fn a_send_event_logs_one_diag_client_line_with_its_fields_and_the_forwarded_address() {
+    let event = logged_event(base_body("send"));
+    assert_eq!(field(&event, "kind"), "send");
+    assert_eq!(field(&event, "request_id"), "0f0e1d2c-3b4a-5968-7789-aabbccddeeff");
+    assert_eq!(field(&event, "click_to_response_ms"), "300");
+    assert_eq!(field(&event, "click_to_echo_ms"), "620");
+    assert_eq!(field(&event, "retries"), "1");
+    assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
+    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+  }
+
+  #[test]
+  fn a_socket_event_logs_one_diag_client_line_with_its_fields_and_the_forwarded_address() {
+    let event = logged_event(base_body("socket"));
+    assert_eq!(field(&event, "kind"), "socket");
+    assert_eq!(field(&event, "disconnect_at"), "2026-02-13T09:59:00Z");
+    assert_eq!(field(&event, "cause"), "network");
+    assert_eq!(field(&event, "close_code"), "1006");
+    assert_eq!(field(&event, "reconnect_at"), "2026-02-13T09:59:02Z");
+    assert_eq!(field(&event, "reconnect_count"), "1");
+    assert_eq!(field(&event, "catchup_at"), "2026-02-13T09:59:03Z");
+    assert_eq!(field(&event, "catchup_bytes"), "80860");
+    assert_eq!(field(&event, "client_ts"), "2026-02-13T09:59:03Z");
+    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+  }
+
+  #[test]
+  fn a_page_load_event_logs_one_diag_client_line_with_its_fields_and_the_forwarded_address() {
+    let event = logged_event(base_body("page_load"));
+    assert_eq!(field(&event, "kind"), "page_load");
+    assert_eq!(field(&event, "response_end_ms"), "33000");
+    assert_eq!(field(&event, "dom_content_loaded_ms"), "34500");
+    assert_eq!(field(&event, "transfer_size"), "415115");
+    assert_eq!(field(&event, "cause"), "bootstrap_failure");
+    assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
+    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+  }
+
+  #[test]
+  fn a_traffic_event_logs_one_diag_client_line_with_its_rows_and_the_forwarded_address() {
+    let event = logged_event(base_body("traffic"));
+    assert_eq!(field(&event, "kind"), "traffic");
+    assert_eq!(field(&event, "window_s"), "60");
     assert_eq!(
-      named,
-      ["phase", "from_session", "to_session", "generation", "winner_generation", "elapsed_ms", "error", "client_ts"]
+      field(&event, "endpoints"),
+      r#"[{"endpoint":"/api/sessions/{id}/","transfer_size":113004,"count":1},"#.to_string()
+        + r#"{"endpoint":"/api/concurrency/now","transfer_size":365,"count":12}]"#
     );
+    assert_eq!(field(&event, "visibility_state"), "visible");
+    assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
+    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+  }
+
+  #[test]
+  fn a_started_switch_logs_null_resource_timing_and_a_null_error() {
+    let mut body = base_body("switch");
+    body["phase"] = json!("started");
+    body["winner_generation"] = json!(null);
+    for name in ["request_start", "response_start", "response_end", "transfer_size"] {
+      body[name] = json!(null);
+    }
+    let event = logged_event(body);
+    assert_eq!(field(&event, "winner_generation"), "null");
+    assert_eq!(field(&event, "request_start"), "null");
+    assert_eq!(field(&event, "transfer_size"), "null");
+    assert_eq!(field(&event, "error"), "null");
+  }
+
+  #[test]
+  fn a_long_error_is_logged_cut_to_its_first_300_code_points() {
+    let long = "é".to_string() + &"𐍈".repeat(174) + &"x".repeat(175);
+    let mut body = base_body("switch");
+    body["error"] = json!(long);
+    let event = logged_event(body);
+    assert_eq!(field(&event, "error").chars().count(), MAX_ERROR_CHARS);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The route: one path, one method, the old switch-events path gone
+  // ---------------------------------------------------------------------------
+
+  #[test]
+  fn the_route_matches_only_client_events() {
+    assert!(matches("/api/diag/client-events"));
+    assert!(!matches("/api/diag/switch-events"));
+    assert!(!matches("/api/diag/client-events/"));
   }
 }

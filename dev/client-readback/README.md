@@ -23,8 +23,8 @@ address the server logged (`forwarded_for`), and prints per device:
 
 ```sh
 node dev/client-readback/readback.mjs --from 2026-11-05T03:00:00Z --to 2026-11-05T14:00:00Z \
-  /tmp/charliebot-logs/server_20261105_031143.log
-node dev/client-readback/readback.mjs --from ... --to ... --device 100.84.122.38 <log>...
+  /tmp/charliebot-logs/server_20261105_031143.log  # the log files of the window's days
+node dev/client-readback/readback.mjs --from ... --to ... --device 100.64.0.8 <log>...
 ```
 
 The window bounds are the log's own timestamps. A percentile is the sorted

@@ -613,7 +613,7 @@ mod tests {
     let _capture = install_events(Arc::new(Capture(Arc::clone(&events))));
     let values = validate_event(body).expect("the event body is valid");
     let kind = values["kind"].as_str().expect("the kind validates to a string").to_string();
-    log_client_event(&kind, values.as_object().unwrap(), "100.84.122.38");
+    log_client_event(&kind, values.as_object().unwrap(), "100.64.0.8");
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1, "one diag_client event per call");
     events[0].clone()
@@ -642,7 +642,7 @@ mod tests {
     assert_eq!(field(&event, "response_start"), "400");
     assert_eq!(field(&event, "response_end"), "1500");
     assert_eq!(field(&event, "transfer_size"), "26592");
-    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+    assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
   }
 
   #[test]
@@ -654,7 +654,7 @@ mod tests {
     assert_eq!(field(&event, "click_to_echo_ms"), "620");
     assert_eq!(field(&event, "retries"), "1");
     assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
-    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+    assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
   }
 
   #[test]
@@ -669,7 +669,7 @@ mod tests {
     assert_eq!(field(&event, "catchup_at"), "2026-02-13T09:59:03Z");
     assert_eq!(field(&event, "catchup_bytes"), "80860");
     assert_eq!(field(&event, "client_ts"), "2026-02-13T09:59:03Z");
-    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+    assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
   }
 
   #[test]
@@ -681,7 +681,7 @@ mod tests {
     assert_eq!(field(&event, "transfer_size"), "415115");
     assert_eq!(field(&event, "cause"), "bootstrap_failure");
     assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
-    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+    assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
   }
 
   #[test]
@@ -696,7 +696,7 @@ mod tests {
     );
     assert_eq!(field(&event, "visibility_state"), "visible");
     assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
-    assert_eq!(field(&event, "forwarded_for"), "100.84.122.38");
+    assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
   }
 
   #[test]

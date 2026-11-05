@@ -37,6 +37,12 @@ const LOG_LINES = [
   line('2026-02-13 09:03:00.100Z', SWITCH_COMPLETED.replace('elapsed_ms=1500', 'elapsed_ms=3000')),
   line('2026-02-13 09:04:00.100Z', SWITCH_COMPLETED.replace('elapsed_ms=1500', 'elapsed_ms=6000')),
 
+  // A failed switch: the console renderer quotes an error holding spaces.
+  line('2026-02-13 09:04:30.100Z', "kind=switch phase=failed from_session=null " +
+    "to_session=1f2e3d4c-5b6a-7988-8799-bbccddeeff00 generation=8 winner_generation=null elapsed_ms=900 " +
+    "error='bootstrap 500' client_ts=2026-02-13T09:04:30Z request_start=null response_start=null " +
+    "response_end=null transfer_size=null forwarded_for=100.64.0.8"),
+
   // Sends: echo waits 500 and 1500 ms.
   line('2026-02-13 09:05:00.100Z', 'kind=send request_id=2c3d4e5f-6a7b-8901-abcd-eeff00112233 ' +
     'click_to_response_ms=300 click_to_echo_ms=500 retries=1 client_ts=2026-02-13T09:05:00Z forwarded_for=100.64.0.8'),
@@ -58,13 +64,15 @@ const LOG_LINES = [
 
   // Traffic: two windows of one minute each (0.0333 tab-hours), /api/sessions/
   // at 120000 bytes total and the concurrency poll at 120 bytes total.
-  line('2026-02-13 09:10:00.100Z', 'kind=traffic window_s=60 ' +
-    'endpoints=[{"endpoint":"/api/sessions/","transfer_size":60000,"count":1},' +
-    '{"endpoint":"/api/concurrency/now","transfer_size":73,"count":12}] visibility_state=visible ' +
+  // The console renderer quotes the endpoints value (it holds double quotes), the way the live
+  // diag_client lines carry it.
+  line('2026-02-13 09:10:00.100Z', "kind=traffic window_s=60 " +
+    'endpoints=\'[{"endpoint":"/api/sessions/","transfer_size":60000,"count":1},' +
+    '{"endpoint":"/api/concurrency/now","transfer_size":73,"count":12}]\' visibility_state=visible ' +
     'client_ts=2026-02-13T09:10:00Z forwarded_for=100.64.0.8'),
-  line('2026-02-13 09:11:00.100Z', 'kind=traffic window_s=60 ' +
-    'endpoints=[{"endpoint":"/api/sessions/","transfer_size":60000,"count":1},' +
-    '{"endpoint":"/api/concurrency/now","transfer_size":47,"count":12}] visibility_state=hidden ' +
+  line('2026-02-13 09:11:00.100Z', "kind=traffic window_s=60 " +
+    'endpoints=\'[{"endpoint":"/api/sessions/","transfer_size":60000,"count":1},' +
+    '{"endpoint":"/api/concurrency/now","transfer_size":47,"count":12}]\' visibility_state=hidden ' +
     'client_ts=2026-02-13T09:11:00Z forwarded_for=100.64.0.8'),
 
   // Page loads: one fresh open, one bootstrap failure.
@@ -98,7 +106,7 @@ test('the readback prints every section per device on the fixture log', () => {
     // Percentiles are the sorted sample's floor(p * (n - 1)) element: the
     // completed switches [1000, 2000, 3000, 6000] give p50=2000, p90=3000,
     // p99=6000; the echo waits [500, 1500] give p50=p90=500.
-    assert.match(output, /== 100\.64\.0\.8: 14 events/);
+    assert.match(output, /== 100\.64\.0\.8: 15 events/);
     assert.match(output, /switch completed n=4 p50=2000ms p90=3000ms p99=3000ms/);
     assert.match(output, /over-5s=1/);
     assert.match(output, /send click-to-echo n=2 p50=500ms p90=500ms/);

@@ -80,6 +80,20 @@ function isFiniteNumber(value) {
   return value !== null && value !== '' && Number.isFinite(Number(value));
 }
 
+// The log's value form is bare, or a quote wrapping `text_repr::str_repr` (the console renderer
+// quotes a value holding whitespace, `=`, a quote or a control character). The endpoints JSON of a
+// traffic row arrives quoted, so the parser decodes the wrapper before anything reads the value.
+function unlogValue(value) {
+  if (value.length >= 2) {
+    const quote = value[0];
+    if ((quote === "'" || quote === '"') && value.endsWith(quote)) {
+      return value.slice(1, -1).replace(/\\(.)/g, (_, char) =>
+        (char === 'n' ? '\n' : char === 't' ? '\t' : char === 'r' ? '\r' : char));
+    }
+  }
+  return value;
+}
+
 // The `diag_client` events of one log file, as `{at, device, kind, fields}`. A line whose kind is
 // unknown, or whose fields the line's own kind does not carry, is skipped.
 function parseLog(file) {
@@ -111,7 +125,7 @@ function parseLog(file) {
     const fields = {};
     for (const boundary of boundaries) {
       const key = boundary.name;
-      const value = rest.slice(boundary.at + key.length + 2, boundary.valueEnd).trim();
+      const value = unlogValue(rest.slice(boundary.at + key.length + 2, boundary.valueEnd).trim());
       if (fields[key] === undefined) fields[key] = value;
     }
     const device = fields.forwarded_for;

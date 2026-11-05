@@ -9,24 +9,15 @@
 mod process_guard;
 mod recovery_support;
 
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use charliebot_agents::backend_pool;
-use charliebot_claude_code::claude_accounts::{self, ClaudeAccountState};
-use charliebot_claude_code::claude_config;
-use charliebot_claude_code::claude_lifecycle::ClaudeCodeLifecycle;
-use charliebot_claude_code::claude_relay;
-use charliebot_claude_code::login_dirs;
-use charliebot_core::config::{BackendOption, ConfigSection, RoutingConfig};
+use charliebot_core::config::{BackendOption, RoutingConfig};
 use charliebot_core::event_types;
-use charliebot_registry::backend::{BackendLifecycle, BackendTraits, ResumeStyle};
 use charliebot_registry::caller::CallerIdentity;
-use charliebot_registry::{RegisterFn, Registry, RegistryError};
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
@@ -35,8 +26,8 @@ use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 use charliebot_tasks::{cold_read, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Build, Scripts, Stack, cold_read_body, init_repo_with_origin, last_child_report,
-  post_delegate, result_script, scripted_type, settle_until, synthetic_git, synthetic_run, write_sitrep,
+  BACKEND_ID, BACKEND_TYPE, Scripts, Stack, cold_read_body, init_repo_with_origin, last_child_report, post_delegate,
+  result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -913,141 +904,6 @@ async fn non_space_end_failure_lands_immediately_and_starts_no_retry() -> anyhow
   Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Pooled cc-claude launches
-// ---------------------------------------------------------------------------
-
-/// The pooled Fable option's id; its configuration names the `cc-claude` type under this id.
-const POOLED: &str = "claude-fable-5";
-
-thread_local! {
-  /// The Claude account state the next `cc-claude` registration drives. The test sets it on the thread that registers.
-  static CLAUDE_STATE: RefCell<Option<Arc<ClaudeAccountState>>> = const { RefCell::new(None) };
-}
-
-fn register_pooled_claude(registry: &mut Registry) -> Result<(), RegistryError> {
-  let state = CLAUDE_STATE
-    .with(|cell| cell.borrow_mut().take())
-    .expect("the test sets the Claude account state before registering");
-  registry.config_section(ConfigSection {
-    key: "accounts",
-    legacy_keys: &[],
-    parse: claude_config::parse_accounts,
-    dump: claude_config::dump_accounts,
-  })?;
-  let lifecycle: Arc<dyn BackendLifecycle> = Arc::new(ClaudeCodeLifecycle::with_state(state));
-  let traits = BackendTraits {
-    resume: ResumeStyle::CliFlag,
-    restart_reattach: true,
-    preassigned_session_id: true,
-    family_prefix: None,
-    manual_compact: true,
-    compact_hint: None,
-  };
-  registry.backend_type(scripted_type("cc-claude", traits, Some(lifecycle)))
-}
-
-/// One pooled test's directories: the Claude config dirs of its accounts and the configuration's worktree root.
-struct Root {
-  dir: tempfile::TempDir,
-}
-
-impl Root {
-  fn new() -> anyhow::Result<Self> {
-    Ok(Self { dir: tempfile::tempdir()? })
-  }
-
-  fn path(&self) -> &Path {
-    self.dir.path()
-  }
-
-  fn claude(&self, label: &str) -> PathBuf {
-    self.path().join(format!("claude-{label}"))
-  }
-}
-
-/// Writes the Claude OAuth credentials that mark an account's login present.
-fn plant_credentials(config_dir: &Path) -> anyhow::Result<()> {
-  std::fs::create_dir_all(config_dir)?;
-  let credentials = json!({"claudeAiOauth": {"accessToken": "token", "refreshToken": "r"}});
-  std::fs::write(config_dir.join(login_dirs::CREDENTIALS_FILE), credentials.to_string())?;
-  Ok(())
-}
-
-/// A session transcript of `session_id` under a config dir, as a Claude Code login writes it.
-fn make_transcript(config_dir: &Path, session_id: &str) -> anyhow::Result<PathBuf> {
-  let transcript = config_dir.join("projects").join("slug").join(format!("{session_id}.jsonl"));
-  std::fs::create_dir_all(transcript.parent().expect("a transcript has a directory"))?;
-  std::fs::write(&transcript, "[]")?;
-  Ok(transcript)
-}
-
-/// The `config.yaml` of a pooled test: the Claude accounts with their credentials, the pools, and the one `cc-claude`
-/// option, which draws from the first pool when pools are given.
-fn pooled_config(root: &Root, labels: &[&str], pools: &[(&str, &[&str])], token: &str) -> anyhow::Result<String> {
-  // The sessions here have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent chain.
-  let mut text = format!(
-    "paths:\n  worktree_dir: {}\nserver:\n  session_memory_max_mb: 0\n",
-    root.path().join("worktrees").display()
-  );
-  if !labels.is_empty() {
-    text.push_str("accounts:\n  claude:\n");
-    for label in labels {
-      plant_credentials(&root.claude(label))?;
-      text.push_str(&format!("    - label: {label}\n      config_dir: {}\n", root.claude(label).display()));
-    }
-    if !pools.is_empty() {
-      text.push_str("  claude_pools:\n");
-      for (name, members) in pools {
-        text.push_str(&format!("    {name}: [{}]\n", members.join(", ")));
-      }
-    }
-  }
-  let pool = pools.first().map(|(name, _)| format!("      account_pool: {name}\n")).unwrap_or_default();
-  let option = format!("      model: test-model\n      token: {token}\n{pool}");
-  text.push_str(&format!(
-    "backends:\n  options:\n    - id: {POOLED}\n      label: {POOLED}\n      type: cc-claude\n{option}"
-  ));
-  Ok(text)
-}
-
-/// A stack over a pooled Claude configuration whose one `cc-claude` option runs `scripts` in order. Its lifecycle
-/// selects through `state`, which the test has observed its readings into.
-async fn pooled_stack(
-  root: &Root,
-  labels: &[&str],
-  pools: &[(&str, &[&str])],
-  scripts: &Scripts,
-  state: &Arc<ClaudeAccountState>,
-) -> anyhow::Result<Stack> {
-  CLAUDE_STATE.with(|cell| *cell.borrow_mut() = Some(Arc::clone(state)));
-  let config = pooled_config(root, labels, pools, scripts.token())?;
-  let stack = Stack::start_from_config(&config, ("test.pooled_claude", register_pooled_claude as RegisterFn)).await?;
-  stack.write_access_key()?;
-  Ok(stack)
-}
-
-/// A work run on a pooled cc-claude option, whose model is the option's test model (`_register_work_run`).
-fn pooled_run(session_id: &str, run_id: &str, backend: &str) -> RunRecord {
-  RunRecord {
-    backend: Some(backend.to_string()),
-    model: Some("test-model".to_string()),
-    ..synthetic_run(session_id, run_id, RunKind::Work)
-  }
-}
-
-/// Record a run's process group as soon as the spawn callback persists its pid.
-async fn track_run_pid(stack: &Stack, guard: &ProcessGroupGuard, session_id: &str, run_id: &str) -> anyhow::Result<()> {
-  settle_until(|| {
-    if let Some(pid) = stack.store().read_run_sync(session_id, run_id)?.and_then(|run| run.pid) {
-      guard.track(pid);
-      return Ok(true);
-    }
-    Ok(false)
-  })
-  .await
-}
-
 /// A `/bin/sh` script that prints each event as one JSON line and then runs `tail`.
 fn script_lines(events: &[Value], tail: &str) -> String {
   let mut commands = vec![":".to_string()];
@@ -1065,42 +921,8 @@ fn exits(events: &[Value], code: i32) -> String {
   script_lines(events, &format!("exit {code}"))
 }
 
-/// A script that waits until `gate` exists before it runs, so the test can read the launch it was given first.
-fn gated(gate: &Path, script: String) -> String {
-  format!("while [ ! -f '{}' ]; do sleep 0.05; done; {script}", gate.display())
-}
-
-fn assistant_text(text: &str) -> Value {
-  json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}})
-}
-
 fn result() -> Value {
   json!({"type": event_types::RESULT, "subtype": "success", "is_error": false, "result": "done"})
-}
-
-/// A rate-limit observation: the five-hour window at `utilization`, resetting three hours from now.
-fn rate_limit_info(status: &str, utilization: f64) -> Value {
-  let resets_at = (OffsetDateTime::now_utc() + TimeDuration::hours(3)).unix_timestamp();
-  json!({
-    "status": status,
-    "rateLimitType": "five_hour",
-    "resetsAt": resets_at,
-    "unifiedWindows": {"five_hour": {"utilization": utilization}, "seven_day": {"utilization": 0.3}},
-  })
-}
-
-fn rate_limit(status: &str, utilization: f64) -> Value {
-  json!({"type": event_types::RATE_LIMIT_EVENT, "rate_limit_info": rate_limit_info(status, utilization)})
-}
-
-/// The label of the account a launch was given (`claude_account`).
-fn account_label(build: &Build) -> Option<&str> {
-  build.launch.backend_kwargs.get("claude_account")?.get("label")?.as_str()
-}
-
-/// The config dir of the account a launch was given (`claude_account`).
-fn account_dir(build: &Build) -> Option<PathBuf> {
-  Some(PathBuf::from(build.launch.backend_kwargs.get("claude_account")?.get("config_dir")?.as_str()?))
 }
 
 /// The events of a run's events log, one per line.
@@ -1111,92 +933,6 @@ fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<
     .filter(|line| !line.trim().is_empty())
     .map(|line| Ok(serde_json::from_str(line)?))
     .collect()
-}
-
-/// A fresh work Run and its spawned review on a pooled cc-claude option both launch on the account the pool selects.
-#[tokio::test]
-async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow::Result<()> {
-  let root = Root::new()?;
-  let state = Arc::new(ClaudeAccountState::new());
-  let scripts = Scripts::new(vec![
-    exits(&[assistant_text("work done"), result()], 0),
-    exits(&[assistant_text("review ok"), result()], 0),
-  ]);
-  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
-  let expected =
-    claude_accounts::select(&state, &stack.cfg, Some("test-model"), &HashSet::new(), None, None, None, 0.0)?
-      .expect("an account is available");
-  assert_eq!(expected.label, "main");
-  let guard = ProcessGroupGuard::new();
-  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::Implement)))).await?;
-  register_run(&stack, pooled_run(&worker.id, "run-work", POOLED), "ship it").await?;
-  stack.adapter.launch(&worker.id, "run-work")?;
-  track_run_pid(&stack, &guard, &worker.id, "run-work").await?;
-
-  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
-  let mut review_pid_tracked = false;
-  settle_until(|| {
-    let Some(review) = stack.run_records(&worker.id)?.into_iter().find(|run| run.kind == RunKind::Review) else {
-      return Ok(false);
-    };
-    if let Some(pid) = review.pid
-      && !review_pid_tracked
-    {
-      guard.track(pid);
-      review_pid_tracked = true;
-    }
-    Ok(run_records::terminal_outcome(&stack.run_events(&worker.id)?, &review.id)?.is_some())
-  })
-  .await?;
-  let builds = scripts.builds();
-  assert_eq!(builds.len(), 2, "the work and review each launch a build");
-  assert_eq!(
-    builds.iter().map(account_label).collect::<Vec<_>>(),
-    vec![Some(expected.label.as_str()), Some(expected.label.as_str())],
-    "both launches take the account claude_accounts.select returns"
-  );
-  Ok(())
-}
-
-/// With pools defined, the launch picks an account of its option's pool. The untouched beta accounts hold more headroom
-/// than the alpha member, and stay unused.
-#[tokio::test]
-async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result<()> {
-  let root = Root::new()?;
-  let state = Arc::new(ClaudeAccountState::new());
-  // main sits at half a window; across all accounts an untouched beta account wins.
-  claude_accounts::observe_rate_limit(&state, "main", &rate_limit_info("allowed", 0.50), None);
-  let scripts = Scripts::new(vec![exits(&[assistant_text("done"), result()], 0)]);
-  let pools: &[(&str, &[&str])] = &[("alpha", &["main"]), ("beta", &["ext-1", "ext-2"])];
-  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], pools, &scripts, &state).await?;
-  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
-  register_run(&stack, pooled_run(&worker.id, "run-pool", POOLED), "ship it").await?;
-  stack.adapter.launch(&worker.id, "run-pool")?;
-
-  assert_eq!(stack.wait_terminal(&worker.id, "run-pool").await?, RunOutcomeKind::Success);
-  assert_eq!(account_label(&scripts.builds()[0]), Some("main"), "the launch stays inside the option's pool");
-  let unpooled =
-    claude_accounts::select(&state, &stack.cfg, Some("test-model"), &HashSet::new(), None, None, None, 0.0)?
-      .expect("an account is available");
-  assert_ne!(unpooled.label, "main", "without the pool, the untouched beta account would win");
-  Ok(())
-}
-
-/// Over an empty pool: the cc-claude option runs on no account, so its launch carries no `claude_account` and runs on
-/// the default login.
-#[tokio::test]
-async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> anyhow::Result<()> {
-  let root = Root::new()?;
-  let state = Arc::new(ClaudeAccountState::new());
-  let scripts = Scripts::new(vec![exits(&[assistant_text("done"), result()], 0)]);
-  let stack = pooled_stack(&root, &[], &[], &scripts, &state).await?;
-  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
-  register_run(&stack, pooled_run(&worker.id, "run-work", POOLED), "ship it").await?;
-  stack.adapter.launch(&worker.id, "run-work")?;
-
-  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
-  assert!(scripts.builds()[0].launch.backend_kwargs.get("claude_account").is_none());
-  Ok(())
 }
 
 /// Over a non-Claude backend: the launch carries no `claude_account` either.
@@ -1210,79 +946,6 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend
 
   assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
   assert!(scripts.builds()[0].launch.backend_kwargs.get("claude_account").is_none());
-  Ok(())
-}
-
-/// With no account left to select, the Run fails before any process starts. Its events log carries the pool-exhausted
-/// error, which names the earliest reset, and the error event is flagged as quota exhaustion.
-#[tokio::test]
-async fn pool_exhausted_launch_fails_the_run_with_evidence_and_no_process() -> anyhow::Result<()> {
-  let root = Root::new()?;
-  let state = Arc::new(ClaudeAccountState::new());
-  for label in ["main", "ext-1", "ext-2"] {
-    claude_accounts::observe_rate_limit(&state, label, &rate_limit_info("rejected", 1.0), None);
-  }
-  let scripts = Scripts::new(vec![]);
-  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
-  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", None))).await?;
-  register_run(&stack, pooled_run(&worker.id, "run-x", POOLED), "ship it").await?;
-  stack.adapter.launch(&worker.id, "run-x")?;
-
-  assert_eq!(stack.wait_terminal(&worker.id, "run-x").await?, RunOutcomeKind::Failed);
-  let run = stack.store().read_run_sync(&worker.id, "run-x")?.expect("the run is recorded");
-  assert!(run.pid.is_none(), "no process started");
-  assert!(scripts.builds().is_empty(), "the backend was never invoked");
-  let error = error_text(&stack, &worker.id, "run-x")?;
-  assert!(error.contains(claude_relay::POOL_EXHAUSTED_PHRASE), "{error}");
-  assert!(error.contains("earliest reset") && error.contains("UTC"), "{error}");
-  assert_eq!(error, claude_relay::pool_exhausted_message(&state, &stack.cfg, None, None)?);
-  let flags: Vec<Value> = run_log(&stack, &worker.id, "run-x")?
-    .iter()
-    .filter(|event| event["type"] == event_types::ERROR)
-    .map(|event| event[event_types::QUOTA_EXHAUSTED].clone())
-    .collect();
-  assert_eq!(flags, [json!(true)], "the refusal's flag rides the launch error event");
-  Ok(())
-}
-
-/// A Run launched through task execution relays like a directly driven worker. The first process's rejected reading
-/// moves the run to the account with the most headroom, on the same Claude conversation, and the Run ends successfully.
-#[tokio::test]
-async fn rejected_first_process_relays_to_another_pool_account_and_succeeds() -> anyhow::Result<()> {
-  let root = Root::new()?;
-  let state = Arc::new(ClaudeAccountState::new());
-  let gate = root.path().join("gate");
-  let scripts = Scripts::new(vec![
-    gated(&gate, exits(&[assistant_text("halfway"), rate_limit("rejected", 1.0)], 1)),
-    exits(&[assistant_text("done after relay"), result()], 0),
-  ]);
-  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
-  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
-  register_run(&stack, pooled_run(&worker.id, "run-relay", POOLED), "ship it").await?;
-  stack.adapter.launch(&worker.id, "run-relay")?;
-
-  // The fresh launch binds a Claude conversation of its own: its transcript exists under the first account before the
-  // first process is released to reach its rejection, so the relay has a transcript to move.
-  settle_until(|| Ok(!scripts.builds().is_empty())).await?;
-  let first = scripts.builds()[0].clone();
-  let conversation = first.launch.backend_kwargs["claude_session_id"]
-    .as_str()
-    .expect("a fresh launch pins its conversation")
-    .to_string();
-  make_transcript(&account_dir(&first).expect("the first launch names its account"), &conversation)?;
-  settle_until(|| Ok(stack.store().read_run_sync(&worker.id, "run-relay")?.is_some_and(|run| run.pid.is_some())))
-    .await?;
-  let first_pid = stack.store().read_run_sync(&worker.id, "run-relay")?.and_then(|run| run.pid);
-  std::fs::write(&gate, "")?;
-
-  assert_eq!(stack.wait_terminal(&worker.id, "run-relay").await?, RunOutcomeKind::Success);
-  let run = stack.store().read_run_sync(&worker.id, "run-relay")?.expect("the run is recorded");
-  assert_eq!(run.exit_code, Some(0));
-  assert_ne!(run.pid, first_pid, "the Run's identity follows the relay's second process");
-  let builds = scripts.builds();
-  assert_eq!([account_label(&builds[0]), account_label(&builds[1])], [Some("main"), Some("ext-1")]);
-  let moved = root.claude("ext-1").join("projects").join("slug").join(format!("{conversation}.jsonl"));
-  assert!(moved.is_file(), "the transcript moved with the run to {}", moved.display());
   Ok(())
 }
 

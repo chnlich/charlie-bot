@@ -37,8 +37,8 @@ use axum::http::{Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CONFIG_FILENAME, CharlieBotConfig, PathsConfig, Sections,
-  ServerConfig, TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
+  TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
@@ -50,8 +50,8 @@ use charliebot_registry::RegisterFn;
 use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle,
-  Translate, TransportKind,
+  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
+  TransportKind,
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
@@ -190,11 +190,6 @@ impl Scripts {
       backend_type: backend_type.to_string(),
       type_fields,
     }
-  }
-
-  /// The token a config file names this queue with.
-  pub fn token(&self) -> &str {
-    &self.token
   }
 
   pub fn builds(&self) -> Vec<Build> {
@@ -345,22 +340,6 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
     registry.register_package(package, register)?;
   }
   Ok(registry)
-}
-
-/// A backend type over the scripted factory, for a test's own type names (the Claude account type takes its lifecycle).
-pub fn scripted_type(
-  type_name: &'static str,
-  traits: BackendTraits,
-  lifecycle: Option<Arc<dyn BackendLifecycle>>,
-) -> BackendTypeRegistration {
-  BackendTypeRegistration {
-    type_name,
-    traits,
-    option_model: |_| Ok(()),
-    factory: Arc::new(ScriptFactory),
-    lifecycle,
-    translate_fallback: false,
-  }
 }
 
 /// A script that prints one successful result event carrying `text`.
@@ -569,16 +548,6 @@ impl Stack {
     let pool = vec![BACKEND_ID.to_string()];
     let cfg = config(home.path(), options, pool, 0);
     let registry = registry(Some(("test.cron_recovery", register_cron_recovery)))?;
-    Stack::assemble(Arc::new(home), cfg, registry).await
-  }
-
-  /// A stack over the `config.yaml` the test writes, loaded through a registry that also holds `extra`: the test's own
-  /// backend types and config sections, such as the Claude account type and its accounts section.
-  pub async fn start_from_config(config_text: &str, extra: (&'static str, RegisterFn)) -> anyhow::Result<Stack> {
-    let home = tempfile::tempdir()?;
-    std::fs::write(home.path().join(CONFIG_FILENAME), config_text)?;
-    let registry = registry(Some(extra))?;
-    let cfg = registry.load_config(home.path())?;
     Stack::assemble(Arc::new(home), cfg, registry).await
   }
 

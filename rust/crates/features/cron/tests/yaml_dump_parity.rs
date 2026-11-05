@@ -1,4 +1,4 @@
-use charliebot_core::yaml;
+use charliebot_cron::yaml;
 use serde_json::{Value, json};
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/yaml_dump_parity_golden.json");
@@ -66,7 +66,7 @@ fn corpus() -> Vec<Value> {
 }
 
 #[test]
-fn core_yaml_writer_matches_pyyaml_safe_c_dumper_for_the_corpus() {
+fn cron_yaml_writer_matches_pyyaml_safe_c_dumper_for_the_corpus() {
   let corpus = corpus();
   let rust: Vec<String> = corpus.iter().map(|value| yaml::dump(value).unwrap()).collect();
   let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();

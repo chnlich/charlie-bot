@@ -1045,7 +1045,7 @@ mod tests {
     scheduler.tick_at(clock).await.unwrap();
     let mut binding: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     binding["enabled"] = json!(true);
-    std::fs::write(&path, charliebot_core::yaml::dump(&binding).unwrap()).unwrap();
+    std::fs::write(&path, crate::yaml::dump(&binding).unwrap()).unwrap();
     let session_id = binding["session_id"].as_str().unwrap();
     let guard = features.store.control_lock().await;
     features
@@ -1456,7 +1456,7 @@ mod tests {
       if fail_after == "write" {
         let mut body = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
         body.as_object_mut().unwrap().insert("session_id".to_string(), json!(node.id));
-        std::fs::write(&path, charliebot_core::yaml::dump(&body).unwrap()).unwrap();
+        std::fs::write(&path, crate::yaml::dump(&body).unwrap()).unwrap();
       }
 
       CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
@@ -1523,7 +1523,7 @@ mod tests {
     scheduler.tick().await.unwrap();
     let mut body = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
     body.as_object_mut().unwrap().insert("backend".to_string(), json!("synthetic-alt"));
-    std::fs::write(&path, charliebot_core::yaml::dump(&body).unwrap()).unwrap();
+    std::fs::write(&path, crate::yaml::dump(&body).unwrap()).unwrap();
 
     scheduler.tick().await.unwrap();
 
@@ -1602,7 +1602,7 @@ mod tests {
     let node_id = first["session_id"].as_str().unwrap().to_string();
     let mut unbound = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
     unbound.as_object_mut().unwrap().remove("session_id");
-    std::fs::write(&path, charliebot_core::yaml::dump(&unbound).unwrap()).unwrap();
+    std::fs::write(&path, crate::yaml::dump(&unbound).unwrap()).unwrap();
     features.store.archive_session(&node_id).await.unwrap();
     assert_eq!(features.store.task_state(&node_id).unwrap(), "open");
 
@@ -2105,7 +2105,7 @@ mod tests {
     std::fs::create_dir_all(thread_path.parent().unwrap()).unwrap();
     std::fs::write(
       &thread_path,
-      charliebot_core::yaml::dump(&json!({
+      crate::yaml::dump(&json!({
         "id": "stuck-thread", "session_id": node.id, "description": "stuck round",
         "status": "running", "pid": 999999,
       }))

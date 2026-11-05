@@ -164,7 +164,7 @@ impl std::error::Error for TaskFileWriteError {
 
 /// One cron task value, encoded as YAML and written to the file.
 pub fn write_task_file(path: &Path, value: &Value) -> Result<(), TaskFileWriteError> {
-  let contents = charliebot_core::yaml::dump(value).map_err(TaskFileWriteError::Encode)?;
+  let contents = crate::yaml::dump(value).map_err(TaskFileWriteError::Encode)?;
   std::fs::write(path, contents).map_err(TaskFileWriteError::Write)
 }
 
@@ -596,7 +596,7 @@ mod tests {
   fn write_task(cfg: &CharlieBotConfig, name: &str, body: &Value) {
     let directory = cfg.config_d_dir().join("cron.d");
     std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(directory.join(format!("{name}.yaml")), charliebot_core::yaml::dump(body).unwrap()).unwrap();
+    std::fs::write(directory.join(format!("{name}.yaml")), crate::yaml::dump(body).unwrap()).unwrap();
   }
 
   fn write_prompt(directory: &Path, name: &str, body: &str) -> std::path::PathBuf {
@@ -649,7 +649,7 @@ mod tests {
     let body = json!({"cron":"0 8 * * *","prompt_file":"prompts/synthetic.md"});
     let path = dir.path().join("synthetic.yaml");
     write_task_file(&path, &body).unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), charliebot_core::yaml::dump(&body).unwrap());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), crate::yaml::dump(&body).unwrap());
 
     let absent = dir.path().join("absent/synthetic.yaml");
     let error = write_task_file(&absent, &body).unwrap_err();
@@ -779,10 +779,10 @@ mod tests {
       {"name":"selector","prompt_file":"prompts/cron/selector.md"},
       {"name":"reviewer","prompt_file":"prompts/cron/reviewer.md","distinct_backend_from":"selector"}
     ]});
-    let bytes = charliebot_core::yaml::dump(&value).unwrap();
+    let bytes = crate::yaml::dump(&value).unwrap();
     let path = cfg.config_d_dir().join("cron.d/synthetic-default.yaml");
     std::fs::write(&path, &bytes).unwrap();
-    std::fs::write(&path, charliebot_core::yaml::dump(&value).unwrap()).unwrap();
+    std::fs::write(&path, crate::yaml::dump(&value).unwrap()).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), bytes.as_bytes());
     assert!(home.path().join("config.d/cron.d/synthetic-default.yaml").exists());
   }

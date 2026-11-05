@@ -16,6 +16,7 @@ charliebot-tasks.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 futures-util.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

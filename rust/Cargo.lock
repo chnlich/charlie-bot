@@ -752,6 +752,7 @@ dependencies = [
  "chrono-tz",
  "futures-util",
  "nix",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

@@ -1,11 +1,11 @@
-//! The YAML writer.
+//! The YAML writer for cron task files.
 //!
 //! Scalar style follows the YAML resolver and block-context scalar analysis. Quoted scalars use the escape table and
 //! width-80 folding rules, and floating-point numbers use the `represent_float` spelling.
 
 use std::sync::OnceLock;
 
-use crate::text_repr;
+use charliebot_core::text_repr;
 use regex::Regex;
 use serde_json::{Map, Value};
 

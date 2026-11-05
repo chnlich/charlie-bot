@@ -869,7 +869,7 @@ mod tests {
 
   fn write_cron(home: &std::path::Path, name: &str, value: Value) {
     let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
-    std::fs::write(&path, charliebot_core::yaml::dump(&value).unwrap()).unwrap();
+    std::fs::write(&path, crate::yaml::dump(&value).unwrap()).unwrap();
   }
 
   #[tokio::test]

@@ -452,7 +452,7 @@ mod tests {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
       &path,
-      charliebot_core::yaml::dump(&json!({
+      crate::yaml::dump(&json!({
         "cron": "0 8 * * *",
         "prompt_file": prompt,
         "session_id": node.id,
@@ -506,11 +506,8 @@ mod tests {
     features.startup.insert(CronScheduler::new(Arc::clone(&features))).unwrap();
     let path = home.path().join("config.d/cron.d/synthetic-handler.yaml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(
-      &path,
-      charliebot_core::yaml::dump(&json!({"cron": "0 8 * * *", "handler": "synthetic_handler"})).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(&path, crate::yaml::dump(&json!({"cron": "0 8 * * *", "handler": "synthetic_handler"})).unwrap())
+      .unwrap();
 
     let (status, result) = send(&routes(&features), "POST", "/api/cron/tasks/synthetic-handler/run", json!(null)).await;
 
@@ -537,7 +534,7 @@ mod tests {
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
     std::fs::write(
       &path,
-      charliebot_core::yaml::dump(&json!({
+      crate::yaml::dump(&json!({
         "cron": "0 8 * * *",
         "handler": "synthetic_handler",
         "session_id": node.id,
@@ -566,7 +563,7 @@ mod tests {
     let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
     let node = manager(&features, "synthetic-busy-bound-node").await.unwrap();
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
-    let original = charliebot_core::yaml::dump(&json!({
+    let original = crate::yaml::dump(&json!({
       "cron": "0 8 * * *",
       "handler": "synthetic_handler",
       "session_id": node.id,
@@ -612,7 +609,7 @@ mod tests {
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
     std::fs::write(
       &path,
-      charliebot_core::yaml::dump(&json!({
+      crate::yaml::dump(&json!({
         "cron": "0 8 * * *",
         "handler": "synthetic_handler",
         "session_id": node.id,
@@ -643,7 +640,7 @@ mod tests {
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
     std::fs::write(
       &path,
-      charliebot_core::yaml::dump(&json!({
+      crate::yaml::dump(&json!({
         "cron": "0 8 * * *",
         "handler": "synthetic_handler",
         "session_id": "synthetic-bound-node",

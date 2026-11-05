@@ -409,7 +409,7 @@ pub async fn archive_task(features: &FeatureContext, session_id: &str) {
 pub fn write_task(home: &Path, name: &str, body: &Value) -> PathBuf {
   let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
   std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-  std::fs::write(&path, charliebot_core::yaml::dump(body).unwrap()).unwrap();
+  std::fs::write(&path, crate::yaml::dump(body).unwrap()).unwrap();
   path
 }
 

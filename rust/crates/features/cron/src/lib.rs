@@ -11,6 +11,7 @@ mod sequence_controller;
 mod steps;
 #[cfg(test)]
 mod test_support;
+pub mod yaml;
 
 use std::sync::Arc;
 

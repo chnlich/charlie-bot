@@ -38,7 +38,6 @@ pub mod timefmt;
 pub mod timeouts;
 pub mod v1_sessions;
 pub mod web_search;
-pub mod yaml;
 
 pub use metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator, SlotField};
 pub use repo_root::RepoRoot;

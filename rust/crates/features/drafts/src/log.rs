@@ -1,4 +1,4 @@
-//! Derive one draft's state from the session log.
+//! One draft's state, derived from the session log.
 //!
 //! The log is the only truth the send path reads: a registered draft with no `draft_sent` and no later draft that
 //! names it in `replaces` can be sent. Nothing else is stored.
@@ -50,7 +50,7 @@ pub enum Sendability {
   Missing,
 }
 
-/// Read one session's log and derive `draft_id`'s sendability.
+/// `draft_id`'s sendability, derived from one session's log.
 pub fn sendability<'a>(events: impl Iterator<Item = &'a ChatEvent>, draft_id: &str) -> Sendability {
   let mut registered: Option<RegisteredDraft> = None;
   let mut sent = false;

@@ -1,20 +1,11 @@
 //! The persisted run record's types. The store's run-record state holds them, so they sit in a module of their own.
+//! The run's category is `charliebot_core::run_kind::RunKind`, which the backends read too.
 
 use serde::{Deserialize, Serialize};
 
-use crate::metadata::UtcDateTime;
+use charliebot_core::run_kind::RunKind;
 
-/// The execution category in a persisted run record.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunKind {
-  ManagerTurn,
-  #[default]
-  Work,
-  Review,
-  Iteration,
-  ScheduledStep,
-}
+use crate::metadata::UtcDateTime;
 
 /// The sequence that owns a scheduled run.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

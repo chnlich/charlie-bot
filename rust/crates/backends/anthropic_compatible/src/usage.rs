@@ -1,8 +1,8 @@
 //! Context limits for `cc-anthropic-compatible` usage readings.
 
 use charliebot_core::config::BackendOption;
+use charliebot_core::run_kind::RunKind;
 use charliebot_registry::backend::ContextLimits;
-use charliebot_store::run_records::RunKind;
 
 use super::options::CcAnthropicCompatibleOption;
 use charliebot_claude_code::claude_launch;

@@ -987,6 +987,10 @@ copy_seed_sessions() {
     mkdir -m 700 -p "$TRIAL_CB_HOME/state" || return 1
     cp -a -- "$SEED_HOME/boot_skip_proof.json" "$TRIAL_CB_HOME/state/boot_skip_proof.json" || return 1
   fi
+  if [[ -f $SEED_HOME/boot_trigger_index.json ]]; then
+    mkdir -m 700 -p "$TRIAL_CB_HOME/state" || return 1
+    cp -a -- "$SEED_HOME/boot_trigger_index.json" "$TRIAL_CB_HOME/state/boot_trigger_index.json" || return 1
+  fi
 }
 
 start_server() {

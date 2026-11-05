@@ -269,7 +269,7 @@ pub struct SessionUsage {
 }
 
 impl SessionUsage {
-  /// Create an owner bound to this server's reloaded config, store, and registrations.
+  /// An owner bound to this server's reloaded config, store, and registrations.
   pub fn new(config: Arc<HotReload<CharlieBotConfig>>, store: Arc<Store>, registry: Arc<Registry>) -> SessionUsage {
     SessionUsage {
       config,
@@ -280,7 +280,7 @@ impl SessionUsage {
     }
   }
 
-  /// Resolve one session's reading through its backend resolver, then the shared event-fold tiers.
+  /// One session's reading, resolved through its backend resolver and then the shared event-fold tiers.
   pub fn resolve_session_usage(
     &self,
     session_id: &str,
@@ -290,7 +290,7 @@ impl SessionUsage {
     self.resolve_with_facts(session_id, meta, backend_option).map(|(usage, _)| usage)
   }
 
-  /// Resolve the event-only tiers for an already-loaded transcript, without a backend resolver or cross-call memo.
+  /// The event-only tiers for an already-loaded transcript; no backend resolver and no cross-call memo.
   pub fn resolve_events_usage<E: EventFields>(
     &self,
     events: &[&E],
@@ -300,7 +300,7 @@ impl SessionUsage {
     fold_usage(events, run_kind, &self.registry, backend_option)
   }
 
-  /// Return the selected context reading and the latest assistant/result request time.
+  /// The selected context-token reading and the latest assistant/result request time.
   pub fn context_state(
     &self,
     session_id: &str,
@@ -393,7 +393,7 @@ impl SessionUsage {
   }
 }
 
-/// Register the one server-wide session usage owner in the runtime startup state.
+/// The runtime registration of the one server-wide session usage owner.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.pre_recovery_step("session_usage", initialize)
 }
@@ -409,7 +409,7 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
   })
 }
 
-/// Fold session events through the source tiers, without invoking a registered backend usage resolver.
+/// The session events folded through the source tiers, without a registered backend usage resolver.
 pub fn fold_usage<E: EventFields>(
   events: &[&E],
   run_kind: RunKind,

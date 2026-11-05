@@ -1,4 +1,4 @@
-//! `GET /api/approval/day`: one PT day's queue, login sheet and digest as JSON.
+//! The day JSON route: one PT day's queue, login sheet and digest, served at `GET /api/approval/day`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,7 +23,8 @@ pub fn matches(path: &str) -> bool {
   path == "/api/approval/day"
 }
 
-/// `GET /api/approval/day?date=YYYY-MM-DD`: the day view. An absent `date` answers today's Pacific day.
+/// The day route: the day view for one `date` query, where an absent date answers today's Pacific day. It answers
+/// `GET /api/approval/day?date=YYYY-MM-DD`.
 async fn day_api(
   State(features): State<Arc<FeatureContext>>,
   Query(query): Query<HashMap<String, String>>,

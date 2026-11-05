@@ -9,6 +9,10 @@
 // task_delegated, …) flow but only for state side-effects (stopThinking,
 // spinner, etc), which the handlers of websocket-handlers.js apply.
 let ws = null;
+// Whether the current socket has opened. Only an open socket's close is a disconnect the
+// client-socket telemetry announces: a reconnect attempt that never opened belongs to the
+// disconnect already announced.
+let wsOpen = false;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 // The connect attempts since the last successful open or the last page-driven
@@ -63,11 +67,14 @@ function disconnectWS() {
   wsGeneration++;
   const socket = ws;
   ws = null;
-  // The page closed its own socket (a switch, a session open or the welcome
+  // The page closed its own open socket (a switch, a session open or the welcome
   // view): the client-socket telemetry separates these closes from network
   // ones, and the readback counts only the network episodes.
-  reconnectAttempts = 0;
-  document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {detail: {cause: 'switch', code: null}}));
+  if (wsOpen) {
+    reconnectAttempts = 0;
+    document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {detail: {cause: 'switch', code: null}}));
+  }
+  wsOpen = false;
   if (!socket) return;
   detachSocketHandlers(socket);
   try { socket.close(); } catch {}
@@ -90,6 +97,7 @@ function connectWS() {
       `&asset_version=${encodeURIComponent(STATIC_ASSET_VERSION)}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
+  wsOpen = false;
   // The replay's bytes: everything this socket receives from its open until
   // the catchup_complete frame ends the replay, UTF-8 encoded.
   const replayBytes = new TextEncoder();
@@ -103,6 +111,7 @@ function connectWS() {
       return;
     }
     console.log('WS connected');
+    wsOpen = true;
     reconnectDelay = 1000;
     document.dispatchEvent(new CustomEvent('charliebot:client-socket-open', {detail: {attempts: reconnectAttempts}}));
     reconnectAttempts = 0;
@@ -126,9 +135,12 @@ function connectWS() {
 
   socket.onclose = (event) => {
     if (isStaleSocket(socket, targetSession, generation)) return;
-    document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {
-      detail: {cause: 'network', code: event ? event.code : null},
-    }));
+    if (wsOpen) {
+      document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {
+        detail: {cause: 'network', code: event ? event.code : null},
+      }));
+    }
+    wsOpen = false;
     // 4409: the server's static asset version moved past this page's, so the tab kept running
     // pre-deploy JavaScript. Reload instead of reconnecting with the old code.
     if (event && event.code === 4409) {

@@ -382,11 +382,22 @@ function buildTransportHarness() {
 
 test('the transport announces a switch close with cause switch and no code', () => {
   const h = buildTransportHarness();
+  h.context.connectWS();
+  h.FakeWebSocket.instances[0].emitOpen();
   h.context.disconnectWS();
 
   const close = h.announced.find((event) => event.type === 'charliebot:client-socket-close');
   assert.deepEqual({...close.detail}, {cause: 'switch', code: null},
       'the page closed its own socket: the readback must never count this as a network wait');
+});
+
+test('a page-driven close with no open socket announces nothing', () => {
+  const h = buildTransportHarness();
+  h.context.connectWS();
+  h.context.disconnectWS();
+
+  assert.equal(h.announced.filter((event) => event.type === 'charliebot:client-socket-close').length, 0,
+      'no socket was open, so there is no disconnect to report');
 });
 
 test('the transport announces a socket-driven close as a network close with the code', () => {
@@ -420,6 +431,8 @@ test('the transport announces the reopen with the reconnect attempt count', () =
   h.context.connectWS();
   let socket = h.FakeWebSocket.instances[h.FakeWebSocket.instances.length - 1];
   socket.emitClose({code: 1006});           // first attempt dies before opening
+  assert.equal(h.announced.filter((event) => event.type === 'charliebot:client-socket-close').length, 0,
+      'a reconnect attempt that never opened is part of the disconnect no close was announced for');
   h.timers.pop().fn();                      // the backoff fires the second attempt
   socket = h.FakeWebSocket.instances[h.FakeWebSocket.instances.length - 1];
   socket.emitOpen();

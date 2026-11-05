@@ -401,6 +401,22 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_current_turn_agent_step_without_metrics_fails_the_turn_and_names_the_file() {
+    let root = tempfile::tempdir().unwrap();
+    let mut export: Value = serde_json::from_str(FIXTURE).unwrap();
+    let last_step = export["steps"].as_array_mut().unwrap().last_mut().unwrap();
+    last_step.as_object_mut().unwrap().remove("metrics");
+    let without_metrics = export.to_string();
+    stage_devin(root.path(), &[("export.json", without_metrics.as_str()), ("answer.txt", ANSWER)]);
+    let logs = root.path().join("logs");
+    let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
+    let error = run.result.unwrap_err().to_string();
+    assert!(error.contains("an agent step without metrics"), "the error names the missing metrics: {error}");
+    let export_path = logs.join(EXPORT_FILE_NAME);
+    assert!(error.contains(&export_path.display().to_string()), "the error names the export path: {error}");
+  }
+
+  #[tokio::test]
   async fn a_nonzero_exit_fails_the_turn_with_devins_stderr() {
     let root = tempfile::tempdir().unwrap();
     stage_devin(root.path(), &[("stderr.txt", "Error: Usage limit reached. Try again later.\n"), ("exit_code", "1")]);

@@ -15,9 +15,15 @@
       "tool_calls": [
         {"tool_call_id": "call-1", "function_name": "exec", "arguments": {"command": "echo first"}}
       ],
-      "observation": {"results": [{"source_call_id": "call-1", "content": "first"}]}
+      "observation": {"results": [{"source_call_id": "call-1", "content": "first"}]},
+      "metrics": {"prompt_tokens": 300, "completion_tokens": 20, "cached_tokens": 0}
     },
-    {"step_id": 8, "source": "agent", "message": "First turn answer."},
+    {
+      "step_id": 8,
+      "source": "agent",
+      "message": "First turn answer.",
+      "metrics": {"prompt_tokens": 350, "completion_tokens": 30, "cached_tokens": 300}
+    },
     {"step_id": 9, "source": "user", "message": "Second turn prompt."},
     {
       "step_id": 10,
@@ -25,11 +31,22 @@
       "tool_calls": [
         {"tool_call_id": "call-2", "function_name": "exec", "arguments": {"command": "echo second"}}
       ],
-      "observation": {"results": [{"source_call_id": "call-2", "content": "second"}]}
+      "observation": {"results": [{"source_call_id": "call-2", "content": "second"}]},
+      "metrics": {"prompt_tokens": 500, "completion_tokens": 25, "cached_tokens": 350}
     },
-    {"step_id": 11, "source": "agent", "message": "Second turn answer."},
+    {
+      "step_id": 11,
+      "source": "agent",
+      "message": "Second turn answer.",
+      "metrics": {"prompt_tokens": 520, "completion_tokens": 15, "cached_tokens": 500}
+    },
     {"step_id": 12, "source": "user", "message": "Third turn prompt."},
-    {"step_id": 13, "source": "agent", "message": "Third turn answer."},
+    {
+      "step_id": 13,
+      "source": "agent",
+      "message": "Third turn answer.",
+      "metrics": {"prompt_tokens": 700, "completion_tokens": 40, "cached_tokens": 520}
+    },
     {"step_id": 14, "source": "user", "message": "Fourth turn prompt."},
     {
       "step_id": 15,
@@ -37,14 +54,20 @@
       "tool_calls": [
         {"tool_call_id": "call-4", "function_name": "exec", "arguments": {"command": "echo fourth"}}
       ],
-      "observation": {"results": [{"source_call_id": "call-4", "content": "fourth"}]}
+      "observation": {"results": [{"source_call_id": "call-4", "content": "fourth"}]},
+      "metrics": {"prompt_tokens": 1500, "completion_tokens": 100, "cached_tokens": 900}
     },
-    {"step_id": 16, "source": "agent", "message": "Fourth turn answer."}
+    {
+      "step_id": 16,
+      "source": "agent",
+      "message": "Fourth turn answer.",
+      "metrics": {"prompt_tokens": 900, "completion_tokens": 60, "cached_tokens": 300}
+    }
   ],
   "final_metrics": {
-    "total_prompt_tokens": 2400,
-    "total_completion_tokens": 160,
-    "total_cached_tokens": 1200,
+    "total_prompt_tokens": 4770,
+    "total_completion_tokens": 290,
+    "total_cached_tokens": 2870,
     "total_steps": 16
   }
 }

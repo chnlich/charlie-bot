@@ -11,9 +11,15 @@
       "tool_calls": [
         {"tool_call_id": "call-1", "function_name": "read_file", "arguments": {"path": "number.txt"}}
       ],
-      "observation": {"results": [{"source_call_id": "call-1", "content": "41"}]}
+      "observation": {"results": [{"source_call_id": "call-1", "content": "41"}]},
+      "metrics": {"prompt_tokens": 700, "completion_tokens": 50, "cached_tokens": 400}
     },
-    {"step_id": 3, "source": "agent", "message": "The number is 41."}
+    {
+      "step_id": 3,
+      "source": "agent",
+      "message": "The number is 41.",
+      "metrics": {"prompt_tokens": 500, "completion_tokens": 35, "cached_tokens": 500}
+    }
   ],
   "final_metrics": {
     "total_prompt_tokens": 1200,

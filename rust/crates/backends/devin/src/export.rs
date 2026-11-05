@@ -1,8 +1,8 @@
 //! The devin export: the trajectory JSON that `devin --export` writes after each turn, read into the runtime's events.
 //!
 //! This module is the one place that names the export's fields. The names come from the CLI binary's strings
-//! (`ATIF-v1.x`), not from a Devin document: `session_id`, `steps[]` with `source`, `message`, `tool_calls[]` and
-//! `observation.results[]`, and `final_metrics`. A live export that disagrees with them is fixed here.
+//! (`ATIF-v1.x`), not from a Devin document: `session_id`, `steps[]` with `source`, `message`, `tool_calls[]`,
+//! `observation.results[]` and each agent step's `metrics`. A live export that disagrees with them is fixed here.
 
 use std::collections::HashMap;
 
@@ -24,7 +24,6 @@ const USER_SOURCE: &str = "user";
 struct Export {
   session_id: Option<String>,
   steps: Vec<Step>,
-  final_metrics: Metrics,
 }
 
 #[derive(Deserialize)]
@@ -34,6 +33,7 @@ struct Step {
   #[serde(default)]
   tool_calls: Vec<ToolCall>,
   observation: Option<Observation>,
+  metrics: Option<StepMetrics>,
 }
 
 #[derive(Deserialize)]
@@ -54,11 +54,21 @@ struct ObservationResult {
   content: Option<String>,
 }
 
+/// The token counts an agent step reports. `prompt_tokens` counts all input, and `cached_tokens` is the part of it that
+/// was a cache hit.
 #[derive(Deserialize)]
-struct Metrics {
-  total_prompt_tokens: i64,
-  total_completion_tokens: i64,
-  total_cached_tokens: i64,
+struct StepMetrics {
+  prompt_tokens: i64,
+  completion_tokens: i64,
+  cached_tokens: i64,
+}
+
+/// The token counts of one turn: the sum of its steps' metrics.
+#[derive(Default)]
+struct TurnUsage {
+  prompt_tokens: i64,
+  completion_tokens: i64,
+  cached_tokens: i64,
 }
 
 /// The events of one turn, in the order the session page shows them: the attached session, each step's text and tool
@@ -66,8 +76,9 @@ struct Metrics {
 ///
 /// The export holds the whole conversation, every earlier turn included, so only the steps after the last user step
 /// become events. `answer` is the stdout text, the final answer. The last agent message of that turn carries the same
-/// answer, so that message is not repeated as a text event. The usage result has a null cost, because Devin bills in
-/// credits and reports no dollar figure.
+/// answer, so that message is not repeated as a text event. The usage is the sum of those steps' metrics, not the
+/// export's `final_metrics`, which covers every turn. The usage result has a null cost, because Devin bills in credits
+/// and reports no dollar figure.
 pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>> {
   let export: Export = serde_json::from_str(export_text).context("the export is not the trajectory JSON")?;
   let session_id = match export.session_id {
@@ -78,6 +89,7 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
     bail!("devin export has no user step");
   };
   let steps = &export.steps[prompt_step + 1..];
+  let usage = turn_usage(steps)?;
   let final_message = steps.iter().rposition(|step| step.source == AGENT_SOURCE && has_text(&step.message));
 
   let mut events = vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id})];
@@ -103,16 +115,38 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
   }
 
   events.push(make_text_event(answer));
-  let metrics = export.final_metrics;
+  // ATIF's `prompt_tokens` is the whole input, with `cached_tokens` as a subset of it (Harbor's
+  // rfcs/0001-trajectory-format.md, MetricsSchema). The result keeps that OpenAI-style convention, as codex's
+  // translator does: `input_tokens` is the prompt sum with the cached part, and `cache_read_input_tokens` carries the
+  // cached count beside it. Devin's usage source is run-logs-only, whose ledger record reads `input_tokens` as the
+  // whole input, so each input token is counted once.
   events.push(make_result_event(
-    metrics.total_prompt_tokens,
-    metrics.total_completion_tokens,
-    metrics.total_cached_tokens,
+    usage.prompt_tokens,
+    usage.completion_tokens,
+    usage.cached_tokens,
     0,
     Value::Null,
     None,
   ));
   Ok(events)
+}
+
+/// The turn's tokens, summed over its steps' metrics. Only agent steps carry metrics, so an agent step without them
+/// would leave its tokens out of the sum, and the turn fails instead.
+fn turn_usage(steps: &[Step]) -> anyhow::Result<TurnUsage> {
+  let mut usage = TurnUsage::default();
+  for step in steps {
+    match (&step.metrics, step.source.as_str()) {
+      (Some(metrics), _) => {
+        usage.prompt_tokens += metrics.prompt_tokens;
+        usage.completion_tokens += metrics.completion_tokens;
+        usage.cached_tokens += metrics.cached_tokens;
+      }
+      (None, AGENT_SOURCE) => bail!("devin export has an agent step without metrics in the current turn"),
+      (None, _) => {}
+    }
+  }
+  Ok(usage)
 }
 
 fn has_text(message: &Option<String>) -> bool {
@@ -201,8 +235,11 @@ mod tests {
   }
 
   #[test]
-  fn a_missing_metrics_block_is_refused() {
-    let without = FIXTURE.replace("\"final_metrics\"", "\"metrics\"");
-    assert!(turn_events(&without, "x").is_err());
+  fn a_current_turn_agent_step_without_metrics_is_refused() {
+    let mut export: Value = serde_json::from_str(MULTITURN_FIXTURE).unwrap();
+    let last_step = export["steps"].as_array_mut().unwrap().last_mut().unwrap();
+    last_step.as_object_mut().unwrap().remove("metrics");
+    let error = turn_events(&export.to_string(), "x").unwrap_err();
+    assert_eq!(error.to_string(), "devin export has an agent step without metrics in the current turn");
   }
 }

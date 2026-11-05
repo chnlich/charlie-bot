@@ -10,7 +10,7 @@ use charliebot_core::event_types;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{
-  AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, Env, LaunchArgs, Translate, TransportKind,
+  AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, CLAUDE_INSTRUCTIONS_FILE_NAME, Env, LaunchArgs, Translate, TransportKind,
 };
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
@@ -105,7 +105,7 @@ impl CodexBackend {
       "--config".to_string(),
       format!("developer_instructions={content}"),
       "--config".to_string(),
-      r#"project_doc_fallback_filenames=["CLAUDE.md"]"#.to_string(),
+      format!(r#"project_doc_fallback_filenames=["{CLAUDE_INSTRUCTIONS_FILE_NAME}"]"#),
     ])
   }
 

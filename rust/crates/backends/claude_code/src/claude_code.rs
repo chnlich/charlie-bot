@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_registry::backend::{
-  AgentBackend, ContextLimits, Env, ExitedProbe, LaunchArgs, Translate, TransportKind,
+  AgentBackend, CLAUDE_INSTRUCTIONS_FILE_NAME, ContextLimits, Env, ExitedProbe, LaunchArgs, Translate, TransportKind,
 };
 use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
@@ -38,7 +38,6 @@ pub const MCP_CONFIG_FLAG: &str = "--mcp-config";
 /// Claude Code's built-in web search tool. It asks the API endpoint to search, which the endpoint backends either
 /// refuse or answer without a search, so those backends disallow it and mount the server's tool instead.
 pub const BUILT_IN_WEB_SEARCH_TOOL: &str = "WebSearch";
-pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
@@ -436,7 +435,7 @@ fn one_shot_argv(model_args: &[String], system: &str) -> Vec<String> {
 
 impl AgentBackend for ClaudeCodeBackend {
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
-    Some((INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT))
+    Some((CLAUDE_INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT))
   }
 
   fn prepare_transport(&mut self, _log_dir: &std::path::Path) -> anyhow::Result<()> {

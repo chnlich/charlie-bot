@@ -426,9 +426,9 @@ impl PageTextSource {
 /// The chat page's rendered sidebar texts.
 ///
 /// Every page request renders the same rows from the same inputs, so the memo serves the whole sidebar text until one
-/// of the inputs [`render_row_text`] reads moves. A row whose inputs did not move keeps its text across a rebuild, so
-/// one changed row costs one row render rather than the whole sidebar. The memo holds the page's whole sidebar text,
-/// about as much memory as one response body.
+/// of the inputs [`page_client_value`] reads moves. A row whose inputs did not move keeps its fields across a rebuild,
+/// so one changed row costs one row render rather than the whole sidebar. The memo holds the page's whole sidebar
+/// text, about as much memory as one response body.
 #[derive(Default)]
 pub struct PageRowsMemo {
   state: Mutex<PageRowsMemoState>,
@@ -438,7 +438,7 @@ pub struct PageRowsMemo {
 
 #[derive(Default)]
 struct PageRowsMemoState {
-  rows: HashMap<String, String>,
+  rows: HashMap<String, Arc<PageRowText>>,
   whole: Option<WholePageText>,
 }
 
@@ -449,7 +449,7 @@ impl PageRowsMemo {
   }
 }
 
-/// Render the chat page's sidebar rows as the Jinja `tojson` text of their array.
+/// Render the chat page's sidebar rows as their column text.
 ///
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
@@ -484,38 +484,32 @@ pub fn active_page_json_text(
     .map_or_else(HashMap::new, |whole| whole.inputs.into_iter().map(|row| (row.meta.id.clone(), row)).collect());
   let current: HashSet<&str> = inputs.iter().map(|row| row.meta.id.as_str()).collect();
   state.rows.retain(|session_id, _| current.contains(session_id.as_str()));
-  let cached_bytes: usize = state.rows.values().map(String::len).sum();
-  let mut text = String::with_capacity(2 + cached_bytes + 256 * inputs.len());
-  text.push('[');
-  for (index, row) in inputs.iter().enumerate() {
-    if index > 0 {
-      text.push_str(", ");
-    }
+  let mut rows = Vec::with_capacity(inputs.len());
+  for row in &inputs {
     let clear = clear_unread == Some(row.meta.id.as_str());
     let inputs_moved = previous.get(row.meta.id.as_str()) != Some(row);
     if !clear
       && !inputs_moved
       && let Some(row_text) = state.rows.get(row.meta.id.as_str())
     {
-      text.push_str(row_text);
+      rows.push(Arc::clone(row_text));
       continue;
     }
     #[cfg(test)]
     memo.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let row_text = render_row_text(store, row, clear)?;
-    text.push_str(&row_text);
+    let row_text = Arc::new(PageRowText::of(page_client_value(store, row, clear)));
     if clear {
-      // The active row renders without its unread mark, so its text cannot answer an ordinary request. A row whose
-      // inputs moved drops its older text here, which keeps that text from serving the next request with them.
+      // The active row renders without its unread mark, so its fields cannot answer an ordinary request. A row whose
+      // inputs moved drops its older fields here, which keeps them from serving the next request with them.
       if inputs_moved {
         state.rows.remove(row.meta.id.as_str());
       }
     } else {
-      state.rows.insert(row.meta.id.clone(), row_text);
+      state.rows.insert(row.meta.id.clone(), Arc::clone(&row_text));
     }
+    rows.push(row_text);
   }
-  text.push(']');
-  let text = Arc::new(text);
+  let text = Arc::new(page_columns_text(&rows));
   state.whole = Some(WholePageText {
     source: PageTextSource::of(page),
     inputs,
@@ -525,10 +519,74 @@ pub fn active_page_json_text(
   Ok(text)
 }
 
-/// One row as the page's JSON text: the value the page's client reads, with `has_unread` cleared for the active
-/// session.
-fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
-  Ok(charliebot_compat::jinja::tojson_text(&page_client_value(store, row, clear_unread)))
+/// One page row's fields as the JSON text each field carries.
+///
+/// The page's text is written by field, so a row splits into its fields once and the column writer reads the texts
+/// back. The fragments hold about the bytes the row's object text held, so the memo's memory stays at one sidebar
+/// text rather than a value tree of it.
+struct PageRowText {
+  fields: Vec<(String, String)>,
+}
+
+impl PageRowText {
+  /// The fragments of one page row's value.
+  fn of(value: Value) -> Self {
+    let fields = value
+      .as_object()
+      .expect("a page row is a JSON object")
+      .iter()
+      .map(|(field, cell)| (field.clone(), charliebot_compat::jinja::tojson_text(cell)))
+      .collect();
+    Self { fields }
+  }
+
+  /// The JSON text of one field, or `None` when the row leaves the field out.
+  fn cell(&self, field: &str) -> Option<&str> {
+    self.fields.iter().find(|(name, _)| name == field).map(|(_, text)| text.as_str())
+  }
+}
+
+/// The page's row text: one array per field, in row order, holding `null` where a row leaves the field out.
+///
+/// The page's rows repeat the same field names and value shapes on every row. A gzip deflator finds the repetition
+/// inside one field's values before it finds any across interleaved rows, so grouping the values by field shrinks
+/// the page: on the 7,160-session mock home the sidebar costs 453 KB of the page's compressed bytes as columns and
+/// 506 KB as row objects.
+///
+/// A page row never carries a null value: the falsy fields it keeps are a name and a schedule flag, and
+/// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
+fn page_columns_text(rows: &[Arc<PageRowText>]) -> String {
+  let mut fields: Vec<&str> = Vec::new();
+  let mut seen: HashSet<&str> = HashSet::new();
+  for row in rows {
+    for (field, _) in &row.fields {
+      if seen.insert(field.as_str()) {
+        fields.push(field.as_str());
+      }
+    }
+  }
+  fields.sort_unstable();
+  let mut text = String::new();
+  text.push('{');
+  for (index, field) in fields.iter().enumerate() {
+    if index > 0 {
+      text.push_str(", ");
+    }
+    text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String((*field).to_string())));
+    text.push_str(": [");
+    for (row_index, row) in rows.iter().enumerate() {
+      if row_index > 0 {
+        text.push_str(", ");
+      }
+      match row.cell(field) {
+        Some(cell) => text.push_str(cell),
+        None => text.push_str("null"),
+      }
+    }
+    text.push(']');
+  }
+  text.push('}');
+  text
 }
 
 /// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads,
@@ -917,9 +975,10 @@ mod tests {
     assert_eq!(memos.state.lock().unwrap().render_calls, 3);
   }
 
-  /// The page's text is the Jinja `tojson` text of the row array, and a row keeps that text until an input moves.
+  /// The page's text is the Jinja `tojson` text of the row fields as columns, and a row keeps its value until an
+  /// input moves.
   #[tokio::test]
-  async fn page_text_matches_the_array_json_and_reuses_unchanged_rows() {
+  async fn page_text_matches_the_column_json_and_reuses_unchanged_rows() {
     let (_home, features) = crate::test_support::feature_context();
     let first = crate::test_support::create_node(&features.store, "page-text-a", None, TaskProfile::Manager).await;
     crate::test_support::create_node(&features.store, "page-text-b", None, TaskProfile::Manager).await;
@@ -1020,7 +1079,7 @@ mod tests {
     };
 
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
-    let rows: Vec<Value> = serde_json::from_str(text.as_str()).unwrap();
+    let rows = page_rows_of(text.as_str());
     let row = rows[0].as_object().expect("a page row is an object");
     // The row writer fills these with null, false or zero, so the client would read them as falsy either way.
     for omitted in ["schedule_task", "cc_session_id", "has_unread", "pending_trigger_count"] {
@@ -1069,7 +1128,7 @@ mod tests {
     let memo = PageRowsMemo::default();
 
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
-    let rows: Vec<Value> = serde_json::from_str(text.as_str()).unwrap();
+    let rows = page_rows_of(text.as_str());
     assert_eq!(rows[0][ROUND_RATINGS], json!({"round-a": "thumbs_up"}));
   }
 
@@ -1103,12 +1162,12 @@ mod tests {
     let renamed = SessionMetadata { name: "renamed while active".to_string(), has_unread: true, ..meta.clone() };
     let changed = page_rows_over(vec![Arc::new(renamed)]);
     let active_text = active_page_json_text(&features.store, &changed, Some(&meta.id), &memo).unwrap();
-    let active: Vec<Value> = serde_json::from_str(active_text.as_str()).unwrap();
+    let active = page_rows_of(active_text.as_str());
     assert_eq!(active[0]["name"], "renamed while active");
     assert!(active[0].get("has_unread").is_none(), "the active row renders without its unread mark");
 
     let ordinary_text = active_page_json_text(&features.store, &changed, None, &memo).unwrap();
-    let ordinary: Vec<Value> = serde_json::from_str(ordinary_text.as_str()).unwrap();
+    let ordinary = page_rows_of(ordinary_text.as_str());
     assert_eq!(ordinary[0]["name"], "renamed while active");
     assert_eq!(ordinary[0]["has_unread"], true);
   }
@@ -1124,11 +1183,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
     let row_of = |text: &str| -> Value {
-      serde_json::from_str::<Vec<Value>>(text)
-        .unwrap()
-        .into_iter()
-        .find(|row| row["id"] == json!(meta.id))
-        .expect("the created row is in the page")
+      page_rows_of(text).into_iter().find(|row| row["id"] == json!(meta.id)).expect("the created row is in the page")
     };
     assert_eq!(row_of(text.as_str())["run_backend"], Value::Null);
 
@@ -1151,14 +1206,44 @@ mod tests {
     assert_eq!(first_page_row_id(&features.store).unwrap().as_deref(), first_row);
   }
 
-  /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared and
-  /// every field the page's client does not read left out.
+  /// The bytes the page must carry: `tojson` of the row values' fields as columns, with the active session's unread
+  /// mark cleared and every field the page's client does not read left out.
   fn page_array_text(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> String {
     let inputs =
       row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
     let values: Vec<Value> =
       inputs.iter().map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()))).collect();
-    charliebot_compat::jinja::tojson_text(&Value::Array(values))
+    let mut fields: Vec<String> = Vec::new();
+    for value in &values {
+      for field in value.as_object().expect("a page row is an object").keys() {
+        if !fields.iter().any(|known| known == field) {
+          fields.push(field.clone());
+        }
+      }
+    }
+    let columns = fields
+      .into_iter()
+      .map(|field| {
+        let cells = values.iter().map(|row| row.get(&field).cloned().unwrap_or(Value::Null)).collect();
+        (field, Value::Array(cells))
+      })
+      .collect::<Map<String, Value>>();
+    charliebot_compat::jinja::tojson_text(&Value::Object(columns))
+  }
+
+  /// The row values the page's column text carries.
+  fn page_rows_of(text: &str) -> Vec<Value> {
+    let columns: Map<String, Value> = serde_json::from_str(text).expect("the page text is a column object");
+    let count = columns.values().next().and_then(Value::as_array).map_or(0, Vec::len);
+    let mut rows = vec![Map::new(); count];
+    for (field, cells) in columns {
+      for (index, cell) in cells.as_array().expect("a column is an array").iter().enumerate() {
+        if !cell.is_null() {
+          rows[index].insert(field.clone(), cell.clone());
+        }
+      }
+    }
+    rows.into_iter().map(Value::Object).collect()
   }
 
   #[tokio::test]

@@ -130,9 +130,25 @@ function renderSidebarLoadErrors(errors) {
   ).join('');
 }
 
+// The page carries the sidebar rows as columns: one array per field, in row order, with null where a row leaves the
+// field out. Expanding them once here gives every sidebar view the row objects it reads.
+function expandSessionColumns(columns) {
+  const fields = Object.keys(columns);
+  const count = fields.length ? columns[fields[0]].length : 0;
+  const rows = Array.from({length: count}, () => ({}));
+  fields.forEach(field => {
+    const values = columns[field];
+    for (let i = 0; i < count; i++) {
+      if (values[i] != null) rows[i][field] = values[i];
+    }
+  });
+  return rows;
+}
+
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
-  Sidebar.resyncSessionUnread(INITIAL_SESSIONS);
+  const initialSessions = expandSessionColumns(INITIAL_SESSIONS);
+  Sidebar.resyncSessionUnread(initialSessions);
   const params = new URLSearchParams(location.search);
   const urlFilter = params.get('filter');
   const urlQuery = params.get('q');
@@ -146,7 +162,7 @@ function restoreSidebarFromUrl() {
     if (INITIAL_LOAD_ERRORS.length) {
       renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
     } else {
-      renderSessionList(INITIAL_SESSIONS, 'all');
+      renderSessionList(initialSessions, 'all');
       // The Workspace badges load on their own so the first paint never waits
       // for them; the repaint discards itself when the view has moved on.
       loadWorkspaceBadges().then(paintWorkspaceBadges);

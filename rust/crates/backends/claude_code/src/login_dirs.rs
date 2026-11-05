@@ -45,13 +45,13 @@ pub struct ClaudeHost {
 }
 
 impl ClaudeHost {
-  /// The host of the running server. HOME must be set, as `Path.home()` needs it.
+  /// The host of the running server. HOME must be set, since this host's home directory comes from it.
   pub fn from_process() -> anyhow::Result<Self> {
     let home = std::env::var_os("HOME").context("HOME must be set for the Claude Code usage source")?;
     Ok(Self { home: PathBuf::from(home), claude_config_dir: claude_config_dir()? })
   }
 
-  /// The default login directory: `Path.home() / ".claude"`.
+  /// The default login directory: this host's home directory joined with `.claude`.
   pub fn default_dir(&self) -> PathBuf {
     self.home.join(".claude")
   }

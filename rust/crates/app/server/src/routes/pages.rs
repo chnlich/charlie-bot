@@ -414,8 +414,9 @@ fn render_page_blocking(
 
 /// The finished body of a page, with its compressed form when a gzip client asked for it.
 ///
-/// The chat page keeps its finished body between requests. The home page and the events viewer are a few kilobytes,
-/// so compressing them again costs less than holding their bodies would.
+/// The chat page keeps its finished body between requests. The home page and the events viewer rebuild their body
+/// from the template on every request; the events viewer's document carries its stylesheet, so its body is larger
+/// than its template alone.
 fn page_body(
   name: &str,
   template_html: &str,

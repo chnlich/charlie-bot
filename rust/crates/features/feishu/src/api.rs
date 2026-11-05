@@ -34,10 +34,13 @@ const REPLY_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
 const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
-/// The read request's fields: the calling session's id and the window size.
+/// The read request's fields: the calling session, window size, and optional read mode parameters.
 const READ_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::optional("limit", FieldType::Integer).ge(Bound::Int(1)).le(Bound::Int(100)),
+  Field::optional("mode", FieldType::Literal(&["chat", "topic"])),
+  Field::optional("topic_id", FieldType::String),
+  Field::optional("page", FieldType::String),
 ];
 const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 
@@ -123,7 +126,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
   answer(result)
 }
 
-/// The read route (`POST /api/internal/feishu/read`): the session's own thread, with the unread messages marked read.
+/// The read route (`POST /api/internal/feishu/read`): the session's topic or one of its read-only group views.
 async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -136,10 +139,24 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   };
   let session_id = text_field(&fields, "session_id");
   let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_READ_LIMIT) as usize;
-  answer(commands::read_thread(&bot, &session_id, limit).await)
+  let mode = fields.get("mode").and_then(Value::as_str);
+  let topic_id = fields.get("topic_id").and_then(Value::as_str);
+  let page = fields.get("page").and_then(Value::as_str);
+  let result = match (mode, topic_id, page) {
+    (None, None, None) => commands::read_thread(&bot, &session_id, limit).await,
+    (Some("chat"), None, page) => commands::read_chat(&bot, &session_id, limit, page).await,
+    (Some("topic"), Some(thread_id), page) => {
+      commands::read_topic(&bot, &session_id, thread_id, limit, page).await
+    }
+    _ => Err(ThreadReplyError::refused(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      "read mode parameters do not match the selected mode",
+    )),
+  };
+  answer(result)
 }
 
-/// The download route (`POST /api/internal/feishu/download`): writes one image or file of the session's thread into
+/// The download route (`POST /api/internal/feishu/download`): writes one image or file from the session's group into
 /// the session directory.
 async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();

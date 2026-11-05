@@ -35,7 +35,8 @@ pub const FEISHU: ThreadPlatform = ThreadPlatform {
 pub fn thread_contract_part() -> String {
   format!(
     "{}\n\
-     用 `{READ_COMMAND}` 读这条话题（服务端代读，返回 bot 在这条话题里能看到的消息，未读的随之记为已读）。\
+     用 `{READ_COMMAND}` 读这条话题（未读消息随之记为已读）。\n\
+     本会话可读取本群主聊天和其他话题：`{READ_COMMAND} --chat` 与 `{READ_COMMAND} --topic <thread_id>` 返回只读内容，不标记已读、不移动已读位置，也不读取其他群。\n\
      读回里 `summon: true` 的消息就是本轮要回答的召唤。\n\
      跟帖唤醒（`{FOLLOW_TRIGGER_PREFIX} floor=<id>`）：用 `{READ_COMMAND}` 读话题里的新消息\
      （本次返回的未读消息随之记为已读，本轮沉默也要先读）。",

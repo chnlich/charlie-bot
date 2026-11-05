@@ -86,7 +86,8 @@ pub fn register_usage_source(registry: &mut Registry) -> Result<(), RegistryErro
   register_source(registry, db, PathBuf::from("/proc"))
 }
 
-/// [`register_usage_source`] over an explicit database and process root for the writer count.
+/// The usage-source registration that [`register_usage_source`] performs, over an explicit database and process root
+/// for the writer count.
 fn register_source(registry: &mut Registry, db: PathBuf, proc_root: PathBuf) -> Result<(), RegistryError> {
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,

@@ -96,10 +96,7 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
   let mut events = vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id})];
   let mut tool_names: HashMap<String, String> = HashMap::new();
   for (index, step) in steps.iter().enumerate() {
-    if step.source == AGENT_SOURCE
-      && final_message != Some(index)
-      && !step.message.is_empty()
-    {
+    if step.source == AGENT_SOURCE && final_message != Some(index) && !step.message.is_empty() {
       events.push(make_text_event(&step.message));
     }
     for call in &step.tool_calls {

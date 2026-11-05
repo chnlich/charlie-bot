@@ -143,20 +143,12 @@ struct Parser<'a, F> {
   convert_charrefs: bool,
   cdata_elem: Option<String>,
   reference_mode: ReferenceMode,
-  support_cdata: bool,
   handler: F,
 }
 
 impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
   fn new(source: &'a str, convert_charrefs: bool, handler: F) -> Self {
-    Self {
-      source,
-      convert_charrefs,
-      cdata_elem: None,
-      reference_mode: ReferenceMode::Resolve,
-      support_cdata: true,
-      handler,
-    }
+    Self { source, convert_charrefs, cdata_elem: None, reference_mode: ReferenceMode::Resolve, handler }
   }
 
   fn emit(&mut self, kind: EventKind, args: Value, at: usize, starttag_text: Option<String>) {
@@ -252,7 +244,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
               }
             }
             self.emit(EventKind::Comment, json!([&self.source[i + 4..stop]]), i, None);
-          } else if tail.starts_with("<![CDATA[") && self.support_cdata {
+          } else if tail.starts_with("<![CDATA[") {
             self.emit(EventKind::UnknownDeclaration, json!([&self.source[i + 3..]]), i, None);
           } else if starts_with_doctype(tail) {
             self.emit(EventKind::Declaration, json!([&self.source[i + 2..]]), i, None);
@@ -417,7 +409,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       if self.source[i + 2..].starts_with('>') {
         return Ok(Some(i + 3));
       }
-      return Ok(self.parse_bogus_comment(i, true));
+      return Ok(self.parse_bogus_comment(i));
     }
     let Some(tag_end) = capture_at_exact(&LOCATETAGEND, self.source, i + 2)? else {
       return Err(ParseError::new("AssertionError", "parse_endtag() expected a match"));
@@ -453,15 +445,13 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     Some(end)
   }
 
-  fn parse_bogus_comment(&mut self, i: usize, report: bool) -> Option<usize> {
+  fn parse_bogus_comment(&mut self, i: usize) -> Option<usize> {
     let tail = &self.source[i..];
     if !tail.starts_with("<!") && !tail.starts_with("</") {
       return None;
     }
     let position = self.source[i + 2..].find('>')? + i + 2;
-    if report {
-      self.emit(EventKind::Comment, json!([&self.source[i + 2..position]]), i, None);
-    }
+    self.emit(EventKind::Comment, json!([&self.source[i + 2..position]]), i, None);
     Some(position + 1)
   }
 
@@ -483,7 +473,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     if tail.starts_with("<!--") {
       return self.parse_comment(i);
     }
-    if self.support_cdata && tail.starts_with("<![CDATA[") {
+    if tail.starts_with("<![CDATA[") {
       let end = self.source[i + 9..].find("]]>")? + i + 9;
       self.emit(EventKind::UnknownDeclaration, json!([&self.source[i + 3..end]]), i, None);
       return Some(end + 3);
@@ -493,7 +483,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       self.emit(EventKind::Declaration, json!([&self.source[i + 2..end]]), i, None);
       return Some(end + 1);
     }
-    self.parse_bogus_comment(i, true)
+    self.parse_bogus_comment(i)
   }
 
   fn set_cdata_mode(&mut self, element: &str, reference_mode: ReferenceMode) {

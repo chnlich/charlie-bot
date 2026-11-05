@@ -207,11 +207,7 @@ async fn handle_event(payload: &[u8], connection: &Connection) -> anyhow::Result
 
 /// Admit a classified summon or follow only when its group has a listed person among its members. The member list is
 /// read fresh, so a failed read is an error and the event is not handled. Other verdicts pass through unchanged.
-async fn admit(
-  inbound: Inbound,
-  client: &FeishuClient,
-  allowed: &BTreeMap<String, String>,
-) -> anyhow::Result<Inbound> {
+async fn admit(inbound: Inbound, client: &FeishuClient, allowed: &BTreeMap<String, String>) -> anyhow::Result<Inbound> {
   let (Inbound::Summon(message) | Inbound::Follow(message)) = &inbound else {
     return Ok(inbound);
   };

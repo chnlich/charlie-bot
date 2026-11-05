@@ -194,7 +194,7 @@ test('entering Workspace paints the badge and the list from one parallel fetch p
   ];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/') return {ok: true, json: async () => sessions};
+      if (url === '/api/sessions/?compact=1') return {ok: true, json: async () => sessions};
       if (url === '/api/cron/tasks') return {ok: true, json: async () => cronTasks};
       throw new Error('unexpected fetch ' + url);
     },
@@ -203,7 +203,7 @@ test('entering Workspace paints the badge and the list from one parallel fetch p
   context.switchSidebarFilter('all');
   await settle();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/', '/api/cron/tasks']);
+  assert.deepEqual(fetchCalls, ['/api/sessions/?compact=1', '/api/cron/tasks']);
   assert.equal(countRows(nav.innerHTML), 2);
   // Broken entries reach the badge name-ordered; the click opens the first.
   assert.ok(nav.innerHTML.includes('2 scheduled tasks failed to load'), nav.innerHTML);
@@ -216,7 +216,7 @@ test('a failed cron pull still paints the Workspace list, with no badge', async 
   const sessions = [makeSession('c1', {group: null}), makeSession('c2', {group: null})];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/') return {ok: true, json: async () => sessions};
+      if (url === '/api/sessions/?compact=1') return {ok: true, json: async () => sessions};
       if (url === '/api/cron/tasks') throw new Error('cron endpoint down');
       throw new Error('unexpected fetch ' + url);
     },
@@ -225,7 +225,7 @@ test('a failed cron pull still paints the Workspace list, with no badge', async 
   context.switchSidebarFilter('all');
   await settle();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/', '/api/cron/tasks']);
+  assert.deepEqual(fetchCalls, ['/api/sessions/?compact=1', '/api/cron/tasks']);
   assert.equal(countRows(nav.innerHTML), 2);
   assert.ok(nav.innerHTML.includes('Session c1'), nav.innerHTML);
   assert.ok(nav.innerHTML.includes('Session c2'), nav.innerHTML);

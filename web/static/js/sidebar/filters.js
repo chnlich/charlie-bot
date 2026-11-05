@@ -25,7 +25,7 @@ function registerSidebarFilter(filter) {
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
-registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/', restoreFromUrl: false});
+registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1', restoreFromUrl: false});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
@@ -103,7 +103,7 @@ function switchSidebarFilter(filter) {
       }),
       loadWorkspaceBadges(),
     ])
-      .then(([sessions, workspaceBadges]) => renderSessionList(sessions, filter, {workspaceBadges}))
+      .then(([payload, workspaceBadges]) => renderSessionList(listingRows(payload), filter, {workspaceBadges}))
       .catch(err => console.error('Filter fetch failed:', err));
     return;
   }
@@ -112,8 +112,14 @@ function switchSidebarFilter(filter) {
       if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
       return res.json();
     })
-    .then(sessions => renderSessionList(sessions, filter))
+    .then(payload => renderSessionList(listingRows(payload), filter))
     .catch(err => console.error('Filter fetch failed:', err));
+}
+
+// A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
+// and a filter that answers with a row array needs no expansion.
+function listingRows(payload) {
+  return Array.isArray(payload) ? payload : expandSessionColumns(payload);
 }
 
 // Pill-click entry point: only entering a different filter collapses group

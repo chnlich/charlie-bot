@@ -375,6 +375,35 @@ const PAGE_PROJECTION: SidebarProjection = SidebarProjection {
   include_run_backend: true,
 };
 
+/// A sidebar listing's row projection: running, trigger and plan state, and no run backend.
+const LISTING_PROJECTION: SidebarProjection = SidebarProjection {
+  include_running: true,
+  include_trigger: true,
+  include_plan: true,
+  display_backend: true,
+  include_run_backend: false,
+};
+
+/// The session value a sidebar row starts from.
+///
+/// The page renders the stored metadata, and its client draws the goal and the origin fields it reads. A listing
+/// route renders the response model's form, [`metadata_value`], which names the chat-thread flag and leaves the goal
+/// out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowSchema {
+  Page,
+  Listing,
+}
+
+impl RowSchema {
+  fn value(self, store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
+    match self {
+      RowSchema::Page => Ok(store.session_metadata_value(meta)),
+      RowSchema::Listing => metadata_value(store, meta),
+    }
+  }
+}
+
 /// The page's whole sidebar text and the inputs it rendered from.
 struct WholePageText {
   source: PageTextSource,
@@ -461,6 +490,21 @@ pub fn active_page_json_text(
   clear_unread: Option<&str>,
   memo: &PageRowsMemo,
 ) -> StoreResult<Arc<String>> {
+  page_json_text(store, page, clear_unread, memo, PAGE_PROJECTION, RowSchema::Page)
+}
+
+/// Render one row projection of the sidebar corpus as its column text.
+///
+/// The text carries the fields of `projection` over the session value of `schema`, so each pair needs a memo of its
+/// own: a memo serves the pair it filled from, and another projection or schema renders other values.
+pub(crate) fn page_json_text(
+  store: &Store,
+  page: &PageRows,
+  clear_unread: Option<&str>,
+  memo: &PageRowsMemo,
+  projection: SidebarProjection,
+  schema: RowSchema,
+) -> StoreResult<Arc<String>> {
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the text
   // reads still holds, so the text it returns is the text a rebuild would render.
   {
@@ -472,7 +516,7 @@ pub fn active_page_json_text(
       return Ok(Arc::clone(&whole.text));
     }
   }
-  let inputs = row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION)?;
+  let inputs = row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, projection)?;
   let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
   if let Some(whole) = &state.whole
     && whole.clear_unread.as_deref() == clear_unread
@@ -499,7 +543,7 @@ pub fn active_page_json_text(
     }
     #[cfg(test)]
     memo.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let row_text = Arc::new(PageRowText::of(page_client_value(store, row, clear)));
+    let row_text = Arc::new(PageRowText::of(page_client_value(store, row, clear, projection, schema)?));
     if clear {
       // The active row renders without its unread mark, so its fields cannot answer an ordinary request. A row whose
       // inputs moved drops its older fields here, which keeps them from serving the next request with them.
@@ -707,23 +751,35 @@ fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   }
 }
 
-/// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads,
-/// then the values in the form the page's client uses.
+/// One page row's value as its client reads it: every falsy field left out, then the fields it never reads, then the
+/// values in the form the client uses.
 ///
-/// Unlike [`render_row`], the page's rows keep `task.goal`. The test's expected-value helper builds its compare text
-/// through this function, so it compares the page text against the construction the page serves.
-fn page_client_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
-  let mut value = page_row_value(store, row, clear_unread);
+/// The session value the row starts from is the caller's [`RowSchema`]. The test's expected-value helper builds its
+/// compare values through this function, so it compares a text against the construction the route serves.
+fn page_client_value(
+  store: &Store,
+  row: &RowInputs,
+  clear_unread: bool,
+  projection: SidebarProjection,
+  schema: RowSchema,
+) -> StoreResult<Value> {
+  let mut value = page_row_value(store, row, clear_unread, projection, schema)?;
   drop_falsy_fields(&mut value);
   drop_unread_fields(&mut value);
   compact_page_fields(&mut value, row.meta.updated_at);
-  value
+  Ok(value)
 }
 
-/// One page row's value: the session's metadata with its sidebar and controller fields.
-fn page_row_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
-  let mut value = store.session_metadata_value(&row.meta);
-  apply_sidebar_fields(&mut value, row, PAGE_PROJECTION);
+/// One row's value: the session's metadata with its sidebar and controller fields.
+fn page_row_value(
+  store: &Store,
+  row: &RowInputs,
+  clear_unread: bool,
+  projection: SidebarProjection,
+  schema: RowSchema,
+) -> StoreResult<Value> {
+  let mut value = schema.value(store, &row.meta)?;
+  apply_sidebar_fields(&mut value, row, projection);
   apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
   if clear_unread {
     value
@@ -731,7 +787,7 @@ fn page_row_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
       .expect("a session metadata value is an object")
       .insert(HAS_UNREAD.to_string(), Value::Bool(false));
   }
-  value
+  Ok(value)
 }
 
 /// Fields the page keeps even when their value is falsy.
@@ -838,13 +894,7 @@ pub fn sessions_list_response(
   sequence_fields: &HashMap<String, Map<String, Value>>,
   memos: &SessionsListMemos,
 ) -> Response {
-  let projection = SidebarProjection {
-    include_running: true,
-    include_trigger: true,
-    include_plan: true,
-    display_backend: true,
-    include_run_backend: false,
-  };
+  let projection = LISTING_PROJECTION;
   let wants_gzip = request
     .headers()
     .get(header::ACCEPT_ENCODING)
@@ -894,6 +944,51 @@ pub fn sessions_list_response(
   let compressed = Bytes::from(charliebot_compat::compression::gzip_memoized_body(&whole.body));
   state.whole_body.as_mut().expect("the body is rendered when the inputs changed").gzip = Some(compressed.clone());
   json_bytes_response(compressed, true)
+}
+
+/// A sidebar listing's column text and its gzip body.
+///
+/// The Workspace filter refetches the listing on every session or task-tree change, and the page already carries the
+/// same rows in the column form [`active_page_json_text`] writes. The compact response serves that text in place of a
+/// row array: the row texts it joins are the page's own fields, so the sidebar decodes it with the same
+/// `expandSessionColumns` the page's inline listing takes. Its gzip memo reuses the previous body while the text
+/// keeps its allocation, and the row memo re-renders only the rows a corpus change moved.
+#[derive(Default)]
+pub struct CompactListingMemo {
+  rows: PageRowsMemo,
+  body: Mutex<Option<CompactListingBody>>,
+}
+
+struct CompactListingBody {
+  text: Arc<String>,
+  gzip: Bytes,
+}
+
+impl CompactListingMemo {
+  /// The compact listing for this corpus, gzipped when the request accepts gzip.
+  pub fn response(&self, request: &Request<Body>, store: &Store, page: &PageRows) -> Response {
+    let text = match page_json_text(store, page, None, &self.rows, LISTING_PROJECTION, RowSchema::Listing) {
+      Ok(text) => text,
+      Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+    };
+    let wants_gzip = request
+      .headers()
+      .get(header::ACCEPT_ENCODING)
+      .and_then(|value| value.to_str().ok())
+      .is_some_and(|value| value.contains("gzip"));
+    if !wants_gzip {
+      return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), false);
+    }
+    let mut body = self.body.lock().expect("the compact listing memo mutex is not poisoned");
+    if let Some(cached) = body.as_ref()
+      && Arc::ptr_eq(&cached.text, &text)
+    {
+      return json_bytes_response(cached.gzip.clone(), true);
+    }
+    let gzip = Bytes::from(charliebot_compat::compression::gzip_memoized_body(text.as_bytes()));
+    *body = Some(CompactListingBody { text: Arc::clone(&text), gzip: gzip.clone() });
+    json_bytes_response(gzip, true)
+  }
 }
 
 /// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
@@ -1117,6 +1212,39 @@ mod tests {
     assert_eq!(memo.render_calls(), rendered + 1);
   }
 
+  /// The compact listing carries the listing projection's columns, so the sidebar's expander restores the rows the
+  /// full listing sends, and a repeat gzip request serves the compressed body the first one built.
+  #[tokio::test]
+  async fn the_compact_listing_carries_the_listing_columns_and_reuses_its_gzip_body() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "compact-a", None, TaskProfile::Manager).await;
+    crate::test_support::create_node(&features.store, "compact-b", None, TaskProfile::Worker).await;
+    let memo = CompactListingMemo::default();
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+
+    let identity = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
+    let response = memo.response(&identity, &features.store, &page);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = std::str::from_utf8(&body).expect("the identity body is UTF-8");
+    assert_eq!(
+      page_rows_of(text),
+      projection_row_values(&features.store, &page, None, LISTING_PROJECTION, RowSchema::Listing)
+    );
+
+    let gzip_request = Request::builder()
+      .uri("/api/sessions/?compact=1")
+      .header(header::ACCEPT_ENCODING, "gzip")
+      .body(Body::empty())
+      .unwrap();
+    let first =
+      axum::body::to_bytes(memo.response(&gzip_request, &features.store, &page).into_body(), usize::MAX).await.unwrap();
+    let second =
+      axum::body::to_bytes(memo.response(&gzip_request, &features.store, &page).into_body(), usize::MAX).await.unwrap();
+    assert_eq!(first, second, "a repeat request serves the compressed body the memo holds");
+    assert_eq!(memo.body.lock().unwrap().as_ref().unwrap().gzip, first);
+  }
+
   /// A repeat page request serves the corpus the previous one built, and a session created after it joins the next
   /// page. The gate every sidebar-moving fixture holds (`test_support`) keeps the other tests of this binary out of
   /// the window the pointer assertions read. The test build never spawns the self-heal sweep.
@@ -1325,9 +1453,22 @@ mod tests {
 
   /// The row values the page's client reads, as the page's columns expand to them.
   fn page_row_values(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> Vec<Value> {
-    let inputs =
-      row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
-    inputs.iter().map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()))).collect()
+    projection_row_values(store, page, clear_unread, PAGE_PROJECTION, RowSchema::Page)
+  }
+
+  /// The row values one projection over one schema renders, as its columns expand to them.
+  fn projection_row_values(
+    store: &Store,
+    page: &PageRows,
+    clear_unread: Option<&str>,
+    projection: SidebarProjection,
+    schema: RowSchema,
+  ) -> Vec<Value> {
+    let inputs = row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, projection).unwrap();
+    inputs
+      .iter()
+      .map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()), projection, schema).unwrap())
+      .collect()
   }
 
   /// The row values the page's column text carries, with each declared encoding expanded.

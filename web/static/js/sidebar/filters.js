@@ -167,7 +167,7 @@ function expandSessionId(cell) {
   return sessionIdOf(decodeBase64Url(cell));
 }
 
-// The session ids one `uuid-b64` column carries. A string holds every id's 16 bytes in row order; an array holds one
+// The session ids one `uuid-b64` column carries. A string holds every id's 16 bytes in row order. An array holds one
 // cell per row, which is how a home whose ids are not all canonical UUIDs travels.
 function expandSessionIds(values, count) {
   if (Array.isArray(values)) return values.map(value => (value == null ? null : expandSessionId(value)));
@@ -177,9 +177,9 @@ function expandSessionIds(values, count) {
 }
 
 // The page carries the sidebar rows as columns: one array per field, in row order, with null where a row leaves the
-// field out. The page declares under `$encoded` the columns whose cells are not their field's value: a `uuid-b64`
-// column holds the session ids' 16 bytes in base64url, and a `delta` column holds the first value as it stands and
-// every later value as its difference from the row before. Expanding the columns once here gives every sidebar view
+// field out. The page declares under `$encoded` the columns whose cells are not their field's value. A `uuid-b64`
+// column holds the session ids' 16 bytes in base64url. A `delta` column holds the first value as it stands and every
+// later value as its difference from the row before. Expanding the columns once here gives every sidebar view
 // the row objects it reads.
 function expandSessionColumns(columns) {
   const encoding = columns.$encoded || {};

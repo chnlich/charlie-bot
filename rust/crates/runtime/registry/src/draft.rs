@@ -60,6 +60,18 @@ pub struct DraftSendFailure {
   pub outcome: DraftFailureOutcome,
 }
 
+impl DraftSendFailure {
+  /// The send the platform refused: nothing reached the target.
+  pub fn rejected(detail: impl Into<String>) -> Self {
+    Self { detail: detail.into(), outcome: DraftFailureOutcome::Rejected }
+  }
+
+  /// The send whose response was lost: the target may hold the message.
+  pub fn unknown(detail: impl Into<String>) -> Self {
+    Self { detail: detail.into(), outcome: DraftFailureOutcome::Unknown }
+  }
+}
+
 /// One platform's draft support: its target validation, the target's card label, and the sender.
 ///
 /// The drafts package builds an instance from the live [`DraftContext`] on each request, so the sender reads the

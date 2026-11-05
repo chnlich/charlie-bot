@@ -6,6 +6,7 @@
 //! The ack comes first because the core may read a whole thread before it answers, and Feishu re-pushes an event that
 //! is not acknowledged within three seconds.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,8 +22,9 @@ use serde_json::Value;
 use crate::adapter::{self, Bot, FeishuThreadAdapter};
 use crate::client::{BASE_URL, BOT_CAPABILITY_CODE, FeishuAPIError, FeishuClient};
 use crate::config::FeishuConfig;
-use crate::event::{self, Inbound};
+use crate::event::{self, Drop, Inbound};
 use crate::frame::{Frame, METHOD_DATA, Reassembler, TYPE_EVENT};
+use crate::owners;
 
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -191,7 +193,7 @@ async fn handle_event(payload: &[u8], connection: &Connection) -> anyhow::Result
   let event: Value = serde_json::from_slice(payload).context("the event payload is not JSON")?;
   let config = connection.features.config.get()?;
   let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
-  let inbound = event::classify(&event, &connection.bot_open_id, allowed)?;
+  let inbound = admit(event::classify(&event, &connection.bot_open_id)?, &connection.client, allowed).await?;
   if let Inbound::Drop(reason) = inbound {
     tracing::debug!(event = "feishu_listener_event_dropped", reason = ?reason);
     return Ok(());
@@ -201,6 +203,23 @@ async fn handle_event(payload: &[u8], connection: &Connection) -> anyhow::Result
   let session = adapter::route_inbound(&adapter, &connection.features, inbound).await?;
   tracing::info!(event = "feishu_listener_message_handled", session = ?session);
   Ok(())
+}
+
+/// Admit a classified summon or follow only when its group has a listed person among its members. The member list is
+/// read fresh, so a failed read is an error and the event is not handled. Other verdicts pass through unchanged.
+async fn admit(
+  inbound: Inbound,
+  client: &FeishuClient,
+  allowed: &BTreeMap<String, String>,
+) -> anyhow::Result<Inbound> {
+  let (Inbound::Summon(message) | Inbound::Follow(message)) = &inbound else {
+    return Ok(inbound);
+  };
+  if owners::chat_has_owner(client, allowed, &message.chat_id).await? {
+    Ok(inbound)
+  } else {
+    Ok(Inbound::Drop(Drop::NoOwnerInChat))
+  }
 }
 
 /// The service id the endpoint URL names in its `service_id` query parameter.
@@ -221,10 +240,65 @@ fn next_backoff(backoff: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event::Message;
   use crate::test_support::{Answer, Home, serve};
   use charliebot_compat::http_client;
   use charliebot_core::test_support::LogCapture;
   use serde_json::json;
+
+  const OWNER: &str = "ou_synthetic_owner";
+  const UNLISTED: &str = "ou_synthetic_member";
+
+  fn allowed() -> BTreeMap<String, String> {
+    BTreeMap::from([(OWNER.to_string(), "Owner".to_string())])
+  }
+
+  /// A group message from `sender`, as the classifier hands it on.
+  fn summon_from(sender: &str) -> Inbound {
+    Inbound::Summon(Message {
+      tenant_key: "tk_synthetic".to_string(),
+      chat_id: "oc_synthetic_admit".to_string(),
+      message_id: "om_admit".to_string(),
+      root_id: None,
+      thread_id: None,
+      create_time: "1700000000000".to_string(),
+      sender_open_id: sender.to_string(),
+      message_type: "text".to_string(),
+      content: "{\"text\":\"@_user_1 hello\"}".to_string(),
+      mentions: Vec::new(),
+    })
+  }
+
+  fn client(base_url: &str, app_id: &str) -> FeishuClient {
+    let http = http_client::client(&http_client::Settings::from_env()).expect("the HTTP client builds");
+    FeishuClient::new(http, base_url, app_id, "synthetic-secret")
+  }
+
+  fn members(open_ids: &[&str]) -> Value {
+    let items: Vec<Value> = open_ids.iter().map(|id| json!({"member_id": id, "member_id_type": "open_id"})).collect();
+    json!({"code": 0, "data": {"items": items, "has_more": false}})
+  }
+
+  #[tokio::test]
+  async fn a_listed_person_in_the_chat_admits_an_unlisted_members_summon() {
+    let stub = serve(move |_| Answer::json(members(&[UNLISTED, OWNER]))).await;
+    let inbound = admit(summon_from(UNLISTED), &client(&stub.base_url, "cli_admit_present"), &allowed()).await.unwrap();
+    assert!(matches!(inbound, Inbound::Summon(_)), "got {inbound:?}");
+  }
+
+  #[tokio::test]
+  async fn a_chat_with_no_listed_person_drops_the_summon() {
+    let stub = serve(move |_| Answer::json(members(&[UNLISTED]))).await;
+    let inbound = admit(summon_from(UNLISTED), &client(&stub.base_url, "cli_admit_absent"), &allowed()).await.unwrap();
+    assert_eq!(inbound, Inbound::Drop(Drop::NoOwnerInChat));
+  }
+
+  #[tokio::test]
+  async fn a_member_list_error_is_an_error_not_a_verdict() {
+    let stub = serve(|_| Answer::json(json!({"code": 99991672, "msg": "no permission"}))).await;
+    let result = admit(summon_from(UNLISTED), &client(&stub.base_url, "cli_admit_error"), &allowed()).await;
+    assert!(result.is_err());
+  }
 
   #[test]
   fn the_service_id_comes_from_the_endpoint_query() {

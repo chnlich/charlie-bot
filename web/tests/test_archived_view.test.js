@@ -66,7 +66,7 @@ function buildContext(overrides = {}) {
   // Fork mutations land before createChatSidebarContext: the loaded modules
   // bind or shadow these globals at load time.
   context.SESSION_ID = 'session-live';
-  context.INITIAL_SESSIONS = [];
+  context.INITIAL_SESSIONS = {};
   context.INITIAL_LOAD_ERRORS = [];
   inlinePageTimers(context);
   context.document.getElementById = (id) => elements.get(id) || null;

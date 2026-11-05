@@ -49,7 +49,7 @@ function buildContext({sessionId = 'session-live', rows = [], fetchHandler} = {}
   const {context} = baseSessionContext({elements});
 
   context.SESSION_ID = sessionId;
-  context.INITIAL_SESSIONS = [];
+  context.INITIAL_SESSIONS = {};
   context.INITIAL_LOAD_ERRORS = [];
   inlinePageTimers(context);
   context.document.getElementById = (id) => elements.get(id) || null;

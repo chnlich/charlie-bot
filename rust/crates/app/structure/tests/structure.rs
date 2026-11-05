@@ -1077,6 +1077,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "image/png", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "image/vnd.microsoft.icon", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "image/webp", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "text/html", owner: "infra/compat", hint: MIME_HINT },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

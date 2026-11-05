@@ -12,7 +12,7 @@ pub mod http_client;
 pub mod jinja;
 pub mod json;
 pub mod mimetypes;
-mod mimetypes_table;
+pub mod mimetypes_table;
 pub mod request_body;
 pub mod responses;
 pub mod routing;

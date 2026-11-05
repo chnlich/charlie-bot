@@ -258,7 +258,7 @@ fn register_watch(sessions_dir: &Path, session_id: &str, args: &Args) -> Result<
   let watch_targets = args.watch.clone().unwrap_or_default();
   let mut payload = Map::new();
   payload.insert("session_id".to_string(), json!(session_id));
-  payload.insert("delay_seconds".to_string(), json!(args.max_wait));
+  payload.insert(triggers::DELAY_SECONDS_FIELD.to_string(), json!(args.max_wait));
   payload.insert("message".to_string(), json!(args.message));
   if let Some(watch) = &args.watch {
     payload
@@ -301,7 +301,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   };
   let payload = json!({
     "session_id": session_id,
-    "delay_seconds": args.max_wait,
+    (triggers::DELAY_SECONDS_FIELD): args.max_wait,
     "message": args.message,
     (triggers::WATCH_TARGETS_FIELD): [launch_target(&launch)],
   });

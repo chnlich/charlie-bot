@@ -33,7 +33,8 @@ function postChatMessage(sessionId, content, extra, requestId) {
 // outcome and (in websocket-handlers.js) the socket echo of the same request
 // id. The diag package assembles them into one client-event POST per send.
 function reportSendStep(step, requestId, detail) {
-  document.dispatchEvent(new CustomEvent('charliebot:client-send-' + step, {detail: Object.assign({request_id: requestId}, detail)}));
+  document.dispatchEvent(
+      new CustomEvent('charliebot:client-send-' + step, {detail: Object.assign({request_id: requestId}, detail)}));
 }
 
 async function postChatMessageWithRetry(sessionId, content, extra, requestId) {

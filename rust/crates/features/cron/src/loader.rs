@@ -54,22 +54,22 @@ static PROMPT_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::n
 /// The directory under `config.d` that holds the cron jobs, one YAML file per job.
 pub const CRON_D_DIR_NAME: &str = "cron.d";
 
-/// Return the cron task directory under a profile home path.
+/// The cron task directory under one profile home.
 pub fn cron_dir_for_home(home: &Path) -> PathBuf {
   home.join(CONFIG_D_DIR_NAME).join(CRON_D_DIR_NAME)
 }
 
-/// Return the file directory owned by this profile.
+/// The cron task directory this profile owns.
 pub fn cron_dir(cfg: &CharlieBotConfig) -> PathBuf {
   cron_dir_for_home(&cfg.charliebot_home)
 }
 
-/// Return one task's config file path under a profile home path.
+/// One task's config file path under a profile home.
 pub fn cron_path_for_home(home: &Path, name: &str) -> PathBuf {
   cron_dir_for_home(home).join(format!("{name}.yaml"))
 }
 
-/// Return one task's config file path.
+/// One task's config file path in this profile.
 pub fn cron_path(cfg: &CharlieBotConfig, name: &str) -> PathBuf {
   cron_path_for_home(&cfg.charliebot_home, name)
 }
@@ -124,7 +124,7 @@ impl std::error::Error for TaskFileReadError {
   }
 }
 
-/// Open one cron task file, decode its YAML and require a mapping.
+/// One cron task file, read as YAML and required to be a mapping.
 pub fn read_task_file(path: &Path) -> Result<TaskFile, TaskFileReadError> {
   let raw =
     std::fs::read_to_string(path).map_err(|error| TaskFileReadError::Read { path: path.to_path_buf(), error })?;
@@ -162,20 +162,20 @@ impl std::error::Error for TaskFileWriteError {
   }
 }
 
-/// Encode one cron task value as YAML and write it to the file.
+/// One cron task value, encoded as YAML and written to the file.
 pub fn write_task_file(path: &Path, value: &Value) -> Result<(), TaskFileWriteError> {
   let contents = charliebot_core::yaml::dump(value).map_err(TaskFileWriteError::Encode)?;
   std::fs::write(path, contents).map_err(TaskFileWriteError::Write)
 }
 
-/// Validate a task name before forming a host file path.
+/// The check a task name passes before it forms a host file path.
 pub fn valid_name(name: &str) -> bool {
   let mut chars = name.chars();
   chars.next().is_some_and(|first| first.is_ascii_alphanumeric())
     && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-/// Return the unchanged YAML and prompt snapshot until one of its file mtimes moves. A reload that finds broken files
+/// The YAML and prompt snapshot, unchanged until one of its file mtimes moves. A reload that finds broken files
 /// raises their alert.
 pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> anyhow::Result<CronSnapshot> {
   let (snapshot, reloaded) = read_snapshot(features, cfg)?;
@@ -192,8 +192,8 @@ pub(crate) fn read_snapshot(features: &FeatureContext, cfg: &CharlieBotConfig) -
   load_snapshot_for_paths(&cron_dir(cfg), repo.path())
 }
 
-/// Load one shared cron snapshot, rereading it when a cron YAML appears, disappears or changes mtime, or a prompt
-/// file changes mtime or goes missing.
+/// One shared cron snapshot, reread when a cron YAML appears, disappears or changes mtime, or a prompt file
+/// changes mtime or goes missing.
 pub(crate) fn load_snapshot_for_paths(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, bool)> {
   let key = SnapshotKey { directory: directory.to_path_buf(), repo: repo.to_path_buf() };
   let snapshots = SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -262,7 +262,7 @@ fn reload_snapshot(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapsho
   Ok((snapshot, prompt_paths))
 }
 
-/// Load and validate one cron file while preserving prompt pointer strings.
+/// One cron file's task, loaded and validated with its prompt pointer strings preserved.
 pub fn load_file(path: &Path, name: &str, repo: &Path) -> Result<ScheduledTaskConfig, String> {
   load_file_with_prompts(path, name, repo).map(|(task, _)| task).map_err(|(error, _)| error)
 }
@@ -353,7 +353,7 @@ fn prompt_file_read_count(path: &Path) -> usize {
     .unwrap_or_default()
 }
 
-/// Resolve one in-memory create or update body before persisting it.
+/// The task one in-memory create or update body describes, resolved against the repo before it is persisted.
 pub fn validate_body(name: &str, mut body: Value, repo: &Path) -> Result<ScheduledTaskConfig, String> {
   let object = body.as_object_mut().ok_or_else(|| "cron config must be a mapping".to_string())?;
   if object.contains_key("name") {
@@ -535,7 +535,7 @@ async fn send_telegram(
   anyhow::bail!("Telegram API returned {status}: {}", body.chars().take(200).collect::<String>())
 }
 
-/// Check all valid task and step backend references before serving.
+/// The backend-reference check over every valid cron file, run before the server serves.
 pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Result<(), String> {
   let mut problems = Vec::new();
   let known = cfg.backends.options.iter().map(|option| option.id.as_str()).collect::<std::collections::HashSet<_>>();

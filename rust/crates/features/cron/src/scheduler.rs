@@ -241,8 +241,9 @@ impl CronScheduler {
     Ok(())
   }
 
-  /// Use up one due fire of `task_name` on its bound session and record why it did not run. The slots take the fire as
-  /// used, so the next due fire is the next occurrence. No worker starts and no session is woken.
+  /// One due fire of `task_name` used up on its bound session, with the reason it did not run recorded.
+  /// The slots take the fire as used, so the next due fire is the next occurrence. No worker starts and no session
+  /// is woken.
   async fn record_skip(
     &self,
     session_id: &str,
@@ -614,7 +615,7 @@ pub enum RunError {
   Failed(String),
 }
 
-/// Run one task through the scheduler instance registered at startup.
+/// One task fired now through the scheduler registered at startup.
 pub async fn run_task_now(features: &Arc<FeatureContext>, name: &str) -> Result<TaskRunResult, RunError> {
   let scheduler = features.startup.get::<CronScheduler>().ok_or(RunError::Unavailable)?;
   scheduler.run_now(name).await
@@ -707,7 +708,7 @@ async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<crat
   }
 }
 
-/// Return the next cron occurrence in the configured time zone.
+/// The next cron occurrence in the configured time zone.
 pub(super) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTime) -> anyhow::Result<String> {
   let timezone = timezone.parse::<chrono_tz::Tz>()?;
   let inner = now_utc.into_inner();
@@ -1652,7 +1653,7 @@ mod tests {
     }
   }
 
-  /// Fire one task through the scheduler's launch path and return its worker leaf and the run once `done` holds.
+  /// One task fired through the scheduler's launch path, returned with its worker leaf and the run once `done` holds.
   async fn fire_until(
     features: &Arc<FeatureContext>,
     task: ScheduledTaskConfig,
@@ -1688,7 +1689,7 @@ mod tests {
     (leaf_id, run)
   }
 
-  /// Fire one task and return its worker leaf and the run once the run reaches a terminal fact.
+  /// One task fired, returned with its worker leaf and the run once the run reaches a terminal fact.
   async fn fire_and_settle(
     features: &Arc<FeatureContext>,
     task: ScheduledTaskConfig,
@@ -1701,8 +1702,8 @@ mod tests {
     .await
   }
 
-  /// Fire one task and return its worker leaf and the run once the launch text is written. The run keeps going after
-  /// this returns, so a caller asserts only what the launch records.
+  /// One task fired, returned with its worker leaf and the run once the launch text is written.
+  /// The run keeps going after this returns, so a caller asserts only what the launch records.
   async fn fire_and_launch(
     features: &Arc<FeatureContext>,
     task: ScheduledTaskConfig,
@@ -1857,8 +1858,8 @@ mod tests {
     features.store.child_ids(node_id).unwrap().len()
   }
 
-  /// Wait until a round under `node_id` has a running run, then return its session and run. The run's process joins
-  /// `processes`, so the test ends even when it fails before `end_round`.
+  /// The session and run of the first round under `node_id` to reach a running run, waited for up to 15 seconds.
+  /// The run's process joins `processes`, so the test ends even when it fails before `end_round`.
   async fn wait_for_running_round(
     features: &Arc<FeatureContext>,
     processes: &ProcessGroupGuard,
@@ -1898,7 +1899,7 @@ mod tests {
     format!("{states:?}")
   }
 
-  /// Kill a held round's process and wait until its run has a terminal fact.
+  /// The end of a held round: its process killed, and its run waited for until a terminal fact lands.
   async fn end_round(features: &Arc<FeatureContext>, leaf_id: &str, run: &RunRecord) {
     let pid = run.pid.expect("a running round has a process");
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();

@@ -6,7 +6,7 @@
 //! request until the check first passes, so a directory that appears later serves without a restart. A missing one
 //! answers 500.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -21,24 +21,13 @@ use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
 
+use crate::body_memo::BodyMemo;
 use crate::headers::header_text;
 use crate::mimetypes::MimeTypes;
 use crate::responses;
 
 /// A body at least this long goes out in more than one message.
 const CHUNK_SIZE: usize = 64 * 1024;
-
-/// The whole-file bodies served recently, oldest first.
-///
-/// A page load asks for the same few static files, and every request read its file again: the read, its
-/// allocation and the body's message list cost more than the metadata read the request already made. The key
-/// holds the file's path and the `(mtime, size)` identity its ETag is built from, so a file that moved is read
-/// again on the next request.
-#[derive(Default)]
-struct FileBodyMemo {
-  bodies: HashMap<FileBodyKey, Bytes>,
-  order: VecDeque<FileBodyKey>,
-}
 
 /// One file's identity beside the path its bytes were read from.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -54,27 +43,12 @@ const FILE_BODY_MEMO_ENTRIES: usize = 64;
 /// The largest body the memo holds; a larger file is read and sent without being kept.
 const FILE_BODY_MEMO_MAX_BYTES: usize = 256 * 1024;
 
-static FILE_BODY_MEMO: LazyLock<Mutex<FileBodyMemo>> = LazyLock::new(|| Mutex::new(FileBodyMemo::default()));
-
-impl FileBodyMemo {
-  fn get(&self, key: &FileBodyKey) -> Option<Bytes> {
-    self.bodies.get(key).cloned()
-  }
-
-  fn store(&mut self, key: FileBodyKey, body: Bytes) {
-    if body.len() > FILE_BODY_MEMO_MAX_BYTES {
-      return;
-    }
-    if self.bodies.insert(key.clone(), body).is_none() {
-      self.order.push_back(key);
-      while self.order.len() > FILE_BODY_MEMO_ENTRIES {
-        if let Some(oldest) = self.order.pop_front() {
-          self.bodies.remove(&oldest);
-        }
-      }
-    }
-  }
-}
+/// The whole-file bodies served recently. A page load asks for the same few static files, and every request read its
+/// file again: the read, its allocation and the body's message list cost more than the metadata read the request
+/// already made. The key holds the file's path and the `(mtime, size)` identity its ETag is built from, so a file that
+/// moved is read again on the next request.
+static FILE_BODY_MEMO: LazyLock<Mutex<BodyMemo<FileBodyKey>>> =
+  LazyLock::new(|| Mutex::new(BodyMemo::new(FILE_BODY_MEMO_ENTRIES, FILE_BODY_MEMO_MAX_BYTES)));
 
 /// The canonical path of each served directory, resolved the first time a request serves from it.
 ///

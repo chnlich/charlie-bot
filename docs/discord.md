@@ -52,7 +52,7 @@ The checklist below is the whole Discord-side setup; run it once per application
        "<user id two>": person-two
    ```
 
-   With Developer Mode on (User Settings, Advanced), right-click a user and Copy User ID. The map is who the bot knows people by: every readback message names its author's entry as `person`, and the thread reply rules (`prompts/discord_reply_scope.md`) judge personal information by that name, so a changed display name cannot impersonate anyone. A message from an id outside the map is dropped before it can summon anything, and an empty map starts nothing: the entrypoint only starts when the token and at least one mapped account are set.
+   With Developer Mode on (User Settings, Advanced), right-click a user and Copy User ID. The map is who the bot knows people by: every readback message names its author's entry as `person`, and the thread reply scope (`$CHARLIEBOT_HOME/prompts/discord_reply_scope.md` when present, otherwise `prompts/discord_reply_scope.md`) judges personal information by that name, so a changed display name cannot impersonate anyone. A message from an id outside the map is dropped before it can summon anything, and an empty map starts nothing: the entrypoint only starts when the token and at least one mapped account are set.
 6. **Restart the server.** Startup logs `discord_entrypoint_started` and connects the gateway listener; with the token or the account map missing it logs `discord_entrypoint_off` instead and runs without Discord.
 
 ## Verify

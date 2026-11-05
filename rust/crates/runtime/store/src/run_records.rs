@@ -34,8 +34,9 @@ use crate::metadata::UtcDateTime;
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
-pub use crate::run_record::{RunKind, RunRecord, SequenceRef};
+pub use crate::run_record::{RunRecord, SequenceRef};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
+pub use charliebot_core::run_kind::RunKind;
 
 pub use crate::layout::{DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RUNS_DIR_NAME, THREADS_DIR_NAME};
 pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;

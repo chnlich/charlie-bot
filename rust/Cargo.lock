@@ -381,7 +381,6 @@ dependencies = [
  "charliebot-claude-code",
  "charliebot-core",
  "charliebot-registry",
- "charliebot-store",
  "serde_json",
  "serde_yaml",
  "tempfile",

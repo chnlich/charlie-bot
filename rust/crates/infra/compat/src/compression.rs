@@ -21,10 +21,14 @@ static LEVEL_ONE_BYTES_DEFLATED: AtomicU64 = AtomicU64::new(0);
 /// smallest body a page compresses itself.
 pub const MINIMUM_DEFLATE_BYTES: usize = 1000;
 
+/// The server-sent event media type. The gzip skip list and the server's identity responder both exclude it, so the
+/// name is spelled once here.
+pub const TEXT_EVENT_STREAM: &str = "text/event-stream";
+
 /// `_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES`: content types already entropy-coded, matched by prefix. A content type the
 /// MIME table names is spelled there and read here.
 pub const SKIP_MEDIA_PREFIXES: &[&str] = &[
-  "text/event-stream",
+  TEXT_EVENT_STREAM,
   IMAGE_GIF,
   IMAGE_HEIC,
   IMAGE_JPEG,

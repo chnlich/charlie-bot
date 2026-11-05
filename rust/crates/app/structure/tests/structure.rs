@@ -795,6 +795,9 @@ struct OwnerRow {
   hint: &'static str,
 }
 
+/// The hint for a content type that the MIME table names.
+const MIME_HINT: &str = "Keep the content type in `infra/compat`'s MIME table; the transport skip list reads it there.";
+
 /// The names with an owner. A task that fixes the sites of a name adds the name's row in the same commit, so the rule
 /// stays green at every commit.
 const OWNER_TABLE: &[OwnerRow] = &[
@@ -1030,6 +1033,18 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/session-api",
     hint: "Use `charliebot_session_api::api::SESSION_TREE_INCLUDE_ARCHIVED_QUERY`.",
   },
+  OwnerRow { name: "application/msword", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "application/pdf", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "application/vnd.ms-powerpoint", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "application/x-7z-compressed", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "application/zip", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "font/woff", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "image/gif", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "image/heic", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "image/jpeg", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "image/png", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "image/vnd.microsoft.icon", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow { name: "image/webp", owner: "infra/compat", hint: MIME_HINT },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

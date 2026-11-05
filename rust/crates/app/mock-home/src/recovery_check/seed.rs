@@ -10,7 +10,9 @@ use anyhow::{Context, Result, bail};
 use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED};
 use charliebot_store::layout;
 use charliebot_store::metadata::{HAS_UNREAD, KEEP_WORKTREE_FIELD};
-use charliebot_store::run_records::{RAW_LOG_NAME, RUN_METADATA_NAME};
+use charliebot_store::run_records::{
+  OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME,
+};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -197,9 +199,9 @@ fn run_record(run: RunRecord) -> Value {
     "branch_name": null,
     "worktree_path": null,
     "sequence_ref": null,
-    "raw_log_ref": null,
-    "events_ref": null,
-    "result_ref": null,
+    (OBSERVATION_RAW_LOG_REF): null,
+    (OBSERVATION_EVENTS_REF): null,
+    (OBSERVATION_RESULT_REF): null,
   })
 }
 

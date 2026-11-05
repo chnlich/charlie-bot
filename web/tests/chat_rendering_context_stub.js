@@ -77,6 +77,7 @@ function loadChatRendering() {
 function makeChatRenderContext(elements = new Map()) {
   return {
     document: {
+      addEventListener() {},
       getElementById(id) { return elements.get(id) || null; },
       createElement(tag) { return new FakeElement(tag); },
       querySelector() { return null; },

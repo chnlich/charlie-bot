@@ -64,7 +64,6 @@ test('sentinel renders idle text on first paint when has_more is true', () => {
       ['messages', messages],
       ['header-session-name', createElement()],
       ['backend-badge', createElement()],
-      ['input-model-badge', createElement()],
     ]),
   });
 

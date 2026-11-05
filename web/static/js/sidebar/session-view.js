@@ -81,9 +81,6 @@ function updateActiveBackendBadges() {
       backendBadge.textContent = activeBackendLabel;
     }
   }
-
-  const inputModelBadge = document.getElementById('input-model-badge');
-  if (inputModelBadge) inputModelBadge.textContent = activeBackendLabel;
 }
 
 function renderSwitchableBackendBadge(badge, backendIds, activeId) {

@@ -109,7 +109,7 @@ function _field(row, name) {
 }
 
 // Controllable in-memory localStorage: call counts let tests prove the
-// platform-derived default is never written back.
+// default is never written back.
 function makeStorage(initial = {}) {
   const map = new Map(Object.entries(initial));
   return {
@@ -875,9 +875,9 @@ test('collapse state stays internally consistent across render and toggle sequen
     }) } }],
   ];
 
-  // Track the expected truth outside the implementation: starts expanded
-  // (desktop default, key absent), each chip click flips it and writes.
-  const expect = { collapsed: false, stored: null, writes: 0, providers: 0 };
+  // Track the expected truth outside the implementation: starts collapsed
+  // (the default at every width, key absent), each chip click flips it and writes.
+  const expect = { collapsed: true, stored: null, writes: 0, providers: 0 };
 
   for (const [name, data] of payloads) {
     expect.providers = Object.keys(data.providers).length;
@@ -924,14 +924,16 @@ test('collapse state stays internally consistent across render and toggle sequen
   _assertCollapseConsistent(harness, expect, 'summary click while expanded is inert');
 });
 
-test('collapsed default follows storage then platform.isMobile, never written back', () => {
+test('collapsed default is the summary row at every width, a stored choice wins, never written back', () => {
   const cases = [
     { name: 'missing key, mobile', initial: {}, isMobile: true, want: true },
-    { name: 'missing key, desktop', initial: {}, isMobile: false, want: false },
-    { name: 'missing key, no platform', initial: {}, isMobile: undefined, want: false },
+    { name: 'missing key, desktop', initial: {}, isMobile: false, want: true },
+    { name: 'missing key, no platform', initial: {}, isMobile: undefined, want: true },
     { name: 'invalid value, mobile', initial: { [COLLAPSE_STORAGE_KEY]: 'definitely-not-a-flag' }, isMobile: true, want: true },
-    { name: 'invalid value, no platform', initial: { [COLLAPSE_STORAGE_KEY]: 'definitely-not-a-flag' }, isMobile: undefined, want: false },
+    { name: 'invalid value, desktop', initial: { [COLLAPSE_STORAGE_KEY]: 'definitely-not-a-flag' },
+      isMobile: false, want: true },
     { name: 'stored collapsed beats desktop', initial: { [COLLAPSE_STORAGE_KEY]: '1' }, isMobile: false, want: true },
+    { name: 'stored expanded beats desktop', initial: { [COLLAPSE_STORAGE_KEY]: '0' }, isMobile: false, want: false },
     { name: 'stored expanded beats mobile', initial: { [COLLAPSE_STORAGE_KEY]: '0' }, isMobile: true, want: false },
   ];
   for (const c of cases) {
@@ -1110,7 +1112,7 @@ test('a refusing localStorage degrades to the in-memory boolean', () => {
   const { context, strip, chip } = harness;
 
   assert.doesNotThrow(() => harness.fireDOMContentLoaded(), 'bootstrap survives a throwing storage');
-  assert.equal(harness.isCollapsed(), true, 'platform default survives the failed read');
+  assert.equal(harness.isCollapsed(), true, 'the default survives the failed read');
 
   context.renderExtUsage({ providers: { 'claude:main': _claudePayload() } });
   assert.equal(strip.children.length, 2, 'rendering is unaffected by storage failures');

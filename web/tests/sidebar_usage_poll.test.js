@@ -754,7 +754,6 @@ test('switchSession preserves worker icon until authoritative status returns', a
       ['msg-input', input],
       ['header-session-name', createElement()],
       ['backend-badge', createElement()],
-      ['input-model-badge', createElement()],
       ['messages', messages],
       ['worker-indicator-session-b', workerIcon],
       ['spinner-session-b', createElement({className: 'hidden'})],
@@ -798,7 +797,6 @@ test('missing bootstrap worker data and empty worker tab do not imply idle', () 
     elements: new Map([
       ['header-session-name', createElement()],
       ['backend-badge', createElement()],
-      ['input-model-badge', createElement()],
       ['messages', createElement()],
       ['worker-indicator-session-a', workerIcon],
       ['spinner-session-a', createElement({className: 'hidden'})],
@@ -1284,7 +1282,6 @@ test('switchBackend updates the active backend badge in place on success', async
     BACKEND_OPTIONS: {'claude-opus-4.6': 'Opus 4.6', 'codex-o3': 'Codex O3'},
     elements: new Map([
       ['backend-badge', createElement()],
-      ['input-model-badge', createElement()],
     ]),
   });
   const posts = [];
@@ -1300,5 +1297,4 @@ test('switchBackend updates the active backend badge in place on success', async
   ]);
   assert.equal(context.getActiveBackendId(), 'codex-o3');
   assert.equal(elements.get('backend-badge').textContent, 'Codex O3');
-  assert.equal(elements.get('input-model-badge').textContent, 'Codex O3');
 });

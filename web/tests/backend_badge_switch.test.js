@@ -35,15 +35,6 @@ function makeBadgeElement() {
   return el;
 }
 
-function makeTextElement() {
-  const el = {};
-  Object.defineProperty(el, 'textContent', {
-    get() { return el._text || ''; },
-    set(v) { el._text = String(v || ''); },
-  });
-  return el;
-}
-
 function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
@@ -73,7 +64,6 @@ function loadSessionContext({elements, BACKEND_OPTIONS, SESSION_ID, fetchImpl}) 
 function headerFixtures() {
   return new Map([
     ['backend-badge', makeBadgeElement()],
-    ['input-model-badge', makeTextElement()],
   ]);
 }
 
@@ -93,7 +83,6 @@ test('updateActiveBackendBadges keeps a read-only badge for a single-backend dom
   const badge = elements.get('backend-badge');
   assert.equal(badge.innerHTML, '');
   assert.equal(badge.textContent, 'Opus 5');
-  assert.equal(elements.get('input-model-badge').textContent, 'Opus 5');
 });
 
 // ---------------------------------------------------------------------------

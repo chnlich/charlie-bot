@@ -408,6 +408,12 @@ body { overscroll-behavior: none; }
 .child-report[data-folded="false"] .child-report-more { display: none; }
 .child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
 .child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
+/* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp): the clamp shows ten lines, and
+   the control appears only while the clamp hides some of the text. */
+.user-msg-fold[data-folded="true"] .user-msg-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10; overflow: hidden; }
+.user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
+.user-msg-fold[data-folded="true"][data-overflows="true"] .user-msg-more { display: block; }
+.user-msg-more:hover { background: rgba(15, 23, 42, 0.5); }
 /* Worker summary card folds (chat/worker-summary.js): a closing passage clamps
    to three lines the way the child-report card does; data-folded="false" shows
    all of it. */

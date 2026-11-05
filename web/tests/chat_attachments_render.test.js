@@ -164,6 +164,17 @@ test('normalizeUserMessage strips legacy attachment footers and keeps file names
   assert.match(html, /report\.pdf/);
 });
 
+test('renderUserMessageBubble wraps every text in a fold that starts clamped and undecided', () => {
+  const context = loadChatScript();
+  const multiline = Array.from({length: 11}, (_, i) => 'line ' + i).join('\n');
+  for (const text of ['one line', multiline]) {
+    const html = context.renderUserMessageBubble(text, null, null, null);
+    assert.match(html, /<div class="user-msg-fold" data-folded="true" data-overflows="false">/);
+    assert.match(html, /<div class="user-msg-clamp whitespace-pre-wrap">/);
+    assert.match(html, /<button type="button" class="user-msg-more"/);
+  }
+});
+
 test('renderUserMessageBubble shows a registered input mode\'s badge, and none for a typed message', () => {
   const context = loadChatScript();
   context.Chat.registerInputMode('voice', '&#127908; Voice');

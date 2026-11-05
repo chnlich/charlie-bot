@@ -14,13 +14,19 @@
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
-  let mut stack = vec![Place::Code { braces: 0 }];
+  let mut stack = vec![Place::code()];
   let mut expect_expression = true;
   let mut i = 0;
   while i < bytes.len() {
     if matches!(stack.last(), Some(Place::Template)) {
       match bytes[i] {
-        b'\\' => i = copy(&mut out, source, i, (i + 2).min(bytes.len())),
+        b'\\' => {
+          let mut end = (i + 1).min(bytes.len());
+          if end < bytes.len() {
+            end += source[end..].chars().next().map_or(1, char::len_utf8);
+          }
+          i = copy(&mut out, source, i, end);
+        }
         b'`' => {
           copy(&mut out, source, i, i + 1);
           stack.pop();
@@ -29,7 +35,7 @@ pub fn without_comments(source: &str) -> String {
         }
         b'$' if bytes.get(i + 1) == Some(&b'{') => {
           copy(&mut out, source, i, i + 2);
-          stack.push(Place::Code { braces: 0 });
+          stack.push(Place::code());
           expect_expression = true;
           i += 2;
         }
@@ -38,18 +44,19 @@ pub fn without_comments(source: &str) -> String {
       continue;
     }
     if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
-      i = bytes[i..].iter().position(|byte| *byte == b'\n').map_or(bytes.len(), |end| i + end);
+      i = line_end(bytes, i).unwrap_or(bytes.len());
       continue;
     }
     if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
       let end = source[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 2);
-      out.push(if source[i..end].contains('\n') { '\n' } else { ' ' });
+      out.push(if spans_lines(&bytes[i..end]) { '\n' } else { ' ' });
       i = end;
       continue;
     }
     if bytes[i] == b'/' && expect_expression {
       match regex_end(bytes, i) {
         Some(end) => {
+          clear_control(&mut stack);
           copy(&mut out, source, i, end);
           expect_expression = false;
           i = end;
@@ -64,18 +71,21 @@ pub fn without_comments(source: &str) -> String {
     match bytes[i] {
       b'\'' | b'"' => {
         let end = string_end(bytes, i);
+        clear_control(&mut stack);
         copy(&mut out, source, i, end);
         expect_expression = false;
         i = end;
       }
       b'`' => {
+        clear_control(&mut stack);
         copy(&mut out, source, i, i + 1);
         stack.push(Place::Template);
         i += 1;
       }
       b'{' => {
-        if let Some(Place::Code { braces }) = stack.last_mut() {
+        if let Some(Place::Code { braces, control, .. }) = stack.last_mut() {
           *braces += 1;
+          *control = false;
         }
         copy(&mut out, source, i, i + 1);
         expect_expression = true;
@@ -83,11 +93,16 @@ pub fn without_comments(source: &str) -> String {
       }
       b'}' => {
         let decremented = match stack.last_mut() {
-          Some(Place::Code { braces }) if *braces > 0 => {
+          Some(Place::Code { braces, control, .. }) if *braces > 0 => {
             *braces -= 1;
+            *control = false;
             true
           }
-          _ => false,
+          Some(Place::Code { control, .. }) => {
+            *control = false;
+            false
+          }
+          Some(Place::Template) | None => false,
         };
         if !decremented && stack.len() > 1 {
           stack.pop();
@@ -98,17 +113,42 @@ pub fn without_comments(source: &str) -> String {
       }
       byte if byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$' => {
         let end = identifier_end(bytes, i);
-        expect_expression = expects_expression(&source[i..end]);
+        let word = &source[i..end];
+        expect_expression = expects_expression(word);
+        if let Some(Place::Code { control, .. }) = stack.last_mut() {
+          *control = matches!(word, "if" | "while" | "for" | "with");
+        }
         copy(&mut out, source, i, end);
         i = end;
       }
       byte if byte.is_ascii_digit() || byte == b'.' => {
         let end = number_end(bytes, i);
+        clear_control(&mut stack);
         copy(&mut out, source, i, end);
         expect_expression = false;
         i = end;
       }
-      b')' | b']' => {
+      b'(' => {
+        if let Some(Place::Code { parens, control, .. }) = stack.last_mut() {
+          parens.push(*control);
+          *control = false;
+        }
+        copy(&mut out, source, i, i + 1);
+        expect_expression = true;
+        i += 1;
+      }
+      b')' => {
+        let follows_control = match stack.last_mut() {
+          Some(Place::Code { parens, .. }) => parens.pop().unwrap_or(false),
+          Some(Place::Template) | None => false,
+        };
+        clear_control(&mut stack);
+        copy(&mut out, source, i, i + 1);
+        expect_expression = follows_control;
+        i += 1;
+      }
+      b']' => {
+        clear_control(&mut stack);
         copy(&mut out, source, i, i + 1);
         expect_expression = false;
         i += 1;
@@ -118,6 +158,7 @@ pub fn without_comments(source: &str) -> String {
         i += 1;
       }
       _ => {
+        clear_control(&mut stack);
         let end = copy_char(&mut out, source, i);
         expect_expression = bytes[i] != b'.';
         i = end;
@@ -127,10 +168,48 @@ pub fn without_comments(source: &str) -> String {
   out
 }
 
-/// Where the scanner is: JavaScript code with its open-brace count, or a template literal's text.
+/// Where the scanner is: JavaScript code, or a template literal's text.
 enum Place {
-  Code { braces: usize },
+  /// Code with its open-brace count and, for each open parenthesis, whether a control keyword introduced it.
+  ///
+  /// A `/` after the `)` of `if (…)` opens a statement's regex literal, while a `/` after any other `)` divides.
+  Code {
+    braces: usize,
+    parens: Vec<bool>,
+    control: bool,
+  },
   Template,
+}
+
+impl Place {
+  fn code() -> Place {
+    Place::Code { braces: 0, parens: Vec::new(), control: false }
+  }
+}
+
+/// Forget a control keyword the scanner has left behind.
+fn clear_control(stack: &mut [Place]) {
+  if let Some(Place::Code { control, .. }) = stack.last_mut() {
+    *control = false;
+  }
+}
+
+/// The index of the first JavaScript line terminator at or after `from`: LF, CR, U+2028 or U+2029.
+fn line_end(bytes: &[u8], from: usize) -> Option<usize> {
+  let mut i = from;
+  while i < bytes.len() {
+    match bytes[i] {
+      b'\n' | b'\r' => return Some(i),
+      0xE2 if bytes.get(i + 1) == Some(&0x80) && matches!(bytes.get(i + 2), Some(0xA8 | 0xA9)) => return Some(i),
+      _ => i += 1,
+    }
+  }
+  None
+}
+
+/// Whether the text holds a JavaScript line terminator.
+fn spans_lines(bytes: &[u8]) -> bool {
+  line_end(bytes, 0).is_some()
 }
 
 /// Copy `source[start..end]` to `out`, returning `end`.
@@ -193,7 +272,7 @@ fn string_end(bytes: &[u8], start: usize) -> usize {
   while i < bytes.len() {
     match bytes[i] {
       b'\\' => i += 2,
-      b'\n' => return i,
+      b'\n' | b'\r' => return i,
       byte if byte == quote => return i + 1,
       _ => i += 1,
     }
@@ -209,7 +288,7 @@ fn regex_end(bytes: &[u8], start: usize) -> Option<usize> {
   while i < bytes.len() {
     match bytes[i] {
       b'\\' => i += 2,
-      b'\n' => return None,
+      b'\n' | b'\r' => return None,
       b'[' => {
         in_class = true;
         i += 1;
@@ -276,6 +355,28 @@ mod tests {
   fn a_comment_marker_inside_a_regex_is_text() {
     assert_eq!(without_comments("let r = /[//]/; // gone"), "let r = /[//]/; ");
     assert_eq!(without_comments("let r = /a\\/\\/b/g; // gone"), "let r = /a\\/\\/b/g; ");
+  }
+
+  #[test]
+  fn a_slash_after_a_control_statements_paren_opens_a_regex() {
+    assert_eq!(without_comments("if (ready) /[//]/.test(value); // gone"), "if (ready) /[//]/.test(value); ");
+    assert_eq!(without_comments("while (a) /x/.test(b);"), "while (a) /x/.test(b);");
+  }
+
+  #[test]
+  fn a_slash_after_another_paren_divides() {
+    assert_eq!(without_comments("let c = (a) / b; // gone"), "let c = (a) / b; ");
+  }
+
+  #[test]
+  fn a_template_escape_of_a_multibyte_character_is_kept() {
+    assert_eq!(without_comments("let s = `\\é // text`; // gone"), "let s = `\\é // text`; ");
+  }
+
+  #[test]
+  fn a_line_comment_ends_at_any_line_terminator() {
+    assert_eq!(without_comments("// note\rcount += 1;"), "\rcount += 1;");
+    assert_eq!(without_comments("// note\u{2028}count += 1;"), "\u{2028}count += 1;");
   }
 
   #[test]

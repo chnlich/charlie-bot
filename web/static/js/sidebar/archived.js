@@ -49,9 +49,13 @@ function archivedTotalCount() {
 
 function renderArchivedPills() {
   if (!archivedState.pillsEl) return;
+  // The count keeps the 4.5:1 text floor on both pill states: slate-400 reads about 5.3:1
+  // inside the active pill's blue-600/20 fill and about 6.3:1 on the slate-850 sidebar, where
+  // slate-500 reads about 2.8:1 inside the active fill.
   const pill = (onclickExpr, dataAttr, label, total, isActive) => {
     const cls = Sidebar.filterPillClass(isActive);
-    return `<button type="button"${dataAttr} onclick="${onclickExpr}" class="${cls}">${escapeHtml(label)} <span class="text-slate-500">${total}</span></button>`;
+    return `<button type="button"${dataAttr} onclick="${onclickExpr}" class="${cls}">${escapeHtml(label)} `
+      + `<span class="text-slate-400">${total}</span></button>`;
   };
   const parts = [pill('setArchivedGroupFilter(null)', '', 'All', archivedTotalCount(), archivedState.group === null)];
   for (const g of archivedState.groups) {

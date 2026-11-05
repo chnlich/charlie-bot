@@ -5,6 +5,7 @@ use std::path::Path;
 
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types::MESSAGE_CONTENT_POINTER;
 use charliebot_store::run_records::visit_events_from_end;
 use serde_json::Value;
 
@@ -144,7 +145,7 @@ pub(crate) fn read_worker_error_file(worker_log_path: &Path) -> anyhow::Result<O
 }
 
 fn assistant_event_text(event: &Value) -> Option<String> {
-  let blocks = event.pointer("/message/content")?.as_array()?;
+  let blocks = event.pointer(MESSAGE_CONTENT_POINTER)?.as_array()?;
   Some(
     blocks
       .iter()

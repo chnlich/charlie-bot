@@ -221,7 +221,7 @@ fn usage_key(message: &Map<String, Value>, line: &Map<String, Value>) -> String 
   }
 }
 
-/// `line.get("timestamp") or ""`.
+/// The line's `timestamp` as text, or the empty string when the field is missing or falsy.
 fn timestamp_of(line: &Map<String, Value>) -> String {
   match line.get("timestamp") {
     Some(timestamp) if is_truthy(timestamp) => value_str(timestamp),

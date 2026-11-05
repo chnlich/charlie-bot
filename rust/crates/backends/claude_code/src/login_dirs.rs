@@ -51,7 +51,7 @@ impl ClaudeHost {
     Ok(Self { home: PathBuf::from(home), claude_config_dir: claude_config_dir()? })
   }
 
-  /// `Path.home() / ".claude"`: the default login directory.
+  /// The default login directory: `Path.home() / ".claude"`.
   pub fn default_dir(&self) -> PathBuf {
     self.home.join(".claude")
   }

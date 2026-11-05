@@ -29,7 +29,7 @@ struct Export {
 #[derive(Deserialize)]
 struct Step {
   source: String,
-  message: Option<String>,
+  message: String,
   #[serde(default)]
   tool_calls: Vec<ToolCall>,
   observation: Option<Observation>,
@@ -91,17 +91,16 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
   };
   let steps = &export.steps[prompt_step + 1..];
   let usage = turn_usage(steps)?;
-  let final_message = steps.iter().rposition(|step| step.source == AGENT_SOURCE && has_text(&step.message));
+  let final_message = steps.iter().rposition(|step| step.source == AGENT_SOURCE && !step.message.is_empty());
 
   let mut events = vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id})];
   let mut tool_names: HashMap<String, String> = HashMap::new();
   for (index, step) in steps.iter().enumerate() {
-    if let Some(message) = step.message.as_deref()
-      && step.source == AGENT_SOURCE
+    if step.source == AGENT_SOURCE
       && final_message != Some(index)
-      && !message.is_empty()
+      && !step.message.is_empty()
     {
-      events.push(make_text_event(message));
+      events.push(make_text_event(&step.message));
     }
     for call in &step.tool_calls {
       tool_names.insert(call.tool_call_id.clone(), call.function_name.clone());
@@ -151,10 +150,6 @@ fn turn_usage(steps: &[Step]) -> anyhow::Result<TurnUsage> {
     }
   }
   Ok(usage)
-}
-
-fn has_text(message: &Option<String>) -> bool {
-  message.as_deref().is_some_and(|text| !text.is_empty())
 }
 
 #[cfg(test)]
@@ -235,6 +230,15 @@ mod tests {
     let without_user = MULTITURN_FIXTURE.replace("\"source\": \"user\"", "\"source\": \"system\"");
     let error = turn_events(&without_user, "x").unwrap_err();
     assert_eq!(error.to_string(), "devin export has no user step");
+  }
+
+  #[test]
+  fn an_export_without_a_step_message_is_refused() {
+    let mut export: Value = serde_json::from_str(MULTITURN_FIXTURE).unwrap();
+    let last_step = export["steps"].as_array_mut().unwrap().last_mut().unwrap();
+    last_step.as_object_mut().unwrap().remove("message");
+    let error = turn_events(&export.to_string(), "x").unwrap_err();
+    assert_eq!(error.to_string(), "the export is not the trajectory JSON");
   }
 
   #[test]

@@ -12,6 +12,7 @@
     {
       "step_id": 7,
       "source": "agent",
+      "message": "",
       "tool_calls": [
         {"tool_call_id": "call-1", "function_name": "exec", "arguments": {"command": "echo first"}}
       ],
@@ -28,6 +29,7 @@
     {
       "step_id": 10,
       "source": "agent",
+      "message": "",
       "tool_calls": [
         {"tool_call_id": "call-2", "function_name": "exec", "arguments": {"command": "echo second"}}
       ],
@@ -51,6 +53,7 @@
     {
       "step_id": 15,
       "source": "agent",
+      "message": "",
       "tool_calls": [
         {"tool_call_id": "call-4", "function_name": "exec", "arguments": {"command": "echo fourth"}}
       ],

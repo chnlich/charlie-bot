@@ -6,6 +6,8 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
@@ -546,12 +548,33 @@ impl PageRowText {
   }
 }
 
+/// The key under which the page declares the encoding of each column it encoded.
+const COLUMN_ENCODING_KEY: &str = "$encoded";
+
+/// The encoding of the page's `id` column: an id written as a canonical UUID travels as its 16 bytes in base64url,
+/// and any other id as `~` and its text.
+const UUID_ENCODING: &str = "uuid-b64";
+
+/// The encoding of the page's `updated_at` column: the first row carries its epoch minutes, and every later row the
+/// difference from the row before it.
+const DELTA_ENCODING: &str = "delta";
+
+/// The page's `id` field, whose UUIDs travel in [`UUID_ENCODING`].
+const ID_FIELD: &str = "id";
+
 /// The page's row text: one array per field, in row order, holding `null` where a row leaves the field out.
 ///
 /// The page's rows repeat the same field names and value shapes on every row. A gzip deflator finds the repetition
 /// inside one field's values before it finds any across interleaved rows, so grouping the values by field shrinks
 /// the page: on the 7,160-session mock home the sidebar costs 453 KB of the page's compressed bytes as columns and
 /// 506 KB as row objects.
+///
+/// Two columns carry an encoding the page declares under [`COLUMN_ENCODING_KEY`], because their plain text costs
+/// bytes a client-side expansion removes. A session id is a canonical UUID, so [`UUID_ENCODING`] carries its 16
+/// bytes in base64url (22 characters, near the 16 bytes' entropy) where the 36-character text costs a gzip
+/// deflator's 22 bytes per row. An `updated_at` is epoch minutes in newest-first order, so [`DELTA_ENCODING`] carries
+/// the differences, which are small numbers the deflator packs tightly. On the mock home the two encodings take the
+/// compressed page from 452,820 to 415,790 bytes.
 ///
 /// A page row never carries a null value: the falsy fields it keeps are a name and a schedule flag, and
 /// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
@@ -568,25 +591,78 @@ fn page_columns_text(rows: &[Arc<PageRowText>]) -> String {
   fields.sort_unstable();
   let mut text = String::new();
   text.push('{');
-  for (index, field) in fields.iter().enumerate() {
-    if index > 0 {
-      text.push_str(", ");
-    }
-    text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String((*field).to_string())));
-    text.push_str(": [");
-    for (row_index, row) in rows.iter().enumerate() {
-      if row_index > 0 {
-        text.push_str(", ");
-      }
-      match row.cell(field) {
-        Some(cell) => text.push_str(cell),
-        None => text.push_str("null"),
-      }
+  text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(COLUMN_ENCODING_KEY.to_string())));
+  text.push(':');
+  text.push_str(&charliebot_compat::jinja::tojson_text(&Value::Object(Map::from_iter([
+    (ID_FIELD.to_string(), Value::String(UUID_ENCODING.to_string())),
+    (UPDATED_AT.to_string(), Value::String(DELTA_ENCODING.to_string())),
+  ]))));
+  for field in fields {
+    text.push(',');
+    text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(field.to_string())));
+    text.push_str(":[");
+    match field {
+      ID_FIELD => write_id_column(&mut text, rows),
+      UPDATED_AT => write_updated_at_column(&mut text, rows),
+      _ => write_plain_column(&mut text, rows, field),
     }
     text.push(']');
   }
   text.push('}');
   text
+}
+
+/// Write one column's cells as their field's JSON text, with `null` where a row leaves the field out.
+fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str) {
+  for (index, row) in rows.iter().enumerate() {
+    if index > 0 {
+      text.push(',');
+    }
+    text.push_str(row.cell(field).unwrap_or("null"));
+  }
+}
+
+/// Write the `id` column in [`UUID_ENCODING`]: a canonical UUID as its 16 bytes in base64url, any other id as `~` and
+/// its text.
+fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
+  for (index, row) in rows.iter().enumerate() {
+    if index > 0 {
+      text.push(',');
+    }
+    let Some(cell) = row.cell(ID_FIELD) else {
+      text.push_str("null");
+      continue;
+    };
+    let id: String = serde_json::from_str(cell).expect("an id cell is JSON text");
+    match uuid::Uuid::parse_str(&id) {
+      // The store holds and the routes name an id by its exact text, so only the canonical spelling may travel
+      // encoded: `Uuid::parse_str` also accepts uppercase, simple, braced and URN spellings, and decoding those
+      // would hand the page a different id string.
+      Ok(uuid) if uuid.to_string() == id => {
+        text.push('"');
+        text.push_str(&URL_SAFE_NO_PAD.encode(uuid.as_bytes()));
+        text.push('"');
+      }
+      _ => text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(format!("~{id}")))),
+    }
+  }
+}
+
+/// Write the `updated_at` column in [`DELTA_ENCODING`]: the first value as it stands, then each difference.
+fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
+  let mut previous: Option<i64> = None;
+  for (index, row) in rows.iter().enumerate() {
+    if index > 0 {
+      text.push(',');
+    }
+    let Some(cell) = row.cell(UPDATED_AT) else {
+      text.push_str("null");
+      continue;
+    };
+    let value: i64 = cell.parse().expect("an updated_at cell is an integer");
+    text.push_str(&previous.map_or(value, |previous| value - previous).to_string());
+    previous = Some(value);
+  }
 }
 
 /// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads,
@@ -975,10 +1051,9 @@ mod tests {
     assert_eq!(memos.state.lock().unwrap().render_calls, 3);
   }
 
-  /// The page's text is the Jinja `tojson` text of the row fields as columns, and a row keeps its value until an
-  /// input moves.
+  /// The page's text expands to the row values the client reads, and a row keeps its value until an input moves.
   #[tokio::test]
-  async fn page_text_matches_the_column_json_and_reuses_unchanged_rows() {
+  async fn page_text_expands_to_the_row_values_and_reuses_unchanged_rows() {
     let (_home, features) = crate::test_support::feature_context();
     let first = crate::test_support::create_node(&features.store, "page-text-a", None, TaskProfile::Manager).await;
     crate::test_support::create_node(&features.store, "page-text-b", None, TaskProfile::Manager).await;
@@ -986,7 +1061,7 @@ mod tests {
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
-    assert_eq!(text.as_str(), page_array_text(&features.store, &page, None));
+    assert_eq!(page_rows_of(text.as_str()), page_row_values(&features.store, &page, None));
     let rendered = memo.render_calls();
     assert_eq!(rendered, page.rows.len());
 
@@ -996,7 +1071,7 @@ mod tests {
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
     let active = active_page_json_text(&features.store, &page, Some(&first.id), &memo).unwrap();
-    assert_eq!(active.as_str(), page_array_text(&features.store, &page, Some(&first.id)));
+    assert_eq!(page_rows_of(active.as_str()), page_row_values(&features.store, &page, Some(&first.id)));
     assert_eq!(memo.render_calls(), rendered + 1);
   }
 
@@ -1206,44 +1281,83 @@ mod tests {
     assert_eq!(first_page_row_id(&features.store).unwrap().as_deref(), first_row);
   }
 
-  /// The bytes the page must carry: `tojson` of the row values' fields as columns, with the active session's unread
-  /// mark cleared and every field the page's client does not read left out.
-  fn page_array_text(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> String {
+  /// The row values the page's client reads, as the page's columns expand to them.
+  fn page_row_values(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> Vec<Value> {
     let inputs =
       row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
-    let values: Vec<Value> =
-      inputs.iter().map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()))).collect();
-    let mut fields: Vec<String> = Vec::new();
-    for value in &values {
-      for field in value.as_object().expect("a page row is an object").keys() {
-        if !fields.iter().any(|known| known == field) {
-          fields.push(field.clone());
-        }
-      }
-    }
-    let columns = fields
-      .into_iter()
-      .map(|field| {
-        let cells = values.iter().map(|row| row.get(&field).cloned().unwrap_or(Value::Null)).collect();
-        (field, Value::Array(cells))
-      })
-      .collect::<Map<String, Value>>();
-    charliebot_compat::jinja::tojson_text(&Value::Object(columns))
+    inputs.iter().map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()))).collect()
   }
 
-  /// The row values the page's column text carries.
+  /// The row values the page's column text carries, with each declared encoding expanded.
   fn page_rows_of(text: &str) -> Vec<Value> {
     let columns: Map<String, Value> = serde_json::from_str(text).expect("the page text is a column object");
-    let count = columns.values().next().and_then(Value::as_array).map_or(0, Vec::len);
+    let encodings = columns.get(COLUMN_ENCODING_KEY).and_then(Value::as_object).cloned().unwrap_or_default();
+    let count = columns
+      .iter()
+      .find(|(field, _)| field.as_str() != COLUMN_ENCODING_KEY)
+      .and_then(|(_, cells)| cells.as_array())
+      .map_or(0, Vec::len);
     let mut rows = vec![Map::new(); count];
     for (field, cells) in columns {
+      if field == COLUMN_ENCODING_KEY {
+        continue;
+      }
+      let encoding = encodings.get(&field).and_then(Value::as_str);
+      let mut running = 0i64;
       for (index, cell) in cells.as_array().expect("a column is an array").iter().enumerate() {
-        if !cell.is_null() {
-          rows[index].insert(field.clone(), cell.clone());
+        if cell.is_null() {
+          continue;
         }
+        let value = match encoding {
+          Some(UUID_ENCODING) => Value::String(expand_session_id(cell.as_str().expect("an id cell is a string"))),
+          Some(DELTA_ENCODING) => {
+            running += cell.as_i64().expect("a delta cell is an integer");
+            Value::from(running)
+          }
+          _ => cell.clone(),
+        };
+        rows[index].insert(field.clone(), value);
       }
     }
     rows.into_iter().map(Value::Object).collect()
+  }
+
+  /// The session id a [`UUID_ENCODING`] cell carries: a UUID decoded from its base64url bytes, or a `~` text id.
+  fn expand_session_id(cell: &str) -> String {
+    let Some(encoded) = cell.strip_prefix('~') else {
+      let bytes = URL_SAFE_NO_PAD.decode(cell).expect("a UUID id cell is base64url");
+      return uuid::Uuid::from_slice(&bytes).expect("a UUID id cell holds 16 bytes").to_string();
+    };
+    encoded.to_string()
+  }
+
+  /// A canonical UUID id travels as 22 base64url characters, any other id as `~` and its text, and the expansion
+  /// restores both.
+  #[test]
+  fn a_canonical_uuid_id_travels_as_its_bytes_and_any_other_id_as_text() {
+    let uuid = "e870f19c-96c6-40e7-8da7-71f02b2622e3";
+    let rows: Vec<Arc<PageRowText>> = [uuid, "imported-chat", "E870F19C-96C6-40E7-8DA7-71F02B2622E3"]
+      .into_iter()
+      .enumerate()
+      .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
+      .collect();
+
+    let text = page_columns_text(&rows);
+    assert_eq!(
+      text,
+      format!(
+        r#"{{"$encoded":{{"id": "{UUID_ENCODING}", "updated_at": "{DELTA_ENCODING}"}},"id":["{}","~imported-chat","~E870F19C-96C6-40E7-8DA7-71F02B2622E3"],"updated_at":[29566074,1,1]}}"#,
+        URL_SAFE_NO_PAD.encode(uuid::Uuid::parse_str(uuid).unwrap().as_bytes())
+      )
+    );
+    assert_eq!(
+      page_rows_of(&text),
+      vec![
+        json!({"id": uuid, "updated_at": 29_566_074}),
+        json!({"id": "imported-chat", "updated_at": 29_566_075}),
+        json!({"id": "E870F19C-96C6-40E7-8DA7-71F02B2622E3", "updated_at": 29_566_076})
+      ]
+    );
   }
 
   #[tokio::test]

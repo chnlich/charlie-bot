@@ -11,10 +11,14 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {buildSidebarIndicatorContext} = require('./session_context_stub');
+const {buildSidebarIndicatorContext, makeSessionMeta} = require('./session_context_stub');
 
 const UUID = 'e870f19c-96c6-40e7-8da7-71f02b2622e3';
 const UUID_CELL = Buffer.from(UUID.replace(/-/g, ''), 'hex').toString('base64url');
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+const rowIds = (html) => [...html.matchAll(/id="session-([^"]+)"/g)].map((match) => match[1]);
 
 test('the declared encodings expand to the row values the sidebar reads', () => {
   const {context} = buildSidebarIndicatorContext(['x']);
@@ -72,4 +76,41 @@ test('an encoded id of another length fails instead of entering the sidebar', ()
   assert.throws(
     () => context.Sidebar.expandSessionColumns({$encoded: {id: 'uuid-b64'}, name: ['a', 'b'], id: UUID_CELL}),
     /Encoded session id blob/);
+});
+
+test('the Workspace fetch asks for the compact listing and paints its rows', async () => {
+  const {context, nav} = buildSidebarIndicatorContext(['x']);
+  const urls = [];
+  context.fetch = async (url) => {
+    urls.push(url);
+    return {
+      ok: true,
+      json: async () => ({
+        $encoded: {id: 'uuid-b64', updated_at: 'delta'},
+        backend: ['mock-backend'],
+        id: UUID_CELL,
+        name: ['first'],
+        profile: ['manager'],
+        updated_at: [29566074],
+      }),
+    };
+  };
+
+  context.Sidebar.switchSidebarFilter('all');
+  await flush();
+  await flush();
+
+  assert.deepEqual(urls, ['/api/sessions/?compact=1']);
+  assert.deepEqual(rowIds(nav.innerHTML), [UUID]);
+});
+
+test('a filter that answers with a row array paints the same list', async () => {
+  const {context, nav} = buildSidebarIndicatorContext(['x']);
+  context.fetch = async () => ({ok: true, json: async () => [makeSessionMeta(UUID)]});
+
+  context.Sidebar.switchSidebarFilter('all');
+  await flush();
+  await flush();
+
+  assert.deepEqual(rowIds(nav.innerHTML), [UUID]);
 });

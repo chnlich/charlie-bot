@@ -21,11 +21,12 @@ use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::api;
-use crate::listing::{self, SessionsListMemos};
+use crate::listing::{self, CompactListingMemo, SessionsListMemos};
 use crate::route_support::{Query, blocking_store, store_error};
 use crate::{search, sidebar, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
+static COMPACT_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
 const STATUS_BODY_MEMO_LIMIT: usize = 4;
 
 type StatusBodyCache = Mutex<LruCache<StatusKey, Vec<u8>>>;
@@ -103,11 +104,18 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 }
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  // `compact=1` asks for the page's column form of the same rows, which the sidebar decodes with the page's own
+  // expander. Any other value keeps the row array the route has always sent.
+  let compact = Query::new(&request).get("compact") == Some("1");
   let response = blocking_store(move || {
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
-    Ok(listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS))
+    Ok(if compact {
+      COMPACT_LISTING_MEMO.response(&request, &features.store, &page)
+    } else {
+      listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS)
+    })
   })
   .await;
   response.unwrap_or_else(store_error)
@@ -623,6 +631,27 @@ mod tests {
       features.store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active)).unwrap();
 
     assert_eq!(after_generation, before_generation + 1);
+  }
+
+  /// The Workspace route keeps its row array by default and answers `compact=1` with the page's column object.
+  #[tokio::test]
+  async fn the_active_list_answers_compact_requests_with_the_page_columns() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "compact-route", None, TaskProfile::Manager).await;
+
+    let compact = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
+    let response = list_active(State(Arc::clone(&features)), compact).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload.get("$encoded").is_some(), "the compact listing declares its column encodings");
+
+    let rows = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
+    let response = list_active(State(features), rows).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload.is_array(), "a request without compact keeps the row array");
   }
 
   #[tokio::test]

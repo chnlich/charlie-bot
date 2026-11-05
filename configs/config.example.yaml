@@ -77,6 +77,12 @@ backends:
   #     type: codex
   #     model: gpt-6-luna
   # Codex reasoning effort is xhigh unless the entry sets model_reasoning_effort.
+  # A devin entry runs the Devin CLI headless with every tool approved. Its model is the SWE-2 id
+  # that `devin models list` prints after `devin auth login`; the id must start with `devin-`.
+  #   - id: devin-swe2
+  #     label: "Devin · SWE-2"
+  #     type: devin
+  #     model: <id from devin models list>
   # An id names the model family, never a version: a version bump edits only the
   # entry's model and label (the id rule: usage's startup check in rust/crates/features/usage/src/backend_ids.rs
   # refuses an id outside the prefixes the backend types register).

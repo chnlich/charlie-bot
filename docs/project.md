@@ -254,6 +254,7 @@ including a resumed run and a pool relay:
 - charlie-code: `--instructions-file <run dir>/harness_instructions.md`.
 - Codex: `-c developer_instructions=<file text as a TOML string>` and `-c project_doc_fallback_filenames=["CLAUDE.md"]`.
 - OpenCode: the base class frames the text into the prompt.
+- Devin: the framed text goes into the prompt file that `--prompt-file` names, in the run's log directory.
 
 A run on a repository starts in its worktree root, so its CLI can read that repository's guide and skills from there;
 a run without a repository starts in its Run directory. A manager turn is the one path that writes an instructions

@@ -64,5 +64,5 @@ The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic ND
 
 Each agent backend is its own crate under `rust/crates/backends/<name>`, so Cargo and the structure test hold the
 backend group boundaries: `charliebot-anthropic-compatible`, `charliebot-antigravity`, `charliebot-charlie-code`,
-`charliebot-claude-code`, `charliebot-codex`, `charliebot-gemini`, `charliebot-openai-compatible` and
+`charliebot-claude-code`, `charliebot-codex`, `charliebot-devin`, `charliebot-gemini`, `charliebot-openai-compatible` and
 `charliebot-opencode`.

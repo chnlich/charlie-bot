@@ -59,7 +59,7 @@ pub fn is_millis(text: &str) -> bool {
 }
 
 /// The RFC 3339 time of a millisecond string, as the core's timestamp compare reads it.
-fn rfc3339_of_millis(millis: &str) -> anyhow::Result<String> {
+pub(super) fn rfc3339_of_millis(millis: &str) -> anyhow::Result<String> {
   let millis: i128 = millis.parse().with_context(|| format!("create_time is not milliseconds: {millis:?}"))?;
   let time = OffsetDateTime::from_unix_timestamp_nanos(millis * 1_000_000)
     .with_context(|| format!("create_time is out of range: {millis}"))?;

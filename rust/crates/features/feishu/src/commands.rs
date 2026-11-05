@@ -314,7 +314,7 @@ fn decode_topic_page_cursor(token: &str, thread_id: &str) -> Result<TopicPageCur
     let low = hex_digit(pair[1]).ok_or_else(invalid_topic_page_token)?;
     bytes.push((high << 4) | low);
   }
-  let cursor = serde_json::from_slice(&bytes).map_err(|_| invalid_topic_page_token())?;
+  let cursor: TopicPageCursor = serde_json::from_slice(&bytes).map_err(|_| invalid_topic_page_token())?;
   if cursor.thread_id != thread_id || (cursor.page_token.is_none() && cursor.buffered_message_id.is_none()) {
     return Err(invalid_topic_page_token());
   }
@@ -589,7 +589,10 @@ mod tests {
     assert_eq!(first_read["messages"].as_array().unwrap().len(), 2);
     assert_eq!(first_read["messages"][0]["content"], "newest");
     assert_eq!(first_read["messages"][0]["author_id"], USER_ID);
-    assert_eq!(first_read["messages"][0]["timestamp"], crate::rfc3339_of_millis("1700000002000").unwrap());
+    assert_eq!(
+      first_read["messages"][0]["timestamp"],
+      crate::adapter::rfc3339_of_millis("1700000002000").unwrap()
+    );
     assert_eq!(first_read["messages"][0]["thread_id"], "omt_new_topic");
     assert_eq!(first_read["messages"][1]["thread_id"], Value::Null);
     assert_eq!(first_read["next_page"], "older");
@@ -881,7 +884,7 @@ mod tests {
           "thread_id": "omt_summon",
           "author_id": USER_ID,
           "person": "tester",
-          "timestamp": crate::rfc3339_of_millis("1700000000000").unwrap(),
+          "timestamp": crate::adapter::rfc3339_of_millis("1700000000000").unwrap(),
           "content": "existing output",
           "unread": false,
           "summon": false,

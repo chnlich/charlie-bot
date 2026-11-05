@@ -354,17 +354,17 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
 
 async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let query = Query::new(&request);
-  let parent_id = query.get("parent_id").filter(|value| !value.is_empty());
-  let include_archived = match query.parse_bool("include_archived", false) {
+  let parent_id = query.get(api::SESSION_TREE_PARENT_ID_QUERY).filter(|value| !value.is_empty());
+  let include_archived = match query.parse_bool(api::SESSION_TREE_INCLUDE_ARCHIVED_QUERY, false) {
     Ok(value) => value,
     Err(response) => return *response,
   };
-  let limit = match query.parse_int("limit", Some(100), Some(1), Some(500)) {
+  let limit = match query.parse_int(api::SESSION_TREE_LIMIT_QUERY, Some(100), Some(1), Some(500)) {
     Ok(value) => value as usize,
     Err(response) => return *response,
   };
   let parent_id = parent_id.map(str::to_string);
-  let cursor = query.get("cursor").map(str::to_string);
+  let cursor = query.get(api::SESSION_TREE_CURSOR_QUERY).map(str::to_string);
   let page = blocking_store(move || {
     tree::tree_page(&features.store, parent_id.as_deref(), include_archived, limit, cursor.as_deref())
   })

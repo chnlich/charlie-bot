@@ -316,14 +316,14 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
 
 fn tree(args: &TreeArgs) -> Result<(), CliExit> {
   let mut params = vec![
-    ("limit".to_string(), args.limit.to_string()),
-    ("include_archived".to_string(), args.include_archived.to_string()),
+    (session_routes::SESSION_TREE_LIMIT_QUERY.to_string(), args.limit.to_string()),
+    (session_routes::SESSION_TREE_INCLUDE_ARCHIVED_QUERY.to_string(), args.include_archived.to_string()),
   ];
   if let Some(root) = &args.root {
-    params.push(("parent_id".to_string(), root.clone()));
+    params.push((session_routes::SESSION_TREE_PARENT_ID_QUERY.to_string(), root.clone()));
   }
   if let Some(cursor) = &args.cursor {
-    params.push(("cursor".to_string(), cursor.clone()));
+    params.push((session_routes::SESSION_TREE_CURSOR_QUERY.to_string(), cursor.clone()));
   }
   let result = client::get(session_routes::SESSION_TREE_PATH, Some(params))?;
   print_result(&result);

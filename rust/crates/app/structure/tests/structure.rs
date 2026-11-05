@@ -1015,6 +1015,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/session-api",
     hint: "Use `charliebot_session_api::api::CATCHUP_COMPLETE_FRAME`.",
   },
+  OwnerRow {
+    name: "parent_id",
+    owner: "runtime/session-api",
+    hint: "Use `charliebot_session_api::api::SESSION_TREE_PARENT_ID_QUERY`.",
+  },
+  OwnerRow {
+    name: "include_archived",
+    owner: "runtime/session-api",
+    hint: "Use `charliebot_session_api::api::SESSION_TREE_INCLUDE_ARCHIVED_QUERY`.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

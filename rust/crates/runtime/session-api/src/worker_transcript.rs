@@ -244,7 +244,7 @@ fn run_header_event(
     "run_id": run.id,
     "kind": kind,
     "backend": run.backend.as_deref().unwrap_or(""),
-    "backend_label": backend_label,
+    (event_types::BACKEND_LABEL): backend_label,
     "state": state,
     "error": error,
     "tool_calls": tool_calls,
@@ -254,7 +254,7 @@ fn run_header_event(
     "launched": run.started_at.is_some(),
     "launch_failed": FAILED_STATES.contains(&state) && run.started_at.is_none(),
     "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
-    "launch_prompt_ref": launch_prompt_ref,
+    (event_types::LAUNCH_PROMPT_REF): launch_prompt_ref,
   })
 }
 
@@ -381,7 +381,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       json!({
         "run_id": run.id,
         "kind": serde_json::to_value(run.kind).expect("run kind serializes"),
-        "backend_label": backend_label,
+        (event_types::BACKEND_LABEL): backend_label,
         "state": states.get(&run.id).map(String::as_str).unwrap_or("queued"),
         "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
         "ended_at": run.ended_at.map(UtcDateTime::to_isoformat_text),
@@ -473,7 +473,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       let launch_prompt_path = store.run_dir(session_id, &run.id).join(LAUNCH_TEXT_FILENAME);
       json!({
         "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
-        "launch_prompt_ref": if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() },
+        (event_types::LAUNCH_PROMPT_REF): if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() },
         (OBSERVATION_RAW_LOG_REF): run.raw_log_ref.as_deref().unwrap_or(""),
         (OBSERVATION_EVENTS_REF): run.events_ref.as_deref().unwrap_or(""),
       })
@@ -714,7 +714,7 @@ mod tests {
     assert_eq!(summary["closing"]["work"], json!({"run_id": "run-work", "text": "All checks pass."}));
     assert_eq!(summary["closing"]["review"], json!({"run_id": "run-review", "text": "Review approved."}));
     assert_eq!(summary["links"]["task_spec_ref"], "");
-    assert_eq!(summary["links"]["launch_prompt_ref"], "");
+    assert_eq!(summary["links"][event_types::LAUNCH_PROMPT_REF], "");
     assert_eq!(summary["delivery"]["raw_log_ref"], "");
     assert!(summary["links"].get("raw_log_ref").is_some());
     assert!(summary["links"].get("events_ref").is_some());

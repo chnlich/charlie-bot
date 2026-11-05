@@ -759,7 +759,7 @@ fn render_context_compacted<E: EventFields>(event: &E) -> StoreResult<Value> {
 fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
   let kind = event.field("kind").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_else(|| "run".to_string());
   let backend = event
-    .field("backend_label")
+    .field(event_types::BACKEND_LABEL)
     .filter(|value| is_truthy(*value))
     .or_else(|| event.field("backend").filter(|value| is_truthy(*value)))
     .map(event_str)
@@ -795,7 +795,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
     "launched": required_field(event, "launched")?.to_owned_value(),
     "launch_failed": required_field(event, "launch_failed")?.to_owned_value(),
     "task_spec_ref": required_field(event, "task_spec_ref")?.to_owned_value(),
-    "launch_prompt_ref": required_field(event, "launch_prompt_ref")?.to_owned_value(),
+    (event_types::LAUNCH_PROMPT_REF): required_field(event, event_types::LAUNCH_PROMPT_REF)?.to_owned_value(),
   }))
 }
 

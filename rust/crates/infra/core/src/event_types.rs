@@ -89,6 +89,10 @@ pub const CHILD_REPORT: &str = "child_report";
 pub const PROMPT_CHANGED: &str = "prompt_changed";
 pub const TASK_IMPORTED: &str = "task_imported";
 pub const RUN_HEADER: &str = "run_header";
+/// The run header's display label for the backend that ran.
+pub const BACKEND_LABEL: &str = "backend_label";
+/// The run header's reference to the run's launch prompt file.
+pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
 pub const RUN_END: &str = "run_end";
 pub const RUN_ERROR: &str = "run_error";
 pub const RUN_DELIVERY: &str = "run_delivery";

@@ -2,10 +2,10 @@
 //! built through the `tar` crate.
 //!
 //! The archive is the PAX format: every member carries a ustar
-//! header, and a `././@PaxHeader` extended entry precedes it whenever a field does not fit ustar's
+//! header. A `././@PaxHeader` extended entry precedes it whenever a field does not fit ustar's
 //! limits or is a float. The `mtime` arrives with sub-second precision, so every member
 //! carries a PAX `mtime` record. The split stays: the rounded integer mtime in the
-//! ustar header and the full-precision float in the PAX record, so a reader sees the same mtime value
+//! ustar header and the full-precision float in the PAX record. A reader sees the same mtime value
 //! from either field.
 //!
 //! Names and link targets are raw bytes. A value that is not UTF-8 goes
@@ -82,7 +82,7 @@ fn store_text(field: &mut [u8], value: &[u8]) {
 
 fn ustar_header(member: &Member) -> [u8; BLOCK] {
   let mut header = tar::Header::new_ustar();
-  // The ustar mode keeps the permission and the setuid, setgid and sticky bits only; a number that does not fit
+  // The ustar mode keeps the permission and the setuid, setgid and sticky bits only. A number that does not fit
   // its octal field stays 0 in the ustar header and rides the PAX record.
   header.set_mode(member.mode & 0o7777);
   header.set_uid(ustar_number(i128::from(member.uid), 8));

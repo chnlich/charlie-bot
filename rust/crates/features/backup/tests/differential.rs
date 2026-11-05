@@ -18,10 +18,11 @@ fn write(home: &Path, relative: impl AsRef<Path>, content: &[u8]) {
   std::fs::write(path, content).unwrap();
 }
 
-/// Builds the synthetic home the two sides archive: nested directories, an empty directory, a credentials
-/// file, a `.git` directory, a `.claude` directory, a pycache file, an opencode store at the top level and one
-/// deeper, a session thread directory, names that are not UTF-8 at the top level and nested, a non-ASCII
-/// UTF-8 name, a name over 100 bytes, and symlinks whose targets are over 100 bytes or not UTF-8.
+/// Builds the synthetic home the two sides archive. It holds nested directories, an empty directory, a
+/// credentials file, a `.git` directory, a `.claude` directory, and a pycache file. The opencode store sits at
+/// the top level and one level deeper, beside a session thread directory. Names that are not UTF-8 appear at
+/// the top level and nested, next to a non-ASCII UTF-8 name and a name over 100 bytes. Some symlink targets
+/// run over 100 bytes or are not UTF-8.
 fn build_fixture_home(home: &Path) {
   write(home, "config.yaml", b"server: {}\n");
   write(home, "nested/a/b/deep.txt", b"deep content\n");
@@ -49,7 +50,7 @@ fn build_fixture_home(home: &Path) {
 }
 
 /// Builds the fixture under `root` and archives it on the Rust side. The home is `root/charliebot`, and the
-/// Rust side reads it through the symlink `root/rust/charliebot`, so both sides see the same metadata and
+/// Rust side reads it through the symlink `root/rust/charliebot`. Both sides then see the same metadata. They
 /// write into different backup directories: `root/charliebot_backup` for the recorded reference side,
 /// `root/rust/charliebot_backup` for this crate.
 fn archive_fixture(root: &Path) -> (PathBuf, PathBuf) {

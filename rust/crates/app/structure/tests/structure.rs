@@ -1,30 +1,12 @@
-//! Workspace structure check: the group of each crate, the dependencies between groups, the runtime layer order, and
-//! the module cycles inside each crate.
+//! Workspace structure check over `cargo metadata` and each target's syntax tree.
 //!
-//! A crate's group comes from its directory under `rust/crates`. The names map as `infra/<name>` to `infra`,
-//! `runtime/<name>` to `runtime`, `backends/<name>` to `backends.<name>`, `features/<name>` to `features.<name>`,
-//! and `app/<name>` to `app`. Any other directory fails.
+//! Checks: every crate sits in a group, and each dependency follows its group's directions. A runtime crate
+//! depends only on its own layer or a lower one, and no crate has a module cycle. A name that two crates must agree
+//! on is spelled only in its owner. Each check returns its failures, and a `#[test]` asserts the list is empty.
 //!
-//! Directions: infra depends on infra only. runtime depends on runtime and infra. A backend or a feature depends on
-//! itself, runtime and infra. The backends in `BACKEND_VARIANTS` may also depend on backends.claude_code, and the
-//! features in `CHAT_CHANNELS` may also depend on features.chat_threads. app depends on every group. Normal and
-//! build dependencies count; a dev-dependency does not, because test code follows no direction.
-//!
-//! Inside runtime, every crate is one layer. A runtime crate depends only on its own layer or a lower layer. The table
-//! must cover every runtime crate and name no missing one.
-//!
-//! Each crate's module graph covers every target: its lib (or its main bin), each other bin, test, example and bench.
-//! A node is the target root, a file module or an inline `mod` block. An edge A -> B means A's own code holds a path
-//! that resolves to an item defined in B. The path reaches through `use` trees, expressions, types, patterns and the
-//! tokens of macro calls. A `mod` declaration is no edge, and a `pub use` that only re-exports a name is no edge until
-//! the module's own code uses that name. A cycle is a strongly connected component of two or more modules.
-//!
-//! Every module cycle fails: a cycle is a defect of the code, not a recorded exception.
-//!
-//! A name that two crates must agree on has one owner: the owner table names the owner crate, and no other crate's
-//! production code may spell the name. A class of names, such as `CHARLIEBOT_` environment variables, must be spelled
-//! in one crate. Both rules read the string literals of each production module; a literal with whitespace is prose and
-//! names nothing.
+//! The rules live beside the data each check reads: `group_of_dir` and `allowed_groups` hold the group mapping and
+//! the directions. `RUNTIME_LAYERS` holds the layer order, `module_outgoing` the module-graph edges, `OWNER_TABLE`
+//! and `SPELLING_CLASSES` the owned names and name classes, `FORMAT_TABLE` the file-kind writers.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -44,6 +26,9 @@ const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"
 const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 
 /// The runtime layers, keyed by the crate's directory name under `rust/crates/runtime`.
+///
+/// A runtime crate depends only on its own layer or a lower layer. The table must cover every runtime crate and name
+/// no missing one.
 const RUNTIME_LAYERS: [(&str, usize); 8] = [
   ("store", 1),
   ("registry", 2),
@@ -177,6 +162,8 @@ fn load_workspace(manifest_dir: &Path) -> Workspace {
   Workspace { root, crates, path_failures }
 }
 
+/// The dependency names a package declares for normal or build code. A dev-dependency does not count: test code
+/// follows no direction.
 fn workspace_deps(package: &serde_json::Value) -> BTreeSet<String> {
   let mut deps = BTreeSet::new();
   for dep in package["dependencies"].as_array().expect("a package holds dependencies") {
@@ -362,6 +349,9 @@ impl Builder<'_> {
 }
 
 /// The group of a crate directory relative to the workspace root: `crates/<group>/<name>`.
+///
+/// `infra/<name>`, `runtime/<name>` and `app/<name>` map to `infra`, `runtime` and `app`; `backends/<name>` and
+/// `features/<name>` map to `backends.<name>` and `features.<name>`. Any other directory yields None.
 fn group_of_dir(dir_rel: &str) -> Option<String> {
   let parts: Vec<&str> = dir_rel.split('/').collect();
   if parts.len() != 3 || parts[0] != "crates" {
@@ -375,6 +365,10 @@ fn group_of_dir(dir_rel: &str) -> Option<String> {
 }
 
 /// The groups `group` may import besides itself; None for app, which may import every group.
+///
+/// infra imports infra only; runtime adds infra. A backend or a feature adds runtime and infra, plus
+/// `backends.claude_code` for the backends in `BACKEND_VARIANTS` and `features.chat_threads` for the ones in
+/// `CHAT_CHANNELS`.
 fn allowed_groups(group: &str) -> Option<BTreeSet<String>> {
   let (kind, name) = match group.split_once('.') {
     Some((kind, name)) => (kind, name),
@@ -611,6 +605,11 @@ fn module_name(target: &Target, path: &[String]) -> String {
 }
 
 /// The modules `module`'s own code points at, with the line of the first reference to each.
+///
+/// A node is a target root, a file module or an inline `mod` block. An edge A -> B means A's own code holds a path
+/// that resolves to an item defined in B. The path reaches through `use` trees, expressions, types, patterns and the
+/// tokens of macro calls. A `mod` declaration is no edge, and a `pub use` that only re-exports a name is no edge
+/// until the module's own code uses that name.
 fn module_outgoing(item: &Crate, target: usize, path: &[String], module: &Module) -> Vec<(Vec<String>, usize)> {
   let mut outgoing = Vec::new();
   for record in &module.uses {
@@ -662,6 +661,8 @@ impl Cycle {
   }
 }
 
+/// Every module cycle: a strongly connected component of two or more modules. A cycle is a defect of the code, not a
+/// recorded exception.
 fn detect_cycles(workspace: &Workspace) -> Vec<Cycle> {
   let mut cycles = Vec::new();
   for item in &workspace.crates {
@@ -1264,7 +1265,8 @@ fn parameters_as_empty(path: &str) -> String {
 }
 
 /// The owner rule's failures: each owner row's name spelled outside its owner, and each spelling class's name spelled
-/// in two or more crates.
+/// in two or more crates. Both rules read the string literals of each production module; a literal with whitespace is
+/// prose and names nothing.
 fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingClass]) -> Vec<String> {
   let sites = production_sites(workspace);
   let mut failures = Vec::new();

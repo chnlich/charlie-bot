@@ -207,6 +207,8 @@ pub struct PassCounters {
   pub resumed: u64,
   pub drained: u64,
   pub followups: u64,
+  /// The follow-up replays this pass served from the last completed pass instead of re-running them.
+  pub replay_served: u64,
   pub full: u64,
   pub skipped: u64,
   pub marker: Option<String>,
@@ -360,6 +362,9 @@ pub fn let_go_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::
 struct FullPassSession {
   session_id: String,
   meta: SessionMetadata,
+  /// The start of the last pass that completed every step for this node, when the boot marker names one. A run whose
+  /// end is older had its follow-up applied by that pass, so this boot's replay serves it instead of re-running it.
+  completed_before: Option<UtcDateTime>,
 }
 
 /// One session directory's verdict from the walk's skip check.
@@ -382,6 +387,10 @@ enum WalkEntry {
 /// node passes by step ([`StepTotals`]): `node_pass_step_ms`, `node_pass_step_file_reads` and
 /// `node_pass_step_file_read_bytes`. A run follow that an earlier pass started in the background can read while a later
 /// pass runs; its reads count toward that later pass's running step.
+///
+/// A node pass serves most of its replay from the pass the marker names: a run that ended before that pass started
+/// already had its follow-up applied there, so re-running it would land nothing. Only the session's newest run keeps
+/// its full follow-up, which is the one place a close request that arrived later acts.
 pub async fn reconcile_task_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
@@ -576,8 +585,16 @@ pub async fn reconcile_task_tree(
       Ok(true) => Some(Err(anyhow::Error::new(charliebot_store::task_node_absence::not_a_task_tree_node(&session_id)))),
       Ok(false) => {
         // No session channel has a subscriber before the server binds, so the pass builds no aggregator for one.
-        let node_pass =
-          reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop), &mut pass_timer.steps);
+        let node_pass = reconcile_node_inner(
+          features,
+          adapter,
+          &session_id,
+          &mut counters,
+          None,
+          candidate.completed_before,
+          Some(&stop),
+          &mut pass_timer.steps,
+        );
         reconcile_node_until_stopped(&stop, charliebot_store::hold_aggregator_builds(node_pass)).await
       }
       Err(error) => Some(Err(anyhow::Error::new(error))),
@@ -626,6 +643,7 @@ pub async fn reconcile_task_tree(
     node_pass_step_ms = %node_pass_step_ms,
     node_pass_step_file_reads = %node_pass_step_file_reads,
     node_pass_step_file_read_bytes = %node_pass_step_file_read_bytes,
+    replay_served = counters.replay_served,
     "task_tree_recovery_phases"
   );
   counters.marker = marker_text;
@@ -651,8 +669,8 @@ fn examine_session_dir(
     .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
     .to_string();
   let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
-  let source = SkipProofSource::read(session_dir, meta_identity)
-    .with_context(|| format!("stating {}", session_dir.display()))?;
+  let source =
+    SkipProofSource::read(session_dir, meta_identity).with_context(|| format!("stating {}", session_dir.display()))?;
   // A node whose last pass failed takes its full pass, whatever the marker or the proof says about its files.
   if let Some(marker) = marker {
     if marker.failed_sessions.contains(&session_id) {
@@ -661,7 +679,7 @@ fn examine_session_dir(
       };
       return Ok(WalkEntry::Kept {
         reason: Some("failed_pass"),
-        session: Box::new(FullPassSession { session_id, meta }),
+        session: Box::new(FullPassSession { session_id, meta, completed_before: None }),
       });
     }
     // A row whose identities still hold answers the node's verdict without reading a tail, a run listing or a
@@ -682,7 +700,8 @@ fn examine_session_dir(
       SkipCheck::Skip { newest_backend } => return Ok(WalkEntry::Skipped { session_id, newest_backend, source }),
     },
   };
-  Ok(WalkEntry::Kept { reason, session: Box::new(FullPassSession { session_id, meta }) })
+  let completed_before = marker.map(|marker| marker.pass_started_at);
+  Ok(WalkEntry::Kept { reason, session: Box::new(FullPassSession { session_id, meta, completed_before }) })
 }
 
 /// [`parallel_walk::map_until`] on the blocking pool, ended by the startup stop; the items come back with the results.
@@ -887,17 +906,29 @@ pub async fn reconcile_node(
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
 ) -> anyhow::Result<()> {
-  reconcile_node_inner(features, adapter, session_id, counters, is_driven, None, &mut PassSteps::start(&features.store))
-    .await
+  reconcile_node_inner(
+    features,
+    adapter,
+    session_id,
+    counters,
+    is_driven,
+    None,
+    None,
+    &mut PassSteps::start(&features.store),
+  )
+  .await
 }
 
-/// The node pass, ending each step in `steps`.
+/// The node pass, ending each step in `steps`. `completed_before` is the start of the last pass that completed every
+/// step for this node, when this boot knows one; the replay serves a run that ended before it.
+#[allow(clippy::too_many_arguments)] // the pass takes its node, its counters, the replay inputs, the stop and the steps
 async fn reconcile_node_inner(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
   session_id: &str,
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
+  completed_before: Option<UtcDateTime>,
   stop: Option<&StartupStop>,
   steps: &mut PassSteps<'_>,
 ) -> anyhow::Result<()> {
@@ -1011,11 +1042,21 @@ async fn reconcile_node_inner(
     let Some(refreshed_run_records) = refreshed_run_records else {
       return Ok(());
     };
-    replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records, stop).await?;
+    replay_followups_with_records(
+      features,
+      adapter,
+      session_id,
+      counters,
+      &refreshed_run_records,
+      completed_before,
+      stop,
+    )
+    .await?;
   } else {
     // Reusing this sorted snapshot is equivalent when steps 1 and 2 made no record changes, and it avoids another
     // run-directory scan per node.
-    replay_followups_with_records(features, adapter, session_id, counters, &run_records, stop).await?;
+    replay_followups_with_records(features, adapter, session_id, counters, &run_records, completed_before, stop)
+      .await?;
   }
   steps.end("replay_followups");
   if stop.is_some_and(StartupStop::is_cancelled) {
@@ -1038,18 +1079,44 @@ pub async fn replay_followups(
   counters: &mut PassCounters,
 ) -> anyhow::Result<()> {
   let run_records = features.store.list_run_records_sync(session_id)?;
-  replay_followups_with_records(features, adapter, session_id, counters, &run_records, None).await?;
+  replay_followups_with_records(features, adapter, session_id, counters, &run_records, None, None).await?;
   Ok(())
+}
+
+/// Whether this boot serves a run's follow-up from the last completed pass instead of re-running it.
+///
+/// That pass replayed every run that ended before it started and completed every step, and each follow-up lands its
+/// effects through stable ids. Two cases then have nothing to land again. A manager turn that is not the session's
+/// newest run answers without acting: the owner-close recheck returns an empty verdict for every run a later run
+/// supersedes. A worker or review run of a task that is no longer open meets the completion refusal before any blocker
+/// check, so its delivery line is the only write. The session's newest run keeps its full follow-up, because a close
+/// request that arrived after it ended is actionable only there, and an open task's worker run keeps its own.
+fn served_by_completed_pass(
+  completed_before: Option<UtcDateTime>,
+  run: &RunRecord,
+  newest_run_id: Option<&str>,
+  task_open: bool,
+) -> bool {
+  let ended_before_pass =
+    completed_before.is_some_and(|pass_started| run.ended_at.is_some_and(|ended| ended < pass_started));
+  ended_before_pass && newest_run_id != Some(run.id.as_str()) && (run.kind == RunKind::ManagerTurn || !task_open)
 }
 
 /// Replay from the current run-record snapshot, shared with the preceding reconcile steps when they changed no
 /// records. `replay_followups` loads this list itself.
+///
+/// `completed_before` is the start of the last pass that completed every step for this session. A run that ended
+/// before it had its follow-up applied there, and [`served_by_completed_pass`] names the runs whose follow-up has
+/// nothing left to land: this boot serves those and replays the rest. The step still runs, still counts every run it
+/// serves, and still logs the line an implement or cold-read delivery logs, so the walk's counters and log items are a
+/// full replay's.
 async fn replay_followups_with_records(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
   session_id: &str,
   counters: &mut PassCounters,
   run_records: &[RunRecord],
+  completed_before: Option<UtcDateTime>,
   stop: Option<&StartupStop>,
 ) -> anyhow::Result<()> {
   let store = &features.store;
@@ -1122,6 +1189,23 @@ async fn replay_followups_with_records(
       continue;
     };
     if meta.profile != TaskProfile::Worker && run.kind != RunKind::ManagerTurn {
+      continue;
+    }
+    if served_by_completed_pass(completed_before, run, newest_run_id, task_facts.task_state == "open") {
+      counters.followups += 1;
+      counters.replay_served += 1;
+      if outcome == RunOutcomeKind::Success && run.kind == RunKind::Work {
+        // The lines `after_run_finished` writes before it returns for these task types: a full replay's items.
+        match meta.task.as_ref().and_then(|task| task.task_type) {
+          Some(TaskType::Implement) => {
+            tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, "worker_delivery_awaits_review");
+          }
+          Some(TaskType::ColdRead) => {
+            tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, "cold_read_delivery_awaits_report");
+          }
+          _ => {}
+        }
+      }
       continue;
     }
     if meta.profile == TaskProfile::Manager && run.kind == RunKind::ManagerTurn {
@@ -1701,13 +1785,13 @@ fn to_utc(value: OffsetDateTime) -> anyhow::Result<UtcDateTime> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_store::layout;
   use crate::execution::pre_recovery_step;
   use charliebot_agents::backend_pool::BackendPool;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::store_hooks::store_hooks;
   use charliebot_registry::{Registry, StartupState};
+  use charliebot_store::layout;
   use charliebot_store::metadata::TaskSpec;
   use charliebot_store::run_records::{self, SequenceRef};
   use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
@@ -1964,7 +2048,7 @@ mod tests {
         std::fs::create_dir_all(store.run_dir(&session_id, "run-1")).expect("the run directory exists");
       }
       let meta = SessionMetadata::new(session_id.clone(), "Batch session", TaskProfile::Manager);
-      candidates.push(FullPassSession { session_id, meta });
+      candidates.push(FullPassSession { session_id, meta, completed_before: None });
     }
     let stop = StartupStop::default();
     let proved = parallel_walk::map_until(&candidates, &|| stop.is_cancelled(), |candidate| {
@@ -2064,6 +2148,115 @@ mod tests {
       let line = charliebot_core::logging::render_line(event);
       self.0.lock().expect("the line capture is not poisoned").push(line);
     }
+  }
+
+  /// The `run_id` of every captured line that renders `event` from `module`, the emitting module the rendered line's
+  /// source location carries.
+  fn captured_run_ids(lines: &std::sync::Mutex<Vec<String>>, event: &str, module: &str) -> Vec<String> {
+    lines
+      .lock()
+      .expect("the line capture is not poisoned")
+      .iter()
+      .filter(|line| line.contains(module))
+      .filter_map(|line| charliebot_core::logline::parse(line))
+      .filter(|row| row.event == event)
+      .map(|row| row.field("run_id").expect("a delivery line names its run").to_string())
+      .collect()
+  }
+
+  /// A run that ended before the last completed pass started was followed up by that pass, so the boot replay serves it
+  /// without re-running the delivery. The session's newest run keeps its full follow-up: it is the one run a close
+  /// request that arrived later acts on. A served run still counts as a follow-up and still logs the line the delivery
+  /// logs, so the walk's counters and log items are a full replay's.
+  #[tokio::test]
+  async fn a_replay_serves_runs_that_ended_before_the_last_completed_pass() {
+    let (_home, features) = startup_features().await;
+    let session_id = closed_worker_node(&features, "synthetic-served-replay", 2).await;
+    let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
+    let run_records = features.store.list_run_records_sync(&session_id).expect("the synthetic runs list");
+    assert_eq!(run_records.len(), 2, "the fixture writes two runs");
+    let newest = run_records.last().expect("the node holds two runs").id.clone();
+    let last_end = run_records.last().and_then(|run| run.ended_at).expect("the synthetic run ended");
+    let pass_started = UtcDateTime::from(last_end.into_inner() + time::Duration::seconds(1));
+
+    let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _capture = charliebot_core::test_support::install_events(Arc::new(RenderedLines(Arc::clone(&lines))));
+    let mut served = PassCounters::default();
+    replay_followups_with_records(
+      &features,
+      &adapter,
+      &session_id,
+      &mut served,
+      &run_records,
+      Some(pass_started),
+      None,
+    )
+    .await
+    .expect("the served replay completes");
+    assert_eq!(
+      captured_run_ids(&lines, "worker_delivery_awaits_review", "tasks/recovery.rs"),
+      [run_records[0].id.clone()],
+      "the older run's delivery line comes from the serving branch"
+    );
+    assert_eq!(
+      captured_run_ids(&lines, "worker_delivery_awaits_review", "tasks/completion.rs"),
+      [newest],
+      "only the newest run keeps its full follow-up"
+    );
+    assert_eq!(served.followups, 2, "a served run still counts as a follow-up");
+    assert_eq!(served.replay_served, 1, "the older run comes from the serving branch");
+
+    lines.lock().expect("the line capture is not poisoned").clear();
+    let mut full = PassCounters::default();
+    replay_followups_with_records(&features, &adapter, &session_id, &mut full, &run_records, None, None)
+      .await
+      .expect("the full replay completes");
+    assert_eq!(full.followups, served.followups, "both replays count the same follow-ups");
+    assert_eq!(
+      captured_run_ids(&lines, "worker_delivery_awaits_review", "tasks/completion.rs").len(),
+      2,
+      "a full replay follows up every run"
+    );
+  }
+
+  /// A run whose follow-up could still land something keeps its full replay. An open task's worker run can close the
+  /// task, so it is never served. A manager turn a later run supersedes cannot act, so an open task serves it too.
+  #[tokio::test]
+  async fn a_replay_serves_only_runs_whose_follow_up_has_nothing_left_to_land() {
+    let (_home, features) = startup_features().await;
+    let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
+
+    let open_worker =
+      synthetic_node(&features, "synthetic-open-replay", TaskProfile::Worker, RunKind::Work, 2, false).await;
+    let open_records = features.store.list_run_records_sync(&open_worker).expect("the open node's runs list");
+    let open_end = open_records.last().and_then(|run| run.ended_at).expect("the synthetic run ended");
+    let open_pass = UtcDateTime::from(open_end.into_inner() + time::Duration::seconds(1));
+    let mut open = PassCounters::default();
+    replay_followups_with_records(&features, &adapter, &open_worker, &mut open, &open_records, Some(open_pass), None)
+      .await
+      .expect("the open node's replay completes");
+    assert_eq!(open.followups, 2, "both runs are followed up");
+    assert_eq!(open.replay_served, 0, "an open task's worker run keeps its full follow-up");
+
+    let manager =
+      synthetic_node(&features, "synthetic-manager-replay", TaskProfile::Manager, RunKind::ManagerTurn, 2, false).await;
+    let manager_records = features.store.list_run_records_sync(&manager).expect("the manager node's runs list");
+    let manager_end = manager_records.last().and_then(|run| run.ended_at).expect("the synthetic turn ended");
+    let manager_pass = UtcDateTime::from(manager_end.into_inner() + time::Duration::seconds(1));
+    let mut manager_replay = PassCounters::default();
+    replay_followups_with_records(
+      &features,
+      &adapter,
+      &manager,
+      &mut manager_replay,
+      &manager_records,
+      Some(manager_pass),
+      None,
+    )
+    .await
+    .expect("the manager node's replay completes");
+    assert_eq!(manager_replay.followups, 2, "both manager turns are followed up");
+    assert_eq!(manager_replay.replay_served, 1, "the superseded manager turn comes from the serving branch");
   }
 
   /// A node pass at the slow threshold logs each step it ran in run order, a repeated step once, and the whole-log
@@ -2240,14 +2433,28 @@ mod tests {
   /// Creates a closed implement worker node with `run_count` successful work runs. Each run carries the repository path,
   /// so the replay of its follow-up reads the node's shared facts.
   async fn closed_worker_node(features: &Arc<FeatureContext>, request_id: &str, run_count: usize) -> String {
+    synthetic_node(features, request_id, TaskProfile::Worker, RunKind::Work, run_count, true).await
+  }
+
+  /// Creates a node of `profile` with `run_count` successful `kind` runs, closed only when `close` is set. A worker
+  /// node carries the implement task spec and the repository path its follow-up reads; a manager node carries no task.
+  async fn synthetic_node(
+    features: &Arc<FeatureContext>,
+    request_id: &str,
+    profile: TaskProfile,
+    kind: RunKind,
+    run_count: usize,
+    close: bool,
+  ) -> String {
+    let worker = profile == TaskProfile::Worker;
     let task = features
       .store
       .create_task(
         CreateTask {
           request_id: request_id.to_string(),
           task_parent_id: None,
-          profile: TaskProfile::Worker,
-          task: Some(TaskSpec {
+          profile,
+          task: worker.then(|| TaskSpec {
             goal: "synthetic implementation".to_string(),
             repo_path: Some("/synthetic/repo".to_string()),
             task_type: Some(TaskType::Implement),
@@ -2268,8 +2475,8 @@ mod tests {
       let run_id = format!("synthetic-run-{index:04}");
       let run = RunRecord {
         session_id: task.id.clone(),
-        repo_path: Some("/synthetic/repo".to_string()),
-        ..run(&run_id, RunKind::Work, None)
+        repo_path: worker.then(|| "/synthetic/repo".to_string()),
+        ..run(&run_id, kind, None)
       };
       features.store.register_run_locked(&guard, &task.id, run, None).await.expect("the synthetic run registers");
       features
@@ -2278,11 +2485,13 @@ mod tests {
         .await
         .expect("the synthetic run finishes");
     }
-    features
-      .store
-      .append_control_fact(&guard, &task.id, json!({"type": "task_closed", "outcome": "completed"}))
-      .await
-      .expect("the synthetic node closes");
+    if close {
+      features
+        .store
+        .append_control_fact(&guard, &task.id, json!({"type": "task_closed", "outcome": "completed"}))
+        .await
+        .expect("the synthetic node closes");
+    }
     task.id
   }
 
@@ -2365,11 +2574,11 @@ mod tests {
 
       let boot_marker = BootMarker { pass_started_at: marker, failed_sessions: BTreeSet::new() };
       let source = SkipProofSource::read(
-      &session_dir,
-      SkipProofSource::metadata_file(&session_dir).expect("the metadata file stats"),
-    )
-    .expect("the session's log stats")
-    .expect("both files exist");
+        &session_dir,
+        SkipProofSource::metadata_file(&session_dir).expect("the metadata file stats"),
+      )
+      .expect("the session's log stats")
+      .expect("both files exist");
       let reason = match boot_skip_check(&features, &session_id, &meta, &boot_marker, Some(&source))
         .expect("the skip check reads")
       {

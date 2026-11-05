@@ -1,21 +1,18 @@
 //! Outbound WebSocket connections with the TLS roots and HTTPS proxy rules shared with `http_client`.
 //!
-//! The voice relay can forward the returned error text to the browser. Each failure maps to its display text:
+//! The voice relay forwards the returned error text to the browser. Each failure maps to its display text:
 //!
 //! | Failure | Display text |
 //! | --- | --- |
 //! | The server answers the opening request with a non-101 status | `server rejected WebSocket connection: HTTP {status}` |
 //! | The proxy rejects `CONNECT` | `proxy rejected connection: HTTP {status}` |
 //! | The opening timeout expires during connect, `CONNECT`, TLS, or handshake | `timed out during opening handshake` |
-//! | A peer closes with a normal close frame | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
-//! | A peer closes with an error close frame | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
+//! | A peer closes with a normal or an error close frame | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
 //! | An incoming message exceeds `max_size` | `sent 1009 (message too big) frame with {size} bytes exceeds limit of {max_size} bytes; no close frame received` |
 //! | A keepalive ping receives no pong before `ping_timeout` | `sent 1011 (internal error) keepalive ping timeout; no close frame received` |
 //!
-//! Close-frame text includes its code and reason; the normal and error close cases share one base display
-//! format. TLS, socket, proxy-configuration, and other protocol errors retain their Rust transport error text.
-//!
-//! The handshake omits the `User-Agent` header and doesn't offer `permessage-deflate`.
+//! Close-frame text includes its code and reason; normal and error closes share one base format. TLS, socket, proxy
+//! and protocol errors keep their Rust text; the handshake omits `User-Agent` and offers no `permessage-deflate`.
 
 use std::fmt;
 use std::future::pending;

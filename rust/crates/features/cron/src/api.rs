@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{config, loader, scheduler};
 
-/// Build the cron task routes.
+/// The cron task routes: list and create at the collection, update and delete at one task, and a run path for one task.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/cron/tasks", refuse_other_methods(get(list_tasks).post(create_task), "GET"))

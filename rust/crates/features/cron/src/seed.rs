@@ -1,4 +1,4 @@
-//! Seed repo-owned default cron tasks into the host's per-job cron files. The setup command (`charliebot setup`)
+//! The repo-owned default cron tasks, seeded into the host's per-job cron files. The setup command (`charliebot setup`)
 //! runs [`setup_step`] after the home provisioning, in registration order.
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ pub struct SeedReport {
   pub status: &'static str,
 }
 
-/// Seed repo-owned default cron tasks into per-job host files by name.
+/// The repo-owned default cron tasks written into per-job host files by name.
 ///
 /// Reads the repo's `configs/cron.default.yaml` and the host `config.d/cron.d/` directory. A default entry with no
 /// host file `cron.d/<name>.yaml` is created from its body minus `name`, keeping the `prompt_file` pointer. An
@@ -73,7 +73,7 @@ pub fn seed_default_cron_tasks(
   Ok(report)
 }
 
-/// Seed the default cron tasks, then list the effective scheduled tasks.
+/// The setup action: seed the default cron tasks, then list the effective scheduled tasks.
 pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Result<(), String> {
   println!("==> Seeding default cron tasks");
   // Per-task created/exists for repo-default cron entries, keyed on whether the

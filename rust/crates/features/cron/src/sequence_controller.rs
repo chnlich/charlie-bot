@@ -253,7 +253,7 @@ fn row_schedule_fields(
   fields_by_session
 }
 
-/// Makes the registry available to cron bindings before crash recovery can wake a session.
+/// The service that makes the registry available to cron bindings before crash recovery can wake a session.
 pub struct BindingContextService {
   registry: watch::Sender<Option<Weak<Registry>>>,
 }

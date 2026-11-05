@@ -224,7 +224,7 @@ fn synthetic_host_alias(fields: &Mapping) -> Result<Option<String>, String> {
 static HOST_VERDICTS: Mutex<Vec<(PathBuf, HostLogin)>> = Mutex::new(Vec::new());
 static HOST_PROBES: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
 
-/// Set the verdict a home's stub host reports for `login.alias`, replacing an earlier one.
+/// One home's stub-host verdict for `login.alias`, replacing the verdict an earlier call set.
 pub fn set_host_login(home: &Path, login: HostLogin) {
   let mut verdicts = HOST_VERDICTS.lock().expect("the verdict list is not poisoned");
   verdicts.retain(|(owner, existing)| !(owner == home && existing.alias == login.alias));
@@ -303,7 +303,7 @@ fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
 /// The commit SHA the fake origin's `main` points at.
 const FAKE_TIP: &str = "1111111111111111111111111111111111111111";
 
-/// Serializes the tests that depend on the tasks crate's git program override, which is process-global.
+/// The lock that serializes the tests depending on the tasks crate's git program override, which is process-global.
 /// Those are the tests that install a [`FakeGit`] and each test that launches a repo-backed run, whose git calls
 /// must reach real git.
 pub static GIT_PROGRAM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -317,7 +317,7 @@ pub struct FakeGit {
 }
 
 impl FakeGit {
-  /// Installs the fake until the returned value drops; the call log starts empty.
+  /// The installed fake, kept until the returned value drops; the call log starts empty.
   pub fn install() -> Self {
     let dir = tempfile::tempdir().expect("fake git directory is available");
     let calls = dir.path().join("calls");
@@ -382,7 +382,7 @@ pub async fn child_manager(
   task_manager(features, Some(parent_id), request_id).await
 }
 
-/// Archive a task session as the completion owner's archive writes it: one closed fact on the session.
+/// One task session archived as the completion owner's archive writes it: one closed fact on the session.
 pub async fn archive_task(features: &FeatureContext, session_id: &str) {
   let guard = features.store.control_lock().await;
   let event = charliebot_store::control_events::build_control_event(
@@ -405,7 +405,7 @@ pub async fn archive_task(features: &FeatureContext, session_id: &str) {
   features.store.invalidate_tree_index();
 }
 
-/// Write one cron task file under the home's `config.d/cron.d`, where the task loader reads it.
+/// The path of one cron task file written under the home's `config.d/cron.d`, where the task loader reads it.
 pub fn write_task(home: &Path, name: &str, body: &Value) -> PathBuf {
   let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
   std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -413,8 +413,9 @@ pub fn write_task(home: &Path, name: &str, body: &Value) -> PathBuf {
   path
 }
 
-/// Write one worker task whose prompt is `HELD_ROUND_GOAL`, in a prompt file the task points to through `prompt_file`.
-/// A cron.d host file may not carry an inline `prompt`, so the loader would isolate it as broken.
+/// The path of one worker task whose prompt is `HELD_ROUND_GOAL`, written to a prompt file the task points to
+/// through `prompt_file`. A cron.d host file may not carry an inline `prompt`, so the loader would isolate it
+/// as broken.
 pub fn write_prompted_task(home: &Path, name: &str, body: &Value) -> PathBuf {
   let prompt = home.join(format!("{name}-prompt.md"));
   std::fs::write(&prompt, format!("{HELD_ROUND_GOAL}\n")).unwrap();

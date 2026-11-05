@@ -72,7 +72,7 @@ pub struct ScheduledTaskError {
   pub enabled: Option<bool>,
 }
 
-/// Validate the source, mode and sequence invariants shared with the YAML loader.
+/// The source, mode and sequence rules shared with the YAML loader, each returning its message when broken.
 pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   let source_count = usize::from(task.prompt.as_ref().is_some_and(|value| !value.is_empty()))
     + usize::from(task.steps.as_ref().is_some_and(|value| !value.is_empty()))
@@ -193,7 +193,7 @@ pub const UPDATE_MODEL: BodyModel = BodyModel::required(&[
   Field::optional("session_id", FieldType::NullableString),
 ]);
 
-/// Build a task file model from a resolved mapping and file stem.
+/// The task file model for one resolved mapping, named by the file stem and checked by [`validate_task`].
 pub fn task_from_value(name: &str, value: serde_json::Value) -> Result<ScheduledTaskConfig, String> {
   let mut object = value.as_object().cloned().ok_or_else(|| "cron config must be a mapping".to_string())?;
   object.insert("name".to_string(), serde_json::Value::String(name.to_string()));

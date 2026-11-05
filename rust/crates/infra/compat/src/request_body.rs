@@ -134,6 +134,8 @@ pub enum FieldType {
   NullableInteger,
   NullableFloat,
   Boolean,
+  /// A `bool` field that also takes null.
+  NullableBoolean,
   /// A mapping field whose keys and values are unconstrained.
   Dictionary,
   Literal(&'static [&'static str]),
@@ -422,6 +424,11 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
       Err(kind) => failure(kind),
     },
     FieldType::Boolean => match boolean_value(value) {
+      Ok(value) => Ok(value),
+      Err(kind) => failure(kind),
+    },
+    FieldType::NullableBoolean if value.is_null() => Ok(Value::Null),
+    FieldType::NullableBoolean => match boolean_value(value) {
       Ok(value) => Ok(value),
       Err(kind) => failure(kind),
     },
@@ -782,6 +789,19 @@ mod tests {
     assert!(!is_json_content_type("text/json; charset=utf-8"));
     assert!(!is_json_content_type("application/jsonp"));
     assert!(!is_json_content_type("application/json/extra"));
+  }
+
+  #[test]
+  fn a_nullable_boolean_takes_null_booleans_and_refuses_other_types() {
+    const FIELD: &[Field] = &[Field::required("muted", FieldType::NullableBoolean)];
+    const MODEL: BodyModel = BodyModel::required(FIELD);
+    for value in [json!(null), json!(true), json!(false)] {
+      assert_eq!(RequestBody::Json(json!({"muted": value})).check(&MODEL).unwrap(), Some(json!({"muted": value})));
+    }
+    assert_eq!(
+      check(json!({"muted": 2}), &MODEL),
+      vec![field_error(&["body", "muted"], json!(2), validation::Kind::BoolParsing)]
+    );
   }
 
   #[test]

@@ -345,6 +345,8 @@ function newVoiceRun(sessionId, backend) {
     ui: null,
     backend,
     devicesPromise: null,
+    devices: null,
+    startup: newVoiceStartup(),
     relaySocket: null,
     relayFinalResolve: null,
     relayWaitTimer: null,
@@ -368,6 +370,7 @@ async function startRecording() {
 
   const run = newVoiceRun(SESSION_ID, selectedVoiceBackend());
   activeVoiceRun = run;
+  noteVoiceStartupPermission(run);
   // Amber from the click on: the mic is not delivering sound yet, so the
   // user must not speak. Red is the speak cue and lights at the first
   // chunk with a non-zero sample.
@@ -381,7 +384,7 @@ async function startRecording() {
   // the wait is the longer of the two instead of their sum. Each resource
   // lands on the run as it opens, which the catch below relies on: one
   // release path frees whatever a failed startup leaves behind.
-  const micBranch = navigator.mediaDevices.getUserMedia({
+  const micBranch = tagVoiceStartupError(run, 'mic', navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
       echoCancellation: true,
@@ -389,13 +392,18 @@ async function startRecording() {
       autoGainControl: true,
     },
   }).then((stream) => {
+    run.startup.micOpenMs = voiceStartupElapsed(run);
     run.stream = stream;
     // The recording's device facts: collection starts here, at recording
     // start, without delaying it — the end frame and the upload await the
-    // settled object instead.
-    run.devicesPromise = collectVoiceDevices(run);
-  });
-  const graphBranch = (async () => {
+    // settled object instead. The startup report reads the value only once
+    // it exists.
+    run.devicesPromise = collectVoiceDevices(run).then((devices) => {
+      run.devices = devices;
+      return devices;
+    });
+  }));
+  const graphBranch = tagVoiceStartupError(run, 'graph', (async () => {
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     run.audioContext = new AudioContextCtor();
     const workletUrl = URL.createObjectURL(new Blob([VOICE_WORKLET_SOURCE], {type: 'application/javascript'}));
@@ -404,7 +412,8 @@ async function startRecording() {
     } finally {
       URL.revokeObjectURL(workletUrl);
     }
-  })();
+    run.startup.graphReadyMs = voiceStartupElapsed(run);
+  })());
 
   try {
     await Promise.all([micBranch, graphBranch]);
@@ -427,6 +436,8 @@ async function startRecording() {
 
     run.recording = true;
     run.phase = 'recording';
+    // Both startup steps are done; the button now waits for the first chunk.
+    run.startup.reached = 'no_frames';
     updateVoiceLeaveGuard();
     // Connected is not yet sounding: a just-opened device can deliver
     // seconds of digital zero, so the button stays amber and the hint waits
@@ -434,6 +445,9 @@ async function startRecording() {
     showVoiceHint(run, VOICE_HINT_WAITING);
     updateVoiceIndicator(run);
   } catch (err) {
+    // The first rejection goes out now: the other branch may never settle, and
+    // the wait below would hold the report forever.
+    sendVoiceStartup(run, 'startup_error');
     // Both branches settle before the release, so the slower branch's
     // resources are already on the run. The one release path closes the
     // AudioContext and stops every opened track in either order of success
@@ -493,6 +507,122 @@ function voiceOutputDeviceLabel(listed, deviceId) {
   return match ? match.label : null;
 }
 
+// --- Startup report ---------------------------------------------------------
+// One record per recording run, created at the click, marks the last startup
+// step the run reached and how it ended. The first exit sends it, and the
+// record's flag makes every later exit a no-op: a late mic return, a session
+// switch, or a page close after a stop adds no second line. The server writes
+// one voice_startup line per run and keeps no state.
+
+function newVoiceStartup() {
+  return {
+    clickedAt: performance.now(),
+    reached: 'mic_opening',
+    end: null,
+    error: null,
+    micOpenMs: null,
+    graphReadyMs: null,
+    firstFrameMs: null,
+    firstSoundMs: null,
+    frames: 0,
+    micPermission: null,
+    sent: false,
+  };
+}
+
+// Milliseconds from the click, on the page's monotonic clock, which no clock
+// adjustment moves.
+function voiceStartupElapsed(run) {
+  return Math.max(0, Math.round(performance.now() - run.startup.clickedAt));
+}
+
+// The browser's permission for this site's microphone at the click. The query
+// is never awaited: an unsupported browser or one still asking leaves null.
+function noteVoiceStartupPermission(run) {
+  const permissions = navigator.permissions;
+  if (!permissions || typeof permissions.query !== 'function') return;
+  permissions.query({name: 'microphone'}).then((status) => {
+    run.startup.micPermission = status.state;
+  }).catch((err) => {
+    console.warn('Voice microphone permission query failed:', err);
+  });
+}
+
+// A failed startup step's error text: its name when that name says something
+// (NotAllowedError), else its message.
+function voiceStartupErrorText(err) {
+  const message = err && err.message ? err.message : String(err);
+  const name = err && err.name ? err.name : '';
+  return name && name !== 'Error' ? name + ': ' + message : message;
+}
+
+// Tags a startup branch's first rejection with the step it came from, so the
+// catch reports `mic: ...` or `graph: ...` without waiting for both branches.
+function tagVoiceStartupError(run, step, promise) {
+  return promise.catch((err) => {
+    if (run.startup.error === null) run.startup.error = step + ': ' + voiceStartupErrorText(err);
+    throw err;
+  });
+}
+
+// The body of one voice_startup line: the run's startup record plus the audio
+// and microphone state at this moment. devices rides only once the collection
+// has settled; the send never waits for it.
+function voiceStartupBody(run) {
+  const startup = run.startup;
+  const context = run.audioContext;
+  const track = run.stream ? run.stream.getAudioTracks()[0] : null;
+  return {
+    backend: run.backend.id,
+    reached: startup.reached,
+    end: startup.end,
+    error: startup.error,
+    mic_open_ms: startup.micOpenMs,
+    graph_ready_ms: startup.graphReadyMs,
+    first_frame_ms: startup.firstFrameMs,
+    first_sound_ms: startup.firstSoundMs,
+    end_ms: voiceStartupElapsed(run),
+    frames: startup.frames,
+    samples: Math.min(run.totalSamples, VOICE_MAX_SAMPLES),
+    audio_context_state: context ? context.state : null,
+    audio_context_rate: context ? context.sampleRate : null,
+    mic_permission: startup.micPermission,
+    track_ready_state: track ? track.readyState : null,
+    track_muted: track ? track.muted : null,
+    devices: run.devices,
+    user_agent: navigator.userAgent,
+    client_ts: new Date().toISOString(),
+  };
+}
+
+// The one send: the record's flag makes every call after the first a no-op, so
+// each run writes exactly one line. keepalive lets a page-close report outlive
+// the page; only a report from a live page names its own failure.
+function sendVoiceStartup(run, end) {
+  const startup = run.startup;
+  if (startup.sent) return;
+  startup.sent = true;
+  startup.end = end;
+  const report = end !== 'page_closed';
+  fetch(`/api/voice/${encodeURIComponent(run.sessionId)}/startup`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(voiceStartupBody(run)),
+    keepalive: true,
+    credentials: 'same-origin',
+  }).then((response) => {
+    if (report && !response.ok) console.error('Voice startup report failed:', response.status);
+  }).catch((err) => {
+    if (report) console.error('Voice startup report failed:', err);
+  });
+}
+
+// A page close, reload or navigation during a run: the report goes out from
+// this handler so keepalive can carry it after the document is gone.
+function onVoicePageHide() {
+  if (activeVoiceRun) sendVoiceStartup(activeVoiceRun, 'page_closed');
+}
+
 function handleVoiceWorkletMessage(run, event) {
   if (activeVoiceRun !== run) return;
   const data = event.data || {};
@@ -512,6 +642,11 @@ function handleVoiceWorkletMessage(run, event) {
   const samples = new Int16Array(data.buffer);
   run.pcmChunks.push(data.buffer);
   run.totalSamples += samples.length;
+  if (run.startup.firstFrameMs === null) {
+    run.startup.firstFrameMs = voiceStartupElapsed(run);
+    run.startup.reached = 'silent';
+  }
+  run.startup.frames += 1;
   updateVoiceLevel(run, samples);
   updateVoiceIndicator(run);
   sendVoiceRelayAudio(run, data.buffer);
@@ -524,6 +659,8 @@ function handleVoiceWorkletMessage(run, event) {
       for (let i = 0; i < samples.length; i++) {
         if (samples[i] === 0) continue;
         run.signalReady = true;
+        run.startup.firstSoundMs = voiceStartupElapsed(run);
+        run.startup.reached = 'ready';
         setVoiceButtonState('recording');
         showVoiceHint(run, voiceReadyHint(run));
         break;
@@ -553,6 +690,9 @@ async function stopRecording(run) {
   if (!run.recording) return;
   run.recording = false;
   run.stopping = true;
+  // A click stop and the 5-minute auto-stop both report here, before the flush
+  // adds its tail to the recorded counts.
+  sendVoiceStartup(run, 'stop');
   setVoiceButtonState('idle');
   updateVoiceLeaveGuard();
   try {
@@ -1096,6 +1236,9 @@ function releaseVoiceRun(run) {
 // in-flight upload. Idempotent, so an ownership-lost continuation and the
 // teardown path can both call it; the later call only sees nulls.
 function abortVoiceRun(run) {
+  // Every teardown reaches here, including a session switch during startup; a
+  // run that already sent (stop, startup error) only sees the flag.
+  sendVoiceStartup(run, 'left');
   cleanupVoiceCapture(run);
   closeVoiceRelay(run);
   abortVoiceUpload(run);
@@ -1152,9 +1295,11 @@ function removeVoiceOverlay() {
 }
 
 // First paint: the mic's tooltip names the backend a recording would use, and
-// the composer's ⋯ menu carries the backend entry phones use.
+// the composer's ⋯ menu carries the backend entry phones use. The page-close
+// report listens from here, before any run exists.
 updateVoiceMicTitle();
 ensureVoiceBackendEntry();
+window.addEventListener('pagehide', onVoicePageHide);
 
 // A dictated message's bubble carries the microphone badge, and the run ends
 // with the session view it belongs to.

@@ -1,8 +1,10 @@
-//! The voice upload route: `POST /api/voice/{session_id}`.
+//! The voice upload route: `POST /api/voice/{session_id}` and the startup report route
+//! `POST /api/voice/{session_id}/startup`.
 //!
 //! The upload persists the recording before it selects an online backend. Selection failures answer 400, and
 //! transcription failures answer 500; both leave the WAV on disk. The preview relay lives in relay.rs and shares the
-//! `voice_transcribed` line written here.
+//! `voice_transcribed` line written here. The startup report validates one recording run's startup record and logs it
+//! as one `voice_startup` line; it keeps no state.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,6 +14,7 @@ use axum::extract::{FromRequestParts, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::form_body::{self, Field, FormModel};
+use charliebot_compat::request_body::{self, BodyModel, Field as BodyField, FieldType};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
@@ -38,15 +41,26 @@ const UPLOAD_FORM: FormModel = FormModel::new(UPLOAD_FIELDS);
 
 /// The routes of `/api/voice`, with the feature context as their state.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route("/api/voice/{session_id}", post_only(upload_voice_recording)).with_state(Arc::clone(features))
+  Router::new()
+    .route("/api/voice/{session_id}", post_only(upload_voice_recording))
+    .route("/api/voice/{session_id}/startup", post_only(post_voice_startup))
+    .with_state(Arc::clone(features))
 }
 
-/// Whether a request path falls under the voice upload routes, for the trailing-slash redirect the server answers.
+/// Whether a request path falls under the voice routes, for the trailing-slash redirect the server answers.
 pub(crate) fn matches(path: &str) -> bool {
   let Some(rest) = path.strip_prefix("/api/voice/") else {
     return false;
   };
-  !rest.is_empty() && !rest.contains('/')
+  let mut segments = rest.split('/');
+  if !segments.next().is_some_and(|segment| !segment.is_empty()) {
+    return false;
+  }
+  match segments.next() {
+    None => true,
+    Some("startup") => segments.next().is_none(),
+    Some(_) => false,
+  }
 }
 
 /// A voice request's failure: the HTTP status and the `error` text the response carries.
@@ -107,6 +121,217 @@ async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, req
   };
   let factory = recording::OnlineBackendFactory;
   upload_recording(cfg, credentials, session_id, upload, &factory).await
+}
+
+// --- Startup report ---------------------------------------------------------
+// One recording run reports its startup record once: the last of the three startup steps it reached, how the
+// recording ended, and the browser's audio and microphone state at that moment. The route keeps no state.
+
+/// The step names of the startup report's `reached` field, in their progression order.
+const STARTUP_STEPS: &[&str] = &["mic_opening", "no_frames", "silent", "ready"];
+/// How a recording ended, as the startup report's `end` field names it.
+const STARTUP_ENDS: &[&str] = &["stop", "startup_error", "left", "page_closed"];
+/// The browser's microphone permission at the click.
+const MIC_PERMISSIONS: &[&str] = &["granted", "prompt", "denied"];
+/// The microphone track's readyState at the send.
+const TRACK_READY_STATES: &[&str] = &["live", "ended"];
+/// The longest string the startup line keeps, in code points, the same cut the diag route's `error` takes.
+const MAX_STARTUP_TEXT_CHARS: usize = 300;
+
+/// The device object the browser collected, the same five fields `voice_transcribed` logs.
+const STARTUP_DEVICE_FIELDS: &[BodyField] = &[
+  BodyField::required("input_device", FieldType::NullableString),
+  BodyField::required("capture_settings", FieldType::Dictionary),
+  BodyField::required("output_device", FieldType::NullableString),
+  BodyField::required("communications_output_device", FieldType::NullableString),
+  BodyField::required("device_error", FieldType::NullableString),
+];
+const STARTUP_DEVICES: BodyModel = BodyModel::required(STARTUP_DEVICE_FIELDS);
+
+/// The startup body's fields in their declaration order, which is also the log line's field order; an unknown field
+/// is refused.
+const STARTUP_FIELDS: &[BodyField] = &[
+  BodyField::required("backend", FieldType::String),
+  BodyField::required("reached", FieldType::Literal(STARTUP_STEPS)),
+  BodyField::required("end", FieldType::Literal(STARTUP_ENDS)),
+  BodyField::required("error", FieldType::NullableString),
+  BodyField::required("mic_open_ms", FieldType::NullableInteger),
+  BodyField::required("graph_ready_ms", FieldType::NullableInteger),
+  BodyField::required("first_frame_ms", FieldType::NullableInteger),
+  BodyField::required("first_sound_ms", FieldType::NullableInteger),
+  BodyField::required("end_ms", FieldType::Integer),
+  BodyField::required("frames", FieldType::Integer),
+  BodyField::required("samples", FieldType::Integer),
+  BodyField::required("audio_context_state", FieldType::NullableString),
+  BodyField::required("audio_context_rate", FieldType::NullableInteger),
+  BodyField::required("mic_permission", FieldType::NullableLiteral(MIC_PERMISSIONS)),
+  BodyField::required("track_ready_state", FieldType::NullableLiteral(TRACK_READY_STATES)),
+  BodyField::required("track_muted", FieldType::NullableBoolean),
+  BodyField::required("devices", FieldType::NullableModel { class_name: "VoiceDevices", model: &STARTUP_DEVICES }),
+  BodyField::required("user_agent", FieldType::String),
+  BodyField::required("client_ts", FieldType::String),
+];
+
+const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra();
+
+/// `POST /api/voice/{session_id}/startup`: validate one startup record, log one `voice_startup` line, answer
+/// `{"ok": true}`. A validation failure answers 422 and logs nothing.
+async fn post_voice_startup(AxumPath(session_id): AxumPath<String>, request: Request) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let values = match body.validate(&STARTUP_BODY) {
+    Ok(Some(Value::Object(values))) => values,
+    Ok(_) => unreachable!("a required model validates a body to its fields"),
+    Err(response) => return *response,
+  };
+  log_voice_startup(&session_id, &VoiceStartup::from_values(&values));
+  responses::fast_json(StatusCode::OK, &json!({"ok": true}))
+}
+
+/// The validated startup body, borrowed from the validated values.
+struct VoiceStartup<'a> {
+  backend: &'a str,
+  reached: &'a str,
+  end: &'a str,
+  error: Option<&'a str>,
+  mic_open_ms: Option<i128>,
+  graph_ready_ms: Option<i128>,
+  first_frame_ms: Option<i128>,
+  first_sound_ms: Option<i128>,
+  end_ms: i128,
+  frames: i128,
+  samples: i128,
+  audio_context_state: Option<&'a str>,
+  audio_context_rate: Option<i128>,
+  mic_permission: Option<&'a str>,
+  track_ready_state: Option<&'a str>,
+  track_muted: Option<bool>,
+  devices: Option<&'a Value>,
+  user_agent: &'a str,
+  client_ts: &'a str,
+}
+
+impl<'a> VoiceStartup<'a> {
+  /// Reads the validated fields in model declaration order.
+  fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
+    Self {
+      backend: text(values, "backend"),
+      reached: text(values, "reached"),
+      end: text(values, "end"),
+      error: optional_text(values, "error"),
+      mic_open_ms: integer(values, "mic_open_ms"),
+      graph_ready_ms: integer(values, "graph_ready_ms"),
+      first_frame_ms: integer(values, "first_frame_ms"),
+      first_sound_ms: integer(values, "first_sound_ms"),
+      end_ms: integer(values, "end_ms").expect("a required integer validates to a value"),
+      frames: integer(values, "frames").expect("a required integer validates to a value"),
+      samples: integer(values, "samples").expect("a required integer validates to a value"),
+      audio_context_state: optional_text(values, "audio_context_state"),
+      audio_context_rate: integer(values, "audio_context_rate"),
+      mic_permission: optional_text(values, "mic_permission"),
+      track_ready_state: optional_text(values, "track_ready_state"),
+      track_muted: flag(values, "track_muted"),
+      devices: values.get("devices").filter(|value| !value.is_null()),
+      user_agent: text(values, "user_agent"),
+      client_ts: text(values, "client_ts"),
+    }
+  }
+}
+
+fn text<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> &'a str {
+  match values.get(name) {
+    Some(Value::String(text)) => text,
+    other => unreachable!("the validated body carries a string {name}, got {other:?}"),
+  }
+}
+
+fn optional_text<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> Option<&'a str> {
+  match values.get(name) {
+    Some(Value::String(text)) => Some(text),
+    Some(Value::Null) | None => None,
+    other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
+  }
+}
+
+/// An integer field, `None` when it is null. `i128` holds the whole integer range the body reader accepts.
+fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> {
+  match values.get(name) {
+    None | Some(Value::Null) => None,
+    Some(Value::Number(number)) => Some(
+      number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+        .expect("the validated body carries a 64-bit integer"),
+    ),
+    other => unreachable!("the validated body carries an integer or null {name}, got {other:?}"),
+  }
+}
+
+/// A boolean field, `None` when it is null.
+fn flag(values: &serde_json::Map<String, Value>, name: &str) -> Option<bool> {
+  match values.get(name) {
+    None | Some(Value::Null) => None,
+    Some(Value::Bool(flag)) => Some(*flag),
+    other => unreachable!("the validated body carries a boolean or null {name}, got {other:?}"),
+  }
+}
+
+/// The one `voice_startup` line: the body's fields in declaration order, with the device object written as
+/// `voice_transcribed` writes its five device fields and an absent optional as null.
+fn log_voice_startup(session_id: &str, startup: &VoiceStartup<'_>) {
+  let device = |field: &str| device_text(startup.devices.and_then(|devices| devices.get(field)));
+  tracing::info!(
+    target: "charliebot_voice",
+    session_id,
+    backend = %cut_startup_text(startup.backend),
+    reached = %cut_startup_text(startup.reached),
+    end = %cut_startup_text(startup.end),
+    error = %Nullable(startup.error.map(cut_startup_text)),
+    mic_open_ms = %Nullable(startup.mic_open_ms),
+    graph_ready_ms = %Nullable(startup.graph_ready_ms),
+    first_frame_ms = %Nullable(startup.first_frame_ms),
+    first_sound_ms = %Nullable(startup.first_sound_ms),
+    end_ms = %startup.end_ms,
+    frames = %startup.frames,
+    samples = %startup.samples,
+    audio_context_state = %Nullable(startup.audio_context_state.map(cut_startup_text)),
+    audio_context_rate = %Nullable(startup.audio_context_rate),
+    mic_permission = %Nullable(startup.mic_permission.map(cut_startup_text)),
+    track_ready_state = %Nullable(startup.track_ready_state.map(cut_startup_text)),
+    track_muted = %Nullable(startup.track_muted),
+    input_device = %device("input_device"),
+    capture_settings = %device("capture_settings"),
+    output_device = %device("output_device"),
+    communications_output_device = %device("communications_output_device"),
+    device_error = %device("device_error"),
+    user_agent = %cut_startup_text(startup.user_agent),
+    client_ts = %cut_startup_text(startup.client_ts),
+    "voice_startup"
+  );
+}
+
+/// A string field cut to its first `MAX_STARTUP_TEXT_CHARS` code points.
+fn cut_startup_text(text: &str) -> &str {
+  match text.char_indices().nth(MAX_STARTUP_TEXT_CHARS) {
+    Some((end, _)) => &text[..end],
+    None => text,
+  }
+}
+
+/// An optional log value: the value as itself, or `null` when it is absent, the spelling the diag route logs.
+struct Nullable<T>(Option<T>);
+
+impl<T: std::fmt::Display> std::fmt::Display for Nullable<T> {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match &self.0 {
+      Some(value) => value.fmt(formatter),
+      None => formatter.write_str("null"),
+    }
+  }
 }
 
 /// Persist one validated recording before backend selection, then archive its final transcript.
@@ -593,6 +818,198 @@ mod tests {
   #[test]
   fn test_the_confirm_probe_endpoint_no_longer_exists() {
     assert!(!matches("/api/voice/session-a/confirm"));
+  }
+
+  #[test]
+  fn test_the_matcher_recognizes_the_upload_and_startup_paths_only() {
+    assert!(matches("/api/voice/session-a"));
+    assert!(matches("/api/voice/session-a/startup"));
+    assert!(!matches("/api/voice/"));
+    assert!(!matches("/api/voice/session-a/startup/extra"));
+    assert!(!matches("/api/voice/session-a/confirm"));
+  }
+
+  fn startup_body() -> Value {
+    json!({
+      "backend": "gemini",
+      "reached": "ready",
+      "end": "stop",
+      "error": null,
+      "mic_open_ms": 180,
+      "graph_ready_ms": 95,
+      "first_frame_ms": 230,
+      "first_sound_ms": 260,
+      "end_ms": 5000,
+      "frames": 212,
+      "samples": 27136,
+      "audio_context_state": "running",
+      "audio_context_rate": 48000,
+      "mic_permission": "granted",
+      "track_ready_state": "live",
+      "track_muted": false,
+      "devices": {
+        "input_device": "Test Microphone",
+        "capture_settings": {"echoCancellation": true, "noiseSuppression": false, "autoGainControl": true, "sampleRate": 16000},
+        "output_device": "Test Speakers",
+        "communications_output_device": "Test Comms Headset",
+        "device_error": null
+      },
+      "user_agent": "Mozilla/5.0 (Test) Chrome/1",
+      "client_ts": "2026-11-04T10:00:00Z"
+    })
+  }
+
+  fn startup_request(body: &Value) -> Request {
+    Request::builder()
+      .method("POST")
+      .header("Content-Type", "application/json")
+      .body(axum::body::Body::from(body.to_string()))
+      .expect("build a synthetic startup request")
+  }
+
+  async fn post_startup(body: Value) -> (Response, Vec<Event>) {
+    let request = startup_request(&body);
+    capture_events_async(post_voice_startup(AxumPath(SESSION_ID.to_string()), request)).await
+  }
+
+  fn startup_lines(logs: &[Event]) -> Vec<&Event> {
+    logs.iter().filter(|event| event["event"] == "voice_startup").collect()
+  }
+
+  #[tokio::test]
+  async fn test_a_startup_report_answers_ok_and_logs_one_line_in_table_order() {
+    let (response, logs) = post_startup(startup_body()).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_text(response).await, r#"{"ok":true}"#);
+    let lines = startup_lines(&logs);
+    assert_eq!(lines.len(), 1);
+    let line = lines[0];
+    let names: Vec<&str> = line.keys().map(String::as_str).filter(|name| *name != "event").collect();
+    assert_eq!(
+      names,
+      [
+        "session_id",
+        "backend",
+        "reached",
+        "end",
+        "error",
+        "mic_open_ms",
+        "graph_ready_ms",
+        "first_frame_ms",
+        "first_sound_ms",
+        "end_ms",
+        "frames",
+        "samples",
+        "audio_context_state",
+        "audio_context_rate",
+        "mic_permission",
+        "track_ready_state",
+        "track_muted",
+        "input_device",
+        "capture_settings",
+        "output_device",
+        "communications_output_device",
+        "device_error",
+        "user_agent",
+        "client_ts",
+      ]
+    );
+    assert_eq!(line["session_id"], SESSION_ID);
+    assert_eq!(line["backend"], "gemini");
+    assert_eq!(line["reached"], "ready");
+    assert_eq!(line["end"], "stop");
+    assert_eq!(line["error"], "null");
+    assert_eq!(line["mic_open_ms"], "180");
+    assert_eq!(line["graph_ready_ms"], "95");
+    assert_eq!(line["first_frame_ms"], "230");
+    assert_eq!(line["first_sound_ms"], "260");
+    assert_eq!(line["end_ms"], "5000");
+    assert_eq!(line["frames"], "212");
+    assert_eq!(line["samples"], "27136");
+    assert_eq!(line["audio_context_state"], "running");
+    assert_eq!(line["audio_context_rate"], "48000");
+    assert_eq!(line["mic_permission"], "granted");
+    assert_eq!(line["track_ready_state"], "live");
+    assert_eq!(line["track_muted"], "false");
+    assert_eq!(line["input_device"], "Test Microphone");
+    assert_eq!(line["output_device"], "Test Speakers");
+    assert_eq!(line["communications_output_device"], "Test Comms Headset");
+    assert_eq!(line["device_error"], "null");
+    assert_eq!(line["user_agent"], "Mozilla/5.0 (Test) Chrome/1");
+    assert_eq!(line["client_ts"], "2026-11-04T10:00:00Z");
+  }
+
+  #[tokio::test]
+  async fn test_an_absent_optional_and_devices_log_as_null() {
+    let mut body = startup_body();
+    body["reached"] = json!("mic_opening");
+    body["end"] = json!("left");
+    for field in ["mic_open_ms", "graph_ready_ms", "first_frame_ms", "first_sound_ms"] {
+      body[field] = Value::Null;
+    }
+    body["audio_context_state"] = Value::Null;
+    body["audio_context_rate"] = Value::Null;
+    body["mic_permission"] = Value::Null;
+    body["track_ready_state"] = Value::Null;
+    body["track_muted"] = Value::Null;
+    body["devices"] = Value::Null;
+
+    let (response, logs) = post_startup(body).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let lines = startup_lines(&logs);
+    assert_eq!(lines.len(), 1);
+    let line = lines[0];
+    for field in ["mic_open_ms", "graph_ready_ms", "first_frame_ms", "first_sound_ms"] {
+      assert_eq!(line[field], "null", "{field}");
+    }
+    for field in ["input_device", "capture_settings", "output_device", "communications_output_device", "device_error"] {
+      assert_eq!(line[field], "null", "{field}");
+    }
+    assert_eq!(line["track_muted"], "null");
+    assert_eq!(line["reached"], "mic_opening");
+    assert_eq!(line["end"], "left");
+  }
+
+  #[tokio::test]
+  async fn test_an_extra_field_is_a_422_that_logs_nothing() {
+    let mut body = startup_body();
+    body["stale"] = json!(true);
+
+    let (response, logs) = post_startup(body).await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(startup_lines(&logs).is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_a_wrong_field_type_is_a_422_that_logs_nothing() {
+    let mut body = startup_body();
+    body["backend"] = json!(5);
+
+    let (response, logs) = post_startup(body).await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body_text(response).await.contains("\"loc\":[\"body\",\"backend\"]"));
+    assert!(startup_lines(&logs).is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_a_long_string_field_is_cut_to_300_code_points() {
+    let mut body = startup_body();
+    let long = "é".to_string() + &"𐍈".repeat(174) + &"x".repeat(175);
+    assert_eq!(long.chars().count(), 350);
+    body["user_agent"] = json!(long);
+
+    let (response, logs) = post_startup(body).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let lines = startup_lines(&logs);
+    assert_eq!(lines.len(), 1);
+    let logged = lines[0]["user_agent"].as_str().expect("the user agent logs as text");
+    assert_eq!(logged.chars().count(), MAX_STARTUP_TEXT_CHARS);
+    assert_eq!(logged, long.chars().take(MAX_STARTUP_TEXT_CHARS).collect::<String>());
   }
 
   #[tokio::test]

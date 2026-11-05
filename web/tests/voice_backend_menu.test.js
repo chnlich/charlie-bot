@@ -79,7 +79,7 @@ function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKE
     VOICE_DEFAULT_BACKEND: defaultBackend,
     autoResize() {},
     saveDraft() {},
-    window: {innerWidth: 1024},
+    window: {innerWidth: 1024, addEventListener() {}, removeEventListener() {}},
   };
   vm.createContext(sandbox);
   vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), sandbox, {filename: 'voice-input.js'});

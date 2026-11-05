@@ -117,6 +117,10 @@ function baseSessionContext(overrides = {}) {
     saveDraftNow: () => {},
   };
   context.window = {addEventListener: () => {}, innerHeight: 800};
+  // A voice run's startup record stamps its click on the page's monotonic clock,
+  // and its report carries the browser's user agent.
+  context.performance = {now: () => 0};
+  context.navigator = {userAgent: 'TestAgent/1.0'};
   context.CSS = {escape: (value) => String(value)};
 
   return {context, elements, localStorageData, sessionStorageData};

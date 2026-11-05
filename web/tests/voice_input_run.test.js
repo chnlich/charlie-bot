@@ -54,6 +54,14 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
     overlayMap: new Map(),
     beforeunloadCount: 0,
+    pagehideHandlers: [],
+    fetches: [],
+    nowMs: 1000,
+    consoleErrors: [],
+    consoleWarnings: [],
+    permissionState: 'granted',
+    permissionQueries: 0,
+    fetchResponse: null,
     sendLockOpens: 0,
     sendLockSettles: 0,
     caret: {disabled: false},
@@ -65,6 +73,8 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
       this.stopped = false;
       this.tracks = [{
         label: 'Fake Mic',
+        readyState: 'live',
+        muted: false,
         getSettings: () => ({echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000}),
         stop: () => { this.stopped = true; },
       }];
@@ -98,6 +108,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   class FakeAudioContext {
     constructor() {
       this.sampleRate = 48000;
+      this.state = 'running';
       this.closed = false;
       state.audioContexts.push(this);
     }
@@ -219,7 +230,19 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   };
   const sandbox = {
     SESSION_ID: sessionId,
-    console,
+    console: {
+      log: console.log,
+      info: console.info,
+      debug: console.debug,
+      warn: (...args) => state.consoleWarnings.push(args),
+      error: (...args) => state.consoleErrors.push(args),
+    },
+    performance: {now: () => state.nowMs},
+    fetch: (url, opts) => {
+      state.fetches.push({url, opts});
+      return Promise.resolve(state.fetchResponse || {ok: true, status: 200});
+    },
+    JSON_HEADERS: {'Content-Type': 'application/json'},
     setTimeout: (fn, ms) => {
       state.timers.push({fn, ms, cleared: false});
       return state.timers.length - 1;
@@ -249,6 +272,13 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     ],
     VOICE_DEFAULT_BACKEND: 'batch',
     navigator: {
+      userAgent: 'TestAgent/1.0',
+      permissions: {
+        query: () => {
+          state.permissionQueries += 1;
+          return Promise.resolve({state: state.permissionState});
+        },
+      },
       mediaDevices: {
         getUserMedia: () => {
           state.micCalls += 1;
@@ -266,8 +296,9 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     },
     window: {
       AudioContext: FakeAudioContext,
-      addEventListener: (type) => {
+      addEventListener: (type, handler) => {
         if (type === 'beforeunload') state.beforeunloadCount += 1;
+        if (type === 'pagehide') state.pagehideHandlers.push(handler);
       },
       removeEventListener: (type) => {
         if (type === 'beforeunload') state.beforeunloadCount -= 1;
@@ -375,6 +406,12 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   state.stopWithFlush = stopWithFlush;
   state.stopLive = stopLive;
   state.FakeStream = FakeStream;
+  state.advance = (ms) => { state.nowMs += ms; };
+  state.firePageHide = () => state.pagehideHandlers.forEach((handler) => handler());
+  // Every startup POST the page made, with its parsed JSON body.
+  state.startupReports = () => state.fetches
+    .filter((call) => call.url.endsWith('/startup'))
+    .map((call) => ({url: call.url, opts: call.opts, body: JSON.parse(call.opts.body)}));
 
   return {context, state};
 }
@@ -1196,4 +1233,189 @@ test('the caret is disabled while a run is active and back on release', async ()
   await tick();
   await tick();
   assert.equal(state.caret.disabled, true); // the retry state keeps the lock
+});
+
+// ---------------------------------------------------------------------------
+// Startup report: each recording run posts one voice_startup body at its first
+// exit, and the record's flag makes every later exit a no-op.
+// ---------------------------------------------------------------------------
+
+test('a normal recording reports ready and stop once with every step time filled', async () => {
+  const {context, state} = buildHarness();
+  // Hold both startup branches so the clock can move between the click, the
+  // module, and the microphone.
+  let resolveMic;
+  let resolveModule;
+  state.micPending = new Promise((resolve) => { resolveMic = resolve; });
+  state.modulePending = new Promise((resolve) => { resolveModule = resolve; });
+  context.toggleVoice();
+  await tick();
+  state.advance(20);
+  resolveModule();
+  await tick();
+  state.advance(30);
+  resolveMic(new state.FakeStream());
+  await tick();
+  await tick();
+  await tick();
+  const worklet = state.workletNodes[state.workletNodes.length - 1];
+  state.advance(10);
+  worklet.emitPcmCount(2048, 0);
+  state.advance(20);
+  worklet.emitPcmCount(2048, 8000);
+  state.advance(40);
+  await state.stopWithFlush();
+
+  const reports = state.startupReports();
+  assert.equal(reports.length, 1);
+  const {url, opts, body} = reports[0];
+  assert.equal(url, '/api/voice/session-a/startup');
+  assert.equal(opts.method, 'POST');
+  assert.equal(opts.keepalive, true);
+  assert.equal(opts.credentials, 'same-origin');
+  assert.equal(opts.headers['Content-Type'], 'application/json');
+  assert.equal(body.backend, 'batch');
+  assert.equal(body.reached, 'ready');
+  assert.equal(body.end, 'stop');
+  assert.equal(body.error, null);
+  assert.equal(body.mic_open_ms, 50);
+  assert.equal(body.graph_ready_ms, 20);
+  assert.equal(body.first_frame_ms, 60);
+  assert.equal(body.first_sound_ms, 80);
+  assert.equal(body.end_ms, 120);
+  assert.equal(body.frames, 2);
+  assert.equal(body.samples, 4096);
+  assert.equal(body.audio_context_state, 'running');
+  assert.equal(body.audio_context_rate, 48000);
+  assert.equal(body.mic_permission, 'granted');
+  assert.equal(body.track_ready_state, 'live');
+  assert.equal(body.track_muted, false);
+  assert.deepEqual(body.devices, FAKE_DEVICES);
+  assert.equal(body.user_agent, 'TestAgent/1.0');
+  assert.equal(typeof body.client_ts, 'string');
+  assert.equal(state.consoleErrors.length, 0);
+});
+
+test('all-zero frames report silent with no first_sound_ms', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(2048, 0);
+  worklet.emitPcmCount(2048, 0);
+  await state.stopWithFlush();
+
+  const [report] = state.startupReports();
+  assert.equal(report.body.reached, 'silent');
+  assert.equal(report.body.end, 'stop');
+  assert.equal(report.body.first_sound_ms, null);
+  assert.equal(report.body.frames, 2);
+});
+
+test('a stop before any audio frame reports no_frames with no first_frame_ms', async () => {
+  const {state} = buildHarness();
+  await state.arm();
+  await state.stopWithFlush();
+
+  const [report] = state.startupReports();
+  assert.equal(report.body.reached, 'no_frames');
+  assert.equal(report.body.end, 'stop');
+  assert.equal(report.body.first_frame_ms, null);
+  assert.equal(report.body.samples, 0);
+});
+
+test('a session switch during a hanging mic reports left once, before the mic returns', async () => {
+  const {context, state} = buildHarness();
+  let resolveMic;
+  state.micPending = new Promise((resolve) => { resolveMic = resolve; });
+  context.toggleVoice();
+  await tick();
+  await tick();
+
+  context.resetVoiceState();
+  await tick();
+  let reports = state.startupReports();
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].body.reached, 'mic_opening');
+  assert.equal(reports[0].body.end, 'left');
+  assert.equal(reports[0].body.mic_open_ms, null);
+
+  resolveMic(new state.FakeStream());
+  await tick();
+  await tick();
+  await tick();
+  reports = state.startupReports();
+  assert.equal(reports.length, 1); // the late mic return adds no line
+});
+
+test('a graph rejection with a hanging mic reports startup_error at once, then a switch adds nothing', async () => {
+  const {context, state} = buildHarness();
+  state.micPending = new Promise(() => {});
+  state.moduleError = new Error('module exploded');
+  context.toggleVoice();
+  await tick();
+  await tick();
+
+  let reports = state.startupReports();
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].body.end, 'startup_error');
+  assert.ok(reports[0].body.error.startsWith('graph:'));
+
+  context.resetVoiceState();
+  await tick();
+  reports = state.startupReports();
+  assert.equal(reports.length, 1); // the catch still waits, the switch adds no line
+});
+
+test('the 5-minute auto-stop reports stop with the capped sample count', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+  const chunk = RATE; // 1 s per chunk keeps the loop small
+  for (let sent = 0; sent < MAX_SAMPLES / chunk; sent += 1) {
+    worklet.emitPcmCount(chunk, 8000);
+  }
+  await tick();
+
+  const [report] = state.startupReports();
+  assert.equal(report.body.end, 'stop');
+  assert.equal(report.body.reached, 'ready');
+  assert.equal(report.body.samples, MAX_SAMPLES);
+  assert.equal(report.body.frames, MAX_SAMPLES / chunk);
+});
+
+test('a page close while the button is still amber reports page_closed once', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(2048, 0); // frames but no sound: the button stays amber
+
+  state.firePageHide();
+  state.firePageHide();
+
+  const reports = state.startupReports();
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].body.reached, 'silent');
+  assert.equal(reports[0].body.end, 'page_closed');
+  assert.equal(state.consoleErrors.length, 0);
+});
+
+test('devices ride the report only once collected', async () => {
+  const {state} = buildHarness();
+  state.enumeratePending = new Promise(() => {}); // the enumeration never settles
+  const worklet = await state.arm();
+  worklet.emitPcmCount(2048, 8000);
+  await state.stopWithFlush();
+
+  const [report] = state.startupReports();
+  assert.equal(report.body.devices, null);
+});
+
+test('a non-2xx startup response is reported to the console', async () => {
+  const {state} = buildHarness();
+  state.fetchResponse = {ok: false, status: 500};
+  await state.arm();
+  await state.stopWithFlush();
+  await tick();
+  await tick();
+
+  assert.equal(state.startupReports().length, 1);
+  assert.equal(state.consoleErrors.length, 1);
+  assert.equal(state.consoleErrors[0][0], 'Voice startup report failed:');
 });

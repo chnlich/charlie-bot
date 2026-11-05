@@ -104,8 +104,9 @@ test('the readback prints every section per device on the fixture log', () => {
       '--from', '2026-02-13T09:00:00Z', '--to', '2026-02-13T10:00:00Z', log], {encoding: 'utf8'});
 
     // Percentiles are the sorted sample's floor(p * (n - 1)) element: the
-    // completed switches [1000, 2000, 3000, 6000] give p50=2000, p90=3000,
-    // p99=6000; the echo waits [500, 1500] give p50=p90=500.
+    // completed switches [1000, 2000, 3000, 6000] give p50=2000 (index 1),
+    // p90=3000 and p99=3000 (index 2 for both); the echo waits [500, 1500]
+    // give p50=p90=500.
     assert.match(output, /== 100\.64\.0\.8: 15 events/);
     assert.match(output, /switch completed n=4 p50=2000ms p90=3000ms p99=3000ms/);
     assert.match(output, /over-5s=1/);

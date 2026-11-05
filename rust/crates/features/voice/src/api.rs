@@ -87,7 +87,8 @@ pub(crate) struct UploadForm {
   pub(crate) devices: Option<String>,
 }
 
-/// `POST /api/voice/{session_id}`: multipart fields carry the WAV, selected backend and device object.
+/// The recording upload route: multipart fields carry the WAV, selected backend and device object, at
+/// `POST /api/voice/{session_id}`.
 async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, request: Request) -> Response {
   let (mut parts, stream) = request.into_parts();
   let form = match form_body::read(&parts.headers, stream).await {
@@ -174,8 +175,8 @@ const STARTUP_FIELDS: &[BodyField] = &[
 
 const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra();
 
-/// `POST /api/voice/{session_id}/startup`: validate one startup record, log one `voice_startup` line, answer
-/// `{"ok": true}`. A validation failure answers 422 and logs nothing.
+/// The startup report route: validate one startup record, log one `voice_startup` line, answer `{"ok": true}`.
+/// A validation failure answers 422 and logs nothing. The route answers `POST /api/voice/{session_id}/startup`.
 async fn post_voice_startup(AxumPath(session_id): AxumPath<String>, request: Request) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {

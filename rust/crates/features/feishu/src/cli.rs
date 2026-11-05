@@ -1,7 +1,6 @@
-//! The `feishu` verbs. `reply` posts on a session's own Feishu thread, and `read` reads that thread and marks the
-//! unread messages as read. `download` saves one image or file of it into the session directory. `check` prints the
-//! app's setup readback and exits 1 when `ok` is false. `request`, `consent-url` and `exchange-code` drive the user
-//! token.
+//! The `feishu` verbs. `reply` posts on a session's topic. Plain `read` reads that topic and marks unread messages;
+//! `--chat` and `--topic` read group messages without marking them. `download` saves a group image or file in the
+//! session directory. `check` prints setup status, and the user-token verbs manage user authorization.
 
 use std::ffi::OsString;
 
@@ -13,7 +12,7 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::resolve;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
-use serde_json::json;
+use serde_json::{Map, json};
 
 use crate::user_token::{self, Endpoints};
 
@@ -28,9 +27,9 @@ struct FeishuCli {
 enum FeishuCommand {
   /// Post a reply to this session's Feishu thread
   Reply(ReplyArgs),
-  /// Read thread messages, marking the returned unread ones read
+  /// Read this session's topic, the group's main chat, or another topic
   Read(ReadArgs),
-  /// Download one image or file of this session's thread into the session directory
+  /// Download one image or file from this session's group into the session directory
   Download(DownloadArgs),
   /// Verify the Feishu app setup; exits 1 when ok is false
   Check,
@@ -47,6 +46,15 @@ struct ReadArgs {
   /// Messages per page, 1..100 (default 50)
   #[arg(long, default_value_t = READ_LIMIT_DEFAULT, value_name = "N")]
   limit: i64,
+  /// Read the main chat of this session's group, newest first
+  #[arg(long, conflicts_with = "topic")]
+  chat: bool,
+  /// Read one topic of this session's group, oldest first
+  #[arg(long, value_name = "THREAD_ID", conflicts_with = "chat")]
+  topic: Option<String>,
+  /// Continue a main-chat or topic page
+  #[arg(long, value_name = "TOKEN")]
+  page: Option<String>,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
   #[arg(long)]
   session: Option<String>,
@@ -124,7 +132,30 @@ fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
 }
 
 fn read(args: &ReadArgs) -> Result<(), CliExit> {
-  post_read("/api/internal/feishu/read", args.session.as_deref(), args.limit, None)
+  let extra = read_mode_fields(args)?;
+  post_read("/api/internal/feishu/read", args.session.as_deref(), args.limit, extra)
+}
+
+fn read_mode_fields(args: &ReadArgs) -> Result<Option<Map<String, serde_json::Value>>, CliExit> {
+  if args.page.is_some() && !args.chat && args.topic.is_none() {
+    return Err(CliExit::usage("--page requires --chat or --topic"));
+  }
+  let fields = if args.chat {
+    let mut fields = Map::from_iter([("mode".to_string(), json!("chat"))]);
+    if let Some(page) = &args.page {
+      fields.insert("page".to_string(), json!(page));
+    }
+    fields
+  } else if let Some(topic) = &args.topic {
+    let mut fields = Map::from_iter([("mode".to_string(), json!("topic")), ("topic_id".to_string(), json!(topic))]);
+    if let Some(page) = &args.page {
+      fields.insert("page".to_string(), json!(page));
+    }
+    fields
+  } else {
+    return Ok(None);
+  };
+  Ok(Some(fields))
 }
 
 /// The server writes the file, so the output path goes over as an absolute path resolved here, in the caller's
@@ -152,4 +183,31 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
 
 fn check() -> Result<(), CliExit> {
   post_check("/api/internal/feishu/check")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn read_modes_accept_only_their_declared_parameters() {
+    assert!(FeishuCli::try_parse_from(["feishu", "read"]).is_ok());
+    assert!(FeishuCli::try_parse_from(["feishu", "read", "--chat", "--page", "older"]).is_ok());
+    assert!(FeishuCli::try_parse_from(["feishu", "read", "--topic", "omt_topic"]).is_ok());
+    let topic = FeishuCli::try_parse_from(["feishu", "read", "--topic", "omt_topic", "--page", "older"]).unwrap();
+    let FeishuCommand::Read(topic_args) = topic.command else {
+      panic!("topic arguments produce the read command");
+    };
+    let fields = read_mode_fields(&topic_args).unwrap().unwrap();
+    assert_eq!(fields["mode"], "topic");
+    assert_eq!(fields["topic_id"], "omt_topic");
+    assert_eq!(fields["page"], "older");
+    assert!(FeishuCli::try_parse_from(["feishu", "read", "--chat", "--topic", "omt_topic"]).is_err());
+    let FeishuCommand::Read(args) = FeishuCli::try_parse_from(["feishu", "read", "--page", "older"]).unwrap().command
+    else {
+      panic!("read arguments produce the read command");
+    };
+    assert!(read_mode_fields(&args).is_err());
+    assert!(FeishuCli::try_parse_from(["feishu", "read", "--group", "oc_other"]).is_err());
+  }
 }

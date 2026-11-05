@@ -1,4 +1,4 @@
-//! The Feishu Open API client: one method per call the thread entrypoint makes, on the app's tenant access token.
+//! The Feishu Open API client: one method per operation the Feishu feature makes, on the app's tenant access token.
 //!
 //! The token comes from `feishu.app_id` and `feishu.app_secret` and is cached in the server until shortly before it
 //! expires. Neither the token nor the secret reaches an error message: a failed call names its method, path, HTTP
@@ -26,7 +26,7 @@ const CHATS_PATH: &str = "/open-apis/im/v1/chats";
 /// A tenant token is replaced this long before Feishu says it expires.
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(30 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// The page size of every list call: Feishu's cap for the thread and reaction lists.
+/// The maximum page size Feishu accepts for list calls.
 pub const PAGE_SIZE: usize = 50;
 
 /// The tenant token the server holds, with the app it was minted for.
@@ -205,13 +205,40 @@ impl FeishuClient {
     self.call(Method::POST, &format!("{MESSAGES_PATH}/{}/reply", path_segment(root_id)?), &[], Some(body)).await
   }
 
-  /// One page of a thread's messages, oldest first (`GET /open-apis/im/v1/messages` with `container_id_type=thread`).
+  /// One page of a thread's messages, oldest first (`container_id_type=thread`).
   pub async fn thread_messages(&self, thread_id: &str, page_token: Option<&str>) -> anyhow::Result<Page> {
+    self.message_page("thread", thread_id, "ByCreateTimeAsc", PAGE_SIZE, page_token).await
+  }
+
+  /// One page of a thread's messages with a caller-selected page size, oldest first.
+  pub async fn thread_messages_sized(
+    &self,
+    thread_id: &str,
+    page_size: usize,
+    page_token: Option<&str>,
+  ) -> anyhow::Result<Page> {
+    self.message_page("thread", thread_id, "ByCreateTimeAsc", page_size, page_token).await
+  }
+
+  /// One page of a group's main chat, newest first (`container_id_type=chat`).
+  pub async fn chat_messages(&self, chat_id: &str, page_size: usize, page_token: Option<&str>) -> anyhow::Result<Page> {
+    self.message_page("chat", chat_id, "ByCreateTimeDesc", page_size, page_token).await
+  }
+
+  /// One page of a message container, ordered by creation time and capped at Feishu's page size.
+  async fn message_page(
+    &self,
+    container_id_type: &str,
+    container_id: &str,
+    sort_type: &str,
+    page_size: usize,
+    page_token: Option<&str>,
+  ) -> anyhow::Result<Page> {
     let mut query = vec![
-      ("container_id_type", "thread".to_string()),
-      ("container_id", path_segment(thread_id)?.to_string()),
-      ("sort_type", "ByCreateTimeAsc".to_string()),
-      ("page_size", PAGE_SIZE.to_string()),
+      ("container_id_type", container_id_type.to_string()),
+      ("container_id", path_segment(container_id)?.to_string()),
+      ("sort_type", sort_type.to_string()),
+      ("page_size", page_size.min(PAGE_SIZE).to_string()),
     ];
     if let Some(token) = page_token {
       query.push(("page_token", token.to_string()));

@@ -59,7 +59,7 @@ pub fn is_millis(text: &str) -> bool {
 }
 
 /// The RFC 3339 time of a millisecond string, as the core's timestamp compare reads it.
-fn rfc3339_of_millis(millis: &str) -> anyhow::Result<String> {
+pub(super) fn rfc3339_of_millis(millis: &str) -> anyhow::Result<String> {
   let millis: i128 = millis.parse().with_context(|| format!("create_time is not milliseconds: {millis:?}"))?;
   let time = OffsetDateTime::from_unix_timestamp_nanos(millis * 1_000_000)
     .with_context(|| format!("create_time is out of range: {millis}"))?;
@@ -173,6 +173,11 @@ pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
   let sender = item.get("sender").context("a message has no sender")?;
   let sender_type = text_of(sender, "sender_type")?;
   let sender_id = text_of(sender, "id")?;
+  let thread_id = item
+    .get("thread_id")
+    .filter(|value| !value.is_null())
+    .map(|value| value.as_str().context("a message thread_id is not a string"))
+    .transpose()?;
   let deleted = item.get("deleted").and_then(Value::as_bool).unwrap_or(false);
   let text = if deleted {
     String::new()
@@ -188,7 +193,12 @@ pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
     user: is_user.then(|| sender_id.clone()),
     text,
     created_at: Some(rfc3339_of_millis(&create_time)?),
-    metadata: Some(json!({"message_id": message_id, "message_type": message_type_of(item)?})),
+    metadata: Some(json!({
+      "message_id": message_id,
+      "message_type": message_type_of(item)?,
+      "chat_id": item.get("chat_id").and_then(Value::as_str),
+      "thread_id": thread_id,
+    })),
     bot_id: (sender_type == "app").then_some(sender_id.clone()),
     eligible: is_user && !deleted,
   })

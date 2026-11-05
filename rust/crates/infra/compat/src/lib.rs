@@ -2,6 +2,7 @@
 //! Jinja2-compatible template environment, the static-file response, and the outbound HTTP client. A
 //! crate that answers the same routes takes them from here rather than writing its own.
 
+pub mod body_memo;
 pub mod compression;
 pub mod file_urls;
 pub mod form_body;

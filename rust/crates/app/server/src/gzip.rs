@@ -13,7 +13,6 @@
 //! version at the smaller level-6 form ([`charliebot_compat::compression::gzip_memoized_body`]); a body
 //! too long for the memo's cap, and a deflate that runs per response, keep the level-1 form.
 
-use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::{LazyLock, Mutex};
 
@@ -29,6 +28,7 @@ use http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use http_body::{Body as _, Frame};
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 
+use charliebot_compat::body_memo::BodyMemo;
 use charliebot_compat::headers::header_text;
 
 /// `GZipMiddleware(minimum_size=1000)`.
@@ -224,34 +224,8 @@ struct BodyKey {
 /// hold across requests. Static files are the responses that carry an ETag, which is the file version's identity: the
 /// client's own cache treats the same ETag as the same bytes. A response without an ETag, or one that is not a whole
 /// 200, is compressed fresh and never cached.
-#[derive(Default)]
-struct BodyMemo {
-  bodies: HashMap<BodyKey, Bytes>,
-  /// The keys in insertion order, so a full memo drops the entry stored longest ago.
-  order: VecDeque<BodyKey>,
-}
-
-impl BodyMemo {
-  fn get(&self, key: &BodyKey) -> Option<Bytes> {
-    self.bodies.get(key).cloned()
-  }
-
-  fn store(&mut self, key: BodyKey, body: Bytes) {
-    if body.len() > MEMO_MAX_BODY_BYTES {
-      return;
-    }
-    if self.bodies.insert(key.clone(), body).is_none() {
-      self.order.push_back(key);
-      while self.order.len() > MEMO_ENTRIES {
-        if let Some(oldest) = self.order.pop_front() {
-          self.bodies.remove(&oldest);
-        }
-      }
-    }
-  }
-}
-
-static BODY_MEMO: LazyLock<Mutex<BodyMemo>> = LazyLock::new(|| Mutex::new(BodyMemo::default()));
+static BODY_MEMO: LazyLock<Mutex<BodyMemo<BodyKey>>> =
+  LazyLock::new(|| Mutex::new(BodyMemo::new(MEMO_ENTRIES, MEMO_MAX_BODY_BYTES)));
 
 /// The deflated body the gzip responder sends for one complete response: the bytes memoized for this request's
 /// resource and ETag, or a fresh deflate that the memo keeps for the next request.

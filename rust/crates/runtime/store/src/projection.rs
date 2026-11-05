@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use lru::LruCache;
+use charliebot_core::memo::BoundedMemo;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
@@ -14,25 +13,8 @@ use crate::{StoreError, StoreResult};
 
 const PAGE_BODY_CACHE_LIMIT: usize = 4;
 
-struct PageBodyCache {
-  values: LruCache<(usize, usize), Bytes>,
-}
-
-impl Default for PageBodyCache {
-  fn default() -> Self {
-    Self { values: LruCache::new(NonZeroUsize::new(PAGE_BODY_CACHE_LIMIT).expect("the cache limit is nonzero")) }
-  }
-}
-
-impl PageBodyCache {
-  fn get(&mut self, key: (usize, usize)) -> Option<Bytes> {
-    self.values.get(&key).cloned()
-  }
-
-  fn store(&mut self, key: (usize, usize), body: Bytes) {
-    self.values.put(key, body);
-  }
-}
+/// A page body cache: the serialized body of each of the last `PAGE_BODY_CACHE_LIMIT` pages.
+type PageBodyCache = BoundedMemo<(usize, usize), Bytes>;
 
 /// Memoized, turn-aligned message history for one live session.
 pub struct MessageProjection {
@@ -68,8 +50,8 @@ impl MessageProjection {
       pending_draft: None,
       history: Vec::new(),
       event_count: event_index_offset,
-      page_bodies: Mutex::new(PageBodyCache::default()),
-      page_body_gzips: Mutex::new(PageBodyCache::default()),
+      page_bodies: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
+      page_body_gzips: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
     };
     projection.ingest(events)?;
     Ok(projection)
@@ -88,8 +70,8 @@ impl MessageProjection {
       pending_draft: None,
       history: Vec::new(),
       event_count: self.event_count,
-      page_bodies: Mutex::new(PageBodyCache::default()),
-      page_body_gzips: Mutex::new(PageBodyCache::default()),
+      page_bodies: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
+      page_body_gzips: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
     };
     copied.ingest(events)?;
     Ok(copied)
@@ -118,7 +100,7 @@ impl MessageProjection {
   /// Return the cached serialized body for one page. The body is shared: a request hands the cached bytes to its
   /// response by refcount, so a page of any size costs no copy per request.
   pub fn cached_page_body(&self, before: usize, limit: usize) -> Option<Bytes> {
-    self.page_bodies.lock().expect("page body cache mutex is not poisoned").get((before, limit))
+    self.page_bodies.lock().expect("page body cache mutex is not poisoned").get(&(before, limit))
   }
 
   /// Cache the serialized body for one page.
@@ -128,7 +110,7 @@ impl MessageProjection {
 
   /// Return the cached gzip body for one page.
   pub fn cached_page_body_gzip(&self, before: usize, limit: usize) -> Option<Bytes> {
-    self.page_body_gzips.lock().expect("gzip page body cache mutex is not poisoned").get((before, limit))
+    self.page_body_gzips.lock().expect("gzip page body cache mutex is not poisoned").get(&(before, limit))
   }
 
   /// Cache the gzip body for one page.

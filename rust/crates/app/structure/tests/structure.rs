@@ -1083,6 +1083,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_compat::mimetypes_table::TEXT_HTML`; the auth gate's login-page check and Slack's \
            download check read it.",
   },
+  OwnerRow { name: "text/plain", owner: "infra/compat", hint: MIME_HINT },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

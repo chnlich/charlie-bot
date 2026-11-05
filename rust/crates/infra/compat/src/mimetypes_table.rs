@@ -30,6 +30,10 @@ pub const IMAGE_PNG: &str = "image/png";
 pub const IMAGE_VND_MICROSOFT_ICON: &str = "image/vnd.microsoft.icon";
 pub const IMAGE_WEBP: &str = "image/webp";
 
+/// The plain-text media type: the table's text rows, the static-file fallback, and the websocket route's refusal
+/// answer.
+pub const TEXT_PLAIN: &str = "text/plain";
+
 /// The HTML media type: the table's `.html` and `.htm` rows, the auth gate's login-page check, and Slack's
 /// sign-in-page check.
 pub const TEXT_HTML: &str = "text/html";
@@ -200,13 +204,13 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".md", "text/markdown"),
   (".markdown", "text/markdown"),
   (".n3", "text/n3"),
-  (".txt", "text/plain"),
-  (".bat", "text/plain"),
-  (".c", "text/plain"),
-  (".h", "text/plain"),
-  (".ksh", "text/plain"),
-  (".pl", "text/plain"),
-  (".srt", "text/plain"),
+  (".txt", TEXT_PLAIN),
+  (".bat", TEXT_PLAIN),
+  (".c", TEXT_PLAIN),
+  (".h", TEXT_PLAIN),
+  (".ksh", TEXT_PLAIN),
+  (".pl", TEXT_PLAIN),
+  (".srt", TEXT_PLAIN),
   (".rtx", "text/richtext"),
   (".rtf", "text/rtf"),
   (".tsv", "text/tab-separated-values"),

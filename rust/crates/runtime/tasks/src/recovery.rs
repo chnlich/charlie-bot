@@ -29,7 +29,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDate
 use charliebot_store::run_records::{
   RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text,
 };
-use charliebot_store::{HistoryWork, PromptScope, Store, StoreError, StoreResult, layout};
+use charliebot_store::{HistoryWork, PromptScope, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -640,16 +640,19 @@ fn examine_session_dir(
   marker: Option<&BootMarker>,
   proof: &SkipProof,
 ) -> anyhow::Result<WalkEntry> {
-  if !session_dir.is_dir() || !layout::metadata_path(session_dir).is_file() {
+  // The metadata file's stat answers both "this directory holds a node" and the proof's metadata identity, and the
+  // log's stat completes the proof's identity. A served node therefore costs two stats, not four.
+  let Some(meta_identity) = SkipProofSource::metadata_file(session_dir) else {
     return Ok(WalkEntry::Absent);
-  }
+  };
   let session_id = session_dir
     .file_name()
     .and_then(|name| name.to_str())
     .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
     .to_string();
   let _session_timer = SessionTimer { session_id: session_id.clone(), started: Instant::now() };
-  let source = SkipProofSource::read(session_dir).with_context(|| format!("stating {}", session_dir.display()))?;
+  let source = SkipProofSource::read(session_dir, meta_identity)
+    .with_context(|| format!("stating {}", session_dir.display()))?;
   // A node whose last pass failed takes its full pass, whatever the marker or the proof says about its files.
   if let Some(marker) = marker {
     if marker.failed_sessions.contains(&session_id) {
@@ -1698,6 +1701,7 @@ fn to_utc(value: OffsetDateTime) -> anyhow::Result<UtcDateTime> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_store::layout;
   use crate::execution::pre_recovery_step;
   use charliebot_agents::backend_pool::BackendPool;
   use charliebot_core::credentials::load_credentials;
@@ -2360,7 +2364,12 @@ mod tests {
       }
 
       let boot_marker = BootMarker { pass_started_at: marker, failed_sessions: BTreeSet::new() };
-      let source = SkipProofSource::read(&session_dir).expect("the session's files stat").expect("both files exist");
+      let source = SkipProofSource::read(
+      &session_dir,
+      SkipProofSource::metadata_file(&session_dir).expect("the metadata file stats"),
+    )
+    .expect("the session's log stats")
+    .expect("both files exist");
       let reason = match boot_skip_check(&features, &session_id, &meta, &boot_marker, Some(&source))
         .expect("the skip check reads")
       {
@@ -2370,6 +2379,37 @@ mod tests {
 
       assert_eq!(reason, expected, "a durable file {before:?} before the marker");
     }
+  }
+
+  /// The skip check's existence test is the metadata file's own stat, which also gives the proof its metadata identity.
+  /// A plain file where a session directory would be, and a directory without a metadata file, are no node; a node
+  /// whose log is absent is a node that keeps its pass, as it did before.
+  #[tokio::test]
+  async fn the_skip_check_takes_existence_and_the_proof_identity_from_one_metadata_stat() {
+    let (_home, features) = startup_features().await;
+    let sessions = features.config.get().expect("the test config loads").sessions_dir();
+    std::fs::create_dir_all(&sessions).expect("the sessions directory exists");
+    let plain_file = sessions.join("not-a-session");
+    std::fs::write(&plain_file, b"").expect("the plain file writes");
+    assert!(
+      matches!(examine_session_dir(&features, &plain_file, None, &SkipProof::default()), Ok(WalkEntry::Absent)),
+      "a plain file in the sessions directory is no node"
+    );
+    let empty = sessions.join("empty-session");
+    std::fs::create_dir_all(&empty).expect("the empty directory exists");
+    assert!(
+      matches!(examine_session_dir(&features, &empty, None, &SkipProof::default()), Ok(WalkEntry::Absent)),
+      "a directory without a metadata file is no node"
+    );
+    let session_id = closed_worker_node(&features, "synthetic-logless-node", 0).await;
+    std::fs::remove_file(features.store.chat_events_path(&session_id)).expect("the log is removed");
+    assert!(
+      matches!(
+        examine_session_dir(&features, &features.store.session_dir(&session_id), None, &SkipProof::default()),
+        Ok(WalkEntry::Kept { .. })
+      ),
+      "a node whose log is absent keeps its pass"
+    );
   }
 
   /// A skip proof serves a node's verdict while the node's log and metadata keep the identities the row recorded, with
@@ -2386,7 +2426,12 @@ mod tests {
       pass_started_at: UtcDateTime::parse("2030-01-01T00:00:00Z").expect("the synthetic marker parses"),
       failed_sessions: BTreeSet::new(),
     };
-    let source = SkipProofSource::read(&session_dir).expect("the session's files stat").expect("both files exist");
+    let source = SkipProofSource::read(
+      &session_dir,
+      SkipProofSource::metadata_file(&session_dir).expect("the metadata file stats"),
+    )
+    .expect("the session's log stats")
+    .expect("both files exist");
 
     // The verdict the node's own files give, and what that check reads.
     let tails = features.store.task_state_tail_read_count();
@@ -2451,7 +2496,12 @@ mod tests {
     )
     .expect("the stale proof writes");
     let stale = SkipProof::read(home.path());
-    let changed = SkipProofSource::read(&session_dir).expect("the session's files stat").expect("both files exist");
+    let changed = SkipProofSource::read(
+      &session_dir,
+      SkipProofSource::metadata_file(&session_dir).expect("the metadata file stats"),
+    )
+    .expect("the session's log stats")
+    .expect("both files exist");
     assert_eq!(stale.served(&session_id, &changed), None, "a row of other identities serves nothing");
     match examine_session_dir(&features, &session_dir, Some(&marker), &stale).expect("the session is examined") {
       WalkEntry::Skipped { .. } => {}

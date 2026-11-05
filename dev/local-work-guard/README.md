@@ -14,7 +14,7 @@ and the switch is `server.enable_local_work_guard` in `config.yaml`. `refuse.sh`
 | node --test, npm test, npm run build | `NODE_OPTIONS` preloads a refusing module | `node/refuse-local-tests.cjs` |
 | make | `MAKEFILES` names a refusing makefile | `make/refuse.mk` |
 | go build, go test, go run | `GOFLAGS` sets `-toolexec` to a refusing program | `go/toolexec.sh` |
-| cc, gcc, g++, c++ | `PATH` starts with `bin/`; `CC` and `CXX` name its scripts | `bin/cc` (the other three are links to it) |
+| cc, gcc, g++, c++ | `PATH` contains `bin/`; `CC` and `CXX` name its scripts | `bin/cc` (the other three are links to it) |
 
 ## Prescreen entry point
 
@@ -32,9 +32,10 @@ line. The entry point follows each caller's `task_parent_id` in `sessions/<id>/m
 allowed root therefore uses the same scope. The file must exist, be readable, and contain at least one valid session
 ID. The entry point reads session metadata with `jq` and refuses a caller outside the configured trees.
 
-The entry point removes only the local guard's compiler directory from `PATH` and sets `CC=cc` and `CXX=c++` for
-the command. It leaves `PYTEST_PLUGINS`, `PYTHONPATH`, `NODE_OPTIONS`, `MAKEFILES`, `GOFLAGS`, `RUSTUP_TOOLCHAIN` and
-`RUSTC_WRAPPER` in place, so tests and every other refused toolchain stay refused.
+The entry point removes every occurrence of the local guard's compiler directory from `PATH`, preserving the order of
+the other entries, and sets `CC=cc` and `CXX=c++` for the command. It leaves `PYTEST_PLUGINS`, `PYTHONPATH`,
+`NODE_OPTIONS`, `MAKEFILES`, `GOFLAGS`, `RUSTUP_TOOLCHAIN` and `RUSTC_WRAPPER` in place, so tests and every other
+refused toolchain stay refused.
 
 One lock at `$CHARLIEBOT_HOME/local-work-guard/prescreen-entry.lock` covers the full command. A later command prints
 that it is waiting, then starts when the first command exits. The entry lock is separate from locks the prescreen

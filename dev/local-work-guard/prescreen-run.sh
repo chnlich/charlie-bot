@@ -94,12 +94,11 @@ fi
 if [[ ! -x $guard_cc || ! -x $guard_cxx ]]; then
   refuse 'the local work guard compiler scripts are unavailable.'
 fi
-if [[ $PATH != "$guard_bin:"* ]]; then
-  refuse 'the local work guard compiler directory is not first on PATH.'
-fi
-
 # The guard can already be present later in PATH when its child environment prepends it.
 path_with_boundaries=":$PATH:"
+if [[ $path_with_boundaries != *":$guard_bin:"* ]]; then
+  refuse 'the local work guard compiler directory is absent from PATH.'
+fi
 while [[ $path_with_boundaries == *":$guard_bin:"* ]]; do
   path_with_boundaries=${path_with_boundaries/":$guard_bin:"/:}
 done

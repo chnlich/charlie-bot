@@ -54,8 +54,44 @@ run_scoped() {
   CHARLIEBOT_HOME="$home" CHARLIEBOT_SESSION_ID="$caller_id" "$entry" "$@"
 }
 
+assert_scoped_compilers_with_path() {
+  local input_path=$1 expected_path=$2
+  if PRESCREEN_TEST_EXPECT_PATH="$expected_path" PATH="$input_path" run_scoped "$child_id" bash -c '
+    set -euo pipefail
+    if [[ $PATH != "$PRESCREEN_TEST_EXPECT_PATH" ]]; then
+      printf "unexpected PATH after removing the guard directory: %s\n" "$PATH" >&2
+      exit 1
+    fi
+    cc -fsyntax-only "$1"
+    c++ -fsyntax-only "$2"
+  ' _ "$test_root/small.c" "$test_root/small.cpp"; then
+    :
+  else
+    fail 'an in-scope C or C++ compile failed after guard PATH removal'
+  fi
+}
+
 printf 'int main(void) { return 0; }\n' > "$test_root/small.c"
 printf 'int main() { return 0; }\n' > "$test_root/small.cpp"
+
+path_before_guard="$test_root/path-before-guard"
+path_between_guard_copies="$test_root/path-between-guard-copies"
+mkdir -p "$path_before_guard" "$path_between_guard_copies"
+expected_path="$path_before_guard:$path_between_guard_copies:$base_path"
+assert_scoped_compilers_with_path \
+  "$path_before_guard:$test_guard_dir/bin:$path_between_guard_copies:$base_path" "$expected_path"
+assert_scoped_compilers_with_path \
+  "$path_before_guard:$test_guard_dir/bin:$path_between_guard_copies:$test_guard_dir/bin:$base_path" \
+  "$expected_path"
+
+if PATH="$base_path" run_scoped "$child_id" true > "$test_root/missing-guard-path.log" 2>&1; then
+  fail 'an absent guard compiler directory allowed the entry point to run'
+else
+  status=$?
+fi
+if (( status != 1 )); then
+  fail "an absent guard compiler directory exited with $status instead of 1"
+fi
 
 if cc -fsyntax-only "$test_root/small.c" > "$test_root/direct-cc.log" 2>&1; then
   fail 'a direct cc invocation compiled outside the entry point'

@@ -46,9 +46,11 @@
             <label class="{{ form_label_class }}">Timezone</label>
             <input id="cron-timezone" type="text" class="{{ cron_field_class }}" value="America/Los_Angeles" />
           </div>
+          {#- The Enabled control is the modal's only small target: a 16 px box in a 24 px label row clears the
+              24 px pointer floor, as the events viewer's Expand all does. -#}
           <div class="flex items-center gap-2">
-            <input id="cron-enabled" type="checkbox" checked class="rounded bg-slate-800 border-slate-600" />
-            <label for="cron-enabled" class="text-xs text-slate-400">Enabled</label>
+            <input id="cron-enabled" type="checkbox" checked class="h-4 w-4 rounded bg-slate-800 border-slate-600" />
+            <label for="cron-enabled" class="py-1 text-xs text-slate-400">Enabled</label>
           </div>
         </form>
       </div>

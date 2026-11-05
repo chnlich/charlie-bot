@@ -495,7 +495,7 @@ fn tool_call_row<E: EventFields>(block: &E) -> ToolRow {
 
 /// The tool_use id that a subagent event names as its parent. An event without one belongs to the turn.
 fn parent_tool_use_id<E: EventFields>(event: &E) -> StoreResult<Option<&str>> {
-  match event.field("parent_tool_use_id").filter(|value| is_truthy(*value)) {
+  match event.field(event_types::PARENT_TOOL_USE_ID).filter(|value| is_truthy(*value)) {
     None => Ok(None),
     Some(value) => value.as_str_field().map(Some).ok_or_else(|| StoreError::new("parent_tool_use_id must be a string")),
   }

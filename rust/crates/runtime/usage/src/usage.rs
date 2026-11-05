@@ -71,7 +71,7 @@ impl UsageFold {
   }
 
   fn feed_assistant<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
-    if truthy_field(event.field("parent_tool_use_id")) {
+    if truthy_field(event.field(event_types::PARENT_TOOL_USE_ID)) {
       return Ok(());
     }
     let Some(message) = truthy_object(event.field("message"), "assistant.message")? else { return Ok(()) };

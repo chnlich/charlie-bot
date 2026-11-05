@@ -615,6 +615,8 @@ async function switchSession(sessionId) {
       // session it bound before the navigation drops the page.
       abandonHeldComposerActions(sessionId);
       switching = false;
+      // The page-load telemetry names this navigation's cause on the other side.
+      document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'bootstrap_failure'}}));
       location.href = '/?session=' + sessionId;
       return;
     }

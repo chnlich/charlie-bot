@@ -31,6 +31,7 @@ function makeDocument(elements) {
     querySelector() {
       return null;
     },
+    dispatchEvent: () => true,
   };
 }
 
@@ -46,6 +47,7 @@ function fakeHeaderButton() {
 function loadChatContext(elements) {
   let requestSequence = 0;
   const context = {
+    CustomEvent,
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
     marked: { parse: (v) => String(v || '') },

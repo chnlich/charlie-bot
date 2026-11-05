@@ -27,12 +27,21 @@ function loadWebsocketContext(extraContext) {
     // The page global index.html renders next to the ?v= script URLs; websocket.js
     // sends it as the handshake's asset_version.
     STATIC_ASSET_VERSION: 'stub-asset-version',
-    document: {getElementById: () => null},
+    document: {
+      getElementById: () => null,
+      // websocket.js announces socket closes, opens, replays and page-load
+      // causes as page events; a harness asserts on these through
+      // `dispatched` when it needs the announcements themselves.
+      dispatchEvent: () => true,
+    },
+    CustomEvent,
+    TextEncoder,
+    sessionStorage: {getItem: () => null, setItem: () => {}, removeItem: () => {}},
     Chat: {activeTurnEngineFor: () => null},
     localStorage: {getItem: () => null},
     // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
     wsUrlWithToken: (path) => path,
-    location: {protocol: 'http:', host: 'localhost:8000'},
+    location: {protocol: 'http:', host: 'localhost:8000', reload: () => {}},
     console: {log: () => {}, error: () => {}},
     WebSocket: createFakeWebSocketClass(),
     clearTimeout: () => {},
@@ -65,8 +74,19 @@ function loadWebsocketContext(extraContext) {
 // registrations it accepts. The caller's context supplies the page globals
 // the files read (SESSION_ID, WebSocket, wsUrlWithToken, the sidebar hooks).
 function loadWebsocketModules(context) {
+  prepareWebsocketGlobals(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 }
 
-module.exports = { loadWebsocketContext, loadWebsocketModules };
+// The page events websocket.js announces (socket closes, opens, replays and
+// page-load causes) need a dispatching document, the event constructor and the
+// replay byte counter. A harness that records the announcements asserts on
+// them; the defaults drop them, like every other no-op page hook here.
+function prepareWebsocketGlobals(context) {
+  if (context.document && !context.document.dispatchEvent) context.document.dispatchEvent = () => true;
+  if (!context.CustomEvent) context.CustomEvent = CustomEvent;
+  if (!context.TextEncoder) context.TextEncoder = TextEncoder;
+}
+
+module.exports = { loadWebsocketContext, loadWebsocketModules, prepareWebsocketGlobals };

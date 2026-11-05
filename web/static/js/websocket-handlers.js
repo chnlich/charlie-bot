@@ -11,6 +11,7 @@ function _commitMessage(msg) {
   const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
   if (msg.role === 'user' && pendingUserRequestIds.has(msg.request_id)) {
     // The matching local send already rendered this message optimistically.
+    document.dispatchEvent(new CustomEvent('charliebot:client-send-echo', {detail: {request_id: msg.request_id}}));
     pendingUserRequestIds.delete(msg.request_id);
     if (engine) {
       engine.rekeyMessage(

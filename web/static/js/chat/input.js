@@ -29,6 +29,13 @@ function postChatMessage(sessionId, content, extra, requestId) {
   });
 }
 
+// The send-timing telemetry's page events: the click, every retry, the POST's
+// outcome and (in websocket-handlers.js) the socket echo of the same request
+// id. The diag package assembles them into one client-event POST per send.
+function reportSendStep(step, requestId, detail) {
+  document.dispatchEvent(new CustomEvent('charliebot:client-send-' + step, {detail: Object.assign({request_id: requestId}, detail)}));
+}
+
 async function postChatMessageWithRetry(sessionId, content, extra, requestId) {
   let retryDelay = 1000;
   while (true) {
@@ -36,21 +43,28 @@ async function postChatMessageWithRetry(sessionId, content, extra, requestId) {
     try {
       response = await postChatMessage(sessionId, content, extra, requestId);
     } catch (_error) {
+      reportSendStep('retry', requestId);
       await waitForSendRetry(retryDelay);
       retryDelay = Math.min(retryDelay * 2, 30000);
       continue;
     }
     if (response.status >= 500) {
+      reportSendStep('retry', requestId);
       await waitForSendRetry(retryDelay);
       retryDelay = Math.min(retryDelay * 2, 30000);
       continue;
     }
     if (response.status >= 400 && response.status < 500) {
+      reportSendStep('response', requestId, {ok: false});
       const error = new Error(String(response.status));
       error.status = response.status;
       throw error;
     }
-    if (!response.ok) throw new Error(String(response.status));
+    if (!response.ok) {
+      reportSendStep('response', requestId, {ok: false});
+      throw new Error(String(response.status));
+    }
+    reportSendStep('response', requestId, {ok: true});
     return response.json();
   }
 }
@@ -89,6 +103,7 @@ async function sendMessage() {
 
   const inputMode = composerInputMode;
   const requestId = crypto.randomUUID();
+  reportSendStep('click', requestId);
 
   // The send belongs to the session the page displays at press: the composer
   // and its draft are taken now, so later typing is the next message.
@@ -131,6 +146,7 @@ async function compactContext() {
   const target = composerTargetSession();
   if (!target.id) return;
   const requestId = crypto.randomUUID();
+  reportSendStep('click', requestId);
   const finish = async () => {
     pendingUserRequestIds.add(requestId);
     const optimisticMessage = appendMessage('user', '/compact', null, new Date().toISOString(), null, requestId);

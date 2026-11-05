@@ -11,6 +11,10 @@
 let ws = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
+// The connect attempts since the last successful open or the last page-driven
+// close: the client-socket telemetry's reconnect_count, so an episode reports
+// how many attempts its reconnect took.
+let reconnectAttempts = 0;
 // Request ids identify the local optimistic sends whose server echoes are due.
 const pendingUserRequestIds = new Set();
 let wsGeneration = 0;
@@ -59,6 +63,11 @@ function disconnectWS() {
   wsGeneration++;
   const socket = ws;
   ws = null;
+  // The page closed its own socket (a switch, a session open or the welcome
+  // view): the client-socket telemetry separates these closes from network
+  // ones, and the readback counts only the network episodes.
+  reconnectAttempts = 0;
+  document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {detail: {cause: 'switch', code: null}}));
   if (!socket) return;
   detachSocketHandlers(socket);
   try { socket.close(); } catch {}
@@ -73,6 +82,7 @@ function cancelReconnect() {
 function connectWS() {
   if (!SESSION_ID) return;
   cancelReconnect();
+  reconnectAttempts++;
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
   const wsUrl = wsUrlWithToken(
@@ -80,6 +90,11 @@ function connectWS() {
       `&asset_version=${encodeURIComponent(STATIC_ASSET_VERSION)}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
+  // The replay's bytes: everything this socket receives from its open until
+  // the catchup_complete frame ends the replay, UTF-8 encoded.
+  const replayBytes = new TextEncoder();
+  let catchupBytes = 0;
+  let catchupDone = false;
 
   socket.onopen = () => {
     if (isStaleSocket(socket, targetSession, generation)) {
@@ -89,6 +104,8 @@ function connectWS() {
     }
     console.log('WS connected');
     reconnectDelay = 1000;
+    document.dispatchEvent(new CustomEvent('charliebot:client-socket-open', {detail: {attempts: reconnectAttempts}}));
+    reconnectAttempts = 0;
     wsConnectHandlers.forEach((handler) => handler());
   };
 
@@ -96,11 +113,22 @@ function connectWS() {
     if (isStaleSocket(socket, targetSession, generation)) return;
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
+    if (!catchupDone) {
+      if (data && data.type === 'catchup_complete') {
+        catchupDone = true;
+        document.dispatchEvent(new CustomEvent('charliebot:client-socket-catchup', {detail: {bytes: catchupBytes}}));
+      } else {
+        catchupBytes += replayBytes.encode(e.data).length;
+      }
+    }
     handleWSEvent(data, targetSession, generation);
   };
 
   socket.onclose = (event) => {
     if (isStaleSocket(socket, targetSession, generation)) return;
+    document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {
+      detail: {cause: 'network', code: event ? event.code : null},
+    }));
     // 4409: the server's static asset version moved past this page's, so the tab kept running
     // pre-deploy JavaScript. Reload instead of reconnecting with the old code.
     if (event && event.code === 4409) {
@@ -134,6 +162,8 @@ function handleStalePageClose() {
     return;
   }
   sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
+  // The page-load telemetry names this reload's cause on the other side.
+  document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
   location.reload();
 }
 

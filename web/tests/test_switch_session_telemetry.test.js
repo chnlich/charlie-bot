@@ -7,9 +7,9 @@ const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSe
 const {createElement} = require('./dom_element_stub');
 const {readPackageStatic, readStatic} = require('./read_static');
 
-// The wire path the diag package's switch-events.js posts each switch phase
-// to; an endpoint move on either side breaks the pin.
-const SWITCH_TELEMETRY_URL = '/api/diag/switch-events';
+// The wire path the diag package's client-events.js posts each client timing
+// event to; an endpoint move on either side breaks the pin.
+const CLIENT_EVENTS_URL = '/api/diag/client-events';
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flush = async () => { await tick(); await tick(); };
@@ -27,7 +27,15 @@ function loadSwitchTelemetry(context) {
     for (const listener of listeners.get(event.type) || []) listener(event);
     return true;
   };
-  vm.runInContext(readPackageStatic('features', 'diag', 'switch-events.js'), context, {filename: 'switch-events.js'});
+  // The Resource Timing entries the switch listener reads the bootstrap's
+  // timing from; a test sets resourceEntries to land one on the page.
+  const resourceEntries = [];
+  context.performance = Object.assign(context.performance || {}, {
+    getEntriesByType: (type) => (type === 'resource' ? resourceEntries : []),
+  });
+  context.PerformanceObserver = undefined;
+  vm.runInContext(readPackageStatic('features', 'diag', 'client-events.js'), context, {filename: 'client-events.js'});
+  return resourceEntries;
 }
 
 // vm harness for switchSession: bootstrap fetches resolve through manual
@@ -48,7 +56,7 @@ function buildSwitchHarness() {
   const renamePosts = [];
   const sequence = [];
   const failBootstrap = new Set();
-  const knobs = {failTelemetry: false};
+  const knobs = {failTelemetry: false, failChatOnce: false};
   const payloads = {
     'session-a': bootstrapPayload('session-a', 0, false),
     'session-b': bootstrapPayload('session-b', 0, false),
@@ -86,7 +94,7 @@ function buildSwitchHarness() {
   context.FormData = class { append() {} };
   installSessionDocumentLookups(context, elements, messages, rows);
   context.fetch = async (url, opts = {}) => {
-    if (url === SWITCH_TELEMETRY_URL) {
+    if (url === CLIENT_EVENTS_URL) {
       const body = JSON.parse(opts.body);
       telemetryPosts.push(body);
       sequence.push('telemetry:' + body.phase);
@@ -103,6 +111,10 @@ function buildSwitchHarness() {
       const body = JSON.parse(opts.body);
       chatPosts.push({sessionId: chatMatch[1], content: body.content, requestId: body.request_id});
       sequence.push('chat:' + chatMatch[1]);
+      if (knobs.failChatOnce) {
+        knobs.failChatOnce = false;
+        throw new Error('chat POST down');
+      }
       return {ok: true, status: 202, json: async () => ({})};
     }
     const cancelMatch = url.match(/\/api\/chat\/([^/]+)\/cancel$/);
@@ -164,7 +176,7 @@ function buildSwitchHarness() {
   // and the upload gate answers the send path.
   vm.runInContext(readStatic('config.js'), context, {filename: 'config.js'});
   vm.runInContext(readStatic('file-upload.js'), context, {filename: 'file-upload.js'});
-  loadSwitchTelemetry(context);
+  const resourceEntries = loadSwitchTelemetry(context);
   // The optimistic bubble's one observable: appendMessage records the bubble
   // it renders, so a test asserts which view the bubble was appended against
   // through the sequence markers.
@@ -190,6 +202,7 @@ function buildSwitchHarness() {
     appendedMessages,
     sequence,
     failBootstrap,
+    resourceEntries,
     knobs,
     payloadFor: (sid) => payloads[sid],
     resolveLastSwitch: () => pendingSwitches[pendingSwitches.length - 1].resolve(),
@@ -225,7 +238,7 @@ test('click paints the placeholder synchronously over the old session DOM', asyn
   assert.equal(h.messages.children.length, 0, 'the placeholder element must not survive the render');
 });
 
-test('started telemetry carries exactly the eight schema fields', async () => {
+test('started telemetry carries exactly the switch schema fields', async () => {
   const h = buildSwitchHarness();
 
   const click = h.context.switchSession('session-b');
@@ -235,8 +248,10 @@ test('started telemetry carries exactly the eight schema fields', async () => {
   assert.equal(h.telemetryPosts.length, 2);
   const started = h.telemetryPosts[0];
   assert.deepEqual(Object.keys(started).sort(), [
-    'client_ts', 'elapsed_ms', 'error', 'from_session', 'generation', 'phase', 'to_session', 'winner_generation',
+    'client_ts', 'elapsed_ms', 'error', 'from_session', 'generation', 'kind', 'phase', 'request_start',
+    'response_end', 'response_start', 'to_session', 'transfer_size', 'winner_generation',
   ]);
+  assert.equal(started.kind, 'switch');
   assert.equal(started.phase, 'started');
   assert.equal(started.from_session, 'session-a');
   assert.equal(started.to_session, 'session-b');
@@ -244,9 +259,46 @@ test('started telemetry carries exactly the eight schema fields', async () => {
   assert.equal(started.winner_generation, null);
   assert.equal(started.elapsed_ms, 0);
   assert.equal(started.error, null);
+  assert.equal(started.request_start, null, 'the started phase has no Resource Timing entry yet');
+  assert.equal(started.transfer_size, null);
   assert.match(started.client_ts, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(h.telemetryPosts[1].phase, 'completed');
   assert.equal(h.telemetryPosts[1].elapsed_ms >= 0, true);
+  assert.equal(h.telemetryPosts[1].transfer_size, null, 'no Resource Timing entry lands without one on the page');
+});
+
+test('a completed switch carries its bootstrap Resource Timing', async () => {  const h = buildSwitchHarness();
+  h.resourceEntries.push({
+    name: 'http://localhost:8000/api/sessions/session-b/bootstrap',
+    requestStart: 120.4,
+    responseStart: 410.2,
+    responseEnd: 1500.8,
+    transferSize: 26592,
+  });
+
+  const click = h.context.switchSession('session-b');
+  h.resolveLastSwitch();
+  await click;
+
+  const completed = h.telemetryPosts[1];
+  assert.equal(completed.phase, 'completed');
+  assert.deepEqual(
+    [completed.request_start, completed.response_start, completed.response_end, completed.transfer_size],
+    [120, 410, 1501, 26592]);
+});
+
+test('the switch Resource Timing reads only the target session’s bootstrap entry', async () => {
+  const h = buildSwitchHarness();
+  h.resourceEntries.push({
+    name: 'http://localhost:8000/api/sessions/session-z/bootstrap',
+    requestStart: 1, responseStart: 2, responseEnd: 3, transferSize: 999,
+  });
+
+  const click = h.context.switchSession('session-b');
+  h.resolveLastSwitch();
+  await click;
+
+  assert.equal(h.telemetryPosts[1].transfer_size, null, 'another session’s bootstrap entry does not apply');
 });
 
 // ---------------------------------------------------------------------------
@@ -646,4 +698,32 @@ test('a superseded switch that fails does not navigate the page away from the ne
   await flush();
   assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-c'],
       'the send held for session-c still lands in session-c');
+});
+
+// ---------------------------------------------------------------------------
+// Acceptance: the send timing rides the same channel
+// ---------------------------------------------------------------------------
+
+test('a send posts one client event with both waits once its echo arrives', async () => {
+  const h = buildSwitchHarness();
+  h.context.renderSessionView(h.payloadFor('session-a'));
+  const input = h.elements.get('msg-input');
+  input.value = 'timed words';
+
+  await h.context.sendMessage();
+  await flush();
+
+  // The 202 response returned; the send waits for its echo before posting.
+  const sends = h.telemetryPosts.filter((t) => t.kind === 'send');
+  assert.equal(sends.length, 0, 'the send waits for the echo');
+  const requestId = h.chatPosts[0].requestId;
+
+  h.context.document.dispatchEvent(new CustomEvent('charliebot:client-send-echo', {detail: {request_id: requestId}}));
+  const send = h.telemetryPosts.filter((t) => t.kind === 'send').pop();
+  assert.equal(send.kind, 'send');
+  assert.equal(send.request_id, requestId);
+  assert.equal(send.click_to_response_ms >= 0, true);
+  assert.equal(send.click_to_echo_ms >= send.click_to_response_ms, true,
+      'the echo cannot land before the response that returned first');
+  assert.equal(send.retries, 0);
 });

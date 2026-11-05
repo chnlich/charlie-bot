@@ -309,7 +309,7 @@ fn decode_topic_page_cursor(token: &str, thread_id: &str) -> Result<TopicPageCur
     return Err(invalid_topic_page_token());
   }
   let mut bytes = Vec::with_capacity(encoded.len() / 2);
-  for pair in encoded.as_bytes().chunks_exact(2) {
+  for pair in encoded.as_bytes().as_chunks::<2>().0 {
     let high = hex_digit(pair[0]).ok_or_else(invalid_topic_page_token)?;
     let low = hex_digit(pair[1]).ok_or_else(invalid_topic_page_token)?;
     bytes.push((high << 4) | low);

@@ -43,7 +43,6 @@
   const sendTimings = new Map();
 
   document.addEventListener('charliebot:client-send-click', (event) => {
-    console.error('DBG click', event.detail && event.detail.request_id);
     const now = Date.now();
     for (const [requestId, timing] of sendTimings) {
       if (now - timing.click > SEND_TIMING_TTL_MS) sendTimings.delete(requestId);
@@ -68,7 +67,6 @@
   });
 
   document.addEventListener('charliebot:client-send-echo', (event) => {
-    console.error('DBG echo', event.detail && event.detail.request_id, sendTimings.size);
     const timing = sendTimings.get(event.detail.request_id);
     if (!timing) return;
     timing.echo = Date.now();

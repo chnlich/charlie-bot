@@ -216,7 +216,7 @@ pub fn home(platform: Arc<SyntheticPlatform>) -> (tempfile::TempDir, Arc<Feature
   (home, features)
 }
 
-/// Create one manager session node and return its id.
+/// One manager session node's id, created on the fixture.
 pub async fn create_session(features: &FeatureContext, name: &str) -> String {
   let meta = features
     .store
@@ -282,7 +282,7 @@ impl DispatchExecutor for RecordingExecutor {
   }
 }
 
-/// Install a dispatcher whose executor records launches, and return the recorder.
+/// The recorder installed on a dispatcher whose executor records launches.
 pub fn install_wake_recorder(features: &Arc<FeatureContext>) -> Arc<RecordingExecutor> {
   let completion = Arc::new(TaskCompletion::new(Arc::clone(features)));
   features.startup.insert(Arc::clone(&completion)).expect("the completion owner inserts once");

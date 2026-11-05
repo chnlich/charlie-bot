@@ -11,7 +11,7 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 static LOCKS: LazyLock<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Take the lock for one draft, waiting while another request holds it.
+/// The lock guard of one draft, awaited while another request holds it.
 pub async fn acquire(session_id: &str, draft_id: &str) -> OwnedMutexGuard<()> {
   let key = format!("{session_id}/{draft_id}");
   let lock = {

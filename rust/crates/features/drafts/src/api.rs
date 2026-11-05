@@ -184,7 +184,8 @@ async fn send(
   }
 }
 
-/// Append `draft_sent`, then wake the session with it. The wake is best effort: the send is already a fact.
+/// The `draft_sent` event appended to the log, then the session woken with it. The wake is best effort: the
+/// send is already a fact.
 async fn record_sent(
   features: &FeatureContext,
   session_id: &str,

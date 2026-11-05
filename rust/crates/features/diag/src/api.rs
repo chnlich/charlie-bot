@@ -9,7 +9,9 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{
+  self, BodyModel, Field, FieldType, integer_field, optional_text_field_ref, text_field,
+};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
@@ -80,54 +82,15 @@ impl<'a> SwitchEvent<'a> {
   /// Reads the validated fields in model declaration order and borrows `error` from the validated value.
   fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
     Self {
-      phase: string(values, "phase"),
-      from_session: optional_string(values, "from_session"),
-      to_session: string(values, "to_session"),
-      generation: integer(values, "generation").expect("a required integer validates to a value"),
-      winner_generation: integer(values, "winner_generation"),
-      elapsed_ms: integer(values, "elapsed_ms"),
-      error: optional_str(values, "error"),
-      client_ts: string(values, "client_ts"),
+      phase: text_field(values, "phase"),
+      from_session: optional_text_field_ref(values, "from_session").map(str::to_string),
+      to_session: text_field(values, "to_session"),
+      generation: integer_field(values, "generation").expect("a required integer validates to a value"),
+      winner_generation: integer_field(values, "winner_generation"),
+      elapsed_ms: integer_field(values, "elapsed_ms"),
+      error: optional_text_field_ref(values, "error"),
+      client_ts: text_field(values, "client_ts"),
     }
-  }
-}
-
-fn string(values: &serde_json::Map<String, Value>, name: &str) -> String {
-  match values.get(name) {
-    Some(Value::String(text)) => text.clone(),
-    other => unreachable!("the validated body carries a string {name}, got {other:?}"),
-  }
-}
-
-fn optional_string(values: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
-  match values.get(name) {
-    Some(Value::String(text)) => Some(text.clone()),
-    Some(Value::Null) | None => None,
-    other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
-  }
-}
-
-fn optional_str<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> Option<&'a str> {
-  match values.get(name) {
-    Some(Value::String(text)) => Some(text),
-    Some(Value::Null) | None => None,
-    other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
-  }
-}
-
-/// An integer field of the validated body, `None` when the field is absent or null. `i128` holds the signed 64-bit
-/// range and the positive values through the unsigned 64-bit maximum accepted by the body reader.
-fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> {
-  match values.get(name) {
-    None | Some(Value::Null) => None,
-    Some(Value::Number(number)) => Some(
-      number
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| number.as_u64().map(i128::from))
-        .expect("the validated body carries a 64-bit integer"),
-    ),
-    other => unreachable!("the validated body carries an integer or null {name}, got {other:?}"),
   }
 }
 

@@ -11,6 +11,9 @@
 //!   Err(response) => return *response,
 //! };
 //! ```
+//!
+//! The field readers below read one field of a body that a model has validated. Their shape check cannot fail
+//! after `validate`, so they return the value rather than an error.
 
 use std::cmp::Ordering;
 
@@ -328,11 +331,50 @@ impl RequestBody {
   }
 }
 
+/// A string field of a validated body, borrowed from it.
+pub fn text_field_ref<'a>(fields: &'a Map<String, Value>, name: &str) -> &'a str {
+  match fields.get(name).and_then(Value::as_str) {
+    Some(text) => text,
+    None => unreachable!("a validated {name} is a string"),
+  }
+}
+
 /// A string field of a validated body.
 pub fn text_field(fields: &Map<String, Value>, name: &str) -> String {
-  match fields.get(name).and_then(Value::as_str) {
-    Some(text) => text.to_string(),
-    None => unreachable!("a validated {name} is a string"),
+  text_field_ref(fields, name).to_string()
+}
+
+/// An optional string field of a validated body: an absent field and a null one are both `None`.
+pub fn optional_text_field_ref<'a>(fields: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+  match fields.get(name) {
+    Some(Value::String(text)) => Some(text),
+    Some(Value::Null) | None => None,
+    other => unreachable!("a validated {name} is a string or null, got {other:?}"),
+  }
+}
+
+/// An integer field of a validated body, `None` when it is absent or null. `i128` holds the signed 64-bit range
+/// and the positive values through the unsigned 64-bit maximum that the body reader accepts.
+pub fn integer_field(fields: &Map<String, Value>, name: &str) -> Option<i128> {
+  match fields.get(name) {
+    Some(Value::Number(number)) => Some(
+      number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+        .expect("a validated integer is a 64-bit value"),
+    ),
+    Some(Value::Null) | None => None,
+    other => unreachable!("a validated {name} is an integer or null, got {other:?}"),
+  }
+}
+
+/// A boolean field of a validated body, `None` when it is absent or null.
+pub fn flag_field(fields: &Map<String, Value>, name: &str) -> Option<bool> {
+  match fields.get(name) {
+    Some(Value::Bool(flag)) => Some(*flag),
+    Some(Value::Null) | None => None,
+    other => unreachable!("a validated {name} is a bool or null, got {other:?}"),
   }
 }
 
@@ -835,6 +877,29 @@ mod tests {
   fn refuse_worker_kind(values: &Map<String, Value>) -> Option<String> {
     (values.get("mode") == Some(&json!("worker")) && values.get("kind").is_some())
       .then(|| "a worker takes no kind".to_string())
+  }
+
+  #[test]
+  fn a_validated_field_keeps_the_whole_integer_range() {
+    let fields = json!({
+      "text": "value",
+      "nothing": null,
+      "big": u64::MAX,
+      "small": -3,
+      "flag": false,
+    });
+    let fields = fields.as_object().expect("an object");
+
+    assert_eq!(text_field_ref(fields, "text"), "value");
+    assert_eq!(optional_text_field_ref(fields, "text"), Some("value"));
+    assert_eq!(optional_text_field_ref(fields, "nothing"), None);
+    assert_eq!(optional_text_field_ref(fields, "missing"), None);
+    assert_eq!(integer_field(fields, "big"), Some(i128::from(u64::MAX)));
+    assert_eq!(integer_field(fields, "small"), Some(-3));
+    assert_eq!(integer_field(fields, "nothing"), None);
+    assert_eq!(integer_field(fields, "missing"), None);
+    assert_eq!(flag_field(fields, "flag"), Some(false));
+    assert_eq!(flag_field(fields, "missing"), None);
   }
 
   #[test]

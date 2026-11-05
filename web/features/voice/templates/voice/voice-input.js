@@ -486,13 +486,23 @@ async function startRecording() {
 async function resumeVoiceContext(run) {
   const context = run.audioContext;
   let timer = null;
+  let stateChangeHandler = null;
+  const running = new Promise((resolve) => {
+    stateChangeHandler = () => {
+      if (context.state === 'running') resolve();
+    };
+    context.addEventListener('statechange', stateChangeHandler);
+    if (context.state === 'running') resolve();
+  });
   const bound = new Promise((resolve) => {
     timer = setTimeout(resolve, VOICE_CONTEXT_RESUME_BOUND_MS);
   });
   try {
-    await Promise.race([context.resume(), bound]);
+    context.resume().catch((err) => console.error('Voice audio engine resume failed:', err));
+    await Promise.race([running, bound]);
   } finally {
     clearTimeout(timer);
+    context.removeEventListener('statechange', stateChangeHandler);
   }
   if (context.state !== 'running') {
     run.startup.audioContextResume = 'timed_out';

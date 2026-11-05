@@ -48,6 +48,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     audioContextStartState: 'running', // the state a new AudioContext opens in
     audioContextResumeStarts: 1, // the 1-based resume() call that starts the engine
     audioContextResumeHangs: false, // every resume() stays pending and the engine stays suspended
+    audioContextResumePendingCalls: new Set(), // selected resume() calls stay pending, even if the engine starts
     addModuleCalls: 0,
     moduleError: null,
     modulePending: null,
@@ -114,12 +115,25 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
       this.state = state.audioContextStartState;
       this.closed = false;
       this.resumeCalls = 0;
+      this.stateChangeListeners = new Set();
       state.audioContexts.push(this);
+    }
+    addEventListener(type, listener) {
+      if (type === 'statechange') this.stateChangeListeners.add(listener);
+    }
+    removeEventListener(type, listener) {
+      if (type === 'statechange') this.stateChangeListeners.delete(listener);
     }
     resume() {
       this.resumeCalls += 1;
-      if (state.audioContextResumeHangs) return new Promise(() => {});
-      if (this.resumeCalls === state.audioContextResumeStarts) this.state = 'running';
+      if (!state.audioContextResumeHangs && this.resumeCalls === state.audioContextResumeStarts) {
+        const wasRunning = this.state === 'running';
+        this.state = 'running';
+        if (!wasRunning) this.stateChangeListeners.forEach((listener) => listener({target: this}));
+      }
+      if (state.audioContextResumeHangs || state.audioContextResumePendingCalls.has(this.resumeCalls)) {
+        return new Promise(() => {});
+      }
       return Promise.resolve();
     }
     get audioWorklet() {
@@ -1435,8 +1449,10 @@ test('a suspended engine that starts on resume() reaches the recording phase and
   const {state} = buildHarness();
   state.audioContextStartState = 'suspended';
   // The click's resume does not start the engine here; the resume after both
-  // branches settle does.
+  // branches settle does. That call's promise stays pending, so the statechange
+  // must end the wait.
   state.audioContextResumeStarts = 2;
+  state.audioContextResumePendingCalls.add(2);
   await state.arm();
   assert.equal(state.audioContexts[0].resumeCalls, 2);
   assert.equal(state.voiceUi().hint.textContent, 'Waiting for microphone signal...');

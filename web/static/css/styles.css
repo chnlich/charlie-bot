@@ -240,6 +240,19 @@ body.resizing { cursor: col-resize; user-select: none; }
 .input-buttons { position: relative; }
 .sidebar-overlay { display: none; }
 .hamburger-btn { display: none !important; }
+/* The header's events link is the one glyph-only control under the 24 px pointer floor: its 16 px
+   icon was the whole box, and no boundary marked the target. (On a phone the Menu button is
+   glyph-only too, in a 36 px box.) The link takes a 24 px box around the glyph and the header's
+   bordered-control surface (index.html), so the target is both large enough and visible. No row,
+   strip or label is added: the header's tallest item still sets its height, and on a phone the box
+   with its margins fills the 2.5rem the tab row reserves. */
+main > header > a[title="View JSONL events"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
   .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }

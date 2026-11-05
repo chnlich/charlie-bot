@@ -926,6 +926,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::layout::chat_events_path`.",
   },
+  OwnerRow { name: "schedule_task", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_TASK`." },
   OwnerRow { name: "schedule_cron", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_CRON`." },
   OwnerRow {
     name: "schedule_enabled",

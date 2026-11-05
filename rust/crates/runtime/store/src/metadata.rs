@@ -33,6 +33,10 @@ pub const SCHEDULE_TIMEZONE: &str = "schedule_timezone";
 pub const SCHEDULE_PROJECT: &str = "schedule_project";
 /// The session-metadata field saying whether a failed bound-task run is allowed.
 pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
+/// The session-listing field holding the name of the task bound to the session's schedule. The cron row fields write
+/// it, and the session listing fills `null` when no task is bound; it is computed per listing, so `SCHEDULE_FIELDS`
+/// does not hold it.
+pub const SCHEDULE_TASK: &str = "schedule_task";
 /// Every schedule field name of a session, in the order session metadata writes them. The session listing and the cron
 /// row fields read these names from here.
 pub const SCHEDULE_FIELDS: [&str; 6] =

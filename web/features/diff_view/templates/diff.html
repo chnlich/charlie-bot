@@ -19,6 +19,12 @@
        this rule wins the cascade, and it reaches the form fields and the comment boxes
        diff_comments.js builds. */
     input::placeholder, textarea::placeholder { color: #64748b; }
+    /* diff2html's .d2h-file-name-wrapper keeps width:100%, so at phone width it fills the whole header.
+       The per-file Viewed control then starts past the right edge: its 74 px box began at 362 px on a
+       390 px page. Letting the wrapper shrink keeps the control inside; the name still ellipsizes to
+       the room that is left. */
+    .d2h-file-name-wrapper { width: auto; flex: 1 1 auto; min-width: 0; }
+    .d2h-file-name { min-width: 0; }
   </style>
 </head>
 <body class="bg-white text-slate-900 min-h-screen">

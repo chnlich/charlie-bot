@@ -26,6 +26,7 @@ EXEMPT_PATHS=(
   'dev/remote-run/common.sh' # reads the project's .venv interpreter and asks uv for the matching one on the build host
   'dev/remote-run/setup.sh' # installs the project's pinned CPython on the build host through uv
   'dev/local-work-guard/README.md' # the mechanism table names the python directory of the refusing hooks
+  'dev/local-work-guard/test-prescreen-run.sh' # drives the guard's refused Python toolchain to prove the guard stops it
 )
 
 exempt() {

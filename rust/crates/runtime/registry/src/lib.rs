@@ -10,6 +10,7 @@ pub mod backend;
 pub mod caller;
 pub mod context;
 pub mod draft;
+mod inlined_script;
 pub mod lifespan;
 pub mod midturn_delivery;
 pub mod pages;

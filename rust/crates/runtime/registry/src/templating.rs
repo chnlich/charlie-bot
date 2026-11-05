@@ -40,6 +40,7 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
+use crate::inlined_script;
 use crate::pages::{self, package_directory};
 use crate::watch::TreeWatch;
 
@@ -394,7 +395,14 @@ impl Templating {
   }
 
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
-    let mut environment = jinja::environment(jinja::file_system_loader(self.loader.clone()));
+    let loader = jinja::file_system_loader(self.loader.clone());
+    // A page carries its scripts inline, and a comment in a script explains it to an editor rather than to the
+    // browser: the inline copy leaves the comments out. A template and a stylesheet keep every byte.
+    let loader = move |name: &str| {
+      let source = loader(name)?;
+      Ok(source.map(|text| if name.ends_with(".js") { inlined_script::without_comments(&text) } else { text }))
+    };
+    let mut environment = jinja::environment(loader);
     let repo_root = self.repo_root.clone();
     let packages = self.packages.clone();
     // A page part is a template source, so this environment lives only while every source holds its value. A part
@@ -826,6 +834,38 @@ mod tests {
         "<link rel=\"stylesheet\" media=\"print\" href=\"/static/css/page.css\">\n",
         "<link rel=\"stylesheet\" href=\"/static/css/absent.css\">",
       )
+    );
+  }
+
+  /// A page that inlines a script carries it without the comments that document the source file, and the string
+  /// literals the script holds keep their bytes. A stylesheet inlines whole.
+  #[tokio::test]
+  async fn an_inlined_script_travels_without_its_comments() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = root.path().join("web").join("templates");
+    let scripts = root.path().join("web").join("static").join("js");
+    let styles = root.path().join("web").join("static").join("css");
+    fs::create_dir_all(&templates).unwrap();
+    fs::create_dir_all(&scripts).unwrap();
+    fs::create_dir_all(&styles).unwrap();
+    fs::write(scripts.join("page.js"), "// a note\nlet url = 'https://example.com'; // gone").unwrap();
+    fs::write(styles.join("page.css"), "/* a note */\n.chat{display:flex}").unwrap();
+    fs::write(
+      templates.join("scripted.html"),
+      "<script>{% include 'js/page.js' %}</script><style>{% include 'css/page.css' %}</style>",
+    )
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(Registry::new()));
+    features.startup.insert(Templating::new(root.path(), &[])).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/scripted").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    let response = templating.render_page(&features, "scripted.html", &json!({}), &parts).unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+      body,
+      "<script>\nlet url = 'https://example.com'; </script><style>/* a note */\n.chat{display:flex}</style>"
     );
   }
 

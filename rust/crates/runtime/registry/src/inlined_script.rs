@@ -1,0 +1,295 @@
+//! The form a script takes when a page carries it inline.
+//!
+//! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
+//! comments that explain them to an editor, and a browser runs no comment: on the mock home's chat page the comments
+//! are 225 KB of the 730 KB of script text and 82 KB of the document's 410 KB gzip form. The strip is textual and
+//! keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular expression holds.
+
+/// The JavaScript `source` with its comments removed.
+///
+/// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
+/// spans lines and one space otherwise, so a comment between two tokens still separates them. The scanner follows
+/// the literals that can hold comment text: a quoted string ends at its quote or its line's end, a template literal
+/// at its backtick, and a regex literal at its closing slash.
+pub fn without_comments(source: &str) -> String {
+  let bytes = source.as_bytes();
+  let mut out = String::with_capacity(source.len());
+  let mut stack = vec![Place::Code { braces: 0 }];
+  let mut expect_expression = true;
+  let mut i = 0;
+  while i < bytes.len() {
+    if matches!(stack.last(), Some(Place::Template)) {
+      match bytes[i] {
+        b'\\' => i = copy(&mut out, source, i, (i + 2).min(bytes.len())),
+        b'`' => {
+          copy(&mut out, source, i, i + 1);
+          stack.pop();
+          expect_expression = false;
+          i += 1;
+        }
+        b'$' if bytes.get(i + 1) == Some(&b'{') => {
+          copy(&mut out, source, i, i + 2);
+          stack.push(Place::Code { braces: 0 });
+          expect_expression = true;
+          i += 2;
+        }
+        _ => i = copy_char(&mut out, source, i),
+      }
+      continue;
+    }
+    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+      i = bytes[i..].iter().position(|byte| *byte == b'\n').map_or(bytes.len(), |end| i + end);
+      continue;
+    }
+    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+      let end = source[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 2);
+      out.push(if source[i..end].contains('\n') { '\n' } else { ' ' });
+      i = end;
+      continue;
+    }
+    if bytes[i] == b'/' && expect_expression {
+      match regex_end(bytes, i) {
+        Some(end) => {
+          copy(&mut out, source, i, end);
+          expect_expression = false;
+          i = end;
+        }
+        None => {
+          copy(&mut out, source, i, i + 1);
+          i += 1;
+        }
+      }
+      continue;
+    }
+    match bytes[i] {
+      b'\'' | b'"' => {
+        let end = string_end(bytes, i);
+        copy(&mut out, source, i, end);
+        expect_expression = false;
+        i = end;
+      }
+      b'`' => {
+        copy(&mut out, source, i, i + 1);
+        stack.push(Place::Template);
+        i += 1;
+      }
+      b'{' => {
+        if let Some(Place::Code { braces }) = stack.last_mut() {
+          *braces += 1;
+        }
+        copy(&mut out, source, i, i + 1);
+        expect_expression = true;
+        i += 1;
+      }
+      b'}' => {
+        let decremented = match stack.last_mut() {
+          Some(Place::Code { braces }) if *braces > 0 => {
+            *braces -= 1;
+            true
+          }
+          _ => false,
+        };
+        if !decremented && stack.len() > 1 {
+          stack.pop();
+        }
+        copy(&mut out, source, i, i + 1);
+        expect_expression = false;
+        i += 1;
+      }
+      byte if byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$' => {
+        let end = identifier_end(bytes, i);
+        expect_expression = expects_expression(&source[i..end]);
+        copy(&mut out, source, i, end);
+        i = end;
+      }
+      byte if byte.is_ascii_digit() || byte == b'.' => {
+        let end = number_end(bytes, i);
+        copy(&mut out, source, i, end);
+        expect_expression = false;
+        i = end;
+      }
+      b')' | b']' => {
+        copy(&mut out, source, i, i + 1);
+        expect_expression = false;
+        i += 1;
+      }
+      byte if byte.is_ascii_whitespace() => {
+        copy(&mut out, source, i, i + 1);
+        i += 1;
+      }
+      _ => {
+        let end = copy_char(&mut out, source, i);
+        expect_expression = bytes[i] != b'.';
+        i = end;
+      }
+    }
+  }
+  out
+}
+
+/// Where the scanner is: JavaScript code with its open-brace count, or a template literal's text.
+enum Place {
+  Code { braces: usize },
+  Template,
+}
+
+/// Copy `source[start..end]` to `out`, returning `end`.
+fn copy(out: &mut String, source: &str, start: usize, end: usize) -> usize {
+  out.push_str(&source[start..end]);
+  end
+}
+
+/// Copy the one character at `start` to `out`, returning the index after it.
+fn copy_char(out: &mut String, source: &str, start: usize) -> usize {
+  let end = start + source[start..].chars().next().map_or(1, char::len_utf8);
+  copy(out, source, start, end)
+}
+
+/// The index after the identifier that starts at `start`.
+fn identifier_end(bytes: &[u8], start: usize) -> usize {
+  let mut end = start;
+  while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'$') {
+    end += 1;
+  }
+  end
+}
+
+/// The index after the number that starts at `start`: its digits, decimal point, exponent and suffix letters.
+fn number_end(bytes: &[u8], start: usize) -> usize {
+  let mut end = start;
+  while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'.' | b'_' | b'$')) {
+    end += 1;
+  }
+  end
+}
+
+/// Whether the word `word` is followed by an expression, so a `/` after it opens a regex literal rather than
+/// dividing. Every other word is a value, and a `/` after a value divides.
+fn expects_expression(word: &str) -> bool {
+  matches!(
+    word,
+    "return"
+      | "typeof"
+      | "void"
+      | "delete"
+      | "in"
+      | "of"
+      | "instanceof"
+      | "new"
+      | "do"
+      | "else"
+      | "case"
+      | "throw"
+      | "yield"
+      | "await"
+  )
+}
+
+/// The index after the quoted string that starts at `start`: its closing quote, or the line's end when the line
+/// ends first. A JavaScript string cannot span lines, so the line's end bounds the scan.
+fn string_end(bytes: &[u8], start: usize) -> usize {
+  let quote = bytes[start];
+  let mut i = start + 1;
+  while i < bytes.len() {
+    match bytes[i] {
+      b'\\' => i += 2,
+      b'\n' => return i,
+      byte if byte == quote => return i + 1,
+      _ => i += 1,
+    }
+  }
+  bytes.len()
+}
+
+/// The index after the regex literal that starts at `start`, when the line holds its closing slash and flag
+/// letters. A slash that opens no regex on its line is division.
+fn regex_end(bytes: &[u8], start: usize) -> Option<usize> {
+  let mut i = start + 1;
+  let mut in_class = false;
+  while i < bytes.len() {
+    match bytes[i] {
+      b'\\' => i += 2,
+      b'\n' => return None,
+      b'[' => {
+        in_class = true;
+        i += 1;
+      }
+      b']' => {
+        in_class = false;
+        i += 1;
+      }
+      b'/' if !in_class => {
+        i += 1;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') {
+          i += 1;
+        }
+        return Some(i);
+      }
+      _ => i += 1,
+    }
+  }
+  None
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn line_comments_leave_the_code_and_keep_their_newline() {
+    assert_eq!(without_comments("let a = 1; // one\nlet b = 2;\n"), "let a = 1; \nlet b = 2;\n");
+    assert_eq!(without_comments("// only a comment"), "");
+    assert_eq!(without_comments("a(); // trailing"), "a(); ");
+  }
+
+  #[test]
+  fn block_comments_keep_the_tokens_apart() {
+    assert_eq!(without_comments("let a = 1;/* note */let b = 2;"), "let a = 1; let b = 2;");
+    assert_eq!(without_comments("let a = 1;/* one\ntwo */let b = 2;"), "let a = 1;\nlet b = 2;");
+    assert_eq!(without_comments("/** a doc comment */function f() {}"), " function f() {}");
+  }
+
+  #[test]
+  fn a_comment_marker_inside_a_string_is_text() {
+    assert_eq!(
+      without_comments(r#"let url = "https://example.com/a"; // gone"#),
+      r#"let url = "https://example.com/a"; "#
+    );
+    assert_eq!(without_comments(r#"let s = '/* not a comment */';"#), r#"let s = '/* not a comment */';"#);
+    assert_eq!(without_comments("let s = 'a // b';"), "let s = 'a // b';");
+  }
+
+  #[test]
+  fn a_comment_marker_inside_a_template_literal_is_text() {
+    assert_eq!(without_comments("let s = `a // b`; // gone"), "let s = `a // b`; ");
+    assert_eq!(without_comments("let s = `a /* b */ c`;"), "let s = `a /* b */ c`;");
+    assert_eq!(without_comments("let s = `\\` // still text`;"), "let s = `\\` // still text`;");
+  }
+
+  #[test]
+  fn a_template_literal_expression_is_code() {
+    assert_eq!(without_comments("let s = `a ${b /* gone */ + c}`;"), "let s = `a ${b   + c}`;");
+    assert_eq!(without_comments("let s = `${`inner // text`}`;"), "let s = `${`inner // text`}`;");
+  }
+
+  #[test]
+  fn a_comment_marker_inside_a_regex_is_text() {
+    assert_eq!(without_comments("let r = /[//]/; // gone"), "let r = /[//]/; ");
+    assert_eq!(without_comments("let r = /a\\/\\/b/g; // gone"), "let r = /a\\/\\/b/g; ");
+  }
+
+  #[test]
+  fn a_slash_after_a_value_divides_and_a_slash_after_an_operator_opens_a_regex() {
+    assert_eq!(without_comments("let c = a / b; // gone"), "let c = a / b; ");
+    assert_eq!(without_comments("let r = return_value / 2; // gone"), "let r = return_value / 2; ");
+    assert_eq!(
+      without_comments("function f() { return /x/.test(y); } // gone"),
+      "function f() { return /x/.test(y); } "
+    );
+  }
+
+  #[test]
+  fn a_line_comment_ending_the_source_needs_no_newline() {
+    assert_eq!(without_comments("a(); // end"), "a(); ");
+  }
+}

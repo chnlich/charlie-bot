@@ -201,6 +201,13 @@ The declared window is 433000 (compaction point 400000) for every run kind. The 
 
 ---
 
+## OpenCode Backend
+
+- For DeepSeek models on OpenCode Go, set the workspace Privacy region to Global.
+- When every request in an OpenCode session times out, first check whether the host has exhausted `fs.inotify.max_user_instances`. `@parcel/watcher` permanently blocks the main thread when it cannot obtain an instance.
+
+---
+
 ## Claude Account Pool
 
 One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`rust/crates/backends/claude_code/src/claude_accounts.rs` owns account state and selection; `rust/crates/backends/claude_code/src/claude_relay.rs` owns the relay mechanics both the master turn and workers use).

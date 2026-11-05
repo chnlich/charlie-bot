@@ -14,7 +14,8 @@
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
 //! `templates/`, in registration order, then `web/static` and each package's `static/`. The static trees come
 //! last, so a template name always resolves to a template, and a page includes the core script or style the static
-//! route would otherwise serve.
+//! route would otherwise serve. A stylesheet the page links from the static tree is carried inline the same way: the
+//! document holds the file at the link's place, so the first paint never waits for a second request.
 
 use std::collections::HashMap;
 use std::fs;
@@ -358,7 +359,8 @@ impl Templating {
       Arc::clone(&cache.as_ref().expect("the render cache holds the environment it built").environment)
     };
     let template = environment.get_template(name).map_err(RenderError::Template)?;
-    template.render(Value::from_serialize(context)).map_err(RenderError::Template)
+    let html = template.render(Value::from_serialize(context)).map_err(RenderError::Template)?;
+    inline_local_stylesheets(&environment, html)
   }
 
   /// The `(rel path, mtime_ns, size)` of every template source under the search directories, sorted, as the walk
@@ -412,6 +414,89 @@ impl Templating {
     }
     environment
   }
+}
+
+/// The page's local stylesheet links, carried inline where the link stands.
+///
+/// A stylesheet under `/static/` names a file the engine's loader already holds, and a page response is
+/// `no-store`: a separate request for that file buys no caching, it only holds the first paint until the file
+/// arrives. The element becomes a `<style>` at the link's place, so the cascade keeps the order the page states.
+/// A tag that states any attribute beside `rel` and `href` (a media query, a disabled flag), a URL outside the
+/// static tree and a file the loader cannot hold all stay links, because inlining them would change what the page
+/// means.
+fn inline_local_stylesheets(environment: &Environment<'_>, html: String) -> Result<String, RenderError> {
+  const LINK: &str = "<link";
+  if !html.contains(LINK) {
+    return Ok(html);
+  }
+  let mut out = String::with_capacity(html.len());
+  let mut rest = html.as_str();
+  while let Some(start) = rest.find(LINK) {
+    out.push_str(&rest[..start]);
+    let tag_rest = &rest[start + LINK.len()..];
+    let Some(end) = tag_rest.find('>') else {
+      out.push_str(&rest[start..]);
+      return Ok(out);
+    };
+    match linked_stylesheet(environment, &tag_rest[..end])? {
+      Some(css) => {
+        out.push_str("<style>");
+        out.push_str(&css);
+        out.push_str("</style>");
+      }
+      None => {
+        out.push_str(LINK);
+        out.push_str(&tag_rest[..=end]);
+      }
+    }
+    rest = &tag_rest[end + 1..];
+  }
+  out.push_str(rest);
+  Ok(out)
+}
+
+/// The text of the stylesheet one `<link>` tag names, when the tag names a file under the served static tree.
+fn linked_stylesheet(environment: &Environment<'_>, tag: &str) -> Result<Option<String>, RenderError> {
+  let Some(attributes) = link_attributes(tag) else { return Ok(None) };
+  let mut rel = None;
+  let mut href = None;
+  for (name, value) in attributes {
+    match name {
+      "rel" => rel = Some(value),
+      "href" => href = Some(value),
+      _ => return Ok(None),
+    }
+  }
+  if rel != Some("stylesheet") {
+    return Ok(None);
+  }
+  let Some(path) = href.and_then(|url| url.strip_prefix("/static/")) else { return Ok(None) };
+  let path = path.split(['?', '#']).next().unwrap_or(path);
+  match environment.get_template(path) {
+    Ok(template) => Ok(Some(template.source().to_string())),
+    Err(error) if error.kind() == ErrorKind::TemplateNotFound => Ok(None),
+    Err(error) => Err(RenderError::Template(error)),
+  }
+}
+
+/// The `(name, value)` pairs of one `<link>` tag's attributes, each value quoted, or `None` for a spelling this
+/// engine does not read.
+fn link_attributes(tag: &str) -> Option<Vec<(&str, &str)>> {
+  let mut attributes = Vec::new();
+  let mut rest = tag.trim();
+  while !rest.is_empty() {
+    let equals = rest.find('=')?;
+    let name = rest[..equals].trim();
+    let after = rest[equals + 1..].trim_start();
+    let quote = after.chars().next()?;
+    if quote != '"' && quote != '\'' {
+      return None;
+    }
+    let close = after[1..].find(quote)?;
+    attributes.push((name, &after[1..1 + close]));
+    rest = after[close + 2..].trim_start();
+  }
+  Some(attributes)
 }
 
 /// Write each `(placeholder, text)` pair's text where `html` carries its placeholder.
@@ -703,6 +788,45 @@ mod tests {
       .render_page_with_substitutions(&features, "splice.html", &context, &parts, &[("ABSENT", "[]")])
       .unwrap_err();
     assert_eq!(error.kind(), "TemplateError");
+  }
+
+  /// A page that links a stylesheet from the served static tree renders that file inline at the link's place. A
+  /// remote sheet, a tag that states a media query and a URL the loader does not hold keep their link.
+  #[tokio::test]
+  async fn a_local_stylesheet_link_renders_inline() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = root.path().join("web").join("templates");
+    let css = root.path().join("web").join("static").join("css");
+    fs::create_dir_all(&templates).unwrap();
+    fs::create_dir_all(&css).unwrap();
+    fs::write(css.join("page.css"), ".chat{display:flex}").unwrap();
+    fs::write(
+      templates.join("linked.html"),
+      concat!(
+        "<link rel=\"stylesheet\" href=\"/static/css/page.css?v=1\">\n",
+        "<link rel=\"stylesheet\" href=\"https://cdn.example.com/x.css\">\n",
+        "<link rel=\"stylesheet\" media=\"print\" href=\"/static/css/page.css\">\n",
+        "<link rel=\"stylesheet\" href=\"/static/css/absent.css\">",
+      ),
+    )
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(Registry::new()));
+    features.startup.insert(Templating::new(root.path(), &[])).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/linked").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    let response = templating.render_page(&features, "linked.html", &json!({}), &parts).unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+      body,
+      concat!(
+        "<style>.chat{display:flex}</style>\n",
+        "<link rel=\"stylesheet\" href=\"https://cdn.example.com/x.css\">\n",
+        "<link rel=\"stylesheet\" media=\"print\" href=\"/static/css/page.css\">\n",
+        "<link rel=\"stylesheet\" href=\"/static/css/absent.css\">",
+      )
+    );
   }
 
   /// A repeat render answers from the compiled environment, and a template edited on disk moves the source list so

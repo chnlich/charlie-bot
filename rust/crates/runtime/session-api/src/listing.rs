@@ -551,8 +551,9 @@ impl PageRowText {
 /// The key under which the page declares the encoding of each column it encoded.
 const COLUMN_ENCODING_KEY: &str = "$encoded";
 
-/// The encoding of the page's `id` column: an id written as a canonical UUID travels as its 16 bytes in base64url,
-/// and any other id as `~` and its text.
+/// The encoding of the page's `id` column: the ids' 16-byte UUID values travel in row order as one base64url string.
+/// A home whose ids are not all canonical UUIDs carries one cell per row instead: the canonical UUID's 16 bytes in
+/// base64url, any other id as `~` and its text.
 const UUID_ENCODING: &str = "uuid-b64";
 
 /// The encoding of the page's `updated_at` column: the first row carries its epoch minutes, and every later row the
@@ -570,11 +571,11 @@ const ID_FIELD: &str = "id";
 /// 506 KB as row objects.
 ///
 /// Two columns carry an encoding the page declares under [`COLUMN_ENCODING_KEY`], because their plain text costs
-/// bytes a client-side expansion removes. A session id is a canonical UUID, so [`UUID_ENCODING`] carries its 16
-/// bytes in base64url (22 characters, near the 16 bytes' entropy) where the 36-character text costs a gzip
-/// deflator's 22 bytes per row. An `updated_at` is epoch minutes in newest-first order, so [`DELTA_ENCODING`] carries
-/// the differences, which are small numbers the deflator packs tightly. On the mock home the two encodings take the
-/// compressed page from 452,820 to 415,790 bytes.
+/// bytes a client-side expansion removes. A session id is a canonical UUID, so [`UUID_ENCODING`] carries the ids' 16
+/// bytes in row order as one base64url string: the 36-character text costs a gzip deflator's 22 bytes per row, one
+/// base64url cell per row costs the same, and the string of them costs the 16 bytes' entropy. An `updated_at` is
+/// epoch minutes in newest-first order, so [`DELTA_ENCODING`] carries the differences, which are small numbers the
+/// deflator packs tightly.
 ///
 /// A page row never carries a null value: the falsy fields it keeps are a name and a schedule flag, and
 /// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
@@ -600,13 +601,20 @@ fn page_columns_text(rows: &[Arc<PageRowText>]) -> String {
   for field in fields {
     text.push(',');
     text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(field.to_string())));
-    text.push_str(":[");
+    text.push(':');
     match field {
       ID_FIELD => write_id_column(&mut text, rows),
-      UPDATED_AT => write_updated_at_column(&mut text, rows),
-      _ => write_plain_column(&mut text, rows, field),
+      UPDATED_AT => {
+        text.push('[');
+        write_updated_at_column(&mut text, rows);
+        text.push(']');
+      }
+      _ => {
+        text.push('[');
+        write_plain_column(&mut text, rows, field);
+        text.push(']');
+      }
     }
-    text.push(']');
   }
   text.push('}');
   text
@@ -622,9 +630,33 @@ fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str)
   }
 }
 
-/// Write the `id` column in [`UUID_ENCODING`]: a canonical UUID as its 16 bytes in base64url, any other id as `~` and
-/// its text.
+/// Write the `id` column in [`UUID_ENCODING`]: every id's 16 bytes, in row order, as one base64url string. A home
+/// whose rows are not all canonical UUIDs carries one cell per row instead, so a row's exact id text survives.
 fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
+  let mut ids = Vec::with_capacity(rows.len() * 16);
+  for row in rows {
+    let Some(cell) = row.cell(ID_FIELD) else {
+      write_id_cells(text, rows);
+      return;
+    };
+    let id: String = serde_json::from_str(cell).expect("an id cell is JSON text");
+    match canonical_uuid(&id) {
+      Some(bytes) => ids.extend_from_slice(&bytes),
+      None => {
+        write_id_cells(text, rows);
+        return;
+      }
+    }
+  }
+  text.push('"');
+  text.push_str(&URL_SAFE_NO_PAD.encode(&ids));
+  text.push('"');
+}
+
+/// Write the `id` column as one cell per row: a canonical UUID as its 16 bytes in base64url, any other id as `~` and
+/// its text, and `null` where the row leaves the field out.
+fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
+  text.push('[');
   for (index, row) in rows.iter().enumerate() {
     if index > 0 {
       text.push(',');
@@ -634,17 +666,27 @@ fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
       continue;
     };
     let id: String = serde_json::from_str(cell).expect("an id cell is JSON text");
-    match uuid::Uuid::parse_str(&id) {
-      // The store holds and the routes name an id by its exact text, so only the canonical spelling may travel
-      // encoded: `Uuid::parse_str` also accepts uppercase, simple, braced and URN spellings, and decoding those
-      // would hand the page a different id string.
-      Ok(uuid) if uuid.to_string() == id => {
+    match canonical_uuid(&id) {
+      Some(bytes) => {
         text.push('"');
-        text.push_str(&URL_SAFE_NO_PAD.encode(uuid.as_bytes()));
+        text.push_str(&URL_SAFE_NO_PAD.encode(bytes));
         text.push('"');
       }
-      _ => text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(format!("~{id}")))),
+      None => text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(format!("~{id}")))),
     }
+  }
+  text.push(']');
+}
+
+/// The 16 bytes one id carries, when its text is the canonical UUID spelling.
+///
+/// The store holds and the routes name an id by its exact text, so only the canonical spelling may travel encoded:
+/// `Uuid::parse_str` also accepts uppercase, simple, braced and URN spellings, and decoding those would hand the page
+/// a different id string.
+fn canonical_uuid(id: &str) -> Option<[u8; 16]> {
+  match uuid::Uuid::parse_str(id) {
+    Ok(uuid) if uuid.to_string() == id => Some(*uuid.as_bytes()),
+    _ => None,
   }
 }
 
@@ -1294,15 +1336,32 @@ mod tests {
     let encodings = columns.get(COLUMN_ENCODING_KEY).and_then(Value::as_object).cloned().unwrap_or_default();
     let count = columns
       .iter()
-      .find(|(field, _)| field.as_str() != COLUMN_ENCODING_KEY)
-      .and_then(|(_, cells)| cells.as_array())
-      .map_or(0, Vec::len);
+      .filter(|(field, _)| field.as_str() != COLUMN_ENCODING_KEY)
+      .map(|(_, cells)| match cells {
+        Value::Array(cells) => cells.len(),
+        // The `id` column's string form carries one 16-byte id per row.
+        Value::String(blob) => URL_SAFE_NO_PAD.decode(blob).expect("the id blob is base64url").len() / 16,
+        _ => 0,
+      })
+      .max()
+      .unwrap_or(0);
     let mut rows = vec![Map::new(); count];
     for (field, cells) in columns {
       if field == COLUMN_ENCODING_KEY {
         continue;
       }
       let encoding = encodings.get(&field).and_then(Value::as_str);
+      if encoding == Some(UUID_ENCODING)
+        && let Some(blob) = cells.as_str()
+      {
+        let bytes = URL_SAFE_NO_PAD.decode(blob).expect("the id blob is base64url");
+        for index in 0..count {
+          let id =
+            uuid::Uuid::from_slice(&bytes[index * 16..(index + 1) * 16]).expect("the id blob holds 16 bytes per row");
+          rows[index].insert(field.clone(), Value::String(id.to_string()));
+        }
+        continue;
+      }
       let mut running = 0i64;
       for (index, cell) in cells.as_array().expect("a column is an array").iter().enumerate() {
         if cell.is_null() {
@@ -1331,8 +1390,34 @@ mod tests {
     encoded.to_string()
   }
 
-  /// A canonical UUID id travels as 22 base64url characters, any other id as `~` and its text, and the expansion
-  /// restores both.
+  /// A home whose ids are all canonical UUIDs carries them as one base64url string of the 16-byte values, and the
+  /// expansion restores each id's text.
+  #[test]
+  fn canonical_uuid_ids_travel_as_one_base64url_string() {
+    let ids = ["e870f19c-96c6-40e7-8da7-71f02b2622e3", "994a3ec8-c930-4c2c-9009-5b75d17b823d"];
+    let rows: Vec<Arc<PageRowText>> = ids
+      .into_iter()
+      .enumerate()
+      .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
+      .collect();
+
+    let text = page_columns_text(&rows);
+    let bytes: Vec<u8> = ids.iter().flat_map(|id| *uuid::Uuid::parse_str(id).unwrap().as_bytes()).collect();
+    assert_eq!(
+      text,
+      format!(
+        r#"{{"$encoded":{{"id": "{UUID_ENCODING}", "updated_at": "{DELTA_ENCODING}"}},"id":"{}","updated_at":[29566074,1]}}"#,
+        URL_SAFE_NO_PAD.encode(&bytes)
+      )
+    );
+    assert_eq!(
+      page_rows_of(&text),
+      vec![json!({"id": ids[0], "updated_at": 29_566_074}), json!({"id": ids[1], "updated_at": 29_566_075})]
+    );
+  }
+
+  /// A home whose ids are not all canonical UUIDs carries one cell per row: a canonical UUID as 22 base64url
+  /// characters, any other id as `~` and its text, and the expansion restores both.
   #[test]
   fn a_canonical_uuid_id_travels_as_its_bytes_and_any_other_id_as_text() {
     let uuid = "e870f19c-96c6-40e7-8da7-71f02b2622e3";

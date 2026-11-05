@@ -335,7 +335,8 @@ async fn control(fake: &Arc<Fake>, write: &mut OwnedWriteHalf, body: &Value) -> 
   Ok(())
 }
 
-/// `serve`: prints the listening address, then answers each connection until the process is ended.
+/// The server loop behind the `serve` subcommand: prints the listening address, then answers each connection until the
+/// process is ended.
 async fn serve(fake: Arc<Fake>) {
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("the loopback port binds");
   let port = listener.local_addr().expect("the listening address reads").port();
@@ -352,7 +353,8 @@ async fn serve(fake: Arc<Fake>) {
   }
 }
 
-/// `run`: records the one-shot's environment, prints the scripted lines, and exits with the scripted status.
+/// The one-shot path behind the `run` subcommand: records the one-shot's environment, prints the scripted lines, and
+/// exits with the scripted status.
 fn run_once(settings: &Settings) {
   let data_home = PathBuf::from(std::env::var_os("XDG_DATA_HOME").expect("a one-shot sets XDG_DATA_HOME"));
   fs::create_dir_all(data_home.join("opencode/shell")).expect("the shell directory is created");
@@ -377,7 +379,7 @@ fn param(params: &Params, name: &str) -> String {
   params.get(name).and_then(|values| values.first()).cloned().unwrap_or_default()
 }
 
-/// `urllib.parse.parse_qs` with its default of dropping blank values.
+/// The query string parser, matching `urllib.parse.parse_qs` with its default of dropping blank values.
 fn parse_query(query: &str) -> Params {
   let mut params = Params::new();
   for pair in query.split('&') {
@@ -393,7 +395,8 @@ fn params_json(params: &Params) -> Value {
   Value::Object(params.iter().map(|(name, values)| (name.clone(), json!(values))).collect())
 }
 
-/// `urllib.parse.unquote_plus`: a `+` is a space, and each `%XX` is the byte that its two hex digits name.
+/// The percent decoder, matching `urllib.parse.unquote_plus`: a `+` is a space, and each `%XX` is the byte that its
+/// two hex digits name.
 fn unquote(text: &str) -> String {
   let bytes = text.replace('+', " ").into_bytes();
   let mut decoded = Vec::with_capacity(bytes.len());

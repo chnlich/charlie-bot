@@ -160,7 +160,11 @@ pub async fn recover(
     tokio::time::sleep(poll_interval).await;
   }
   let context: CaptureContext = serde_json::from_slice(&context)?;
-  let launch = LaunchArgs { resume_session_id: context.resume_session_id, ..LaunchArgs::default() };
+  let launch = LaunchArgs {
+    resume_session_id: context.resume_session_id,
+    log_dir: Some(directory.to_path_buf()),
+    ..LaunchArgs::default()
+  };
   let option = option.context("a captured final-stdout run needs its backend option")?;
   let mut built = crate::backend_types::build_backend(registry, option, cfg, launch)?;
   materialize(built.backend.as_mut(), directory, None)?;

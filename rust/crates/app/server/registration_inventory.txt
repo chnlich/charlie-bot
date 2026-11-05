@@ -36,6 +36,7 @@ page_packages	backends.antigravity	backends.antigravity
 page_packages	backends.charlie_code	backends.charlie_code
 page_packages	backends.claude_code	backends.claude_code
 page_packages	backends.codex	backends.codex
+page_packages	backends.devin	backends.devin
 page_packages	backends.gemini	backends.gemini
 page_packages	backends.anthropic_compatible	backends.anthropic_compatible
 page_packages	backends.opencode	backends.opencode
@@ -151,12 +152,14 @@ usage source	backends.antigravity	Antigravity
 usage source	backends.charlie_code	CLC
 usage source	backends.claude_code	Claude Code
 usage source	backends.codex	Codex
+usage source	backends.devin	Devin
 usage source	backends.opencode	opencode
 usage attribution	backends.openai_compatible	cc-openai-compatible
 usage attribution	backends.antigravity	antigravity
 usage attribution	backends.charlie_code	charlie-code
 usage attribution	backends.claude_code	cc-claude
 usage attribution	backends.codex	codex
+usage attribution	backends.devin	devin
 usage attribution	backends.anthropic_compatible	cc-anthropic-compatible
 usage attribution	backends.opencode	opencode
 backend type	backends.openai_compatible	cc-openai-compatible
@@ -164,6 +167,7 @@ backend type	backends.antigravity	antigravity
 backend type	backends.charlie_code	charlie-code
 backend type	backends.claude_code	cc-claude
 backend type	backends.codex	codex
+backend type	backends.devin	devin
 backend type	backends.gemini	gemini
 backend type	backends.anthropic_compatible	cc-anthropic-compatible
 backend type	backends.opencode	opencode
@@ -172,6 +176,7 @@ option schema	backends.antigravity	antigravity
 option schema	backends.charlie_code	charlie-code
 option schema	backends.claude_code	cc-claude
 option schema	backends.codex	codex
+option schema	backends.devin	devin
 option schema	backends.gemini	gemini
 option schema	backends.anthropic_compatible	cc-anthropic-compatible
 option schema	backends.opencode	opencode

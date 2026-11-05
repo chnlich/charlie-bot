@@ -1,0 +1,53 @@
+//! The `devin` backend type: the Devin CLI in print mode, run headless with every tool approved. The CLI prints the
+//! final answer on stdout and writes the turn's trajectory to an export file, which the runner reads once the process
+//! has exited. The CLI logs its usage only into CharlieBot's own run logs, so the usage source has no reader.
+
+mod devin_cli;
+mod export;
+mod factory;
+mod options;
+
+use std::sync::Arc;
+
+use charliebot_agents::cli_base::CliHost;
+use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
+use charliebot_registry::usage::UsageSource;
+use charliebot_registry::{Registry, RegistryError, registration_step};
+
+/// The ledger's source value and the usage page's card title for devin's usage.
+pub const USAGE_SOURCE: &str = "Devin";
+
+/// The package label the composition list registers this backend's package under.
+pub const PACKAGE: &str = "backends.devin";
+
+/// Registers the `devin` type and the Devin usage source, which attributes the type's usage.
+pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  register_with_host(registry, registration_step(PACKAGE, CliHost::from_process())?)
+}
+
+/// [`register`] over an explicit host.
+pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), RegistryError> {
+  registry.backend_type(BackendTypeRegistration {
+    type_name: "devin",
+    traits: BackendTraits {
+      resume: ResumeStyle::NativeId,
+      restart_reattach: true,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: options::option_model,
+    factory: Arc::new(factory::DevinFactory::new(host)),
+    lifecycle: None,
+    translate_fallback: false,
+  })?;
+  registry.option_schema("devin", options::SCHEMA)?;
+  registry.usage_source(UsageSource {
+    name: USAGE_SOURCE,
+    id_prefixes: &["devin-"],
+    run_logs_only: true,
+    implementation: None,
+  })?;
+  registry.attribute_backend_type("devin", USAGE_SOURCE)
+}

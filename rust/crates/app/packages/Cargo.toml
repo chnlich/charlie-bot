@@ -17,6 +17,7 @@ charliebot-chat-threads.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-code-server.workspace = true
 charliebot-codex.workspace = true
+charliebot-devin.workspace = true
 charliebot-cron.workspace = true
 charliebot-diag.workspace = true
 charliebot-diff-view.workspace = true

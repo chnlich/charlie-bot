@@ -54,6 +54,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   (charliebot_charlie_code::PACKAGE, charliebot_charlie_code::register),
   (charliebot_claude_code::PACKAGE, charliebot_claude_code::register),
   (charliebot_codex::PACKAGE, charliebot_codex::register),
+  (charliebot_devin::PACKAGE, charliebot_devin::register),
   (charliebot_gemini::PACKAGE, charliebot_gemini::register),
   (charliebot_anthropic_compatible::PACKAGE, charliebot_anthropic_compatible::register),
   (charliebot_opencode::PACKAGE, charliebot_opencode::register),

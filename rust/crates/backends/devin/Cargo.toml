@@ -1,0 +1,20 @@
+[package]
+name = "charliebot-devin"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+charliebot-agents.workspace = true
+charliebot-core.workspace = true
+charliebot-registry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+[dev-dependencies]
+charliebot-store.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

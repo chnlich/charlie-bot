@@ -765,6 +765,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-devin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "charliebot-diag"
 version = "0.1.0"
 dependencies = [
@@ -1168,6 +1184,7 @@ dependencies = [
  "charliebot-code-server",
  "charliebot-codex",
  "charliebot-cron",
+ "charliebot-devin",
  "charliebot-diag",
  "charliebot-diff-view",
  "charliebot-discord",

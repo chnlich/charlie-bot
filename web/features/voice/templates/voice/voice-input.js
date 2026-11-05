@@ -509,10 +509,10 @@ function voiceOutputDeviceLabel(listed, deviceId) {
 
 // --- Startup report ---------------------------------------------------------
 // One record per recording run, created at the click, marks the last startup
-// step the run reached and how it ended. The first exit sends it, and the
-// record's flag makes every later exit a no-op: a late mic return, a session
-// switch, or a page close after a stop adds no second line. The server writes
-// one voice_startup line per run and keeps no state.
+// step the run reached and how it ended. The first exit sends it. The record's
+// flag makes every later exit a no-op, so a late mic return, a session switch,
+// or a page close after a stop adds no second line. The server writes one
+// voice_startup line per run and keeps no state.
 
 function newVoiceStartup() {
   return {
@@ -566,8 +566,8 @@ function tagVoiceStartupError(run, step, promise) {
 }
 
 // The body of one voice_startup line: the run's startup record plus the audio
-// and microphone state at this moment. devices rides only once the collection
-// has settled; the send never waits for it.
+// and microphone state at this moment. Devices rides only once the collection
+// has settled, and the send never waits for it.
 function voiceStartupBody(run) {
   const startup = run.startup;
   const context = run.audioContext;
@@ -596,8 +596,8 @@ function voiceStartupBody(run) {
 }
 
 // The one send: the record's flag makes every call after the first a no-op, so
-// each run writes exactly one line. keepalive lets a page-close report outlive
-// the page; only a report from a live page names its own failure.
+// each run writes exactly one line. Keepalive lets a page-close report outlive
+// the page, and only a report from a live page names its own failure.
 function sendVoiceStartup(run, end) {
   const startup = run.startup;
   if (startup.sent) return;

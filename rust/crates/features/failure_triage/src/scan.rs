@@ -127,7 +127,7 @@ pub fn preflight(cfg: &CharlieBotConfig, log_dir: &Path) -> Result<()> {
 /// How many judge calls a scan keeps in flight. Three fills the light pool without stacking calls on one gateway.
 pub const JUDGE_CONCURRENCY: usize = 3;
 
-/// Run one scan over the window. `judge` decides every signature that has a cause and no archived entry.
+/// One scan over the window. `judge` decides every signature that has a cause and no archived entry.
 pub async fn scan(options: &ScanOptions, judge: &dyn JudgeRunner) -> Result<Vec<ScanRow>> {
   let lessons_path = options.home.join(LESSONS_FILE_NAME);
   let lessons = LessonIndex::load(&lessons_path)

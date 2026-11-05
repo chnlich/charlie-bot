@@ -16,7 +16,7 @@ pub(crate) struct MatchLine {
   pub(crate) text: String,
 }
 
-/// Check that ripgrep answers, for a scan that is about to rank LESSONS entries.
+/// The check that ripgrep answers, for a scan that is about to rank LESSONS entries.
 pub(crate) fn ensure_available() -> Result<()> {
   let answered = Command::new("rg")
     .arg("--version")

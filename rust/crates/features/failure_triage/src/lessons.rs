@@ -47,7 +47,7 @@ struct Entry {
 }
 
 impl LessonIndex {
-  /// Read the entries of `path`. A missing or unreadable file is an error: a scan cannot rank candidates without it.
+  /// The entries of `path`. A missing or unreadable file is an error: a scan cannot rank candidates without it.
   pub fn load(path: &Path) -> Result<LessonIndex> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut entries = Vec::new();

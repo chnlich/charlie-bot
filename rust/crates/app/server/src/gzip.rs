@@ -40,7 +40,7 @@ pub const COMPRESS_LEVEL: u32 = 1;
 pub use charliebot_compat::compression::SKIP_MEDIA_PREFIXES;
 
 /// The identity responder's own exclusion (`DEFAULT_EXCLUDED_CONTENT_TYPES`).
-const IDENTITY_EXCLUDED_PREFIX: &str = "text/event-stream";
+const IDENTITY_EXCLUDED_PREFIX: &str = charliebot_compat::compression::TEXT_EVENT_STREAM;
 
 /// Whether the gzip responder passes a response of this content type through untouched.
 pub fn skips_transport_gzip(content_type: &str) -> bool {

@@ -681,42 +681,46 @@ pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Resu
   Ok(status_payload(&status))
 }
 
-/// The session's metadata when the session is open: not archived, not in `archived`, and with an open task. A session
-/// deleted since the task-tree index was read is absent.
-async fn open_meta(
-  store: &Arc<Store>,
-  session_id: &str,
-  archived: &HashSet<String>,
-) -> Result<Option<SessionMetadata>, WebReplyError> {
-  let Some(meta) = store.get_session(session_id).await? else {
-    return Ok(None);
-  };
-  if meta.status == SessionStatus::Archived || archived.contains(session_id) {
-    return Ok(None);
-  }
-  if task_state(store, session_id).await? != "open" {
-    return Ok(None);
-  }
-  Ok(Some(meta))
+/// What one blocking pass over the session's subtree reads: the direct children, every open descendant, and each open
+/// descendant's stored status.
+///
+/// One pass reads each descendant's metadata once, so the holders, the descendant rows and the children rows all come
+/// from the same read. The request pays one blocking round trip for the pass, not one per read.
+struct StatusTree {
+  /// The direct children, as the task-tree index orders them.
+  children: Vec<String>,
+  /// The open descendants, in depth-first order.
+  open: Vec<String>,
+  /// The open descendants that hold a stored status, in the same order.
+  statuses: Vec<(String, SessionMetadata, WebStatus)>,
 }
 
-/// The sessions among `session_ids` that are open and hold a status.
-async fn open_statuses(
-  store: &Arc<Store>,
-  session_ids: Vec<String>,
-  archived: &HashSet<String>,
-) -> Result<Vec<(String, SessionMetadata, WebStatus)>, WebReplyError> {
+/// Read the session's subtree: the direct children, then each descendant's metadata and stored status while that
+/// descendant is open (its task state is `open`, and neither it nor an ancestor is archived).
+///
+/// A session deleted since the task-tree index was read is absent, so it answers no row.
+fn read_status_tree(store: &Store, session_id: &str) -> Result<StatusTree, WebReplyError> {
+  let archived = store.derived_archived_ids()?;
+  let archived: HashSet<&str> = archived.iter().map(String::as_str).collect();
+  let children = store.child_ids(session_id)?;
+  let mut open = Vec::new();
   let mut statuses = Vec::new();
-  for session_id in session_ids {
-    let Some(meta) = open_meta(store, &session_id, archived).await? else {
+  for descendant_id in store.descendant_ids(session_id)? {
+    let Some(meta) = store.get_session_cached_or_read_sync(&descendant_id)? else {
       continue;
     };
-    let Some(status) = stored_status(&meta)? else {
+    if meta.status == SessionStatus::Archived || archived.contains(descendant_id.as_str()) {
       continue;
-    };
-    statuses.push((session_id, meta, status));
+    }
+    if store.task_state(&descendant_id)? != "open" {
+      continue;
+    }
+    if let Some(status) = stored_status(&meta)? {
+      statuses.push((descendant_id.clone(), meta, status));
+    }
+    open.push(descendant_id);
   }
-  Ok(statuses)
+  Ok(StatusTree { children, open, statuses })
 }
 
 /// The derived Waiting on you items that the registry's reader gives: those held by a session in `holders`, or all of
@@ -765,22 +769,20 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
-  let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
+  let tree = tree_read_reply(&features.store, {
+    let session_id = session_id.to_string();
+    move |store| read_status_tree(store, &session_id)
+  })
+  .await?;
   let mut holders = HashSet::from([session_id.to_string()]);
-  for descendant_id in descendant_ids(&features.store, session_id).await? {
-    if open_meta(&features.store, &descendant_id, &archived).await?.is_some() {
-      holders.insert(descendant_id);
-    }
-  }
+  holders.extend(tree.open.iter().cloned());
   let derived = derived_items(features, Some(&holders)).await?;
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
-  for (descendant_id, child, child_status) in
-    open_statuses(&features.store, descendant_ids(&features.store, session_id).await?, &archived).await?
-  {
+  for (descendant_id, child, child_status) in &tree.statuses {
     if child_status.waiting.is_empty() {
       continue;
     }
-    let payload = status_payload(&child_status);
+    let payload = status_payload(child_status);
     let row = json!({
       "session_id": descendant_id,
       "name": child.name,
@@ -790,13 +792,14 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     rows.push((child_status.updated_at, row));
   }
   rows.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
-  let child_ids = tree_read(&features.store, {
-    let session_id = session_id.to_string();
-    move |store| store.child_ids(&session_id)
-  })
-  .await?;
+  let status_of: HashMap<&str, usize> =
+    tree.statuses.iter().enumerate().map(|(index, (id, _, _))| (id.as_str(), index)).collect();
   let mut children: Vec<(UtcDateTime, Value)> = Vec::new();
-  for (child_id, child, child_status) in open_statuses(&features.store, child_ids, &archived).await? {
+  for child_id in &tree.children {
+    let Some(index) = status_of.get(child_id.as_str()) else {
+      continue;
+    };
+    let (_, child, child_status) = &tree.statuses[*index];
     let Some(now) = child_status.now.as_ref() else {
       continue;
     };
@@ -947,14 +950,21 @@ where
   Ok(answer?)
 }
 
+/// The task-tree reads run off the runtime's worker threads, never on the async worker. A pass that raises its own
+/// `WebReplyError` keeps it, so a refusal the pass detects reaches the route unchanged.
+async fn tree_read_reply<T, F>(store: &Arc<Store>, read: F) -> Result<T, WebReplyError>
+where
+  T: Send + 'static,
+  F: FnOnce(&Store) -> Result<T, WebReplyError> + Send + 'static,
+{
+  let store = Arc::clone(store);
+  let answer = tokio::task::spawn_blocking(move || read(&store)).await;
+  answer.map_err(|error| anyhow::anyhow!("a task-tree read stopped: {error}"))?
+}
+
 async fn ancestor_ids(store: &Arc<Store>, session_id: &str) -> Result<Vec<String>, WebReplyError> {
   let session_id = session_id.to_string();
   tree_read(store, move |store| store.ancestor_ids(&session_id)).await
-}
-
-async fn descendant_ids(store: &Arc<Store>, session_id: &str) -> Result<Vec<String>, WebReplyError> {
-  let session_id = session_id.to_string();
-  tree_read(store, move |store| store.descendant_ids(&session_id)).await
 }
 
 async fn derived_archived_ids(store: &Arc<Store>) -> Result<Arc<Vec<String>>, WebReplyError> {

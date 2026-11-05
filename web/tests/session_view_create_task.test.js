@@ -25,7 +25,6 @@ function buildHarness(overrides = {}) {
     ['messages', messages],
     ['header-session-name', createElement({id: 'header-session-name'})],
     ['backend-badge', createElement()],
-    ['input-model-badge', createElement()],
     ['msg-input', input],
   ]);
   if (overrides.backendSelectValue !== undefined) {

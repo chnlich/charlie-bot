@@ -73,7 +73,6 @@ function buildSwitchHarness() {
     ['messages', messages],
     ['header-session-name', headerName],
     ['backend-badge', createElement()],
-    ['input-model-badge', createElement()],
     ['msg-input', createElement()],
     ['rename-input', createElement({id: 'rename-input', className: 'hidden', select() {}})],
     ['thinking', createElement({className: 'hidden'})],

@@ -252,7 +252,6 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
     ['messages', messages],
     ['header-session-name', createElement({id: 'header-session-name'})],
     ['backend-badge', createElement()],
-    ['input-model-badge', createElement()],
     ['msg-input', createElement()],
     ...rows.map((row) => [row.id, row]),
   ]);

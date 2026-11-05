@@ -18,14 +18,20 @@
   // plus the bootstrap's Resource Timing. The started phase has no entry yet
   // (its response has not landed) and reports nulls, as does a cache-hit
   // switch whose bootstrap entry predates the phase lookup window.
+  // The bootstrap entry must have started inside the switch's window, which opens at its
+  // started phase: an earlier switch's fetch of the same session is not this switch's bootstrap.
+  let switchWindowStart = 0;
+
   document.addEventListener('charliebot:session-switch-phase', (event) => {
+    if (event.detail.phase === 'started') switchWindowStart = performance.now();
     postClientEvent('switch', Object.assign({}, event.detail, bootstrapResourceTiming(event.detail.to_session)));
   });
 
   function bootstrapResourceTiming(sessionId) {
     const suffix = '/api/sessions/' + sessionId + '/bootstrap';
-    const entries = performance.getEntriesByType('resource');
-    const entry = entries.filter((candidate) => candidate.name.endsWith(suffix)).pop();
+    const entry = performance.getEntriesByType('resource')
+      .filter((candidate) => candidate.name.endsWith(suffix) && candidate.startTime >= switchWindowStart)
+      .pop();
     return {
       request_start: entry ? Math.round(entry.requestStart) : null,
       response_start: entry ? Math.round(entry.responseStart) : null,

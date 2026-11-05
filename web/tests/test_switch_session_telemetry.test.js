@@ -11,6 +11,9 @@ const {readPackageStatic, readStatic} = require('./read_static');
 // event to; an endpoint move on either side breaks the pin.
 const CLIENT_EVENTS_URL = '/api/diag/client-events';
 
+// The performance.now() every switch phase reads in the harness.
+const SWITCH_CLOCK_MS = 1000;
+
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flush = async () => { await tick(); await tick(); };
 
@@ -28,9 +31,12 @@ function loadSwitchTelemetry(context) {
     return true;
   };
   // The Resource Timing entries the switch listener reads the bootstrap's
-  // timing from; a test sets resourceEntries to land one on the page.
+  // timing from; a test sets resourceEntries to land one on the page. Every
+  // phase reads the same clock, so an entry's startTime places it before or
+  // inside the switch's window.
   const resourceEntries = [];
   context.performance = Object.assign(context.performance || {}, {
+    now: () => SWITCH_CLOCK_MS,
     getEntriesByType: (type) => (type === 'resource' ? resourceEntries : []),
   });
   context.PerformanceObserver = undefined;
@@ -267,9 +273,11 @@ test('started telemetry carries exactly the switch schema fields', async () => {
   assert.equal(h.telemetryPosts[1].transfer_size, null, 'no Resource Timing entry lands without one on the page');
 });
 
-test('a completed switch carries its bootstrap Resource Timing', async () => {  const h = buildSwitchHarness();
+test('a completed switch carries its bootstrap Resource Timing', async () => {
+  const h = buildSwitchHarness();
   h.resourceEntries.push({
     name: 'http://localhost:8000/api/sessions/session-b/bootstrap',
+    startTime: SWITCH_CLOCK_MS + 1,
     requestStart: 120.4,
     responseStart: 410.2,
     responseEnd: 1500.8,
@@ -291,6 +299,7 @@ test('the switch Resource Timing reads only the target session’s bootstrap ent
   const h = buildSwitchHarness();
   h.resourceEntries.push({
     name: 'http://localhost:8000/api/sessions/session-z/bootstrap',
+    startTime: SWITCH_CLOCK_MS + 1,
     requestStart: 1, responseStart: 2, responseEnd: 3, transferSize: 999,
   });
 
@@ -299,6 +308,24 @@ test('the switch Resource Timing reads only the target session’s bootstrap ent
   await click;
 
   assert.equal(h.telemetryPosts[1].transfer_size, null, 'another session’s bootstrap entry does not apply');
+});
+
+test('a switch reports Resource Timing only from a bootstrap that began inside its window', async () => {
+  const h = buildSwitchHarness();
+  // An earlier switch's fetch of the same session began before this switch's window opened.
+  h.resourceEntries.push({
+    name: 'http://localhost:8000/api/sessions/session-b/bootstrap',
+    startTime: SWITCH_CLOCK_MS - 500,
+    requestStart: 1, responseStart: 2, responseEnd: 3, transferSize: 999,
+  });
+
+  const click = h.context.switchSession('session-b');
+  h.resolveLastSwitch();
+  await click;
+
+  assert.deepEqual(h.telemetryPosts.map((post) => [post.phase, post.transfer_size]),
+      [['started', null], ['completed', null]],
+      'a cache-hit or re-visited switch must not report an earlier fetch’s timing');
 });
 
 // ---------------------------------------------------------------------------

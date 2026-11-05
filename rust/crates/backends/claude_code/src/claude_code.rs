@@ -20,6 +20,7 @@ use charliebot_agents::cli_base::SKIP_PERMISSIONS_FLAG;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
+use charliebot_core::event_types;
 use charliebot_core::run_token;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME};
@@ -768,7 +769,7 @@ pub fn out_of_family_served_models(events: &[Value], configured_model: &str) -> 
   let mut seen = HashSet::new();
   let mut served = Vec::new();
   for event in events {
-    if event.get("parent_tool_use_id").is_some_and(is_truthy)
+    if event.get(event_types::PARENT_TOOL_USE_ID).is_some_and(is_truthy)
       || event.get("type").and_then(Value::as_str) != Some("assistant")
     {
       continue;

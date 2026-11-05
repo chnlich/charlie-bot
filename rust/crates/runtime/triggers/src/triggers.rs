@@ -110,9 +110,13 @@ const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
 /// the `session trigger` command, so neither crate spells the name on its own.
 pub const WATCH_TARGETS_FIELD: &str = "watch_targets";
 
+/// The session trigger body field that holds the wait before the wake fires. The body model reads it and so does
+/// the `session trigger` command, so neither crate spells the name on its own.
+pub const DELAY_SECONDS_FIELD: &str = "delay_seconds";
+
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
-  Field::required("delay_seconds", FieldType::Integer),
+  Field::required(DELAY_SECONDS_FIELD, FieldType::Integer),
   Field::required("message", FieldType::String).max_length(MAX_TRIGGER_MESSAGE_CHARS),
   Field::optional(
     WATCH_TARGETS_FIELD,
@@ -1427,7 +1431,7 @@ pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxF
 fn schedule_request(payload: &Value) -> anyhow::Result<ScheduleTriggerRequest> {
   Ok(ScheduleTriggerRequest {
     session_id: payload["session_id"].as_str().expect("validated string field").to_string(),
-    delay_seconds: integer_field(payload, "delay_seconds")?,
+    delay_seconds: integer_field(payload, DELAY_SECONDS_FIELD)?,
     message: payload["message"].as_str().expect("validated string field").to_string(),
     watch_targets: match payload.get(WATCH_TARGETS_FIELD) {
       None | Some(Value::Null) => None,

@@ -995,6 +995,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::trigger_files::SLURM_JOB_KIND`.",
   },
   OwnerRow {
+    name: "delay_seconds",
+    owner: "runtime/triggers",
+    hint: "Use `charliebot_triggers::triggers::DELAY_SECONDS_FIELD`.",
+  },
+  OwnerRow {
     name: "watch_targets",
     owner: "runtime/triggers",
     hint: "Use `charliebot_triggers::triggers::WATCH_TARGETS_FIELD`.",

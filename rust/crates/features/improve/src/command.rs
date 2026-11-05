@@ -140,7 +140,7 @@ pub fn iteration_report_path(loop_dir: &Path, iteration: i64) -> PathBuf {
   loop_dir.join(format!("iter_{iteration:04}.md"))
 }
 
-/// Read the live goal of a loop directory. A missing `goal.md` fails loudly: there is no fallback to the state file's
+/// The live goal of a loop directory. A missing `goal.md` fails loudly: there is no fallback to the state file's
 /// startup snapshot.
 pub fn read_loop_goal(loop_dir: &Path) -> anyhow::Result<String> {
   let goal_path = loop_dir.join(GOAL_FILE);
@@ -150,7 +150,7 @@ pub fn read_loop_goal(loop_dir: &Path) -> anyhow::Result<String> {
   std::fs::read_to_string(&goal_path).with_context(|| format!("read {}", goal_path.display()))
 }
 
-/// Read the optional live plan of a loop directory, `None` when the file is absent.
+/// The optional live plan of a loop directory, `None` when the file is absent.
 pub fn read_loop_plan(loop_dir: &Path) -> anyhow::Result<Option<String>> {
   let plan_path = loop_dir.join(PLAN_FILE);
   if !plan_path.exists() {
@@ -209,7 +209,7 @@ fn status_text(status: LoopStatus) -> String {
     .to_string()
 }
 
-/// Read and decode the state file at `path`, the one reader of `state.json` in this module. The caller checks that the
+/// The decoded state file at `path`, through the one reader of `state.json` in this module. The caller checks that the
 /// file exists, and the read and parse errors name the path.
 fn read_state_file<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
   let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
@@ -242,8 +242,8 @@ pub fn require_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64
     .ok_or_else(|| anyhow::anyhow!("missing loop state for session {session_id} loop {loop_id}"))
 }
 
-/// Write the loop's state file as the atomic swap the readers need: the server, the CLI and the startup pass read it
-/// with no coordination.
+/// The loop's state file, written as the atomic swap the readers need: the server, the CLI and the startup pass read
+/// it with no coordination.
 pub fn save_loop_state(cfg: &CharlieBotConfig, session_id: &str, state: &ImproveState) -> anyhow::Result<()> {
   let path = state_path(cfg, session_id, state.loop_id);
   let parent = path.parent().expect("a state path has a loop directory");
@@ -252,7 +252,7 @@ pub fn save_loop_state(cfg: &CharlieBotConfig, session_id: &str, state: &Improve
   atomic_write_text(&path, &text).with_context(|| format!("write {}", path.display()))
 }
 
-/// Remove the session's active-loop lock, if present.
+/// The session's active-loop lock, removed when present.
 pub fn clear_active_loop_lock(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Result<()> {
   let active = active_lock_path(cfg, session_id);
   match std::fs::remove_file(&active) {
@@ -302,7 +302,7 @@ fn next_loop_id(loops_dir: &Path) -> anyhow::Result<i64> {
   Ok(if max_loop_id > 0 { max_loop_id + 1 } else { 1 })
 }
 
-/// Create a unique loop directory for the session and return its id and path.
+/// A unique loop directory for the session, as its id and path.
 fn reserve_loop_dir(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Result<(i64, PathBuf)> {
   let loops = loops_dir(cfg, session_id);
   std::fs::create_dir_all(&loops).with_context(|| format!("create {}", loops.display()))?;
@@ -341,7 +341,7 @@ pub fn stop_improve_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Re
   Ok(true)
 }
 
-/// Resolve a path non-strictly: symlinks in the existing prefix are followed and
+/// The resolved path, non-strictly: symlinks in the existing prefix are followed and
 /// the missing tail is kept as written.
 pub fn resolve_path(path: &Path) -> anyhow::Result<PathBuf> {
   let absolute = std::path::absolute(path).with_context(|| format!("absolute path of {}", path.display()))?;

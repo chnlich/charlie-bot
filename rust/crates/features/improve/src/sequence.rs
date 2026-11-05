@@ -93,8 +93,8 @@ pub fn improve_child_id(session_id: &str, loop_id: i64) -> String {
   control_events::stable_task_id(Some(session_id), &improve_child_request_id(loop_id))
 }
 
-/// Create, or re-admit, the loop's one worker child under the manager. The child records the loop's resolved backend
-/// and carries the goal as its task text with no task type: the improve loop is its own deliverable kind.
+/// The loop's one worker child under the manager, created or re-admitted. The child records the loop's resolved
+/// backend and carries the goal as its task text with no task type: the improve loop is its own deliverable kind.
 pub async fn create_improve_child(
   store: &Store,
   session_id: &str,
@@ -188,8 +188,8 @@ pub fn compose_iteration_description(goal: &str, plan: Option<&str>, previous_su
   parts.join("\n")
 }
 
-/// Register one iteration Run with its shared-worktree provenance, before its launch. Stable by (child, request id):
-/// a replayed registration returns the original Run.
+/// One iteration Run registered with its shared-worktree provenance, before its launch. Stable by (child, request
+/// id): a replayed registration returns the original Run.
 async fn register_iteration_run(
   tree: &dyn SequenceTree,
   spec: &LoopSpec<'_>,
@@ -276,7 +276,7 @@ struct Progress {
   completed_iterations: i64,
 }
 
-/// Run the improve sequence on the loop's child. Every iteration launches through the shared adapter and is awaited to
+/// The improve sequence on the loop's child. Every iteration launches through the shared adapter and is awaited to
 /// its terminal fact; a failure ends the loop with a final report that names it. The close step runs at every end.
 pub async fn run_improve_sequence(
   spec: &LoopSpec<'_>,
@@ -545,7 +545,7 @@ async fn run_loop(
   Ok(())
 }
 
-/// Create the loop's one worktree and pin its canonical base on the state. Returns the canonical base branch.
+/// The loop's one worktree, created with its canonical base pinned on the state. Returns the canonical base branch.
 async fn create_worktree(
   cfg: &CharlieBotConfig,
   spec: &LoopSpec<'_>,
@@ -758,7 +758,7 @@ async fn deliver_iteration_report(
   Ok(())
 }
 
-/// Close the loop's worker child once the loop has ended. It returns while the loop can still progress, and when a
+/// The loop's worker child, closed once the loop has ended. It returns while the loop can still progress, and when a
 /// launched iteration still owes its terminal fact; that Run's finish runs the step again. A failure is logged and the
 /// child stays open for the next call point.
 pub async fn close_ended_loop_child(tree: &dyn SequenceTree, cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) {

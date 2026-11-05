@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::client::{BASE_URL, FeishuAPIError, FeishuClient, Page};
 use crate::config::FeishuConfig;
 use crate::event::{self, Inbound, Message};
-use crate::metadata::FeishuOrigin;
+use crate::metadata::{FEISHU_ORIGIN, FeishuOrigin};
 use crate::thread_contract::FEISHU;
 
 /// The namespace of Feishu session ids. Changing it would orphan every existing Feishu-backed session.
@@ -360,7 +360,7 @@ async fn record_thread_id(bot: &Bot, session_id: &str) -> Result<(), thread_entr
     .update_slot_fields_at(
       session_id,
       FEISHU.name,
-      Map::from_iter([("feishu_origin".to_string(), value)]),
+      Map::from_iter([(FEISHU_ORIGIN.to_string(), value)]),
       UtcDateTime::now(),
     )
     .await?

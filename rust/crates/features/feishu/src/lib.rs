@@ -37,24 +37,24 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       owner: "feishu",
       on: MetadataFile::Session,
       after: Some("successor_session_id"),
-      fields: ["feishu_origin", "feishu_watermark_id"]
+      fields: [metadata::FEISHU_ORIGIN, metadata::FEISHU_WATERMARK_ID]
         .into_iter()
         .map(|name| SlotField { name, default: Value::Null })
         .collect(),
     },
     validate_session_fields,
   )?;
-  registry.thread_origin_field("feishu_origin")?;
+  registry.thread_origin_field(metadata::FEISHU_ORIGIN)?;
   registry.turn_contribution("feishu", Arc::new(FeishuTurnContribution))
 }
 
 fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
-  if let Some(origin) = values.get_mut("feishu_origin")
+  if let Some(origin) = values.get_mut(metadata::FEISHU_ORIGIN)
     && !metadata::valid_origin(origin)
   {
     return Some("feishu_origin must be a FeishuOrigin or null".to_string());
   }
-  if values.get("feishu_watermark_id").is_some_and(|value| !value.is_null() && !value.is_string()) {
+  if values.get(metadata::FEISHU_WATERMARK_ID).is_some_and(|value| !value.is_null() && !value.is_string()) {
     return Some("feishu_watermark_id must be a string or null".to_string());
   }
   None

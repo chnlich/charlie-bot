@@ -50,17 +50,18 @@ struct Observation {
 
 #[derive(Deserialize)]
 struct ObservationResult {
-  source_call_id: String,
+  source_call_id: Option<String>,
   content: Option<String>,
 }
 
-/// The token counts an agent step reports. `prompt_tokens` counts all input, and `cached_tokens` is the part of it that
-/// was a cache hit.
+/// The token counts an agent step reports. ATIF marks every field here optional, and the CLI omits `cached_tokens`
+/// when a turn has no prompt caching. `prompt_tokens` counts all input, and `cached_tokens` is the part of it that was
+/// a cache hit. An omitted count adds zero to the turn's usage.
 #[derive(Deserialize)]
 struct StepMetrics {
-  prompt_tokens: i64,
-  completion_tokens: i64,
-  cached_tokens: i64,
+  prompt_tokens: Option<i64>,
+  completion_tokens: Option<i64>,
+  cached_tokens: Option<i64>,
 }
 
 /// The token counts of one turn: the sum of its steps' metrics.
@@ -107,8 +108,11 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
       events.push(make_tool_use_event(&call.function_name, call.arguments.clone()));
     }
     for result in step.observation.iter().flat_map(|observation| &observation.results) {
-      let Some(name) = tool_names.get(&result.source_call_id) else {
-        bail!("devin export observation answers tool call {} that no step made", result.source_call_id);
+      let Some(call_id) = &result.source_call_id else {
+        bail!("devin export observation result has no source_call_id, so its tool name is unknown");
+      };
+      let Some(name) = tool_names.get(call_id) else {
+        bail!("devin export observation answers tool call {call_id} that no step made");
       };
       events.push(make_tool_result_event(name, result.content.as_deref().unwrap_or("")));
     }
@@ -138,9 +142,9 @@ fn turn_usage(steps: &[Step]) -> anyhow::Result<TurnUsage> {
   for step in steps {
     match (&step.metrics, step.source.as_str()) {
       (Some(metrics), _) => {
-        usage.prompt_tokens += metrics.prompt_tokens;
-        usage.completion_tokens += metrics.completion_tokens;
-        usage.cached_tokens += metrics.cached_tokens;
+        usage.prompt_tokens += metrics.prompt_tokens.unwrap_or(0);
+        usage.completion_tokens += metrics.completion_tokens.unwrap_or(0);
+        usage.cached_tokens += metrics.cached_tokens.unwrap_or(0);
       }
       (None, AGENT_SOURCE) => bail!("devin export has an agent step without metrics in the current turn"),
       (None, _) => {}
@@ -209,6 +213,21 @@ mod tests {
         }),
       ]
     );
+  }
+
+  #[test]
+  fn a_step_metrics_without_cached_tokens_counts_zero_cached_tokens() {
+    let mut export: Value = serde_json::from_str(MULTITURN_FIXTURE).unwrap();
+    for step in export["steps"].as_array_mut().unwrap() {
+      if let Some(metrics) = step.get_mut("metrics") {
+        metrics.as_object_mut().unwrap().remove("cached_tokens");
+      }
+    }
+    let events = turn_events(&export.to_string(), "Fourth turn answer.").unwrap();
+    let result = events.last().unwrap();
+    assert_eq!(result["usage"]["input_tokens"], 2400);
+    assert_eq!(result["usage"]["output_tokens"], 160);
+    assert_eq!(result["usage"]["cache_read_input_tokens"], 0);
   }
 
   #[test]

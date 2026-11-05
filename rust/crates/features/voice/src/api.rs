@@ -14,7 +14,9 @@ use axum::extract::{FromRequestParts, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::form_body::{self, Field, FormModel};
-use charliebot_compat::request_body::{self, BodyModel, Field as BodyField, FieldType};
+use charliebot_compat::request_body::{
+  self, BodyModel, Field as BodyField, FieldType, flag_field, integer_field, optional_text_field_ref, text_field_ref,
+};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
@@ -219,65 +221,26 @@ impl<'a> VoiceStartup<'a> {
   /// Reads the validated fields in model declaration order.
   fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
     Self {
-      backend: text(values, "backend"),
-      reached: text(values, "reached"),
-      end: text(values, "end"),
-      error: optional_text(values, "error"),
-      mic_open_ms: integer(values, "mic_open_ms"),
-      graph_ready_ms: integer(values, "graph_ready_ms"),
-      first_frame_ms: integer(values, "first_frame_ms"),
-      first_sound_ms: integer(values, "first_sound_ms"),
-      end_ms: integer(values, "end_ms").expect("a required integer validates to a value"),
-      frames: integer(values, "frames").expect("a required integer validates to a value"),
-      samples: integer(values, "samples").expect("a required integer validates to a value"),
-      audio_context_state: optional_text(values, "audio_context_state"),
-      audio_context_rate: integer(values, "audio_context_rate"),
-      mic_permission: optional_text(values, "mic_permission"),
-      track_ready_state: optional_text(values, "track_ready_state"),
-      track_muted: flag(values, "track_muted"),
+      backend: text_field_ref(values, "backend"),
+      reached: text_field_ref(values, "reached"),
+      end: text_field_ref(values, "end"),
+      error: optional_text_field_ref(values, "error"),
+      mic_open_ms: integer_field(values, "mic_open_ms"),
+      graph_ready_ms: integer_field(values, "graph_ready_ms"),
+      first_frame_ms: integer_field(values, "first_frame_ms"),
+      first_sound_ms: integer_field(values, "first_sound_ms"),
+      end_ms: integer_field(values, "end_ms").expect("a required integer validates to a value"),
+      frames: integer_field(values, "frames").expect("a required integer validates to a value"),
+      samples: integer_field(values, "samples").expect("a required integer validates to a value"),
+      audio_context_state: optional_text_field_ref(values, "audio_context_state"),
+      audio_context_rate: integer_field(values, "audio_context_rate"),
+      mic_permission: optional_text_field_ref(values, "mic_permission"),
+      track_ready_state: optional_text_field_ref(values, "track_ready_state"),
+      track_muted: flag_field(values, "track_muted"),
       devices: values.get("devices").filter(|value| !value.is_null()),
-      user_agent: text(values, "user_agent"),
-      client_ts: text(values, "client_ts"),
+      user_agent: text_field_ref(values, "user_agent"),
+      client_ts: text_field_ref(values, "client_ts"),
     }
-  }
-}
-
-fn text<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> &'a str {
-  match values.get(name) {
-    Some(Value::String(text)) => text,
-    other => unreachable!("the validated body carries a string {name}, got {other:?}"),
-  }
-}
-
-fn optional_text<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> Option<&'a str> {
-  match values.get(name) {
-    Some(Value::String(text)) => Some(text),
-    Some(Value::Null) | None => None,
-    other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
-  }
-}
-
-/// An integer field, `None` when it is null. `i128` holds the whole integer range the body reader accepts.
-fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> {
-  match values.get(name) {
-    None | Some(Value::Null) => None,
-    Some(Value::Number(number)) => Some(
-      number
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| number.as_u64().map(i128::from))
-        .expect("the validated body carries a 64-bit integer"),
-    ),
-    other => unreachable!("the validated body carries an integer or null {name}, got {other:?}"),
-  }
-}
-
-/// A boolean field, `None` when it is null.
-fn flag(values: &serde_json::Map<String, Value>, name: &str) -> Option<bool> {
-  match values.get(name) {
-    None | Some(Value::Null) => None,
-    Some(Value::Bool(flag)) => Some(*flag),
-    other => unreachable!("the validated body carries a boolean or null {name}, got {other:?}"),
   }
 }
 

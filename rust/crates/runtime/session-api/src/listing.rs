@@ -9,8 +9,8 @@ use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_FIELDS, SessionMetadata,
-  SessionStatus, TaskProfile, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
+  SessionMetadata, SessionStatus, TaskProfile, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -554,7 +554,7 @@ fn page_row_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
 /// The client reads these values themselves rather than their truth: it renders `name` literally, so an absent name
 /// prints "undefined" in the sidebar, and it draws a schedule as disabled only for `schedule_enabled` false, so an
 /// absent value would draw the schedule as enabled.
-const KEPT_FALSY_FIELDS: [&str; 2] = ["name", "schedule_enabled"];
+const KEPT_FALSY_FIELDS: [&str; 2] = ["name", SCHEDULE_ENABLED];
 
 /// Leave out every field the page's client reads as falsy: null, false, zero and the empty string.
 ///

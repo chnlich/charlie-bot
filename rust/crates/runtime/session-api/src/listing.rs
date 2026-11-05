@@ -549,6 +549,13 @@ fn page_row_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
   value
 }
 
+/// Fields the page keeps even when their value is falsy.
+///
+/// The client reads these values themselves rather than their truth: it renders `name` literally, so an absent name
+/// prints "undefined" in the sidebar, and it draws a schedule as disabled only for `schedule_enabled` false, so an
+/// absent value would draw the schedule as enabled.
+const KEPT_FALSY_FIELDS: [&str; 2] = ["name", "schedule_enabled"];
+
 /// Leave out every field the page's client reads as falsy: null, false, zero and the empty string.
 ///
 /// The page carries each row's whole metadata, and most sessions leave most of its fields at their default: on the
@@ -558,7 +565,7 @@ fn page_row_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
 /// compressed at gzip level 6.
 fn drop_falsy_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
-  object.retain(|_, field| !is_falsy(field));
+  object.retain(|field, value| KEPT_FALSY_FIELDS.contains(&field.as_str()) || !is_falsy(value));
 }
 
 /// Whether *value* is a value the page's client reads as falsy: null, false, zero or the empty string.
@@ -967,6 +974,23 @@ mod tests {
     assert_eq!(row["id"], json!(meta.id));
     assert_eq!(row["name"], json!("falsy-row"));
     assert_eq!(row["profile"], json!("manager"));
+  }
+
+  /// The fields the client reads by value stay when their value is falsy.
+  #[test]
+  fn the_page_keeps_a_falsy_name_and_a_disabled_schedule() {
+    let mut row = json!({
+      "id": "synthetic",
+      "name": "",
+      "schedule_enabled": false,
+      "has_unread": false,
+      "pending_trigger_count": 0,
+      "next_trigger_at": null,
+    });
+
+    drop_falsy_fields(&mut row);
+
+    assert_eq!(row, json!({"id": "synthetic", "name": "", "schedule_enabled": false}));
   }
 
   /// A row whose inputs move while it is the active session does not serve its older text to a later request.

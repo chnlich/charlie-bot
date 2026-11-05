@@ -106,9 +106,10 @@ a later run reclaims the ones no process holds.
 
 ## Refused toolchains on the agent host
 
-The agent environment on the agent host refuses a local run of the toolchains this list names,
-and the agent runs them on the build host through this runner instead. This list is the single
-home of that closed list; the refusal mechanism reads it here.
+The agent environment refuses a direct local run of every toolchain this list names, and the agent runs that work on
+the build host through this runner instead. C and C++ compilers have one scoped local exception for prescreen runs,
+documented in `dev/local-work-guard/README.md`; that entry point keeps every other guard refusal active. This list is
+the single home of the refused toolchains.
 
 - cargo and rustc
 - pytest in all its entry forms: `pytest`, `python -m pytest`, `uv run pytest`, `.venv/bin/pytest`

@@ -16,6 +16,30 @@ and the switch is `server.enable_local_work_guard` in `config.yaml`. `refuse.sh`
 | go build, go test, go run | `GOFLAGS` sets `-toolexec` to a refusing program | `go/toolexec.sh` |
 | cc, gcc, g++, c++ | `PATH` starts with `bin/`; `CC` and `CXX` name its scripts | `bin/cc` (the other three are links to it) |
 
+## Prescreen entry point
+
+`prescreen-run.sh` is the only local compiler exception. It lets a configured session tree run a prescreen command
+with `cc`, `gcc`, `g++`, `c++`, `CC` and `CXX` available, while every other guard refusal remains active.
+
+Pass the command and its arguments directly to the entry point:
+
+```sh
+dev/local-work-guard/prescreen-run.sh <prescreen command> [arguments...]
+```
+
+The host stores allowed session roots in `$CHARLIEBOT_HOME/local-work-guard/prescreen-scope.txt`, one session ID per
+line. The entry point follows each caller's `task_parent_id` in `sessions/<id>/metadata.json`; a worker under an
+allowed root therefore uses the same scope. The file must exist, be readable, and contain at least one valid session
+ID. The entry point reads session metadata with `jq` and refuses a caller outside the configured trees.
+
+The entry point removes only the local guard's compiler directory from `PATH` and sets `CC=cc` and `CXX=c++` for
+the command. It leaves `PYTEST_PLUGINS`, `PYTHONPATH`, `NODE_OPTIONS`, `MAKEFILES`, `GOFLAGS`, `RUSTUP_TOOLCHAIN` and
+`RUSTC_WRAPPER` in place, so tests and every other refused toolchain stay refused.
+
+One lock at `$CHARLIEBOT_HOME/local-work-guard/prescreen-entry.lock` covers the full command. A later command prints
+that it is waiting, then starts when the first command exits. The entry lock is separate from locks the prescreen
+command takes itself.
+
 Read-only and non-build commands run as usual: the cargo subcommands `fmt`, `metadata` and `tree`, and the
 `--version` of each tool.
 

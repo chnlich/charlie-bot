@@ -50,8 +50,8 @@ use charliebot_registry::RegisterFn;
 use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
-  TransportKind,
+  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle,
+  Translate, TransportKind,
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
@@ -340,6 +340,22 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
     registry.register_package(package, register)?;
   }
   Ok(registry)
+}
+
+/// A backend type over the scripted factory, for a test's own type names (the Claude account type takes its lifecycle).
+pub fn scripted_type(
+  type_name: &'static str,
+  traits: BackendTraits,
+  lifecycle: Option<Arc<dyn BackendLifecycle>>,
+) -> BackendTypeRegistration {
+  BackendTypeRegistration {
+    type_name,
+    traits,
+    option_model: |_| Ok(()),
+    factory: Arc::new(ScriptFactory),
+    lifecycle,
+    translate_fallback: false,
+  }
 }
 
 /// A script that prints one successful result event carrying `text`.

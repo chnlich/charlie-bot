@@ -916,15 +916,6 @@ fn script_lines(events: &[Value], tail: &str) -> String {
   commands.join("; ")
 }
 
-/// A script that prints its events and exits with `code`.
-fn exits(events: &[Value], code: i32) -> String {
-  script_lines(events, &format!("exit {code}"))
-}
-
-fn result() -> Value {
-  json!({"type": event_types::RESULT, "subtype": "success", "is_error": false, "result": "done"})
-}
-
 /// The events of a run's events log, one per line.
 fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<Value>> {
   let path = stack.store().run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);

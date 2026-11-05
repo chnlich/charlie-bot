@@ -5,6 +5,11 @@ use charliebot_store::metadata::SessionMetadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The session-metadata field holding the Feishu thread a session was summoned from.
+pub const FEISHU_ORIGIN: &str = "feishu_origin";
+/// The session-metadata field holding the Feishu id the session's turn has read up to.
+pub const FEISHU_WATERMARK_ID: &str = "feishu_watermark_id";
+
 /// The Feishu thread a session was summoned from. `root_id` is set at creation and never changes. `thread_id` is
 /// absent until the bot's first reply creates the thread.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -19,7 +24,7 @@ pub struct FeishuOrigin {
 /// The session's Feishu origin, or `None` when the field is absent or null
 /// (`fields_of(meta, "feishu").feishu_origin`). A stored value that is not a Feishu origin fails.
 pub fn feishu_origin(meta: &SessionMetadata) -> anyhow::Result<Option<FeishuOrigin>> {
-  match meta.extra.get("feishu_origin") {
+  match meta.extra.get(FEISHU_ORIGIN) {
     None | Some(Value::Null) => Ok(None),
     Some(value) => FeishuOrigin::deserialize(value).map(Some).context("feishu_origin is not a Feishu origin"),
   }

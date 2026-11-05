@@ -12,6 +12,8 @@ pub const TOOL_RESULT: &str = "tool_result";
 pub const TOOL_USE_ID: &str = "tool_use_id";
 /// The tool_use id whose subagent transcript line an event belongs to; an event without it belongs to the turn.
 pub const PARENT_TOOL_USE_ID: &str = "parent_tool_use_id";
+/// The `input` key of a file tool call: the path a `Read`, `Edit` or `Write` tool names.
+pub const TOOL_INPUT_FILE_PATH: &str = "file_path";
 /// The JSON pointer to the content blocks of an event's message: the array a `user` or `assistant` event carries.
 pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
 pub const MASTER_DONE: &str = "master_done";

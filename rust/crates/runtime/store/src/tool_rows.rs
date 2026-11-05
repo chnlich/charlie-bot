@@ -5,6 +5,7 @@
 //! the `subagent` object, only on a row that a subagent hangs under. A row without a subagent renders exactly as
 //! it did before subagents were shown.
 
+use charliebot_core::event_types::TOOL_INPUT_FILE_PATH;
 use charliebot_core::str_methods::take_chars;
 use serde_json::{Value, json};
 
@@ -384,7 +385,7 @@ pub fn tool_preview(tool: Value) -> Value {
 fn input_read_fields(name: Option<&Value>, input: &serde_json::Map<String, Value>) -> Vec<String> {
   match name.and_then(Value::as_str) {
     Some("Bash" | "bash") => vec!["command".to_string()],
-    Some("Read" | "Edit" | "Write") => vec!["file_path".to_string()],
+    Some("Read" | "Edit" | "Write") => vec![TOOL_INPUT_FILE_PATH.to_string()],
     Some("Glob") => vec!["pattern".to_string()],
     Some("Grep") => vec!["pattern".to_string(), "path".to_string()],
     _ => input.keys().next().cloned().into_iter().collect(),

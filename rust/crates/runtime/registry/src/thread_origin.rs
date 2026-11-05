@@ -18,11 +18,6 @@ pub fn register_origin_field(field: &'static str) {
   }
 }
 
-/// The registered thread-origin fields, in registration order.
-pub fn origin_fields() -> Vec<&'static str> {
-  THREAD_ORIGIN_FIELDS.lock().expect("the thread-origin field list is not poisoned").clone()
-}
-
 /// True when `meta` names a chat thread: a registered origin field is present and not null.
 pub fn is_thread_session(meta: &SessionMetadata) -> bool {
   let fields = THREAD_ORIGIN_FIELDS.lock().expect("the thread-origin field list is not poisoned");

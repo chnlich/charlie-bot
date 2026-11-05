@@ -145,9 +145,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let result = match (mode, topic_id, page) {
     (None, None, None) => commands::read_thread(&bot, &session_id, limit).await,
     (Some("chat"), None, page) => commands::read_chat(&bot, &session_id, limit, page).await,
-    (Some("topic"), Some(thread_id), page) => {
-      commands::read_topic(&bot, &session_id, thread_id, limit, page).await
-    }
+    (Some("topic"), Some(thread_id), page) => commands::read_topic(&bot, &session_id, thread_id, limit, page).await,
     _ => Err(ThreadReplyError::refused(
       StatusCode::UNPROCESSABLE_ENTITY,
       "read mode parameters do not match the selected mode",

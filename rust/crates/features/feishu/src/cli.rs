@@ -147,10 +147,7 @@ fn read_mode_fields(args: &ReadArgs) -> Result<Option<Map<String, serde_json::Va
     }
     fields
   } else if let Some(topic) = &args.topic {
-    let mut fields = Map::from_iter([
-      ("mode".to_string(), json!("topic")),
-      ("topic_id".to_string(), json!(topic)),
-    ]);
+    let mut fields = Map::from_iter([("mode".to_string(), json!("topic")), ("topic_id".to_string(), json!(topic))]);
     if let Some(page) = &args.page {
       fields.insert("page".to_string(), json!(page));
     }
@@ -197,8 +194,7 @@ mod tests {
     assert!(FeishuCli::try_parse_from(["feishu", "read"]).is_ok());
     assert!(FeishuCli::try_parse_from(["feishu", "read", "--chat", "--page", "older"]).is_ok());
     assert!(FeishuCli::try_parse_from(["feishu", "read", "--topic", "omt_topic"]).is_ok());
-    let topic = FeishuCli::try_parse_from(["feishu", "read", "--topic", "omt_topic", "--page", "older"])
-      .unwrap();
+    let topic = FeishuCli::try_parse_from(["feishu", "read", "--topic", "omt_topic", "--page", "older"]).unwrap();
     let FeishuCommand::Read(topic_args) = topic.command else {
       panic!("topic arguments produce the read command");
     };
@@ -207,9 +203,7 @@ mod tests {
     assert_eq!(fields["topic_id"], "omt_topic");
     assert_eq!(fields["page"], "older");
     assert!(FeishuCli::try_parse_from(["feishu", "read", "--chat", "--topic", "omt_topic"]).is_err());
-    let FeishuCommand::Read(args) = FeishuCli::try_parse_from(["feishu", "read", "--page", "older"])
-      .unwrap()
-      .command
+    let FeishuCommand::Read(args) = FeishuCli::try_parse_from(["feishu", "read", "--page", "older"]).unwrap().command
     else {
       panic!("read arguments produce the read command");
     };

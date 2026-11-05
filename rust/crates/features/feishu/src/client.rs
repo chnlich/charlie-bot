@@ -221,12 +221,7 @@ impl FeishuClient {
   }
 
   /// One page of a group's main chat, newest first (`container_id_type=chat`).
-  pub async fn chat_messages(
-    &self,
-    chat_id: &str,
-    page_size: usize,
-    page_token: Option<&str>,
-  ) -> anyhow::Result<Page> {
+  pub async fn chat_messages(&self, chat_id: &str, page_size: usize, page_token: Option<&str>) -> anyhow::Result<Page> {
     self.message_page("chat", chat_id, "ByCreateTimeDesc", page_size, page_token).await
   }
 

@@ -220,14 +220,11 @@ pub async fn read_topic(
   let config = bot.config().map_err(ThreadReplyError::failure)?;
   let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
   let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let cursor = page
-    .map(|token| decode_topic_page_cursor(token, thread_id))
-    .transpose()?
-    .unwrap_or(TopicPageCursor {
-      thread_id: thread_id.to_string(),
-      page_token: None,
-      buffered_message_id: None,
-    });
+  let cursor = page.map(|token| decode_topic_page_cursor(token, thread_id)).transpose()?.unwrap_or(TopicPageCursor {
+    thread_id: thread_id.to_string(),
+    page_token: None,
+    buffered_message_id: None,
+  });
   let mut page_token = cursor.page_token;
   let mut buffered_message_id = None;
   let mut messages = Vec::with_capacity(limit);
@@ -239,10 +236,8 @@ pub async fn read_topic(
   let mut first_page = page.is_none();
   while messages.len() < limit && (first_page || page_token.is_some()) {
     let page_size = (limit - messages.len()).min(PAGE_SIZE);
-    let response = client
-      .thread_messages_sized(thread_id, page_size, page_token.as_deref())
-      .await
-      .map_err(api_failure)?;
+    let response =
+      client.thread_messages_sized(thread_id, page_size, page_token.as_deref()).await.map_err(api_failure)?;
     for item in &response.items {
       require_item_group(item, &origin.chat_id)?;
     }
@@ -252,10 +247,7 @@ pub async fn read_topic(
         .iter()
         .find_map(|item| item.get("root_id").filter(|value| !value.is_null()))
         .map(|value| {
-          value
-            .as_str()
-            .context("a Feishu topic message has a non-string root_id")
-            .map_err(ThreadReplyError::failure)
+          value.as_str().context("a Feishu topic message has a non-string root_id").map_err(ThreadReplyError::failure)
         })
         .transpose()?;
       if let Some(root_id) = root_id
@@ -589,10 +581,7 @@ mod tests {
     assert_eq!(first_read["messages"].as_array().unwrap().len(), 2);
     assert_eq!(first_read["messages"][0]["content"], "newest");
     assert_eq!(first_read["messages"][0]["author_id"], USER_ID);
-    assert_eq!(
-      first_read["messages"][0]["timestamp"],
-      crate::adapter::rfc3339_of_millis("1700000002000").unwrap()
-    );
+    assert_eq!(first_read["messages"][0]["timestamp"], crate::adapter::rfc3339_of_millis("1700000002000").unwrap());
     assert_eq!(first_read["messages"][0]["thread_id"], "omt_new_topic");
     assert_eq!(first_read["messages"][1]["thread_id"], Value::Null);
     assert_eq!(first_read["next_page"], "older");
@@ -648,38 +637,14 @@ mod tests {
     let home = Home::new();
     let watermark = "1700000000000-om_seen";
     let session_id = home.thread_session(SESSION_ID, origin(), Some(watermark)).await;
-    let reply_one = message(
-      "om_reply_one",
-      "1700000000000",
-      CHAT_ID,
-      Some(TOPIC_ID),
-      Some("om_topic_root"),
-      "reply one",
-    );
-    let reply_two = message(
-      "om_reply_two",
-      "1700000001000",
-      CHAT_ID,
-      Some(TOPIC_ID),
-      Some("om_topic_root"),
-      "reply two",
-    );
-    let reply_three = message(
-      "om_reply_three",
-      "1700000002000",
-      CHAT_ID,
-      Some(TOPIC_ID),
-      Some("om_topic_root"),
-      "reply three",
-    );
-    let cross_group = message(
-      "om_cross",
-      "1700000000000",
-      OTHER_CHAT_ID,
-      Some("omt_cross"),
-      Some("om_cross_root"),
-      "private",
-    );
+    let reply_one =
+      message("om_reply_one", "1700000000000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply one");
+    let reply_two =
+      message("om_reply_two", "1700000001000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply two");
+    let reply_three =
+      message("om_reply_three", "1700000002000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply three");
+    let cross_group =
+      message("om_cross", "1700000000000", OTHER_CHAT_ID, Some("omt_cross"), Some("om_cross_root"), "private");
     let first = vec![reply_one.clone(), reply_two.clone()];
     let second = reply_two.clone();
     let third = reply_three.clone();
@@ -786,17 +751,8 @@ mod tests {
     let home = Home::new();
     let mut foreign_origin = origin();
     foreign_origin["root_id"] = json!("om_foreign_root");
-    let session_id = home
-      .thread_session(SESSION_ID, foreign_origin, Some("1699999999000-om_seen"))
-      .await;
-    let reply = message(
-      "om_reply",
-      "1700000000000",
-      CHAT_ID,
-      Some("omt_summon"),
-      Some("om_foreign_root"),
-      "reply",
-    );
+    let session_id = home.thread_session(SESSION_ID, foreign_origin, Some("1699999999000-om_seen")).await;
+    let reply = message("om_reply", "1700000000000", CHAT_ID, Some("omt_summon"), Some("om_foreign_root"), "reply");
     let foreign_root = message("om_foreign_root", "1699999998000", OTHER_CHAT_ID, Some("omt_summon"), None, "foreign");
     let root = foreign_root.clone();
     let stub = serve(move |request: &Recorded| {
@@ -850,13 +806,7 @@ mod tests {
     );
     assert!(!foreign.exists());
     assert_eq!(
-      stub
-        .requests
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|request| request.target.contains("/resources/"))
-        .count(),
+      stub.requests.lock().unwrap().iter().filter(|request| request.target.contains("/resources/")).count(),
       1
     );
   }

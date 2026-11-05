@@ -6,6 +6,7 @@ pub mod body_memo;
 pub mod compression;
 pub mod file_urls;
 pub mod form_body;
+pub mod forwarded;
 pub mod headers;
 pub mod http_client;
 pub mod jinja;

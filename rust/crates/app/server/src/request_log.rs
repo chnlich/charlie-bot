@@ -13,31 +13,15 @@ use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Request};
-use axum::http::HeaderName;
 use axum::middleware::Next;
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_compat::forwarded::first_address;
 use charliebot_compat::responses::Failure;
 use http_body::{Frame, SizeHint};
 
 use crate::connection::ConnectionInfo;
 use crate::request_path;
-
-/// The header a Tailscale Serve proxy sets to the proxied request's client address
-/// (`addProxyForwardedHeaders` in `ipn/ipnlocal/serve.go`).
-const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
-
-/// The first `X-Forwarded-For` address, trimmed, or `-` when the request carries no address.
-fn forwarded_for_of(request: &Request) -> String {
-  request
-    .headers()
-    .get(&X_FORWARDED_FOR)
-    .and_then(|value| value.to_str().ok())
-    .and_then(|value| value.split(',').next())
-    .map(str::trim)
-    .filter(|address| !address.is_empty())
-    .map_or_else(|| "-".to_string(), ToString::to_string)
-}
 
 /// The fields of one request's event, logged when dropped.
 struct PendingEvent {
@@ -113,7 +97,7 @@ pub async fn layer(request: Request, next: Next) -> Response {
     .extensions()
     .get::<ConnectInfo<ConnectionInfo>>()
     .map_or_else(|| "-".to_string(), |ConnectInfo(connection)| connection.client.ip().to_string());
-  let forwarded_for = forwarded_for_of(&request);
+  let forwarded_for = first_address(request.headers());
   let response = next.run(request).await;
   let event = PendingEvent {
     method,
@@ -142,7 +126,9 @@ mod tests {
   use tracing::Event;
   use tracing::field::{Field, Visit};
 
-  use super::{X_FORWARDED_FOR, layer};
+  use charliebot_compat::forwarded::X_FORWARDED_FOR;
+
+  use super::layer;
   use crate::connection::ConnectionInfo;
   use crate::request_path;
 

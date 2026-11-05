@@ -9,8 +9,8 @@ use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
-  SessionMetadata, SessionStatus, TaskProfile, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS, SCHEDULE_ENABLED,
+  SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -525,14 +525,21 @@ pub fn active_page_json_text(
   Ok(text)
 }
 
-/// One row as the page's JSON text, with its `has_unread` cleared for the active session and every falsy field
-/// left out.
-///
-/// Unlike [`render_row`], the page's rows keep `task.goal`.
+/// One row as the page's JSON text: the value the page's client reads, with `has_unread` cleared for the active
+/// session.
 fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
+  Ok(charliebot_compat::jinja::tojson_text(&page_client_value(store, row, clear_unread)))
+}
+
+/// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads.
+///
+/// Unlike [`render_row`], the page's rows keep `task.goal`. The test's expected-value helper builds its compare text
+/// through this function, so it compares the page text against the construction the page serves.
+fn page_client_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
   let mut value = page_row_value(store, row, clear_unread);
   drop_falsy_fields(&mut value);
-  Ok(charliebot_compat::jinja::tojson_text(&value))
+  drop_unread_fields(&mut value);
+  value
 }
 
 /// One page row's value: the session's metadata with its sidebar and controller fields.
@@ -566,6 +573,30 @@ const KEPT_FALSY_FIELDS: [&str; 2] = ["name", SCHEDULE_ENABLED];
 fn drop_falsy_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
   object.retain(|field, value| KEPT_FALSY_FIELDS.contains(&field.as_str()) || !is_falsy(value));
+}
+
+/// The fields of a page row that no page client reads: the session's creation time and its stored metadata schema
+/// version.
+///
+/// The page's rows feed the sidebar and the session views under `web/static/js`, and none of them reads either
+/// field: the tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
+/// compatibility marker. On the 7,160-session mock home the two fields are 365,160 bytes of the page's 2,347,241-byte
+/// sidebar text.
+const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", "schema_version"];
+
+/// Leave out the fields no page client reads, and an empty `round_ratings`.
+///
+/// A row's `round_ratings` is an object of rounds the user rated, so a session with ratings keeps it. The page's
+/// client reads the field as `session.round_ratings || {}`, which draws an absent field exactly like an empty map;
+/// on the mock home every session's map is empty, and the field's 121,720 bytes of the sidebar text carry no value.
+fn drop_unread_fields(value: &mut Value) {
+  let object = value.as_object_mut().expect("a session metadata value is an object");
+  object.retain(|field, value| {
+    if UNREAD_PAGE_FIELDS.contains(&field.as_str()) {
+      return false;
+    }
+    !(field.as_str() == ROUND_RATINGS && value.as_object().is_some_and(|ratings| ratings.is_empty()))
+  });
 }
 
 /// Whether *value* is a value the page's client reads as falsy: null, false, zero or the empty string.
@@ -812,7 +843,7 @@ fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use charliebot_store::metadata::{RoundRating, RoundRatings, SessionMetadata, TaskProfile};
   use serde_json::json;
 
   async fn list_body(
@@ -971,9 +1002,29 @@ mod tests {
     for omitted in ["schedule_task", "cc_session_id", "has_unread", "pending_trigger_count"] {
       assert!(!row.contains_key(omitted), "{omitted} is falsy and stays out of the page row");
     }
+    // No page client reads these: the sidebar and session views never touch a row's creation time or schema
+    // version, and an absent rating map reads like the empty one this row holds.
+    for omitted in UNREAD_PAGE_FIELDS.iter().copied().chain([ROUND_RATINGS]) {
+      assert!(!row.contains_key(omitted), "{omitted} is not a field the page's client reads");
+    }
     assert_eq!(row["id"], json!(meta.id));
     assert_eq!(row["name"], json!("falsy-row"));
     assert_eq!(row["profile"], json!("manager"));
+  }
+
+  /// A session the user rated keeps its ratings: only an empty map is left out of the page row.
+  #[tokio::test]
+  async fn a_page_row_keeps_the_round_ratings_it_holds() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "rated-row", None, TaskProfile::Manager).await;
+    let mut round_ratings = RoundRatings::default();
+    round_ratings.set("round-a".to_string(), Some(RoundRating::ThumbsUp));
+    let page = page_rows_over(vec![Arc::new(SessionMetadata { round_ratings, ..meta })]);
+    let memo = PageRowsMemo::default();
+
+    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let rows: Vec<Value> = serde_json::from_str(text.as_str()).unwrap();
+    assert_eq!(rows[0][ROUND_RATINGS], json!({"round-a": "thumbs_up"}));
   }
 
   /// The fields the client reads by value stay when their value is falsy.
@@ -1055,18 +1106,12 @@ mod tests {
   }
 
   /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared and
-  /// every falsy field left out.
+  /// every field the page's client does not read left out.
   fn page_array_text(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> String {
     let inputs =
       row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
-    let values: Vec<Value> = inputs
-      .iter()
-      .map(|row| {
-        let mut value = page_row_value(store, row, clear_unread == Some(row.meta.id.as_str()));
-        drop_falsy_fields(&mut value);
-        value
-      })
-      .collect();
+    let values: Vec<Value> =
+      inputs.iter().map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()))).collect();
     charliebot_compat::jinja::tojson_text(&Value::Array(values))
   }
 

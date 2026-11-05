@@ -72,7 +72,7 @@ struct ImproveStopRequest {
   session_id: String,
 }
 
-/// Register the improve routes under the internal API paths.
+/// The improve routes, mounted under the internal API paths.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/internal/improve", post_only(start_improve_loop))

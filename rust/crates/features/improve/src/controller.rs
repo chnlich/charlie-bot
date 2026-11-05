@@ -91,7 +91,7 @@ impl SequenceController for ImproveSequenceController {
   }
 }
 
-/// Run the owning loop's close step, located through the Run's `owner_ref`: `<sessions>/<session>/loops/<loop id>`.
+/// The owning loop's close step, run and located through the Run's `owner_ref`: `<sessions>/<session>/loops/<loop id>`.
 async fn close_loop_for_run(run: &RunRecord, tree: &dyn SequenceTree) -> anyhow::Result<()> {
   let seq = run.sequence_ref.as_ref().with_context(|| format!("run {} carries no sequence_ref", run.id))?;
   let loop_dir = Path::new(&seq.owner_ref);
@@ -110,7 +110,7 @@ async fn close_loop_for_run(run: &RunRecord, tree: &dyn SequenceTree) -> anyhow:
   Ok(())
 }
 
-/// Register the improve controller under its sequence kind.
+/// The improve controller, registered under its sequence kind.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.sequence_controller(SEQUENCE_KIND, Arc::new(ImproveSequenceController))
 }

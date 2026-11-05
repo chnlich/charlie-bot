@@ -45,9 +45,9 @@ struct ImproveCli {
 
 #[derive(Subcommand)]
 enum ImproveVerb {
-  /// Run an iterative improvement loop via CharlieBot workers
+  /// An iterative improvement loop run by CharlieBot workers
   Start(StartArgs),
-  /// Stop this session's active improve loop after the current iteration
+  /// This session's active improve loop, stopped after the current iteration
   Stop(StopArgs),
 }
 
@@ -88,7 +88,7 @@ struct StopArgs {
   session: Option<String>,
 }
 
-/// Parse the improve verb and run it. Parser errors print and exit on their own: help
+/// The improve verb, parsed and run. Parser errors print and exit on their own: help
 /// exits 0, a usage error exits 2.
 pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   let mut command = with_infer_long_args(ImproveCli::command());

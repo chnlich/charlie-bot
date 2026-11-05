@@ -13,6 +13,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{FromRequestParts, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use charliebot_compat::mimetypes_table::TEXT_PLAIN;
 use http::{HeaderMap, StatusCode, header};
 
 use crate::auth;
@@ -73,7 +74,7 @@ fn forbidden() -> Response {
   Response::builder()
     .status(StatusCode::FORBIDDEN)
     .header(header::CONTENT_LENGTH, "0")
-    .header(header::CONTENT_TYPE, "text/plain")
+    .header(header::CONTENT_TYPE, TEXT_PLAIN)
     .header(header::CONNECTION, "close")
     .body(Body::empty())
     .expect("a fixed 403 response builds")

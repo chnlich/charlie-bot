@@ -25,6 +25,9 @@
   h2 { flex-wrap:wrap }
   h2 .win { white-space:nowrap }
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
+  /* The prose lists and the closing line keep the intro's 82ch measure. The page's tables and section rules
+     take the wrap's full width, but a bullet drawn across all 1080 px reads past a comfortable line. */
+  .wrap > ul, .wrap > p.foot { max-width:82ch }
   .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 22px }
   .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
     border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }

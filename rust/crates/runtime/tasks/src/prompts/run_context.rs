@@ -5,7 +5,9 @@ use std::path::Path;
 
 use charliebot_core::json_loads;
 use charliebot_store::Store;
-use charliebot_store::run_records::run_not_found_in_task_text;
+use charliebot_store::run_records::{
+  OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, run_not_found_in_task_text,
+};
 use serde_json::{Value, json};
 
 use super::PromptSnapshot;
@@ -58,9 +60,9 @@ pub fn read_run_context(store: &Store, session_id: &str, run_id: &str) -> Result
     "snapshot": snapshot,
     "task_spec": task_spec,
     "logs": {
-      "raw_log_ref": run.raw_log_ref,
-      "events_ref": run.events_ref,
-      "result_ref": run.result_ref,
+      (OBSERVATION_RAW_LOG_REF): run.raw_log_ref,
+      (OBSERVATION_EVENTS_REF): run.events_ref,
+      (OBSERVATION_RESULT_REF): run.result_ref,
     },
   }))
 }

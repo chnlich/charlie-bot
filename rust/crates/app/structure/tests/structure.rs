@@ -983,6 +983,21 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::sidebar_state::TASK_TREE_ACTIVITY`.",
   },
   OwnerRow {
+    name: "raw_log_ref",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_RAW_LOG_REF`.",
+  },
+  OwnerRow {
+    name: "events_ref",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_EVENTS_REF`.",
+  },
+  OwnerRow {
+    name: "result_ref",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_RESULT_REF`.",
+  },
+  OwnerRow {
     name: "local_pid",
     owner: "runtime/store",
     hint: "Use `charliebot_store::trigger_files::LOCAL_PID_KIND`.",

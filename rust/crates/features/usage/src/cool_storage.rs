@@ -23,8 +23,8 @@ use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
-  CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME,
-  THREADS_DIR_NAME,
+  CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
+  OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME, THREADS_DIR_NAME,
 };
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -40,7 +40,7 @@ const ORPHAN_IDLE_DAYS: i64 = 2;
 /// The three agent-pipe names and the two tee names the backend writers use.
 const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, "stderr.log"];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
-const RUN_EVIDENCE_KEYS: [&str; 3] = ["raw_log_ref", "events_ref", "result_ref"];
+const RUN_EVIDENCE_KEYS: [&str; 3] = [OBSERVATION_RAW_LOG_REF, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF];
 const SESSION_ARCHIVED: &str = "archived";
 
 /// The `cool_storage` scheduled handler: the real sweep at the wall clock, off the async runtime.

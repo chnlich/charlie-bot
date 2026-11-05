@@ -913,6 +913,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "HTTP_PROXY", owner: "infra/core", hint: "Use `charliebot_core::proxy_env::HTTP_PROXY`." },
   OwnerRow { name: "HTTPS_PROXY", owner: "infra/core", hint: "Use `charliebot_core::proxy_env::HTTPS_PROXY`." },
   OwnerRow { name: "NO_PROXY", owner: "infra/core", hint: "Use `charliebot_core::proxy_env::NO_PROXY`." },
+  OwnerRow {
+    name: "/message/content",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::MESSAGE_CONTENT_POINTER`.",
+  },
   OwnerRow { name: "data", owner: "runtime/store", hint: "Use `charliebot_store::layout::data_dir`." },
   OwnerRow { name: "runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::runs_dir`." },
   OwnerRow { name: "triggers", owner: "runtime/store", hint: "Use `charliebot_store::layout::triggers_dir`." },

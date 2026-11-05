@@ -298,7 +298,7 @@ fn is_error(result: &Value) -> bool {
 
 /// The content blocks of an event's message; empty when the message holds no list.
 fn content_blocks(event: &Value) -> &[Value] {
-  event.pointer("/message/content").and_then(Value::as_array).map_or(&[], Vec::as_slice)
+  event.pointer(event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array).map_or(&[], Vec::as_slice)
 }
 
 #[cfg(test)]

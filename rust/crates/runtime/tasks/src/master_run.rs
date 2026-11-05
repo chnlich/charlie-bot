@@ -135,7 +135,7 @@ impl RunTimingTracker {
     if self.saw_assistant_text {
       return;
     }
-    let Some(blocks) = event.pointer("/message/content").and_then(Value::as_array) else {
+    let Some(blocks) = event.pointer(event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array) else {
       return;
     };
     if event.get("type").and_then(Value::as_str) != Some(event_types::ASSISTANT) {

@@ -75,7 +75,7 @@ fn find_longest_match_with_positions<T: Eq + Hash>(
   MatchingBlock { a: best_a, b: best_b, size: best_size }
 }
 
-/// Return non-adjacent matching blocks followed by the diff sentinel.
+/// The non-adjacent matching blocks, followed by the diff sentinel.
 fn matching_blocks<T: Eq + Hash>(a: &[T], b: &[T]) -> Vec<MatchingBlock> {
   let b_positions = build_b_positions(b);
   let mut queue = vec![(0, a.len(), 0, b.len())];
@@ -126,7 +126,7 @@ fn build_b_positions<T: Eq + Hash>(b: &[T]) -> HashMap<&T, Vec<usize>> {
   b_positions
 }
 
-/// Return the diff opcodes that turn `a` into `b`.
+/// The diff opcodes that turn `a` into `b`.
 pub fn opcodes<T: Eq + Hash>(a: &[T], b: &[T]) -> Vec<Opcode> {
   let mut result = Vec::new();
   let (mut i, mut j) = (0, 0);

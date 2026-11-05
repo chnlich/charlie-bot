@@ -1,6 +1,7 @@
 //! The synthetic prose, markdown, code and tool traffic that events draw from. Every sentence is written for this crate.
 //! A run composes the block and output-line pools once, so an event costs one random choice per block.
 
+use charliebot_core::event_types::TOOL_INPUT_FILE_PATH;
 use serde_json::{Value, json};
 
 use crate::rng::Rng;
@@ -172,11 +173,15 @@ pub fn tool_call(rng: &mut Rng) -> (&'static str, Value) {
   let name = *rng.choose(TOOL_NAMES);
   let module = format!("module_{:02}", rng.range(1, 40));
   let input = match name {
-    "Read" => json!({"file_path": format!("src/{module}/handler.rs")}),
+    "Read" => json!({TOOL_INPUT_FILE_PATH: format!("src/{module}/handler.rs")}),
     "Bash" => json!({"command": format!("cargo test -p {module} --locked")}),
     "Grep" => json!({"pattern": "TODO|FIXME", "path": format!("src/{module}")}),
     "Edit" => {
-      json!({"file_path": format!("src/{module}/config.rs"), "old_string": "retry: 3", "new_string": "retry: 5"})
+      json!({
+        TOOL_INPUT_FILE_PATH: format!("src/{module}/config.rs"),
+        "old_string": "retry: 3",
+        "new_string": "retry: 5"
+      })
     }
     "Glob" => json!({"pattern": format!("src/{module}/**/*.rs")}),
     other => unreachable!("tool names are drawn from TOOL_NAMES, not {other}"),

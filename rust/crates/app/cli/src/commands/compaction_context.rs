@@ -20,6 +20,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_core::config;
+use charliebot_core::event_types::TOOL_INPUT_FILE_PATH;
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_regex;
@@ -194,7 +195,7 @@ fn reads_from_tool(block: &serde_json::Map<String, Value>) -> Vec<(String, Optio
       }
     }
     Some("Read") => {
-      let Some(Value::String(file_path)) = tool_input.get("file_path") else { return Vec::new() };
+      let Some(Value::String(file_path)) = tool_input.get(TOOL_INPUT_FILE_PATH) else { return Vec::new() };
       if posix_name(file_path) != "SKILL.md" {
         return Vec::new();
       }
